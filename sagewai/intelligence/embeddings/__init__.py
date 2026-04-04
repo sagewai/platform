@@ -1,0 +1,24 @@
+# Copyright 2026 Sagecurator
+#
+# This file is part of Sagewai, licensed under the GNU Affero General
+# Public License v3.0 or later (AGPL-3.0-or-later). You may use,
+# modify, and distribute this file under the terms of the AGPL.
+# See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
+#
+# This file is also available under a commercial license.
+# See COMMERCIAL_LICENSE.md for details.
+"""Pluggable embedding backends for the Sagewai intelligence layer."""
+
+from sagewai.intelligence.embeddings.hash_embedder import HashEmbedder
+from sagewai.intelligence.embeddings.litellm_embedder import LiteLLMEmbedder
+from sagewai.intelligence.embeddings.protocol import Embedder
+from sagewai.intelligence.embeddings.sentence_transformer import (
+    SentenceTransformerEmbedder,
+)
+
+__all__ = [
+    "Embedder",
+    "HashEmbedder",
+    "LiteLLMEmbedder",
+    "SentenceTransformerEmbedder",
+]

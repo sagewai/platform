@@ -1,0 +1,47 @@
+name: SDK CI
+
+on:
+  push:
+    paths: ['packages/sagewai/**']
+  pull_request:
+    paths: ['packages/sagewai/**']
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --package sagewai --group test
+      - run: uv run pytest packages/sagewai/tests/ -m "not integration" -o "addopts="
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --package sagewai --group test
+      - run: uv run ruff check packages/sagewai/
+      - run: uv run mypy packages/sagewai/sagewai/
+        continue-on-error: true
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv build --package sagewai
+      - name: Verify wheel installs
+        run: |
+          uv venv /tmp/test-venv
+          /tmp/test-venv/bin/pip install --no-deps dist/sagewai-0.1.0-py3-none-any.whl
+          /tmp/test-venv/bin/python -c "import sagewai; print(f'Sagewai {sagewai.__version__} installed successfully')"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

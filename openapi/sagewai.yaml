@@ -1,0 +1,817 @@
+openapi: 3.1.0
+info:
+  title: Sagewai API
+  version: 0.1.0
+  description: REST API for Sagewai agent infrastructure platform.
+  contact:
+    email: hello@sagewai.ai
+  license:
+    name: AGPL-3.0
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+
+servers:
+  - url: http://localhost:8100
+    description: Local development
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: API key or JWT token
+
+  schemas:
+    ChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role: { type: string, enum: [system, user, assistant] }
+        content: { type: string }
+
+    ChatCompletionRequest:
+      type: object
+      required: [model, messages]
+      properties:
+        model: { type: string, example: gpt-4o }
+        messages:
+          type: array
+          items: { $ref: '#/components/schemas/ChatMessage' }
+        max_tokens: { type: integer }
+        stream: { type: boolean, default: false }
+        temperature: { type: number }
+        tools: { type: array, items: { type: object } }
+
+    ChatCompletionResponse:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string, example: chat.completion }
+        created: { type: integer }
+        model: { type: string }
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index: { type: integer }
+              message: { $ref: '#/components/schemas/ChatMessage' }
+              finish_reason: { type: string }
+        usage:
+          type: object
+          properties:
+            prompt_tokens: { type: integer }
+            completion_tokens: { type: integer }
+            total_tokens: { type: integer }
+
+    PolicyScope:
+      type: object
+      properties:
+        org_id: { type: string }
+        team_id: { type: string }
+        project_id: { type: string }
+        user_id: { type: string }
+
+    PolicyRule:
+      type: object
+      required: [name, scope]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        scope: { $ref: '#/components/schemas/PolicyScope' }
+        priority: { type: integer, default: 0 }
+        allow_override: { type: boolean, default: true }
+        max_tier: { type: string, enum: [SIMPLE, MEDIUM, COMPLEX] }
+        blocked_models: { type: array, items: { type: string } }
+        allowed_models: { type: array, items: { type: string } }
+
+    HarnessKey:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        user_id: { type: string }
+        org_id: { type: string }
+        team_id: { type: string }
+        project_id: { type: string }
+        key_suffix: { type: string }
+        max_budget_daily_usd: { type: number }
+        max_budget_monthly_usd: { type: number }
+        expires_at: { type: string, format: date-time }
+
+    CreateKeyRequest:
+      type: object
+      required: [name, user_id, org_id]
+      properties:
+        name: { type: string }
+        user_id: { type: string }
+        org_id: { type: string }
+        team_id: { type: string }
+        project_id: { type: string }
+        max_budget_daily_usd: { type: number }
+        max_budget_monthly_usd: { type: number }
+
+    CreateKeyResponse:
+      type: object
+      properties:
+        key_id: { type: string }
+        plaintext: { type: string }
+        name: { type: string }
+        key_suffix: { type: string }
+
+    SpendSummary:
+      type: object
+      properties:
+        daily_usd: { type: number }
+        monthly_usd: { type: number }
+        total_usd: { type: number }
+        total_requests: { type: integer }
+        total_tokens: { type: integer }
+
+    SpendBreakdown:
+      type: object
+      additionalProperties:
+        type: object
+        properties:
+          cost_usd: { type: number }
+          requests: { type: integer }
+          tokens: { type: integer }
+
+    AuditEvent:
+      type: object
+      properties:
+        timestamp: { type: number }
+        action: { type: string }
+        agent_name: { type: string }
+        model: { type: string }
+        tokens_used: { type: integer }
+        cost_usd: { type: number }
+        status: { type: string }
+
+    HarnessConfig:
+      type: object
+      properties:
+        enabled: { type: boolean }
+        default_tier_mapping:
+          type: object
+          properties:
+            simple: { type: string }
+            medium: { type: string }
+            complex: { type: string }
+        budget_exceeded_action: { type: string, enum: [warn, downgrade, block] }
+        allow_override: { type: boolean }
+        log_requests: { type: boolean }
+
+    ClassificationResult:
+      type: object
+      properties:
+        tier: { type: string, enum: [SIMPLE, MEDIUM, COMPLEX] }
+        score: { type: integer }
+        confidence: { type: number }
+        reason: { type: string }
+        signals: { type: object }
+
+    TokenInfo:
+      type: object
+      properties:
+        token_id: { type: string }
+        agent_name: { type: string }
+        grantor_id: { type: string }
+        scopes: { type: array, items: { type: string } }
+        status: { type: string }
+        single_use: { type: boolean }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+
+    CreateTokenRequest:
+      type: object
+      required: [agent_name, grantor_id]
+      properties:
+        agent_name: { type: string }
+        grantor_id: { type: string }
+        scopes: { type: array, items: { type: string }, default: [chat] }
+        single_use: { type: boolean, default: false }
+        expires_in_seconds: { type: integer }
+
+    CreateTokenResponse:
+      type: object
+      properties:
+        token: { type: string }
+        token_id: { type: string }
+        agent_name: { type: string }
+        expires_in_seconds: { type: integer }
+
+    AgentSummary:
+      type: object
+      properties:
+        name: { type: string }
+        capabilities: { type: array, items: { type: string } }
+        model: { type: string }
+        source: { type: string }
+        strategy: { type: string }
+        tags: { type: array, items: { type: string } }
+
+    AgentDetail:
+      type: object
+      properties:
+        name: { type: string }
+        capabilities: { type: array, items: { type: string } }
+        model: { type: string }
+        system_prompt: { type: string }
+        max_iterations: { type: integer }
+        tools: { type: array, items: { type: string } }
+        total_runs: { type: integer }
+        strategy: { type: string }
+        tags: { type: array, items: { type: string } }
+
+    RunSummary:
+      type: object
+      properties:
+        run_id: { type: string }
+        agent_name: { type: string }
+        status: { type: string }
+        input_preview: { type: string }
+        output_preview: { type: string }
+        started_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+        total_tokens: { type: integer }
+        run_type: { type: string }
+
+    RunDetail:
+      type: object
+      properties:
+        run_id: { type: string }
+        agent_name: { type: string }
+        status: { type: string }
+        input_text: { type: string }
+        output_text: { type: string }
+        started_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+        total_tokens: { type: integer }
+        tool_calls: { type: array, items: { type: object } }
+        steps: { type: array, items: { type: object } }
+
+    PaginatedResponse:
+      type: object
+      properties:
+        items: { type: array, items: { type: object } }
+        next_cursor: { type: string }
+        has_more: { type: boolean }
+
+    HealthResponse:
+      type: object
+      properties:
+        status: { type: string, example: healthy }
+        backends: { type: array, items: { type: string } }
+        config_enabled: { type: boolean }
+
+paths:
+  # ── Harness Proxy ─────────────────────────────────────────
+  /v1/messages:
+    post:
+      operationId: createMessage
+      tags: [Harness]
+      summary: Anthropic Messages API (proxy)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [model, messages, max_tokens]
+              properties:
+                model: { type: string }
+                messages: { type: array, items: { $ref: '#/components/schemas/ChatMessage' } }
+                max_tokens: { type: integer }
+                stream: { type: boolean, default: false }
+                system: { type: string }
+      responses:
+        '200':
+          description: Chat response or SSE stream
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  content: { type: array, items: { type: object } }
+                  model: { type: string }
+                  stop_reason: { type: string }
+                  usage: { type: object }
+
+  /v1/chat/completions:
+    post:
+      operationId: createChatCompletion
+      tags: [Harness]
+      summary: OpenAI Chat Completions API (proxy)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChatCompletionRequest' }
+      responses:
+        '200':
+          description: Chat completion response or SSE stream
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChatCompletionResponse' }
+
+  /v1/models:
+    get:
+      operationId: listModels
+      tags: [Harness]
+      summary: List available models
+      responses:
+        '200':
+          description: Model list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  object: { type: string, example: list }
+                  data: { type: array, items: { type: object, properties: { id: { type: string }, object: { type: string } } } }
+
+  # ── Harness Admin ─────────────────────────────────────────
+  /api/v1/harness/policies:
+    get:
+      operationId: listPolicies
+      tags: [Harness Admin]
+      summary: List policies
+      parameters:
+        - name: org_id
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Policy list
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/PolicyRule' } }
+    post:
+      operationId: createPolicy
+      tags: [Harness Admin]
+      summary: Create policy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PolicyRule' }
+      responses:
+        '201':
+          description: Policy created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PolicyRule' }
+
+  /api/v1/harness/policies/{policy_id}:
+    parameters:
+      - name: policy_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getPolicy
+      tags: [Harness Admin]
+      summary: Get policy
+      responses:
+        '200':
+          description: Policy detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PolicyRule' }
+    put:
+      operationId: updatePolicy
+      tags: [Harness Admin]
+      summary: Update policy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PolicyRule' }
+      responses:
+        '200':
+          description: Policy updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PolicyRule' }
+    delete:
+      operationId: deletePolicy
+      tags: [Harness Admin]
+      summary: Delete policy
+      responses:
+        '204':
+          description: Policy deleted
+
+  /api/v1/harness/keys:
+    get:
+      operationId: listKeys
+      tags: [Harness Admin]
+      summary: List API keys
+      parameters:
+        - name: org_id
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Key list
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/HarnessKey' } }
+    post:
+      operationId: createKey
+      tags: [Harness Admin]
+      summary: Create API key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateKeyRequest' }
+      responses:
+        '201':
+          description: Key created (plaintext shown once)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreateKeyResponse' }
+
+  /api/v1/harness/keys/{key_id}:
+    delete:
+      operationId: deleteKey
+      tags: [Harness Admin]
+      summary: Delete API key
+      parameters:
+        - name: key_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204':
+          description: Key deleted
+
+  /api/v1/harness/spend:
+    get:
+      operationId: getSpend
+      tags: [Harness Admin]
+      summary: Spend summary
+      parameters:
+        - name: org_id
+          in: query
+          schema: { type: string }
+        - name: user_id
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Spend summary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SpendSummary' }
+
+  /api/v1/harness/spend/breakdown:
+    get:
+      operationId: getSpendBreakdown
+      tags: [Harness Admin]
+      summary: Cost breakdown by model
+      parameters:
+        - name: org_id
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Per-model cost breakdown
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SpendBreakdown' }
+
+  /api/v1/harness/audit:
+    get:
+      operationId: getAuditLog
+      tags: [Harness Admin]
+      summary: Audit log
+      parameters:
+        - name: event_type
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100 }
+      responses:
+        '200':
+          description: Audit events
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/AuditEvent' } }
+
+  /api/v1/harness/config:
+    get:
+      operationId: getHarnessConfig
+      tags: [Harness Admin]
+      summary: Get harness configuration
+      responses:
+        '200':
+          description: Current config
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HarnessConfig' }
+    put:
+      operationId: updateHarnessConfig
+      tags: [Harness Admin]
+      summary: Update harness configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HarnessConfig' }
+      responses:
+        '200':
+          description: Updated config
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HarnessConfig' }
+
+  /api/v1/harness/test-classify:
+    post:
+      operationId: testClassify
+      tags: [Harness Admin]
+      summary: Test complexity classification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                messages: { type: array, items: { $ref: '#/components/schemas/ChatMessage' } }
+      responses:
+        '200':
+          description: Classification result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ClassificationResult' }
+
+  # ── Gateway ───────────────────────────────────────────────
+  /gateway/tokens:
+    post:
+      operationId: createToken
+      tags: [Gateway]
+      summary: Create access token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateTokenRequest' }
+      responses:
+        '201':
+          description: Token created (plaintext shown once)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreateTokenResponse' }
+    get:
+      operationId: listTokens
+      tags: [Gateway]
+      summary: List tokens
+      parameters:
+        - name: agent_name
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Token list
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/TokenInfo' } }
+
+  /gateway/tokens/{token_id}/revoke:
+    post:
+      operationId: revokeToken
+      tags: [Gateway]
+      summary: Revoke token
+      parameters:
+        - name: token_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Token revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token_id: { type: string }
+                  status: { type: string }
+
+  /gateway/tokens/{token_id}:
+    delete:
+      operationId: deleteToken
+      tags: [Gateway]
+      summary: Delete token
+      parameters:
+        - name: token_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Token deleted
+
+  # ── Admin ─────────────────────────────────────────────────
+  /admin/agents:
+    get:
+      operationId: listAgents
+      tags: [Admin]
+      summary: List agents
+      responses:
+        '200':
+          description: Agent list
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/AgentSummary' } }
+
+  /admin/agents/{agent_name}:
+    get:
+      operationId: getAgent
+      tags: [Admin]
+      summary: Agent detail
+      parameters:
+        - name: agent_name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Full agent detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentDetail' }
+
+  /admin/agents/{agent_name}/config:
+    patch:
+      operationId: updateAgentConfig
+      tags: [Admin]
+      summary: Update agent configuration
+      parameters:
+        - name: agent_name
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                model: { type: string }
+                system_prompt: { type: string }
+                temperature: { type: number }
+                max_tokens: { type: integer }
+                tags: { type: array, items: { type: string } }
+      responses:
+        '200':
+          description: Updated config
+
+  /admin/runs:
+    get:
+      operationId: listRuns
+      tags: [Admin]
+      summary: List runs
+      parameters:
+        - name: agent_name
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { type: string }
+        - name: cursor
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        '200':
+          description: Paginated run list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/PaginatedResponse' }
+                  - type: object
+                    properties:
+                      items: { type: array, items: { $ref: '#/components/schemas/RunSummary' } }
+
+  /admin/runs/{run_id}:
+    get:
+      operationId: getRun
+      tags: [Admin]
+      summary: Run detail
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Full run detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunDetail' }
+
+  /admin/runs/{run_id}/pause:
+    post:
+      operationId: pauseRun
+      tags: [Admin]
+      summary: Pause a running agent
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Run paused
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id: { type: string }
+                  action: { type: string }
+                  status: { type: string }
+
+  /admin/runs/{run_id}/resume:
+    post:
+      operationId: resumeRun
+      tags: [Admin]
+      summary: Resume a paused agent
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Run resumed
+
+  /admin/runs/{run_id}/cancel:
+    post:
+      operationId: cancelRun
+      tags: [Admin]
+      summary: Cancel a running agent
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Run cancelled
+
+  /admin/sessions:
+    get:
+      operationId: listSessions
+      tags: [Admin]
+      summary: List active sessions
+      parameters:
+        - name: cursor
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        '200':
+          description: Session list
+
+  /admin/sessions/{session_id}:
+    get:
+      operationId: getSession
+      tags: [Admin]
+      summary: Session detail
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Session detail
+
+  # ── Health ────────────────────────────────────────────────
+  /health:
+    get:
+      operationId: healthCheck
+      tags: [Health]
+      summary: Health check
+      security: []
+      responses:
+        '200':
+          description: Service health
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthResponse' }
