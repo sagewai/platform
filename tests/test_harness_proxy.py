@@ -324,7 +324,7 @@ class TestHarnessProxy:
         assert proxy._detect_provider("gpt-4o") == "openai"
         assert proxy._detect_provider("gpt-4o-mini") == "openai"
         assert proxy._detect_provider("o3-mini") == "openai"
-        assert proxy._detect_provider("gemini-2.0-flash") == "google"
+        assert proxy._detect_provider("gemini-2.5-flash") == "google"
         assert proxy._detect_provider("some-other-model") == "default"
 
     def test_estimate_cost(self) -> None:

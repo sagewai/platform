@@ -58,7 +58,7 @@ class TestModelPricing:
         assert out > 0
 
     def test_gemini_model(self):
-        inp, out = get_model_pricing("gemini-2.0-flash")
+        inp, out = get_model_pricing("gemini-2.5-flash")
         assert inp == 0.10
 
 

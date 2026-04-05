@@ -51,7 +51,7 @@ class AgentConfig(BaseModel):
 
     model: str = "gpt-4o"
     """LLM model to use. Any LiteLLM-supported model string works.
-    Examples: ``'gpt-4o'``, ``'claude-sonnet-4-20250514'``, ``'gemini/gemini-2.0-flash'``,
+    Examples: ``'gpt-4o'``, ``'claude-sonnet-4-20250514'``, ``'gemini/gemini-2.5-flash'``,
     ``'ollama/llama3'``"""
 
     system_prompt: str = ""

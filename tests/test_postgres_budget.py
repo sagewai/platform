@@ -96,7 +96,7 @@ class TestPostgresBudgetManager:
             max_daily_usd=0.01,
             max_monthly_usd=100.0,
             action="throttle",
-            fallback_chain=["gpt-4o-mini", "gemini-2.0-flash"],
+            fallback_chain=["gpt-4o-mini", "gemini-2.5-flash"],
         )
         await mgr.record_spend(agent_name="agent-a", cost_usd=1.0)
         fallback = await mgr.get_fallback_model("agent-a", "gpt-4o")

@@ -46,7 +46,7 @@ async def test_simple_chat(mock_client_cls):
     )
     mock_client_cls.return_value = mock_client
 
-    agent = GoogleNativeAgent(name="test", model="gemini-2.0-flash")
+    agent = GoogleNativeAgent(name="test", model="gemini-2.5-flash")
     result = await agent.chat("Hi")
 
     assert result == "Hello from Gemini!"
@@ -80,7 +80,7 @@ async def test_tool_call_parsing(mock_client_cls):
         handler=search_handler,
     )
 
-    agent = GoogleNativeAgent(name="test", model="gemini-2.0-flash", tools=[tool])
+    agent = GoogleNativeAgent(name="test", model="gemini-2.5-flash", tools=[tool])
     result = await agent.chat("Search for test")
 
     assert result == "Found: test results"
@@ -107,7 +107,7 @@ async def test_tool_schema_conversion(mock_client_cls):
         },
     )
 
-    agent = GoogleNativeAgent(name="test", model="gemini-2.0-flash", tools=[tool])
+    agent = GoogleNativeAgent(name="test", model="gemini-2.5-flash", tools=[tool])
     await agent.chat("Weather?")
 
     # Verify generate_content was called with config containing tools
@@ -133,7 +133,7 @@ async def test_system_instruction_in_config(mock_client_cls):
 
     agent = GoogleNativeAgent(
         name="test",
-        model="gemini-2.0-flash",
+        model="gemini-2.5-flash",
         system_prompt="You are a pirate.",
     )
     result = await agent.chat("Who are you?")
@@ -154,7 +154,7 @@ async def test_content_building(mock_client_cls):
     )
     mock_client_cls.return_value = mock_client
 
-    agent = GoogleNativeAgent(name="test", model="gemini-2.0-flash")
+    agent = GoogleNativeAgent(name="test", model="gemini-2.5-flash")
     await agent.chat("Hello")
 
     call_kwargs = mock_client.aio.models.generate_content.call_args[1]
@@ -174,7 +174,7 @@ async def test_multiple_system_messages_concatenated(mock_client_cls):
         return_value=_make_gemini_response(text="ok")
     )
 
-    agent = GoogleNativeAgent(name="t", model="gemini-2.0-flash")
+    agent = GoogleNativeAgent(name="t", model="gemini-2.5-flash")
     messages = [
         ChatMessage(role="system", content="First."),
         ChatMessage(role="system", content="Second."),
@@ -206,7 +206,7 @@ async def test_empty_function_call_args(mock_client_cls):
     mock_instance = mock_client_cls.return_value
     mock_instance.aio.models.generate_content = AsyncMock(return_value=response)
 
-    agent = GoogleNativeAgent(name="t", model="gemini-2.0-flash")
+    agent = GoogleNativeAgent(name="t", model="gemini-2.5-flash")
     result = await agent._call_llm(
         [ChatMessage(role="user", content="hi")], []
     )
@@ -224,7 +224,7 @@ async def test_response_missing_candidates(mock_client_cls):
     mock_instance = mock_client_cls.return_value
     mock_instance.aio.models.generate_content = AsyncMock(return_value=response)
 
-    agent = GoogleNativeAgent(name="t", model="gemini-2.0-flash")
+    agent = GoogleNativeAgent(name="t", model="gemini-2.5-flash")
     result = await agent._call_llm(
         [ChatMessage(role="user", content="hi")], []
     )
@@ -241,7 +241,7 @@ async def test_token_usage_fallback(mock_client_cls):
     mock_instance = mock_client_cls.return_value
     mock_instance.aio.models.generate_content = AsyncMock(return_value=response)
 
-    agent = GoogleNativeAgent(name="t", model="gemini-2.0-flash")
+    agent = GoogleNativeAgent(name="t", model="gemini-2.5-flash")
     result = await agent._call_llm(
         [ChatMessage(role="user", content="hi")], []
     )
@@ -258,7 +258,7 @@ async def test_tool_result_mapped_to_user_role(mock_client_cls):
         return_value=_make_gemini_response(text="ok")
     )
 
-    agent = GoogleNativeAgent(name="t", model="gemini-2.0-flash")
+    agent = GoogleNativeAgent(name="t", model="gemini-2.5-flash")
     messages = [
         ChatMessage(role="user", content="call my tool"),
         ChatMessage(role="tool", content='{"result": 42}', tool_call_id="tc1"),

@@ -22,7 +22,7 @@ Usage::
         max_daily_usd=5.0,
         max_monthly_usd=100.0,
         action="throttle",
-        fallback_chain=["gpt-4o-mini", "gemini-2.0-flash"],
+        fallback_chain=["gpt-4o-mini", "gemini-2.5-flash"],
     ))
 
     # Record spend after each LLM call

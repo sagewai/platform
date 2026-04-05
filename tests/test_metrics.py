@@ -175,46 +175,46 @@ class TestLLMCallMetrics:
     @pytest.mark.asyncio
     async def test_llm_call_zero_cost_skips_cost_counter(self):
         before = llm_cost_usd_total.labels(
-            model="gemini-2.0-flash", agent_name="test"
+            model="gemini-2.5-flash", agent_name="test"
         )._value.get()
         await metrics_event_hook(
             AgentEvent.LLM_CALL_FINISHED,
             {
                 "agent": "test",
-                "model": "gemini-2.0-flash",
+                "model": "gemini-2.5-flash",
                 "input_tokens": 0,
                 "output_tokens": 0,
                 "cost_usd": 0.0,
             },
         )
         after = llm_cost_usd_total.labels(
-            model="gemini-2.0-flash", agent_name="test"
+            model="gemini-2.5-flash", agent_name="test"
         )._value.get()
         assert after == before
 
     @pytest.mark.asyncio
     async def test_llm_call_zero_tokens_skips_token_counters(self):
         before_in = llm_tokens_total.labels(
-            model="gemini-2.0-flash", agent_name="test", token_type="input"
+            model="gemini-2.5-flash", agent_name="test", token_type="input"
         )._value.get()
         before_out = llm_tokens_total.labels(
-            model="gemini-2.0-flash", agent_name="test", token_type="output"
+            model="gemini-2.5-flash", agent_name="test", token_type="output"
         )._value.get()
         await metrics_event_hook(
             AgentEvent.LLM_CALL_FINISHED,
             {
                 "agent": "test",
-                "model": "gemini-2.0-flash",
+                "model": "gemini-2.5-flash",
                 "input_tokens": 0,
                 "output_tokens": 0,
                 "cost_usd": 0.001,
             },
         )
         after_in = llm_tokens_total.labels(
-            model="gemini-2.0-flash", agent_name="test", token_type="input"
+            model="gemini-2.5-flash", agent_name="test", token_type="input"
         )._value.get()
         after_out = llm_tokens_total.labels(
-            model="gemini-2.0-flash", agent_name="test", token_type="output"
+            model="gemini-2.5-flash", agent_name="test", token_type="output"
         )._value.get()
         assert after_in == before_in
         assert after_out == before_out

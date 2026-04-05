@@ -299,7 +299,7 @@ class TestProfiles:
         assert profile.name == "large"
 
     def test_detect_gemini_flash(self):
-        profile = detect_profile("gemini/gemini-2.0-flash")
+        profile = detect_profile("gemini/gemini-2.5-flash")
         assert profile.name == "medium"
 
     def test_detect_claude_haiku(self):

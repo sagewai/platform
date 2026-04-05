@@ -38,7 +38,7 @@ from sagewai.engines.universal import UniversalAgent
 MODELS = [
     ("gpt-4o-mini", "OPENAI_API_KEY"),
     ("claude-sonnet-4-5-20250929", "ANTHROPIC_API_KEY"),
-    ("gemini/gemini-2.0-flash", "GEMINI_API_KEY"),
+    ("gemini/gemini-2.5-flash", "GEMINI_API_KEY"),
     ("ollama/llama3.2", None),  # Local — no key needed
 ]
 

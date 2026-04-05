@@ -91,7 +91,7 @@ def test_anthropic_defaults():
 
 def test_gemini_defaults():
     result = providers.gemini()
-    assert result["model"] == "gemini/gemini-2.0-flash"
+    assert result["model"] == "gemini/gemini-2.5-flash"
 
 
 def test_custom():

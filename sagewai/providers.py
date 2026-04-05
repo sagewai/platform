@@ -31,7 +31,7 @@ Usage::
     # Cloud providers
     agent = UniversalAgent("bot", **providers.openai("gpt-4o"))
     agent = UniversalAgent("bot", **providers.anthropic("claude-sonnet-4-6"))
-    agent = UniversalAgent("bot", **providers.gemini("gemini-2.0-flash"))
+    agent = UniversalAgent("bot", **providers.gemini("gemini-2.5-flash"))
 """
 
 from __future__ import annotations
@@ -202,11 +202,11 @@ def anthropic(model: str = "claude-sonnet-4-6", api_key: str | None = None) -> d
     return result
 
 
-def gemini(model: str = "gemini-2.0-flash", api_key: str | None = None) -> dict:
+def gemini(model: str = "gemini-2.5-flash", api_key: str | None = None) -> dict:
     """Google Gemini models.
 
     Args:
-        model: Gemini model ID (e.g. ``"gemini-2.0-flash"``, ``"gemini-1.5-pro"``).
+        model: Gemini model ID (e.g. ``"gemini-2.5-flash"``, ``"gemini-1.5-pro"``).
         api_key: Gemini API key. Reads ``GEMINI_API_KEY`` env var.
 
     Returns:

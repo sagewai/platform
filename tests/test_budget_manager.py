@@ -28,7 +28,7 @@ class TestBudgetLimit:
             max_daily_usd=5.0,
             max_monthly_usd=100.0,
             action="throttle",
-            fallback_chain=["gpt-4o-mini", "gemini-2.0-flash", "llama-3.1-8b-instant"],
+            fallback_chain=["gpt-4o-mini", "gemini-2.5-flash", "llama-3.1-8b-instant"],
         )
         assert limit.action == "throttle"
         assert len(limit.fallback_chain) == 3
@@ -135,7 +135,7 @@ class TestModelFallback:
             max_daily_usd=1.0,
             max_monthly_usd=20.0,
             action="throttle",
-            fallback_chain=["gpt-4o-mini", "gemini-2.0-flash"],
+            fallback_chain=["gpt-4o-mini", "gemini-2.5-flash"],
         ))
         mgr.record_spend(agent_name="agent-a", cost_usd=1.5)
         model = mgr.get_fallback_model("agent-a", current_model="gpt-4o")
@@ -160,7 +160,7 @@ class TestModelFallback:
             max_daily_usd=1.0,
             max_monthly_usd=20.0,
             action="throttle",
-            fallback_chain=["gpt-4o", "gpt-4o-mini", "gemini-2.0-flash"],
+            fallback_chain=["gpt-4o", "gpt-4o-mini", "gemini-2.5-flash"],
         ))
         mgr.record_spend(agent_name="agent-a", cost_usd=1.5)
         model = mgr.get_fallback_model("agent-a", current_model="gpt-4o")

@@ -260,7 +260,7 @@ class TestHarnessPillar:
             output_tokens=500,
             cost_usd=0.05,
         )
-        store.record_spend(record)
+        await store.record_spend(record)
         summary = await store.get_spend_summary(org_id="acme")
         assert summary is not None
         assert summary.get("total_cost_usd", 0) > 0 or summary.get("total_usd", 0) > 0 or len(summary) > 0

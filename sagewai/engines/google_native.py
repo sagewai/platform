@@ -15,7 +15,7 @@ features without the LiteLLM proxy layer.
 
 Usage::
 
-    agent = GoogleNativeAgent(name="gemini", model="gemini-2.0-flash")
+    agent = GoogleNativeAgent(name="gemini", model="gemini-2.5-flash")
     response = await agent.chat("Summarize this document.")
 """
 
@@ -42,7 +42,7 @@ from sagewai.models.tool import ToolSpec
 class GoogleNativeAgent(BaseAgent):
     """Agent using Google's unified GenAI SDK for Gemini models.
 
-    Supports gemini-2.0-flash, gemini-2.5-pro, etc.
+    Supports gemini-2.5-flash, gemini-2.5-pro, etc.
     """
 
     def __init__(self, **kwargs: Any) -> None:

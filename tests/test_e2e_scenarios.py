@@ -180,7 +180,7 @@ class TestCrossEngineEquivalence:
             mock_instance.aio.models.generate_content = AsyncMock(
                 return_value=mock_gemini_resp
             )
-            ga = GoogleNativeAgent(name="g", model="gemini-2.0-flash")
+            ga = GoogleNativeAgent(name="g", model="gemini-2.5-flash")
             result_g = await ga._call_llm(messages, [])
 
         # Both should return ChatMessage with content
