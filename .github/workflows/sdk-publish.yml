@@ -39,7 +39,7 @@ jobs:
     needs: [build, test]
     environment: testpypi
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
@@ -52,7 +52,7 @@ jobs:
     needs: [build, test, publish-testpypi]
     environment: pypi
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
