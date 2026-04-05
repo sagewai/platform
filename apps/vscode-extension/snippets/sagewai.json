@@ -1,0 +1,64 @@
+{
+  "Sagewai Agent": {
+    "prefix": "swagent",
+    "body": [
+      "from sagewai import UniversalAgent, tool",
+      "",
+      "",
+      "@tool",
+      "def ${1:tool_name}(${2:query}: str) -> str:",
+      "    \"\"\"${3:Tool description}.\"\"\"",
+      "    return ${4:\"result\"}",
+      "",
+      "",
+      "agent = UniversalAgent(",
+      "    name=\"${5:my_agent}\",",
+      "    model=\"${6:gpt-4o}\",",
+      "    system_prompt=\"${7:You are a helpful assistant.}\",",
+      "    tools=[${1:tool_name}],",
+      ")",
+      ""
+    ],
+    "description": "Create a new Sagewai agent with a tool"
+  },
+  "Sagewai Tool": {
+    "prefix": "swtool",
+    "body": [
+      "@tool",
+      "def ${1:tool_name}(${2:query}: str) -> str:",
+      "    \"\"\"${3:Tool description}.\"\"\"",
+      "    return ${0:\"result\"}"
+    ],
+    "description": "Add a new @tool decorated function"
+  },
+  "Sagewai Workflow": {
+    "prefix": "swworkflow",
+    "body": [
+      "from sagewai import SequentialAgent, UniversalAgent",
+      "",
+      "${1:agent1} = UniversalAgent(name=\"${2:stage1}\", model=\"gpt-4o\", system_prompt=\"${3:prompt}\")",
+      "${4:agent2} = UniversalAgent(name=\"${5:stage2}\", model=\"gpt-4o\", system_prompt=\"${6:prompt}\")",
+      "",
+      "pipeline = SequentialAgent(",
+      "    name=\"${7:pipeline}\",",
+      "    agents=[${1:agent1}, ${4:agent2}],",
+      ")"
+    ],
+    "description": "Create a sequential agent workflow"
+  },
+  "Context Directive": {
+    "prefix": "swctx",
+    "body": ["@context('${1:query}', scope='${2|project,org|}', tags='${3:tag1,tag2}')"],
+    "description": "Insert @context directive"
+  },
+  "Memory Directive": {
+    "prefix": "swmem",
+    "body": ["@memory('${1:query}')"],
+    "description": "Insert @memory directive"
+  },
+  "Agent Directive": {
+    "prefix": "swag",
+    "body": ["@agent:${1:agent_name}('${2:task}')"],
+    "description": "Insert @agent delegation directive"
+  }
+}
