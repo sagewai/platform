@@ -9,7 +9,7 @@ description = "Open-source AI agent platform for production workloads — full-s
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "AGPL-3.0-or-later"}
-authors = [{name = "Sagecurator", email = "hello@sagewai.ai"}]
+authors = [{name = "Ali Arda Diri", email = "arda@sagewai.ai"}]
 keywords = [
     "ai",
     "agents",

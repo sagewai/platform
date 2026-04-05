@@ -85,4 +85,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and PR
 
 AGPL-3.0 -- see [LICENSE](LICENSE). Commercial licenses available for organizations that need an alternative to AGPL. See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) for details.
 
-Built by [Sagecurator](https://sagewai.ai).
+Built by [Ali Arda Diri](https://sagecurator.com).

@@ -12,7 +12,7 @@ Thank you for your interest in contributing to Sagewai. This guide covers everyt
 
 ```bash
 # Clone the repository
-git clone https://github.com/sagecurator/sagewai.git
+git clone https://github.com/sagewai/sagewai.git
 cd sagewai
 
 # Install all dependencies
@@ -142,6 +142,6 @@ No Contributor License Agreement (CLA) is required.
 
 ## Questions?
 
-- Open a [GitHub Discussion](https://github.com/sagecurator/sagewai/discussions) for questions
-- File a [GitHub Issue](https://github.com/sagecurator/sagewai/issues) for bugs or feature requests
+- Open a [GitHub Discussion](https://github.com/sagewai/sagewai/discussions) for questions
+- File a [GitHub Issue](https://github.com/sagewai/sagewai/issues) for bugs or feature requests
 - Email: hello@sagewai.ai

@@ -35,7 +35,7 @@ Under the AGPL-3.0 and copyright law, a derivative work includes:
 Such translations:
 
 1. **Must** retain the AGPL-3.0 license (or a compatible copyleft license)
-2. **Must** provide clear attribution to Sagecurator as the original author
+2. **Must** provide clear attribution to Ali Arda Diri as the original author
 3. **Must not** use the Sagewai name, logo, or "Sage" prefix (see TRADEMARK.md)
 4. **Must** make their source code publicly available under AGPL-3.0
 
@@ -71,9 +71,9 @@ No. You may not rebrand Sagewai and offer it as your own product. See TRADEMARK.
 
 ### Why does Sagewai offer official wrappers in so many languages?
 
-Sagewai is building official thin API client wrappers in 14 languages (TypeScript, Go, Rust, Java, C#, Ruby, C++, Swift, PHP, Dart, Perl, Elixir, Scala) so that developers in any language can integrate with Sagewai without needing to translate the core SDK. These wrappers are being released progressively — check the [Sagewai GitHub organization](https://github.com/sagecurator) for availability.
+Sagewai is building official thin API client wrappers in 14 languages (TypeScript, Go, Rust, Java, C#, Ruby, C++, Swift, PHP, Dart, Perl, Elixir, Scala) so that developers in any language can integrate with Sagewai without needing to translate the core SDK. These wrappers are being released progressively — check the [Sagewai GitHub organization](https://github.com/sagewai) for availability.
 
-These wrappers call the Sagewai server API and are maintained by Sagecurator. They are the recommended way to use Sagewai from non-Python environments.
+These wrappers call the Sagewai server API and are maintained by Ali Arda Diri. They are the recommended way to use Sagewai from non-Python environments.
 
 ## Contact
 
