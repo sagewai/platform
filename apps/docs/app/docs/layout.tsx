@@ -35,7 +35,7 @@ export default function DocsLayout({ children }: { children: React.ReactNode }) 
               Guides
             </Link>
             <a
-              href="https://github.com/sagecurator/atelier"
+              href="https://github.com/sagewai/sagewai"
               className="text-sm text-gray-600 hover:text-emerald-700 transition-colors"
               target="_blank"
               rel="noopener noreferrer"

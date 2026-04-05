@@ -131,7 +131,7 @@ export default function LandingPage() {
               Guides
             </Link>
             <a
-              href="https://github.com/sagecurator/atelier"
+              href="https://github.com/sagewai/sagewai"
               className="text-sm text-gray-600 hover:text-emerald-700 transition-colors"
               target="_blank"
               rel="noopener noreferrer"
@@ -175,7 +175,7 @@ export default function LandingPage() {
                 Get Started
               </Link>
               <a
-                href="https://github.com/sagecurator/atelier"
+                href="https://github.com/sagewai/sagewai"
                 className="w-full sm:w-auto border border-gray-300 text-gray-700 px-8 py-3.5 rounded-xl text-base font-semibold hover:border-gray-400 hover:bg-gray-50 transition-colors"
                 target="_blank"
                 rel="noopener noreferrer"
@@ -393,7 +393,7 @@ export default function LandingPage() {
               <ul className="space-y-2">
                 <li>
                   <a
-                    href="https://github.com/sagecurator/atelier"
+                    href="https://github.com/sagewai/sagewai"
                     className="text-sm text-gray-600 hover:text-emerald-700"
                     target="_blank"
                     rel="noopener noreferrer"
@@ -403,7 +403,7 @@ export default function LandingPage() {
                 </li>
                 <li>
                   <a
-                    href="https://github.com/sagecurator/atelier/issues"
+                    href="https://github.com/sagewai/sagewai/issues"
                     className="text-sm text-gray-600 hover:text-emerald-700"
                     target="_blank"
                     rel="noopener noreferrer"
