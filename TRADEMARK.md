@@ -1,7 +1,7 @@
 # Sagewai Trademark Policy
 
 **Effective Date**: 2026-04-04
-**Owner**: Ali Arda Diri (operating as Sagecurator)
+**Owner**: Ali Arda Diri, 14195 Berlin, Germany (operating as Sagecurator)
 
 ## Trademarks
 
