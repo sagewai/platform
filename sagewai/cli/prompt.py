@@ -53,7 +53,14 @@ def prompt_list(
     if as_json:
         _cli._echo_json(data)
         return
-    if not data:
+    if isinstance(data, dict):
+        items = data.get("items", [])
+    elif isinstance(data, list):
+        items = data
+    else:
+        click.echo(f"Unexpected response format: {type(data).__name__}")
+        return
+    if not items:
         click.echo("No prompt logs found.")
         return
     rows = [
@@ -66,7 +73,7 @@ def prompt_list(
             ),
             "cost": f"${entry.get('cost_usd', 0):.4f}",
         }
-        for entry in data
+        for entry in items
     ]
     _cli._echo_table(rows, ["log_id", "agent", "model", "tokens", "cost"])
 

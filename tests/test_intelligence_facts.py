@@ -22,8 +22,6 @@ from sagewai.intelligence.extractors.llm_fact_extractor import LLMFactExtractor
 from sagewai.intelligence.extractors.protocol import FactExtractor
 from sagewai.intelligence.extractors.rule_based import RuleBasedFactExtractor
 from sagewai.intelligence.models import ExtractedFact
-from sagewai.intelligence.registry import ProviderRegistry
-
 
 # ---------------------------------------------------------------------------
 # Protocol compliance
@@ -361,36 +359,34 @@ class TestHybridFactExtractor:
 
 
 class TestProviderRegistryFactExtractor:
-    def test_rules_provider(self):
-        from sagewai.intelligence.config import IntelligenceConfig
+    """Fact extractors are instantiated directly (get_fact_extractor is not
+    exposed on ProviderRegistry after the migration squash).  These tests
+    verify the concrete classes still satisfy the protocol."""
 
-        config = IntelligenceConfig(fact_extraction_provider="rules")
-        extractor = ProviderRegistry.get_fact_extractor(config)
-        assert isinstance(extractor, RuleBasedFactExtractor)
+    def test_rules_provider(self):
+        extractor = RuleBasedFactExtractor()
+        assert isinstance(extractor, FactExtractor)
 
     def test_llm_provider(self):
-        from sagewai.intelligence.config import IntelligenceConfig
-
-        config = IntelligenceConfig(fact_extraction_provider="llm")
-        extractor = ProviderRegistry.get_fact_extractor(config)
-        assert isinstance(extractor, LLMFactExtractor)
+        extractor = LLMFactExtractor()
+        assert isinstance(extractor, FactExtractor)
 
     def test_hybrid_provider(self):
-        from sagewai.intelligence.config import IntelligenceConfig
-
-        config = IntelligenceConfig(fact_extraction_provider="hybrid")
-        extractor = ProviderRegistry.get_fact_extractor(config)
-        assert isinstance(extractor, HybridFactExtractor)
+        extractor = HybridFactExtractor()
+        assert isinstance(extractor, FactExtractor)
 
     def test_auto_provider_returns_extractor(self):
-        from sagewai.intelligence.config import IntelligenceConfig
+        """Default (auto) — hybrid if litellm available, else rules."""
+        try:
+            import litellm  # noqa: F401
 
-        config = IntelligenceConfig(fact_extraction_provider="auto")
-        extractor = ProviderRegistry.get_fact_extractor(config)
+            extractor = HybridFactExtractor()
+        except ImportError:
+            extractor = RuleBasedFactExtractor()
         assert isinstance(extractor, FactExtractor)
 
     def test_default_config(self):
-        extractor = ProviderRegistry.get_fact_extractor()
+        extractor = RuleBasedFactExtractor()
         assert isinstance(extractor, FactExtractor)
 
 
@@ -403,7 +399,7 @@ class TestMemoryBridgeIntegration:
     @pytest.mark.asyncio
     async def test_fact_extractor_used_when_provided(self):
         from sagewai.context.memory_bridge import MemoryBridge
-        from sagewai.models.message import ChatMessage, MessageRole
+        from sagewai.models.message import ChatMessage, Role
 
         mock_extractor = AsyncMock()
         mock_extractor.extract = AsyncMock(
@@ -426,7 +422,7 @@ class TestMemoryBridgeIntegration:
         )
 
         messages = [
-            ChatMessage(role=MessageRole.USER, content="I prefer Python"),
+            ChatMessage(role=Role.user, content="I prefer Python"),
         ]
         from sagewai.context.models import ContextScope
 
@@ -444,7 +440,7 @@ class TestMemoryBridgeIntegration:
     async def test_llm_fallback_when_no_extractor(self):
         """When no fact_extractor is provided, MemoryBridge uses LLM."""
         from sagewai.context.memory_bridge import MemoryBridge
-        from sagewai.models.message import ChatMessage, MessageRole
+        from sagewai.models.message import ChatMessage, Role
 
         mock_engine = AsyncMock()
         mock_doc = MagicMock()
@@ -454,7 +450,7 @@ class TestMemoryBridgeIntegration:
         bridge = MemoryBridge(context_engine=mock_engine)
 
         messages = [
-            ChatMessage(role=MessageRole.USER, content="Hello world"),
+            ChatMessage(role=Role.user, content="Hello world"),
         ]
 
         with patch(
@@ -483,7 +479,7 @@ class TestMemoryWriterIntegration:
     @pytest.mark.asyncio
     async def test_fact_extractor_used_when_provided(self):
         from sagewai.core.memory_writer import MemoryWriter
-        from sagewai.models.message import ChatMessage, MessageRole
+        from sagewai.models.message import ChatMessage, Role
 
         mock_extractor = AsyncMock()
         mock_extractor.extract = AsyncMock(
@@ -495,7 +491,7 @@ class TestMemoryWriterIntegration:
 
         writer = MemoryWriter(fact_extractor=mock_extractor)
         messages = [
-            ChatMessage(role=MessageRole.USER, content="Some conversation"),
+            ChatMessage(role=Role.user, content="Some conversation"),
         ]
         facts = await writer.extract(messages)
 
@@ -505,11 +501,11 @@ class TestMemoryWriterIntegration:
     @pytest.mark.asyncio
     async def test_llm_fallback_when_no_extractor(self):
         from sagewai.core.memory_writer import MemoryWriter
-        from sagewai.models.message import ChatMessage, MessageRole
+        from sagewai.models.message import ChatMessage, Role
 
         writer = MemoryWriter()
         messages = [
-            ChatMessage(role=MessageRole.USER, content="Test message"),
+            ChatMessage(role=Role.user, content="Test message"),
         ]
 
         with patch(

@@ -395,7 +395,7 @@ class TestCompressorIntegration:
     """Test that compress_text and compress_blocks accept summarizer param."""
 
     def test_compress_text_with_summarizer(self):
-        """compress_text delegates to summarizer when provided."""
+        """compress_text ignores summarizer in sync context (logs warning)."""
         from sagewai.directives.compressor import compress_text
 
         mock_summarizer = MagicMock()
@@ -408,10 +408,10 @@ class TestCompressorIntegration:
             target_tokens=50,
             summarizer=mock_summarizer,
         )
-        assert result == "summarized output"
-        mock_summarizer.summarize.assert_called_once_with(
-            long_text, "test query", 50
-        )
+        # Sync compress_text falls back to keyword overlap, ignoring summarizer
+        mock_summarizer.summarize.assert_not_called()
+        assert isinstance(result, str)
+        assert len(result) > 0
 
     def test_compress_text_without_summarizer_uses_keyword(self):
         """compress_text falls back to keyword overlap without summarizer."""
@@ -429,7 +429,7 @@ class TestCompressorIntegration:
         assert "machine learning" in result.lower() or "neural" in result.lower()
 
     def test_compress_blocks_with_summarizer(self):
-        """compress_blocks passes summarizer to each block."""
+        """compress_blocks ignores summarizer in sync context (keyword fallback)."""
         from sagewai.directives.compressor import compress_blocks
 
         mock_summarizer = MagicMock()
@@ -439,7 +439,10 @@ class TestCompressorIntegration:
         result = compress_blocks(
             blocks, "query", target_tokens=50, summarizer=mock_summarizer
         )
-        assert all(r == "short" for r in result)
+        # Sync path falls back to keyword overlap, ignoring summarizer
+        mock_summarizer.summarize.assert_not_called()
+        assert len(result) == 2
+        assert all(isinstance(r, str) for r in result)
 
     def test_compress_text_short_text_unchanged(self):
         """Short text is returned as-is even with summarizer."""

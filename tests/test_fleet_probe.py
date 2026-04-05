@@ -279,19 +279,11 @@ class TestProbeWorkerModels:
         assert len(results) == 2
 
     @pytest.mark.asyncio
-    async def test_bare_model_treated_as_ollama(self):
-        """Models without a provider prefix are treated as ollama."""
-        resp = _mock_response(200, {
-            "models": [{"name": "llama3:8b"}]
-        })
+    async def test_bare_model_treated_as_unknown(self):
+        """Models without a provider prefix are treated as unknown provider."""
         probe = LLMHealthProbe()
-        with patch.object(
-            httpx.AsyncClient,
-            "get",
-            new_callable=AsyncMock,
-            return_value=resp,
-        ):
-            results = await probe.probe_worker_models(["llama3:8b"])
+        results = await probe.probe_worker_models(["llama3:8b"])
 
         assert len(results) == 1
-        assert results[0].reachable is True
+        assert results[0].reachable is False
+        assert "No endpoint configured" in (results[0].error or "")

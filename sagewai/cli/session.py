@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import click
 
-from sagewai.cli._helpers import _api_get, _echo_json, _echo_table
+from sagewai.cli import _helpers
 
 
 @click.group()
@@ -32,9 +32,16 @@ def session() -> None:
 @click.option("--json", "as_json", is_flag=True, help="Output raw JSON.")
 def session_list(as_json: bool) -> None:
     """List active sessions."""
-    data = _api_get("/admin/sessions")
+    data = _helpers._api_get("/admin/sessions")
     if as_json:
-        _echo_json(data)
+        _helpers._echo_json(data)
+        return
+    if isinstance(data, dict):
+        items = data.get("items", [])
+    elif isinstance(data, list):
+        items = data
+    else:
+        click.echo(f"Unexpected response format: {type(data).__name__}")
         return
     rows = [
         {
@@ -42,9 +49,9 @@ def session_list(as_json: bool) -> None:
             "agent": s.get("agent_name", ""),
             "messages": s.get("message_count", 0),
         }
-        for s in data
+        for s in items
     ]
-    _echo_table(rows, ["session_id", "agent", "messages"])
+    _helpers._echo_table(rows, ["session_id", "agent", "messages"])
 
 
 @session.command("show")
@@ -52,9 +59,9 @@ def session_list(as_json: bool) -> None:
 @click.option("--json", "as_json", is_flag=True, help="Output raw JSON.")
 def session_show(session_id: str, as_json: bool) -> None:
     """Show session detail."""
-    data = _api_get(f"/admin/sessions/{session_id}")
+    data = _helpers._api_get(f"/admin/sessions/{session_id}")
     if as_json:
-        _echo_json(data)
+        _helpers._echo_json(data)
         return
     click.echo(f"Session: {data.get('session_id', session_id)}")
     click.echo(f"  Agent    : {data.get('agent_name', '—')}")
@@ -66,9 +73,9 @@ def session_show(session_id: str, as_json: bool) -> None:
 @click.option("--json", "as_json", is_flag=True, help="Output raw JSON.")
 def session_messages(session_id: str, as_json: bool) -> None:
     """Show conversation messages for a session."""
-    data = _api_get(f"/api/v1/sessions/{session_id}/messages")
+    data = _helpers._api_get(f"/api/v1/sessions/{session_id}/messages")
     if as_json:
-        _echo_json(data)
+        _helpers._echo_json(data)
         return
     click.echo(f"Session: {data.get('session_id', session_id)}")
     click.echo(f"Agent  : {data.get('agent_name', '—')}")

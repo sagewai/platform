@@ -78,11 +78,19 @@ def _echo_table(rows: list[dict[str, Any]], columns: list[str]) -> None:
 ADMIN_URL = os.environ.get("SAGEWAI_ADMIN_URL", "http://localhost:8000")
 
 
+def _auth_headers() -> dict[str, str]:
+    """Return Authorization header if SAGEWAI_API_TOKEN is set."""
+    token = os.environ.get("SAGEWAI_API_TOKEN", "")
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    return {}
+
+
 def _api_get(path: str) -> Any:
     """GET from the admin API."""
     import httpx
 
-    resp = httpx.get(f"{ADMIN_URL}{path}", timeout=30)
+    resp = httpx.get(f"{ADMIN_URL}{path}", headers=_auth_headers(), timeout=30)
     resp.raise_for_status()
     return resp.json()
 
@@ -91,7 +99,9 @@ def _api_post(path: str, body: dict[str, Any] | None = None) -> Any:
     """POST to the admin API."""
     import httpx
 
-    resp = httpx.post(f"{ADMIN_URL}{path}", json=body or {}, timeout=30)
+    resp = httpx.post(
+        f"{ADMIN_URL}{path}", json=body or {}, headers=_auth_headers(), timeout=30,
+    )
     resp.raise_for_status()
     return resp.json()
 
@@ -100,7 +110,7 @@ def _api_delete(path: str) -> Any:
     """DELETE on the admin API."""
     import httpx
 
-    resp = httpx.delete(f"{ADMIN_URL}{path}", timeout=30)
+    resp = httpx.delete(f"{ADMIN_URL}{path}", headers=_auth_headers(), timeout=30)
     resp.raise_for_status()
     return resp.json()
 
@@ -109,6 +119,8 @@ def _api_put(path: str, body: dict[str, Any] | None = None) -> Any:
     """PUT to the admin API."""
     import httpx
 
-    resp = httpx.put(f"{ADMIN_URL}{path}", json=body or {}, timeout=30)
+    resp = httpx.put(
+        f"{ADMIN_URL}{path}", json=body or {}, headers=_auth_headers(), timeout=30,
+    )
     resp.raise_for_status()
     return resp.json()

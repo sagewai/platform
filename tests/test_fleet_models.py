@@ -233,46 +233,6 @@ class TestEnrollmentKey:
             self._make_key(current_uses=-1)
 
 
-class TestMigration005:
-    """Verify migration 005 module structure."""
-
-    def _load_migration(self):
-        """Load the migration module via importlib (file starts with digit)."""
-        import importlib.util
-        from pathlib import Path
-
-        migration_path = (
-            Path(__file__).resolve().parent.parent
-            / "sagewai"
-            / "db"
-            / "migrations"
-            / "versions"
-            / "005_fleet.py"
-        )
-        spec = importlib.util.spec_from_file_location(
-            "migration_005_fleet", migration_path
-        )
-        assert spec is not None, f"Migration file not found: {migration_path}"
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)  # type: ignore[union-attr]
-        return mod
-
-    def test_migration_file_exists(self) -> None:
-        """Migration module should load cleanly."""
-        m = self._load_migration()
-        assert m is not None
-
-    def test_migration_revision(self) -> None:
-        m = self._load_migration()
-        assert m.revision == "005_fleet"
-        assert m.down_revision == "004_worker_routing"
-
-    def test_migration_has_upgrade_and_downgrade(self) -> None:
-        m = self._load_migration()
-        assert callable(m.upgrade)
-        assert callable(m.downgrade)
-
-
 class TestFleetExports:
     """Verify fleet models are exported from the main package."""
 

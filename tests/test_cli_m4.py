@@ -73,7 +73,7 @@ class TestWorkflowHistory:
 
 
 class TestSessionMessages:
-    @patch("sagewai.cli.session._api_get")
+    @patch("sagewai.cli._helpers._api_get")
     def test_messages_command(self, mock_get):
         mock_get.return_value = {
             "session_id": "sess-001",
@@ -90,7 +90,7 @@ class TestSessionMessages:
         assert "Hi!" in result.output
         mock_get.assert_called_once_with("/api/v1/sessions/sess-001/messages")
 
-    @patch("sagewai.cli.session._api_get")
+    @patch("sagewai.cli._helpers._api_get")
     def test_messages_json(self, mock_get):
         mock_get.return_value = {
             "session_id": "sess-001",

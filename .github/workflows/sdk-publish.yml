@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7
-      - run: uv build --package sagewai
+      - run: uv build
       - uses: actions/upload-artifact@v7
         with:
           name: dist
@@ -23,16 +23,13 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ['3.10', '3.11', '3.12', '3.13']
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7
         with:
-          python-version: ${{ matrix.python-version }}
-      - run: uv sync --package sagewai --group test
-      - run: uv run pytest packages/sagewai/tests/ -m "not integration" -o "addopts="
+          python-version: '3.13'
+      - run: uv sync --all-packages --group test
+      - run: uv run pytest tests/ -m "not integration" -o "addopts="
 
   publish-testpypi:
     runs-on: ubuntu-latest

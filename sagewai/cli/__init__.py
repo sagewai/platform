@@ -30,7 +30,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from typing import Any
 
 import click
@@ -86,46 +85,18 @@ def _echo_table(rows: list[dict[str, Any]], columns: list[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Admin API helpers (httpx-backed commands)
+# Admin API helpers — canonical implementation in _helpers.py
+# Re-exported here for backward compat (prompt.py etc. use _cli._api_get)
 # ---------------------------------------------------------------------------
 
-ADMIN_URL = os.environ.get("SAGEWAI_ADMIN_URL", "http://localhost:8000")
-
-
-def _api_get(path: str) -> Any:
-    """GET from the admin API."""
-    import httpx
-
-    resp = httpx.get(f"{ADMIN_URL}{path}", timeout=30)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def _api_post(path: str, body: dict[str, Any] | None = None) -> Any:
-    """POST to the admin API."""
-    import httpx
-
-    resp = httpx.post(f"{ADMIN_URL}{path}", json=body or {}, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def _api_delete(path: str) -> Any:
-    """DELETE on the admin API."""
-    import httpx
-
-    resp = httpx.delete(f"{ADMIN_URL}{path}", timeout=30)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def _api_put(path: str, body: dict[str, Any] | None = None) -> Any:
-    """PUT to the admin API."""
-    import httpx
-
-    resp = httpx.put(f"{ADMIN_URL}{path}", json=body or {}, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
+from sagewai.cli._helpers import (  # noqa: E402, F401
+    ADMIN_URL,
+    _api_delete,
+    _api_get,
+    _api_post,
+    _api_put,
+    _auth_headers,
+)
 
 
 # ===========================================================================

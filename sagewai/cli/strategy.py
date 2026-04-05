@@ -34,6 +34,10 @@ def strategy_list(as_json: bool) -> None:
     if as_json:
         _echo_json(data)
         return
+    if isinstance(data, list) and data and isinstance(data[0], str):
+        for name in data:
+            click.echo(f"  {name}")
+        return
     rows = [
         {
             "name": s.get("name", ""),

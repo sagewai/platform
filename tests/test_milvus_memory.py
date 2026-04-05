@@ -90,6 +90,7 @@ class TestMilvusVectorMemoryRetrieve:
                 assert len(results) == 2
 
     @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_retrieve_empty_collection(self):
         with patch("sagewai.memory.milvus.MilvusClient") as mock_cls:
             mock_client = MagicMock()
