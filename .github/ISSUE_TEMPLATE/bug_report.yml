@@ -1,0 +1,51 @@
+name: Bug Report
+description: Report a bug in Sagewai
+labels: ["type:bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: What happened? What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal code or steps to reproduce the issue.
+      placeholder: |
+        ```python
+        from sagewai import UniversalAgent
+        agent = UniversalAgent(name="test", model="gpt-4o")
+        # This fails because...
+        ```
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Sagewai Version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python Version
+      placeholder: "3.12"
+    validations:
+      required: true
+  - type: dropdown
+    id: pillar
+    attributes:
+      label: Which pillar is affected?
+      options:
+        - SDK (agents, tools, memory, workflows)
+        - Registry (agent governance)
+        - Harness (LLM proxy, routing, budget)
+        - Observatory (cost tracking, audit, metrics)
+        - Training (intelligence, local LLMs)
+        - Other / Not sure
+    validations:
+      required: true

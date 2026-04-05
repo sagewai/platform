@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions & Discussions
+    url: https://github.com/sagewai/sagewai/discussions
+    about: Ask questions and discuss ideas in GitHub Discussions
+  - name: Security Vulnerability
+    url: https://github.com/sagewai/sagewai/blob/main/SECURITY.md
+    about: Report security issues privately via email (never open a public issue)

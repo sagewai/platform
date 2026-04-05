@@ -1,0 +1,36 @@
+name: Feature Request
+description: Suggest a feature or improvement
+labels: ["type:feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem does this feature solve?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: How should this work? Include code examples if possible.
+    validations:
+      required: true
+  - type: dropdown
+    id: pillar
+    attributes:
+      label: Which pillar does this relate to?
+      options:
+        - SDK (agents, tools, memory, workflows)
+        - Registry (agent governance)
+        - Harness (LLM proxy, routing, budget)
+        - Observatory (cost tracking, audit, metrics)
+        - Training (intelligence, local LLMs)
+        - New pillar / Cross-cutting
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: What other approaches did you consider?
