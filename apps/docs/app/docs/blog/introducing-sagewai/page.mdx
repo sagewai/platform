@@ -1,0 +1,74 @@
+# Introducing Sagewai: Agent Infrastructure You Own
+
+*April 2026*
+
+Today we're open-sourcing **Sagewai** -- the platform for AI agents that run, remember, and report.
+
+## Why We Built This
+
+Every company using AI coding tools like Claude Code, Cursor, or Codex faces the same problem: no visibility into what they spend, no control over which models handle which tasks, and no governance over the agents they build.
+
+We built Sagewai to solve this with five integrated pillars.
+
+## The 5 Pillars
+
+### SDK -- Build Agents
+
+Build production-grade agents in Python with three lines of code. Multi-model support (100+ models via LiteLLM), custom tools, persistent memory, guardrails, and durable workflows.
+
+```python
+import asyncio
+from sagewai import UniversalAgent
+
+agent = UniversalAgent(name="assistant", model="gpt-4o")
+print(asyncio.run(agent.chat("Analyze our Q1 results")))
+```
+
+### Registry -- Govern Agents
+
+Store, version, discover, and govern agents across your organization. Approval workflows, audit trails, and lifecycle management.
+
+### Harness -- Control LLM Access
+
+Point Claude Code, Cursor, or Codex at the Sagewai Harness. Every request is classified by complexity and routed to the cheapest model that can handle it -- automatically.
+
+- Simple tasks (typos, imports) go to Haiku
+- Medium tasks (refactoring) go to Sonnet
+- Complex tasks (architecture) go to Opus
+
+Developers don't change their workflow. The organization saves money.
+
+### Observatory -- Track Everything
+
+Source of truth for all AI expenditure. Cost per model, per user, per team. OpenTelemetry tracing, Prometheus metrics, and audit logs for compliance.
+
+### Training -- Build Domain Models
+
+Fine-tune domain-specific LLMs with Unsloth. Use Sagewai agents to collect training data, fine-tune locally, then serve through the Harness at $0 per token.
+
+## Open Source, Not Open Core
+
+Everything is free under AGPL-3.0. All five pillars, all 40 connectors, the full admin dashboard. No feature gates, no artificial limits.
+
+Premium tiers exist for organizations that want managed hosting (Cloud), compliance features (Enterprise), or a commercial license alternative to AGPL.
+
+## Get Started
+
+```bash
+pip install sagewai
+```
+
+- [Documentation](https://docs.sagewai.ai)
+- [GitHub](https://github.com/sagecurator/atelier)
+- [21 Examples](https://github.com/sagecurator/atelier/tree/main/packages/sagewai/sagewai/examples)
+
+## What's Next
+
+- PyPI package (v0.1.0)
+- VS Code extension on the Marketplace
+- Official client wrappers in 14 languages (TypeScript, Go, Rust, and more)
+- Community Discord
+
+We built Sagewai because we believe agent infrastructure should be owned, not rented. Try it and let us know what you think.
+
+-- The Sagecurator Team

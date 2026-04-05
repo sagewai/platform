@@ -1,0 +1,358 @@
+# Agents
+
+Core agent classes for building AI applications. All agents share the same public API: `chat()`, `chat_with_history()`, `chat_stream()`, and `on_event()`.
+
+```python
+from sagewai import UniversalAgent
+
+agent = UniversalAgent(name="helper", model="gpt-4o")
+response = await agent.chat("Hello!")
+```
+
+---
+
+## BaseAgent
+
+Abstract foundation for all agents. Provides the agentic tool-calling loop, guardrails, context compaction, event system, and budget enforcement. You never instantiate `BaseAgent` directly.
+
+```python
+from sagewai import BaseAgent
+```
+
+### Constructor
+
+```python
+BaseAgent(
+    name: str,
+    model: str = "gpt-4o",
+    system_prompt: str = "",
+    tools: list[ToolSpec] | None = None,
+    temperature: float = 0.7,
+    max_tokens: int | None = None,
+    max_iterations: int = 10,
+    strategy: ExecutionStrategy | None = None,
+    memory: Any = None,
+    guardrails: list[Guardrail] | None = None,
+    max_context_tokens: int | None = None,
+    rate_limiter: RateLimiter | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+    custom_llm_provider: str | None = None,
+    directives: Any = None,
+)
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | `str` | required | Agent identifier used in logs, events, and admin |
+| `model` | `str` | `"gpt-4o"` | LLM model string (any LiteLLM-supported model) |
+| `system_prompt` | `str` | `""` | System message prepended to all conversations |
+| `tools` | `list[ToolSpec] \| None` | `None` | Tools the agent can invoke |
+| `temperature` | `float` | `0.7` | LLM sampling temperature |
+| `max_tokens` | `int \| None` | `None` | Max output tokens per LLM call |
+| `max_iterations` | `int` | `10` | Max tool-calling loop iterations |
+| `strategy` | `ExecutionStrategy \| None` | `None` | Execution strategy (defaults to `ReActStrategy`) |
+| `memory` | `Any` | `None` | Memory provider for RAG (e.g. `ContextEngine`) |
+| `guardrails` | `list[Guardrail] \| None` | `None` | Input/output validation guardrails |
+| `max_context_tokens` | `int \| None` | `None` | Enables automatic context compaction |
+| `rate_limiter` | `RateLimiter \| None` | `None` | Per-agent rate limiting |
+| `api_base` | `str \| None` | `None` | Override the LLM API base URL |
+| `api_key` | `str \| None` | `None` | Override the LLM API key |
+| `custom_llm_provider` | `str \| None` | `None` | Force a specific LiteLLM provider |
+| `directives` | `Any` | `None` | Enable directive preprocessing (`True`, `False`, or `DirectiveEngine` instance) |
+
+### Methods
+
+| Method | Signature | Returns | Description |
+|--------|-----------|---------|-------------|
+| `chat` | `async chat(message: str)` | `str` | Send a message, get text response |
+| `chat_with_history` | `async chat_with_history(messages: list[ChatMessage])` | `ChatMessage` | Run with explicit conversation history |
+| `chat_stream` | `async chat_stream(message: str)` | `AsyncGenerator[str, None]` | Stream text chunks |
+| `on_event` | `on_event(callback: EventCallback)` | `None` | Register event listener |
+
+---
+
+## UniversalAgent
+
+LiteLLM-based agent supporting 100+ LLM providers: OpenAI, Anthropic, Google, Mistral, Cohere, Azure, and more.
+
+```python
+from sagewai import UniversalAgent
+
+agent = UniversalAgent(
+    name="analyst",
+    model="claude-sonnet-4-20250514",
+    system_prompt="You are a data analyst.",
+    temperature=0.3,
+)
+response = await agent.chat("Summarize Q4 revenue trends.")
+```
+
+Inherits all `BaseAgent` constructor parameters. Same public API.
+
+---
+
+## GoogleNativeAgent
+
+Native Gemini agent using the `google-genai` SDK. Direct access to Gemini features without the LiteLLM proxy layer.
+
+```python
+from sagewai import GoogleNativeAgent
+
+agent = GoogleNativeAgent(
+    name="gemini",
+    model="gemini-2.0-flash",
+    system_prompt="You are a helpful assistant.",
+)
+response = await agent.chat("Explain quantum entanglement.")
+```
+
+Inherits all `BaseAgent` constructor parameters. Same public API.
+
+---
+
+## SequentialAgent
+
+Execute sub-agents in order, passing each output as input to the next.
+
+```python
+from sagewai import SequentialAgent, UniversalAgent
+
+researcher = UniversalAgent(name="researcher", model="gpt-4o")
+writer = UniversalAgent(name="writer", model="gpt-4o")
+pipeline = SequentialAgent(name="pipeline", agents=[researcher, writer])
+result = await pipeline.chat("Write about quantum computing")
+```
+
+### Constructor
+
+```python
+SequentialAgent(
+    name: str,
+    agents: list[BaseAgent],
+    *,
+    durability: DurabilityMode = DurabilityMode.NONE,
+    workflow_store: WorkflowStore | None = None,
+    **kwargs,
+)
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | `str` | required | Pipeline name |
+| `agents` | `list[BaseAgent]` | required | Ordered list of sub-agents |
+| `durability` | `DurabilityMode` | `NONE` | `NONE` or `CHECKPOINT` for durable execution |
+| `workflow_store` | `WorkflowStore \| None` | `None` | Store for checkpoint persistence |
+
+**Additional method:** `async resume(run_id: str) -> str` -- resume a checkpointed run.
+
+---
+
+## ParallelAgent
+
+Execute sub-agents concurrently and merge their outputs.
+
+```python
+from sagewai import ParallelAgent, UniversalAgent
+
+analyst = UniversalAgent(name="analyst", model="gpt-4o")
+critic = UniversalAgent(name="critic", model="gpt-4o")
+panel = ParallelAgent(name="panel", agents=[analyst, critic])
+result = await panel.chat("Evaluate this proposal")
+```
+
+### Constructor
+
+```python
+ParallelAgent(
+    name: str,
+    agents: list[BaseAgent],
+    merge: Callable[[list[str]], str] | None = None,
+    *,
+    durability: DurabilityMode = DurabilityMode.NONE,
+    workflow_store: WorkflowStore | None = None,
+    **kwargs,
+)
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | `str` | required | Agent name |
+| `agents` | `list[BaseAgent]` | required | Sub-agents to run concurrently |
+| `merge` | `Callable[[list[str]], str] \| None` | `None` | Custom merge function (default: join with newlines) |
+
+---
+
+## LoopAgent
+
+Repeat a sub-agent until a condition is met or max iterations reached.
+
+```python
+from sagewai import LoopAgent, UniversalAgent
+
+refiner = UniversalAgent(name="refiner", model="gpt-4o")
+loop = LoopAgent(
+    name="refinement-loop",
+    agent=refiner,
+    max_iterations=3,
+    should_stop=lambda result, i: "DONE" in result,
+)
+result = await loop.chat("Improve this text iteratively")
+```
+
+### Constructor
+
+```python
+LoopAgent(
+    name: str,
+    agent: BaseAgent,
+    should_stop: Callable[[str, int], bool] | None = None,
+    *,
+    durability: DurabilityMode = DurabilityMode.NONE,
+    workflow_store: WorkflowStore | None = None,
+    **kwargs,
+)
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | `str` | required | Agent name |
+| `agent` | `BaseAgent` | required | The sub-agent to loop |
+| `should_stop` | `Callable[[str, int], bool] \| None` | `None` | Stop condition receiving `(result, iteration)` |
+| `max_iterations` | `int` | `10` | Maximum loop iterations (inherited from BaseAgent) |
+
+---
+
+## ConditionalAgent
+
+Route input to different agents based on a sync or async condition function.
+
+```python
+from sagewai import ConditionalAgent, UniversalAgent
+
+greeter = UniversalAgent(name="greeter", model="gpt-4o-mini")
+researcher = UniversalAgent(name="researcher", model="gpt-4o")
+
+def route(message: str) -> str:
+    return "greeter" if "hello" in message.lower() else "researcher"
+
+router = ConditionalAgent(
+    name="router",
+    condition=route,
+    agents={"greeter": greeter, "researcher": researcher},
+)
+result = await router.chat("Hello there!")
+```
+
+---
+
+## agent_as_tool
+
+Wrap an agent so another agent can invoke it as a tool.
+
+```python
+from sagewai import agent_as_tool, UniversalAgent
+
+researcher = UniversalAgent(name="researcher", model="gpt-4o")
+tool = agent_as_tool(researcher, description="Research any topic")
+
+orchestrator = UniversalAgent(
+    name="orchestrator",
+    model="gpt-4o",
+    tools=[tool],
+)
+```
+
+### Signature
+
+```python
+agent_as_tool(
+    agent: BaseAgent,
+    description: str,
+    *,
+    tool_name: str | None = None,
+) -> ToolSpec
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `agent` | `BaseAgent` | required | The sub-agent to wrap |
+| `description` | `str` | required | Description shown to the LLM |
+| `tool_name` | `str \| None` | `None` | Override auto-generated tool name |
+
+---
+
+## AgentConfig
+
+Configuration object stored on every agent instance at `agent.config`.
+
+```python
+from sagewai import AgentConfig
+
+config = AgentConfig(
+    name="my-agent",
+    model="gpt-4o",
+    system_prompt="You are helpful.",
+)
+```
+
+### Key Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | `str` | required | Unique agent identifier |
+| `model` | `str` | `"gpt-4o"` | LLM model string |
+| `system_prompt` | `str` | `""` | System prompt |
+| `tools` | `list[ToolSpec]` | `[]` | Available tools |
+| `inference` | `InferenceParams` | `InferenceParams()` | LLM inference parameters |
+| `max_iterations` | `int` | `10` | Max tool-calling iterations |
+| `strategy` | `Any` | `None` | Execution strategy |
+| `memory` | `Any` | `None` | Memory provider |
+| `auto_learn` | `bool` | `False` | Auto-extract facts from conversations |
+| `learn_every_n_turns` | `int` | `5` | Auto-learn frequency |
+| `durability` | `str` | `"none"` | Durability mode (`"none"` or `"checkpoint"`) |
+| `project_id` | `str \| None` | `None` | Project scope for multi-tenancy |
+| `directives` | `Any` | `None` | Directive engine configuration |
+
+---
+
+## InferenceParams
+
+LLM inference parameters with validation and preset support.
+
+```python
+from sagewai import InferenceParams
+
+# Custom
+params = InferenceParams(temperature=0.3, top_p=0.8, max_tokens=4096)
+
+# From preset
+from sagewai.models.inference import InferencePreset
+params = InferenceParams.from_preset(InferencePreset.CREATIVE)
+```
+
+### Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `temperature` | `float` | `0.7` | Sampling temperature (0.0-2.0) |
+| `top_p` | `float \| None` | `None` | Nucleus sampling threshold (0.0-1.0) |
+| `top_k` | `int \| None` | `None` | Top-k sampling |
+| `max_tokens` | `int \| None` | `None` | Max output tokens |
+| `frequency_penalty` | `float \| None` | `None` | Frequency penalty (-2.0 to 2.0) |
+| `presence_penalty` | `float \| None` | `None` | Presence penalty (-2.0 to 2.0) |
+| `stop_sequences` | `list[str] \| None` | `None` | Stop sequences |
+| `api_base` | `str \| None` | `None` | Custom API base URL |
+| `api_key` | `str \| None` | `None` | Custom API key |
+| `custom_llm_provider` | `str \| None` | `None` | Force LiteLLM provider |
+| `timeout` | `float \| None` | `120.0` | LLM call timeout in seconds |
+| `fallback_models` | `list[str]` | `[]` | Ordered fallback models on failure |
+
+### Presets
+
+| Preset | Temperature | Top P |
+|--------|-------------|-------|
+| `PRECISE` | 0.1 | 0.9 |
+| `BALANCED` | 0.5 | 0.95 |
+| `CREATIVE` | 0.9 | 1.0 |
+| `EXPERIMENTAL` | 1.5 | 1.0 |

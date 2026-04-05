@@ -1,0 +1,325 @@
+# Context Engine
+
+The Context Engine is Sagewai's production-grade memory system. It handles the full lifecycle of knowledge: ingesting documents, chunking and embedding them, storing chunks in vector and graph databases, and retrieving relevant context using multi-strategy search.
+
+Unlike the lower-level `VectorMemory` and `GraphMemory` primitives, the Context Engine adds document management, scoped access control, tag-based filtering, deduplication, conflict detection, lifecycle management, and self-editing memory tools.
+
+The Context Engine implements the `MemoryProvider` protocol, so it plugs directly into any agent via `memory=engine`.
+
+## Architecture
+
+```
+Documents / Text / URLs / Directories
+    |
+    v
+IngestionPipeline
+    |
+    +---> Docling (PDF, DOCX, HTML, images)
+    +---> tree-sitter (source code: Python, JS, Go, ...)
+    +---> URL fetcher (with SSRF protection)
+    |
+    v
+Chunking (recursive, with semantic dedup)
+    |
+    v
+Embedding (OpenAI, configurable)
+    |
+    +---> Vector Store (Milvus or in-memory)
+    +---> Metadata Store (Postgres or in-memory)
+    +---> Graph Store (NebulaGraph, optional)
+    |
+    v
+Multi-Strategy Retrieval
+    +---> Vector search (semantic similarity)
+    +---> BM25 search (keyword matching)
+    +---> Graph search (relationship traversal)
+    |
+    v
+Reciprocal Rank Fusion (RRF) merge
+    |
+    v
+Optional cross-encoder re-ranking
+    |
+    v
+Deduplicated, scored results
+```
+
+## Quick Start
+
+```python
+import asyncio
+from sagewai import UniversalAgent, ContextEngine, ContextScope
+from sagewai.context import InMemoryMetadataStore, InMemoryVectorStore
+
+async def main():
+    # 1. Create a context engine (in-memory for development)
+    engine = ContextEngine(
+        metadata_store=InMemoryMetadataStore(),
+        vector_store=InMemoryVectorStore(),
+        project_id="my-project",
+    )
+
+    # 2. Ingest knowledge
+    await engine.ingest_text(
+        text="Sagewai supports 100+ LLM providers through LiteLLM.",
+        title="About Sagewai",
+        scope=ContextScope.PROJECT,
+        scope_id="my-project",
+    )
+
+    # 3. Create an agent with context-aware memory
+    agent = UniversalAgent(
+        name="assistant",
+        model="gpt-4o",
+        memory=engine,                # automatic RAG retrieval
+        tools=engine.get_tools(),     # self-editing memory tools
+    )
+
+    response = await agent.chat("What LLM providers does Sagewai support?")
+    print(response)
+
+asyncio.run(main())
+```
+
+---
+
+## Ingestion
+
+The Context Engine can ingest content from multiple sources:
+
+### Text
+
+```python
+from sagewai.context.models import ContextSource
+
+doc = await engine.ingest_text(
+    text="Your document content here.",
+    title="My Document",
+    scope=ContextScope.PROJECT,
+    scope_id="my-project",
+    source=ContextSource.MANUAL,
+    metadata={"author": "Alice", "department": "Engineering"},
+)
+```
+
+### Files
+
+Supports PDF, DOCX, HTML, Markdown, images (via Docling), and source code (via tree-sitter):
+
+```python
+doc = await engine.ingest_file(
+    file_data=open("report.pdf", "rb").read(),
+    filename="report.pdf",
+    scope=ContextScope.PROJECT,
+    scope_id="my-project",
+)
+```
+
+### URLs
+
+Fetches and parses web pages with built-in SSRF protection. Re-ingesting the same URL auto-supersedes the old version:
+
+```python
+doc = await engine.ingest_url(
+    url="https://docs.example.com/api-reference",
+    scope=ContextScope.PROJECT,
+    scope_id="my-project",
+)
+```
+
+### Directories
+
+Recursively indexes a directory, respecting `.gitignore`, `.claudeignore`, and other ignore files. Automatically skips binary files, `.git`, `node_modules`, and files over 50MB:
+
+```python
+docs = await engine.ingest_directory(
+    path="/path/to/codebase",
+    scope=ContextScope.PROJECT,
+    scope_id="my-project",
+)
+```
+
+---
+
+## Scopes
+
+The Context Engine uses two access scopes for isolating and sharing knowledge:
+
+| Scope | Access | Use Case |
+|-------|--------|----------|
+| `ContextScope.ORG` | All projects in the organization | Company policies, shared knowledge bases |
+| `ContextScope.PROJECT` | Single project only | Project-specific documents, meeting notes |
+
+When an agent searches, it retrieves from both its project scope and the organization scope. Project-scoped results take priority over org-scoped results during deduplication.
+
+```python
+from sagewai import ContextScope
+
+# Org-level: visible to all projects
+await engine.ingest_text(
+    text="Company vacation policy: 25 days per year.",
+    title="HR Policy",
+    scope=ContextScope.ORG,
+    scope_id="acme-corp",
+)
+
+# Project-level: visible only to this project
+await engine.ingest_text(
+    text="Project Alpha uses React and FastAPI.",
+    title="Tech Stack",
+    scope=ContextScope.PROJECT,
+    scope_id="project-alpha",
+)
+```
+
+---
+
+## Tags
+
+Documents support tags for fine-grained access control and filtering. Tags are stored as a list of strings on each document, backed by a PostgreSQL `TEXT[]` column with a GIN index for fast lookups.
+
+```python
+# Ingest with tags
+await engine.ingest_text(
+    text="Q4 revenue was $12M, up 15% YoY.",
+    title="Q4 Financial Summary",
+    scope=ContextScope.PROJECT,
+    scope_id="my-project",
+    metadata={"tags": ["finance", "q4", "revenue"]},
+)
+
+# Search with tag filtering — only returns documents matching these tags
+results = await engine.search(
+    "quarterly revenue",
+    tags=["finance", "q4"],
+)
+```
+
+Tags are filtered at the document level before chunk retrieval, so the search only considers chunks from documents that match the requested tags.
+
+---
+
+## Multi-Strategy Retrieval
+
+The `search()` method runs three retrieval strategies in parallel and merges results:
+
+```python
+results = await engine.search(
+    "How does the billing system work?",
+    top_k=5,
+    scopes=[ContextScope.PROJECT],
+    tags=["billing"],
+)
+
+for result in results:
+    print(f"Score: {result.score:.3f} | {result.content[:100]}")
+```
+
+### Strategy Details
+
+| Strategy | How It Works | Strengths |
+|----------|-------------|-----------|
+| **Vector search** | Embeds the query, finds nearest neighbors | Semantic meaning, paraphrases |
+| **BM25** | TF-IDF keyword matching | Exact terms, acronyms, proper nouns |
+| **Graph search** | Traverses entity relationships | "Who manages X?", relational queries |
+
+Results are merged via **Reciprocal Rank Fusion (RRF)**, which combines ranked lists without requiring score normalization. An optional cross-encoder re-ranker can be configured for higher precision.
+
+---
+
+## Self-Editing Memory Tools
+
+The Context Engine provides four tools that let agents curate their own memory during conversations:
+
+```python
+agent = UniversalAgent(
+    name="analyst",
+    model="gpt-4o",
+    memory=engine,
+    tools=engine.get_tools(),  # memory_store, memory_search, memory_forget, memory_update
+)
+```
+
+| Tool | What It Does |
+|------|-------------|
+| `memory_store` | Saves new facts extracted from conversation |
+| `memory_search` | Searches stored knowledge by query |
+| `memory_forget` | Marks a stored fact as irrelevant (sets importance to 0) |
+| `memory_update` | Replaces old information with updated content |
+
+With these tools, the agent decides what to remember, what to forget, and when to update outdated facts — following the self-editing memory paradigm.
+
+### Auto-Learn
+
+Enable `auto_learn=True` to have the agent automatically extract and store key facts from every conversation via the `MemoryBridge`:
+
+```python
+agent = UniversalAgent(
+    name="analyst",
+    model="gpt-4o",
+    memory=engine,
+    tools=engine.get_tools(),
+    auto_learn=True,  # auto-extracts facts from conversations
+)
+```
+
+---
+
+## Production Stores
+
+For production deployments, use Postgres for metadata and Milvus for vectors:
+
+```python
+from sagewai.context import (
+    ContextEngine,
+    PostgresContextStore,
+    MilvusContextVectorStore,
+)
+from sagewai.memory.nebula import NebulaGraphMemory
+
+engine = ContextEngine(
+    metadata_store=PostgresContextStore(database_url="postgresql://localhost/sagewai"),
+    vector_store=MilvusContextVectorStore(
+        uri="http://localhost:19530",
+        collection="context_chunks",
+    ),
+    graph_store=NebulaGraphMemory(
+        space="knowledge",
+        hosts="127.0.0.1:9669",
+    ),
+    project_id="my-project",
+    embedding_model="text-embedding-3-small",
+)
+```
+
+The in-memory stores require no infrastructure and are the default for development. Production stores require `sagewai[memory]` and `sagewai[postgres]` extras.
+
+---
+
+## Lifecycle Management
+
+The Context Engine supports configurable lifecycle policies for document compression, archival, and cleanup:
+
+```python
+from sagewai.context import LifecycleConfig
+
+engine = ContextEngine(
+    metadata_store=...,
+    vector_store=...,
+    lifecycle_config=LifecycleConfig(
+        compress_after_days=30,
+        archive_after_days=90,
+        discard_after_days=365,
+    ),
+)
+```
+
+Lifecycle actions are triggered automatically based on document age and importance scores. The conflict detection system auto-supersedes older versions when a document is re-ingested.
+
+---
+
+## What's Next
+
+- **[Directives](/docs/core-concepts/directives)** — Use `@context('query')` to pull documents inline in prompts
+- **[Memory](/docs/core-concepts/memory)** — Lower-level vector and graph memory primitives
+- **[Safety](/docs/core-concepts/safety)** — HallucinationGuard validates responses against retrieved context

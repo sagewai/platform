@@ -1,0 +1,618 @@
+# Python SDK Reference
+
+Complete API reference for the Sagewai Python SDK. All public classes, methods, and parameters.
+
+---
+
+## sagewai.engines.universal
+
+### UniversalAgent
+
+LiteLLM-based multi-model agent. Supports 100+ LLM providers.
+
+```python
+from sagewai.engines.universal import UniversalAgent
+
+agent = UniversalAgent(
+    name="my-agent",
+    model="gpt-4o",
+    system_prompt="You are a helpful assistant.",
+    tools=[],
+    temperature=0.7,
+    max_tokens=None,
+    max_iterations=10,
+    strategy=ReActStrategy(),
+    memory=None,
+    guardrails=[],
+    max_context_tokens=None,
+)
+```
+
+**Methods:**
+
+| Method | Signature | Returns | Description |
+|--------|-----------|---------|-------------|
+| `chat` | `async chat(message: str)` | `str` | Send a message, get text response |
+| `chat_with_history` | `async chat_with_history(messages: list[ChatMessage])` | `ChatMessage` | Run with explicit conversation history |
+| `chat_stream` | `async chat_stream(message: str)` | `AsyncGenerator[str, None]` | Stream text chunks |
+| `on_event` | `on_event(callback: EventCallback)` | `None` | Register event listener |
+
+---
+
+## sagewai.engines.google_native
+
+### GoogleNativeAgent
+
+Native Gemini agent using the `google.genai` SDK.
+
+```python
+from sagewai.engines.google_native import GoogleNativeAgent
+
+agent = GoogleNativeAgent(
+    name="gemini-agent",
+    model="gemini-2.0-flash",
+    system_prompt="You are a helpful assistant.",
+)
+```
+
+Same public API as `UniversalAgent` (`chat`, `chat_with_history`, `chat_stream`, `on_event`).
+
+---
+
+## sagewai.models.message
+
+### ChatMessage
+
+Immutable message in a conversation.
+
+```python
+from sagewai.models.message import ChatMessage, Role
+
+# Factory methods
+msg = ChatMessage.system("You are a helpful assistant.")
+msg = ChatMessage.user("Hello!")
+msg = ChatMessage.assistant("Hi there!")
+msg = ChatMessage.tool_result(tool_call_id="tc_1", name="search", content="Results...")
+```
+
+**Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `role` | `Role` | `system`, `user`, `assistant`, `tool` |
+| `content` | `str \| None` | Text content |
+| `tool_calls` | `list[ToolCall] \| None` | Tool calls requested by the assistant |
+| `tool_call_id` | `str \| None` | ID linking a tool result to its call |
+| `name` | `str \| None` | Tool name (for tool results) |
+| `usage` | `UsageInfo \| None` | Token usage info |
+
+### Role
+
+```python
+from sagewai.models.message import Role
+
+Role.system      # "system"
+Role.user        # "user"
+Role.assistant   # "assistant"
+Role.tool        # "tool"
+```
+
+### ToolCall
+
+```python
+from sagewai.models.message import ToolCall
+
+tc = ToolCall(id="tc_1", name="get_weather", arguments={"city": "Berlin"})
+```
+
+### UsageInfo
+
+```python
+from sagewai.models.message import UsageInfo
+
+usage = UsageInfo(input_tokens=100, output_tokens=50)
+```
+
+---
+
+## sagewai.models.tool
+
+### ToolSpec
+
+Tool definition that agents can use.
+
+```python
+from sagewai.models.tool import ToolSpec
+
+spec = ToolSpec(
+    name="search",
+    description="Search the knowledge base",
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Search query"},
+        },
+        "required": ["query"],
+    },
+    handler=search_function,
+)
+```
+
+### @tool decorator
+
+Convert a function into a `ToolSpec` automatically:
+
+```python
+from sagewai.models.tool import tool
+
+@tool
+async def get_weather(city: str) -> str:
+    """Get current weather for a city.
+
+    Args:
+        city: The city name.
+    """
+    return f"Sunny in {city}"
+```
+
+The decorator extracts name, description, and parameters from the function signature and docstring.
+
+### ToolResult
+
+```python
+from sagewai.models.tool import ToolResult
+
+result = ToolResult(
+    tool_call_id="tc_1",
+    name="search",
+    content="Found 3 results...",
+    error=None,  # Set to error message if tool failed
+)
+```
+
+---
+
+## sagewai.models.agent
+
+### AgentConfig
+
+Configuration object stored on every agent instance.
+
+```python
+from sagewai.models.agent import AgentConfig
+
+config = AgentConfig(
+    name="my-agent",
+    model="gpt-4o",
+    system_prompt="...",
+    tools=[],
+    temperature=0.7,
+    max_tokens=None,
+    max_iterations=10,
+    strategy=ReActStrategy(),
+    memory=None,
+)
+```
+
+---
+
+## sagewai.core.strategies
+
+### ExecutionStrategy (Protocol)
+
+```python
+from sagewai.core.strategies import ExecutionStrategy
+
+class MyStrategy:
+    async def execute(
+        self,
+        agent: BaseAgent,
+        messages: list[ChatMessage],
+        tools: list[ToolSpec],
+        max_iterations: int,
+    ) -> ChatMessage:
+        ...
+```
+
+### ReActStrategy
+
+```python
+from sagewai.core.strategies import ReActStrategy
+strategy = ReActStrategy()
+```
+
+### TreeOfThoughtsStrategy
+
+```python
+from sagewai.core.tree_of_thoughts import TreeOfThoughtsStrategy
+strategy = TreeOfThoughtsStrategy(num_branches=3, max_depth=3)
+```
+
+### LATSStrategy
+
+```python
+from sagewai.core.lats import LATSStrategy
+strategy = LATSStrategy(num_simulations=5, exploration_weight=1.4, max_depth=4)
+```
+
+### SelfCorrectionStrategy
+
+```python
+from sagewai.core.self_correction import SelfCorrectionStrategy, OutputValidator, ExemplarStore
+strategy = SelfCorrectionStrategy(max_corrections=3, validator=validator, exemplar_store=store)
+```
+
+### PlanningStrategy
+
+```python
+from sagewai.core.planning import PlanningStrategy
+strategy = PlanningStrategy(mode="plan_then_act", max_steps=5)
+# or: mode="plan_act_reflect"
+```
+
+### RoutingStrategy
+
+```python
+from sagewai.core.routing import RoutingStrategy
+strategy = RoutingStrategy(
+    routes={"greet": greeter, "research": researcher},
+    fallback=fallback,
+    method="heuristic",  # or "llm"
+    keywords={"greet": ["hello", "hi"]},
+)
+```
+
+---
+
+## sagewai.core.workflows
+
+### SequentialAgent
+
+```python
+from sagewai.core.workflows import SequentialAgent
+pipeline = SequentialAgent(name="pipeline", agents=[agent1, agent2, agent3])
+result = await pipeline.chat("input")
+```
+
+### ParallelAgent
+
+```python
+from sagewai.core.workflows import ParallelAgent
+parallel = ParallelAgent(name="parallel", agents=[agent1, agent2, agent3])
+result = await parallel.chat("input")
+```
+
+### LoopAgent
+
+```python
+from sagewai.core.workflows import LoopAgent
+loop = LoopAgent(
+    name="loop",
+    agent=refiner,
+    max_iterations=5,
+    stop_condition=lambda response: "DONE" in response,
+)
+result = await loop.chat("input")
+```
+
+---
+
+## sagewai.core.conversation
+
+### ConversationManager
+
+Multi-turn conversation with automatic state management, compaction, and memory.
+
+```python
+from sagewai.core.conversation import ConversationManager
+
+manager = ConversationManager(
+    agent=agent,
+    session_id="sess-1",
+    compactor=LLMCompactor(max_tokens=4000, model="gpt-4o-mini"),
+    memory=rag_engine,
+    memory_writer=MemoryWriter(model="gpt-4o-mini"),
+    session_store=InMemorySessionStore(),
+)
+
+response = await manager.send("Hello!")
+response = await manager.send("What did I just say?")
+await manager.resume()  # Resume from saved session
+```
+
+---
+
+## sagewai.core.compactor
+
+### PromptCompactor
+
+Token-aware extractive context compression.
+
+```python
+from sagewai.core.compactor import PromptCompactor
+
+compactor = PromptCompactor(max_tokens=4000, preserve_recent=4, summary_max_tokens=500)
+if compactor.needs_compaction(messages):
+    messages = compactor.compact(messages)
+```
+
+### LLMCompactor
+
+LLM-powered abstractive summarization.
+
+```python
+from sagewai.core.compactor import LLMCompactor
+
+compactor = LLMCompactor(max_tokens=4000, model="gpt-4o-mini")
+summary = await compactor.summarize_async(messages)
+compacted = await compactor.compact_async(messages)
+```
+
+---
+
+## sagewai.core.resilience
+
+### RetryPolicy
+
+```python
+from sagewai.core.resilience import RetryPolicy
+
+retry = RetryPolicy(max_retries=3, backoff_base=1.0)
+result = await retry.execute(api_call, retryable_errors=(TimeoutError,))
+```
+
+### CircuitBreaker
+
+```python
+from sagewai.core.resilience import CircuitBreaker
+
+breaker = CircuitBreaker(failure_threshold=5, reset_timeout=60.0)
+result = await breaker.execute(external_call)
+```
+
+---
+
+## sagewai.core.model_router
+
+### ModelRouter
+
+Dynamically select models based on query characteristics.
+
+```python
+from sagewai.core.model_router import ModelRouter, short_query_rule, tool_heavy_rule
+
+router = ModelRouter(
+    rules=[
+        short_query_rule(threshold=100, model="gpt-4o-mini"),
+        tool_heavy_rule(model="gpt-4o", min_tools=3),
+    ],
+    default_model="gpt-4o",
+)
+
+model = router.select_model("Short question", context={"tool_count": 1})
+```
+
+---
+
+## sagewai.safety
+
+### PIIGuard
+
+```python
+from sagewai.safety.pii import PIIGuard, PIIEntityType
+
+guard = PIIGuard(action="redact", entity_types=[PIIEntityType.EMAIL, PIIEntityType.PHONE])
+findings = guard.detect("text with user@example.com")
+clean = guard.redact("text with user@example.com")
+```
+
+### HallucinationGuard
+
+```python
+from sagewai.safety.hallucination import HallucinationGuard
+
+guard = HallucinationGuard(threshold=0.3, action="warn")
+```
+
+### ContentFilter
+
+```python
+from sagewai.safety.guardrails import ContentFilter
+
+guard = ContentFilter(blocklist=["password"], patterns=[r"\d{3}-\d{2}-\d{4}"], action="block")
+```
+
+### TokenBudgetGuard
+
+```python
+from sagewai.safety.guardrails import TokenBudgetGuard
+
+guard = TokenBudgetGuard(max_usd=1.0)
+```
+
+### OutputSchemaGuard
+
+```python
+from sagewai.safety.guardrails import OutputSchemaGuard
+
+guard = OutputSchemaGuard(schema={"type": "object", "required": ["title"]})
+```
+
+---
+
+## sagewai.memory
+
+### VectorMemory
+
+```python
+from sagewai.memory.vector import VectorMemory
+
+memory = VectorMemory()
+await memory.store("id", "text content")
+results = await memory.retrieve("search query", top_k=5)
+```
+
+### MilvusVectorMemory
+
+```python
+from sagewai.memory.milvus import MilvusVectorMemory
+
+memory = MilvusVectorMemory(collection="kb", uri="http://localhost:19530", dimension=1536)
+await memory.initialize()
+```
+
+### GraphMemory
+
+```python
+from sagewai.memory.graph import GraphMemory
+
+memory = GraphMemory()
+await memory.store_relation("Alice", "works_at", "Acme")
+results = await memory.retrieve("Who works at Acme?")
+```
+
+### NebulaGraphMemory
+
+```python
+from sagewai.memory.nebula import NebulaGraphMemory
+
+memory = NebulaGraphMemory(space="knowledge", hosts="127.0.0.1:9669")
+await memory.initialize()
+```
+
+### RAGEngine
+
+```python
+from sagewai.memory.rag import RAGEngine, RetrievalStrategy
+
+rag = RAGEngine(vector=vector_mem, graph=graph_mem, strategy=RetrievalStrategy.HYBRID)
+results = await rag.retrieve("query")
+```
+
+---
+
+## sagewai.admin
+
+### AnalyticsStore
+
+```python
+from sagewai.admin.analytics import AnalyticsStore, create_analytics_router
+
+store = AnalyticsStore()
+store.record_cost(agent_name="agent", model="gpt-4o", cost_usd=0.01, tokens=1000)
+store.record_guardrail_event(agent_name="agent", event_type="pii")
+
+costs = store.get_costs(agent_name="agent")
+usage = store.get_usage()
+risks = store.get_risks()
+models = store.get_model_analytics()
+agents = store.get_agent_analytics()
+
+# Mount as FastAPI router
+router = create_analytics_router(store)
+app.include_router(router, prefix="/analytics")
+```
+
+### BudgetManager
+
+```python
+from sagewai.admin.budget import BudgetManager, BudgetLimit
+
+mgr = BudgetManager()
+mgr.add_limit(BudgetLimit(
+    agent_name="my-agent",
+    max_daily_usd=5.0,
+    max_monthly_usd=100.0,
+    action="throttle",
+    fallback_chain=["gpt-4o-mini", "gemini-2.0-flash"],
+))
+
+mgr.record_spend(agent_name="my-agent", cost_usd=0.01)
+result = mgr.check_budget("my-agent")
+status = mgr.get_budget_status("my-agent")
+fallback = mgr.get_fallback_model("my-agent", current_model="gpt-4o")
+```
+
+---
+
+## sagewai.mcp
+
+### McpClient
+
+Connect to MCP servers and discover tools.
+
+```python
+from sagewai.mcp.client import McpClient
+
+# Stdio transport
+tools = await McpClient.connect(["python", "-m", "mcp_server"])
+
+# SSE transport
+tools = await McpClient.connect_sse("http://localhost:8080/sse")
+
+# Streamable HTTP transport
+tools = await McpClient.connect_http("http://localhost:8080/mcp")
+```
+
+Returns a `list[ToolSpec]` that can be passed directly to any agent's `tools` parameter.
+
+---
+
+## sagewai.gateway
+
+### TokenManager
+
+```python
+from sagewai.gateway import TokenManager, InMemoryTokenStore
+
+manager = TokenManager(store=InMemoryTokenStore())
+plaintext = await manager.generate(
+    agent_name="scout",
+    grantor_id="admin-1",
+    scopes=["chat", "dream"],
+    expires_in_seconds=3600,
+    single_use=True,
+)
+access = await manager.validate(plaintext)
+await manager.revoke(token_id)
+```
+
+### GatewayAuth
+
+```python
+from sagewai.gateway import GatewayAuthConfig, gateway_auth
+
+config = GatewayAuthConfig(
+    jwt_secret="secret",
+    api_keys=["key-1"],
+    token_manager=token_manager,
+)
+auth = gateway_auth(config)
+# Use as FastAPI dependency: Depends(auth)
+```
+
+---
+
+## sagewai.eval
+
+### EvalSuite
+
+```python
+from sagewai.eval.dataset import EvalDataset, EvalCase
+from sagewai.eval.judge import LLMJudge
+from sagewai.eval.suite import EvalSuite
+
+dataset = EvalDataset(cases=[
+    EvalCase(
+        input="Summarize AI news",
+        agent_name="Drafter",
+        criteria=["accuracy", "clarity"],
+    ),
+])
+
+judge = LLMJudge(model="gpt-4o-mini")
+suite = EvalSuite(agent=agent, dataset=dataset, judge=judge)
+results = await suite.run()
+print(results.summary())
+results.to_jsonl("results.jsonl")
+```

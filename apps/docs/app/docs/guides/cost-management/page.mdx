@@ -1,0 +1,368 @@
+# Cost Management Guide
+
+AI agents can be expensive to operate. This guide shows you how to control costs using Sagewai's budget management, model fallback chains, and cost-aware routing.
+
+## The Cost Challenge
+
+| Model | Cost per 1M input tokens | Cost per 1M output tokens |
+|-------|--------------------------|---------------------------|
+| GPT-4o | $2.50 | $10.00 |
+| GPT-4o-mini | $0.15 | $0.60 |
+| Claude 3.5 Sonnet | $3.00 | $15.00 |
+| Gemini 2.0 Flash | $0.075 | $0.30 |
+
+A single GPT-4o agent processing 100 requests/day with 2K tokens each costs roughly $5/day. In multi-agent workflows, costs multiply quickly.
+
+---
+
+## Strategy 1: Budget Limits
+
+Set daily and monthly spending limits per agent:
+
+```python
+from sagewai.admin.budget import BudgetManager, BudgetLimit
+
+budget = BudgetManager()
+
+# Set limits for each agent
+budget.add_limit(BudgetLimit(
+    agent_name="researcher",
+    max_daily_usd=5.0,
+    max_monthly_usd=100.0,
+    action="throttle",  # warn, throttle, or stop
+))
+
+budget.add_limit(BudgetLimit(
+    agent_name="writer",
+    max_daily_usd=10.0,
+    max_monthly_usd=200.0,
+    action="stop",
+))
+```
+
+### Recording Spend
+
+After each LLM call, record the cost:
+
+```python
+# Record after each agent call
+budget.record_spend(agent_name="researcher", cost_usd=0.015)
+```
+
+### Checking Budget
+
+Before allowing an agent to run, check if it is within budget:
+
+```python
+result = budget.check_budget("researcher")
+
+if result.allowed:
+    response = await agent.chat(message)
+else:
+    print(f"Budget exceeded: {result.reason}")
+    # Handle: use fallback model, queue for later, or reject
+```
+
+### Budget Status
+
+Monitor spending in real time:
+
+```python
+status = budget.get_budget_status("researcher")
+print(f"Daily spend: ${status['daily_spend_usd']:.2f} / ${status['max_daily_usd']:.2f}")
+print(f"Monthly spend: ${status['monthly_spend_usd']:.2f} / ${status['max_monthly_usd']:.2f}")
+print(f"Daily remaining: ${status['daily_remaining_usd']:.2f}")
+```
+
+### Actions
+
+| Action | Behavior |
+|--------|----------|
+| `warn` | Log a warning, allow the request |
+| `throttle` | Fall back to a cheaper model |
+| `stop` | Block the request entirely |
+
+---
+
+## Strategy 2: Model Fallback Chains
+
+When a budget is exceeded, automatically fall back to cheaper models:
+
+```python
+budget.add_limit(BudgetLimit(
+    agent_name="researcher",
+    max_daily_usd=5.0,
+    max_monthly_usd=100.0,
+    action="throttle",
+    fallback_chain=["gpt-4o-mini", "gemini/gemini-2.0-flash"],
+))
+```
+
+When the daily budget is exceeded:
+1. First, try `gpt-4o-mini` (60x cheaper than GPT-4o)
+2. If that is also over budget, try `gemini/gemini-2.0-flash` (30x cheaper)
+
+### Using Fallback Models
+
+```python
+# Check if a fallback model should be used
+fallback = budget.get_fallback_model("researcher", current_model="gpt-4o")
+
+if fallback:
+    # Use the fallback model instead
+    agent = UniversalAgent(name="researcher", model=fallback)
+else:
+    # Within budget, use the primary model
+    agent = UniversalAgent(name="researcher", model="gpt-4o")
+```
+
+---
+
+## Strategy 3: Model Router for Cost Optimization
+
+Use the `ModelRouter` to automatically select the most cost-effective model based on query characteristics:
+
+```python
+from sagewai.core.model_router import ModelRouter, short_query_rule, tool_heavy_rule
+
+router = ModelRouter(
+    rules=[
+        # Short, simple queries -> cheap model
+        short_query_rule(threshold=100, model="gpt-4o-mini"),
+
+        # Queries needing many tools -> capable model
+        tool_heavy_rule(model="gpt-4o", min_tools=3),
+    ],
+    default_model="gpt-4o",
+)
+
+# Router picks the best model for each query
+model = router.select_model(
+    "What is 2+2?",  # Short query -> gpt-4o-mini
+    context={"tool_count": 0},
+)
+```
+
+### Cost-Aware Routing
+
+Combine the budget manager with the model router:
+
+```python
+from sagewai.admin.budget import cost_aware_rule
+
+router = ModelRouter(
+    rules=[
+        # Budget-aware: fall back when over budget
+        cost_aware_rule(budget, agent_name="researcher"),
+
+        # Query-based: use cheap model for simple queries
+        short_query_rule(threshold=100, model="gpt-4o-mini"),
+    ],
+    default_model="gpt-4o",
+)
+```
+
+When the researcher agent exceeds its budget, the router automatically switches to the first model in the fallback chain.
+
+---
+
+## Strategy 4: Choose Models Wisely
+
+The biggest cost savings come from using the right model for each task:
+
+### Cost-Effective Model Selection
+
+| Task Type | Recommended Model | Why |
+|-----------|-------------------|-----|
+| Simple Q&A | `gpt-4o-mini` | Fast, cheap, sufficient quality |
+| Data extraction | `gpt-4o-mini` | Pattern matching, not creative |
+| Research gathering | `gpt-4o-mini` | Follows tool instructions well |
+| Creative writing | `claude-3-5-sonnet-20241022` | Superior prose quality |
+| Complex reasoning | `gpt-4o` | Strong multi-step logic |
+| Code generation | `gpt-4o` | Best code output |
+| Summarization | `gemini/gemini-2.0-flash` | Fast, very cheap, good at compression |
+| Style checking | `gpt-4o-mini` | Rule-based, grammar patterns |
+
+### Multi-Agent Cost Optimization
+
+In a sequential pipeline, use cheap models for intermediate steps:
+
+```python
+# Cheap: bulk research
+researcher = UniversalAgent(name="researcher", model="gpt-4o-mini")
+
+# Premium: final writing
+writer = UniversalAgent(name="writer", model="claude-3-5-sonnet-20241022")
+
+# Cheap: grammar check
+proofreader = UniversalAgent(name="proofreader", model="gpt-4o-mini")
+
+pipeline = SequentialAgent(
+    name="article-pipeline",
+    agents=[researcher, writer, proofreader],
+)
+# Only the writing step uses the expensive model
+```
+
+---
+
+## Strategy 5: Token Control
+
+Reduce token usage to reduce costs:
+
+### Limit Output Tokens
+
+```python
+agent = UniversalAgent(
+    name="concise-agent",
+    model="gpt-4o",
+    max_tokens=500,  # Limit response length
+    system_prompt="Be concise. Answer in 2-3 sentences maximum.",
+)
+```
+
+### Context Compaction
+
+For long conversations, use automatic compaction to keep context small:
+
+```python
+agent = UniversalAgent(
+    name="efficient-agent",
+    model="gpt-4o",
+    max_context_tokens=4000,  # Auto-compact when exceeded
+)
+```
+
+### TokenBudgetGuard
+
+Hard limit on per-request cost:
+
+```python
+from sagewai.safety.guardrails import TokenBudgetGuard
+
+agent = UniversalAgent(
+    name="budget-capped-agent",
+    model="gpt-4o",
+    guardrails=[TokenBudgetGuard(max_usd=1.0)],
+)
+```
+
+---
+
+## Monitoring Costs
+
+### Analytics API
+
+Track costs per agent and per model:
+
+```python
+from sagewai.admin.analytics import AnalyticsStore
+
+store = AnalyticsStore()
+
+# Record costs after each LLM call
+store.record_cost(
+    agent_name="researcher",
+    model="gpt-4o",
+    cost_usd=0.015,
+    tokens=1500,
+)
+
+# Query analytics
+costs = store.get_costs()
+print(f"Total cost: ${costs['total_cost_usd']:.2f}")
+print(f"By model: {costs['by_model']}")
+print(f"By agent: {costs['by_agent']}")
+
+# Model comparison
+models = store.get_model_analytics()
+for m in models:
+    print(f"{m['model']}: ${m['cost_per_1k_tokens']:.4f}/1K tokens, "
+          f"{m['request_count']} requests")
+```
+
+### REST API
+
+Mount the analytics router for HTTP access:
+
+```python
+from sagewai.admin.analytics import create_analytics_router
+
+router = create_analytics_router(store)
+app.include_router(router, prefix="/analytics")
+
+# GET /analytics/costs?agent_name=researcher
+# GET /analytics/models
+# GET /analytics/agents
+```
+
+---
+
+## Putting It All Together
+
+Here is a production-ready cost management setup:
+
+```python
+from sagewai.engines.universal import UniversalAgent
+from sagewai.admin.budget import BudgetManager, BudgetLimit
+from sagewai.admin.analytics import AnalyticsStore
+from sagewai.core.model_router import ModelRouter, short_query_rule
+from sagewai.admin.budget import cost_aware_rule
+from sagewai.safety.guardrails import TokenBudgetGuard
+
+# Analytics store
+analytics = AnalyticsStore()
+
+# Budget manager with fallback chains
+budget = BudgetManager()
+budget.add_limit(BudgetLimit(
+    agent_name="assistant",
+    max_daily_usd=10.0,
+    max_monthly_usd=200.0,
+    action="throttle",
+    fallback_chain=["gpt-4o-mini", "gemini/gemini-2.0-flash"],
+))
+
+# Model router: cost-aware + query-based
+router = ModelRouter(
+    rules=[
+        cost_aware_rule(budget, agent_name="assistant"),
+        short_query_rule(threshold=100, model="gpt-4o-mini"),
+    ],
+    default_model="gpt-4o",
+)
+
+# Select model for each request
+model = router.select_model(user_message, context={"tool_count": len(tools)})
+
+# Create agent with selected model and cost guardrail
+agent = UniversalAgent(
+    name="assistant",
+    model=model,
+    guardrails=[TokenBudgetGuard(max_usd=0.50)],  # Per-request limit
+    max_context_tokens=4000,  # Keep context compact
+)
+
+# After the call, record the spend
+response = await agent.chat(user_message)
+budget.record_spend(agent_name="assistant", cost_usd=estimated_cost)
+analytics.record_cost(
+    agent_name="assistant",
+    model=model,
+    cost_usd=estimated_cost,
+    tokens=estimated_tokens,
+)
+```
+
+---
+
+## Cost Reduction Checklist
+
+1. Use `gpt-4o-mini` or `gemini-2.0-flash` for simple tasks
+2. Set `max_tokens` on agents to limit response length
+3. Enable `max_context_tokens` for automatic compaction
+4. Configure budget limits with fallback chains
+5. Use the model router for automatic model selection
+6. Add `TokenBudgetGuard` for per-request cost caps
+7. Monitor costs via the Analytics API
+8. Review per-model analytics monthly to optimize selections

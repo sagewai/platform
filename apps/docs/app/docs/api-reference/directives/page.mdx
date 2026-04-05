@@ -1,0 +1,170 @@
+# Directives
+
+The Directive Engine preprocesses prompts before the LLM call, resolving `@context`, `@memory`, `@agent`, `/tool`, `/mcp`, and `#meta` directives into enriched context. This enables small and local models to leverage the full Sagewai infrastructure without native tool-calling support.
+
+```python
+from sagewai import DirectiveEngine
+
+engine = DirectiveEngine(
+    context=my_context_engine,
+    model="codellama:7b",
+)
+result = await engine.resolve("@context('ML basics') Help me learn")
+# result.prompt contains enriched text with context injected
+```
+
+---
+
+## DirectiveEngine
+
+Main orchestrator for prompt preprocessing. Supports two syntax modes:
+- **Sigil mode** (`resolve`): `@context('q')`, `/tool.name('a')`, `#model:x`
+- **Template mode** (`resolve_template`): `{{ context.search('q') }}`
+
+Both modes resolve through the same pipeline: parse, resolve, format, compress, and assemble.
+
+```python
+from sagewai import DirectiveEngine
+
+engine = DirectiveEngine(
+    context=context_engine,
+    memory=memory_provider,
+    tools={"search": search_tool},
+    agents={"researcher": researcher_agent},
+    model="gpt-4o",
+    resolution_timeout=10.0,
+)
+result = await engine.resolve(
+    "@context('machine learning') @memory('previous findings') Summarize"
+)
+```
+
+### Constructor
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `context` | `Any \| None` | `None` | Context Engine for `@context` directives |
+| `memory` | `Any \| None` | `None` | Memory provider for `@memory` directives |
+| `tools` | `dict[str, Any] \| None` | `None` | Tools for `/tool` directives |
+| `agents` | `dict[str, Any] \| None` | `None` | Agents for `@agent:name()` directives |
+| `mcp_clients` | `dict[str, Any] \| None` | `None` | MCP clients for `/mcp` directives |
+| `model` | `str \| None` | `None` | Model name for auto-detection of profile |
+| `model_profile` | `ModelProfile \| None` | `None` | Explicit model profile (overrides auto-detection) |
+| `max_context_tokens` | `int \| None` | `None` | Token budget override |
+| `registry` | `DirectiveRegistry \| None` | `None` | Custom directive registry |
+| `allowed_tools` | `set[str] \| None` | `None` | Tool allowlist (security) |
+| `allowed_mcp` | `set[str] \| None` | `None` | MCP allowlist (security) |
+| `allow_all_tools` | `bool` | `False` | Bypass tool allowlists |
+| `resolution_timeout` | `float` | `10.0` | Max seconds per directive resolution |
+| `max_agent_depth` | `int` | `3` | Max recursive agent delegation depth |
+
+### Methods
+
+| Method | Signature | Returns | Description |
+|--------|-----------|---------|-------------|
+| `resolve` | `async resolve(prompt: str)` | `DirectiveResult` | Resolve sigil-syntax directives |
+| `resolve_template` | `async resolve_template(prompt: str)` | `DirectiveResult` | Resolve template-syntax directives |
+
+---
+
+## DirectiveResult
+
+Result of directive resolution. Contains the enriched prompt and metadata.
+
+```python
+result = await engine.resolve("@context('topic') My question")
+
+print(result.prompt)           # Enriched prompt with context injected
+print(result.clean_prompt)     # Original text with directives stripped
+print(result.context_blocks)   # Resolved context blocks
+print(result.metadata)         # Token counts, timings, stats
+print(result.tool_descriptions)  # Tool descriptions for prompt-based calling
+```
+
+### Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `prompt` | `str` | Final enriched prompt text with all context injected |
+| `clean_prompt` | `str` | Original text with directives stripped |
+| `context_blocks` | `list[ContextBlock]` | Resolved context blocks for system message injection |
+| `metadata` | `DirectiveMetadata` | Token counts, timings, resolution stats |
+| `directives_found` | `list[ResolvedDirective]` | All parsed directives with results |
+| `overrides` | `ExecutionOverrides \| None` | Execution overrides from `#` meta-directives |
+| `tool_descriptions` | `str` | Formatted tool descriptions for prompt-based tool calling |
+
+---
+
+## ModelProfile
+
+Defines how the Directive Engine formats output for a model class. Controls compression aggressiveness, delimiter style, tool-call mode, and token budget allocation.
+
+```python
+from sagewai import ModelProfile
+
+profile = ModelProfile(
+    name="custom",
+    max_context_tokens=8192,
+    compression_ratio=2.0,
+    tool_call_mode="prompt_based",
+)
+```
+
+### Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | `str` | required | Profile identifier |
+| `max_context_tokens` | `int` | `4096` | Token budget for directive results |
+| `compression_ratio` | `float` | `1.0` | Target compression (1.0 = none, 5.0 = aggressive) |
+| `max_few_shot` | `int` | `3` | Max few-shot examples to inject |
+| `use_delimiters` | `bool` | `False` | Wrap content in `[CONTEXT]`/`[SOURCE]` delimiters |
+| `use_explicit_instructions` | `bool` | `False` | Add explicit framing for small models |
+| `tool_call_mode` | `str` | `"native"` | `"native"` or `"prompt_based"` |
+| `context_budget` | `dict[str, float]` | `{...}` | Token budget allocation per category |
+| `default_top_k` | `int` | `5` | Default top_k for context retrieval |
+
+### Built-in Profiles
+
+| Profile | Context Tokens | Compression | Tool Mode | Use Case |
+|---------|---------------|-------------|-----------|----------|
+| `SMALL` | 2048 | 5.0 | prompt_based | Local models under 13B params |
+| `MEDIUM` | 8192 | 2.0 | native | Mid-range models (13B-70B, GPT-4o-mini) |
+| `LARGE` | 32768 | 1.0 | native | Frontier models (GPT-4o, Claude, Gemini Pro) |
+
+---
+
+## detect_profile
+
+Auto-detect the model profile from a model name string. Matches against known patterns and falls back to `MEDIUM` for unknown models.
+
+```python
+from sagewai import detect_profile
+
+profile = detect_profile("codellama:7b-instruct")  # -> SMALL
+profile = detect_profile("gpt-4o")                  # -> LARGE
+profile = detect_profile("ollama/mistral")           # -> SMALL
+profile = detect_profile("unknown-model")            # -> MEDIUM
+```
+
+### Signature
+
+```python
+detect_profile(model: str) -> ModelProfile
+```
+
+### Directive Syntax Reference
+
+| Directive | Syntax | Description |
+|-----------|--------|-------------|
+| Context | `@context('query')` | Retrieve context by query |
+| Context (scoped) | `@context('query', scope='org', tags='finance,q4')` | Scoped retrieval with tag filtering |
+| Memory | `@memory('query')` | Search memory store |
+| Agent | `@agent:name('task')` | Delegate to another agent (colon syntax) |
+| Workflow | `@wf:name('input')` | Invoke a saved workflow |
+| Tool | `/tool.name('args')` | Invoke a tool |
+| MCP | `/mcp.server.tool('args')` | Invoke an MCP tool |
+| Model | `#model:name` | Override model for this call |
+| Budget | `#budget:amount` | Set cost budget |
+| Dynamic | `` @datetime ``, `` @date ``, `` @time `` | Current date/time values |
+| Template | `{{ context.search('q') }}` | Template syntax alternative |

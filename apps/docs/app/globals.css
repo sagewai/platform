@@ -1,0 +1,5 @@
+@import "@sagecurator/ui/src/globals.css";
+
+@source "../../../packages/ui/src";
+@source "../components";
+@source ".";

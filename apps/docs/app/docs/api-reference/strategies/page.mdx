@@ -1,0 +1,234 @@
+# Strategies
+
+Execution strategies define how an agent iterates between LLM calls and tool execution. The default is `ReActStrategy`. Swap strategies to change reasoning behavior without modifying agent code.
+
+```python
+from sagewai import UniversalAgent, TreeOfThoughtsStrategy
+
+agent = UniversalAgent(
+    name="reasoner",
+    model="gpt-4o",
+    strategy=TreeOfThoughtsStrategy(branches=3, max_depth=2),
+)
+```
+
+---
+
+## ExecutionStrategy (Protocol)
+
+The protocol all strategies must satisfy. Implement this to create custom strategies.
+
+```python
+from sagewai import ExecutionStrategy
+
+class MyStrategy:
+    async def execute(
+        self,
+        agent: BaseAgent,
+        messages: list[ChatMessage],
+        tools: list[ToolSpec],
+        max_iterations: int,
+    ) -> ChatMessage:
+        ...
+```
+
+### Required Method
+
+| Method | Signature | Returns | Description |
+|--------|-----------|---------|-------------|
+| `execute` | `async execute(agent, messages, tools, max_iterations)` | `ChatMessage` | Run the reasoning loop and return the final message |
+
+---
+
+## ReActStrategy
+
+Reason-Act-Observe loop. The default strategy for all agents.
+
+1. Call the LLM with the current conversation and available tools.
+2. If the response contains tool calls, execute them and loop back.
+3. If the response is pure text, return it.
+4. If `max_iterations` is exhausted, return a guard message.
+
+```python
+from sagewai import ReActStrategy
+
+strategy = ReActStrategy(
+    max_tool_calls_per_name=3,
+    max_error_streak=2,
+)
+```
+
+### Constructor
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `max_tool_calls_per_name` | `int` | `3` | Max times any single tool can be called per run |
+| `max_error_streak` | `int` | `2` | Consecutive all-error iterations before forcing text |
+
+---
+
+## TreeOfThoughtsStrategy
+
+Parallel branch exploration with self-evaluation scoring and pruning.
+
+At each depth level: generate parallel reasoning paths, score via LLM self-evaluation, prune low-scoring branches, and continue the best path.
+
+```python
+from sagewai import TreeOfThoughtsStrategy
+
+strategy = TreeOfThoughtsStrategy(
+    branches=3,
+    max_depth=2,
+    top_k=1,
+)
+```
+
+### Constructor
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `branches` | `int` | `3` | Number of parallel reasoning branches per depth level |
+| `max_depth` | `int` | `2` | Maximum depth of the thought tree |
+| `top_k` | `int` | `1` | Number of top branches to keep after pruning |
+| `branch_prompt` | `str \| None` | `None` | Custom branch generation prompt template |
+| `eval_prompt` | `str \| None` | `None` | Custom evaluation prompt template |
+
+---
+
+## LATSStrategy
+
+Language Agent Tree Search -- MCTS-inspired search over agent reasoning trajectories with tool use, LLM self-evaluation, and reflective backtracking.
+
+At each step: **Select** the most promising node via UCT, **Expand** by generating candidate actions, **Evaluate** with LLM scoring, and **Backpropagate** scores up the tree.
+
+```python
+from sagewai import LATSStrategy
+
+strategy = LATSStrategy(
+    n_samples=3,
+    max_depth=4,
+    max_iterations=8,
+)
+```
+
+### Constructor
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `n_samples` | `int` | `3` | Candidate actions generated at each expansion |
+| `max_depth` | `int` | `4` | Maximum depth of the search tree |
+| `max_iterations` | `int` | `8` | Maximum MCTS iterations |
+| `exploration_weight` | `float` | `1.41` | UCT exploration constant |
+| `reflection_threshold` | `float` | `4.0` | Score below which triggers a reflection step |
+| `eval_prompt` | `str \| None` | `None` | Custom trajectory evaluation template |
+| `reflect_prompt` | `str \| None` | `None` | Custom reflection template |
+
+---
+
+## PlanningStrategy
+
+Decompose goals into subtasks, then execute step by step.
+
+Two modes:
+- `plan_then_act`: Generate plan once, execute all steps sequentially.
+- `plan_act_reflect`: After each step, optionally revise the remaining plan.
+
+```python
+from sagewai import PlanningStrategy
+
+strategy = PlanningStrategy(
+    mode="plan_act_reflect",
+    max_steps=10,
+)
+```
+
+### Constructor
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `mode` | `Literal["plan_then_act", "plan_act_reflect"]` | `"plan_act_reflect"` | Planning mode |
+| `max_steps` | `int` | `10` | Maximum plan steps |
+| `planner_model` | `str \| None` | `None` | Override model for plan generation |
+
+---
+
+## SelfCorrectionStrategy
+
+Error recovery with failure exemplars. Wraps a base strategy and intercepts validation errors to re-prompt the LLM with correction context (PALADIN-style 1-shot correction).
+
+```python
+from sagewai import SelfCorrectionStrategy
+
+strategy = SelfCorrectionStrategy(
+    max_corrections=2,
+)
+```
+
+### Constructor
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `base_strategy` | `ExecutionStrategy \| None` | `None` | Inner strategy (defaults to `ReActStrategy`) |
+| `max_corrections` | `int` | `2` | Maximum correction attempts per run |
+| `validator` | `OutputValidator \| None` | `None` | Output validator for response checking |
+| `exemplar_store` | `ExemplarStore \| None` | `None` | Store for 1-shot correction examples |
+
+### Related Classes
+
+**OutputValidator** -- validates LLM outputs against expected schemas:
+
+```python
+from sagewai.core.self_correction import OutputValidator
+
+validator = OutputValidator()
+validator.add_json_validator(required_fields=["title", "body"])
+validator.add_custom_validator("length", lambda text: None if len(text) > 10 else ValueError("Too short"))
+errors = validator.validate(text)  # Returns list[str], empty = valid
+```
+
+**ExemplarStore** -- stores failure-correction pairs for 1-shot prompting:
+
+```python
+from sagewai.core.self_correction import ExemplarStore, FailureExemplar
+
+store = ExemplarStore()
+store.add(FailureExemplar(
+    error_type="invalid_json",
+    bad_output="not json",
+    correction_prompt="Respond with valid JSON",
+    corrected_output='{"title": "Fixed"}',
+))
+```
+
+---
+
+## RoutingStrategy
+
+Classify user intent and dispatch to a specialist agent.
+
+Two routing methods:
+- `"heuristic"`: keyword matching (cheap, deterministic).
+- `"llm"`: asks the host agent's LLM to classify the intent.
+
+```python
+from sagewai import RoutingStrategy, UniversalAgent
+
+greeter = UniversalAgent(name="greeter", model="gpt-4o-mini")
+researcher = UniversalAgent(name="researcher", model="gpt-4o")
+
+strategy = RoutingStrategy(
+    routes={"greet": greeter, "research": researcher},
+    fallback=greeter,
+    method="heuristic",
+    keywords={"greet": ["hello", "hi", "hey"]},
+)
+```
+
+### Constructor
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `routes` | `dict[str, BaseAgent]` | required | Map of route keys to specialist agents |
+| `fallback` | `BaseAgent` | required | Agent to use when no route matches |
+| `method` | `Literal["llm", "heuristic"]` | `"llm"` | Routing method |
+| `keywords` | `dict[str, list[str]] \| None` | `None` | Keywords for heuristic routing |

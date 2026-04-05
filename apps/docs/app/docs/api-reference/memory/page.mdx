@@ -1,0 +1,153 @@
+# Memory & Context
+
+The Context Engine is the unified memory layer for agents. It handles document ingestion, scoped retrieval, deduplication, and lifecycle management. Pass it as `memory=` to any agent for zero-change RAG integration.
+
+```python
+from sagewai import ContextEngine, UniversalAgent
+from sagewai.context import InMemoryMetadataStore, InMemoryVectorStore
+
+engine = ContextEngine(
+    metadata_store=InMemoryMetadataStore(),
+    vector_store=InMemoryVectorStore(),
+)
+agent = UniversalAgent(name="assistant", model="gpt-4o", memory=engine)
+```
+
+---
+
+## ContextEngine
+
+Unified context creation and management. Implements the `MemoryProvider` protocol.
+
+Handles:
+- Universal data ingestion (files, directories, URLs, text)
+- Scoped retrieval with inheritance (org, project)
+- Multi-strategy search (vector + BM25 + graph, merged via RRF)
+- Automatic deduplication
+- Lifecycle management (compress, archive, discard)
+
+```python
+from sagewai import ContextEngine
+from sagewai.context import InMemoryMetadataStore, InMemoryVectorStore
+
+engine = ContextEngine(
+    metadata_store=InMemoryMetadataStore(),
+    vector_store=InMemoryVectorStore(),
+)
+```
+
+### Constructor
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `metadata_store` | `ContextMetadataStore` | required | Store for document metadata |
+| `vector_store` | `ContextVectorStore` | required | Store for vector embeddings |
+| `graph_store` | `Any \| None` | `None` | Graph store for knowledge graph retrieval |
+| `embedding_model` | `str` | `"text-embedding-3-small"` | Embedding model for vectorization |
+| `chunking_config` | `ChunkingConfig \| None` | `None` | Custom chunking settings |
+| `project_id` | `str \| None` | `None` | Project scope for isolation |
+| `org_id` | `str \| None` | `None` | Organization scope |
+| `reranker` | `Any \| None` | `None` | Cross-encoder re-ranker |
+| `enable_bm25` | `bool` | `True` | Enable BM25 keyword search |
+| `event_callback` | `Any \| None` | `None` | Observability callback |
+| `lifecycle_config` | `Any \| None` | `None` | Auto-trigger lifecycle settings |
+
+### Key Methods
+
+| Method | Signature | Returns | Description |
+|--------|-----------|---------|-------------|
+| `retrieve` | `async retrieve(query, top_k=5)` | `list[str]` | MemoryProvider protocol -- retrieve context strings |
+| `store` | `async store(content, metadata=None)` | `None` | MemoryProvider protocol -- store content |
+| `search` | `async search(query, top_k=5)` | `list[ContextSearchResult]` | Multi-strategy search with full result objects |
+| `ingest_file` | `async ingest_file(data, filename, scope, scope_id)` | `ContextDocument` | Ingest a file (PDF, code, text, etc.) |
+| `ingest_text` | `async ingest_text(text, title, scope, scope_id)` | `ContextDocument` | Ingest raw text |
+| `ingest_url` | `async ingest_url(url, scope, scope_id)` | `ContextDocument` | Fetch and ingest a URL |
+
+### Production Stores
+
+For production deployments, use persistent stores:
+
+```python
+from sagewai.context import PostgresContextStore, MilvusContextVectorStore
+
+engine = ContextEngine(
+    metadata_store=PostgresContextStore(pool=asyncpg_pool),
+    vector_store=MilvusContextVectorStore(uri="http://localhost:19530"),
+)
+```
+
+---
+
+## ContextScope
+
+Access scope levels for context entries. Two levels:
+
+```python
+from sagewai import ContextScope
+
+ContextScope.ORG       # Visible to all projects in the organization
+ContextScope.PROJECT   # Visible only within the owning project
+```
+
+| Value | Description |
+|-------|-------------|
+| `ORG` | Organization-wide visibility |
+| `PROJECT` | Project-scoped visibility |
+
+---
+
+## ContextSource
+
+Origin of context data.
+
+```python
+from sagewai import ContextSource
+
+ContextSource.UPLOAD        # File upload
+ContextSource.DIRECTORY     # Directory indexing
+ContextSource.URL           # URL fetch
+ContextSource.CONVERSATION  # Extracted from conversation
+ContextSource.WORKFLOW      # Workflow output
+ContextSource.RESEARCH      # Research task
+ContextSource.MANUAL        # Manual entry
+ContextSource.EPISODE       # Episodic memory
+```
+
+---
+
+## ChatMessage
+
+Immutable message in a conversation. Used throughout the SDK for message passing.
+
+```python
+from sagewai import ChatMessage
+
+msg = ChatMessage.system("You are a helpful assistant.")
+msg = ChatMessage.user("Hello!")
+msg = ChatMessage.assistant("Hi there!")
+msg = ChatMessage.tool_result(
+    tool_call_id="tc_1",
+    name="search",
+    content="Found 3 results...",
+)
+```
+
+### Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `role` | `Role` | `system`, `user`, `assistant`, or `tool` |
+| `content` | `str \| None` | Text content |
+| `tool_calls` | `list[ToolCall] \| None` | Tool calls requested by the assistant |
+| `tool_call_id` | `str \| None` | ID linking a tool result to its call |
+| `name` | `str \| None` | Tool name (for tool results) |
+| `usage` | `UsageInfo \| None` | Token usage info |
+
+### Factory Methods
+
+| Method | Parameters | Description |
+|--------|-----------|-------------|
+| `ChatMessage.system(content)` | `content: str` | Create a system message |
+| `ChatMessage.user(content)` | `content: str` | Create a user message |
+| `ChatMessage.assistant(content)` | `content: str` | Create an assistant message |
+| `ChatMessage.tool_result(...)` | `tool_call_id, name, content` | Create a tool result message |

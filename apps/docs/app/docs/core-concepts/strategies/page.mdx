@@ -1,0 +1,276 @@
+# Execution Strategies
+
+Strategies control how an agent reasons and makes decisions. The default `ReActStrategy` handles most use cases, but Sagewai provides advanced strategies for complex reasoning tasks.
+
+All strategies implement the `ExecutionStrategy` protocol and are passed to an agent's `strategy` parameter.
+
+## ReActStrategy
+
+The default strategy. Implements the classic Reasoning + Acting loop:
+
+1. Call the LLM with the current messages and available tools
+2. If the LLM returns tool calls, execute them and add results to the conversation
+3. Repeat until the LLM returns a text response (no tool calls)
+
+```python
+from sagewai import UniversalAgent, ReActStrategy
+
+agent = UniversalAgent(
+    name="react-agent",
+    model="gpt-4o",
+    strategy=ReActStrategy(),
+    max_iterations=10,
+)
+```
+
+ReAct is the most widely used pattern for tool-calling agents. It works well for:
+- Simple question-answering with tool access
+- Data retrieval and processing tasks
+- Most single-step or low-complexity workflows
+
+---
+
+## TreeOfThoughtsStrategy
+
+Explores multiple reasoning paths simultaneously and selects the best one. Useful for problems where the first approach may not be optimal.
+
+```python
+from sagewai import UniversalAgent, TreeOfThoughtsStrategy
+
+strategy = TreeOfThoughtsStrategy(
+    num_branches=3,
+    max_depth=3,
+    evaluation_model=None,  # Use the same model for evaluation
+)
+
+agent = UniversalAgent(
+    name="creative-agent",
+    model="gpt-4o",
+    strategy=strategy,
+)
+```
+
+### How It Works
+
+1. Generate `num_branches` candidate reasoning paths
+2. Evaluate each path using the LLM
+3. Select the best path and continue
+4. Repeat up to `max_depth` levels
+
+Best for:
+- Creative writing tasks
+- Complex problem solving with multiple valid approaches
+- Tasks where quality matters more than speed
+
+---
+
+## LATSStrategy
+
+Monte Carlo Tree Search adapted for LLM agents. Combines exploration and exploitation to find optimal solutions through simulated rollouts.
+
+```python
+from sagewai import UniversalAgent, LATSStrategy
+
+strategy = LATSStrategy(
+    num_simulations=5,
+    exploration_weight=1.4,
+    max_depth=4,
+)
+
+agent = UniversalAgent(
+    name="lats-agent",
+    model="gpt-4o",
+    strategy=strategy,
+)
+```
+
+### How It Works
+
+1. **Select** — Use UCB1 to pick the most promising node
+2. **Expand** — Generate a new child reasoning step
+3. **Simulate** — Roll out to a terminal state
+4. **Backpropagate** — Update scores up the tree
+
+Best for:
+- Mathematical reasoning
+- Code generation with correctness validation
+- Problems with clear success/failure criteria
+
+---
+
+## SelfCorrectionStrategy
+
+Automatically detects and corrects errors in LLM output using validation rules and exemplar-based feedback.
+
+```python
+from sagewai import UniversalAgent, SelfCorrectionStrategy
+from sagewai.core.self_correction import OutputValidator, ExemplarStore, FailureExemplar
+
+validator = OutputValidator()
+validator.add_json_validator(required_fields=["title", "body", "tags"])
+validator.add_length_validator(min_length=100, max_length=5000)
+
+exemplar_store = ExemplarStore()
+exemplar_store.add(FailureExemplar(
+    error_type="missing_required_fields",
+    bad_output='{"title": "Test"}',
+    correction_prompt="Output is missing 'body' and 'tags' fields.",
+    corrected_output='{"title": "Test", "body": "Content here.", "tags": ["test"]}',
+))
+
+strategy = SelfCorrectionStrategy(
+    max_corrections=3,
+    validator=validator,
+    exemplar_store=exemplar_store,
+)
+
+agent = UniversalAgent(
+    name="structured-agent",
+    model="gpt-4o",
+    strategy=strategy,
+)
+```
+
+### How It Works
+
+1. Run the agent's normal reasoning loop
+2. Validate the output against rules
+3. If invalid, inject the error message and exemplar as feedback
+4. Re-run the agent with the correction context
+5. Repeat up to `max_corrections` times
+
+Best for:
+- Structured output (JSON, XML, CSV)
+- Agents that must produce output matching a specific schema
+- Tasks where partial correctness is insufficient
+
+---
+
+## PlanningStrategy
+
+Decompose a complex goal into a plan of steps, then execute each step sequentially. Optionally reflect after each step to revise the remaining plan.
+
+```python
+from sagewai import UniversalAgent, PlanningStrategy
+
+# Plan once, execute all steps
+strategy = PlanningStrategy(
+    mode="plan_then_act",
+    max_steps=5,
+)
+
+# Or: plan, act, reflect, revise — iterative planning
+strategy = PlanningStrategy(
+    mode="plan_act_reflect",
+    max_steps=10,
+)
+
+agent = UniversalAgent(
+    name="planner",
+    model="gpt-4o",
+    strategy=strategy,
+)
+```
+
+### Modes
+
+| Mode | Behavior |
+|------|----------|
+| `plan_then_act` | Generate the full plan upfront, then execute each step in order |
+| `plan_act_reflect` | Plan, execute step 1, reflect on the result, optionally revise remaining steps, continue |
+
+Best for:
+- Multi-step research tasks
+- Report generation
+- Any task that benefits from explicit planning before execution
+
+---
+
+## RoutingStrategy
+
+Route user messages to different specialist agents based on intent. Supports keyword-based heuristic routing or LLM-based classification.
+
+```python
+from sagewai import UniversalAgent, RoutingStrategy
+
+greeter = UniversalAgent(name="greeter", system_prompt="You greet users warmly.")
+researcher = UniversalAgent(name="researcher", system_prompt="You research topics.")
+coder = UniversalAgent(name="coder", system_prompt="You write code.")
+fallback = UniversalAgent(name="fallback", system_prompt="General assistant.")
+
+# Heuristic routing (keyword-based, fast, no LLM call)
+strategy = RoutingStrategy(
+    routes={"greet": greeter, "research": researcher, "code": coder},
+    fallback=fallback,
+    method="heuristic",
+    keywords={
+        "greet": ["hello", "hi", "hey"],
+        "research": ["find", "search", "look up"],
+        "code": ["write code", "implement", "function"],
+    },
+)
+
+# LLM routing (the host agent classifies intent)
+strategy = RoutingStrategy(
+    routes={"greet": greeter, "research": researcher, "code": coder},
+    fallback=fallback,
+    method="llm",
+)
+```
+
+Best for:
+- Customer support bots (route to billing, technical, general)
+- Multi-domain assistants
+- Reducing latency by sending simple queries to simpler models
+
+> **Tip:** For deterministic condition-based routing without a strategy, use [`ConditionalAgent`](/docs/core-concepts/agents#conditionalagent) instead.
+
+---
+
+## Choosing a Strategy
+
+| Strategy | Speed | Quality | Use Case |
+|----------|-------|---------|----------|
+| `ReActStrategy` | Fast | Good | General tool-calling tasks |
+| `TreeOfThoughtsStrategy` | Slow | High | Creative, multi-path reasoning |
+| `LATSStrategy` | Slow | Highest | Mathematical, code with validation |
+| `SelfCorrectionStrategy` | Medium | High | Structured output, schema compliance |
+| `PlanningStrategy` | Medium | High | Multi-step research, report generation |
+| `RoutingStrategy` | Fast | Varies | Multi-domain, intent-based routing |
+
+You can also combine strategies. For example, use `RoutingStrategy` at the top level to route to specialist agents that each use `SelfCorrectionStrategy` for structured output.
+
+---
+
+## Custom Strategies
+
+Implement the `ExecutionStrategy` protocol to create your own strategy:
+
+```python
+from sagewai import ExecutionStrategy, BaseAgent, ChatMessage
+from sagewai.models.tool import ToolSpec
+
+class MyStrategy:
+    async def execute(
+        self,
+        agent: BaseAgent,
+        messages: list[ChatMessage],
+        tools: list[ToolSpec],
+        max_iterations: int,
+    ) -> ChatMessage:
+        # Your custom reasoning loop here
+        # Note: _call_llm is a protected API for strategy subclasses —
+        # application code should use agent.chat() instead
+        response = await agent._call_llm(messages, tools)
+        return response
+```
+
+Strategies have access to the agent's internal `_call_llm` method as part of the execution contract. This is a protected API — application code should always use `agent.chat()` instead.
+
+---
+
+## What's Next
+
+- **[Workflows](/docs/core-concepts/workflows)** — Durable multi-step execution with checkpointing and human approval
+- **[Agents](/docs/core-concepts/agents)** — Agent types and composition patterns
+- **[Directives](/docs/core-concepts/directives)** — Prompt preprocessing with model-aware formatting

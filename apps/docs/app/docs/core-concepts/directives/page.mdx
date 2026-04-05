@@ -1,0 +1,254 @@
+# Directives
+
+The Directive Engine is a prompt preprocessor that resolves special syntax into enriched context before the LLM sees the prompt. It enables any model — including small, local LLMs without native tool-calling support — to leverage Sagewai's full infrastructure: Context Engine, Memory, Tools, MCP connectors, and cross-agent delegation.
+
+## Why Directives?
+
+Most LLM frameworks require native function-calling support for tool use. This locks out smaller open-source models. The Directive Engine solves this by resolving all external references at prompt time, injecting the results as text context. The LLM only needs to understand natural language.
+
+For large models (GPT-4o, Claude), directives provide a convenient shorthand for pulling in context. For small models (Phi-3, Llama 3.1 7B, CodeLlama), directives are essential — they enable capabilities these models cannot access natively.
+
+## Quick Start
+
+```python
+import asyncio
+from sagewai import UniversalAgent, ContextEngine, ContextScope
+from sagewai.context import InMemoryMetadataStore, InMemoryVectorStore
+
+async def main():
+    engine = ContextEngine(
+        metadata_store=InMemoryMetadataStore(),
+        vector_store=InMemoryVectorStore(),
+        project_id="my-project",
+    )
+
+    await engine.ingest_text(
+        text="Q4 revenue was $12M, up 15% year-over-year.",
+        title="Q4 Report",
+        scope=ContextScope.PROJECT,
+        scope_id="my-project",
+    )
+
+    agent = UniversalAgent(
+        name="analyst",
+        model="gpt-4o",
+        memory=engine,
+        directives=True,  # enable directive preprocessing
+    )
+
+    # @context pulls relevant documents before the LLM sees the prompt
+    response = await agent.chat(
+        "@context('Q4 revenue') Summarize our Q4 financial performance."
+    )
+    print(response)
+
+asyncio.run(main())
+```
+
+---
+
+## Sigil Syntax
+
+Directives use `@` sigils for context and delegation, `/` for tool invocations, and `#` for execution overrides.
+
+### @context — Retrieve Documents
+
+Pull documents from the Context Engine:
+
+```
+@context('machine learning basics')
+Help me understand neural networks.
+```
+
+With scope and tag filtering:
+
+```
+@context('revenue', scope='org', tags='finance,q4')
+What were the key financial highlights?
+```
+
+### @memory — Search Agent Memory
+
+Search the agent's stored knowledge:
+
+```
+@memory('customer preferences')
+What does this customer usually order?
+```
+
+### @agent:name — Delegate to Another Agent
+
+Delegate a task to a named agent using colon syntax:
+
+```
+@agent:researcher('latest advances in quantum computing')
+Summarize the findings for a non-technical audience.
+```
+
+The Directive Engine resolves this by running the named agent, capturing its output, and injecting it as context.
+
+### @wf:name — Invoke a Saved Workflow
+
+Invoke a saved workflow by name:
+
+```
+@wf:article-pipeline('quantum computing advances')
+Review and improve the generated article.
+```
+
+### /tool — Call a Tool Inline
+
+Invoke a registered tool and inject its result:
+
+```
+/tool.get_weather('Berlin')
+Given the current weather, suggest outfit options.
+```
+
+### #model — Override Model
+
+Switch the model for this request:
+
+```
+#model:gpt-4o-mini
+Give me a quick summary of this topic.
+```
+
+### #budget — Set Cost Limit
+
+Cap the cost for this request:
+
+```
+#budget:0.50
+Analyze this dataset thoroughly.
+```
+
+---
+
+## Dynamic Parameters
+
+Directives support dynamic parameters that are resolved at runtime. Use backtick delimiters:
+
+| Parameter | Resolves To |
+|-----------|-------------|
+| `` @datetime `` | Current date and time |
+| `` @date `` | Current date |
+| `` @time `` | Current time |
+| `` @user `` | Current user identifier |
+| `` @project `` | Current project identifier |
+
+```
+@context('meetings on `@date`')
+What meetings do I have today?
+```
+
+---
+
+## Template Syntax
+
+For more complex expressions, use double-brace templates:
+
+```
+{{ context.search('quarterly revenue', tags='finance,q4') }}
+Summarize the financial performance.
+```
+
+Templates and sigils can be mixed in the same prompt:
+
+```
+@memory('customer history')
+{{ context.search('product catalog', scope='org') }}
+Recommend products based on past purchases.
+```
+
+---
+
+## Model Profiles
+
+The Directive Engine auto-detects the model's capability tier and adjusts formatting accordingly:
+
+| Profile | Context Budget | Compression | Tool Mode | Example Models |
+|---------|---------------|-------------|-----------|----------------|
+| **Small** | 2,048 tokens | 5x aggressive | Prompt-based | Phi-3, Llama 7B, CodeLlama 7B |
+| **Medium** | 8,192 tokens | 2x moderate | Native | GPT-4o-mini, Gemini Flash, Mixtral |
+| **Large** | 32,768 tokens | None | Native | GPT-4o, Claude Sonnet, Gemini Pro |
+
+Auto-detection is based on model name patterns. You can override it:
+
+```python
+from sagewai import DirectiveEngine, detect_profile
+from sagewai.directives import SMALL
+
+# Auto-detect
+profile = detect_profile("ollama/codellama:7b")  # returns SMALL
+
+# Manual override
+engine = DirectiveEngine(
+    context=my_context_engine,
+    model="my-custom-model",
+    profile=SMALL,
+)
+```
+
+### What Profiles Control
+
+- **Compression ratio** — Small models get aggressively compressed context (extractive compression keeps the most important sentences)
+- **Delimiters** — Small models get structured `[CONTEXT]` / `[SOURCE]` delimiters for clarity
+- **Explicit instructions** — Small models get added framing like "You MUST use the context above"
+- **Tool-call mode** — Small models use prompt-based tool descriptions with a `TOOL_CALL:` output marker instead of native function calling
+- **Token budget allocation** — Each profile allocates tokens differently across context, tools, few-shot examples, and instructions
+
+---
+
+## Using the DirectiveEngine Directly
+
+For advanced use, create a `DirectiveEngine` instance and resolve prompts manually:
+
+```python
+from sagewai import DirectiveEngine, DirectiveResult
+
+engine = DirectiveEngine(
+    context=my_context_engine,
+    model="codellama:7b",
+)
+
+result: DirectiveResult = await engine.resolve(
+    "@context('machine learning') Help me learn ML basics"
+)
+
+# result.prompt — enriched text with context injected
+# result.clean_prompt — original text with directives stripped
+# result.context_blocks — resolved context blocks
+# result.metadata — token counts, timings, resolution stats
+# result.tool_descriptions — formatted tool descriptions (for prompt-based mode)
+```
+
+### DirectiveResult Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `prompt` | `str` | Final enriched prompt with all context injected |
+| `clean_prompt` | `str` | User's original text with directives stripped |
+| `context_blocks` | `list[ContextBlock]` | Resolved context blocks for system message injection |
+| `metadata` | `DirectiveMetadata` | Token counts, timings, resolution stats |
+| `overrides` | `ExecutionOverrides` | Model/budget overrides from `#` meta-directives |
+| `tool_descriptions` | `str` | Formatted tool descriptions for prompt-based tool calling |
+
+---
+
+## Security
+
+The Directive Engine includes several safety mechanisms:
+
+- **Tool and MCP allowlists** — Only explicitly allowed tools can be invoked via `/tool` directives
+- **Resolution timeout** — Directive resolution times out after 120 seconds (prevents hangs with local models)
+- **Circular agent detection** — `@agent:name()` delegation tracks a call stack and aborts at depth 3
+- **Meta validation** — `#model` and `#budget` overrides are validated before application
+
+---
+
+## What's Next
+
+- **[Context Engine](/docs/core-concepts/context-engine)** — Document ingestion and retrieval that powers `@context`
+- **[Strategies](/docs/core-concepts/strategies)** — ReActStrategy wires prompt-based tool calling for small models
+- **[Safety](/docs/core-concepts/safety)** — Guardrails that work alongside directive-enhanced agents

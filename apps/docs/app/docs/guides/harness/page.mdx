@@ -1,0 +1,161 @@
+# LLM Harness
+
+Smart proxy and SDK middleware for enterprise LLM cost governance.
+
+## Overview
+
+The LLM Harness sits between AI coding tools (Claude Code, Cursor, Copilot) and LLM providers, automatically routing requests to the cheapest model that can handle the task. Simple tasks like fixing typos go to Haiku ($0.80/M), while complex architecture work stays on Opus ($15/M).
+
+**Two modes:**
+- **Proxy mode** — standalone HTTP server that tools connect to via environment variables
+- **SDK mode** — middleware that intercepts `_call_llm()` inside Sagewai agents
+
+## Quick Start: Proxy Mode
+
+Deploy the harness as a standalone server:
+
+```python
+from sagewai.harness.app import create_harness_app
+import uvicorn
+
+app = create_harness_app(
+    anthropic_api_key="sk-ant-...",
+    openai_api_key="sk-...",
+)
+uvicorn.run(app, host="0.0.0.0", port=8100)
+```
+
+Configure Claude Code to route through the harness:
+
+```bash
+export ANTHROPIC_BASE_URL=http://localhost:8100/v1
+export ANTHROPIC_API_KEY=sk-harness-<your-key>
+```
+
+For Cursor or Copilot, set the API base URL to `http://localhost:8100/v1`.
+
+## Quick Start: SDK Mode
+
+Wrap any agent with smart routing — no proxy needed:
+
+```python
+from sagewai.harness import harness_wrap, ModelTierConfig
+
+harness_wrap(agent, tier_config=ModelTierConfig(
+    simple="claude-haiku-4-5-20251001",
+    medium="claude-sonnet-4-5-20250929",
+    complex="claude-opus-4-6",
+))
+```
+
+Or use the `HarnessingAgent` supervisor for multiple agents:
+
+```python
+from sagewai.harness import HarnessingAgent
+
+harness = HarnessingAgent(
+    agents=[planner, coder, reviewer],
+    tier_config=ModelTierConfig(
+        simple="claude-haiku-4-5-20251001",
+        medium="claude-sonnet-4-5-20250929",
+        complex="claude-opus-4-6",
+    ),
+)
+```
+
+## Request Classification
+
+Every request is scored on 8 signals (no LLM call, pure heuristics):
+
+| Signal | Weight | Example |
+|--------|--------|---------|
+| Total tokens | High | >4000 tokens → +20 |
+| Message count | Medium | >10 messages → +10 |
+| System prompt size | Medium | >2000 tokens → +10 |
+| Last user message length | High | fewer than 50 chars → -20 |
+| Code blocks | Medium | 3+ blocks → +10 |
+| Tool count | High | >5 tools → +15 |
+| Complexity keywords | Medium | "architect", "design" → +8 each |
+| Simplicity keywords | Medium | "fix", "typo", "rename" → -8 each |
+
+Scores map to three tiers: **SIMPLE** (0-29), **MEDIUM** (30-69), **COMPLEX** (70-100).
+
+## Policies
+
+Policies control routing per org, team, project, or user:
+
+```python
+from sagewai.harness.models import PolicyRule, PolicyScope
+
+PolicyRule(
+    name="intern-cap",
+    scope=PolicyScope(org_id="acme", user_id="bob"),
+    max_tier=ComplexityTier.MEDIUM,       # No Opus access
+    blocked_models=["claude-opus-4-6"],   # Explicit block
+    allow_override=False,                  # Can't bypass
+)
+```
+
+Resolution order: **user > project > team > org** (most specific wins).
+
+## Budget Enforcement
+
+Set spend limits per user, team, or project:
+
+```python
+from sagewai.harness.budget import HarnessBudgetManager
+
+budget = HarnessBudgetManager(BudgetManager())
+budget.configure_user_budget("alice", max_daily_usd=5.0, max_monthly_usd=50.0, action="downgrade")
+```
+
+Actions when exceeded: `warn` (log only), `downgrade` (force cheapest model), `stop` (reject with 429).
+
+## Custom Directives
+
+Register harness directives with the Directive Engine:
+
+- `@route:simple` / `@route:medium` / `@route:complex` — force a tier
+- `@cost:estimate` — show pricing for the current model
+
+The existing `#model:name` meta-directive always takes precedence (user intent wins over harness).
+
+## Admin API
+
+13 endpoints at `/api/v1/harness/`:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /policies | List policies |
+| POST | /policies | Create policy |
+| GET/PUT/DELETE | /policies/:id | CRUD |
+| GET | /keys | List keys |
+| POST | /keys | Create key |
+| DELETE | /keys/:id | Revoke key |
+| GET | /spend | Spend summary |
+| GET | /spend/breakdown | Spend by model |
+| GET | /audit | Audit events |
+| GET/PUT | /config | Global config |
+| POST | /test-classify | Dry-run classification |
+
+## Local Model Discovery
+
+The harness auto-discovers local inference servers:
+
+```python
+from sagewai.harness.discovery import discover_local_backends
+
+backends = await discover_local_backends()
+# Probes: Ollama (11434), LM Studio (1234), Unsloth (8001), vLLM (8000), LocalAI (8080)
+```
+
+Local models cost $0/token — routing simple tasks to local models maximizes savings.
+
+## Cost Savings Example
+
+| Request Type | Without Harness | With Harness | Savings |
+|-------------|----------------|-------------|---------|
+| Fix typo (1K tokens) | Opus: $0.015 | Haiku: $0.0008 | 95% |
+| Refactor function (5K) | Opus: $0.075 | Sonnet: $0.015 | 80% |
+| Architecture design (20K) | Opus: $0.300 | Opus: $0.300 | 0% |
+| **Daily (1000 requests, 70% simple)** | **$18.90** | **$4.32** | **77%** |
