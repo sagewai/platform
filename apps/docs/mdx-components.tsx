@@ -1,7 +1,5 @@
 import type { MDXComponents } from 'mdx/types';
-import dynamic from 'next/dynamic';
-
-const Mermaid = dynamic(() => import('@/components/mermaid').then(m => ({ default: m.Mermaid })), { ssr: false });
+import { Mermaid } from '@/components/mermaid';
 
 export function useMDXComponents(components: MDXComponents): MDXComponents {
   return {
