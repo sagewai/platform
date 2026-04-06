@@ -2,10 +2,12 @@
 
 import { useEffect, useRef, useState } from 'react';
 
+type MermaidTheme = 'default' | 'dark';
+
 export function Mermaid({ chart }: { chart: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const [svg, setSvg] = useState<string>('');
-  const [theme, setTheme] = useState<string>('default');
+  const [theme, setTheme] = useState<MermaidTheme>('default');
 
   // Watch for theme changes
   useEffect(() => {
