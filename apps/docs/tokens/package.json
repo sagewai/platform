@@ -1,0 +1,27 @@
+{
+  "name": "@sagewai/tokens",
+  "version": "0.1.0",
+  "description": "Sagewai design tokens — colors, spacing, typography, motion for Tailwind CSS 4",
+  "license": "MIT",
+  "main": "./src/index.css",
+  "style": "./src/index.css",
+  "files": [
+    "src/"
+  ],
+  "keywords": [
+    "sagewai",
+    "design-tokens",
+    "tailwind",
+    "css",
+    "theme",
+    "dark-mode"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sagewai/sagewai",
+    "directory": "tokens"
+  },
+  "peerDependencies": {
+    "tailwindcss": ">=4.0.0"
+  }
+}

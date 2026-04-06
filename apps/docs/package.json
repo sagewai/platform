@@ -7,17 +7,20 @@
     "dev": "next dev --port 3010",
     "build": "next build",
     "start": "next start",
-    "lint": "echo 'lint: skipped (no eslint config)'"
+    "lint": "echo 'lint: skipped (no eslint config)'",
+    "deploy": "next build && wrangler deploy",
+    "preview": "next build && wrangler dev"
   },
   "dependencies": {
-    "@sagecurator/ui": "workspace:*",
     "@mdx-js/mdx": "^3.0.0",
     "@mdx-js/react": "^3.0.0",
     "@next/mdx": "^16.2.2",
+    "@sagewai/tokens": "^0.1.0",
+    "lucide-react": "^1.7.0",
+    "mermaid": "^11.14.0",
     "next": "^16.2.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "lucide-react": "^1.7.0",
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {

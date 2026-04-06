@@ -6,6 +6,16 @@ This guide takes you from zero to a working agent in under five minutes.
 
 ---
 
+## Two Ways to Use Sagewai
+
+**Self-Hosted (Open Source):** Install the SDK, start your own Sagewai server, and manage everything on your infrastructure. On first launch, the admin panel shows a setup wizard to create your admin account and configure your organization. After setup, users log in to access the dashboard.
+
+**Sagewai Cloud:** Purchase and activate your account at [sagewai.ai](https://sagewai.ai), then manage your agents through the cloud admin panel at [cloud.sagewai.ai](https://cloud.sagewai.ai). No infrastructure to manage — just connect and start building.
+
+Both paths use the same SDK and the same APIs. Choose self-hosted for full control, or cloud for convenience.
+
+---
+
 ## Install
 
 Install the SDK with pip:
@@ -32,7 +42,8 @@ Sagewai ships optional extras for advanced features:
 ### Prerequisites
 
 - Python 3.10 or later
-- An API key for at least one LLM provider (OpenAI, Anthropic, Google, etc.)
+- An API key for at least one LLM provider — or use [Ollama for free local inference](/docs/guides/local-inference)
+- See [Hardware Requirements](/docs/guides/hardware-requirements) for detailed system specs
 
 ### Environment Setup
 
@@ -302,6 +313,14 @@ The full admin panel with a web UI is available when running the Sage platform. 
 
 You now have a working agent with tools, memory, streaming, and directives. Here is where to go from here:
 
+### Learn
+
+- **[Tutorials](/docs/guides/tutorials)** — 8 progressive hands-on tutorials from first agent to enterprise deployment
+- **[Video Tutorials](/docs/guides/video-tutorials)** — 20 video walkthroughs covering every feature
+- **[Your First Agent](/docs/guides/first-agent)** — Step-by-step tutorial building a real-world research agent
+
+### Build
+
 - **[Agents](/docs/core-concepts/agents)** — BaseAgent, UniversalAgent, GoogleNativeAgent, composition patterns
 - **[Strategies](/docs/core-concepts/strategies)** — ReAct, Tree of Thoughts, LATS, Planning, Self-Correction, Routing
 - **[Memory & RAG](/docs/core-concepts/memory)** — Vector memory, graph memory, hybrid RAG, episodic memory
@@ -309,5 +328,21 @@ You now have a working agent with tools, memory, streaming, and directives. Here
 - **[Context Engine](/docs/core-concepts/context-engine)** — Document ingestion, scoped access, multi-strategy retrieval
 - **[Directives](/docs/core-concepts/directives)** — Prompt preprocessing with `@context`, `@memory`, `@agent` sigils
 - **[Safety & Guardrails](/docs/core-concepts/safety)** — PII protection, hallucination detection, budget enforcement
-- **[Your First Agent Tutorial](/docs/guides/first-agent)** — A step-by-step walkthrough building a real-world agent
+
+### Integrate
+
+- **[Client Wrappers](/docs/guides/client-wrappers)** — Use Sagewai from TypeScript, Go, Rust, and 14 more languages
+- **[VS Code Extension](/docs/guides/vscode-extension)** — Syntax highlighting, scaffolding, and code snippets
+- **[Local Inference](/docs/guides/local-inference)** — Run agents with Ollama, vLLM, or LM Studio at $0/token
+- **[CI/CD Integration](/docs/guides/ci-cd)** — Run agents in GitHub Actions as PR bots and quality gates
+
+### Deploy
+
+- **[Fleet Architecture](/docs/guides/fleet-enterprise)** — Server + worker topology with multi-tenant isolation
+- **[Hardware Requirements](/docs/guides/hardware-requirements)** — System specs for every deployment scenario
+- **[Infrastructure Management](/docs/guides/infrastructure)** — Container lifecycle, Podman, native setup
+
+### Reference
+
 - **[Python SDK Reference](/docs/api-reference/python-sdk)** — Full API documentation for all 65+ public exports
+- **[vs. Alternatives](/docs/guides/vs-alternatives)** — How Sagewai compares to LangChain, CrewAI, AutoGen

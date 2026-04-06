@@ -1,5 +1,4 @@
-@import "@sagecurator/ui/src/globals.css";
+@import "@sagewai/tokens/src/index.css";
 
-@source "../../../packages/ui/src";
 @source "../components";
 @source ".";

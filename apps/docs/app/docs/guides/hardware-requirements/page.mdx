@@ -1,0 +1,74 @@
+# Hardware Requirements
+
+Sagewai runs anywhere from a laptop to a multi-node cluster. This guide covers system requirements for every deployment scenario.
+
+## Deployment Profiles
+
+| Profile | RAM | CPU | Disk | GPU | Use Case |
+|---------|-----|-----|------|-----|----------|
+| SDK Only | 512 MB | Any 2-core | 500 MB | None | pip install + cloud APIs |
+| Lightweight Dev | 2 GB | 2-core | 2 GB | None | Postgres + Redis only |
+| Full Dev Stack | 8 GB+ | 4-core | 15 GB | None | All infrastructure services |
+| Production | 16 GB+ | 8-core | 50 GB+ | Optional | Self-hosted with observability |
+
+## Per-Service Memory Breakdown
+
+| Service | Memory | Purpose |
+|---------|--------|---------|
+| PostgreSQL 15 | ~200 MB | State, workflows, fleet, audit |
+| Redis 7 | ~50 MB | Cache, sessions |
+| Milvus 2.3 (etcd + MinIO + standalone) | ~2 GB | Vector embeddings for RAG |
+| NebulaGraph 3.6 (metad + storaged + graphd) | ~1.5 GB | Knowledge graph, relations |
+| Observability (Grafana + Prometheus + OTel + Loki + Tempo) | ~1.5 GB | Dashboards, metrics, tracing |
+| LocalStack | ~300 MB | S3-compatible archive (dev) |
+| **Total (full stack)** | **~5.5 GB** | — |
+
+## GPU Requirements for Local Inference
+
+| Task | VRAM | Recommended GPU | CPU Alternative |
+|------|------|----------------|-----------------|
+| Ollama 7B (q4_K_M) | 4 GB | RTX 3060 | Yes, ~10 tok/s |
+| Ollama 13B (q4_K_M) | 8 GB | RTX 3070 | Yes, ~5 tok/s |
+| Ollama 70B (q4_K_M) | 40 GB | A100 / 2x RTX 3090 | Impractical |
+| vLLM serving (7B-70B) | 8-80 GB | NVIDIA A10G+ | No |
+| Unsloth fine-tune 7B | 6 GB | RTX 3060+ | Very slow |
+| Unsloth fine-tune 13B | 12 GB | RTX 3090+ | Impractical |
+| Sentence-transformers | 512 MB | Any | Yes (default) |
+| GLiNER NER | 512 MB | Any | Yes (default) |
+| faster-whisper (base) | 1 GB | Any | Yes |
+
+GPU is **only** needed for local inference. If you use cloud APIs (OpenAI, Anthropic, Google), no GPU is required at all.
+
+## Disk Usage Reference
+
+| Component | Size |
+|-----------|------|
+| SDK + core dependencies | ~500 MB |
+| Intelligence extras (torch, transformers) | ~5 GB |
+| Ollama model weights | 4-40 GB per model |
+| Milvus data (per 1M vectors, 1536-dim) | ~6 GB |
+| Container images (full stack) | ~8 GB |
+| NebulaGraph data | ~500 MB per 1M edges |
+
+## Cloud Instance Recommendations
+
+| Profile | AWS | GCP | Azure |
+|---------|-----|-----|-------|
+| SDK Only | t3.small | e2-small | B2s |
+| Lightweight Dev | t3.medium | e2-medium | B2ms |
+| Full Dev Stack | m5.xlarge | e2-standard-4 | D4s_v5 |
+| Production (no GPU) | m5.2xlarge | e2-standard-8 | D8s_v5 |
+| Production (GPU) | g5.xlarge (A10G) | g2-standard-4 (L4) | NC6s_v3 (V100) |
+
+## Apple Silicon Notes
+
+Sagewai runs natively on Apple Silicon (M1/M2/M3/M4) Macs:
+
+- **Ollama** uses Metal GPU acceleration automatically — no configuration needed
+- **Sentence-transformers** and **GLiNER** work on CPU (MPS support varies)
+- **Docker** runs via Docker Desktop or OrbStack with Rosetta 2 emulation for x86 images
+- **Recommended**: MacBook Pro M2+ with 16 GB unified memory for full dev stack
+
+## Minimum Requirements Summary
+
+At minimum, you need Python 3.10+ and 512 MB of free RAM. Everything else is optional and scales with your needs. Sagewai degrades gracefully — without Milvus, it uses in-memory vectors; without NebulaGraph, in-memory graphs; without Redis, direct database queries.

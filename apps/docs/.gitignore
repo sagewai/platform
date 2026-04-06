@@ -1,0 +1,5 @@
+node_modules/
+.next/
+out/
+.claude/
+.DS_Store

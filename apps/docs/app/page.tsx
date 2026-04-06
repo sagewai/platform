@@ -9,6 +9,7 @@ import {
 import { FeatureCard } from '@/components/feature-card';
 import { CodeBlock } from '@/components/code-block';
 import { ModelBadge } from '@/components/model-badge';
+import { ThemeToggle } from '@/components/theme-toggle';
 
 const FEATURES = [
   {
@@ -112,36 +113,38 @@ export default function LandingPage() {
   return (
     <div className="min-h-screen">
       {/* Navigation */}
-      <nav className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-gray-200">
+      <nav className="sticky top-0 z-50 bg-bg-page/80 backdrop-blur-md border-b border-border">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span className="text-xl font-bold text-emerald-700">Sagewai</span>
-            <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-medium">
+            <img src="/brand/logo.svg" alt="Sagewai" className="h-8 w-8" />
+            <span className="text-xl font-bold text-primary">Sagewai</span>
+            <span className="text-xs bg-primary-light text-primary px-2 py-0.5 rounded-full font-medium">
               SDK
             </span>
           </div>
           <div className="hidden md:flex items-center gap-8">
-            <Link href="/docs/getting-started" className="text-sm text-gray-600 hover:text-emerald-700 transition-colors">
+            <Link href="/docs/getting-started" className="text-sm text-text-secondary hover:text-primary transition-colors">
               Docs
             </Link>
-            <Link href="/docs/api-reference/python-sdk" className="text-sm text-gray-600 hover:text-emerald-700 transition-colors">
+            <Link href="/docs/api-reference/python-sdk" className="text-sm text-text-secondary hover:text-primary transition-colors">
               API Reference
             </Link>
-            <Link href="/docs/guides/first-agent" className="text-sm text-gray-600 hover:text-emerald-700 transition-colors">
+            <Link href="/docs/guides/first-agent" className="text-sm text-text-secondary hover:text-primary transition-colors">
               Guides
             </Link>
             <a
               href="https://github.com/sagewai/sagewai"
-              className="text-sm text-gray-600 hover:text-emerald-700 transition-colors"
+              className="text-sm text-text-secondary hover:text-primary transition-colors"
               target="_blank"
               rel="noopener noreferrer"
             >
               GitHub
             </a>
+            <ThemeToggle />
           </div>
           <Link
             href="/docs/getting-started"
-            className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors"
+            className="bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary-hover transition-colors"
           >
             Get Started
           </Link>
@@ -150,33 +153,33 @@ export default function LandingPage() {
 
       {/* Hero Section */}
       <section className="relative overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-b from-emerald-50/80 to-white pointer-events-none" />
+        <div className="absolute inset-0 bg-gradient-to-b from-primary-light/80 to-bg-page pointer-events-none" />
         <div className="relative max-w-6xl mx-auto px-6 pt-24 pb-16">
           <div className="max-w-3xl mx-auto text-center">
-            <div className="inline-flex items-center gap-2 bg-emerald-100 text-emerald-800 text-sm px-4 py-1.5 rounded-full mb-6 font-medium">
+            <div className="inline-flex items-center gap-2 bg-primary-light text-primary text-sm px-4 py-1.5 rounded-full mb-6 font-medium">
               Open Source + Enterprise Platform
             </div>
-            <h1 className="text-5xl md:text-6xl font-bold text-gray-900 leading-tight tracking-tight mb-6">
+            <h1 className="text-5xl md:text-6xl font-bold text-text-primary leading-tight tracking-tight mb-6">
               Sagewai{' '}
-              <span className="bg-gradient-to-r from-emerald-600 to-teal-600 bg-clip-text text-transparent">
+              <span className="bg-gradient-to-r from-primary to-accent-purple bg-clip-text text-transparent">
                 The LLM-Agnostic
               </span>{' '}
               Agent Framework
             </h1>
-            <p className="text-xl text-gray-600 leading-relaxed mb-10 max-w-[42rem] mx-auto">
+            <p className="text-xl text-text-secondary leading-relaxed mb-10 max-w-[42rem] mx-auto">
               Build production-grade AI agents that work with any model. Multi-tenant, observable,
               durable, and enterprise-ready. Three lines to your first agent.
             </p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
               <Link
                 href="/docs/getting-started"
-                className="w-full sm:w-auto bg-emerald-600 text-white px-8 py-3.5 rounded-xl text-base font-semibold hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-600/20"
+                className="w-full sm:w-auto bg-primary text-white px-8 py-3.5 rounded-xl text-base font-semibold hover:bg-primary-hover transition-colors shadow-lg shadow-primary/20"
               >
                 Get Started
               </Link>
               <a
                 href="https://github.com/sagewai/sagewai"
-                className="w-full sm:w-auto border border-gray-300 text-gray-700 px-8 py-3.5 rounded-xl text-base font-semibold hover:border-gray-400 hover:bg-gray-50 transition-colors"
+                className="w-full sm:w-auto border border-border text-text-primary px-8 py-3.5 rounded-xl text-base font-semibold hover:border-primary hover:bg-bg-subtle transition-colors"
                 target="_blank"
                 rel="noopener noreferrer"
               >
@@ -195,8 +198,8 @@ export default function LandingPage() {
       {/* Feature Cards (5 Pillars) */}
       <section className="max-w-6xl mx-auto px-6 py-20">
         <div className="text-center mb-12">
-          <h2 className="text-3xl font-bold text-gray-900 mb-3">The 5 Pillars</h2>
-          <p className="text-gray-600 max-w-[42rem] mx-auto">
+          <h2 className="text-3xl font-bold text-text-primary mb-3">The 5 Pillars</h2>
+          <p className="text-text-secondary max-w-[42rem] mx-auto">
             Everything you need to build, govern, and operate AI agents at scale.
           </p>
         </div>
@@ -208,27 +211,27 @@ export default function LandingPage() {
       </section>
 
       {/* Code Examples Section */}
-      <section className="bg-gray-50 border-y border-gray-200 py-20">
+      <section className="bg-bg-subtle border-y border-border py-20">
         <div className="max-w-6xl mx-auto px-6">
           <div className="text-center mb-12">
-            <h2 className="text-3xl font-bold text-gray-900 mb-3">Built for Real Workloads</h2>
-            <p className="text-gray-600 max-w-[42rem] mx-auto">
+            <h2 className="text-3xl font-bold text-text-primary mb-3">Built for Real Workloads</h2>
+            <p className="text-text-secondary max-w-[42rem] mx-auto">
               From simple single-agent tasks to complex multi-agent pipelines with safety
               guardrails and cost controls.
             </p>
           </div>
           <div className="grid lg:grid-cols-2 gap-8">
             <div>
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">Multi-Agent Workflows</h3>
-              <p className="text-sm text-gray-600 mb-4">
+              <h3 className="text-lg font-semibold text-text-primary mb-2">Multi-Agent Workflows</h3>
+              <p className="text-sm text-text-secondary mb-4">
                 Compose agents into sequential, parallel, or loop patterns. Each agent can use a
                 different model.
               </p>
               <CodeBlock code={WORKFLOW_CODE} title="workflow.py" />
             </div>
             <div>
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">Safety Guardrails</h3>
-              <p className="text-sm text-gray-600 mb-4">
+              <h3 className="text-lg font-semibold text-text-primary mb-2">Safety Guardrails</h3>
+              <p className="text-sm text-text-secondary mb-4">
                 Protect inputs and outputs with PII detection, hallucination guards, content
                 filters, and token budgets.
               </p>
@@ -241,8 +244,8 @@ export default function LandingPage() {
       {/* Model Compatibility */}
       <section className="max-w-6xl mx-auto px-6 py-20">
         <div className="text-center mb-12">
-          <h2 className="text-3xl font-bold text-gray-900 mb-3">100+ Supported Models</h2>
-          <p className="text-gray-600 max-w-[42rem] mx-auto">
+          <h2 className="text-3xl font-bold text-text-primary mb-3">100+ Supported Models</h2>
+          <p className="text-text-secondary max-w-[42rem] mx-auto">
             Powered by LiteLLM. Write your agent once, then swap models with a single parameter.
             No code changes required.
           </p>
@@ -252,18 +255,18 @@ export default function LandingPage() {
             <ModelBadge key={m.name} name={m.name} provider={m.provider} />
           ))}
         </div>
-        <p className="text-center text-sm text-gray-500 mt-6">
+        <p className="text-center text-sm text-text-muted mt-6">
           Plus Azure OpenAI, AWS Bedrock, Vertex AI, Together AI, Groq, Fireworks, and many more
           via LiteLLM.
         </p>
       </section>
 
       {/* Architecture Overview */}
-      <section className="bg-gray-50 border-y border-gray-200 py-20">
+      <section className="bg-bg-subtle border-y border-border py-20">
         <div className="max-w-6xl mx-auto px-6">
           <div className="text-center mb-12">
-            <h2 className="text-3xl font-bold text-gray-900 mb-3">Modular Architecture</h2>
-            <p className="text-gray-600 max-w-[42rem] mx-auto">
+            <h2 className="text-3xl font-bold text-text-primary mb-3">Modular Architecture</h2>
+            <p className="text-text-secondary max-w-[42rem] mx-auto">
               Use what you need. Every module is independently importable and composable.
             </p>
           </div>
@@ -290,14 +293,14 @@ export default function LandingPage() {
                 items: ['Unsloth Integration', 'Local LLM Discovery', 'Fine-Tuning Pipeline', 'Domain Models'],
               },
             ].map((col) => (
-              <div key={col.label} className="bg-white rounded-xl border border-gray-200 p-5">
-                <h3 className="font-semibold text-emerald-700 mb-3 text-sm uppercase tracking-wide">
+              <div key={col.label} className="bg-bg-page rounded-xl border border-border p-5">
+                <h3 className="font-semibold text-primary mb-3 text-sm uppercase tracking-wide">
                   {col.label}
                 </h3>
                 <ul className="space-y-2">
                   {col.items.map((item) => (
-                    <li key={item} className="text-sm text-gray-600 flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
+                    <li key={item} className="text-sm text-text-secondary flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0" />
                       {item}
                     </li>
                   ))}
@@ -310,23 +313,23 @@ export default function LandingPage() {
 
       {/* CTA Section */}
       <section className="max-w-6xl mx-auto px-6 py-24 text-center">
-        <h2 className="text-3xl font-bold text-gray-900 mb-4">Ready to build?</h2>
-        <p className="text-gray-600 mb-8 max-w-[36rem] mx-auto">
+        <h2 className="text-3xl font-bold text-text-primary mb-4">Ready to build?</h2>
+        <p className="text-text-secondary mb-8 max-w-[36rem] mx-auto">
           Install the SDK and create your first agent in under a minute.
         </p>
-        <div className="bg-gray-900 rounded-xl inline-block px-8 py-4 mb-8">
-          <code className="text-emerald-400 text-lg font-mono">pip install sagewai</code>
+        <div className="bg-bg-deep rounded-xl inline-block px-8 py-4 mb-8">
+          <code className="text-primary text-lg font-mono">pip install sagewai</code>
         </div>
         <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
           <Link
             href="/docs/getting-started"
-            className="bg-emerald-600 text-white px-8 py-3.5 rounded-xl text-base font-semibold hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-600/20"
+            className="bg-primary text-white px-8 py-3.5 rounded-xl text-base font-semibold hover:bg-primary-hover transition-colors shadow-lg shadow-primary/20"
           >
             Read the Docs
           </Link>
           <Link
             href="/docs/guides/first-agent"
-            className="border border-gray-300 text-gray-700 px-8 py-3.5 rounded-xl text-base font-semibold hover:border-gray-400 hover:bg-gray-50 transition-colors"
+            className="border border-border text-text-primary px-8 py-3.5 rounded-xl text-base font-semibold hover:border-primary hover:bg-bg-subtle transition-colors"
           >
             First Agent Tutorial
           </Link>
@@ -334,67 +337,70 @@ export default function LandingPage() {
       </section>
 
       {/* Footer */}
-      <footer className="border-t border-gray-200 bg-gray-50 py-12">
+      <footer className="border-t border-border bg-bg-subtle py-12">
         <div className="max-w-6xl mx-auto px-6">
           <div className="grid md:grid-cols-4 gap-8">
             <div>
-              <span className="text-lg font-bold text-emerald-700">Sagewai</span>
-              <p className="text-sm text-gray-500 mt-2">
-                The LLM-agnostic agent framework for enterprise AI.
+              <div className="flex items-center gap-2 mb-2">
+                <img src="/brand/logo.svg" alt="Sagewai" className="h-6 w-6" />
+                <span className="text-lg font-bold text-primary">Sagewai</span>
+              </div>
+              <p className="text-sm text-text-muted mt-2">
+                Agent infrastructure you own.
               </p>
             </div>
             <div>
-              <h4 className="font-semibold text-gray-900 mb-3 text-sm">Documentation</h4>
+              <h4 className="font-semibold text-text-primary mb-3 text-sm">Documentation</h4>
               <ul className="space-y-2">
                 <li>
-                  <Link href="/docs/getting-started" className="text-sm text-gray-600 hover:text-emerald-700">
+                  <Link href="/docs/getting-started" className="text-sm text-text-secondary hover:text-primary">
                     Getting Started
                   </Link>
                 </li>
                 <li>
-                  <Link href="/docs/core-concepts/agents" className="text-sm text-gray-600 hover:text-emerald-700">
+                  <Link href="/docs/core-concepts/agents" className="text-sm text-text-secondary hover:text-primary">
                     Core Concepts
                   </Link>
                 </li>
                 <li>
-                  <Link href="/docs/api-reference/python-sdk" className="text-sm text-gray-600 hover:text-emerald-700">
+                  <Link href="/docs/api-reference/python-sdk" className="text-sm text-text-secondary hover:text-primary">
                     API Reference
                   </Link>
                 </li>
               </ul>
             </div>
             <div>
-              <h4 className="font-semibold text-gray-900 mb-3 text-sm">Guides</h4>
+              <h4 className="font-semibold text-text-primary mb-3 text-sm">Guides</h4>
               <ul className="space-y-2">
                 <li>
-                  <Link href="/docs/guides/first-agent" className="text-sm text-gray-600 hover:text-emerald-700">
-                    First Agent
+                  <Link href="/docs/guides/tutorials" className="text-sm text-text-secondary hover:text-primary">
+                    Tutorials
                   </Link>
                 </li>
                 <li>
-                  <Link href="/docs/guides/multi-agent" className="text-sm text-gray-600 hover:text-emerald-700">
-                    Multi-Agent Workflows
+                  <Link href="/docs/guides/fleet-enterprise" className="text-sm text-text-secondary hover:text-primary">
+                    Fleet Architecture
                   </Link>
                 </li>
                 <li>
-                  <Link href="/docs/guides/pii-protection" className="text-sm text-gray-600 hover:text-emerald-700">
-                    PII Protection
+                  <Link href="/docs/guides/client-wrappers" className="text-sm text-text-secondary hover:text-primary">
+                    Client Wrappers
                   </Link>
                 </li>
                 <li>
-                  <Link href="/docs/guides/cost-management" className="text-sm text-gray-600 hover:text-emerald-700">
+                  <Link href="/docs/guides/cost-management" className="text-sm text-text-secondary hover:text-primary">
                     Cost Management
                   </Link>
                 </li>
               </ul>
             </div>
             <div>
-              <h4 className="font-semibold text-gray-900 mb-3 text-sm">Community</h4>
+              <h4 className="font-semibold text-text-primary mb-3 text-sm">Community</h4>
               <ul className="space-y-2">
                 <li>
                   <a
                     href="https://github.com/sagewai/sagewai"
-                    className="text-sm text-gray-600 hover:text-emerald-700"
+                    className="text-sm text-text-secondary hover:text-primary"
                     target="_blank"
                     rel="noopener noreferrer"
                   >
@@ -404,7 +410,7 @@ export default function LandingPage() {
                 <li>
                   <a
                     href="https://github.com/sagewai/sagewai/issues"
-                    className="text-sm text-gray-600 hover:text-emerald-700"
+                    className="text-sm text-text-secondary hover:text-primary"
                     target="_blank"
                     rel="noopener noreferrer"
                   >
@@ -414,8 +420,8 @@ export default function LandingPage() {
               </ul>
             </div>
           </div>
-          <div className="border-t border-gray-200 mt-8 pt-8 text-center text-sm text-gray-500">
-            Built by the Sagecurator team.
+          <div className="border-t border-border mt-8 pt-8 text-center text-sm text-text-muted">
+            Built by Sagecurator.
           </div>
         </div>
       </footer>

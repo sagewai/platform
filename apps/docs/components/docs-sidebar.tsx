@@ -16,7 +16,11 @@ interface NavSection {
 const SECTIONS: NavSection[] = [
   {
     title: 'Getting Started',
-    items: [{ label: 'Introduction & Quickstart', href: '/docs/getting-started' }],
+    items: [
+      { label: 'Introduction & Quickstart', href: '/docs/getting-started' },
+      { label: 'Tutorials', href: '/docs/guides/tutorials' },
+      { label: 'Video Tutorials', href: '/docs/guides/video-tutorials' },
+    ],
   },
   // ── Pillar: SDK ──────────────────────────────────────────────
   {
@@ -32,6 +36,8 @@ const SECTIONS: NavSection[] = [
       { label: 'Safety & Guardrails', href: '/docs/core-concepts/safety' },
       { label: 'Multi-Agent Workflows', href: '/docs/guides/multi-agent' },
       { label: 'Agent Patterns', href: '/docs/guides/patterns' },
+      { label: 'VS Code Extension', href: '/docs/guides/vscode-extension' },
+      { label: 'Client Wrappers (17 Languages)', href: '/docs/guides/client-wrappers' },
     ],
   },
   // ── Pillar: Registry ─────────────────────────────────────────
@@ -52,6 +58,8 @@ const SECTIONS: NavSection[] = [
       { label: 'LLM Harness', href: '/docs/guides/harness' },
       { label: 'Cost Management', href: '/docs/guides/cost-management' },
       { label: 'PII Protection', href: '/docs/guides/pii-protection' },
+      { label: 'Local Inference', href: '/docs/guides/local-inference' },
+      { label: 'CI/CD Integration', href: '/docs/guides/ci-cd' },
     ],
   },
   // ── Pillar: Observatory ──────────────────────────────────────
@@ -68,15 +76,19 @@ const SECTIONS: NavSection[] = [
     title: 'Training',
     items: [
       { label: 'Self-Learning Agents', href: '/docs/core-concepts/self-learning' },
+      { label: 'Training & Fine-Tuning', href: '/docs/guides/training' },
     ],
   },
   // ── Deployment & Reference ───────────────────────────────────
   {
     title: 'Deployment',
     items: [
+      { label: 'Fleet Architecture (Enterprise)', href: '/docs/guides/fleet-enterprise' },
       { label: 'Fleet Deployment', href: '/docs/guides/fleet' },
-      { label: 'Fleet Architecture', href: '/docs/guides/fleet-architecture' },
+      { label: 'Fleet Deep Dive', href: '/docs/guides/fleet-architecture' },
       { label: 'Self-Hosted Deployment', href: '/docs/guides/self-hosted' },
+      { label: 'Hardware Requirements', href: '/docs/guides/hardware-requirements' },
+      { label: 'Infrastructure Management', href: '/docs/guides/infrastructure' },
     ],
   },
   {
@@ -95,6 +107,7 @@ const SECTIONS: NavSection[] = [
   {
     title: 'Comparisons',
     items: [
+      { label: 'vs. Alternatives', href: '/docs/guides/vs-alternatives' },
       { label: 'vs. MiniMax', href: '/docs/guides/vs-minimax' },
     ],
   },
