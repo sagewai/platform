@@ -1,0 +1,49 @@
+{
+  "name": "@sagewai/admin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sagewai Admin Panel — web interface for managing agents, workflows, and AI infrastructure",
+  "scripts": {
+    "dev": "next dev --port 3008",
+    "build": "next build",
+    "start": "next start",
+    "lint": "echo 'lint: skipped (no eslint config)'"
+  },
+  "dependencies": {
+    "@sagecurator/ui": "file:../ui",
+    "@sagewai/tokens": "^0.1.0",
+    "@types/d3-force": "^3.0.10",
+    "@types/d3-sankey": "^0.12.5",
+    "@types/d3-scale": "^4.0.9",
+    "@types/dagre": "^0.7.54",
+    "@types/js-yaml": "^4.0.9",
+    "@xyflow/react": "^12.10.2",
+    "d3-force": "^3.0.0",
+    "d3-format": "^3.1.2",
+    "d3-sankey": "^0.12.3",
+    "d3-scale": "^4.0.2",
+    "dagre": "^0.8.5",
+    "driver.js": "^1.4.0",
+    "framer-motion": "^12.38.0",
+    "js-yaml": "^4.1.1",
+    "lucide-react": "^1.7.0",
+    "next": "^16.2.2",
+    "qrcode.react": "^4.2.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "react-syntax-highlighter": "^16.1.1",
+    "recharts": "^3.8.1",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.2.2",
+    "@types/d3-format": "^3.0.4",
+    "@types/node": "25.5.2",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/react-syntax-highlighter": "^15.5.13",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^6.0.2"
+  }
+}

@@ -1,0 +1,151 @@
+@import "@sagecurator/ui/src/globals.css";
+
+@source "../../node_modules/@sagecurator/ui/src";
+@source "../components";
+@source ".";
+
+/*
+ * Admin Console — Dark theme applied via data-theme="dark" on <html>.
+ * All color tokens are inherited from the shared UI dark mode overrides.
+ * This file only contains admin-specific element styling.
+ */
+
+body {
+  background: var(--color-bg-page);
+  color: var(--color-text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Password mask */
+.password-mask {
+  -webkit-text-security: disc;
+  text-security: disc;
+}
+
+/* Selection */
+::selection {
+  background: rgba(38, 198, 218, 0.3);
+  color: var(--color-text-primary);
+}
+
+/* Recharts tooltip + legend */
+.recharts-default-tooltip {
+  background-color: var(--color-bg-surface) !important;
+  border: 1px solid var(--color-border) !important;
+  border-radius: 8px !important;
+  color: var(--color-text-primary) !important;
+}
+
+.recharts-tooltip-label {
+  color: var(--color-text-secondary) !important;
+}
+
+.recharts-legend-item-text {
+  color: var(--color-text-secondary) !important;
+}
+
+/* Tables */
+table {
+  border-color: var(--color-border);
+}
+
+th {
+  color: var(--color-text-secondary);
+  border-color: var(--color-border);
+}
+
+td {
+  border-color: var(--color-border);
+}
+
+tr:hover td {
+  background-color: var(--color-bg-subtle);
+}
+
+/* Inputs */
+input, select, textarea {
+  color: var(--color-text-primary);
+}
+
+input::placeholder, textarea::placeholder {
+  color: var(--color-text-muted);
+}
+
+/* Code blocks */
+code {
+  background-color: var(--color-primary-light);
+  color: var(--color-primary);
+}
+
+pre {
+  background-color: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+/* Links */
+a {
+  color: inherit;
+}
+
+/* Driver.js tour popover */
+.driver-popover {
+  background-color: var(--color-bg-surface) !important;
+  border: 1px solid var(--color-border) !important;
+  color: var(--color-text-primary) !important;
+  border-radius: 0.75rem !important;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6) !important;
+}
+
+.driver-popover .driver-popover-title {
+  font-family: var(--font-heading) !important;
+  font-weight: 700 !important;
+  font-size: 0.95rem !important;
+  color: var(--color-text-primary) !important;
+}
+
+.driver-popover .driver-popover-description {
+  color: var(--color-text-secondary) !important;
+  font-size: 0.85rem !important;
+  line-height: 1.5 !important;
+}
+
+.driver-popover .driver-popover-progress-text {
+  color: var(--color-text-muted) !important;
+  font-size: 0.75rem !important;
+}
+
+.driver-popover .driver-popover-navigation-btns button {
+  border-radius: 0.375rem !important;
+  font-size: 0.8rem !important;
+  padding: 0.35rem 0.75rem !important;
+}
+
+.driver-popover .driver-popover-next-btn {
+  background-color: var(--color-primary) !important;
+  color: var(--color-bg-page) !important;
+  text-shadow: none !important;
+}
+
+.driver-popover .driver-popover-prev-btn {
+  color: var(--color-text-secondary) !important;
+}
+
+.driver-popover .driver-popover-close-btn {
+  color: var(--color-text-muted) !important;
+}
+
+.driver-popover .driver-popover-arrow-side-left.driver-popover-arrow,
+.driver-popover .driver-popover-arrow-side-right.driver-popover-arrow,
+.driver-popover .driver-popover-arrow-side-top.driver-popover-arrow,
+.driver-popover .driver-popover-arrow-side-bottom.driver-popover-arrow {
+  border-color: var(--color-bg-surface) !important;
+}
