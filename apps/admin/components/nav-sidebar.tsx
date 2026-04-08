@@ -20,18 +20,19 @@ import {
   ChevronDown,
   ChevronRight,
   Star,
+  GraduationCap,
+  HardDrive,
+  UserCog,
+  Bug,
+  Eye,
+  FileBarChart,
+  Cog,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useSidebar, SidebarToggle, ThemeToggle } from '@sagecurator/ui';
 import { isCloud } from '@/utils/mode';
+import { useRole } from '@/hooks/use-role';
 import { WorkspaceSwitcher } from './workspace-switcher';
-
-const FAVORITES = [
-  { href: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/agents', label: 'Agents', icon: Bot },
-  { href: '/playground', label: 'Playground', icon: Wrench },
-  { href: '/settings/models', label: 'Settings', icon: Settings2 },
-] as const;
 
 const LS_KEY = 'nav-groups-collapsed';
 
@@ -47,43 +48,77 @@ interface NavGroup {
   /** Destination when icon is tapped in collapsed mode */
   defaultHref: string;
   items: NavItem[];
+  /** If true, render at the bottom of the sidebar (separated from main groups) */
+  bottom?: boolean;
 }
 
-const GROUPS: NavGroup[] = [
+/* ──────────────────────────────────────────────────────────────────────────
+ * Master group list. All possible groups across all roles.
+ * The useRole() hook determines which groups are visible for the current user.
+ * Group IDs MUST match the keys in ROLE_NAV_GROUPS in utils/roles.ts.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+const ALL_GROUPS: NavGroup[] = [
+  /* ── HOME ── */
   {
     id: 'home',
     label: 'Home',
     icon: LayoutDashboard,
     defaultHref: '/',
-    items: [{ href: '/', label: 'Dashboard' }],
+    items: [
+      { href: '/', label: 'Dashboard' },
+      { href: '/playground', label: 'Playground' },
+    ],
   },
+
+  /* ── BUILD (admin, developer) ── */
   {
-    id: 'agents',
-    label: 'Agents',
+    id: 'build',
+    label: 'Build',
     icon: Bot,
     defaultHref: '/agents',
     items: [
       { href: '/agents', label: 'Agent Registry' },
       { href: '/agents/templates', label: 'Agent Templates' },
       { href: '/agents/runs', label: 'Agent Runs' },
-    ],
-  },
-  {
-    id: 'workflows',
-    label: 'Workflows',
-    icon: GitBranch,
-    defaultHref: '/workflows',
-    items: [
       { href: '/workflows', label: 'Workflow Builder' },
-      { href: '/workflows/registry', label: 'Registry' },
+      { href: '/workflows/registry', label: 'Workflow Registry' },
       { href: '/workflows/history', label: 'Workflow History' },
-      { href: '/workflows/templates', label: 'Workflow Templates' },
-      { href: '/workflows/dispatch', label: 'Dispatch' },
-      { href: '/workflows/workers', label: 'Workers' },
-      { href: '/workflows/dlq', label: 'Failed Workflows' },
-      { href: '/workflows/approvals', label: 'Approvals' },
     ],
   },
+
+  /* ── INTELLIGENCE (admin, developer, ml_engineer) ── */
+  {
+    id: 'intelligence',
+    label: 'Intelligence',
+    icon: Brain,
+    defaultHref: '/context',
+    items: [
+      { href: '/context', label: 'Context Engine' },
+      { href: '/context/documents', label: 'Documents' },
+      { href: '/context/search', label: 'Search' },
+      { href: '/memory/vector', label: 'Vector Store' },
+      { href: '/memory/graph', label: 'Knowledge Graph' },
+      { href: '/context/directives', label: 'Directives' },
+    ],
+  },
+
+  /* ── OPERATIONS (admin) ── */
+  {
+    id: 'operations',
+    label: 'Operations',
+    icon: Server,
+    defaultHref: '/fleet',
+    items: [
+      { href: '/fleet', label: 'Fleet Workers' },
+      { href: '/fleet/enrollment-keys', label: 'Enrollment Keys' },
+      { href: '/workflows/dispatch', label: 'Dispatch' },
+      { href: '/workflows/approvals', label: 'Approvals' },
+      { href: '/workflows/dlq', label: 'Failed Workflows' },
+    ],
+  },
+
+  /* ── OBSERVE (admin) ── */
   {
     id: 'observe',
     label: 'Observe',
@@ -92,78 +127,17 @@ const GROUPS: NavGroup[] = [
     items: [
       { href: '/analytics/costs', label: 'Cost Analytics' },
       { href: '/analytics/models', label: 'Model Comparison' },
-      { href: '/analytics/network', label: 'Agent Network' },
       { href: '/analytics/performance', label: 'Performance' },
-      { href: '/monitor', label: 'Execution Monitor' },
-      { href: '/observability/prompts', label: 'Prompt History' },
-      { href: '/eval/datasets', label: 'Datasets' },
-      { href: '/eval/run', label: 'Run Eval' },
-      { href: '/eval/reports', label: 'Reports' },
-    ],
-  },
-  {
-    id: 'safety',
-    label: 'Safety',
-    icon: ShieldCheck,
-    defaultHref: '/safety/guardrails',
-    items: [
-      { href: '/safety/guardrails', label: 'Guardrails' },
       { href: '/safety/audit', label: 'Audit Log' },
       { href: '/compliance/pii', label: 'PII Dashboard' },
-    ],
-  },
-  {
-    id: 'intelligence',
-    label: 'Intelligence',
-    icon: Brain,
-    defaultHref: '/intelligence/dashboard',
-    items: [
-      { href: '/intelligence/dashboard', label: 'Dashboard' },
-      { href: '/context', label: 'Context Engine' },
-      { href: '/context/documents', label: 'Documents' },
-      { href: '/context/search', label: 'Search' },
-      { href: '/context/lifecycle', label: 'Lifecycle' },
-      { href: '/context/directives', label: 'Directives' },
       { href: '/intelligence/spend', label: 'LLM Spend' },
     ],
   },
-  {
-    id: 'memory',
-    label: 'Memory',
-    icon: Database,
-    defaultHref: '/memory/vector',
-    items: [
-      { href: '/memory/vector', label: 'Vector Store' },
-      { href: '/memory/graph', label: 'Knowledge Graph' },
-    ],
-  },
-  {
-    id: 'tools',
-    label: 'Tools',
-    icon: Wrench,
-    defaultHref: '/playground',
-    items: [
-      { href: '/tools/mcp', label: 'MCP Servers' },
-      { href: '/tools/model-router', label: 'Model Router' },
-      { href: '/tools/ollama', label: 'Ollama' },
-      { href: '/playground', label: 'Playground' },
-      { href: '/strategy-lab', label: 'Strategy Lab' },
-    ],
-  },
-  {
-    id: 'fleet',
-    label: 'Fleet',
-    icon: Server,
-    defaultHref: '/fleet',
-    items: [
-      { href: '/fleet', label: 'Workers' },
-      { href: '/fleet/enrollment-keys', label: 'Enrollment Keys' },
-      { href: '/fleet/audit', label: 'Audit Log' },
-    ],
-  },
+
+  /* ── HARNESS (admin) ── */
   {
     id: 'harness',
-    label: 'LLM Harness',
+    label: 'Harness',
     icon: Gauge,
     defaultHref: '/harness',
     items: [
@@ -173,25 +147,132 @@ const GROUPS: NavGroup[] = [
       { href: '/harness/analytics', label: 'Analytics' },
     ],
   },
+
+  /* ── TOOLS (developer) ── */
   {
-    id: 'settings',
-    label: 'Settings',
-    icon: Settings2,
-    defaultHref: '/settings/organization',
+    id: 'tools',
+    label: 'Tools',
+    icon: Wrench,
+    defaultHref: '/playground',
     items: [
-      { href: '/settings/organization', label: 'Organization' },
-      { href: '/settings/account', label: 'Account' },
-      { href: '/settings/tokens', label: 'API Tokens' },
-      { href: '/settings/models', label: 'AI Models' },
-      { href: '/settings/services', label: 'Connectors' },
-      { href: '/settings/triggers', label: 'Triggers' },
-      { href: '/settings/projects', label: 'Projects' },
-      { href: '/operations/budget', label: 'Budget' },
-      { href: '/settings/billing', label: 'Billing' },
-      { href: '/settings/infrastructure', label: 'Infrastructure' },
-      { href: '/settings/notifications', label: 'Notifications' },
-      { href: '/settings/health', label: 'System Health' },
+      { href: '/tools/mcp', label: 'MCP Servers' },
+      { href: '/strategy-lab', label: 'Strategy Lab' },
+      { href: '/tools/ollama', label: 'Ollama' },
+      { href: '/tools/model-router', label: 'Model Router' },
     ],
+  },
+
+  /* ── DEBUG (developer) ── */
+  {
+    id: 'debug',
+    label: 'Debug',
+    icon: Bug,
+    defaultHref: '/monitor',
+    items: [
+      { href: '/monitor', label: 'Execution Monitor' },
+      { href: '/observability/prompts', label: 'Prompt History' },
+      { href: '/analytics/network', label: 'Agent Network' },
+    ],
+  },
+
+  /* ── TRAINING (ml_engineer) ── */
+  {
+    id: 'training',
+    label: 'Training',
+    icon: GraduationCap,
+    defaultHref: '/training/logs',
+    items: [
+      { href: '/training/logs', label: 'Run Logs' },
+      { href: '/training/corpus', label: 'Corpus Builder' },
+      { href: '/training/evals', label: 'Evaluations' },
+      { href: '/training/finetune', label: 'Fine-Tuning Jobs' },
+    ],
+  },
+
+  /* ── DATA (ml_engineer) ── */
+  {
+    id: 'data',
+    label: 'Data',
+    icon: HardDrive,
+    defaultHref: '/data/storage',
+    items: [
+      { href: '/data/storage', label: 'Storage Management' },
+      { href: '/data/quality', label: 'Data Quality' },
+    ],
+  },
+
+  /* ── ANALYTICS (ml_engineer) ── */
+  {
+    id: 'analytics',
+    label: 'Analytics',
+    icon: FileBarChart,
+    defaultHref: '/analytics/models',
+    items: [
+      { href: '/analytics/models', label: 'Model Comparison' },
+      { href: '/analytics/costs', label: 'Cost Analytics' },
+      { href: '/analytics/performance', label: 'Agent Performance' },
+      { href: '/intelligence/spend', label: 'LLM Spend' },
+    ],
+  },
+
+  /* ── REPORTS (viewer) ── */
+  {
+    id: 'reports',
+    label: 'Reports',
+    icon: Eye,
+    defaultHref: '/analytics/costs',
+    items: [
+      { href: '/analytics/costs', label: 'Cost Analytics' },
+      { href: '/analytics/models', label: 'Model Comparison' },
+      { href: '/analytics/performance', label: 'Agent Performance' },
+      { href: '/intelligence/spend', label: 'LLM Spend' },
+    ],
+  },
+
+  /* ── AGENTS read-only (viewer) ── */
+  {
+    id: 'agents-readonly',
+    label: 'Agents',
+    icon: Bot,
+    defaultHref: '/agents',
+    items: [
+      { href: '/agents', label: 'Agent Registry' },
+      { href: '/agents/runs', label: 'Agent Runs' },
+      { href: '/workflows/history', label: 'Workflow History' },
+    ],
+  },
+
+  /* ── SYSTEM (admin only) ── */
+  {
+    id: 'system',
+    label: 'System',
+    icon: Cog,
+    defaultHref: '/system/organization',
+    items: [
+      { href: '/system/organization', label: 'Organization' },
+      { href: '/system/models', label: 'AI Models & Providers' },
+      { href: '/system/connectors', label: 'Connectors' },
+      { href: '/system/infrastructure', label: 'Infrastructure' },
+      { href: '/system/projects', label: 'Projects' },
+      { href: '/system/billing', label: 'Billing' },
+      { href: '/system/notifications', label: 'Notifications' },
+      { href: '/system/health', label: 'System Health' },
+    ],
+    bottom: true,
+  },
+
+  /* ── MY ACCOUNT (all roles) ── */
+  {
+    id: 'account',
+    label: 'My Account',
+    icon: UserCog,
+    defaultHref: '/account/profile',
+    items: [
+      { href: '/account/profile', label: 'Profile & Password' },
+      { href: '/account/tokens', label: 'API Tokens' },
+      { href: '/account/security', label: '2FA Security' },
+    ],
+    bottom: true,
   },
 ];
 
@@ -207,6 +288,14 @@ const WORKSPACE_GROUP: NavGroup = {
     { href: '/workspace/providers', label: 'LLM Providers' },
   ],
 };
+
+/* ── Legacy settings group (kept for backward compatibility with redirects) ── */
+const LEGACY_SETTINGS_ROUTES = [
+  '/settings/organization', '/settings/account', '/settings/tokens',
+  '/settings/models', '/settings/services', '/settings/triggers',
+  '/settings/projects', '/settings/billing', '/settings/infrastructure',
+  '/settings/notifications', '/settings/health',
+];
 
 /** Collapsed-mode icon with fixed-position flyout menu (not clipped by overflow). */
 function NavIconWithFlyout({
@@ -326,6 +415,12 @@ function NavIconWithFlyout({
 
 function isItemActive(pathname: string, href: string, siblings?: string[]): boolean {
   if (href === '/') return pathname === '/';
+  // Handle legacy settings routes → treat as active for system/account groups
+  if (LEGACY_SETTINGS_ROUTES.some((r) => pathname === r || pathname.startsWith(r + '/'))) {
+    if (href.startsWith('/system/') || href.startsWith('/account/')) {
+      return false; // Let the redirect handle it
+    }
+  }
   const matches = pathname === href || pathname.startsWith(href + '/');
   if (!matches) return false;
   // If a sibling item is a longer (more specific) match, this item should not be active
@@ -351,8 +446,18 @@ function getActiveGroupId(pathname: string, groups: NavGroup[]): string | null {
 export function NavSidebar() {
   const pathname = usePathname();
   const { expanded, setExpanded, mobile } = useSidebar();
-  const groups = isCloud ? [...GROUPS, WORKSPACE_GROUP] : GROUPS;
-  const activeGroupId = getActiveGroupId(pathname, groups);
+  const { navGroups: allowedGroupIds, favorites } = useRole();
+
+  // Filter groups by role
+  const roleGroups = ALL_GROUPS.filter((g) => allowedGroupIds.includes(g.id));
+  const cloudGroups = isCloud ? [...roleGroups, WORKSPACE_GROUP] : roleGroups;
+
+  // Separate main groups from bottom groups
+  const mainGroups = cloudGroups.filter((g) => !g.bottom);
+  const bottomGroups = cloudGroups.filter((g) => g.bottom);
+
+  const allGroups = [...mainGroups, ...bottomGroups];
+  const activeGroupId = getActiveGroupId(pathname, allGroups);
 
   /** On mobile, close sidebar when navigating */
   const closeMobile = useCallback(() => {
@@ -382,6 +487,66 @@ export function NavSidebar() {
       }
       return next;
     });
+  }
+
+  function renderGroup(group: NavGroup) {
+    const Icon = group.icon;
+    const isGroupActive = activeGroupId === group.id;
+    const isCollapsed = collapsedGroups.has(group.id);
+
+    /* ── Collapsed sidebar: icon with flyout (portalled to body) ── */
+    if (!expanded) {
+      return (
+        <NavIconWithFlyout
+          key={group.id}
+          group={group}
+          isGroupActive={isGroupActive}
+          pathname={pathname}
+        />
+      );
+    }
+
+    /* ── Expanded sidebar: group header + collapsible sub-items ── */
+    return (
+      <div key={group.id} className="mb-1">
+        <button
+          onClick={() => toggleGroup(group.id)}
+          aria-expanded={!isCollapsed}
+          className={`w-full flex items-center gap-2 px-5 py-1.5 text-[11px] font-semibold uppercase tracking-widest transition-colors cursor-pointer bg-transparent ${
+            isGroupActive ? 'text-primary' : 'text-text-on-dark/35 hover:text-text-on-dark/60'
+          }`}
+        >
+          <Icon size={12} strokeWidth={2.5} aria-hidden="true" />
+          <span className="flex-1 text-left">{group.label}</span>
+          {isCollapsed ? (
+            <ChevronRight size={10} strokeWidth={2.5} aria-hidden="true" />
+          ) : (
+            <ChevronDown size={10} strokeWidth={2.5} aria-hidden="true" />
+          )}
+        </button>
+
+        {!isCollapsed && group.items.map(({ href, label }) => {
+          const siblingHrefs = group.items.map((i) => i.href);
+          const active = isItemActive(pathname, href, siblingHrefs);
+          const tourAttr = href === '/agents' ? 'nav-agents' : href === '/workflows' ? 'nav-workflows' : undefined;
+          return (
+            <Link
+              key={href}
+              href={href}
+              onClick={closeMobile}
+              {...(tourAttr ? { 'data-tour': tourAttr } : {})}
+              className={`block px-5 py-2 text-[13px] no-underline transition-colors border-l-[3px] ${
+                active
+                  ? 'text-white bg-white/10 border-primary font-semibold'
+                  : 'text-text-on-dark/60 border-transparent hover:text-text-on-dark hover:bg-white/5'
+              }`}
+            >
+              {label}
+            </Link>
+          );
+        })}
+      </div>
+    );
   }
 
   return (
@@ -418,7 +583,7 @@ export function NavSidebar() {
         </div>
       )}
 
-      {/* Favorites strip — expanded only */}
+      {/* Favorites strip — expanded only, role-specific */}
       {expanded && (
         <div className="px-3 mb-3 shrink-0">
           <div className="flex items-center gap-1.5 px-2 mb-1.5">
@@ -428,7 +593,7 @@ export function NavSidebar() {
             </span>
           </div>
           <div className="flex gap-1">
-            {FAVORITES.map(({ href, label, icon: FavIcon }) => {
+            {favorites.map(({ href, label }) => {
               const active = isItemActive(pathname, href);
               return (
                 <Link
@@ -436,13 +601,12 @@ export function NavSidebar() {
                   href={href}
                   title={label}
                   onClick={closeMobile}
-                  className={`flex-1 flex flex-col items-center gap-1 py-2 rounded-md text-center transition-colors no-underline ${
+                  className={`flex-1 flex items-center justify-center py-2 rounded-md text-center transition-colors no-underline ${
                     active
                       ? 'bg-white/10 text-white'
                       : 'text-text-on-dark/50 hover:bg-white/[0.08] hover:text-text-on-dark'
                   }`}
                 >
-                  <FavIcon size={14} strokeWidth={active ? 2 : 1.5} aria-hidden="true" />
                   <span className="text-[10px] leading-none">{label}</span>
                 </Link>
               );
@@ -451,67 +615,15 @@ export function NavSidebar() {
         </div>
       )}
 
-      {/* Navigation groups */}
+      {/* Main navigation groups */}
       <nav className="flex-1 overflow-y-auto pb-md" aria-label="Main navigation">
-        {groups.map((group) => {
-          const Icon = group.icon;
-          const isGroupActive = activeGroupId === group.id;
-          const isCollapsed = collapsedGroups.has(group.id);
+        {mainGroups.map(renderGroup)}
 
-          /* ── Collapsed sidebar: icon with flyout (portalled to body) ── */
-          if (!expanded) {
-            return (
-              <NavIconWithFlyout
-                key={group.id}
-                group={group}
-                isGroupActive={isGroupActive}
-                pathname={pathname}
-              />
-            );
-          }
-
-          /* ── Expanded sidebar: group header + collapsible sub-items ── */
-          return (
-            <div key={group.id} className="mb-1">
-              <button
-                onClick={() => toggleGroup(group.id)}
-                aria-expanded={!isCollapsed}
-                className={`w-full flex items-center gap-2 px-5 py-1.5 text-[11px] font-semibold uppercase tracking-widest transition-colors ${
-                  isGroupActive ? 'text-primary' : 'text-text-on-dark/35 hover:text-text-on-dark/60'
-                }`}
-              >
-                <Icon size={12} strokeWidth={2.5} aria-hidden="true" />
-                <span className="flex-1 text-left">{group.label}</span>
-                {isCollapsed ? (
-                  <ChevronRight size={10} strokeWidth={2.5} aria-hidden="true" />
-                ) : (
-                  <ChevronDown size={10} strokeWidth={2.5} aria-hidden="true" />
-                )}
-              </button>
-
-              {!isCollapsed && group.items.map(({ href, label }) => {
-                const siblingHrefs = group.items.map((i) => i.href);
-                const active = isItemActive(pathname, href, siblingHrefs);
-                const tourAttr = href === '/agents' ? 'nav-agents' : href === '/workflows' ? 'nav-workflows' : undefined;
-                return (
-                  <Link
-                    key={href}
-                    href={href}
-                    onClick={closeMobile}
-                    {...(tourAttr ? { 'data-tour': tourAttr } : {})}
-                    className={`block px-5 py-2 text-[13px] no-underline transition-colors border-l-[3px] ${
-                      active
-                        ? 'text-white bg-white/10 border-primary font-semibold'
-                        : 'text-text-on-dark/60 border-transparent hover:text-text-on-dark hover:bg-white/5'
-                    }`}
-                  >
-                    {label}
-                  </Link>
-                );
-              })}
-            </div>
-          );
-        })}
+        {/* Separator before bottom groups */}
+        {bottomGroups.length > 0 && (
+          <div className="mx-5 my-2 border-t border-white/10" />
+        )}
+        {bottomGroups.map(renderGroup)}
       </nav>
     </>
   );
