@@ -553,25 +553,20 @@ export function NavSidebar() {
   return (
     <>
       {/* Header */}
-      <div className={`flex items-center justify-between py-lg shrink-0 ${expanded ? 'px-5' : 'px-3'}`}>
+      <div className={`flex items-center justify-between shrink-0 ${expanded ? 'px-5 py-4' : 'px-3 py-4'}`}>
         {expanded ? (
           <Link href="/" className="flex items-center gap-2.5 no-underline">
-            <img src="/brand/logo.svg" alt="Sagewai" className="h-8 w-8" />
-            <div>
-              <h2 className="m-0 text-lg leading-tight font-[family-name:var(--font-heading)] font-bold tracking-wide">
-                <span className="bg-clip-text text-transparent" style={{ backgroundImage: 'var(--gradient-brand)' }}>SAGEWAI</span>
-              </h2>
-              <div className="text-[10px] font-semibold mt-0.5 font-[family-name:var(--font-mono)] tracking-wide text-primary/70">
-                Operations Console
-              </div>
-            </div>
+            <img src="/brand/logo.svg" alt="Sagewai" className="h-7 w-7" />
+            <span className="text-base font-bold font-[family-name:var(--font-heading)] tracking-wide bg-clip-text text-transparent" style={{ backgroundImage: 'var(--gradient-brand)' }}>
+              SAGEWAI
+            </span>
           </Link>
         ) : (
           <Link href="/" className="mx-auto no-underline">
             <img src="/brand/logo.svg" alt="Sagewai" className="h-7 w-7" />
           </Link>
         )}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-0.5">
           <ThemeToggle />
           <SidebarToggle />
         </div>
@@ -579,42 +574,13 @@ export function NavSidebar() {
 
       {/* Workspace switcher — cloud + expanded only */}
       {isCloud && expanded && (
-        <div className="px-5 mb-md shrink-0">
+        <div className="px-5 mb-3 shrink-0">
           <WorkspaceSwitcher />
         </div>
       )}
 
-      {/* Favorites strip — expanded only, role-specific */}
-      {expanded && (
-        <div className="px-3 mb-3 shrink-0">
-          <div className="flex items-center gap-1.5 px-2 mb-1.5">
-            <Star size={10} strokeWidth={2.5} className="text-text-on-dark/30" aria-hidden="true" />
-            <span className="text-[10px] font-semibold uppercase tracking-widest text-text-on-dark/30">
-              Favorites
-            </span>
-          </div>
-          <div className="flex gap-1">
-            {favorites.map(({ href, label }) => {
-              const active = isItemActive(pathname, href);
-              return (
-                <Link
-                  key={href}
-                  href={href}
-                  title={label}
-                  onClick={closeMobile}
-                  className={`flex-1 flex items-center justify-center py-2 rounded-md text-center transition-colors no-underline ${
-                    active
-                      ? 'bg-white/10 text-white'
-                      : 'text-text-on-dark/50 hover:bg-white/[0.08] hover:text-text-on-dark'
-                  }`}
-                >
-                  <span className="text-[10px] leading-none">{label}</span>
-                </Link>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      {/* Divider */}
+      {expanded && <div className="mx-5 mb-3 border-t border-white/8" />}
 
       {/* Main navigation groups */}
       <nav className="flex-1 overflow-y-auto pb-md" aria-label="Main navigation">

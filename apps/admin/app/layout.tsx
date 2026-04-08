@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { SidebarProvider, SidebarShell, ToastProvider } from '@sagecurator/ui';
+import { SidebarProvider, ToastProvider } from '@sagecurator/ui';
+import { AppSidebarShell } from '@/components/app-sidebar-shell';
 import { NavSidebar } from '@/components/nav-sidebar';
 import { PageTransition } from '@/components/page-transition';
 import { WorkflowToastListener } from '@/components/workflow-toast-listener';
@@ -86,9 +87,9 @@ function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <LicenseProvider>
       <SidebarProvider>
-        <SidebarShell sidebar={<NavSidebar />}>
+        <AppSidebarShell sidebar={<NavSidebar />}>
           <PageTransition>{children}</PageTransition>
-        </SidebarShell>
+        </AppSidebarShell>
         <WorkflowToastListener />
       </SidebarProvider>
     </LicenseProvider>
