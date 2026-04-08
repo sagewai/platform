@@ -50,6 +50,20 @@ const nextConfig = {
   async headers() {
     return [{ source: '/(.*)', headers: securityHeaders }];
   },
+  async redirects() {
+    return [
+      { source: '/settings/account', destination: '/account/profile', permanent: true },
+      { source: '/settings/tokens', destination: '/account/tokens', permanent: true },
+      { source: '/settings/notifications', destination: '/account/notifications', permanent: true },
+      { source: '/settings/organization', destination: '/system/organization', permanent: true },
+      { source: '/settings/models', destination: '/system/models', permanent: true },
+      { source: '/settings/services', destination: '/system/connectors', permanent: true },
+      { source: '/settings/infrastructure', destination: '/system/infrastructure', permanent: true },
+      { source: '/settings/projects', destination: '/system/projects', permanent: true },
+      { source: '/settings/billing', destination: '/system/billing', permanent: true },
+      { source: '/settings/health', destination: '/system/health', permanent: true },
+    ];
+  },
 };
 
 module.exports = nextConfig;
