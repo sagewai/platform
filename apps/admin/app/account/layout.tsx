@@ -1,7 +1,9 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
+import { isAuthenticated } from '@/utils/auth';
 
 const TABS = [
   { href: '/account/profile', label: 'Profile & Password' },
@@ -12,6 +14,18 @@ const TABS = [
 
 export default function AccountLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    if (!isAuthenticated()) {
+      router.replace('/login');
+    } else {
+      setReady(true);
+    }
+  }, [router]);
+
+  if (!ready) return null;
 
   return (
     <div className="p-6 max-w-5xl">

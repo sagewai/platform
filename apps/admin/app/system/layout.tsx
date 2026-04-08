@@ -1,7 +1,10 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
+import { isAuthenticated } from '@/utils/auth';
+import { useRole } from '@/hooks/use-role';
 
 const TABS = [
   { href: '/system/organization', label: 'Organization' },
@@ -16,6 +19,21 @@ const TABS = [
 
 export default function SystemLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const { permissions } = useRole();
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    if (!isAuthenticated()) {
+      router.replace('/login');
+    } else if (!permissions.canManageSystem) {
+      router.replace('/');
+    } else {
+      setReady(true);
+    }
+  }, [router, permissions]);
+
+  if (!ready) return null;
 
   return (
     <div className="p-6 max-w-5xl">

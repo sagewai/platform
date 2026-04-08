@@ -29,7 +29,8 @@ import {
   Cog,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { useSidebar, SidebarToggle, ThemeToggle } from '@sagecurator/ui';
+import { useSidebar, SidebarToggle } from '@sagecurator/ui';
+import { ThemeToggle } from './theme-toggle';
 import { isCloud } from '@/utils/mode';
 import { useRole } from '@/hooks/use-role';
 import { WorkspaceSwitcher } from './workspace-switcher';
@@ -368,7 +369,7 @@ function NavIconWithFlyout({
         className={`flex items-center justify-center w-full h-11 rounded-md transition-colors border-l-[3px] cursor-pointer bg-transparent ${
           isGroupActive
             ? 'bg-white/10 border-primary text-white'
-            : 'border-transparent text-text-on-dark/50 hover:bg-white/[0.08] hover:text-text-on-dark'
+            : 'border-transparent text-text-on-dark/65 hover:bg-white/[0.08] hover:text-text-on-dark'
         }`}
       >
         <Icon size={18} strokeWidth={isGroupActive ? 2 : 1.5} aria-hidden="true" />
@@ -385,7 +386,7 @@ function NavIconWithFlyout({
           style={{ position: 'fixed', top: pos.top, left: pos.left, zIndex: 9999 }}
           className="bg-bg-elevated border border-white/10 rounded-lg shadow-xl min-w-[180px] py-1.5"
         >
-          <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-text-on-dark/40 border-b border-white/5 mb-1">
+          <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-text-on-dark/60 border-b border-white/5 mb-1">
             {group.label}
           </div>
           {group.items.map(({ href, label }) => {
@@ -399,7 +400,7 @@ function NavIconWithFlyout({
                 className={`block px-3 py-2 text-[13px] no-underline transition-colors ${
                   active
                     ? 'text-white bg-white/10 font-semibold'
-                    : 'text-text-on-dark/60 hover:text-text-on-dark hover:bg-white/5'
+                    : 'text-text-on-dark/75 hover:text-text-on-dark hover:bg-white/5'
                 }`}
               >
                 {label}
@@ -508,12 +509,12 @@ export function NavSidebar() {
 
     /* ── Expanded sidebar: group header + collapsible sub-items ── */
     return (
-      <div key={group.id} className="mb-1">
+      <div key={group.id} className="mb-0.5">
         <button
           onClick={() => toggleGroup(group.id)}
           aria-expanded={!isCollapsed}
-          className={`w-full flex items-center gap-2 px-5 py-1.5 text-[11px] font-semibold uppercase tracking-widest transition-colors cursor-pointer bg-transparent ${
-            isGroupActive ? 'text-primary' : 'text-text-on-dark/35 hover:text-text-on-dark/60'
+          className={`w-full flex items-center gap-2.5 px-5 py-2.5 text-[11px] font-semibold uppercase tracking-wider transition-colors cursor-pointer bg-transparent border-none min-h-[36px] ${
+            isGroupActive ? 'text-primary' : 'text-text-on-dark/60 hover:text-text-on-dark/80'
           }`}
         >
           <Icon size={12} strokeWidth={2.5} aria-hidden="true" />
@@ -538,7 +539,7 @@ export function NavSidebar() {
               className={`block px-5 py-2 text-[13px] no-underline transition-colors border-l-[3px] ${
                 active
                   ? 'text-white bg-white/10 border-primary font-semibold'
-                  : 'text-text-on-dark/60 border-transparent hover:text-text-on-dark hover:bg-white/5'
+                  : 'text-text-on-dark/75 border-transparent hover:text-text-on-dark hover:bg-white/5'
               }`}
             >
               {label}
