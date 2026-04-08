@@ -46,6 +46,7 @@ const securityHeaders = [
 ];
 
 const nextConfig = {
+  output: 'standalone',
   transpilePackages: ['@sagecurator/ui'],
   async headers() {
     return [{ source: '/(.*)', headers: securityHeaders }];
