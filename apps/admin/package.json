@@ -10,7 +10,7 @@
     "lint": "echo 'lint: skipped (no eslint config)'"
   },
   "dependencies": {
-    "@sagecurator/ui": "file:../../sagecurator/ui",
+    "@sagecurator/ui": "^0.1.0",
     "@sagewai/tokens": "^0.1.0",
     "@types/d3-force": "^3.0.10",
     "@types/d3-sankey": "^0.12.5",
