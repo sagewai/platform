@@ -7,6 +7,8 @@ import { Badge, Button, Card, FormField, TextInput, Select, TextArea } from '@sa
 import { Brain, Cpu, Languages, Mic, GitBranch, Layers, CheckCircle, XCircle } from 'lucide-react';
 import { adminApi } from '@/utils/api';
 import { setTokens } from '@/utils/auth';
+import { StepProgress } from '@/components/step-progress';
+import Link from 'next/link';
 
 const STEPS = ['Welcome', 'Organization', 'Application', 'Admin Account', 'Intelligence', '2FA Setup', 'Complete'];
 
@@ -143,15 +145,11 @@ export default function SetupPage() {
   return (
     <div className="min-h-screen bg-bg-deep flex items-center justify-center p-md">
       <div className="w-full max-w-[36rem]">
-        {/* Step indicator */}
-        <div className="flex gap-1 mb-xl">
-          {STEPS.map((s, i) => (
-            <div key={s} className="flex-1">
-              <div className={`h-1 rounded-full transition-colors ${i <= step ? 'bg-primary' : 'bg-white/20'}`} />
-              <div className={`text-[10px] mt-1 ${i <= step ? 'text-primary' : 'text-white/40'}`}>{s}</div>
-            </div>
-          ))}
-        </div>
+        {/* Logo */}
+        <img src="/brand/logo.svg" alt="Sagewai" className="h-10 w-10 mx-auto mb-4" />
+
+        {/* Step progress */}
+        <StepProgress steps={STEPS} currentStep={step} />
 
         <Card className="!bg-bg-surface">
           {/* Step 0: Welcome */}
@@ -346,12 +344,36 @@ export default function SetupPage() {
                 <p><strong>Application:</strong> {state.app_name}</p>
                 <p><strong>Admin:</strong> {state.admin_email}</p>
               </div>
-              <h3 className="text-sm font-semibold mb-sm text-text-primary">Next steps</h3>
-              <ul className="text-sm text-text-secondary text-left list-disc pl-5 mb-lg">
-                <li>Configure AI models in Settings</li>
-                <li>Create your first agent</li>
-                <li>Explore the CLI: <code className="font-[family-name:var(--font-mono)] text-xs bg-bg-subtle px-1 rounded">sagewai --help</code></li>
-              </ul>
+              <h3 className="text-sm font-semibold mb-sm text-text-primary">Getting Started</h3>
+              <div className="grid gap-3 mb-lg text-left">
+                <Link href="/playground" className="flex items-center gap-3 px-4 py-3 bg-bg-subtle rounded-lg hover:bg-white/5 transition-colors no-underline group">
+                  <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center text-primary flex-shrink-0">
+                    <Brain size={18} />
+                  </div>
+                  <div>
+                    <div className="text-sm font-medium text-text-primary group-hover:text-primary transition-colors">Go to Playground</div>
+                    <div className="text-xs text-text-muted">Chat with agents and test tools</div>
+                  </div>
+                </Link>
+                <Link href="/system/models" className="flex items-center gap-3 px-4 py-3 bg-bg-subtle rounded-lg hover:bg-white/5 transition-colors no-underline group">
+                  <div className="w-9 h-9 rounded-lg bg-secondary/10 flex items-center justify-center text-secondary flex-shrink-0">
+                    <Cpu size={18} />
+                  </div>
+                  <div>
+                    <div className="text-sm font-medium text-text-primary group-hover:text-secondary transition-colors">Configure LLM Provider</div>
+                    <div className="text-xs text-text-muted">Connect OpenAI, Anthropic, Google, and more</div>
+                  </div>
+                </Link>
+                <a href="https://docs.sagewai.ai" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 px-4 py-3 bg-bg-subtle rounded-lg hover:bg-white/5 transition-colors no-underline group">
+                  <div className="w-9 h-9 rounded-lg bg-accent-purple/10 flex items-center justify-center text-accent-purple flex-shrink-0">
+                    <Layers size={18} />
+                  </div>
+                  <div>
+                    <div className="text-sm font-medium text-text-primary group-hover:text-accent-purple transition-colors">Browse Documentation</div>
+                    <div className="text-xs text-text-muted">Guides, API reference, and examples</div>
+                  </div>
+                </a>
+              </div>
               <Button onClick={() => router.push('/')} size="lg">Go to Dashboard</Button>
             </div>
           )}

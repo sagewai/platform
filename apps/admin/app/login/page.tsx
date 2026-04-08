@@ -7,7 +7,7 @@ import { adminApi } from '@/utils/api';
 import { setTokens } from '@/utils/auth';
 import { useConnection } from '@/utils/connection';
 import { Button } from '@sagecurator/ui';
-import { WifiOff } from 'lucide-react';
+import { WifiOff, Mail, Lock } from 'lucide-react';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -70,15 +70,21 @@ export default function LoginPage() {
           <form onSubmit={handleSubmit}>
             <label className="block mb-4">
               <span className="text-[13px] font-medium text-text-secondary block mb-1.5">Email</span>
-              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required
-                className="w-full px-3.5 py-2.5 border border-border-dark rounded-lg text-sm bg-bg-deep box-border focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none transition-colors"
-                placeholder="you@example.com" />
+              <div className="relative">
+                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted pointer-events-none" />
+                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required
+                  className="w-full pl-9.5 pr-3.5 py-2.5 border border-border-dark rounded-lg text-sm bg-bg-deep box-border focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none transition-colors"
+                  placeholder="you@example.com" />
+              </div>
             </label>
             <label className="block mb-6">
               <span className="text-[13px] font-medium text-text-secondary block mb-1.5">Password</span>
-              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required
-                className="w-full px-3.5 py-2.5 border border-border-dark rounded-lg text-sm bg-bg-deep box-border focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none transition-colors"
-                placeholder="••••••••" />
+              <div className="relative">
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted pointer-events-none" />
+                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required
+                  className="w-full pl-9.5 pr-3.5 py-2.5 border border-border-dark rounded-lg text-sm bg-bg-deep box-border focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none transition-colors"
+                  placeholder="••••••••" />
+              </div>
             </label>
             <Button type="submit" disabled={loading} className="w-full">
               {loading ? 'Signing in...' : 'Sign In'}
@@ -95,9 +101,7 @@ export default function LoginPage() {
         </div>
 
         {/* Footer */}
-        <div className="text-center mt-8 text-xs text-text-muted/50">
-          Powered by Sagewai SDK
-        </div>
+        <p className="text-center text-text-muted text-xs mt-6">Sagewai v0.1.0</p>
       </div>
     </div>
   );

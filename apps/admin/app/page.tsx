@@ -5,6 +5,7 @@ import { StatCard } from '@/components/stat-card';
 import { CostTrendChart } from '@/components/cost-trend-chart';
 import { ModelUsageChart } from '@/components/model-usage-chart';
 import { DashboardHealth } from '@/components/dashboard-health';
+import { DashboardClientWidgets } from '@/components/dashboard/client-widgets';
 import type { RunSummary } from '@/utils/types';
 
 export const dynamic = 'force-dynamic';
@@ -79,6 +80,9 @@ export default async function DashboardPage() {
           </div>
         </div>
       )}
+
+      {/* Role-based welcome, getting started, and quick actions */}
+      <DashboardClientWidgets />
 
       {/* KPI cards */}
       <div data-tour="dashboard-kpis" className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-md mb-lg">
