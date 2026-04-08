@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@sagecurator/ui':
-        specifier: file:../ui
-        version: file:../ui(next@16.2.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.2.2)
+        specifier: file:../../sagecurator/ui
+        version: file:../../sagecurator/ui(next@16.2.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.2.2)
       '@sagewai/tokens':
         specifier: ^0.1.0
         version: 0.1.0(tailwindcss@4.2.2)
@@ -357,8 +357,8 @@ packages:
       react-redux:
         optional: true
 
-  '@sagecurator/ui@file:../ui':
-    resolution: {directory: ../ui, type: directory}
+  '@sagecurator/ui@file:../../sagecurator/ui':
+    resolution: {directory: ../../sagecurator/ui, type: directory}
     peerDependencies:
       next: '>=15.0.0'
       react: '>=19.0.0'
@@ -1495,7 +1495,7 @@ snapshots:
       react: 19.2.4
       react-redux: 9.2.0(@types/react@19.2.14)(react@19.2.4)(redux@5.0.1)
 
-  '@sagecurator/ui@file:../ui(next@16.2.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.2.2)':
+  '@sagecurator/ui@file:../../sagecurator/ui(next@16.2.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.2.2)':
     dependencies:
       '@sagewai/tokens': 0.1.0(tailwindcss@4.2.2)
       lucide-react: 1.7.0(react@19.2.4)
