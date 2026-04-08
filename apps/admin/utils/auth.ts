@@ -37,6 +37,14 @@ export function getAccessToken(): string | null {
   return _accessToken || DEV_TOKEN || null;
 }
 
+import type { UserRole } from './roles';
+import { parseRoleFromToken } from './roles';
+
+/** Get the current user's role from the JWT access token. */
+export function getUserRole(): UserRole {
+  return parseRoleFromToken(getAccessToken());
+}
+
 /**
  * Store the access token in memory only.
  * The refresh token and auth indicator cookie are set server-side (httpOnly)

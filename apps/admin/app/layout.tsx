@@ -99,6 +99,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" suppressHydrationWarning className={fontVariables}>
       <head>
+        <link rel="icon" href="/brand/favicon.ico" sizes="any" />
+        <link rel="apple-touch-icon" href="/brand/logo-256.png" />
+        <meta name="application-name" content="Sagewai Admin" />
+        <meta property="og:title" content="Sagewai Admin" />
+        <meta property="og:description" content="Agent Infrastructure You Own — manage agents, workflows, and AI infrastructure" />
+        <meta property="og:image" content="/brand/logo-256.png" />
         {/* External script for CSP compliance — avoids unsafe-inline */}
         <script src="/theme-init.js" />
       </head>

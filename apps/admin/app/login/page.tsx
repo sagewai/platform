@@ -45,6 +45,7 @@ export default function LoginPage() {
       <div className="w-[420px] relative z-10">
         {/* Logo */}
         <div className="text-center mb-8">
+          <img src="/brand/logo.svg" alt="Sagewai" className="h-12 w-12 mx-auto mb-3" />
           <h1 className="text-3xl font-bold font-[family-name:var(--font-heading)] m-0 mb-2">
             <span className="bg-clip-text text-transparent" style={{ backgroundImage: 'var(--gradient-brand)' }}>SAGEWAI</span>
           </h1>

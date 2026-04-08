@@ -389,18 +389,21 @@ export function NavSidebar() {
       {/* Header */}
       <div className={`flex items-center justify-between py-lg shrink-0 ${expanded ? 'px-5' : 'px-3'}`}>
         {expanded ? (
-          <div>
-            <h2 className="m-0 text-lg leading-tight font-[family-name:var(--font-heading)] font-bold tracking-wide">
-              <span className="bg-clip-text text-transparent" style={{ backgroundImage: 'var(--gradient-brand)' }}>SAGEWAI</span>
-            </h2>
-            <div className="text-[10px] font-semibold mt-0.5 font-[family-name:var(--font-mono)] tracking-wide text-primary/70">
-              Operations Console
+          <Link href="/" className="flex items-center gap-2.5 no-underline">
+            <img src="/brand/logo.svg" alt="Sagewai" className="h-8 w-8" />
+            <div>
+              <h2 className="m-0 text-lg leading-tight font-[family-name:var(--font-heading)] font-bold tracking-wide">
+                <span className="bg-clip-text text-transparent" style={{ backgroundImage: 'var(--gradient-brand)' }}>SAGEWAI</span>
+              </h2>
+              <div className="text-[10px] font-semibold mt-0.5 font-[family-name:var(--font-mono)] tracking-wide text-primary/70">
+                Operations Console
+              </div>
             </div>
-          </div>
+          </Link>
         ) : (
-          <span className="mx-auto text-sm font-bold font-[family-name:var(--font-heading)]">
-            <span className="bg-clip-text text-transparent" style={{ backgroundImage: 'var(--gradient-brand)' }}>SW</span>
-          </span>
+          <Link href="/" className="mx-auto no-underline">
+            <img src="/brand/logo.svg" alt="Sagewai" className="h-7 w-7" />
+          </Link>
         )}
         <div className="flex items-center gap-1">
           <ThemeToggle />
