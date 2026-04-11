@@ -1,7 +1,7 @@
 UV := $(shell command -v uv 2>/dev/null || echo "$$HOME/.local/bin/uv")
 
 .PHONY: install install-all test test-smoke lint format typecheck build clean \
-       admin-serve doctor status \
+       admin-serve admin-up doctor status \
        e2e-offline e2e-live e2e-cli e2e-all \
        publish-test publish-check help
 
@@ -44,6 +44,9 @@ clean:                            ## Remove build artifacts
 
 admin-serve:                      ## Start admin API server (port 8000)
 	$(UV) run sagewai admin serve --port 8000
+
+admin-up:                         ## Start backend + admin UI (docker) in one command
+	@./scripts/admin-up.sh
 
 doctor:                           ## Check installation health
 	$(UV) run sagewai doctor
