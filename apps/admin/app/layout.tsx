@@ -13,6 +13,10 @@ import { LicenseProvider } from '@/utils/license';
 import { silentRefresh, isAuthenticated, authFetch } from '@/utils/auth';
 import { fontVariables } from './fonts';
 import './globals.css';
+import { Geist } from "next/font/google";
+import { cn } from "@/lib/utils";
+
+const geist = Geist({subsets:['latin'],variable:'--font-sans'});
 
 const AUTH_PATHS = ['/login', '/register', '/forgot-password'];
 const FULLSCREEN_PATHS = ['/setup', '/tv'];
@@ -98,7 +102,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning className={fontVariables}>
+    <html lang="en" suppressHydrationWarning className={cn(fontVariables, "font-sans", geist.variable)}>
       <head>
         <link rel="icon" href="/brand/favicon.ico" sizes="any" />
         <link rel="apple-touch-icon" href="/brand/logo-256.png" />
