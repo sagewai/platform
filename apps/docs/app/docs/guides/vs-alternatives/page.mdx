@@ -1,0 +1,88 @@
+# Sagewai vs. Alternatives
+
+How Sagewai compares to other agent frameworks. Sagewai is not just an SDK — it is a complete platform with deployment infrastructure, cost governance, and enterprise-grade fleet management.
+
+## Feature Comparison
+
+| Feature | Sagewai | LangChain | CrewAI | AutoGen | Semantic Kernel |
+|---------|---------|-----------|--------|---------|----------------|
+| **Model Support** | 100+ via LiteLLM | 50+ via integrations | 10+ | 10+ | 20+ via connectors |
+| **Local Inference** | Built-in (Ollama, vLLM, LM Studio, llama.cpp) | Via adapters | Limited | Via config | Via connectors |
+| **Cost Governance** | Harness proxy + per-project budgets | None built-in | None | None | None |
+| **Agent Registry** | Built-in (store, version, discover, govern) | None | None | None | None |
+| **MCP Protocol** | Native client + server | Community plugin | None | None | None |
+| **Durable Workflows** | Built-in (PostgreSQL-backed checkpointing) | Via LangGraph (separate) | None | None | None |
+| **Knowledge Graph** | NebulaGraph integration | None built-in | None | None | None |
+| **Vector Memory** | Milvus integration | Via vectorstores | Via embedchain | None | Via memory connectors |
+| **Fine-Tuning** | Unsloth pipeline (train, serve, $0/token) | None | None | None | None |
+| **Self-Hosted** | Full stack (server + workers + observability) | Partial (LangServe) | No | No | No |
+| **Fleet Workers** | Distributed execution with pool/label routing | None | None | None | None |
+| **Multi-Tenant** | Per-project isolation, quotas, encryption | None | None | None | None |
+| **Cost Tracking** | Per-token, per-model, per-project spend | None built-in | None | None | None |
+| **Guardrails** | PII, hallucination, budget, schema, content | Via guardrails integration | None | None | Via filters |
+| **Prompt Preprocessing** | Directive engine (@context, @memory, @agent) | None | None | None | None |
+| **Context Engine** | Document ingestion, 2-scope access, RAG | Via retrievers | Via embedchain | None | Via memory |
+| **Client Libraries** | 17 languages (TS, Go, Rust, Java, C#, + 12 more) | Python, JS | Python | Python, .NET | Python, .NET, Java |
+| **CI/CD Integration** | GitHub Actions (run-agent, run-evals, deploy-worker) | None | None | None | None |
+| **Admin Console** | Built-in web dashboard | Via LangSmith (paid) | None | Via AutoGen Studio | None |
+| **License** | AGPL-3.0 (free) + commercial | MIT | MIT | CC-BY-4.0 | MIT |
+
+## When to Choose Sagewai
+
+**Enterprise cost control** — Per-project budgets, complexity-based routing, full spend audit trail. No other framework tracks costs at the platform level.
+
+**Distributed execution** — Server + worker architecture with pool/label routing. Run GPU workers on-prem and CPU workers in the cloud. Scale independently.
+
+**Multi-tenant isolation** — Each team gets their own project with isolated namespaces, quotas, and encryption. Critical for organizations with multiple AI initiatives.
+
+**Local inference at scale** — Built-in Ollama/vLLM/Unsloth support with auto-discovery. Fine-tune domain models and serve at $0/token.
+
+**Full ownership** — Self-host everything. No vendor dependency, no data leaving your network, no per-seat pricing.
+
+**Polyglot integration** — 17 client libraries mean your Go backend, Rust service, and TypeScript frontend all talk to the same agent infrastructure.
+
+## When NOT to Choose Sagewai
+
+**Quick prototyping** — If you need a one-off script with minimal setup, LangChain's simpler getting-started may be faster for throwaway experiments.
+
+**Notebook-first workflow** — If you work primarily in Jupyter notebooks and want inline chain visualization, LangSmith + LangChain may suit your workflow better.
+
+**Microsoft ecosystem** — If you are deep in Azure and .NET, Semantic Kernel has tighter Azure integration out of the box.
+
+**Multi-agent conversations** — If your primary use case is autonomous agent debates and conversations (not workflows), AutoGen's conversation patterns are purpose-built for this.
+
+## Migration from LangChain
+
+Key conceptual mapping:
+
+| LangChain | Sagewai |
+|-----------|---------|
+| `ChatOpenAI("gpt-4o")` | `UniversalAgent(model="gpt-4o")` |
+| `@tool` decorator | `@tool` decorator (same concept) |
+| `AgentExecutor` | `BaseAgent` (built-in tool loop) |
+| `RunnableSequence` | `SequentialAgent` |
+| `VectorStore` | `MilvusVectorMemory` or `ContextEngine` |
+| `LangGraph` | `DurableWorkflow` |
+| `LangServe` | `sagewai admin serve` or Fleet Gateway |
+| `LangSmith` | Admin Console (self-hosted, free) |
+
+## Migration from CrewAI
+
+| CrewAI | Sagewai |
+|--------|---------|
+| `Agent(role=..., goal=...)` | `UniversalAgent(name=..., system_prompt=...)` |
+| `Task(description=...)` | Workflow step or directive |
+| `Crew(agents=[...], tasks=[...])` | `SequentialAgent` or `ParallelAgent` |
+| `crew.kickoff()` | `await workflow.run()` |
+
+## The Sagewai Advantage
+
+Most frameworks stop at the SDK layer — they help you build agents but leave deployment, cost control, and operations to you. Sagewai provides the complete stack:
+
+- **Build** agents with the SDK
+- **Govern** them with the Registry
+- **Control costs** with the Harness
+- **Monitor** with the Observatory
+- **Deploy** with the Fleet
+
+All open-source, all self-hosted, all yours.

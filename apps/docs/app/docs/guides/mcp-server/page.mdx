@@ -1,0 +1,173 @@
+# Sagewai MCP Server
+
+Expose your Sagewai agents as MCP tools for Claude Code, Cursor, and other
+MCP-compatible clients.
+
+## What It Does
+
+The Sagewai MCP server connects to your running Sagewai gateway and registers
+each agent as a callable tool. When an MCP client invokes the tool, the server
+forwards the request to the corresponding Sagewai agent via the OpenAI-compatible
+API and returns the response.
+
+```
+MCP Client (Claude Code, Cursor, ...)
+    |
+    v
+sagewai.mcp.agent_server  (stdio transport)
+    |
+    v
+POST /v1/chat/completions  { "model": "<agent>", ... }
+    |
+    v
+Sagewai Gateway  -->  AgentRegistry  -->  Agent response
+```
+
+## Prerequisites
+
+1. **Sagewai installed** with the SDK: `pip install sagewai`
+2. **Gateway running**: `make dev-native APP=admin` or `sagewai admin serve`
+3. **API token** (optional): `sagewai token create --agent <name> --scopes chat`
+4. **MCP SDK** (optional, for advanced use): `pip install mcp`
+
+The MCP agent server uses the built-in `McpServer` from the SDK, which
+implements the MCP protocol over stdio without requiring the external `mcp`
+package.
+
+## Setup
+
+### Claude Code
+
+Add to your project's `.claude/settings.json` or `~/.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "sagewai": {
+      "command": "python",
+      "args": ["-m", "sagewai.mcp.agent_server"],
+      "env": {
+        "SAGEWAI_GATEWAY_URL": "http://localhost:8000",
+        "SAGEWAI_GATEWAY_TOKEN": "your-token"
+      }
+    }
+  }
+}
+```
+
+### Cursor
+
+Add the same configuration to your Cursor MCP settings
+(`.cursor/mcp.json` or the settings UI).
+
+### Command Line
+
+You can also run the server directly:
+
+```bash
+python -m sagewai.mcp.agent_server \
+    --gateway-url http://localhost:8000 \
+    --token your-token
+```
+
+Or using environment variables:
+
+```bash
+export SAGEWAI_GATEWAY_URL=http://localhost:8000
+export SAGEWAI_GATEWAY_TOKEN=your-token
+python -m sagewai.mcp.agent_server
+```
+
+## Usage
+
+Once configured, your Sagewai agents appear as tools in Claude Code. Each
+registered agent becomes a tool named `sagewai_chat_{agent_name}`.
+
+**Example conversation in Claude Code:**
+
+```
+User: Use the knowledge agent to find what we decided about the database migration.
+
+Claude: I'll query your Sagewai knowledge agent.
+[Calls tool: sagewai_chat_knowledge_agent]
+Result: "Based on the meeting notes from March 15, the team decided to
+migrate from MySQL to PostgreSQL with a phased rollout..."
+```
+
+## Available Tools
+
+The server dynamically discovers agents from the gateway at startup. Each agent
+becomes a tool with a single `message` parameter:
+
+| Tool Name | Description |
+|-----------|-------------|
+| `sagewai_chat_knowledge_agent` | Query the knowledge base |
+| `sagewai_chat_tool_agent` | Execute tools via MCP connectors |
+| `sagewai_chat_governance_agent` | Check budgets and audit trails |
+| `sagewai_chat_<your_agent>` | Any custom agent you register |
+
+The tool input schema is:
+
+```json
+{
+  "message": "Your question or instruction for the agent"
+}
+```
+
+## Programmatic Usage
+
+You can also create the server programmatically in Python:
+
+```python
+import asyncio
+from sagewai.mcp.agent_server import create_agent_server
+
+async def main():
+    server = await create_agent_server(
+        gateway_url="http://localhost:8000",
+        token="your-token",
+    )
+    # Run over stdio (for MCP clients)
+    await server.run_stdio()
+
+    # Or get an ASGI app for HTTP hosting
+    app = server.as_asgi_app()
+
+asyncio.run(main())
+```
+
+## Troubleshooting
+
+### No tools appear
+
+Verify the gateway is running and agents are registered:
+
+```bash
+curl http://localhost:8000/v1/models \
+  -H "Authorization: Bearer your-token"
+```
+
+You should see a list of agent IDs in the response.
+
+### Authentication errors
+
+Check your token is valid:
+
+```bash
+sagewai token list
+```
+
+If you are running without authentication, omit the `SAGEWAI_GATEWAY_TOKEN`
+environment variable.
+
+### Connection refused
+
+Ensure the gateway is accessible at the configured URL. The default is
+`http://localhost:8000`. If the admin backend runs on a different port,
+update `SAGEWAI_GATEWAY_URL` accordingly.
+
+### Timeout on large responses
+
+The server uses a 120-second timeout for agent calls. For long-running agents,
+consider increasing the timeout in the gateway configuration or breaking the
+task into smaller requests.

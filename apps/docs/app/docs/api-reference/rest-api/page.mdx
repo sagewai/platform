@@ -1,0 +1,430 @@
+# REST API Reference
+
+Sagewai provides several built-in FastAPI routers for administration, analytics, agent gateway, and tool discovery. These can be mounted on any FastAPI application.
+
+---
+
+## Admin API
+
+The admin API manages agents, runs, and sessions. It is provided by the `sagewai.admin` module.
+
+### Agents
+
+#### `GET /api/v1/admin/agents`
+
+List all registered agents.
+
+**Response:**
+
+```json
+[
+  {
+    "name": "researcher",
+    "model": "gpt-4o",
+    "status": "idle",
+    "total_runs": 42,
+    "registered_at": "2026-01-15T10:30:00Z"
+  }
+]
+```
+
+#### `GET /api/v1/admin/agents/{name}`
+
+Get details for a specific agent.
+
+**Response:**
+
+```json
+{
+  "name": "researcher",
+  "model": "gpt-4o",
+  "system_prompt": "You research topics thoroughly.",
+  "tools": ["search", "browse"],
+  "status": "running",
+  "config": {
+    "temperature": 0.7,
+    "max_iterations": 10
+  }
+}
+```
+
+### Runs
+
+#### `GET /api/v1/admin/runs`
+
+List agent run history.
+
+**Query parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `agent_name` | `string` | `null` | Filter by agent |
+| `status` | `string` | `null` | Filter by status (`running`, `completed`, `failed`, `cancelled`) |
+| `limit` | `int` | `50` | Maximum results |
+| `offset` | `int` | `0` | Pagination offset |
+
+**Response:**
+
+```json
+[
+  {
+    "run_id": "run_abc123",
+    "agent_name": "researcher",
+    "status": "completed",
+    "started_at": "2026-01-15T10:30:00Z",
+    "finished_at": "2026-01-15T10:30:05Z",
+    "total_tokens": 1500,
+    "cost_usd": 0.023,
+    "steps": 3
+  }
+]
+```
+
+#### `GET /api/v1/admin/runs/{run_id}`
+
+Get detailed information about a specific run, including per-step prompt logs.
+
+#### `POST /api/v1/admin/runs/{run_id}/cancel`
+
+Cancel a running agent execution.
+
+#### `POST /api/v1/admin/runs/{run_id}/pause`
+
+Pause a running agent execution (resumes at next checkpoint).
+
+#### `POST /api/v1/admin/runs/{run_id}/resume`
+
+Resume a paused agent execution.
+
+### Sessions
+
+#### `GET /api/v1/admin/sessions`
+
+List all active conversation sessions.
+
+**Response:**
+
+```json
+[
+  {
+    "session_id": "sess_abc123",
+    "agent_name": "assistant",
+    "message_count": 12,
+    "created_at": "2026-01-15T10:00:00Z",
+    "last_active": "2026-01-15T10:30:00Z"
+  }
+]
+```
+
+### Health
+
+#### `GET /api/v1/admin/status`
+
+Get system health status.
+
+**Response:**
+
+```json
+{
+  "status": "healthy",
+  "agents": 5,
+  "active_runs": 2,
+  "active_sessions": 8,
+  "uptime_seconds": 3600
+}
+```
+
+---
+
+## Analytics API
+
+Cost, usage, and risk analytics. Created via `create_analytics_router()`.
+
+### Mounting
+
+```python
+from sagewai.admin.analytics import AnalyticsStore, create_analytics_router
+
+store = AnalyticsStore()
+router = create_analytics_router(store)
+app.include_router(router, prefix="/analytics")
+```
+
+### Endpoints
+
+#### `GET /analytics/costs`
+
+Get cost analytics.
+
+**Query parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `agent_name` | `string` | `null` | Filter by agent |
+
+**Response:**
+
+```json
+{
+  "total_cost_usd": 12.45,
+  "by_model": {
+    "gpt-4o": 8.20,
+    "gpt-4o-mini": 2.15,
+    "claude-3-5-sonnet-20241022": 2.10
+  },
+  "by_agent": {
+    "researcher": 5.00,
+    "writer": 4.25,
+    "reviewer": 3.20
+  },
+  "record_count": 150
+}
+```
+
+#### `GET /analytics/usage`
+
+Get token usage analytics.
+
+**Response:**
+
+```json
+{
+  "total_tokens": 500000,
+  "by_model": {
+    "gpt-4o": 300000,
+    "gpt-4o-mini": 200000
+  },
+  "by_agent": {
+    "researcher": 250000,
+    "writer": 250000
+  },
+  "record_count": 150
+}
+```
+
+#### `GET /analytics/risks`
+
+Get risk analytics (guardrail events).
+
+**Response:**
+
+```json
+{
+  "pii_events": 5,
+  "hallucination_flags": 12,
+  "content_filter_events": 2,
+  "total_events": 19
+}
+```
+
+#### `GET /analytics/models`
+
+Get per-model comparison analytics.
+
+**Response:**
+
+```json
+[
+  {
+    "model": "gpt-4o",
+    "total_cost_usd": 8.20,
+    "total_tokens": 300000,
+    "request_count": 100,
+    "cost_per_1k_tokens": 0.0273
+  }
+]
+```
+
+#### `GET /analytics/agents`
+
+Get per-agent analytics.
+
+**Response:**
+
+```json
+[
+  {
+    "agent_name": "researcher",
+    "total_cost_usd": 5.00,
+    "total_tokens": 250000,
+    "request_count": 75,
+    "models_used": ["gpt-4o", "gpt-4o-mini"]
+  }
+]
+```
+
+---
+
+## Agent Gateway API
+
+Token-based authentication for external agent access.
+
+### Mounting
+
+```python
+from sagewai.gateway.api import create_gateway_router
+from sagewai.gateway import TokenManager, InMemoryTokenStore
+
+manager = TokenManager(store=InMemoryTokenStore())
+router = create_gateway_router(manager)
+app.include_router(router)
+```
+
+### Endpoints
+
+#### `POST /gateway/tokens`
+
+Create a new access token.
+
+**Request body:**
+
+```json
+{
+  "agent_name": "scout",
+  "scopes": ["chat", "dream"],
+  "expires_in_seconds": 3600,
+  "single_use": true
+}
+```
+
+**Response:**
+
+```json
+{
+  "token": "sat-a1b2c3d4e5f6...",
+  "token_id": "tok_abc123",
+  "expires_at": "2026-01-15T11:30:00Z"
+}
+```
+
+> The plaintext token is only returned once at creation. Only the SHA-256 hash is stored.
+
+#### `GET /gateway/tokens`
+
+List all tokens, optionally filtered by agent.
+
+#### `POST /gateway/tokens/{id}/revoke`
+
+Revoke a token (disable without deleting).
+
+#### `DELETE /gateway/tokens/{id}`
+
+Permanently delete a token.
+
+---
+
+## Tool Discovery API
+
+Expose agent tools in OpenAI function-calling format for external consumption.
+
+### Mounting
+
+```python
+from sagewai.gateway.tools import create_tool_discovery_router
+
+router = create_tool_discovery_router(agent_tools)
+app.include_router(router)
+```
+
+### Endpoints
+
+#### `GET /api/v1/tools`
+
+List all available tools.
+
+**Response:**
+
+```json
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "search",
+      "description": "Search the knowledge base",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {"type": "string"}
+        },
+        "required": ["query"]
+      }
+    }
+  }
+]
+```
+
+#### `GET /api/v1/tools/{name}`
+
+Get a specific tool by name.
+
+---
+
+## AG-UI Protocol
+
+Agent-User Interface protocol for real-time event streaming over SSE or WebSocket.
+
+### SSE Endpoint
+
+```
+POST /agui/runs
+Content-Type: application/json
+
+{
+  "agent_name": "researcher",
+  "message": "Research quantum computing"
+}
+```
+
+Returns an SSE stream with the following event types:
+
+| Event | Description |
+|-------|-------------|
+| `RUN_STARTED` | Agent execution began |
+| `TEXT_MESSAGE_START` | New text message beginning |
+| `TEXT_MESSAGE_CONTENT` | Text chunk (delta) |
+| `TEXT_MESSAGE_END` | Text message complete |
+| `TOOL_CALL_START` | Tool invocation beginning |
+| `TOOL_CALL_END` | Tool invocation complete |
+| `TOOL_CALL_RESULT` | Tool result data |
+| `RUN_FINISHED` | Agent execution complete |
+| `RUN_ERROR` | Agent execution failed |
+
+### WebSocket Endpoint
+
+```
+WS /agui/ws
+```
+
+Same event types as SSE, but bidirectional. Send messages as JSON:
+
+```json
+{"type": "message", "content": "Hello!"}
+```
+
+---
+
+## Authentication
+
+All app backends support three authentication methods, checked in order:
+
+1. **JWT** — `Authorization: Bearer <jwt-token>`
+2. **API Key** — `X-API-Key: <key>` or `Authorization: Bearer <api-key>`
+3. **Access Token** — `Authorization: Bearer sat-<token>`
+
+Configure with `GatewayAuthConfig`:
+
+```python
+from sagewai.gateway import GatewayAuthConfig, gateway_auth
+
+config = GatewayAuthConfig(
+    jwt_secret="your-secret",
+    api_keys=["key-1", "key-2"],
+    token_manager=token_manager,
+)
+
+auth = gateway_auth(config)
+
+@app.get("/protected")
+async def protected(user=Depends(auth)):
+    return {"user": user}
+```

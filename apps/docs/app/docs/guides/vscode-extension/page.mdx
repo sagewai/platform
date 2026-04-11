@@ -1,0 +1,150 @@
+# VS Code Extension
+
+The Sagewai VS Code extension accelerates agent development with directive syntax highlighting, scaffold commands, and code snippets. Zero configuration required.
+
+## Installation
+
+### From VSIX (Current)
+
+```bash
+cd vscode/
+npm install
+npm run compile
+npx @vscode/vsce package
+```
+
+Then in VS Code: Command Palette → "Extensions: Install from VSIX..." → select the generated `.vsix` file.
+
+### From Source (Development)
+
+1. Open the `vscode/` directory in VS Code
+2. Press **F5** to launch the Extension Development Host
+3. The extension auto-activates for Python and Markdown files
+
+### VS Code Marketplace (Coming Soon)
+
+```
+ext install sagewai.sagewai
+```
+
+## Features
+
+### Directive Syntax Highlighting
+
+The extension injects syntax highlighting for all Sagewai directive types in Python and Markdown files. Directives are visually distinguished from regular code, making it easy to spot retrieval, delegation, and configuration at a glance.
+
+**Supported directives:**
+
+| Directive | Purpose | Example |
+|-----------|---------|---------|
+| `@context()` | Retrieve documents from Context Engine | `@context('quarterly earnings', scope='project', tags='finance')` |
+| `@memory()` | Search stored facts | `@memory('customer preferences')` |
+| `@agent:name()` | Delegate to another agent | `@agent:researcher('Find latest pricing data')` |
+| `@wf:name()` | Invoke a saved workflow | `@wf:approval_pipeline('Review this contract')` |
+| `/tool.name()` | Call a tool inline | `/tool.web_search('Sagewai documentation')` |
+| `#model:name` | Override the model | `#model:gpt-4o` |
+| `#budget:amount` | Set a budget limit | `#budget:1.00` |
+| `@datetime`, `@date`, `@time` | Dynamic parameters | Resolved at prompt-processing time |
+| `@user`, `@project` | Context parameters | Current user and project |
+| `{{ expression }}` | Template expressions | `{{ context.search('query') }}` |
+
+### Scaffold Commands
+
+Access from the Command Palette (Cmd+Shift+P / Ctrl+Shift+P):
+
+#### Sagewai: New Agent
+
+Generates a complete agent file with:
+- Imports (`UniversalAgent`, `tool`)
+- An example `@tool` decorated function
+- Agent configuration (name, model, system_prompt, tools)
+- Async usage example
+
+```python
+from sagewai import UniversalAgent, tool
+
+@tool
+async def search_web(query: str) -> str:
+    """Search the web for information."""
+    # TODO: implement
+    return f"Results for: {query}"
+
+agent = UniversalAgent(
+    name="my-agent",
+    model="gpt-4o",
+    system_prompt="You are a helpful research assistant.",
+    tools=[search_web],
+)
+
+# Usage: response = await agent.chat("Find the latest AI news")
+```
+
+#### Sagewai: New Workflow
+
+Generates a multi-agent sequential pipeline:
+
+```python
+from sagewai import UniversalAgent, SequentialAgent
+
+researcher = UniversalAgent(
+    name="researcher",
+    model="gpt-4o",
+    system_prompt="You research topics thoroughly.",
+)
+
+writer = UniversalAgent(
+    name="writer",
+    model="gpt-4o",
+    system_prompt="You write clear, engaging content.",
+)
+
+pipeline = SequentialAgent(
+    name="research-pipeline",
+    agents=[researcher, writer],
+)
+
+# Usage: result = await pipeline.chat("Write an article about quantum computing")
+```
+
+#### Sagewai: Add Tool
+
+Inserts a `@tool` decorated function at your cursor position with interactive tabstops — Tab through the function name, parameters, and docstring.
+
+### Code Snippets
+
+Type a prefix and press Tab to expand:
+
+| Prefix | Expands To | Use Case |
+|--------|-----------|----------|
+| `swagent` | Full agent with tool and config | Quick agent setup |
+| `swtool` | `@tool` decorated function | Add a single tool |
+| `swworkflow` | Sequential dual-agent pipeline | Multi-stage workflows |
+| `swctx` | `@context('query', scope='project', tags='...')` | Context retrieval directive |
+| `swmem` | `@memory('query')` | Memory search directive |
+| `swag` | `@agent:name('task')` | Agent delegation directive |
+
+## How It Improves Your Workflow
+
+**Eliminates boilerplate** — Scaffold a complete agent in 2 seconds instead of 30 seconds of typing. Every generated file follows SDK conventions (async patterns, proper imports, tool decorator).
+
+**Visual feedback** — Catch directive syntax errors before running your code. Highlighted directives stand out from regular Python strings, making prompt engineering more visual.
+
+**Consistent patterns** — Generated code always follows Sagewai conventions: async functions, proper imports, UniversalAgent configuration, tool decorator patterns.
+
+**Interactive tabstops** — When using scaffold commands or snippets, Tab through placeholders to fill in names, prompts, and parameters without touching boilerplate.
+
+**Works alongside AI assistants** — The extension complements Copilot, Cursor, and Claude Code. Syntax highlighting helps AI assistants understand your directives, while snippets provide the scaffolding that AI fills in.
+
+## Configuration
+
+**Zero configuration needed.** The extension activates automatically when you open any Python or Markdown file. All features work out of the box.
+
+**Requirements:**
+- VS Code 1.85.0 or later
+- No runtime dependencies
+
+## Technical Details
+
+- **Activation events:** `onLanguage:python`, `onLanguage:markdown`
+- **Grammar injection:** TextMate grammar patterns injected into Python and Markdown
+- **Bundle size:** Minimal — no runtime dependencies, compiles to a single JS file

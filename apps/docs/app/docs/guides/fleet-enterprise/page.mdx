@@ -1,0 +1,591 @@
+# Fleet Architecture & Enterprise Deployment
+
+Sagewai's server + worker architecture is its biggest differentiator. One server manages all projects, budgets, and routing. Workers execute agentic workloads wherever you need them — on-prem GPU boxes, cloud VMs, Kubernetes pods, or edge devices.
+
+## Why This Matters
+
+Most agentic frameworks are single-process libraries. You build an agent, run it on your laptop, and that's it. Scaling to production means building your own infrastructure — task queues, worker pools, cost tracking, authentication, and monitoring.
+
+**Sagewai is a distributed platform:**
+- One server manages all projects, teams, budgets, and routing
+- Workers claim and execute tasks based on model, pool, and label matching
+- Per-project isolation with independent quotas and encryption
+- Zero-trust security: enrollment keys, JWT auth, payload encryption, anomaly detection
+- Container-runtime agnostic: Docker, Podman, containerd, CRI-O, Kubernetes
+
+## Architecture Overview
+
+```
+┌──────────────────────────────────────────────────────┐
+│                   SAGEWAI SERVER                      │
+│                                                      │
+│  Gateway API    Admin Console    Fleet Registry       │
+│  (task dispatch, (monitoring,    (enrollment,         │
+│   webhooks,      analytics,      approval,            │
+│   OpenAI-compat) budgets)        health probing)      │
+│                                                      │
+│  ┌────────────────────────────────────────────────┐  │
+│  │              PostgreSQL                         │  │
+│  │  projects | workflow_runs | workers | keys      │  │
+│  └────────────────────────────────────────────────┘  │
+│                                                      │
+│  Redis (cache)  Milvus (vectors)  NebulaGraph (graph)│
+└────────────────────────┬─────────────────────────────┘
+                         │
+                    Long-poll (HTTPS)
+                         │
+          ┌──────────────┼──────────────┐
+          ▼              ▼              ▼
+   ┌────────────┐ ┌────────────┐ ┌────────────┐
+   │  Worker A  │ │  Worker B  │ │  Worker C  │
+   │  pool: cpu │ │  pool: gpu │ │  pool: gpu │
+   │  gpt-4o    │ │  llama3-70b│ │  gpt-4o    │
+   │  us-east   │ │  eu-west   │ │  ap-south  │
+   └────────────┘ └────────────┘ └────────────┘
+```
+
+## Multi-Project Isolation
+
+Every operation in Sagewai is scoped to a project. Each project gets its own namespace, quotas, and data isolation.
+
+```python
+from sagewai.core.context import ProjectContext
+
+async with ProjectContext(
+    project_id="team-marketing",
+    max_tokens_per_minute=100_000,
+    max_requests_per_minute=50,
+    max_cost_per_day_usd=30.0,
+):
+    # All agent runs, memory queries, and budget checks
+    # are automatically scoped to "team-marketing"
+    response = await agent.chat("Generate Q4 campaign ideas")
+```
+
+**Use case:** Team A (marketing agents, $30/day budget, `cpu` pool) and Team B (engineering agents, $200/day, `gpu` pool) — completely isolated on the same server. Each team's spend, agents, memory, and workflow runs are separated.
+
+### Per-Project Quotas
+
+| Quota | Description | Enforcement |
+|-------|-------------|-------------|
+| `max_tokens_per_minute` | Token throughput limit | 60-second sliding window |
+| `max_requests_per_minute` | Request rate limit | 60-second sliding window |
+| `max_cost_per_day_usd` | Daily spend cap | Resets at midnight UTC |
+
+Quotas are enforced in the `ProjectContext` before every LLM call.
+
+## Server Setup
+
+The server container runs the complete Sagewai platform:
+
+### What the Server Includes
+
+- **Gateway API** — Fleet task dispatch, webhook triggers, OpenAI-compatible endpoint
+- **Admin Console** — Project management, analytics, budget enforcement
+- **Fleet Registry** — Worker enrollment, approval, health monitoring
+- **Workflow Supervisor** — Stale run detection and recovery (5-min heartbeat timeout)
+
+### Compose Spec (Container-Runtime Agnostic)
+
+```yaml
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: sagecurator
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports: ["5432:5432"]
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+
+  sagewai-server:
+    image: sagewai/server:latest
+    ports: ["8000:8000"]
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/sagecurator
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      SAGEWAI_ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+    deploy:
+      resources:
+        limits: { memory: 2G }
+
+volumes:
+  postgres_data:
+```
+
+### Running with Different Container Runtimes
+
+| Runtime | Command | Notes |
+|---------|---------|-------|
+| Docker Compose V2 | `docker compose up -d` | Default on modern Docker Desktop |
+| Podman Compose | `podman-compose up -d` | Rootless, daemonless |
+| nerdctl (containerd) | `nerdctl compose up -d` | Lightweight |
+| Kubernetes | See K8s section below | Production-grade |
+
+## Worker Setup
+
+Workers are lightweight containers that connect to the server, claim tasks, and execute them.
+
+### What Workers Do
+
+1. Register with the server via enrollment key or WRT token
+2. Declare capabilities: models supported, pool, labels, max concurrency
+3. Long-poll for tasks matching their capabilities
+4. Execute workflows with per-worker credential injection
+5. Send heartbeats (default: every 30 seconds)
+6. Report results (encrypted if the org has an encryption key)
+
+### Worker Environment Variables
+
+| Variable | Required | Default | Purpose |
+|----------|----------|---------|---------|
+| `FLEET_GATEWAY_URL` | Yes | — | Server endpoint URL |
+| `ENROLLMENT_KEY` | Yes* | — | Auto-registration key (*or `WRT_TOKEN`) |
+| `WRT_TOKEN` | Yes* | — | Pre-issued JWT auth (*or `ENROLLMENT_KEY`) |
+| `WORKER_POOL` | No | `default` | Pool assignment |
+| `WORKER_LABELS` | No | — | Comma-separated `key=value` pairs |
+| `WORKER_MODELS` | No | — | Comma-separated model names |
+| `OPENAI_API_KEY` | No | — | For cloud model access |
+| `ANTHROPIC_API_KEY` | No | — | For Anthropic Claude access |
+| `OLLAMA_HOST` | No | `localhost:11434` | For local Ollama inference |
+| `HEARTBEAT_INTERVAL` | No | `30` | Seconds between heartbeats |
+
+### Worker Compose Spec
+
+```yaml
+services:
+  worker:
+    image: sagewai/worker:latest
+    environment:
+      FLEET_GATEWAY_URL: http://sagewai-server:8000
+      ENROLLMENT_KEY: ${ENROLLMENT_KEY}
+      WORKER_POOL: gpu
+      WORKER_LABELS: region=us-east-1,tier=production
+      WORKER_MODELS: gpt-4o,ollama/llama3.1:70b
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OLLAMA_HOST: http://host-ollama:11434
+    deploy:
+      replicas: 3
+      resources:
+        limits: { memory: 2G }
+    restart: unless-stopped
+```
+
+**Scale workers:**
+```bash
+docker compose up -d --scale worker=5
+# or with Podman
+podman-compose up -d --scale worker=5
+```
+
+## Enrollment Flow
+
+### Step 1: Create an Enrollment Key
+
+```bash
+sagewai fleet create-key \
+  --org acme \
+  --name gpu-onboarding \
+  --max-uses 10 \
+  --expires 7d \
+  --allowed-pools gpu \
+  --allowed-models gpt-4o,llama3-70b
+```
+
+The raw key is displayed once — store it securely. Only the SHA-256 hash is saved server-side.
+
+### Step 2: Register a Worker
+
+**With enrollment key (auto-approved):**
+```bash
+sagewai fleet register \
+  --gateway https://sagewai.internal:8000 \
+  --enrollment-key sk-fleet-... \
+  --pool gpu \
+  --labels region=us-east-1,tier=production \
+  --models gpt-4o,ollama/llama3.1:70b
+```
+
+**Without enrollment key (manual approval):**
+```bash
+sagewai fleet register \
+  --gateway https://sagewai.internal:8000 \
+  --pool gpu \
+  --models gpt-4o
+```
+
+The worker enters `PENDING` state until an admin approves:
+```bash
+sagewai fleet list-workers --org acme --status pending
+sagewai fleet approve-worker <worker-id>
+```
+
+### Step 3: Worker Starts Claiming Tasks
+
+After registration, the worker automatically begins long-polling for tasks that match its capabilities.
+
+## Task Routing
+
+### Three Dimensions of Matching
+
+Every task is matched against workers on three dimensions:
+
+| Dimension | How It Works |
+|-----------|-------------|
+| **Model** | Task requires `gpt-4o` → only workers declaring `gpt-4o` can claim it |
+| **Pool** | Task targets `gpu` pool → only workers in the `gpu` pool see it |
+| **Labels** | Task requires `{region: eu-west}` → only workers with that label match |
+
+### Load Balancing Strategies
+
+| Strategy | Behavior | Best For |
+|----------|----------|----------|
+| `DIRECT` | No pre-assignment; workers self-select | Simple setups |
+| `ROUND_ROBIN` | Rotate through eligible workers | Even distribution |
+| `LEAST_LOADED` | Pick worker with lowest `active_runs / max_concurrent` ratio | Optimal utilization |
+| `THRESHOLD` | Like LEAST_LOADED but skip workers above 90% capacity | Headroom for spikes |
+
+```python
+from sagewai.models.worker import RoutingConstraints
+
+routing = RoutingConstraints(
+    worker_pool="gpu",
+    worker_labels={"region": "eu-west"},
+    strategy="LEAST_LOADED",
+    capacity_threshold=0.9,
+)
+```
+
+### Model Normalization
+
+`openai/gpt-4o`, `gpt-4o`, and `GPT-4o` are all treated as the same model. The normalizer strips provider prefixes, lowercases, and replaces colons with hyphens.
+
+## Security
+
+### Zero-Trust Architecture
+
+| Layer | Mechanism | Purpose |
+|-------|-----------|---------|
+| **Enrollment** | Scoped keys (pools, models, max uses, expiry) | Control who can join the fleet |
+| **Authentication** | WRT JWT tokens (worker_id, org, pool, scopes) | Verify worker identity |
+| **Authorization** | Scope-based (`claim`, `report`, `heartbeat`) | Limit what workers can do |
+| **Encryption** | Per-org Fernet symmetric keys | Encrypt task payloads at rest and in transit |
+| **Anomaly Detection** | Rate limits, failure tracking, heartbeat monitoring | Auto-revoke misbehaving workers |
+| **Audit** | Structured event log | Full traceability for every action |
+| **Health Probing** | LLM endpoint checks (Ollama, OpenAI-compatible) | Verify workers can actually serve the models they claim |
+| **Supervisor** | Stale run detection (5-min heartbeat timeout) | Recover tasks from crashed workers |
+
+### Per-Worker Credential Injection
+
+Different workers can use different LLM backends. Credentials are injected via ContextVar at execution time — never stored in the database, never sent to the server.
+
+```python
+from sagewai.models.worker import WorkerCredentials
+
+# GPU worker in EU: uses local Ollama
+gpu_creds = WorkerCredentials(
+    model_overrides={"default": "ollama/llama3.1:70b"},
+    inference_overrides={"api_base": "http://localhost:11434"},
+)
+
+# Cloud worker in US: uses OpenAI
+cloud_creds = WorkerCredentials(
+    model_overrides={"default": "gpt-4o"},
+    inference_overrides={"api_key": "sk-..."},
+)
+```
+
+## Production Kubernetes Deployment
+
+### Server Deployment
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sagewai-server
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: sagewai-server }
+  template:
+    metadata:
+      labels: { app: sagewai-server }
+    spec:
+      containers:
+      - name: server
+        image: sagewai/server:latest
+        ports:
+        - containerPort: 8000
+        envFrom:
+        - secretRef: { name: sagewai-secrets }
+        resources:
+          requests: { memory: "1Gi", cpu: "500m" }
+          limits: { memory: "2Gi", cpu: "2000m" }
+        livenessProbe:
+          httpGet: { path: /api/v1/health, port: 8000 }
+          initialDelaySeconds: 10
+        readinessProbe:
+          httpGet: { path: /api/v1/health, port: 8000 }
+          initialDelaySeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sagewai-server
+spec:
+  selector: { app: sagewai-server }
+  ports:
+  - port: 8000
+    targetPort: 8000
+```
+
+### CPU Worker Deployment (Autoscaling)
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sagewai-cpu-workers
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: sagewai-worker, pool: cpu }
+  template:
+    metadata:
+      labels: { app: sagewai-worker, pool: cpu }
+    spec:
+      containers:
+      - name: worker
+        image: sagewai/worker:latest
+        env:
+        - { name: FLEET_GATEWAY_URL, value: "http://sagewai-server:8000" }
+        - { name: WORKER_POOL, value: "cpu" }
+        - { name: WORKER_MODELS, value: "gpt-4o,claude-sonnet-4" }
+        envFrom:
+        - secretRef: { name: sagewai-worker-secrets }
+        resources:
+          requests: { memory: "512Mi", cpu: "500m" }
+          limits: { memory: "2Gi", cpu: "2000m" }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sagewai-cpu-workers-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sagewai-cpu-workers
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+  - type: External
+    external:
+      metric: { name: sagewai_pending_runs }
+      target: { type: AverageValue, averageValue: "5" }
+```
+
+### GPU Worker DaemonSet (One per GPU Node)
+
+```yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: sagewai-gpu-workers
+spec:
+  selector:
+    matchLabels: { app: sagewai-worker, pool: gpu }
+  template:
+    metadata:
+      labels: { app: sagewai-worker, pool: gpu }
+    spec:
+      nodeSelector:
+        nvidia.com/gpu: "true"
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: worker
+        image: sagewai/worker:latest
+        env:
+        - { name: FLEET_GATEWAY_URL, value: "http://sagewai-server:8000" }
+        - { name: WORKER_POOL, value: "gpu" }
+        - { name: WORKER_MODELS, value: "ollama/llama3.1:70b" }
+        envFrom:
+        - secretRef: { name: sagewai-worker-secrets }
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+            memory: "8Gi"
+```
+
+### Terraform Module
+
+```hcl
+module "sagewai_fleet" {
+  source = "sagewai/fleet/kubernetes"
+
+  server_replicas = 2
+  server_image    = "sagewai/server:latest"
+
+  worker_pools = {
+    cpu = {
+      replicas      = 3
+      models        = ["gpt-4o", "claude-sonnet-4"]
+      node_selector = {}
+      resources     = { memory = "2Gi", cpu = "2" }
+    }
+    gpu = {
+      replicas      = 0  # DaemonSet on GPU nodes instead
+      models        = ["ollama/llama3.1:70b"]
+      node_selector = { "nvidia.com/gpu" = "true" }
+      resources     = { memory = "8Gi", gpu = 1 }
+    }
+  }
+
+  database_url   = var.database_url
+  redis_url      = var.redis_url
+  encryption_key = var.encryption_key
+}
+```
+
+### Pulumi (TypeScript)
+
+```typescript
+import * as k8s from "@pulumi/kubernetes";
+
+const server = new k8s.apps.v1.Deployment("sagewai-server", {
+  spec: {
+    replicas: 2,
+    selector: { matchLabels: { app: "sagewai-server" } },
+    template: {
+      metadata: { labels: { app: "sagewai-server" } },
+      spec: {
+        containers: [{
+          name: "server",
+          image: "sagewai/server:latest",
+          ports: [{ containerPort: 8000 }],
+          envFrom: [{ secretRef: { name: "sagewai-secrets" } }],
+          resources: {
+            requests: { memory: "1Gi", cpu: "500m" },
+            limits: { memory: "2Gi", cpu: "2000m" },
+          },
+        }],
+      },
+    },
+  },
+});
+
+const cpuWorkers = new k8s.apps.v1.Deployment("sagewai-cpu-workers", {
+  spec: {
+    replicas: 3,
+    selector: { matchLabels: { app: "sagewai-worker", pool: "cpu" } },
+    template: {
+      metadata: { labels: { app: "sagewai-worker", pool: "cpu" } },
+      spec: {
+        containers: [{
+          name: "worker",
+          image: "sagewai/worker:latest",
+          env: [
+            { name: "WORKER_POOL", value: "cpu" },
+            { name: "WORKER_MODELS", value: "gpt-4o,claude-sonnet-4" },
+          ],
+          envFrom: [{ secretRef: { name: "sagewai-worker-secrets" } }],
+        }],
+      },
+    },
+  },
+});
+```
+
+## Optimization Guide
+
+### Worker Sizing
+
+| Workload | Container Memory | CPU | GPU | Max Concurrent |
+|----------|-----------------|-----|-----|----------------|
+| Cloud API agents (GPT-4o, Claude) | 512 MB | 0.5 core | None | 8-16 |
+| Local Ollama 7B | 6 GB | 2 cores | 1x RTX 3060 | 2-4 |
+| Local Ollama 70B | 48 GB | 4 cores | 1x A100 | 1-2 |
+| RAG + embeddings | 2 GB | 1 core | Optional | 4-8 |
+| Fine-tuning (Unsloth) | 16 GB | 4 cores | 1x RTX 3090+ | 1 |
+
+### Pool Design Patterns
+
+| Pool | Purpose | Models | Cost |
+|------|---------|--------|------|
+| `cpu-fast` | High-volume, low-complexity | GPT-4o-mini, Haiku | Low |
+| `cpu-smart` | Complex reasoning tasks | GPT-4o, Sonnet, Opus | Medium-High |
+| `gpu-local` | On-prem GPU inference | Ollama (Llama, Mistral) | $0/token |
+| `gpu-finetune` | Dedicated fine-tuning | Unsloth | $0/token |
+| `regional-eu` | EU data residency | Any | Compliance-driven |
+| `regional-us` | US data residency | Any | Compliance-driven |
+
+### Cost Optimization
+
+- **Route simple tasks to `gpu-local`** — free inference via Ollama for summarization, classification, extraction
+- **Use `cpu-fast` for high-volume work** — Haiku/GPT-4o-mini for content generation, formatting, simple Q&A
+- **Reserve `cpu-smart` for reasoning** — code review, analysis, planning with Sonnet/GPT-4o
+- **Set per-project daily budgets** — prevent runaway spend with `max_cost_per_day_usd`
+- **Use the harness complexity classifier** — auto-routes by task difficulty so you don't have to choose manually
+
+### Monitoring
+
+```bash
+# Server health (detailed infrastructure status)
+curl http://localhost:8000/api/v1/admin/health
+
+# Worker status
+sagewai fleet list-workers --org acme
+
+# Prometheus metrics
+# sagewai_pending_runs — tasks waiting for workers
+# sagewai_worker_load — per-worker utilization
+# sagewai_run_duration — workflow execution time
+
+# Grafana dashboard
+# Pre-built at http://localhost:3200
+```
+
+**Anomaly detection** auto-alerts on:
+- More than 60 claims per minute (possible bot)
+- More than 10 failures per hour (unhealthy worker)
+- Missed heartbeats for 5+ minutes (crashed worker)
+- Model mismatches (worker claiming tasks it can't serve)
+
+## Example: Enterprise Setup
+
+**Acme Corp** has three teams using Sagewai:
+
+| Team | Project | Pool | Budget | Models | Use Case |
+|------|---------|------|--------|--------|----------|
+| Marketing | `mkt` | `cpu-fast` | $30/day | GPT-4o-mini | Content generation agents |
+| Engineering | `eng` | `gpu-local` | $0/day | Llama 3.1 70B (Ollama) | Code review agents |
+| Research | `research` | `cpu-smart` | $100/day | Claude Sonnet | Analysis and reasoning agents |
+
+**Deployment:**
+
+1. Ops deploys 1 server + 5 workers (2 cpu-fast, 1 gpu-local, 2 cpu-smart)
+2. Each team gets a scoped enrollment key for their pool
+3. Workers auto-register and start claiming tasks
+4. Marketing submits a content workflow → routed to `cpu-fast` → GPT-4o-mini
+5. Engineering submits a code review → routed to `gpu-local` → Llama 3.1 70B ($0)
+6. Research submits analysis → routed to `cpu-smart` → Claude Sonnet
+7. Each team's spend is tracked independently; engineering runs for free
+
+**Result:** Three teams, completely isolated, with automatic routing and cost control. No team can exhaust another team's budget. Engineering pays nothing because their agents run on local hardware.

@@ -1,0 +1,242 @@
+# Self-Learning Agents
+
+Sagewai agents don't just respond --- they **learn from every interaction**. The SDK provides
+five complementary learning mechanisms that work together to make agents smarter over time,
+**without requiring any LLM for the learning itself**.
+
+## The Five Learning Mechanisms
+
+### 1. Auto-Learn (MemoryBridge)
+
+When `auto_learn=True`, the agent automatically extracts facts from conversations and stores
+them in the Context Engine. Facts are extracted every N turns (configurable via `learn_every_n_turns`).
+
+```python
+from sagewai import UniversalAgent
+
+agent = UniversalAgent(
+    name="assistant",
+    model="gpt-4o",
+    auto_learn=True,
+    learn_every_n_turns=5,  # Extract after every 5 turns
+)
+
+# After chatting, the agent remembers:
+# - Decisions made ("we chose PostgreSQL")
+# - User preferences ("I prefer Python")
+# - Key events ("deadline is March 15th")
+# - Action items ("TODO: set up CI pipeline")
+```
+
+**How it works:** The `MemoryBridge` receives conversation history and delegates to a
+`FactExtractor`. The SDK ships three extractors:
+
+| Extractor | Needs LLM? | Speed | Quality |
+|-----------|-----------|-------|---------|
+| `RuleBasedFactExtractor` | No | Instant | Good for structured facts |
+| `LLMFactExtractor` | Yes | ~1-2s | Best for nuanced extraction |
+| `HybridFactExtractor` | Optional | Fast + enhanced | Rules first, LLM fills gaps |
+
+The `RuleBasedFactExtractor` uses pattern matching to detect decisions, preferences,
+events, and action items without any API calls. The `HybridFactExtractor` runs rules
+first and optionally enhances with an LLM pass for anything the rules missed.
+
+### 2. Episodic Memory
+
+Agents remember past task executions --- what worked, what didn't, and what they learned.
+
+```python
+from sagewai.context import EpisodeStore, Episode
+
+episodes = EpisodeStore()
+
+# After completing a task, store the episode
+episode = Episode(
+    goal="Research competitor pricing",
+    context_used=["pricing-doc-chunk-1", "market-report-chunk-5"],
+    actions_taken=["searched context", "queried web", "compiled report"],
+    outcome="Generated 3-page pricing analysis",
+    success=True,
+    lessons=["Financial data older than 6 months is unreliable",
+             "Compare at least 3 competitors for credible analysis"],
+)
+await episodes.store(episode)
+
+# Next time a similar task comes up, retrieve relevant episodes
+similar = await episodes.search("analyze competitor pricing", top_k=3)
+# Agent now has lessons learned from previous attempts
+```
+
+Episodes are stored with embeddings, so retrieval is semantic --- an agent working on
+"pricing comparison" will find episodes about "competitor pricing analysis" even though
+the exact words differ.
+
+### 3. Self-Correction (Exemplar Store)
+
+When an agent makes a mistake, the correction is stored as an exemplar for future reference.
+This is inspired by the PALADIN pattern --- mistakes become teaching examples.
+
+```python
+from sagewai.core.self_correction import SelfCorrectionStrategy, FailureExemplar
+
+# SelfCorrectionStrategy wraps any base strategy and automatically:
+# 1. Detects output validation failures via OutputValidator
+# 2. Stores the error + correction as a FailureExemplar
+# 3. On similar future tasks, includes the exemplar as a 1-shot example
+# 4. Prevents the same mistake from recurring (max_corrections configurable)
+```
+
+The key insight: rather than discarding failed attempts, the SDK stores them as
+negative examples. When the agent encounters a similar task later, the exemplar is
+injected into the prompt as a "don't do this, do this instead" guide.
+
+### 4. Knowledge Graph Building
+
+Every conversation incrementally builds a structured knowledge graph. Entities and
+relations are extracted and stored in NebulaGraph (or an in-memory fallback).
+
+```python
+from sagewai.intelligence import EntityExtractor, RelationExtractor
+
+# Entity extraction (zero-shot, runs locally)
+ner = GLiNEREntityExtractor(
+    labels=["person", "organization", "technology", "date"]
+)
+
+# Relation extraction (co-occurrence heuristic)
+rel = HeuristicRelationExtractor()
+
+# Process a conversation
+entities = await ner.extract(text)
+# [Entity("PostgreSQL", "technology", 0.95), Entity("Alice", "person", 0.91)]
+
+relations = await rel.extract(text, entities)
+# [RelationTriple("Alice", "uses", "PostgreSQL", confidence=0.87)]
+```
+
+The graph grows with every conversation, building a structured representation of
+your organization's knowledge. Agents can then traverse the graph to answer questions
+like "who works on what?" or "what technologies does team X use?".
+
+### 5. Memory Consolidation
+
+Over time, memory is cleaned, deduplicated, and weighted by recency.
+
+```python
+from sagewai.intelligence import MemoryConsolidator
+
+consolidator = MemoryConsolidator(
+    embedder=embedder,
+    similarity_threshold=0.9,  # Merge facts >90% similar
+    decay_rate=0.01,           # 1% decay per day
+)
+
+# Dedup: "We use PostgreSQL" and "Our DB is PostgreSQL" -> merged
+result = await consolidator.deduplicate_facts(all_facts)
+
+# Decay: old facts lose importance, recent facts stay strong
+weighted = consolidator.apply_decay(facts, ages_days=[0, 7, 30, 90])
+
+# Contradictions: "We use MySQL" vs "We migrated to PostgreSQL" -> flagged
+contradictions = await consolidator.detect_contradictions(
+    new_facts, existing_facts
+)
+```
+
+Temporal fact tracking on NebulaGraph ensures that superseded facts (e.g., a
+technology migration) are properly marked with `valid_from` and `superseded_at`
+timestamps rather than deleted.
+
+---
+
+## LLM-Independent Learning
+
+Unlike platforms that require an LLM for every intelligence operation, Sagewai's
+learning pipeline works with zero API keys:
+
+| Component | LLM Required? | Offline Alternative |
+|-----------|--------------|---------------------|
+| Fact extraction | No | `RuleBasedFactExtractor` (regex patterns) |
+| Entity extraction | No | `GLiNEREntityExtractor` (50MB local model) |
+| Embeddings | No | `SentenceTransformerEmbedder` (80MB local model) |
+| Relation extraction | No | `HeuristicRelationExtractor` (co-occurrence) |
+| Graph building | No | Uses the extractors above |
+| Memory consolidation | No | `MemoryConsolidator` (cosine similarity) |
+| Summarization | No | `SemanticSummarizer` (embedding-scored extractive) |
+
+Install the intelligence extras and agents learn without any external API:
+
+```bash
+pip install sagewai[intelligence]
+```
+
+---
+
+## Configuration
+
+Use `IntelligenceConfig` to control provider selection:
+
+```python
+from sagewai.intelligence import IntelligenceConfig
+
+config = IntelligenceConfig(
+    embedding_provider="auto",          # local -> API -> hash fallback
+    extraction_provider="auto",         # GLiNER -> LLM fallback
+    fact_extraction_provider="hybrid",  # rules + optional LLM
+    summarizer_provider="semantic",     # embedding-scored extractive
+)
+```
+
+The `"auto"` setting tries local providers first, falls back to API-based providers
+if available, and uses deterministic fallbacks (hash embeddings, rule-based extraction)
+as a last resort. This means your agents always work, even offline.
+
+## Observability
+
+Every learning operation is observable through the admin console:
+
+- **Context Engine dashboard** --- See stored documents and extracted facts
+- **Knowledge Graph explorer** --- Browse entities and their relations interactively
+- **Agent Runs** --- Track which memories were retrieved and used in each response
+- **Cost Analytics** --- Monitor intelligence layer costs vs LLM costs
+
+The intelligence pipeline emits events through the SDK's event system, so you can
+hook into `on_memory_store`, `on_fact_extracted`, and `on_episode_stored` callbacks
+for custom observability.
+
+## How It All Fits Together
+
+```
+User Message
+    |
+    v
+Agent receives message
+    |
+    +---> [Retrieve] Search context + episodes + graph
+    |         |
+    |         v
+    |     Inject relevant memories into prompt
+    |
+    v
+LLM generates response
+    |
+    +---> [Learn] MemoryBridge extracts facts (every N turns)
+    |         |
+    |         v
+    |     Store facts + build graph + update episodes
+    |
+    v
+Return response to user
+```
+
+The retrieve-then-learn cycle runs automatically when `auto_learn=True`. No
+additional code is needed beyond the agent constructor.
+
+---
+
+## Next Steps
+
+- [Context Engine](/docs/core-concepts/context-engine) --- How documents and facts are stored and retrieved
+- [Memory and RAG](/docs/core-concepts/memory) --- Vector store and graph store architecture
+- [Directives](/docs/core-concepts/directives) --- Use `@memory` and `@context` directives in prompts
+- [Admin Panel](/docs/guides/admin-panel) --- Monitor learning through the admin dashboard

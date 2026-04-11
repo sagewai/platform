@@ -1,0 +1,253 @@
+# Project & Errors
+
+Project isolation scopes all agent activity (workflow runs, audit logs, rate limits, memory) to a namespace. The error hierarchy provides structured exception handling across the SDK.
+
+---
+
+## ProjectContext
+
+Project context with namespace isolation, quotas, and rate limiting. Use as a context manager to scope all operations within.
+
+```python
+from sagewai import ProjectContext
+
+ctx = ProjectContext(project_id="acme-corp")
+with ctx:
+    result = await agent.chat("hello")
+```
+
+Works with both sync and async context managers:
+
+```python
+async with ProjectContext(project_id="acme-corp") as ctx:
+    result = await agent.chat("hello")
+```
+
+### Constructor
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `project_id` | `str` | required | Unique project identifier |
+| `namespace` | `str` | `""` | Namespace prefix for stores (defaults to project_id) |
+| `quota` | `ProjectQuota` | `ProjectQuota()` | Resource quotas |
+| `metadata` | `dict[str, Any]` | `{}` | Arbitrary metadata |
+
+### Methods
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `scoped_collection(base_name)` | `str` | Namespace-scoped collection name (e.g. `"acme__documents"`) |
+| `scoped_key(key)` | `str` | Namespace-scoped cache key (e.g. `"acme:key"`) |
+| `check_rate_limit()` | `None` | Raise if per-minute request quota exceeded |
+| `check_token_quota(tokens)` | `None` | Raise if token quota would be exceeded |
+| `check_cost_quota(cost)` | `None` | Raise if daily cost quota would be exceeded |
+| `record_usage(tokens=0, cost=0.0)` | `None` | Record usage after a successful API call |
+
+---
+
+## ProjectQuota
+
+Resource quotas for a project.
+
+```python
+from sagewai import ProjectQuota
+
+quota = ProjectQuota(
+    max_tokens_per_minute=100_000,
+    max_requests_per_minute=60,
+    max_cost_per_day_usd=100.0,
+)
+```
+
+### Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_tokens_per_minute` | `int` | `100_000` | Token quota per minute |
+| `max_requests_per_minute` | `int` | `60` | Request quota per minute |
+| `max_cost_per_day_usd` | `float` | `100.0` | Daily cost cap in USD |
+
+---
+
+## get_current_project
+
+Return the project context for the current async task, or `None` if no context is active.
+
+```python
+from sagewai import get_current_project
+
+ctx = get_current_project()
+if ctx:
+    print(f"Running in project: {ctx.project_id}")
+```
+
+### Signature
+
+```python
+get_current_project() -> ProjectContext | None
+```
+
+---
+
+## resolve_project_id
+
+Resolve a project_id from an explicit argument, the active ContextVar, or fall back to `"default"`.
+
+```python
+from sagewai import resolve_project_id
+
+project_id = resolve_project_id()          # From contextvar or "default"
+project_id = resolve_project_id("acme")    # Returns "acme"
+```
+
+### Signature
+
+```python
+resolve_project_id(project_id: str | None = None) -> str
+```
+
+---
+
+## require_project
+
+Return the current project context or raise `ProjectRequiredError` if none is set.
+
+```python
+from sagewai import require_project
+
+ctx = require_project()  # Raises if no ProjectContext is active
+```
+
+### Signature
+
+```python
+require_project() -> ProjectContext
+```
+
+---
+
+## Error Hierarchy
+
+All SDK exceptions inherit from `SagewaiError`, enabling a single catch for any SDK failure while still allowing fine-grained handling.
+
+```
+SagewaiError (base)
++-- SagewaiLLMError              -- LLM provider failures
+|   +-- SagewaiRateLimitError    -- 429 / rate limit
+|   +-- SagewaiAuthError         -- invalid/missing API key
+|   +-- SagewaiModelNotFoundError -- model doesn't exist
+|   +-- SagewaiContextLengthError -- context window exceeded
++-- SagewaiTimeoutError          -- step or workflow timeout
++-- SagewaiConfigError           -- invalid configuration
++-- SagewaiWorkflowError         -- workflow execution failures
++-- SagewaiToolError             -- tool invocation failures
++-- SagewaiBudgetExceededError   -- budget limit exceeded
++-- SagewaiContextError          -- context engine errors
+    +-- ContextIngestionError    -- document ingestion failed
+    +-- ContextSearchError       -- context search failed
+    +-- ContextDocumentNotFoundError -- document not found
+```
+
+### SagewaiError
+
+Base exception for all Sagewai SDK errors.
+
+```python
+from sagewai import SagewaiError
+
+try:
+    result = await agent.chat("hello")
+except SagewaiError as e:
+    print(f"SDK error: {e}")
+```
+
+### SagewaiLLMError
+
+Wraps failures from LLM providers (OpenAI, Anthropic, Google, etc.).
+
+```python
+from sagewai import SagewaiLLMError
+
+try:
+    result = await agent.chat("hello")
+except SagewaiLLMError as e:
+    print(f"Provider: {e.provider}, Model: {e.model}, Agent: {e.agent_name}")
+```
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `provider` | `str` | LLM provider name (e.g. `"openai"`) |
+| `model` | `str` | Model identifier (e.g. `"gpt-4o"`) |
+| `agent_name` | `str` | Agent that triggered the call |
+
+### SagewaiRateLimitError
+
+Raised on HTTP 429 or provider-specific rate-limit signals.
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `retry_after` | `float \| None` | Seconds until retry (None if unknown) |
+
+### SagewaiTimeoutError
+
+Raised when a step or workflow exceeds its timeout.
+
+### SagewaiConfigError
+
+Raised for invalid SDK or agent configuration.
+
+### SagewaiWorkflowError
+
+Raised for workflow execution failures.
+
+### SagewaiToolError
+
+Raised for tool invocation failures.
+
+### SagewaiBudgetExceededError
+
+Raised when an agent's budget limit is exceeded and the action is `stop`.
+
+```python
+from sagewai import SagewaiBudgetExceededError
+
+try:
+    result = await agent.chat("expensive operation")
+except SagewaiBudgetExceededError as e:
+    print(f"Agent: {e.agent_name}, Reason: {e.reason}")
+```
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `agent_name` | `str` | Agent that exceeded budget |
+| `reason` | `str` | Explanation of the violation |
+
+### SagewaiContextError
+
+Base class for context engine errors.
+
+### ContextIngestionError
+
+Raised when document ingestion fails.
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `document_id` | `str` | ID of the failed document |
+| `stage` | `str` | Pipeline stage that failed (parse, chunk, embed, store) |
+
+### ContextSearchError
+
+Raised when context search fails.
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `query` | `str` | The search query that failed |
+| `strategies_attempted` | `list[str]` | Strategies that were tried |
+
+### ContextDocumentNotFoundError
+
+Raised when a document is not found by ID.
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `document_id` | `str` | The ID that was looked up |

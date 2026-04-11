@@ -1,0 +1,28 @@
+@import "tailwindcss";
+@import "./brand-tokens.css";
+
+@source "../components";
+@source ".";
+
+/*
+ * Mobile overflow safety.
+ *
+ * Long lines inside <pre> code blocks (MDX fences, raw <pre> tags) would
+ * otherwise expand their flex/grid parents beyond the viewport and cause
+ * horizontal page scroll on mobile. We force every <pre> to cap at 100% of
+ * its container and scroll internally instead.
+ *
+ * `min-width: 0` on articles and main ensures these containers can shrink
+ * below their children's intrinsic content width (flex/grid children default
+ * to min-width: auto which prevents shrinking).
+ */
+@layer base {
+  pre {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  article,
+  main {
+    min-width: 0;
+  }
+}

@@ -1,0 +1,292 @@
+# CI/CD Integration
+
+Run Sagewai agents as CI actions — PR summaries, evaluation quality gates, worker deployment, and webhook-triggered agents.
+
+## Overview
+
+Sagewai provides three reusable GitHub Actions plus a trigger system for event-driven agent execution. Agents run headlessly in CI, report results as PR comments, and enforce quality gates that fail builds when agent performance drops.
+
+## Reusable GitHub Actions
+
+> **Note:** These actions are currently in development and will be published to the GitHub Marketplace as `sagewai/actions/*`. In the meantime, you can use the CLI commands shown in the [CLI for CI](#cli-for-ci) section below, which work with any CI system today.
+
+### run-agent
+
+Execute any Sagewai agent in your CI pipeline:
+
+```yaml
+- uses: sagewai/actions/run-agent@v1
+  with:
+    agent: summarizer
+    input: "Summarize this PR: ${{ github.event.pull_request.title }}"
+    fleet-gateway: ${{ secrets.SAGEWAI_GATEWAY_URL }}
+    api-key: ${{ secrets.SAGEWAI_API_KEY }}
+    model: gpt-4o              # optional model override
+    post-as-comment: 'true'    # post result as PR comment
+```
+
+**Use cases:**
+- PR summaries and changelogs
+- Code review agents
+- Release note generation
+- Documentation freshness checks
+
+### run-evals
+
+Quality gate for agent performance — fails CI if scores drop below a threshold:
+
+```yaml
+- uses: sagewai/actions/run-evals@v1
+  with:
+    eval-suite: evals/core-suite.yaml
+    threshold: '0.8'           # fail CI if score drops below 80%
+    api-key: ${{ secrets.SAGEWAI_API_KEY }}
+```
+
+**Use cases:**
+- Regression testing for agent quality
+- Continuous evaluation on push to main
+- Benchmark tracking across releases
+- A/B testing agent configurations
+
+### deploy-worker
+
+Build, register, and deploy fleet workers from CI:
+
+```yaml
+- uses: sagewai/actions/deploy-worker@v1
+  with:
+    fleet-gateway: ${{ secrets.SAGEWAI_GATEWAY_URL }}
+    enrollment-key: ${{ secrets.ENROLLMENT_KEY }}
+    worker-pool: gpu-inference
+    labels: 'gpu,llama3'
+    models: 'ollama/llama3.1:70b'
+```
+
+**Use cases:**
+- Auto-deploy workers on version tags
+- Register GPU runners to the fleet
+- Scale worker pools from CI
+- Blue-green worker deployments
+
+## Workflow Templates
+
+Copy-paste starters for common CI patterns.
+
+### PR Summary Bot
+
+Automatically summarize every pull request:
+
+```yaml
+name: PR Summary
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  summarize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: sagewai/actions/run-agent@v1
+        with:
+          agent: summarizer
+          input: |
+            Summarize the changes in this PR:
+            Title: ${{ github.event.pull_request.title }}
+            Body: ${{ github.event.pull_request.body }}
+            Files changed: ${{ github.event.pull_request.changed_files }}
+          fleet-gateway: ${{ secrets.SAGEWAI_GATEWAY_URL }}
+          api-key: ${{ secrets.SAGEWAI_API_KEY }}
+          post-as-comment: 'true'
+```
+
+### Eval Quality Gate
+
+Fail the build if agent quality drops:
+
+```yaml
+name: Agent Quality Gate
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'agents/**'
+      - 'evals/**'
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: sagewai/actions/run-evals@v1
+        with:
+          eval-suite: evals/core-suite.yaml
+          threshold: '0.8'
+          api-key: ${{ secrets.SAGEWAI_API_KEY }}
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-results
+          path: eval-results/
+```
+
+### Worker Deployment on Tag
+
+Deploy workers when you push a version tag:
+
+```yaml
+name: Deploy Workers
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: sagewai/actions/deploy-worker@v1
+        with:
+          fleet-gateway: ${{ secrets.SAGEWAI_GATEWAY_URL }}
+          enrollment-key: ${{ secrets.ENROLLMENT_KEY }}
+          worker-pool: production
+          models: 'gpt-4o,claude-sonnet-4'
+```
+
+## Trigger System
+
+The gateway's trigger system maps external events to agent actions — perfect for webhook-driven CI integration.
+
+### How It Works
+
+```python
+from sagewai.gateway.triggers import TriggerSpec, EventFilter, Strategy
+
+trigger = TriggerSpec(
+    source="github",
+    strategy=Strategy.WEBHOOK,
+    filter=EventFilter(
+        event_types=["pull_request"],
+        keywords=["review"],
+    ),
+    target="code-reviewer",
+    action="chat",
+    context={"repo": "sagewai/sagewai"},
+)
+```
+
+### Strategies
+
+| Strategy | How It Works | Use Case |
+|----------|-------------|----------|
+| `WEBHOOK` | Receives HTTP POST events | GitHub webhooks, Slack events |
+| `LISTENER` | Real-time event stream | Live monitoring, chat integrations |
+| `POLLER` | Polls at configurable intervals | Status checks, queue monitoring |
+
+### Actions
+
+| Action | What It Does |
+|--------|-------------|
+| `chat` | Send event data as a message to an agent |
+| `run_workflow` | Submit a workflow run with event context |
+| `execute_tool` | Call a specific tool with event arguments |
+
+### Event Filters
+
+Filter which events trigger which agents:
+
+```python
+EventFilter(
+    channels=["#deployments"],        # source channel
+    event_types=["push", "release"],  # event type
+    senders=["ci-bot"],               # who sent it
+    keywords=["production"],          # content matching
+    recipients=["ops-team"],          # target audience
+)
+```
+
+## CLI for CI
+
+Run agents headlessly from any CI system:
+
+```bash
+# Run an agent with direct input
+sagewai run --agent reviewer --input "Review this diff" --model gpt-4o
+
+# Run from a YAML config
+sagewai run --config agent.yaml
+
+# Run evaluation suite
+sagewai eval run -d evals.jsonl --agent-name QAAgent
+
+# Register a worker from CI
+sagewai fleet register \
+  --name ci-worker \
+  --gateway $SAGEWAI_GATEWAY_URL \
+  --enrollment-key $ENROLLMENT_KEY \
+  --pool ci \
+  --models gpt-4o
+```
+
+## Harness as CI Proxy
+
+Deploy the harness to control costs of CI agent runs:
+
+```yaml
+# In your CI environment
+env:
+  ANTHROPIC_BASE_URL: ${{ secrets.HARNESS_URL }}/v1
+  ANTHROPIC_API_KEY: ${{ secrets.HARNESS_KEY }}
+```
+
+**Benefits:**
+- Set per-workflow budgets (e.g., $5 max per PR review)
+- Route to cheaper models for CI (Haiku for summaries, Sonnet for reviews)
+- Full audit trail of all CI LLM spend
+- Complexity classifier auto-routes by task difficulty
+
+## Secrets & Environment
+
+| Secret | Purpose | Required For |
+|--------|---------|-------------|
+| `SAGEWAI_GATEWAY_URL` | Fleet gateway endpoint | run-agent, deploy-worker |
+| `SAGEWAI_API_KEY` | API authentication | run-agent, run-evals |
+| `ENROLLMENT_KEY` | Worker registration | deploy-worker |
+| `OPENAI_API_KEY` | Direct LLM access | If not using harness |
+| `ANTHROPIC_API_KEY` | Direct Anthropic access | If not using harness |
+
+## Self-Hosted Runners with Local Inference
+
+For zero-cost CI agent execution, run fleet workers on self-hosted GitHub Actions runners with local Ollama:
+
+1. Set up a self-hosted runner with GPU access
+2. Install Ollama on the runner: `curl -fsSL https://ollama.ai/install.sh | sh`
+3. Pull your model: `ollama pull llama3.1:8b`
+4. Register as a fleet worker:
+
+```bash
+sagewai fleet register \
+  --gateway https://sagewai.internal:8000 \
+  --enrollment-key $KEY \
+  --pool ci-local \
+  --models ollama/llama3.1:8b
+```
+
+Now CI jobs targeting the `ci-local` pool run at $0/token on your own hardware.
+
+## Integration with Any CI System
+
+While the GitHub Actions are the easiest path, the CLI works with any CI system:
+
+| CI System | How to Use |
+|-----------|-----------|
+| GitHub Actions | Use `sagewai/actions/*` (recommended) |
+| GitLab CI | `pip install sagewai && sagewai run ...` |
+| Jenkins | `sh 'sagewai run --agent ...'` in pipeline |
+| CircleCI | Add sagewai to executor, run CLI commands |
+| Azure DevOps | Script task with `sagewai run ...` |

@@ -1,0 +1,158 @@
+# Notifications
+
+Send notifications via email, Slack, or in-app channels. Supports system-wide and per-project channel configuration with trigger-based routing.
+
+```python
+from sagewai import NotificationService, SlackWebhookChannel
+
+svc = NotificationService()
+svc.register_channel("slack", SlackWebhookChannel(webhook_url="https://hooks.slack.com/..."))
+await svc.notify("budget_warning", "Budget Alert", "Agent exceeded 80% of daily budget")
+```
+
+---
+
+## NotificationService
+
+Central notification dispatcher. Routes notifications to appropriate channels based on trigger type and project context.
+
+```python
+from sagewai import NotificationService
+
+svc = NotificationService(store=my_store)
+svc.register_channel("email", email_channel)
+svc.register_channel("slack", slack_channel)
+svc.register_channel("in_app", inapp_channel)
+
+# System-wide notification
+await svc.notify("budget_warning", "Budget Alert", "Approaching limit")
+
+# Per-project channel override
+svc.register_channel("slack", project_slack, project_id="acme")
+```
+
+### Constructor
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `store` | `Any` | `None` | Optional store for notification history |
+
+### Methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `register_channel` | `register_channel(channel_type, channel, project_id=None)` | Register a notification channel |
+| `set_trigger_routing` | `set_trigger_routing(trigger, channel_types)` | Configure which channels a trigger routes to |
+| `get_trigger_routing` | `get_trigger_routing()` | Return current trigger routing config |
+| `notify` | `async notify(trigger, title, body, severity="info", metadata={})` | Send a notification |
+
+### Default Trigger Routing
+
+| Trigger | Channels |
+|---------|----------|
+| `budget_warning` | email, slack, in_app |
+| `budget_exceeded` | email, slack, in_app |
+| `budget_throttled` | email, slack, in_app |
+| `workflow_failed` | email, slack, in_app |
+| `approval_requested` | in_app |
+
+---
+
+## NotificationChannel (ABC)
+
+Abstract base class for notification channels. Implement `send()` to create custom channels.
+
+```python
+from sagewai import NotificationChannel
+
+class WebhookChannel(NotificationChannel):
+    async def send(
+        self,
+        title: str,
+        body: str,
+        severity: str,
+        metadata: dict,
+    ) -> bool:
+        # Send via webhook, return True on success
+        ...
+```
+
+### Required Method
+
+| Method | Signature | Returns | Description |
+|--------|-----------|---------|-------------|
+| `send` | `async send(title, body, severity, metadata)` | `bool` | Send a notification. Must not raise. |
+
+---
+
+## SMTPChannel
+
+Send notifications as HTML emails via SMTP. Requires `aiosmtplib` (`pip install aiosmtplib`).
+
+```python
+from sagewai import SMTPChannel
+
+channel = SMTPChannel(
+    smtp_host="smtp.gmail.com",
+    smtp_port=587,
+    smtp_user="alerts@company.com",
+    smtp_password="app-password",
+    use_tls=True,
+    from_address="alerts@company.com",
+    to_addresses=["team@company.com"],
+)
+```
+
+### Constructor
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `smtp_host` | `str` | required | SMTP server hostname |
+| `smtp_port` | `int` | `587` | SMTP server port |
+| `smtp_user` | `str \| None` | `None` | SMTP username |
+| `smtp_password` | `str \| None` | `None` | SMTP password |
+| `use_tls` | `bool` | `True` | Use TLS encryption |
+| `from_address` | `str` | required | Sender email address |
+| `to_addresses` | `list[str]` | required | Recipient email addresses |
+
+---
+
+## SlackWebhookChannel
+
+Send notifications to Slack via an incoming webhook. Posts Block Kit messages.
+
+```python
+from sagewai import SlackWebhookChannel
+
+channel = SlackWebhookChannel(
+    webhook_url="https://hooks.slack.com/services/T.../B.../...",
+    channel="#alerts",
+)
+```
+
+### Constructor
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `webhook_url` | `str` | required | Slack incoming webhook URL |
+| `channel` | `str \| None` | `None` | Override channel name |
+
+---
+
+## InAppChannel
+
+Publish notifications to an in-app event bus or callback. Used for real-time SSE-based alerts in the admin UI. Always returns `True` (best-effort delivery).
+
+```python
+from sagewai import InAppChannel
+
+channel = InAppChannel(
+    callback=lambda event: event_bus.publish(event),
+)
+```
+
+### Constructor
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `callback` | `Callable[[dict], None] \| None` | `None` | Event handler function |

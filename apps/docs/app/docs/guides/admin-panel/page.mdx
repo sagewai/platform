@@ -1,0 +1,662 @@
+# Admin Panel
+
+The Sagewai Admin Panel is a full observability and control suite for managing your AI agent infrastructure. It provides real-time monitoring, cost analytics, compliance dashboards, budget controls, and interactive tools for testing agents and workflows.
+
+## Running the Admin Panel
+
+**Backend** (FastAPI, port 8000):
+
+```bash
+make dev APP=admin
+# or with Docker:
+make dev-up  # starts all services including admin at :8000
+```
+
+**Frontend** (Next.js, port 3008):
+
+```bash
+cd clients/web && pnpm dev --filter @sagecurator/admin
+```
+
+Open [http://localhost:3008](http://localhost:3008) to access the dashboard.
+
+## Architecture
+
+The admin panel has three layers:
+
+| Layer | Technology | Location |
+|-------|-----------|----------|
+| SDK modules | `sagewai.admin` — AdminState, AnalyticsStore, BudgetManager | `packages/sagewai/sagewai/admin/` |
+| Backend API | FastAPI routers mounted on the admin app | `apps/admin/admin/` |
+| Web frontend | Next.js 15 with recharts for visualization | `clients/web/apps/admin/` |
+
+All data stores are **in-memory** for the MVP — designed for easy swap to PostgreSQL-backed implementations in production.
+
+---
+
+## Dashboard
+
+**URL**: `/` (root page)
+
+The main dashboard provides a high-level overview of your agent infrastructure with 6 KPI stat cards:
+
+- **Registered Agents** — total agents in the registry
+- **Total Runs** — completed + running agent invocations
+- **Active Sessions** — currently open multi-turn conversations
+- **Total Tokens** — aggregate token usage across all models
+- **Total Cost** — cumulative LLM spend in USD
+- **Risk Events** — PII detections + hallucination flags + content filter triggers
+
+Below the cards:
+
+- **Cost Trend Chart** — line chart showing cost over time, useful for spotting spend spikes
+- **Model Usage Chart** — pie chart of token distribution by model, showing which providers consume the most resources
+
+**API endpoints used**: `GET /admin/agents`, `GET /admin/runs`, `GET /admin/sessions`, `GET /api/v1/analytics/costs`, `GET /api/v1/analytics/usage`, `GET /api/v1/analytics/risks`
+
+---
+
+## Agent Management
+
+### Agent Registry
+
+**URL**: `/agents`
+
+Lists all registered agents in a table with columns:
+
+| Column | Description |
+|--------|-------------|
+| Name | Agent identifier (links to detail view) |
+| Model | LLM model assigned (e.g., `gpt-4o`, `claude-sonnet-4-5-20250514`) |
+| Status | Health state badge (Healthy, Degraded, Sick) |
+| Capabilities | Tags showing what the agent can do |
+
+### Agent Detail
+
+**URL**: `/agents/{name}`
+
+Detailed view of a single agent showing:
+
+- **Configuration**: Model, status, max iterations, total runs
+- **Capabilities**: Purple badge tags
+- **Tools**: List of MCP tools available to the agent
+- **System Prompt**: Preview of the agent's system prompt (first 500 chars)
+
+### Runtime Config Updates
+
+You can update an agent's configuration at runtime via the API without restarting:
+
+```bash
+curl -X PATCH http://localhost:8000/admin/agents/my-agent/config \
+  -H "Content-Type: application/json" \
+  -d '{"model": "gpt-4o-mini", "temperature": 0.5, "max_iterations": 15}'
+```
+
+Updatable fields: `model`, `system_prompt`, `temperature`, `max_tokens`, `max_iterations`.
+
+---
+
+## Run History
+
+**URL**: `/runs`
+
+Browse all agent invocations with filtering:
+
+- **Agent Name** — text filter to narrow by agent
+- **Status** — dropdown: All, Completed, Running, Failed
+
+Each run shows: Run ID, Agent, Status (colored badge), Token count, Start timestamp.
+
+### Run Detail
+
+**URL**: `/runs/{id}`
+
+Full detail of a single run including:
+
+- **Summary**: Agent name, status, total tokens, duration
+- **Input**: The user message that triggered the run
+- **Output**: The agent's final response
+- **Steps**: Each iteration of the agent loop with type, duration, and detail
+- **Tool Calls**: Each tool invocation with name, arguments, result preview, and duration
+
+### Run Controls
+
+Active runs can be controlled in real-time:
+
+| Action | Endpoint | Effect |
+|--------|----------|--------|
+| Pause | `POST /admin/runs/{id}/pause` | Suspends execution at next checkpoint |
+| Resume | `POST /admin/runs/{id}/resume` | Continues from paused state |
+| Cancel | `POST /admin/runs/{id}/cancel` | Terminates the run, raises `AgentCancelledError` |
+
+---
+
+## Live Sessions
+
+**URL**: `/sessions`
+
+Monitors all active multi-turn conversation sessions. Each session shows:
+
+- Session ID, Agent name, Status, Message count, Start time
+
+Sessions are created by `AdminState.start_session()` and removed when `end_session()` is called.
+
+---
+
+## Observability
+
+### Cost Analytics
+
+**URL**: `/analytics/costs`
+
+Detailed cost breakdown with:
+
+- **Budget Alert Banner** — yellow warning when agents are approaching their spend limits
+- **4 Stat Cards**: Total Cost, API Calls, Models Used, Active Agents
+- **Cost by Model** — horizontal bar chart comparing spend across providers
+- **Breakdown Tables** — two tables (by Model and by Agent) with columns: Name, Cost, Tokens, Requests
+
+**API**: `GET /api/v1/analytics/costs`, `GET /api/v1/analytics/models`, `GET /api/v1/analytics/agents`
+
+### Model Comparison
+
+**URL**: `/analytics/models`
+
+Side-by-side comparison of all models in use:
+
+- **4 Stat Cards**: Models Active, Total Requests, Cheapest Model, Most Used Model
+- **Comparison Table** with sortable columns:
+  - Model name, Provider (auto-inferred), Total Cost, Total Tokens
+  - Request Count, Cost per 1K Tokens
+
+Use this to identify which models offer the best cost-performance ratio for your workloads.
+
+### Execution Monitor
+
+**URL**: `/monitor`
+
+Real-time monitoring of agent executions via Server-Sent Events (SSE):
+
+- **Connection Controls**: Connect/Disconnect SSE stream, Demo Mode for testing
+- **Agent Filter**: Dropdown to filter events by agent
+- **Run List Sidebar**: Scrollable list of active/recent runs with status dots and event counts
+- **Event Timeline**: Chronological timeline of AG-UI events for the selected run, with timestamps and event type badges
+
+Event types include: `run_started`, `text_message_start`, `text_message_content`, `tool_call_start`, `tool_call_end`, `state_snapshot`, `run_finished`, `run_error`.
+
+---
+
+## Compliance
+
+### PII Compliance Dashboard
+
+**URL**: `/compliance/pii`
+
+Monitors PII detection and redaction activity across all agents:
+
+- **4 Stat Cards**: PII Detections, Hallucination Flags, Content Filtered, Total Events
+- **PII Events Chart** — timeline showing detection frequency over time (lines for PII, hallucination, content filter)
+- **Entity Breakdown** — chart showing distribution of detected entity types (EMAIL, PHONE, SSN, CREDIT_CARD, IBAN, IP_ADDRESS, PASSPORT)
+- **Redaction Actions Table** — summary of actions taken (Protected/Warned/Blocked) with counts
+- **Export Audit Report** — button to download a compliance report
+
+**API**: `GET /api/v1/analytics/risks`
+
+PII detection is powered by the `PIIGuard` guardrail. See the [PII Protection guide](/docs/guides/pii-protection) for setup instructions.
+
+---
+
+## Operations
+
+### Budget Manager
+
+**URL**: `/operations/budget`
+
+Configure and manage per-agent spending limits:
+
+- **Budget Limits Table** — all configured limits showing: Agent, Daily Limit, Monthly Limit, Action (badge), Fallback Chain, Edit/Delete buttons
+- **Create/Edit Form**:
+  - Agent Name
+  - Max Daily USD
+  - Max Monthly USD
+  - Action: **Warn** (log and continue), **Throttle** (switch to cheaper model), **Stop** (halt execution)
+  - Fallback Model Chain — ordered list of models to fall back to when budget is exceeded
+- **Fallback Chain Editor** — visual editor with numbered priority, up/down/remove buttons, and model dropdown
+
+#### Budget Actions
+
+| Action | Behavior |
+|--------|----------|
+| `warn` | Logs a warning but allows the request to proceed |
+| `throttle` | Automatically switches to the next model in the fallback chain |
+| `stop` | Blocks the request entirely |
+
+#### Example: Setting Up Budget with Fallback
+
+1. Navigate to `/operations/budget`
+2. Click "+ New Limit"
+3. Set agent name: `my-agent`, daily limit: `$5.00`, monthly: `$100.00`
+4. Set action: `Throttle`
+5. Add fallback chain: `gpt-4o-mini` → `gemini-2.0-flash` → `llama-3.1-8b-instant`
+6. Save
+
+When `my-agent` exceeds $5/day, it automatically switches from its primary model to `gpt-4o-mini`, then `gemini-2.0-flash`, then `llama-3.1-8b-instant`.
+
+**API endpoints**:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/v1/budget/limits` | List all limits |
+| `POST` | `/api/v1/budget/limits` | Create a new limit |
+| `PUT` | `/api/v1/budget/limits/{agent}` | Update a limit |
+| `DELETE` | `/api/v1/budget/limits/{agent}` | Remove a limit |
+| `GET` | `/api/v1/budget/status/{agent}` | Check current spend vs limits |
+
+See the [Cost Management guide](/docs/guides/cost-management) for SDK-level integration.
+
+---
+
+## Tools
+
+### Playground
+
+**URL**: `/playground`
+
+Interactive environment for testing agents without writing code:
+
+- **Left Panel — Agent Configuration**:
+  - Name, Model (dropdown), Strategy (dropdown), System Prompt, Temperature slider (0–2)
+  - "Create Agent" button to instantiate an ad-hoc agent
+- **Right Panel — Chat**:
+  - Real-time streaming chat via SSE (AG-UI protocol)
+  - Messages appear token-by-token as the agent generates them
+  - Tool calls are displayed inline as they execute
+
+Available strategies: `react`, `lats`, `tot`, `self_correct`, `planning`, `routing`.
+
+**API**: `POST /playground/agent` (create), `POST /playground/run` (SSE stream)
+
+### Strategy Lab
+
+**URL**: `/strategy-lab`
+
+Compare different execution strategies side-by-side on the same prompt:
+
+1. Select a model
+2. (Optional) Set a system prompt
+3. Check the strategies you want to compare (multi-select)
+4. Enter your test prompt
+5. Click "Run Comparison"
+
+Results appear in a grid, one card per strategy showing:
+
+- Output text
+- Duration (ms), Tokens used, Cost (USD)
+- Number of reasoning steps and tool calls
+- Status badge (success/error)
+
+A summary bar highlights the **fastest** and **cheapest** strategy.
+
+**API**: `POST /strategies/compare` (SSE stream with `comparison_started`, `strategy_result`, `comparison_finished` events)
+
+### Workflow Builder
+
+**URL**: `/workflows`
+
+Visual editor for building and testing YAML workflows:
+
+- **Left Panel**:
+  - Template selector — pre-built workflow templates to start from
+  - YAML editor — syntax-highlighted textarea for editing workflow definitions
+  - Inline validation — green/red indicator showing if the YAML is valid
+- **Right Panel**:
+  - Pipeline graph — visual representation of the agent pipeline
+  - Test input field and "Run Workflow" button
+  - Execution log — dark-themed log showing workflow events in real-time
+
+Templates include common patterns like sequential pipelines, parallel fan-out, and loop-until-done workflows.
+
+**API**: `POST /workflows/validate` (check YAML), `GET /workflows/templates`, `POST /workflows/run` (SSE stream)
+
+---
+
+## Fleet Management
+
+The fleet pages let you manage distributed workers that execute agent tasks across your infrastructure.
+
+### Workers
+
+**URL**: `/fleet/workers`
+
+Lists all registered workers with real-time status:
+
+- **Status badges** — online (green), offline (gray), draining (yellow)
+- **Pool and label filtering** — narrow the list by worker pool or JSONB labels
+- **Model capabilities** — each worker displays its available models (normalized via `ModelNormalizer`)
+- **Approval status** — pending, approved, or rejected badges reflecting the approval state machine
+- **Enterprise badges** — IP allowlist, dual approval, and WebSocket indicators for enterprise-tier workers
+
+### Worker Detail
+
+**URL**: `/fleet/workers/{id}`
+
+Detailed view of a single worker with 3 tabs:
+
+- **Overview** — worker metadata, pool assignment, labels, model capabilities, probe status display (Ollama + OpenAI-compatible health probes), connection history
+- **Tasks** — task execution history for this worker with status and duration
+- **Anomalies** — anomaly alert cards showing rate limit violations, excessive failures, heartbeat timeouts, and model mismatch detections (auto-revoke triggers on 2+ anomaly types)
+
+### Enrollment Keys
+
+**URL**: `/fleet/enrollment`
+
+Manage enrollment keys that workers use to register with the fleet:
+
+- **Create Key** — generate a new enrollment key with an optional description and expiry
+- **Key List** — table of all keys with creation date, status, and usage count
+- **Revoke Key** — immediately invalidate a key (revoked keys cannot be reused)
+
+Workers enroll using the CLI (`sagewai fleet register`) or Docker worker images with the enrollment key passed as an environment variable.
+
+### Audit Log
+
+**URL**: `/fleet/audit`
+
+Chronological log of all fleet events with filtering:
+
+- **Event type filter** — 13 event types including worker registration, approval, task dispatch, heartbeat, and anomaly detection
+- **Severity filter** — info, warning, error levels
+- **Time range** — filter events by date range
+
+**API endpoints**: `GET /api/v1/fleet/workers`, `GET /api/v1/fleet/workers/{id}`, `POST /api/v1/fleet/enrollment-keys`, `GET /api/v1/fleet/audit`
+
+---
+
+## Context Engine
+
+The context engine pages manage document ingestion, retrieval, and knowledge lifecycle.
+
+### Context Overview
+
+**URL**: `/context` (also shown as a section on `/intelligence/dashboard`)
+
+High-level overview of your context data:
+
+- **Scope stats grid** — document counts, chunk counts, and storage metrics split by scope (org-level vs project-level)
+- **Ingestion activity** — recent ingestion jobs with status indicators
+
+### Documents
+
+**URL**: `/context/documents`
+
+Full document management interface:
+
+- **Multi-file upload** — drag-and-drop or file picker with per-file progress bars and tag input on upload
+- **Directory indexing** — index an entire directory via native folder picker or by entering a server path
+- **Search** — text search with debounce across document titles and metadata
+- **Sortable columns** — sort by name, source, scope, chunk count, created date
+- **Pagination** — paginated results for large document collections
+- **Batch delete** — multi-select checkboxes with batch delete action
+- **Auto-poll** — processing status updates automatically while ingestion is in progress
+
+### Document Detail
+
+**URL**: `/context/documents/{id}`
+
+Detailed view of a single ingested document:
+
+- **Metadata** — source type, scope, tags, ingestion timestamp, file size
+- **Chunk list** — all chunks extracted from the document with content previews and token counts
+- **Source info** — original file path or URL, content type, language detection results
+
+### Search
+
+**URL**: `/context/search`
+
+Multi-strategy retrieval interface:
+
+- **Strategy selection** — vector (semantic), BM25 (keyword), graph (entity-relation), or combined (RRF merge)
+- **Scope selector** — search within org-level, project-level, or both
+- **Tag filtering** — filter results by document tags
+- **Results display** — ranked results with relevance scores, source attribution, and chunk previews
+
+### Lifecycle
+
+**URL**: `/context/lifecycle`
+
+Configure automatic document lifecycle management:
+
+- **Lifecycle triggers** — set thresholds for compress, archive, and discard actions based on document age or access frequency
+- **Maintenance panel** — manually trigger lifecycle operations (compression, archival, cleanup)
+- **Conflict table** — view and resolve conflicting facts detected during re-ingestion (auto-supersede or manual review)
+
+### Directives
+
+**URL**: `/context/directives`
+
+Reference page for the directive engine syntax:
+
+- **Directive catalog** — all supported directives (`@context`, `@memory`, `@agent:name()`, `@wf:name()`, `/tool`, `#meta`)
+- **Dynamic parameters** — documentation for `@datetime`, `@date`, `@time`, `@user`, `@project` with usage examples
+- **Template syntax** — `{{ }}` template expressions with examples
+
+**API endpoints**: `GET /api/v1/context/documents`, `POST /api/v1/context/documents`, `DELETE /api/v1/context/documents`, `POST /api/v1/context/search`, `GET /api/v1/context/lifecycle`
+
+---
+
+## Memory
+
+### Vector Store
+
+**URL**: `/memory/vector`
+
+Browse and inspect Milvus vector collections:
+
+- **Collection list** — all Milvus collections with document count and dimensionality
+- **Search** — run similarity searches against stored embeddings
+- **Collection stats** — storage size, index type, and segment information
+
+### Knowledge Graph
+
+**URL**: `/memory/graph`
+
+Interactive graph exploration powered by NebulaGraph:
+
+- **Entity browser** — searchable, paginated list of all entities in the graph
+- **Entity detail** — view an entity's properties, relations, and neighbors
+- **Interactive navigation** — click on related entities to traverse the graph
+- **Relation viewer** — inspect edge properties including temporal facts (valid_from, superseded_at)
+
+**API endpoints**: `GET /api/v1/graph/entities`, `GET /api/v1/graph/entities/{id}/neighbors`, `GET /api/v1/graph/entities/{id}/relations`
+
+---
+
+## Intelligence
+
+### Intelligence Dashboard
+
+**URL**: `/intelligence/dashboard`
+
+Overview of the intelligence layer capabilities:
+
+- **Feature grid** — status of each intelligence component (embedder, language detector, entity extractor, relation extractor, fact extractor, summarizer, transcriber, vision describer)
+- **Consolidation metrics** — semantic dedup count, exponential decay scores, contradiction detection stats
+- **Provider info** — active provider for each component (local, API, or hash fallback)
+
+### LLM Spend
+
+**URL**: `/intelligence/spend`
+
+Monitor LLM usage costs in real-time:
+
+- **Global spend** — total cost across all models with trend indicator
+- **Per-model breakdown** — table of each model with request count, token usage, and cost
+- **Auto-refresh** — polling interval that pauses when the browser tab is not visible (visibility-based polling)
+- **Time range selector** — filter spend data by day, week, or month
+
+**API endpoints**: `GET /api/v1/analytics/costs`, `GET /api/v1/analytics/models`
+
+---
+
+## Projects and Workspaces
+
+### Project Management
+
+**URL**: `/settings/projects`
+
+Manage project-scoped isolation for all data stores:
+
+- **Project list** — all projects with name, creation date, and agent count
+- **Create project** — set up a new project with name and description
+- **Switch project** — workspace switcher in the sidebar for quick context switching
+- **Default project** — auto-created on first startup via `ensure_default_project()`; cannot be deleted
+
+Multi-project support is a premium feature. Free-tier accounts operate within a single default project.
+
+### Project Settings
+
+Per-project configuration options:
+
+- **LiteLLM virtual key** — assign a virtual API key scoped to this project for spend tracking and rate limiting
+- **Budget config** — set project-level daily and monthly spend limits with warn/throttle/stop actions
+- **Notification overrides** — per-project notification channel configuration (override global SMTP/Slack/SSE settings)
+
+**API endpoints**: `GET /api/v1/projects`, `POST /api/v1/projects`, `PUT /api/v1/projects/{id}`
+
+---
+
+## Infrastructure Settings
+
+### Infrastructure
+
+**URL**: `/settings/infrastructure`
+
+Configure connections to external infrastructure services:
+
+- **LLM Proxy** — LiteLLM proxy URL and masked API key with a "Test Connection" button to verify connectivity
+- **Vector DB** — Milvus URI configuration for vector storage
+- **Graph DB** — NebulaGraph host and port settings
+
+All connection details are stored encrypted. Changes take effect on the next agent invocation without requiring a restart.
+
+### Notifications
+
+**URL**: `/settings/notifications`
+
+Configure notification channels for budget alerts, workflow events, and system warnings:
+
+- **SMTP Email** — server, port, credentials, and sender address for email notifications
+- **Slack Webhook** — webhook URL for posting alerts to a Slack channel
+- **In-App SSE** — server-sent events channel for real-time browser notifications
+
+Each channel can be enabled or disabled independently. Per-project overrides allow different channels for different workspaces.
+
+### Connectors
+
+**URL**: `/settings/services`
+
+Manage external service integrations:
+
+- **Connector list** — all 18 builtin connectors with health badges (healthy, degraded, disconnected)
+- **Search and filter** — find connectors by name, category, or health status
+- **Connector detail** — 3 tabs:
+  - **Overview** — connector description, status, last health check timestamp
+  - **Configuration** — credential fields (API keys shown masked), OAuth settings, endpoint URLs
+  - **Tools** — MCP tools exposed by this connector with name and description
+- **Auto health polling** — periodic health checks with automatic badge updates
+
+**API endpoints**: `GET /api/v1/connectors`, `GET /api/v1/connectors/{id}`, `GET /api/v1/connectors/{id}/health`
+
+---
+
+## Eval
+
+### Datasets
+
+**URL**: `/eval/datasets`
+
+Upload and manage evaluation datasets:
+
+- **Upload** — import eval datasets in JSON format with input/expected-output pairs
+- **Dataset list** — all datasets with name, sample count, and creation date
+
+### Run Eval
+
+**URL**: `/eval/run`
+
+Execute evaluation runs against your agents:
+
+- **Model selection** — choose which model to evaluate
+- **Dataset selection** — pick one or more datasets to run
+- **Run execution** — start the evaluation and monitor progress in real-time
+
+### Reports
+
+**URL**: `/eval/reports`
+
+View evaluation results:
+
+- **Report list** — all completed eval runs with model, dataset, score, and timestamp
+- **Report detail** — per-sample results with input, expected output, actual output, and judge scores
+
+**API endpoints**: `POST /api/v1/eval/run`, `GET /api/v1/eval/reports`
+
+---
+
+## API Reference Summary
+
+All admin endpoints at a glance:
+
+| Group | Method | Path | Description |
+|-------|--------|------|-------------|
+| **Agents** | GET | `/admin/agents` | List all agents |
+| | GET | `/admin/agents/{name}` | Agent detail |
+| | PATCH | `/admin/agents/{name}/config` | Update config at runtime |
+| **Runs** | GET | `/admin/runs` | List runs (filterable) |
+| | GET | `/admin/runs/{id}` | Run detail with steps/tools |
+| | POST | `/admin/runs/{id}/pause` | Pause a run |
+| | POST | `/admin/runs/{id}/resume` | Resume a run |
+| | POST | `/admin/runs/{id}/cancel` | Cancel a run |
+| **Sessions** | GET | `/admin/sessions` | List active sessions |
+| | GET | `/admin/sessions/{id}` | Session detail |
+| **Analytics** | GET | `/api/v1/analytics/costs` | Cost breakdown |
+| | GET | `/api/v1/analytics/usage` | Token usage |
+| | GET | `/api/v1/analytics/risks` | Risk events |
+| | GET | `/api/v1/analytics/models` | Per-model stats |
+| | GET | `/api/v1/analytics/agents` | Per-agent stats |
+| **Budget** | GET | `/api/v1/budget/limits` | List budget limits |
+| | POST | `/api/v1/budget/limits` | Create limit |
+| | PUT | `/api/v1/budget/limits/{agent}` | Update limit |
+| | DELETE | `/api/v1/budget/limits/{agent}` | Delete limit |
+| | GET | `/api/v1/budget/status/{agent}` | Current spend status |
+| **Playground** | POST | `/playground/agent` | Create ad-hoc agent |
+| | POST | `/playground/run` | Run agent (SSE) |
+| | GET | `/playground/strategies` | List strategies |
+| | GET | `/playground/models` | List models |
+| **Strategies** | POST | `/strategies/compare` | Compare strategies (SSE) |
+| **Workflows** | POST | `/workflows/validate` | Validate YAML |
+| | GET | `/workflows/templates` | List templates |
+| | POST | `/workflows/run` | Run workflow (SSE) |
+| **Fleet** | GET | `/api/v1/fleet/workers` | List workers |
+| | GET | `/api/v1/fleet/workers/{id}` | Worker detail |
+| | POST | `/api/v1/fleet/enrollment-keys` | Create enrollment key |
+| | DELETE | `/api/v1/fleet/enrollment-keys/{id}` | Revoke enrollment key |
+| | GET | `/api/v1/fleet/audit` | Fleet audit log |
+| **Context** | GET | `/api/v1/context/documents` | List documents |
+| | POST | `/api/v1/context/documents` | Upload/ingest document |
+| | DELETE | `/api/v1/context/documents` | Batch delete documents |
+| | POST | `/api/v1/context/search` | Search context |
+| | GET | `/api/v1/context/lifecycle` | Lifecycle config |
+| **Graph** | GET | `/api/v1/graph/entities` | List entities |
+| | GET | `/api/v1/graph/entities/{id}/neighbors` | Entity neighbors |
+| | GET | `/api/v1/graph/entities/{id}/relations` | Entity relations |
+| **Projects** | GET | `/api/v1/projects` | List projects |
+| | POST | `/api/v1/projects` | Create project |
+| | PUT | `/api/v1/projects/{id}` | Update project |
+| **Connectors** | GET | `/api/v1/connectors` | List connectors |
+| | GET | `/api/v1/connectors/{id}` | Connector detail |
+| | GET | `/api/v1/connectors/{id}/health` | Connector health |
+| **Eval** | POST | `/api/v1/eval/run` | Run evaluation |
+| | GET | `/api/v1/eval/reports` | List eval reports |
+
+For detailed request/response schemas, see the [REST API Reference](/docs/api-reference/rest-api).

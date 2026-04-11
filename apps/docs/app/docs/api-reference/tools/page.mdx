@@ -1,0 +1,203 @@
+# Tools & MCP
+
+Tools let agents interact with the outside world. Define tools with the `@tool` decorator, connect to MCP servers for external tool discovery, or use the connector framework for managed integrations.
+
+```python
+from sagewai import tool, UniversalAgent
+
+@tool
+async def get_weather(city: str) -> str:
+    """Get current weather for a city."""
+    return f"Sunny in {city}"
+
+agent = UniversalAgent(name="bot", model="gpt-4o", tools=[get_weather])
+```
+
+---
+
+## @tool Decorator
+
+Convert a typed Python function into a `ToolSpec` with auto-generated JSON Schema. The decorator extracts the name, description, and parameters from the function signature and docstring.
+
+```python
+from sagewai import tool
+
+@tool
+async def search_docs(query: str, limit: int = 5) -> str:
+    """Search the knowledge base.
+
+    Args:
+        query: Search query string.
+        limit: Maximum results to return.
+    """
+    return f"Found {limit} results for: {query}"
+```
+
+### Behavior
+
+- **Name**: taken from `fn.__name__`
+- **Description**: taken from the docstring
+- **Parameters**: auto-generated JSON Schema from type hints
+- **Required params**: parameters without defaults are marked required
+- **Return type**: the function must return a string
+
+---
+
+## ToolSpec
+
+Manual tool definition. Use when you need full control over the JSON Schema.
+
+```python
+from sagewai import ToolSpec
+
+spec = ToolSpec(
+    name="search",
+    description="Search the knowledge base",
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Search query"},
+        },
+        "required": ["query"],
+    },
+    handler=search_function,
+)
+```
+
+### Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | `str` | required | Tool name (alphanumeric + underscore) |
+| `description` | `str` | required | Human-readable description shown to the LLM |
+| `parameters` | `dict[str, Any]` | `{}` | JSON Schema for tool parameters |
+| `handler` | `Callable \| None` | `None` | Async or sync function to execute |
+
+---
+
+## McpClient
+
+Connect to MCP (Model Context Protocol) servers and discover their tools as `ToolSpec` instances.
+
+### connect (stdio)
+
+Launch an MCP server as a subprocess and return its tools.
+
+```python
+from sagewai import McpClient
+
+tools = await McpClient.connect("npx my-mcp-server")
+# or with a list:
+tools = await McpClient.connect(["python", "-m", "mcp_server"])
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `server_cmd` | `str \| list[str]` | required | Command to launch the MCP server |
+| `env` | `dict[str, str] \| None` | `None` | Environment variables for the subprocess |
+
+**Returns:** `list[ToolSpec]`
+
+### connect_sse (HTTP+SSE)
+
+Connect to a remote MCP server via HTTP Server-Sent Events.
+
+```python
+tools = await McpClient.connect_sse("http://localhost:3000/mcp")
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `url` | `str` | required | Base URL of the MCP server endpoint |
+
+**Returns:** `list[ToolSpec]`
+
+### connect_http (Streamable HTTP)
+
+Connect via the MCP 2025-03-26 streamable HTTP transport. Session management via `Mcp-Session-Id` is handled automatically.
+
+```python
+tools = await McpClient.connect_http(
+    "http://localhost:3000/mcp",
+    headers={"Authorization": "Bearer token"},
+)
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `url` | `str` | required | MCP server endpoint URL |
+| `headers` | `dict[str, str] \| None` | `None` | Extra HTTP headers (e.g. for auth) |
+
+**Returns:** `list[ToolSpec]`
+
+---
+
+## ConnectorRegistry
+
+Central registry for managed connectors. Handles credential resolution, connection lifecycle, and health monitoring.
+
+```python
+from sagewai import ConnectorRegistry
+
+registry = ConnectorRegistry(credential_store=my_store)
+
+# Register a connector
+registry.register(my_connector)
+
+# Connect (credentials resolved from store or env)
+conn = await registry.connect("slack")
+
+# List all registered connectors
+connectors = registry.list()
+```
+
+### Constructor
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `credential_store` | `CredentialStore \| None` | `None` | Store for credential resolution |
+
+### Methods
+
+| Method | Signature | Returns | Description |
+|--------|-----------|---------|-------------|
+| `register` | `register(connector, *, custom=False)` | `None` | Register a connector |
+| `unregister` | `unregister(name)` | `None` | Remove a connector |
+| `get` | `get(name)` | `ConnectorSpec` | Get connector by name (raises `KeyError`) |
+| `list` | `list()` | `list[ConnectorSpec]` | List all registered connectors |
+| `connect` | `async connect(name, credentials=None, *, resilient=True)` | `McpConnection` | Connect to a connector |
+
+---
+
+## ConnectorSpec
+
+Base class for connector definitions. Uses Pydantic BaseModel.
+
+```python
+from sagewai import ConnectorSpec
+from sagewai.connectors.base import AuthType, AuthField
+
+spec = ConnectorSpec(
+    name="my-api",
+    display_name="My API",
+    category="productivity",
+    description="Connect to My API",
+    auth_type=AuthType.API_KEY,
+    auth_fields=[AuthField(key="api_key", label="API Key", env_var="MY_API_KEY")],
+    mcp_command=["python", "-m", "my_mcp_server"],
+)
+```
+
+### Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | `str` | required | Unique connector identifier |
+| `display_name` | `str` | required | Human-readable name |
+| `category` | `str` | required | Category (e.g. "productivity", "commerce") |
+| `description` | `str` | required | Description of the connector |
+| `auth_type` | `AuthType` | required | Authentication type (`ENV_KEY`, `API_KEY`, `OAUTH2`, `NONE`) |
+| `auth_fields` | `list[AuthField]` | required | Credential fields |
+| `mcp_command` | `list[str]` | required | Command to launch the MCP server |
+| `docs_url` | `str \| None` | `None` | Link to documentation |
+| `agent_description` | `str` | `""` | Description for LLM tool selection |

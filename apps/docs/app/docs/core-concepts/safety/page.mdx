@@ -1,0 +1,315 @@
+# Safety & Guardrails
+
+Sagewai provides multiple layers of safety: input/output guardrails that run automatically on every agent call, budget enforcement that prevents runaway costs, and audit logging for compliance.
+
+## How Guardrails Work
+
+```
+User Message
+    |
+    v
+[Input Guardrails] --block--> GuardrailViolationError
+    |
+    pass
+    |
+    v
+[Agent Loop / LLM]
+    |
+    v
+[Output Guardrails] --block--> GuardrailViolationError
+    |
+    pass
+    |
+    v
+Response to User
+```
+
+Each guardrail has three possible actions:
+- **`block`** — Reject the message, raise `GuardrailViolationError`
+- **`warn`** — Log the violation but allow the message through
+- **`escalate`** — Emit a `GUARDRAIL_ESCALATION` event, allow the message
+
+Guardrails apply to all entry points: `chat()`, `chat_with_history()`, and `chat_stream()`.
+
+---
+
+## PIIGuard
+
+Detect and handle personally identifiable information in agent inputs and outputs:
+
+```python
+from sagewai import UniversalAgent, PIIGuard
+from sagewai.safety.pii import PIIEntityType
+
+agent = UniversalAgent(
+    name="safe-agent",
+    model="gpt-4o",
+    guardrails=[
+        PIIGuard(
+            action="redact",
+            entity_types=[
+                PIIEntityType.EMAIL,
+                PIIEntityType.PHONE,
+                PIIEntityType.SSN,
+                PIIEntityType.CREDIT_CARD,
+            ],
+        ),
+    ],
+)
+```
+
+### Supported Entity Types
+
+| Entity Type | Example | Redaction Label |
+|------------|---------|-----------------|
+| `EMAIL` | `user@example.com` | `[REDACTED_EMAIL]` |
+| `PHONE` | `(555) 123-4567` | `[REDACTED_PHONE]` |
+| `SSN` | `123-45-6789` | `[REDACTED_SSN]` |
+| `CREDIT_CARD` | `4111 1111 1111 1111` | `[REDACTED_CARD]` |
+| `IBAN` | `DE89370400440532013000` | `[REDACTED_IBAN]` |
+| `IP_ADDRESS` | `192.168.1.1` | `[REDACTED_IP]` |
+| `PASSPORT` | `AB1234567` | `[REDACTED_PASSPORT]` |
+
+### Actions
+
+| Action | Behavior |
+|--------|----------|
+| `block` | Raise `GuardrailViolationError` |
+| `redact` | Replace PII with labels, then pass through |
+| `warn` | Log violation, allow through |
+| `escalate` | Emit event, allow through |
+| `log_only` | Log without triggering any action |
+
+### Standalone Usage
+
+Use `PIIGuard` outside of an agent for direct PII detection:
+
+```python
+guard = PIIGuard(action="redact")
+
+findings = guard.detect("Contact me at john@example.com or 555-123-4567")
+# [(PIIEntityType.EMAIL, "john@example.com"), (PIIEntityType.PHONE, "555-123-4567")]
+
+clean_text = guard.redact("Contact me at john@example.com or 555-123-4567")
+# "Contact me at [REDACTED_EMAIL] or [REDACTED_PHONE]"
+```
+
+---
+
+## HallucinationGuard
+
+Check if LLM output is grounded in the provided RAG context using keyword overlap scoring:
+
+```python
+from sagewai import UniversalAgent, HallucinationGuard
+
+agent = UniversalAgent(
+    name="grounded-agent",
+    model="gpt-4o",
+    memory=rag_engine,
+    guardrails=[
+        HallucinationGuard(
+            threshold=0.3,
+            action="warn",
+        ),
+    ],
+)
+```
+
+### How It Works
+
+1. The agent generates a response based on RAG context
+2. `HallucinationGuard` compares the response against the RAG context
+3. It calculates a grounding score (0.0 to 1.0) based on keyword overlap
+4. If the score falls below the threshold, the configured action triggers
+
+### Threshold Tuning
+
+| Range | Behavior |
+|-------|----------|
+| 0.1 - 0.2 | Very permissive. Only flags near-zero overlap |
+| 0.3 - 0.5 | Balanced. Good default for most applications |
+| 0.6 - 0.8 | Strict. May flag valid paraphrases |
+| 0.9+ | Very strict. Only accepts near-verbatim responses |
+
+The guard only triggers when RAG context is available. Without it, it always passes.
+
+---
+
+## ContentFilter
+
+Block messages containing specific words or patterns:
+
+```python
+from sagewai import UniversalAgent, ContentFilter
+
+agent = UniversalAgent(
+    name="filtered-agent",
+    model="gpt-4o",
+    guardrails=[
+        ContentFilter(
+            blocklist=["password", "secret", "confidential"],
+            patterns=[r"\d{3}-\d{2}-\d{4}"],  # SSN pattern
+            action="block",
+        ),
+    ],
+)
+```
+
+---
+
+## TokenBudgetGuard
+
+Prevent agents from exceeding a per-request cost budget:
+
+```python
+from sagewai import UniversalAgent, TokenBudgetGuard
+
+agent = UniversalAgent(
+    name="budget-agent",
+    model="gpt-4o",
+    guardrails=[
+        TokenBudgetGuard(max_usd=1.0),
+    ],
+)
+```
+
+The guard tracks estimated token costs during the agent loop and blocks further processing when the budget is exceeded.
+
+---
+
+## OutputSchemaGuard
+
+Validate that the agent's output matches a specific JSON schema:
+
+```python
+from sagewai import UniversalAgent, OutputSchemaGuard
+
+schema = {
+    "type": "object",
+    "required": ["title", "body"],
+    "properties": {
+        "title": {"type": "string"},
+        "body": {"type": "string"},
+    },
+}
+
+agent = UniversalAgent(
+    name="structured-agent",
+    model="gpt-4o",
+    guardrails=[OutputSchemaGuard(schema=schema)],
+)
+```
+
+---
+
+## Budget Enforcement
+
+Beyond per-request `TokenBudgetGuard`, Sagewai enforces project-level budgets in `BaseAgent._call_llm()`. Every LLM call checks the budget and records spend automatically.
+
+Budget actions:
+
+| Action | Effect |
+|--------|--------|
+| `stop` | Raises `SagewaiBudgetExceededError`, blocks the LLM call |
+| `throttle` | Delays the LLM call with exponential backoff |
+| `warn` | Logs a warning but allows the call |
+
+Budget limits are configured per-project via the admin API or dashboard. When a budget is exceeded, the notification system can alert via email, Slack, or in-app notifications.
+
+```python
+from sagewai.errors import SagewaiBudgetExceededError
+
+try:
+    response = await agent.chat("Analyze this large dataset")
+except SagewaiBudgetExceededError as e:
+    print(f"Budget exceeded: {e}")
+```
+
+---
+
+## Audit Logging
+
+The `AuditLogger` records all agent actions for compliance and debugging:
+
+```python
+from sagewai.observability.audit import AuditLogger
+
+logger = AuditLogger(backend="file", path="/var/log/sagewai/audit.jsonl")
+
+# Attach to an agent via event listeners
+agent.on_event(logger.handle_event)
+```
+
+Audit logs capture: run starts/finishes, tool calls, guardrail violations, budget checks, and workflow state transitions. Logs can be archived to S3 or GCS using the archival backend.
+
+---
+
+## Combining Guardrails
+
+Guardrails are applied in order. Combine multiple guardrails for defense-in-depth:
+
+```python
+from sagewai import (
+    UniversalAgent,
+    PIIGuard,
+    ContentFilter,
+    HallucinationGuard,
+    TokenBudgetGuard,
+)
+from sagewai.safety.pii import PIIEntityType
+
+agent = UniversalAgent(
+    name="production-agent",
+    model="gpt-4o",
+    guardrails=[
+        PIIGuard(action="redact", entity_types=[
+            PIIEntityType.EMAIL,
+            PIIEntityType.SSN,
+            PIIEntityType.CREDIT_CARD,
+        ]),
+        ContentFilter(blocklist=["DROP TABLE", "DELETE FROM"]),
+        HallucinationGuard(threshold=0.3, action="warn"),
+        TokenBudgetGuard(max_usd=2.0),
+    ],
+)
+```
+
+Recommended order:
+1. **PIIGuard** first — redact sensitive data before it reaches the LLM
+2. **ContentFilter** — block injection attacks
+3. **HallucinationGuard** — check output grounding
+4. **TokenBudgetGuard** — prevent runaway costs
+
+---
+
+## Custom Guardrails
+
+Create your own guardrail by implementing the `Guardrail` abstract class:
+
+```python
+from sagewai import Guardrail, GuardrailResult
+
+class ProfanityFilter(Guardrail):
+    async def check_input(self, message: str, context: dict) -> GuardrailResult:
+        if any(word in message.lower() for word in self.bad_words):
+            return GuardrailResult(
+                passed=False,
+                violation="Profanity detected",
+                action="block",
+            )
+        return GuardrailResult(passed=True)
+
+    async def check_output(self, response: str, context: dict) -> GuardrailResult:
+        return GuardrailResult(passed=True)
+```
+
+Both `check_input` and `check_output` must be async methods that return a `GuardrailResult`.
+
+---
+
+## What's Next
+
+- **[Agents](/docs/core-concepts/agents)** — Where guardrails are applied in the agent lifecycle
+- **[Workflows](/docs/core-concepts/workflows)** — Budget enforcement across multi-step workflows
+- **[Context Engine](/docs/core-concepts/context-engine)** — RAG context that powers the HallucinationGuard

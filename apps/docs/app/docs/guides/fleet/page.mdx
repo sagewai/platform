@@ -1,0 +1,196 @@
+# Enterprise Fleet: Distributed Workers
+
+The Sagewai Enterprise Fleet lets you run workflow workers on your own infrastructure — your servers, your GPUs, your private network — while the Sagewai cloud orchestrates task routing and monitoring.
+
+> **Tier**: Premium and Enterprise plans. Free tier is limited to one local worker.
+
+---
+
+## What the Fleet System Does
+
+Instead of running all agents in the cloud, fleet workers run on hardware you control:
+
+- A worker on a GPU server in your data center runs LLaMA 3 locally
+- A worker in your Kubernetes cluster processes sensitive documents without leaving your VPC
+- A worker on a developer's laptop handles low-priority background tasks
+
+The Sagewai gateway distributes workflow tasks to workers based on pool membership, capability labels, and model availability. Workers register once; the gateway handles routing automatically.
+
+---
+
+## How Enrollment Works
+
+```
+1. Admin generates an enrollment key
+2. Worker binary reads the key on startup
+3. Worker calls FleetRegistry.register_worker() via the gateway
+4. Admin approves the worker (admin panel or CLI)
+5. Worker is now eligible to receive tasks
+```
+
+### Step 1: Generate an enrollment key
+
+From the admin panel at **Fleet → Enrollment Keys → New Key**, or via the CLI:
+
+```bash
+sagewai fleet create-key \
+  --pool gpu-workers \
+  --label env=production \
+  --label gpu=true \
+  --expires-in 30d
+```
+
+This returns a `wrt-1.` prefixed token (WRT = Worker Registration Token). Store it securely.
+
+### Step 2: Start a worker
+
+```python
+from sagewai import WorkflowWorker
+
+worker = WorkflowWorker(
+    project_id="my-project",
+    pool="gpu-workers",
+    labels={"env": "production", "gpu": "true"},
+    models=["llama3:70b", "mistral:7b"],   # models available on this machine
+    gateway_url="https://gateway.sagewai.com",
+    enrollment_key="wrt-1.eyJ...",          # from step 1
+)
+await worker.start()
+```
+
+The worker registers itself, starts a heartbeat loop (every 30 seconds), and begins polling for tasks.
+
+### Step 3: Approve the worker
+
+In the admin panel under **Fleet → Workers**, new workers appear with status `PENDING`. Click **Approve** or use the CLI:
+
+```bash
+sagewai fleet list-workers --status pending
+# Approve via the admin panel at Fleet → Workers → Approve
+```
+
+Once approved, the worker receives tasks immediately.
+
+---
+
+## LLM-Aware Routing
+
+Specify which model a workflow step requires, and the dispatcher routes to a worker that has it:
+
+```python
+from sagewai import DurableWorkflow, UniversalAgent
+from sagewai.models.worker import RoutingConstraints
+
+workflow = DurableWorkflow(name="inference-pipeline", store=store)
+
+@workflow.step("heavy-inference", routing=RoutingConstraints(target_model="llama3:70b"))
+async def heavy_inference(prompt: str) -> str:
+    agent = UniversalAgent(name="llm", model="llama3:70b")
+    return await agent.chat(prompt)
+```
+
+The `target_model` filter is evaluated at claim time using `@>` operator on the worker's declared `models_canonical` list. If no worker with the required model is available, the task queues until one becomes available.
+
+---
+
+## Security Model
+
+| Layer | Mechanism |
+|-------|-----------|
+| Enrollment | WRT tokens (JWT, `wrt-1.` prefix, JTI revocation list) |
+| Payload encryption | Per-org Fernet key; task payloads are encrypted before transit |
+| Approval workflow | New workers require explicit admin approval before receiving tasks |
+| Anomaly detection | Auto-revokes workers with repeated failures, rate anomalies, or model mismatches |
+| mTLS | Planned for Enterprise tier — mutual TLS between gateway and workers |
+
+---
+
+## Deployment Options
+
+### Docker (recommended for quick start)
+
+```bash
+docker run --rm \
+  -e ENROLLMENT_KEY="wrt-1.eyJ..." \
+  -e FLEET_GATEWAY_URL="https://gateway.sagewai.com" \
+  -e WORKER_POOL="default" \
+  -e WORKER_MODELS="gpt-4o,claude-3-5-sonnet-20241022" \
+  sagewai/worker:latest
+```
+
+### Bare metal / systemd
+
+```bash
+uv pip install sagewai
+sagewai worker start \
+  --pool gpu-workers \
+  --labels gpu=true,env=staging \
+  --enrollment-key "wrt-1.eyJ..."
+```
+
+### Kubernetes
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sagewai-worker
+spec:
+  replicas: 3
+  template:
+    spec:
+      containers:
+        - name: worker
+          image: sagewai/worker:latest
+          env:
+            - name: ENROLLMENT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: sagewai-fleet
+                  key: enrollment-key
+            - name: FLEET_GATEWAY_URL
+              value: "https://gateway.sagewai.com"
+            - name: WORKER_POOL
+              value: "k8s-pool"
+```
+
+---
+
+## Worker Pools and Labels
+
+Use pools to segment workers by environment or purpose, and labels for fine-grained routing:
+
+```python
+# Development pool
+dev_worker = WorkflowWorker(pool="dev", labels={"region": "us-west"})
+
+# Production GPU pool
+gpu_worker = WorkflowWorker(pool="gpu-prod", labels={"gpu": "true", "vram": "80gb"})
+
+# Route a workflow step to GPU workers only
+@workflow.step("embedding", routing=RoutingConstraints(
+    target_pool="gpu-prod",
+    target_labels={"gpu": "true"},
+))
+async def embed(texts: list[str]) -> list[list[float]]:
+    ...
+```
+
+---
+
+## Monitoring
+
+Fleet worker status is visible in the admin panel under **Fleet → Workers**. Each worker shows:
+
+- Current status (online / offline / pending approval)
+- Heartbeat timestamp
+- Tasks claimed / completed / failed
+- Declared models and labels
+- Any active anomaly alerts
+
+The CLI equivalent:
+
+```bash
+sagewai fleet list-workers
+sagewai fleet list-workers --pool gpu-prod --status online
+```

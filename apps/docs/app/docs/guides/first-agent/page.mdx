@@ -1,0 +1,329 @@
+# Your First Agent — Step by Step
+
+This tutorial walks you through building a real-world AI agent from scratch: a **Research Assistant** that can search the web, summarize findings, and answer follow-up questions using conversation memory.
+
+## What You Will Build
+
+A conversational research assistant that:
+1. Takes a research question from the user
+2. Uses tools to search for information
+3. Summarizes findings in a clear format
+4. Remembers the conversation for follow-up questions
+
+## Prerequisites
+
+- Python 3.10+
+- An OpenAI API key (or any other supported provider)
+- `sagewai` installed (`pip install sagewai`)
+
+## Step 1: Set Up Your Project
+
+Create a new directory and set up your environment:
+
+```bash
+mkdir research-assistant
+cd research-assistant
+
+# Create virtual environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install sagewai
+pip install sagewai
+
+# Create .env file
+echo "OPENAI_API_KEY=sk-..." > .env
+```
+
+## Step 2: Define Your Tools
+
+Create `tools.py` with the tools your agent will use:
+
+```python
+"""Tools for the research assistant."""
+
+import json
+from sagewai.models.tool import tool
+
+
+@tool
+async def web_search(query: str) -> str:
+    """Search the web for information on a topic.
+
+    Args:
+        query: The search query to execute.
+    """
+    # In production, you would call a real search API here.
+    # For this tutorial, we return mock data.
+    return json.dumps({
+        "results": [
+            {
+                "title": f"Research on: {query}",
+                "snippet": f"Key findings about {query}: This is a growing field with "
+                           "significant implications for industry and academia.",
+                "url": f"https://example.com/research/{query.replace(' ', '-')}",
+            },
+            {
+                "title": f"Latest developments in {query}",
+                "snippet": f"Recent breakthroughs in {query} have opened new possibilities "
+                           "for practical applications.",
+                "url": f"https://example.com/news/{query.replace(' ', '-')}",
+            },
+        ]
+    })
+
+
+@tool
+async def save_notes(topic: str, notes: str) -> str:
+    """Save research notes for later reference.
+
+    Args:
+        topic: The topic of the research.
+        notes: The notes to save.
+    """
+    # In production, save to a database or file.
+    return f"Notes saved for topic: {topic} ({len(notes)} characters)"
+```
+
+The `@tool` decorator automatically converts your functions into tool specifications that the LLM understands. It extracts the function name, docstring (as description), and type annotations (as parameter schema).
+
+## Step 3: Create the Agent
+
+Create `agent.py`:
+
+```python
+"""Research assistant agent."""
+
+import asyncio
+from sagewai.engines.universal import UniversalAgent
+from tools import web_search, save_notes
+
+
+async def main():
+    # Create the agent with tools and a system prompt
+    agent = UniversalAgent(
+        name="research-assistant",
+        model="gpt-4o",
+        system_prompt=(
+            "You are a thorough research assistant. When asked about a topic:\n"
+            "1. Search for relevant information using the web_search tool\n"
+            "2. Synthesize the findings into a clear summary\n"
+            "3. Offer to save notes if the user wants to keep the findings\n"
+            "4. Always cite your sources\n"
+            "\n"
+            "Be concise but comprehensive. Use bullet points for key findings."
+        ),
+        tools=[web_search, save_notes],
+        temperature=0.3,  # Lower temperature for factual accuracy
+        max_iterations=5,  # Limit tool-calling loops
+    )
+
+    # Single query
+    response = await agent.chat(
+        "What are the latest developments in quantum computing?"
+    )
+    print(response)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+Run it:
+
+```bash
+python agent.py
+```
+
+The agent will:
+1. Receive your question
+2. Decide to call `web_search` with a relevant query
+3. Process the search results
+4. Return a synthesized summary
+
+## Step 4: Add Streaming
+
+For a better user experience, stream the response in real time. Update `agent.py`:
+
+```python
+async def main():
+    agent = UniversalAgent(
+        name="research-assistant",
+        model="gpt-4o",
+        system_prompt="You are a thorough research assistant...",
+        tools=[web_search, save_notes],
+        temperature=0.3,
+    )
+
+    print("Research Assistant (type 'quit' to exit)")
+    print("=" * 50)
+
+    while True:
+        question = input("\nYou: ")
+        if question.lower() == "quit":
+            break
+
+        print("\nAssistant: ", end="", flush=True)
+        async for chunk in agent.chat_stream(question):
+            print(chunk, end="", flush=True)
+        print()  # newline after response
+```
+
+## Step 5: Add Conversation Memory
+
+For multi-turn conversations, use `ConversationManager`:
+
+```python
+from sagewai.core.conversation import ConversationManager
+from sagewai.core.session import InMemorySessionStore
+
+
+async def main():
+    agent = UniversalAgent(
+        name="research-assistant",
+        model="gpt-4o",
+        system_prompt="You are a thorough research assistant...",
+        tools=[web_search, save_notes],
+        temperature=0.3,
+    )
+
+    # ConversationManager handles multi-turn state
+    manager = ConversationManager(
+        agent=agent,
+        session_id="research-session-1",
+        session_store=InMemorySessionStore(),
+    )
+
+    print("Research Assistant (type 'quit' to exit)")
+    print("=" * 50)
+
+    while True:
+        question = input("\nYou: ")
+        if question.lower() == "quit":
+            break
+
+        response = await manager.send(question)
+        print(f"\nAssistant: {response}")
+```
+
+Now the agent remembers the full conversation. You can ask follow-up questions:
+
+```
+You: What are the latest developments in quantum computing?
+Assistant: [detailed summary]
+
+You: Can you save notes on this?
+Assistant: [calls save_notes tool, confirms saved]
+
+You: What about the practical applications you mentioned?
+Assistant: [references earlier context, provides details]
+```
+
+## Step 6: Add Safety Guardrails
+
+Protect your agent with PII detection:
+
+```python
+from sagewai.safety.pii import PIIGuard, PIIEntityType
+
+agent = UniversalAgent(
+    name="research-assistant",
+    model="gpt-4o",
+    system_prompt="You are a thorough research assistant...",
+    tools=[web_search, save_notes],
+    guardrails=[
+        PIIGuard(
+            action="redact",
+            entity_types=[PIIEntityType.EMAIL, PIIEntityType.PHONE],
+        ),
+    ],
+)
+```
+
+If a user accidentally includes an email or phone number, it gets redacted before reaching the LLM.
+
+## Step 7: Add Event Monitoring
+
+Track what your agent is doing:
+
+```python
+from sagewai.core.events import AgentEvent
+
+
+async def log_events(event: AgentEvent, data: dict):
+    if event == AgentEvent.TOOL_CALL_START:
+        print(f"  [Calling tool: {data.get('tool_name')}]")
+    elif event == AgentEvent.RUN_FINISHED:
+        print(f"  [Done]")
+
+
+agent.on_event(log_events)
+```
+
+## Complete Example
+
+Here is the final `agent.py` with all features combined:
+
+```python
+"""Research assistant — complete example."""
+
+import asyncio
+from sagewai.engines.universal import UniversalAgent
+from sagewai.core.conversation import ConversationManager
+from sagewai.core.session import InMemorySessionStore
+from sagewai.core.events import AgentEvent
+from sagewai.safety.pii import PIIGuard, PIIEntityType
+from tools import web_search, save_notes
+
+
+async def log_events(event: AgentEvent, data: dict):
+    if event == AgentEvent.TOOL_CALL_START:
+        print(f"  [Calling: {data.get('tool_name')}]")
+
+
+async def main():
+    agent = UniversalAgent(
+        name="research-assistant",
+        model="gpt-4o",
+        system_prompt=(
+            "You are a thorough research assistant. "
+            "Search for information, synthesize findings, and cite sources."
+        ),
+        tools=[web_search, save_notes],
+        temperature=0.3,
+        guardrails=[
+            PIIGuard(action="redact", entity_types=[
+                PIIEntityType.EMAIL, PIIEntityType.PHONE,
+            ]),
+        ],
+    )
+
+    agent.on_event(log_events)
+
+    manager = ConversationManager(
+        agent=agent,
+        session_id="research-session-1",
+        session_store=InMemorySessionStore(),
+    )
+
+    print("Research Assistant (type 'quit' to exit)")
+    print("=" * 50)
+
+    while True:
+        question = input("\nYou: ")
+        if question.lower() == "quit":
+            break
+        response = await manager.send(question)
+        print(f"\nAssistant: {response}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+## Next Steps
+
+- **[Multi-Agent Workflows](/docs/guides/multi-agent)** — Compose multiple agents into pipelines
+- **[PII Protection](/docs/guides/pii-protection)** — Deep dive into PII guardrails
+- **[Cost Management](/docs/guides/cost-management)** — Control agent spending with budget limits
+- **[Strategies](/docs/core-concepts/strategies)** — Use advanced reasoning patterns

@@ -1,0 +1,377 @@
+# Agents
+
+Agents are the core building block of Sagewai. An agent wraps an LLM with a tool-calling loop: send a message, the LLM responds (possibly requesting tool calls), tools are executed, and the loop continues until the LLM produces a final text response.
+
+## BaseAgent
+
+`BaseAgent` is the abstract foundation class. All agents inherit from it. You never instantiate `BaseAgent` directly — instead, use one of the concrete engines.
+
+### Architecture
+
+```
+User Message
+    |
+    v
+BaseAgent.chat(message)
+    |
+    v
+[Build Messages] --> [Inject Memory Context]
+    |
+    v
+[Check Input Guardrails]
+    |
+    v
+[ExecutionStrategy.execute()]
+    |
+    +---> [_call_llm()] --> LLM Response
+    |         |
+    |         v
+    |    Has tool_calls?
+    |    YES --> [Execute Tools] --> Loop back
+    |    NO  --> Return text response
+    |
+    v
+[Check Output Guardrails]
+    |
+    v
+Return response text
+```
+
+### Constructor Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | `str` | required | Agent name (used in logging, events, admin) |
+| `model` | `str` | `"gpt-4o"` | LLM model identifier |
+| `system_prompt` | `str` | `""` | System message prepended to all conversations |
+| `tools` | `list[ToolSpec]` | `[]` | Tools the agent can use |
+| `temperature` | `float` | `0.7` | LLM temperature |
+| `max_tokens` | `int \| None` | `None` | Max output tokens per LLM call |
+| `max_iterations` | `int` | `10` | Max tool-calling loop iterations |
+| `strategy` | `ExecutionStrategy` | `ReActStrategy()` | Reasoning loop strategy |
+| `memory` | `Any` | `None` | Memory backend (ContextEngine, VectorMemory, RAGEngine) |
+| `guardrails` | `list[Guardrail]` | `[]` | Input/output safety guardrails |
+| `max_context_tokens` | `int \| None` | `None` | Auto-compact context when exceeded |
+| `directives` | `bool \| DirectiveEngine` | `None` | Enable directive preprocessing |
+| `api_base` | `str \| None` | `None` | Override LLM API base URL |
+| `api_key` | `str \| None` | `None` | Override LLM API key |
+
+### Public Methods
+
+#### `chat(message: str) -> str`
+
+Send a single message and get a text response. This is the simplest interface.
+
+```python
+response = await agent.chat("What is quantum computing?")
+```
+
+#### `chat_with_history(messages: list[ChatMessage]) -> ChatMessage`
+
+Run the agent loop with an explicit conversation history. Useful for multi-turn conversations where you manage state externally.
+
+```python
+from sagewai import ChatMessage
+
+messages = [
+    ChatMessage.system("You are an expert physicist."),
+    ChatMessage.user("Explain quantum entanglement"),
+]
+response = await agent.chat_with_history(messages)
+```
+
+#### `chat_stream(message: str) -> AsyncGenerator[str, None]`
+
+Stream text chunks in real time. Tool calls are handled internally — only text content is yielded.
+
+```python
+async for chunk in agent.chat_stream("Tell me about black holes"):
+    print(chunk, end="", flush=True)
+```
+
+#### `on_event(callback)`
+
+Register a listener for agent lifecycle events (run started, tool calls, errors, etc.):
+
+```python
+from sagewai.core.events import AgentEvent
+
+async def my_handler(event: AgentEvent, data: dict):
+    print(f"Event: {event.value}, Data: {data}")
+
+agent.on_event(my_handler)
+```
+
+Events emitted: `RUN_STARTED`, `RUN_FINISHED`, `RUN_ERROR`, `RUN_CANCELLED`, `STEP_STARTED`, `STEP_FINISHED`, `TOOL_CALL_START`, `TOOL_CALL_END`, `TOOL_CALL_RESULT`, `TEXT_MESSAGE_START`, `TEXT_MESSAGE_CONTENT`, `TEXT_MESSAGE_END`, `GUARDRAIL_ESCALATION`, `CONTEXT_COMPACTED`.
+
+---
+
+## UniversalAgent
+
+`UniversalAgent` is the primary concrete agent, backed by [LiteLLM](https://docs.litellm.ai/). It supports 100+ LLM providers through a unified interface.
+
+```python
+from sagewai import UniversalAgent
+
+agent = UniversalAgent(
+    name="assistant",
+    model="gpt-4o",
+    system_prompt="You are a helpful assistant.",
+    temperature=0.7,
+)
+
+response = await agent.chat("Hello!")
+```
+
+### Supported Models
+
+Any model that LiteLLM supports works out of the box:
+
+| Provider | Model Examples | Prefix |
+|----------|---------------|--------|
+| OpenAI | `gpt-4o`, `gpt-4o-mini`, `o1-preview` | (none) |
+| Anthropic | `claude-sonnet-4-20250514`, `claude-3-haiku-20240307` | (none) |
+| Google Gemini | `gemini/gemini-2.0-flash`, `gemini/gemini-2.5-pro` | `gemini/` |
+| Mistral | `mistral/mistral-large-latest` | `mistral/` |
+| Cohere | `command-r-plus` | (none) |
+| Azure OpenAI | `azure/gpt-4o` | `azure/` |
+| AWS Bedrock | `bedrock/anthropic.claude-3-sonnet` | `bedrock/` |
+| Ollama (local) | `ollama/llama3.1`, `ollama/codellama` | `ollama/` |
+| Together AI | `together_ai/meta-llama/Llama-3.1-405B` | `together_ai/` |
+| Groq | `groq/llama-3.1-70b-versatile` | `groq/` |
+
+### Streaming
+
+`UniversalAgent` implements true token-level streaming via `_stream_llm`, accumulating tool call fragments across chunks:
+
+```python
+async for chunk in agent.chat_stream("Explain relativity"):
+    print(chunk, end="")
+```
+
+---
+
+## GoogleNativeAgent
+
+`GoogleNativeAgent` uses the `google.genai` SDK for native Gemini access, bypassing LiteLLM. This provides access to Gemini-specific features like native function calling.
+
+```python
+from sagewai import GoogleNativeAgent
+
+agent = GoogleNativeAgent(
+    name="gemini-agent",
+    model="gemini-2.0-flash",
+    system_prompt="You are a helpful assistant.",
+)
+
+response = await agent.chat("Hello!")
+```
+
+Use `GoogleNativeAgent` when you need:
+- Native Gemini function calling format
+- Direct access to Google GenAI SDK features
+- Vertex AI integration
+
+Use `UniversalAgent` with `model="gemini/..."` for general-purpose Gemini access via LiteLLM.
+
+---
+
+## Tools
+
+Tools are defined using the `@tool` decorator, which converts a function into a `ToolSpec`:
+
+```python
+from sagewai import tool
+
+@tool
+async def search_database(query: str, limit: int = 10) -> str:
+    """Search the knowledge base for relevant documents.
+
+    Args:
+        query: The search query string.
+        limit: Maximum number of results to return.
+    """
+    results = await db.search(query, limit=limit)
+    return format_results(results)
+```
+
+The decorator extracts:
+- **Name** from the function name
+- **Description** from the docstring
+- **Parameters** from function type annotations
+- **Handler** reference to execute the function
+
+Both sync and async handlers are supported. Tool execution is parallelized when multiple tools are called in a single LLM response.
+
+### MCP Tools
+
+Tools can also be discovered from MCP (Model Context Protocol) servers:
+
+```python
+from sagewai import McpClient
+
+# Connect to an MCP server via stdio
+tools = await McpClient.connect(["python", "-m", "mcp_stripe"])
+
+# Or via SSE
+tools = await McpClient.connect_sse("http://localhost:8080/sse")
+
+# Use discovered tools with any agent
+agent = UniversalAgent(name="auditor", model="gpt-4o", tools=tools)
+```
+
+---
+
+## Agent Composition
+
+Sagewai provides four deterministic workflow agents for composing sub-agents into pipelines. Unlike a single agent that decides what to do via LLM, workflow agents follow a fixed structure while each sub-agent within uses its own LLM.
+
+### SequentialAgent
+
+Execute sub-agents one after another, passing each agent's output as input to the next:
+
+```python
+from sagewai import UniversalAgent, SequentialAgent
+
+researcher = UniversalAgent(
+    name="researcher",
+    model="gpt-4o",
+    system_prompt="You research topics and return key findings.",
+)
+writer = UniversalAgent(
+    name="writer",
+    model="claude-sonnet-4-20250514",
+    system_prompt="You write polished articles from research notes.",
+)
+reviewer = UniversalAgent(
+    name="reviewer",
+    model="gpt-4o-mini",
+    system_prompt="You review articles for accuracy.",
+)
+
+pipeline = SequentialAgent(
+    name="article-pipeline",
+    agents=[researcher, writer, reviewer],
+)
+
+result = await pipeline.chat("Write about the future of quantum computing")
+```
+
+### ParallelAgent
+
+Run multiple agents concurrently on the same input and merge their outputs:
+
+```python
+from sagewai import UniversalAgent, ParallelAgent
+
+legal = UniversalAgent(name="legal", system_prompt="Review for legal issues.")
+financial = UniversalAgent(name="financial", system_prompt="Review for financial accuracy.")
+grammar = UniversalAgent(name="grammar", model="gpt-4o-mini", system_prompt="Review grammar.")
+
+review_panel = ParallelAgent(
+    name="review-panel",
+    agents=[legal, financial, grammar],
+)
+
+result = await review_panel.chat("Review this contract: ...")
+```
+
+All agents process the same input via `asyncio.gather()`. Results are merged with a default newline joiner, or you can pass a custom `merge` function.
+
+### ConditionalAgent
+
+Route input to different agents based on a condition function:
+
+```python
+from sagewai import UniversalAgent, ConditionalAgent
+
+escalation = UniversalAgent(name="escalation", system_prompt="Handle complaints.")
+auto_reply = UniversalAgent(name="auto-reply", system_prompt="Respond helpfully.")
+
+router = ConditionalAgent(
+    name="sentiment-router",
+    condition=lambda text: "negative" if "terrible" in text.lower() else "positive",
+    branches={
+        "negative": escalation,
+        "positive": auto_reply,
+    },
+    default_branch=auto_reply,
+)
+
+result = await router.chat("This product is terrible!")
+# Routes to the escalation agent
+```
+
+The condition can be synchronous or async. For LLM-based classification, pass an async function that calls a classifier model.
+
+### LoopAgent
+
+Repeat a single agent until a condition is met or `max_iterations` is exhausted:
+
+```python
+from sagewai import UniversalAgent, LoopAgent
+
+refiner = UniversalAgent(
+    name="refiner",
+    model="gpt-4o",
+    system_prompt="Improve the text. Output DONE when satisfied.",
+)
+
+loop = LoopAgent(
+    name="iterative-refiner",
+    agent=refiner,
+    max_iterations=5,
+    should_stop=lambda result, iteration: "DONE" in result,
+)
+
+result = await loop.chat("Draft: AI is good at many things...")
+```
+
+---
+
+## Agent-as-Tool
+
+Wrap any agent as a tool so that an orchestrator agent can invoke sub-agents dynamically based on LLM reasoning:
+
+```python
+from sagewai import UniversalAgent, agent_as_tool
+
+researcher = UniversalAgent(name="researcher", model="gpt-4o")
+writer = UniversalAgent(name="writer", model="claude-sonnet-4-20250514")
+
+orchestrator = UniversalAgent(
+    name="orchestrator",
+    model="gpt-4o",
+    tools=[
+        agent_as_tool(researcher, description="Researches a topic thoroughly"),
+        agent_as_tool(writer, description="Writes polished content"),
+    ],
+)
+
+result = await orchestrator.chat("Research and write about quantum computing")
+```
+
+The orchestrator's LLM decides which sub-agents to invoke and in what order. This differs from `SequentialAgent` (fixed order) and `ConditionalAgent` (rule-based routing) because the LLM makes dynamic delegation decisions.
+
+---
+
+## Choosing an Agent Pattern
+
+| Pattern | Orchestration | Use Case |
+|---------|---------------|----------|
+| Single `UniversalAgent` | LLM decides everything | Simple Q&A, single-domain tasks |
+| `SequentialAgent` | Fixed pipeline | Research -> Write -> Review |
+| `ParallelAgent` | Fan-out, merge | Multi-perspective analysis |
+| `ConditionalAgent` | Rule-based routing | Intent classification, triage |
+| `LoopAgent` | Iterative refinement | Edit until quality threshold |
+| `agent_as_tool` | LLM-decided delegation | Dynamic multi-agent orchestration |
+
+Patterns compose freely. A `SequentialAgent` can contain a `ParallelAgent` as one of its steps, which itself contains `UniversalAgent` sub-agents with different models and strategies.
+
+---
+
+## What's Next
+
+- **[Strategies](/docs/core-concepts/strategies)** — Control how agents reason: ReAct, Tree of Thoughts, LATS, Planning
+- **[Memory](/docs/core-concepts/memory)** — Give agents long-term memory with vector, graph, and hybrid retrieval
+- **[Workflows](/docs/core-concepts/workflows)** — Durable execution with checkpointing, human approval, distributed workers

@@ -1,0 +1,377 @@
+# Self-Learning API Reference
+
+APIs for building agents that improve automatically from interaction data. Self-learning in Sagewai is composed of five orthogonal mechanisms that can be used independently or together.
+
+```python
+from sagewai import ContextEngine
+from sagewai.context import MemoryBridge
+from sagewai.intelligence import (
+    MemoryConsolidator,
+    ConversationGraphBuilder,
+    FactExtractor,
+)
+```
+
+---
+
+## MemoryBridge
+
+`MemoryBridge` connects the agent's conversation history to the context engine. After each turn, it extracts facts and stores them so future agents (or future sessions) can retrieve them.
+
+```python
+from sagewai.context import MemoryBridge
+
+bridge = MemoryBridge(
+    context_engine=ctx_engine,
+    fact_extractor=HybridFactExtractor(),  # optional
+)
+```
+
+### Constructor
+
+```python
+MemoryBridge(
+    *,
+    context_engine: ContextEngine,
+    model: str = "gpt-4o-mini",
+    extract_every_n_turns: int = 5,
+    fact_extractor: FactExtractor | None = None,
+)
+```
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `context_engine` | `ContextEngine` | required | Target store for extracted facts |
+| `model` | `str` | `"gpt-4o-mini"` | LLM model for extraction prompts |
+| `extract_every_n_turns` | `int` | `5` | Run extraction every N conversation turns |
+| `fact_extractor` | `FactExtractor \| None` | `None` | Extractor to use; falls back to rule-based |
+
+### Methods
+
+```python
+async def process_message(
+    message: str,
+    role: str = "user",
+    session_id: str | None = None,
+    tags: list[str] | None = None,
+) -> list[ExtractedFact]
+```
+
+Extracts facts from `message` and stores them in the context engine.
+
+```python
+async def bridge_conversation(
+    conversation: Conversation,
+    tags: list[str] | None = None,
+) -> int
+```
+
+Processes an entire `Conversation` object. Returns the number of facts stored.
+
+---
+
+## MemoryConsolidator
+
+Runs background consolidation over the agent's memory: deduplicates semantically similar facts, applies exponential time decay, and detects contradictions.
+
+```python
+from sagewai.intelligence import MemoryConsolidator
+
+consolidator = MemoryConsolidator(
+    context_engine=ctx_engine,
+    embedder=embedder,
+    decay_halflife_days=30.0,
+    similarity_threshold=0.92,
+)
+```
+
+### Constructor
+
+```python
+MemoryConsolidator(
+    context_engine: ContextEngine,
+    embedder: Embedder | None = None,
+    decay_halflife_days: float = 30.0,
+    similarity_threshold: float = 0.92,
+    contradiction_strategy: Literal["keep_newer", "keep_higher_confidence", "flag"] = "keep_newer",
+    batch_size: int = 100,
+)
+```
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `decay_halflife_days` | `float` | `30.0` | Half-life for importance score decay |
+| `similarity_threshold` | `float` | `0.92` | Cosine similarity above which facts are considered duplicates |
+| `contradiction_strategy` | `str` | `"keep_newer"` | How to resolve contradictions |
+| `batch_size` | `int` | `100` | Documents processed per consolidation pass |
+
+### Methods
+
+```python
+async def consolidate(
+    project_id: str | None = None,
+    scope: ContextScope = ContextScope.PROJECT,
+    tags: list[str] | None = None,
+    dry_run: bool = False,
+) -> ConsolidationReport
+```
+
+Runs a full consolidation pass. Returns a `ConsolidationReport` with counts of deduplicated, decayed, and contradicted facts.
+
+```python
+@dataclass
+class ConsolidationReport:
+    duplicates_removed: int
+    facts_decayed: int
+    contradictions_resolved: int
+    total_processed: int
+    duration_ms: float
+```
+
+---
+
+## ConversationGraphBuilder
+
+Builds a knowledge graph incrementally from conversation history. Entities and relations extracted from each message are upserted into NebulaGraph.
+
+```python
+from sagewai.intelligence import ConversationGraphBuilder
+
+builder = ConversationGraphBuilder(
+    graph_store=graph_store,
+    entity_extractor=GLiNEREntityExtractor(),
+    relation_extractor=HeuristicRelationExtractor(),
+)
+```
+
+### Constructor
+
+```python
+ConversationGraphBuilder(
+    graph_store: GraphMemory,
+    entity_extractor: EntityExtractor | None = None,
+    relation_extractor: RelationExtractor | None = None,
+    dedup_threshold: float = 0.85,
+    max_entities_per_message: int = 20,
+)
+```
+
+### Methods
+
+```python
+async def process_turn(
+    message: str,
+    role: str = "user",
+    session_id: str | None = None,
+) -> GraphUpdateResult
+```
+
+Extracts entities and relations from `message` and upserts them into the graph.
+
+```python
+async def process_conversation(
+    conversation: Conversation,
+) -> GraphUpdateResult
+```
+
+Processes all messages in a `Conversation`. Returns cumulative `GraphUpdateResult`.
+
+```python
+@dataclass
+class GraphUpdateResult:
+    entities_added: int
+    entities_merged: int
+    relations_added: int
+    total_messages: int
+```
+
+---
+
+## FactExtractor
+
+Protocol for extracting structured facts from text. Three implementations are provided.
+
+```python
+from sagewai.intelligence import (
+    FactExtractor,          # protocol
+    RuleBasedFactExtractor, # regex patterns — no model required
+    LLMFactExtractor,       # LLM extraction — highest accuracy
+    HybridFactExtractor,    # rules + LLM — recommended default
+)
+```
+
+### Protocol
+
+```python
+class FactExtractor(Protocol):
+    async def extract(
+        self,
+        text: str,
+        context: str | None = None,
+    ) -> list[ExtractedFact]: ...
+```
+
+### ExtractedFact
+
+```python
+@dataclass
+class ExtractedFact:
+    content: str        # The fact text
+    fact_type: str      # "decision" | "preference" | "event" | "action" | "general"
+    confidence: float   # 0.0 – 1.0
+    subject: str | None # Extracted subject entity
+    metadata: dict      # Source, timestamps, extractor name
+```
+
+### RuleBasedFactExtractor
+
+Zero-dependency, offline. Uses regex patterns for common fact types.
+
+```python
+extractor = RuleBasedFactExtractor(
+    min_confidence=0.4,
+    fact_types=["decision", "preference", "event"],  # filter by type
+)
+```
+
+### LLMFactExtractor
+
+Sends text to an LLM with a structured extraction prompt. Highest recall on complex prose.
+
+```python
+extractor = LLMFactExtractor(
+    model="gpt-4o-mini",
+    max_facts_per_call=20,
+)
+```
+
+### HybridFactExtractor
+
+Runs rule-based first (fast), then LLM on remaining text (thorough). Recommended for production.
+
+```python
+extractor = HybridFactExtractor(
+    rule_extractor=RuleBasedFactExtractor(),
+    llm_extractor=LLMFactExtractor(model="gpt-4o-mini"),
+    llm_threshold=0.3,  # invoke LLM when rule confidence is below this
+)
+```
+
+---
+
+## ContextEngine (auto-learn)
+
+The `ContextEngine` works with `MemoryBridge` as a companion. Create the `ContextEngine` first, then wrap it with a `MemoryBridge` to enable automatic fact extraction and storage from conversations.
+
+```python
+engine = ContextEngine(
+    metadata_store=metadata_store,
+    vector_store=vector_store,
+    project_id="proj_123",
+    embedder=embedder,
+)
+
+# Wire MemoryBridge separately — it wraps the ContextEngine
+bridge = MemoryBridge(context_engine=engine, fact_extractor=HybridFactExtractor())
+```
+
+See [Context Engine](/docs/core-concepts/context-engine) for full `ContextEngine` reference.
+
+---
+
+## EpisodeStore
+
+Episodic memory stores complete conversation sessions as retrievable episodes.
+
+```python
+from sagewai.context.episodes import EpisodeStore, PersistentEpisodeStore
+
+# In-memory (tests / dev)
+store = EpisodeStore()
+
+# Postgres-backed (production)
+store = PersistentEpisodeStore(connection_string="postgresql://...")
+```
+
+### Methods
+
+```python
+async def save_episode(
+    session_id: str,
+    messages: list[ChatMessage],
+    metadata: dict | None = None,
+) -> str  # episode_id
+
+async def get_episode(episode_id: str) -> Episode | None
+
+async def search_episodes(
+    query: str,
+    project_id: str | None = None,
+    limit: int = 10,
+) -> list[Episode]
+```
+
+### Episode
+
+```python
+@dataclass
+class Episode:
+    id: str
+    session_id: str
+    messages: list[ChatMessage]
+    summary: str | None
+    created_at: datetime
+    metadata: dict
+```
+
+---
+
+## Wiring Everything Together
+
+```python
+from sagewai import UniversalAgent, ContextEngine, ContextScope
+from sagewai.intelligence import (
+    HybridFactExtractor,
+    MemoryConsolidator,
+    ConversationGraphBuilder,
+    GLiNEREntityExtractor,
+    HeuristicRelationExtractor,
+)
+from sagewai.context import MemoryBridge
+
+# 1. Context engine
+# ctx = ContextEngine(metadata_store=..., vector_store=..., project_id="prod")
+
+# 2. Fact extraction + memory bridge
+bridge = MemoryBridge(
+    context_engine=ctx,
+    fact_extractor=HybridFactExtractor(),
+)
+
+# 3. Knowledge graph builder
+graph_builder = ConversationGraphBuilder(
+    graph_store=ctx.graph_store,
+    entity_extractor=GLiNEREntityExtractor(),
+    relation_extractor=HeuristicRelationExtractor(),
+)
+
+# 4. Background consolidation
+consolidator = MemoryConsolidator(context_engine=ctx)
+
+# 5. Self-learning agent
+agent = UniversalAgent(
+    name="self_learner",
+    model="gpt-4o",
+    context=ctx,
+    memory_bridge=bridge,
+)
+
+# Every chat turn now extracts facts and updates the graph
+response = await agent.chat("We decided to migrate to Postgres next quarter.")
+
+# Periodically consolidate
+report = await consolidator.consolidate()
+print(f"Removed {report.duplicates_removed} duplicates")
+```
+
+See [Example 19](/docs/guides/first-agent) for a complete runnable self-learning agent.

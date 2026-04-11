@@ -1,0 +1,222 @@
+# Safety & Guardrails
+
+Guardrails validate agent inputs and outputs. Attach them to any agent to enforce content policies, detect PII, prevent hallucinations, and control costs.
+
+```python
+from sagewai import UniversalAgent, ContentFilter, PIIGuard
+
+agent = UniversalAgent(
+    name="safe-agent",
+    model="gpt-4o",
+    guardrails=[
+        ContentFilter(blocklist=["password"], action="block"),
+        PIIGuard(action="redact"),
+    ],
+)
+```
+
+---
+
+## Guardrail (ABC)
+
+Abstract base class for all guardrails. Implement `check_input` and `check_output` to create custom guardrails.
+
+```python
+from sagewai import Guardrail, GuardrailResult
+
+class MyGuardrail(Guardrail):
+    async def check_input(self, message: str, context: dict) -> GuardrailResult:
+        if "forbidden" in message:
+            return GuardrailResult(passed=False, violation="Forbidden content")
+        return GuardrailResult(passed=True)
+
+    async def check_output(self, response: str, context: dict) -> GuardrailResult:
+        return GuardrailResult(passed=True)
+```
+
+### Required Methods
+
+| Method | Signature | Returns | Description |
+|--------|-----------|---------|-------------|
+| `check_input` | `async check_input(message: str, context: dict)` | `GuardrailResult` | Validate input before LLM call |
+| `check_output` | `async check_output(response: str, context: dict)` | `GuardrailResult` | Validate output before returning to user |
+
+---
+
+## GuardrailResult
+
+Result of a guardrail check.
+
+```python
+from sagewai import GuardrailResult
+
+# Passed
+result = GuardrailResult(passed=True)
+
+# Failed
+result = GuardrailResult(
+    passed=False,
+    violation="Blocked content detected",
+    action="block",
+)
+```
+
+### Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `passed` | `bool` | required | Whether the check passed |
+| `violation` | `str \| None` | `None` | Description of the violation |
+| `action` | `Literal["block", "warn", "escalate"]` | `"block"` | Action to take on violation |
+
+---
+
+## GuardrailViolationError
+
+Raised when a guardrail blocks an input or output (action = `"block"`).
+
+```python
+from sagewai import GuardrailViolationError
+
+try:
+    response = await agent.chat("forbidden content")
+except GuardrailViolationError as e:
+    print(e.result.violation)
+```
+
+### Attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `result` | `GuardrailResult` | The guardrail result that triggered the error |
+
+---
+
+## ContentFilter
+
+Block messages containing forbidden words or regex patterns.
+
+```python
+from sagewai import ContentFilter
+
+guard = ContentFilter(
+    blocklist=["password", "secret"],
+    patterns=[r"\d{3}-\d{2}-\d{4}"],  # SSN pattern
+    action="block",
+)
+```
+
+### Constructor
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `blocklist` | `list[str] \| None` | `None` | Forbidden words (case-insensitive) |
+| `patterns` | `list[str] \| None` | `None` | Regex patterns to block |
+| `action` | `Literal["block", "warn", "escalate"]` | `"block"` | Action on detection |
+
+---
+
+## PIIGuard
+
+Detect and handle personally identifiable information in agent inputs and outputs.
+
+```python
+from sagewai import PIIGuard
+from sagewai.safety.pii import PIIEntityType
+
+guard = PIIGuard(
+    action="redact",
+    entity_types=[PIIEntityType.EMAIL, PIIEntityType.PHONE],
+)
+
+# Direct detection
+findings = guard.detect("Contact user@example.com")
+# Returns: [(PIIEntityType.EMAIL, "user@example.com")]
+
+# Redaction
+clean = guard.redact("Contact user@example.com")
+# Returns: "Contact [REDACTED_EMAIL]"
+```
+
+### Constructor
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `action` | `Literal["block", "redact", "warn", "escalate", "log_only"]` | `"block"` | How to handle detected PII |
+| `entity_types` | `list[PIIEntityType] \| None` | `None` | Which PII types to detect (all by default) |
+
+### PIIEntityType Enum
+
+| Value | Redaction Label |
+|-------|----------------|
+| `EMAIL` | `[REDACTED_EMAIL]` |
+| `PHONE` | `[REDACTED_PHONE]` |
+| `SSN` | `[REDACTED_SSN]` |
+| `CREDIT_CARD` | `[REDACTED_CARD]` |
+| `IBAN` | `[REDACTED_IBAN]` |
+| `IP_ADDRESS` | `[REDACTED_IP]` |
+| `PASSPORT` | `[REDACTED_PASSPORT]` |
+
+### Methods
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `detect(text)` | `list[tuple[PIIEntityType, str]]` | Detect all PII in text |
+| `redact(text)` | `str` | Replace PII with redaction labels |
+
+---
+
+## HallucinationGuard
+
+Detect potential hallucinations by checking response grounding against RAG context. Uses keyword overlap scoring (lightweight, no additional LLM calls).
+
+```python
+from sagewai import HallucinationGuard
+
+guard = HallucinationGuard(threshold=0.3, action="warn")
+```
+
+### Constructor
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `threshold` | `float` | `0.3` | Minimum grounding score (0-1). Below this triggers violation |
+| `action` | `Literal["block", "warn", "escalate"]` | `"warn"` | Action on low grounding |
+
+---
+
+## TokenBudgetGuard
+
+Block requests that would exceed a cost budget.
+
+```python
+from sagewai import TokenBudgetGuard
+
+guard = TokenBudgetGuard(max_usd=1.0)
+```
+
+### Constructor
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `max_usd` | `float` | required | Maximum cost in USD before blocking |
+
+---
+
+## OutputSchemaGuard
+
+Validate that agent output conforms to a JSON schema. Checks for valid JSON and required fields.
+
+```python
+from sagewai import OutputSchemaGuard
+
+guard = OutputSchemaGuard(
+    schema={"type": "object", "required": ["title", "body"]},
+)
+```
+
+### Constructor
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `schema` | `dict[str, Any]` | required | JSON Schema to validate against |

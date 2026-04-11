@@ -1,0 +1,138 @@
+# Sagewai vs. MiniMax
+
+A practical comparison for teams evaluating enterprise AI orchestration frameworks. Both Sagewai and MiniMax offer agent infrastructure — but they optimise for different tradeoffs.
+
+---
+
+## Overview
+
+| | **Sagewai** | **MiniMax** |
+|---|---|---|
+| **Model support** | Any model via LiteLLM (OpenAI, Gemini, Anthropic, Ollama, …) | Primarily MiniMax proprietary models |
+| **Deployment** | Self-hosted, cloud, or hybrid | Cloud-only (SaaS) |
+| **Worker fleet** | Enterprise fleet with routing, mTLS, anomaly detection | Managed compute only |
+| **Memory** | Milvus vector + NebulaGraph + episodic | Managed context windows |
+| **Protocol support** | MCP, A2A, AG-UI, OpenAI-compat gateway | Proprietary API |
+| **Context engine** | Multi-scope RAG (org/project, tags, BM25+vector+graph) | Basic RAG |
+| **Directive engine** | Prompt preprocessing for small/local models | N/A |
+| **Open source** | Yes (PyPI `sagewai`) | Closed |
+| **Pricing** | Free tier → Premium → Enterprise | Usage-based SaaS |
+
+---
+
+## Model Freedom
+
+Sagewai is model-agnostic by design. The same agent code runs against GPT-4o today and a fine-tuned Llama on your own GPU cluster tomorrow — no rewrites.
+
+```python
+# Same agent, different models
+agent = UniversalAgent(name="analyst", model="gpt-4o")
+agent = UniversalAgent(name="analyst", model="ollama/llama3")
+agent = UniversalAgent(name="analyst", model="gemini/gemini-2.0-flash")
+```
+
+MiniMax agents are coupled to MiniMax models. Switching providers requires re-platforming.
+
+---
+
+## Self-Hosted Execution
+
+Sagewai's **Enterprise Fleet** lets you run workers on your own hardware, air-gapped networks, or private cloud — while the orchestration plane stays in Sagewai's cloud.
+
+```python
+# Worker registered from your datacenter
+sagewai worker start \
+  --pool private-gpu \
+  --labels region=eu,gpu=a100 \
+  --enrollment-key KEY
+```
+
+MiniMax has no equivalent. All compute runs on MiniMax infrastructure.
+
+---
+
+## Memory Architecture
+
+Sagewai provides three integrated memory layers:
+
+| Layer | Technology | Use case |
+|---|---|---|
+| Vector | Milvus | Semantic similarity search |
+| Graph | NebulaGraph | Entity relationships, temporal facts |
+| Episodic | PostgreSQL | Conversation history, session continuity |
+
+MiniMax provides managed context windows. Long-term persistence requires custom integration.
+
+---
+
+## Protocol Ecosystem
+
+Sagewai speaks the protocols agents actually need in production:
+
+- **MCP** — expose tools to Claude Code, Cursor, and any MCP-compatible client
+- **A2A** — agent-to-agent delegation without API wrappers
+- **AG-UI** — streaming UI events for reactive frontends
+- **OpenAI-compat gateway** — drop-in replacement for existing OpenAI integrations
+
+```python
+# Expose your agent as an MCP server in 3 lines
+from sagewai.mcp.server import McpServer
+
+server = McpServer(agents=[my_agent])
+await server.start()
+```
+
+---
+
+## Directive Engine
+
+Sagewai includes a prompt preprocessing layer that makes small and local models significantly more capable by resolving context, memory, and agent delegation before the LLM call.
+
+```
+@context('recent customer complaints', scope='org', tags='support,q4')
+@memory('user preferences')
+Summarise the top 3 issues and draft a resolution plan.
+```
+
+There is no equivalent in MiniMax.
+
+---
+
+## When to Choose Sagewai
+
+- You need **model portability** — avoid vendor lock-in on LLM providers
+- You run **sensitive workloads** that cannot leave your network
+- You want **open standards** (MCP, A2A) rather than proprietary APIs
+- You need **deep memory** — graph relationships, temporal facts, multi-scope RAG
+- You are building a **multi-tenant platform** where project isolation is critical
+
+## When MiniMax May Fit
+
+- Your team is already invested in MiniMax's model ecosystem
+- You want fully managed infrastructure with zero ops overhead
+- Your use cases are conversational rather than agentic
+
+---
+
+## Migration from MiniMax
+
+If you are moving from MiniMax, the main mapping is:
+
+| MiniMax concept | Sagewai equivalent |
+|---|---|
+| Bot | `UniversalAgent` |
+| Knowledge base | `ContextEngine` (org scope) |
+| API key | `CredentialResolver` connector |
+| Chat history | `Conversation` + episodic store |
+| Function call | `@tool` decorator |
+
+```python
+# MiniMax
+client.chat(bot_id="...", messages=[...], use_knowledge=True)
+
+# Sagewai
+agent = UniversalAgent(name="bot", model="gpt-4o", context=ctx_engine)
+await agent.chat_with_history(messages, session_id="...")
+```
+
+See the [Getting Started guide](/docs/getting-started) for a full setup walkthrough.

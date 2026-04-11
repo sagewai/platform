@@ -1,0 +1,283 @@
+# Memory & RAG
+
+Sagewai provides a layered memory architecture: conversation history for short-term context, vector and graph stores for long-term retrieval, a hybrid RAG engine for combining both, and the Context Engine for production-grade document management with scoped access.
+
+## Architecture Overview
+
+```
+User Query
+    |
+    v
+ContextEngine / RAGEngine (orchestrator)
+    |
+    +---> Vector search (semantic similarity)
+    +---> BM25 search (keyword matching)
+    +---> Graph search (relationship traversal)
+    |
+    v
+Reciprocal Rank Fusion (merge results)
+    |
+    v
+Optional re-ranking (cross-encoder)
+    |
+    v
+Retrieved context injected into agent messages
+```
+
+Memory is integrated directly into `BaseAgent`. When you set the `memory` parameter, relevant context is automatically retrieved and injected before each LLM call.
+
+---
+
+## ConversationManager
+
+For multi-turn conversations where the agent remembers previous exchanges, use `ConversationManager` for automatic state management:
+
+```python
+from sagewai import UniversalAgent
+from sagewai.core.conversation import ConversationManager
+
+agent = UniversalAgent(name="tutor", model="gpt-4o")
+
+manager = ConversationManager(agent=agent)
+await manager.send("What is 2 + 2?")      # "4"
+await manager.send("Now multiply that by 3")  # "12" — remembers context
+```
+
+For manual control, use `chat_with_history()` with explicit message management:
+
+```python
+from sagewai import UniversalAgent, ChatMessage
+
+agent = UniversalAgent(name="tutor", model="gpt-4o")
+
+messages = [
+    ChatMessage.system("You are a helpful math tutor."),
+    ChatMessage.user("What is 2 + 2?"),
+]
+response = await agent.chat_with_history(messages)
+
+messages.append(response)
+messages.append(ChatMessage.user("Now multiply that by 3"))
+response = await agent.chat_with_history(messages)
+```
+
+---
+
+## VectorMemory
+
+Semantic similarity search using embedding vectors. Best for retrieving documents, passages, and factual knowledge.
+
+### In-Memory (Prototyping)
+
+```python
+from sagewai.memory.vector import VectorMemory
+
+memory = VectorMemory()
+
+await memory.store("doc-1", "Quantum computing uses qubits instead of classical bits.")
+await memory.store("doc-2", "Machine learning models learn patterns from data.")
+
+results = await memory.retrieve("How do quantum computers work?")
+```
+
+### MilvusVectorMemory (Production)
+
+For production workloads, use Milvus:
+
+```python
+from sagewai.memory.milvus import MilvusVectorMemory
+
+memory = MilvusVectorMemory(
+    collection="knowledge_base",
+    uri="http://localhost:19530",
+    embedding_model="text-embedding-3-small",
+    dimension=1536,
+    top_k=5,
+)
+
+await memory.initialize()
+await memory.store("doc-1", "Quantum computing uses qubits...")
+results = await memory.retrieve("quantum computing basics", top_k=3)
+```
+
+### Configuration
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `collection` | `str` | required | Milvus collection name |
+| `uri` | `str` | `"http://localhost:19530"` | Milvus server URI |
+| `embedding_model` | `str` | `"text-embedding-3-small"` | Embedding model name |
+| `dimension` | `int` | `1536` | Embedding vector dimension |
+| `top_k` | `int` | `5` | Default number of results |
+
+---
+
+## GraphMemory
+
+Knowledge graph storage for relational data. Best for retrieving entity relationships, hierarchies, and structured knowledge.
+
+### In-Memory (Prototyping)
+
+```python
+from sagewai.memory.graph import GraphMemory
+
+memory = GraphMemory()
+
+await memory.store_relation("Alice", "works_at", "Acme Corp")
+await memory.store_relation("Acme Corp", "located_in", "Berlin")
+await memory.store_relation("Bob", "works_at", "Acme Corp")
+
+results = await memory.retrieve("Who works at Acme Corp?")
+```
+
+### NebulaGraphMemory (Production)
+
+For production, use NebulaGraph for persistent graph storage with temporal fact tracking:
+
+```python
+from sagewai.memory.nebula import NebulaGraphMemory
+
+memory = NebulaGraphMemory(
+    space="knowledge",
+    hosts="127.0.0.1:9669",
+    user="root",
+    password="nebula",
+)
+
+await memory.initialize()
+await memory.store_relation("Alice", "manages", "Project X")
+results = await memory.retrieve("What does Alice manage?")
+```
+
+NebulaGraph supports temporal fact tracking with `valid_from` and `superseded_at` timestamps, so facts can be versioned over time.
+
+---
+
+## RAGEngine
+
+The `RAGEngine` orchestrates both vector and graph memory for hybrid retrieval. It uses a `QueryRouter` to classify incoming queries and route them to the appropriate backend.
+
+```python
+from sagewai.memory.rag import RAGEngine, RetrievalStrategy
+from sagewai.memory.milvus import MilvusVectorMemory
+from sagewai.memory.nebula import NebulaGraphMemory
+
+rag = RAGEngine(
+    vector=MilvusVectorMemory(collection="articles"),
+    graph=NebulaGraphMemory(space="knowledge"),
+    strategy=RetrievalStrategy.HYBRID,
+)
+```
+
+### Retrieval Strategies
+
+| Strategy | Behavior |
+|----------|----------|
+| `VECTOR_ONLY` | Only use vector similarity search |
+| `GRAPH_ONLY` | Only use graph relationship traversal |
+| `HYBRID` | Use both and merge results (recommended) |
+
+### Using RAG with Agents
+
+Pass the RAG engine as the `memory` parameter:
+
+```python
+from sagewai import UniversalAgent
+
+agent = UniversalAgent(
+    name="rag-agent",
+    model="gpt-4o",
+    memory=rag,
+)
+
+response = await agent.chat("What are the key findings from our Q4 report?")
+```
+
+---
+
+## Episodic Memory
+
+Episodic memory captures structured records of completed agent tasks: the goal, context used, actions taken, outcome, and lessons learned. On future similar tasks, relevant episodes are retrieved to inform strategy.
+
+This gives agents *experience*, not just *knowledge*.
+
+```python
+from sagewai.context import EpisodeStore, Episode, InMemoryVectorStore
+
+store = EpisodeStore(vector_store=InMemoryVectorStore())
+
+# Capture a completed task
+episode = Episode(
+    goal="Audit Q3 financial statements",
+    actions_taken=["Retrieved P&L data", "Compared against budget"],
+    outcome="Found 3 discrepancies in marketing spend",
+    lessons=["Always cross-reference with bank statements"],
+    success=True,
+)
+await store.capture(episode)
+
+# Later: retrieve relevant past experience
+similar = await store.retrieve("audit financial statements", top_k=3)
+```
+
+For persistent episodes that survive restarts, use `PersistentEpisodeStore` which delegates to a `ContextEngine` instance.
+
+---
+
+## MemoryWriter
+
+Automatically extract key facts from conversations and store them in memory:
+
+```python
+from sagewai.core.memory_writer import MemoryWriter
+
+writer = MemoryWriter(
+    model="gpt-4o-mini",
+    extract_every_n_turns=5,
+)
+
+if writer.should_extract(turn_count=10):
+    facts = await writer.extract_and_store(messages, memory)
+```
+
+`MemoryWriter` uses a small, fast model to identify and extract key facts from conversation history, then stores them in the memory backend for future retrieval.
+
+---
+
+## QueryRouter
+
+The `QueryRouter` classifies queries to determine the best retrieval strategy:
+
+```python
+from sagewai.memory.query_router import QueryRouter
+
+router = QueryRouter()
+
+router.classify("What is quantum computing?")      # "factual" -> VectorMemory
+router.classify("Who manages Project X?")           # "relational" -> GraphMemory
+router.classify("Team leads working on AI?")        # "hybrid" -> both
+```
+
+---
+
+## Best Practices
+
+1. **Start with in-memory stores** for development and testing, then switch to Milvus/NebulaGraph for production.
+
+2. **Use the Context Engine** for production applications that need document ingestion, scoped access, and lifecycle management. See the [Context Engine](/docs/core-concepts/context-engine) page for details.
+
+3. **Use `RetrievalStrategy.HYBRID`** when you have both factual documents and relational data. The RAG engine merges results from both backends.
+
+4. **Set `top_k` appropriately** — too few results may miss relevant context, too many may overwhelm the LLM's context window. Start with 5 and adjust.
+
+5. **Use `MemoryWriter`** for long-running conversations to prevent important context from being lost during compaction.
+
+6. **Enable episodic memory** for agents that perform recurring tasks. Past experiences improve future performance without additional training.
+
+---
+
+## What's Next
+
+- **[Context Engine](/docs/core-concepts/context-engine)** — Production-grade document ingestion, scoped access, and multi-strategy retrieval
+- **[Directives](/docs/core-concepts/directives)** — Inline `@context` and `@memory` directives for prompt-level retrieval
+- **[Safety](/docs/core-concepts/safety)** — HallucinationGuard validates responses against RAG context
