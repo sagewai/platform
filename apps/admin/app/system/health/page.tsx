@@ -1,6 +1,6 @@
 import { adminApi } from '@/utils/api';
 import type { SystemHealth } from '@/utils/types';
-import { Badge, Card, EmptyState } from '@sagecurator/ui';
+import { Badge, Card, EmptyState } from '@/components/ui/legacy';
 
 export const dynamic = 'force-dynamic';
 

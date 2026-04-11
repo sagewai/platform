@@ -5,7 +5,7 @@ import Link from 'next/link';
 
 import { adminApi } from '@/utils/api';
 import type { SessionInfo } from '@/utils/types';
-import { Badge, Button, Skeleton, EmptyState } from '@sagecurator/ui';
+import { Badge, Button, Skeleton, EmptyState } from '@/components/ui/legacy';
 import { ResponsiveTable } from '@/components/responsive-table';
 
 export default function SessionsPage() {

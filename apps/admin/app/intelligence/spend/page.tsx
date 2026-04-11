@@ -1,8 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Badge, Card } from '@sagecurator/ui';
-import type { BadgeVariant } from '@sagecurator/ui';
+import { Badge, Card } from '@/components/ui/legacy';
+import type { BadgeVariant } from '@/components/ui/legacy';
 import {
   DollarSign,
   Cpu,

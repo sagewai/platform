@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useCallback } from 'react';
-import { Badge, Card, Button, EmptyState } from '@sagecurator/ui';
+import { Badge, Card, Button, EmptyState } from '@/components/ui/legacy';
 import { Plus, Copy, Key, AlertTriangle } from 'lucide-react';
 import type { FleetEnrollmentKey } from '@/utils/types';
 

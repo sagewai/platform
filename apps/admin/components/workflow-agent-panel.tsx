@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Button, Badge, TextInput, TextArea } from '@sagecurator/ui';
+import { Button, Badge, TextInput, TextArea } from '@/components/ui/legacy';
 import type { AgentNodeDef } from '@/utils/workflow-types';
 import type { AgentSummary, AvailableModel } from '@/utils/types';
 

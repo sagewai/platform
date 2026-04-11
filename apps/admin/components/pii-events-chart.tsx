@@ -10,7 +10,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
-import { Card, EmptyState } from '@sagecurator/ui';
+import { Card, EmptyState } from '@/components/ui/legacy';
 
 interface PIIEventPoint {
   date: string;

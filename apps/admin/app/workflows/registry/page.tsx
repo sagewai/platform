@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { adminApi } from '@/utils/api';
 import type { SavedWorkflow } from '@/utils/types';
 import Link from 'next/link';
-import { Badge, Button, Skeleton, EmptyState } from '@sagecurator/ui';
+import { Badge, Button, Skeleton, EmptyState } from '@/components/ui/legacy';
 import { ResponsiveTable } from '@/components/responsive-table';
 import { Trash2, Edit, History, Plus } from 'lucide-react';
 

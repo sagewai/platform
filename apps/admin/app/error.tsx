@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
-import { Button } from '@sagecurator/ui';
+import { Button } from '@/components/ui/legacy';
 
 export default function GlobalError({
   error,

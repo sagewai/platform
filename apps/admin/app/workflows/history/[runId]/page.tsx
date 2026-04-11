@@ -6,7 +6,7 @@ import type { WorkflowRun, WorkflowEvent } from '@/utils/types';
 import Link from 'next/link';
 import { Fragment, useEffect, useState, useRef, use } from 'react';
 import { useRouter } from 'next/navigation';
-import { Card, Badge, Button, Skeleton, ConfirmDialog, useToast } from '@sagecurator/ui';
+import { Card, Badge, Button, Skeleton, ConfirmDialog, useToast } from '@/components/ui/legacy';
 import { PipelineGraph } from '@/components/pipeline-graph';
 import { ShareButton } from '@/components/share-button';
 import { yamlToWorkflow } from '@/utils/workflow-types';

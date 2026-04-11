@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { Copy, Download, Bookmark, Check, Share2, X } from 'lucide-react';
-import { Button, useToast } from '@sagecurator/ui';
+import { Button, useToast } from '@/components/ui/legacy';
 import { adminApi } from '@/utils/api';
 
 interface ShareButtonProps {

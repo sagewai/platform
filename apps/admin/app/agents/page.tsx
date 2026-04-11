@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { adminApi } from '@/utils/api';
 import type { AgentSummary } from '@/utils/types';
-import { Button } from '@sagecurator/ui';
+import { Button } from '@/components/ui/legacy';
 import { Search, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, X, Tag, AlertTriangle } from 'lucide-react';
 
 type SortField = 'name' | 'model' | 'strategy' | 'status';

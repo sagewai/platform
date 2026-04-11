@@ -1,6 +1,6 @@
 'use client';
 
-import { Badge } from '@sagecurator/ui';
+import { Badge } from '@/components/ui/legacy';
 import type { ConnectorHealthResult } from '@/utils/types';
 
 interface ConnectorHealthBadgeProps {

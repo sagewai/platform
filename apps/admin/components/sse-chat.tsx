@@ -9,7 +9,7 @@ import { readSSE } from '@/utils/playground-api';
 import { adminApi } from '@/utils/api';
 import { authFetch } from '@/utils/auth';
 import type { PromptLogSummary } from '@/utils/types';
-import { Card, Button } from '@sagecurator/ui';
+import { Card, Button } from '@/components/ui/legacy';
 import { Copy, Check, ChevronDown, ChevronRight, Code2, ClipboardCopy, Search, BookOpen } from 'lucide-react';
 import { ShareButton } from './share-button';
 

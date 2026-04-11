@@ -6,7 +6,7 @@ import { StatCard } from '@/components/stat-card';
 import { PIIEventsChart } from '@/components/pii-events-chart';
 import { PIIEntityBreakdown } from '@/components/pii-entity-breakdown';
 import { ExportButton } from '@/components/export-button';
-import { Badge, Card } from '@sagecurator/ui';
+import { Badge, Card } from '@/components/ui/legacy';
 
 /** Known PII entity types from the SDK PIIGuard. */
 const PII_ENTITY_TYPES = [

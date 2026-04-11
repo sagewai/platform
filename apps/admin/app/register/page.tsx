@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { adminApi } from '@/utils/api';
 import { setTokens } from '@/utils/auth';
-import { Button } from '@sagecurator/ui';
+import { Button } from '@/components/ui/legacy';
 
 export default function RegisterPage() {
   const router = useRouter();

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { adminApi } from '@/utils/api';
 import type { OrgSettings } from '@/utils/types';
-import { Card, Button, FormField, TextInput, Select, Skeleton, useToast } from '@sagecurator/ui';
+import { Card, Button, FormField, TextInput, Select, Skeleton, useToast } from '@/components/ui/legacy';
 
 const TIMEZONE_OPTIONS = [
   { value: 'UTC', label: 'UTC' },

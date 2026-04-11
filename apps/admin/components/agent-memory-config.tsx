@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Card, Button, TextArea, useToast } from '@sagecurator/ui';
+import { Card, Button, TextArea, useToast } from '@/components/ui/legacy';
 import { Brain, Database, Sparkles, BookOpen } from 'lucide-react';
 
 interface AgentMemoryConfig {

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { PageLayout, Card, Button, Badge, FormField, TextInput, useToast } from '@sagecurator/ui';
+import { PageLayout, Card, Button, Badge, FormField, TextInput, useToast } from '@/components/ui/legacy';
 import { adminApi } from '@/utils/api';
 import type { ProviderConfig, OllamaModelInfo, LMStudioModelInfo } from '@/utils/types';
 import { ChevronDown, ChevronRight, Check, X, Zap, Server, Cloud, AlertCircle, ExternalLink, RefreshCw } from 'lucide-react';

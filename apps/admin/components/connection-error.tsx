@@ -2,7 +2,7 @@
 
 import { useConnection } from '@/utils/connection';
 import { WifiOff, RefreshCw, Terminal, Server } from 'lucide-react';
-import { Button } from '@sagecurator/ui';
+import { Button } from '@/components/ui/legacy';
 
 /**
  * Full-page error state shown when the admin backend is unreachable.

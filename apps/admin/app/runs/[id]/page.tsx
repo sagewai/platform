@@ -4,7 +4,7 @@ import { adminApi } from '@/utils/api';
 import type { RunDetail } from '@/utils/types';
 import Link from 'next/link';
 import { useEffect, useState, useCallback, use } from 'react';
-import { Card, Badge, Button, Tabs, Skeleton, ConfirmDialog, useToast } from '@sagecurator/ui';
+import { Card, Badge, Button, Tabs, Skeleton, ConfirmDialog, useToast } from '@/components/ui/legacy';
 import { ShareButton } from '@/components/share-button';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';

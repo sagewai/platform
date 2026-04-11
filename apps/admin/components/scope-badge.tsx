@@ -1,6 +1,6 @@
 'use client';
 
-import { Badge } from '@sagecurator/ui';
+import { Badge } from '@/components/ui/legacy';
 
 const SCOPE_COLORS: Record<string, string> = {
   org: 'bg-purple-500/15 text-purple-400 border-purple-500/30',

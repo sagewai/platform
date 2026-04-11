@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { adminApi } from '@/utils/api';
 import type { Workspace } from '@/utils/types';
-import { Card, Button, Skeleton, useToast } from '@sagecurator/ui';
+import { Card, Button, Skeleton, useToast } from '@/components/ui/legacy';
 
 export default function WorkspaceSettingsPage() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);

@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { adminApi } from '@/utils/api';
 import type { RunSummary } from '@/utils/types';
 import Link from 'next/link';
-import { Badge, Button, Skeleton, EmptyState } from '@sagecurator/ui';
+import { Badge, Button, Skeleton, EmptyState } from '@/components/ui/legacy';
 import { ResponsiveTable } from '@/components/responsive-table';
 
 const RUN_TYPE_LABELS: Record<string, { label: string; variant: 'default' | 'info' | 'warning' }> = {

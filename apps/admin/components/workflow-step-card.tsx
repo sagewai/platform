@@ -1,6 +1,6 @@
 'use client';
 
-import { Button, Badge, Select } from '@sagecurator/ui';
+import { Button, Badge, Select } from '@/components/ui/legacy';
 import type { WorkflowNode, AgentNodeDef } from '@/utils/workflow-types';
 import { isAgentStep, isSequentialNode, isParallelNode, isLoopNode } from '@/utils/workflow-types';
 

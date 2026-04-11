@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { QRCodeSVG } from 'qrcode.react';
-import { Badge, Button, Card, FormField, TextInput, Select, TextArea } from '@sagecurator/ui';
+import { Badge, Button, Card, FormField, TextInput, Select, TextArea } from '@/components/ui/legacy';
 import { Brain, Cpu, Languages, Mic, GitBranch, Layers, CheckCircle, XCircle } from 'lucide-react';
 import { adminApi } from '@/utils/api';
 import { setTokens } from '@/utils/auth';
@@ -145,8 +145,12 @@ export default function SetupPage() {
   return (
     <div className="min-h-screen bg-bg-deep flex items-center justify-center p-md">
       <div className="w-full max-w-[36rem]">
-        {/* Logo */}
-        <img src="/brand/logo.svg" alt="Sagewai" className="h-10 w-10 mx-auto mb-4" />
+        {/* Logo — full logo on dark background */}
+        <img
+          src="/brand/sagewai_logo_dark.svg"
+          alt="Sagewai"
+          className="h-10 w-auto mx-auto mb-4"
+        />
 
         {/* Step progress */}
         <StepProgress steps={STEPS} currentStep={step} />

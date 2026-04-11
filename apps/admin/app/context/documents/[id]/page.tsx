@@ -3,7 +3,7 @@
 import { useEffect, useState, use } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Card, Button, Skeleton, useToast } from '@sagecurator/ui';
+import { Card, Button, Skeleton, useToast } from '@/components/ui/legacy';
 import { RefreshCw, Trash2, ArrowLeft } from 'lucide-react';
 import { adminApi } from '@/utils/api';
 import type { ContextDocument, ContextChunk } from '@/utils/types';

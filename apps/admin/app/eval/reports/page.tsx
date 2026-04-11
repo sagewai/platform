@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { adminApi } from '@/utils/api';
 import type { EvalRunSummary, EvalRunDetail } from '@/utils/types';
-import { Card, Button, Skeleton } from '@sagecurator/ui';
+import { Card, Button, Skeleton } from '@/components/ui/legacy';
 import { BarChart2, CheckCircle2, XCircle, ChevronDown, ChevronRight } from 'lucide-react';
 
 export default function EvalReportsPage() {

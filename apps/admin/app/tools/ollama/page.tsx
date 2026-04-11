@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { Card, Button, Badge, Skeleton, EmptyState, ConfirmDialog, useToast } from '@sagecurator/ui';
+import { Card, Button, Badge, Skeleton, EmptyState, ConfirmDialog, useToast } from '@/components/ui/legacy';
 import { Trash2, Download } from 'lucide-react';
 import { authFetch } from '@/utils/auth';
 

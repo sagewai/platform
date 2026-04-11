@@ -3,7 +3,7 @@
 import { useState, useMemo } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { Badge, Card, Button, EmptyState } from '@sagecurator/ui';
+import { Badge, Card, Button, EmptyState } from '@/components/ui/legacy';
 import { ArrowLeft, Heart, Cpu, Shield, AlertTriangle, Zap } from 'lucide-react';
 import type { FleetWorker } from '@/utils/types';
 

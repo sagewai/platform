@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import Link from 'next/link';
-import { PageLayout, Card, Button, Badge, FormField, TextInput, useToast } from '@sagecurator/ui';
+import { PageLayout, Card, Button, Badge, FormField, TextInput, useToast } from '@/components/ui/legacy';
 import { adminApi } from '@/utils/api';
 import { ConnectorHealthBadge } from '@/components/connector-health-badge';
 import type { ConnectorCatalogItem, ConnectorHealthResult, ConnectorAuthField, CustomConnectorRequest } from '@/utils/types';

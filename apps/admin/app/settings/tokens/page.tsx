@@ -6,7 +6,7 @@ import type { TokenInfo, CreateTokenResponse } from '@/utils/types';
 import {
   Card, Button, Badge, Skeleton, EmptyState, ConfirmDialog, useToast,
   FormField, TextInput, Select,
-} from '@sagecurator/ui';
+} from '@/components/ui/legacy';
 import { ResponsiveTable } from '@/components/responsive-table';
 import { HelpPanel } from '@/components/help-panel';
 

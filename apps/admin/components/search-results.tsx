@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { Card } from '@sagecurator/ui';
+import { Card } from '@/components/ui/legacy';
 import { ScopeBadge } from './scope-badge';
 import { SourceBadge } from './source-badge';
 import type { ContextSearchResult } from '@/utils/types';

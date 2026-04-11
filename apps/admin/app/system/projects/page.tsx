@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
-import { PageLayout, Button, Badge, Card, FormField, TextInput, TextArea, Select, ConfirmDialog, useToast } from '@sagecurator/ui';
+import { PageLayout, Button, Badge, Card, FormField, TextInput, TextArea, Select, ConfirmDialog, useToast } from '@/components/ui/legacy';
 import { adminApi } from '@/utils/api';
 import type { Project, AvailableModel } from '@/utils/types';
 import { ChevronDown, ChevronRight, Trash2, AlertCircle } from 'lucide-react';

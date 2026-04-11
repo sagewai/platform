@@ -5,7 +5,7 @@ import type { AgentDetail, AvailableModel, PromptLogSummary, ConnectorCatalogIte
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, use } from 'react';
-import { Card, Badge, Button, FormField, TextInput, TextArea, Select, Tabs, Skeleton, useToast } from '@sagecurator/ui';
+import { Card, Badge, Button, FormField, TextInput, TextArea, Select, Tabs, Skeleton, useToast } from '@/components/ui/legacy';
 import { AlertCircle, Bookmark, ChevronDown, ChevronRight, MessageSquare, Tag, X, Plus, Pencil, Trash2, Plug } from 'lucide-react';
 import { SSEChat } from '@/components/sse-chat';
 import { AgentMemoryConfigPanel } from '@/components/agent-memory-config';

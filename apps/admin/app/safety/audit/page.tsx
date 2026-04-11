@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { adminApi } from '@/utils/api';
 import type { AuditEvent } from '@/utils/types';
 import { ExportButton } from '@/components/export-button';
-import { Badge, Button, Card, Skeleton, EmptyState } from '@sagecurator/ui';
+import { Badge, Button, Card, Skeleton, EmptyState } from '@/components/ui/legacy';
 
 const PAGE_SIZE = 50;
 

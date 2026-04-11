@@ -1,11 +1,16 @@
 import Link from 'next/link';
-import { Monitor, AlertTriangle } from 'lucide-react';
+import { Monitor, ArrowUpRight, Sparkles } from 'lucide-react';
 import { adminApi } from '@/utils/api';
 import { StatCard } from '@/components/stat-card';
 import { CostTrendChart } from '@/components/cost-trend-chart';
 import { ModelUsageChart } from '@/components/model-usage-chart';
 import { DashboardHealth } from '@/components/dashboard-health';
 import { DashboardClientWidgets } from '@/components/dashboard/client-widgets';
+import { SystemOffline } from '@/components/system-offline';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Button, buttonVariants } from '@/components/ui/button';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import type { RunSummary } from '@/utils/types';
 
 export const dynamic = 'force-dynamic';
@@ -44,6 +49,52 @@ export default async function DashboardPage() {
     apiError = true;
   }
 
+  // ── Header (always visible) ──
+  const header = (
+    <div className="flex items-center justify-between mt-0 mb-lg">
+      <h1 className="text-2xl font-bold font-[family-name:var(--font-heading)]">Dashboard</h1>
+      <a href="/tv" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+        <Monitor className="mr-1.5 h-3.5 w-3.5" /> TV Mode
+      </a>
+    </div>
+  );
+
+  // ── API down: friendly empty state instead of red banner ──
+  if (apiError) {
+    return (
+      <div className="max-w-6xl mx-auto">
+        {header}
+        <div className="mt-8">
+          <SystemOffline />
+        </div>
+      </div>
+    );
+  }
+
+  // ── Fresh install: no activity yet ──
+  const hasAnyActivity = agentCount > 0 || runCount > 0 || sessionCount > 0 || totalTokens > 0;
+  if (!hasAnyActivity) {
+    return (
+      <div className="max-w-6xl mx-auto">
+        {header}
+        <DashboardClientWidgets />
+        <div className="mt-8">
+          <EmptyState
+            icon={Sparkles}
+            title="No activity yet"
+            description="Spin up your first agent and run it from the playground to see metrics here."
+            action={
+              <Link href="/playground" className={buttonVariants()}>
+                Try the playground <ArrowUpRight className="ml-1.5 h-4 w-4" />
+              </Link>
+            }
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // ── Normal dashboard render ──
   const today = new Date().toISOString().slice(0, 10);
   const costTrendData = totalCost > 0 ? [{ date: today, cost: totalCost }] : [];
   const modelUsageData = Object.entries(tokensByModel).map(([model, tokens]) => ({
@@ -56,30 +107,7 @@ export default async function DashboardPage() {
 
   return (
     <div className="max-w-6xl mx-auto">
-      <div className="flex items-center justify-between mt-0 mb-lg">
-        <h1 className="text-2xl font-bold font-[family-name:var(--font-heading)]">Dashboard</h1>
-        <a
-          href="/tv"
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded border border-border-dark text-text-secondary hover:bg-surface-dark-hover hover:text-text-on-dark transition-colors"
-        >
-          <Monitor className="w-3.5 h-3.5" /> TV Mode
-        </a>
-      </div>
-
-      {/* API error banner */}
-      {apiError && (
-        <div className="flex items-center gap-3 bg-error/5 border border-error/20 rounded-lg px-4 py-3 mb-lg">
-          <AlertTriangle className="w-4 h-4 text-error flex-shrink-0" />
-          <div>
-            <p className="text-sm font-medium text-error m-0">Unable to load dashboard data</p>
-            <p className="text-xs text-text-muted m-0 mt-0.5">
-              The API server is not responding. Start the backend with{' '}
-              <code className="font-[family-name:var(--font-mono)] px-1 rounded">make dev-native APP=admin</code>{' '}
-              and refresh the page.
-            </p>
-          </div>
-        </div>
-      )}
+      {header}
 
       {/* Role-based welcome, getting started, and quick actions */}
       <DashboardClientWidgets />
@@ -94,7 +122,7 @@ export default async function DashboardPage() {
         <StatCard label="Risk Events" value={piiEvents} />
       </div>
 
-      {/* Health widget + Quick actions (client-side) */}
+      {/* Health widget */}
       <div className="space-y-md mb-lg">
         <DashboardHealth />
       </div>
@@ -107,72 +135,77 @@ export default async function DashboardPage() {
 
       {/* Top cost models */}
       {costModelEntries.length > 0 && (
-        <div className="bg-surface-dark rounded-lg border border-border-dark p-lg mb-lg">
-          <h3 className="mt-0 mb-md text-base font-semibold font-[family-name:var(--font-heading)]">
-            Top Cost Models
-          </h3>
-          <table className="w-full text-sm border-collapse">
-            <thead>
-              <tr className="border-b-2 border-border-dark">
-                <th className="text-left py-2 px-3 text-xs text-text-muted uppercase tracking-wide">Model</th>
-                <th className="text-right py-2 px-3 text-xs text-text-muted uppercase tracking-wide">Cost</th>
-              </tr>
-            </thead>
-            <tbody>
-              {costModelEntries.map(([model, cost]) => (
-                <tr key={model} className="border-b border-border-dark last:border-0 hover:bg-surface-dark-hover transition-colors">
-                  <td className="py-2 px-3">{model}</td>
-                  <td className="py-2 px-3 text-right text-primary">${cost.toFixed(4)}</td>
+        <Card className="mb-lg">
+          <CardHeader>
+            <CardTitle className="text-base font-semibold">Top Cost Models</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="border-b border-border">
+                  <th className="text-left py-2 px-3 text-xs text-muted-foreground uppercase tracking-wide">Model</th>
+                  <th className="text-right py-2 px-3 text-xs text-muted-foreground uppercase tracking-wide">Cost</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {costModelEntries.map(([model, cost]) => (
+                  <tr key={model} className="border-b border-border last:border-0 hover:bg-accent/40 transition-colors">
+                    <td className="py-2 px-3">{model}</td>
+                    <td className="py-2 px-3 text-right text-primary">${cost.toFixed(4)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </CardContent>
+        </Card>
       )}
 
       {/* Utility Actions */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-md mb-lg">
         {[
           { label: 'Run Evaluation', href: '/eval/run', description: 'Test agent quality' },
-          { label: 'Create Token', href: '/settings/tokens', description: 'Generate API tokens' },
+          { label: 'Create Token', href: '/account/tokens', description: 'Generate API tokens' },
           { label: 'View Audit Log', href: '/safety/audit', description: 'Review safety events' },
-          { label: 'System Health', href: '/settings/health', description: 'Check infrastructure' },
+          { label: 'System Health', href: '/system/health', description: 'Check infrastructure' },
         ].map((action) => (
           <Link
             key={action.href}
             href={action.href}
-            className="bg-surface-dark rounded-lg border border-border-dark p-md no-underline text-inherit hover:border-primary/40 hover:bg-surface-dark-hover transition-colors"
+            className="rounded-lg border border-border bg-card text-card-foreground p-md no-underline hover:border-primary/40 hover:bg-accent/40 transition-colors"
           >
             <div className="text-sm font-semibold text-primary">{action.label}</div>
-            <div className="text-xs text-text-muted mt-1">{action.description}</div>
+            <div className="text-xs text-muted-foreground mt-1">{action.description}</div>
           </Link>
         ))}
       </div>
 
       {/* Recent Activity */}
       {recentRuns.length > 0 && (
-        <div className="bg-surface-dark rounded-lg border border-border-dark p-lg">
-          <h3 className="mt-0 mb-md text-base font-semibold font-[family-name:var(--font-heading)]">Recent Activity</h3>
-          <div className="flex flex-col">
-            {recentRuns.slice(0, 5).map((run) => (
-              <div key={run.run_id} className="flex justify-between items-center py-2 border-b border-border-dark last:border-0 hover:bg-surface-dark-hover transition-colors px-1 rounded">
-                <div>
-                  <span className="font-medium text-sm">{run.agent_name}</span>
-                  <span className="text-text-muted text-xs ml-2">
-                    {run.input_preview?.slice(0, 50) || '\u2014'}
-                  </span>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base font-semibold">Recent Activity</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-col">
+              {recentRuns.slice(0, 5).map((run) => (
+                <div
+                  key={run.run_id}
+                  className="flex justify-between items-center py-2 border-b border-border last:border-0 hover:bg-accent/40 transition-colors px-1 rounded"
+                >
+                  <div>
+                    <span className="font-medium text-sm">{run.agent_name}</span>
+                    <span className="text-muted-foreground text-xs ml-2">
+                      {run.input_preview?.slice(0, 50) || '\u2014'}
+                    </span>
+                  </div>
+                  <Badge variant={run.status === 'completed' ? 'default' : 'secondary'}>
+                    {run.status}
+                  </Badge>
                 </div>
-                <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
-                  run.status === 'completed'
-                    ? 'bg-success/15 text-success'
-                    : 'bg-white/5 text-text-secondary'
-                }`}>
-                  {run.status}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
       )}
     </div>
   );

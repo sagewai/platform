@@ -2,7 +2,7 @@
 
 import { useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Button, FormField, TextInput, TextArea, Tabs, useToast } from '@sagecurator/ui';
+import { Button, FormField, TextInput, TextArea, Tabs, useToast } from '@/components/ui/legacy';
 import {
   Upload, X, FileText, CheckCircle2, AlertCircle, Loader2, FolderOpen,
 } from 'lucide-react';

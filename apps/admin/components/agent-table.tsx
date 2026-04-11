@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import type { AgentSummary } from '@/utils/types';
-import { Badge } from '@sagecurator/ui';
+import { Badge } from '@/components/ui/legacy';
 
 interface Props {
   agents: AgentSummary[];

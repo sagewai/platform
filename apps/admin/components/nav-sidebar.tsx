@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -27,22 +28,24 @@ import {
   Eye,
   FileBarChart,
   Cog,
+  Search,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { useSidebar, SidebarToggle } from '@sagecurator/ui';
+import { useSidebar, SidebarToggle } from '@/components/ui/legacy';
 import { ThemeToggle } from './theme-toggle';
 import { isCloud } from '@/utils/mode';
 import { useRole } from '@/hooks/use-role';
 import { WorkspaceSwitcher } from './workspace-switcher';
+import { openCommandPalette } from './command-palette';
 
 const LS_KEY = 'nav-groups-collapsed';
 
-interface NavItem {
+export interface NavItem {
   href: string;
   label: string;
 }
 
-interface NavGroup {
+export interface NavGroup {
   id: string;
   label: string;
   icon: LucideIcon;
@@ -55,11 +58,11 @@ interface NavGroup {
 
 /* ──────────────────────────────────────────────────────────────────────────
  * Master group list. All possible groups across all roles.
- * The useRole() hook determines which groups are visible for the current user.
+ * Exported so the command palette can reuse the same source of truth.
  * Group IDs MUST match the keys in ROLE_NAV_GROUPS in utils/roles.ts.
  * ────────────────────────────────────────────────────────────────────────── */
 
-const ALL_GROUPS: NavGroup[] = [
+export const ALL_GROUPS: NavGroup[] = [
   /* ── HOME ── */
   {
     id: 'home',
@@ -72,7 +75,7 @@ const ALL_GROUPS: NavGroup[] = [
     ],
   },
 
-  /* ── BUILD (admin, developer) ── */
+  /* ── BUILD ── */
   {
     id: 'build',
     label: 'Build',
@@ -88,7 +91,7 @@ const ALL_GROUPS: NavGroup[] = [
     ],
   },
 
-  /* ── INTELLIGENCE (admin, developer, ml_engineer) ── */
+  /* ── INTELLIGENCE ── */
   {
     id: 'intelligence',
     label: 'Intelligence',
@@ -104,7 +107,7 @@ const ALL_GROUPS: NavGroup[] = [
     ],
   },
 
-  /* ── OPERATIONS (admin) ── */
+  /* ── OPERATIONS ── */
   {
     id: 'operations',
     label: 'Operations',
@@ -119,7 +122,7 @@ const ALL_GROUPS: NavGroup[] = [
     ],
   },
 
-  /* ── OBSERVE (admin) ── */
+  /* ── OBSERVE ── */
   {
     id: 'observe',
     label: 'Observe',
@@ -135,7 +138,7 @@ const ALL_GROUPS: NavGroup[] = [
     ],
   },
 
-  /* ── HARNESS (admin) ── */
+  /* ── HARNESS ── */
   {
     id: 'harness',
     label: 'Harness',
@@ -149,7 +152,7 @@ const ALL_GROUPS: NavGroup[] = [
     ],
   },
 
-  /* ── TOOLS (developer) ── */
+  /* ── TOOLS ── */
   {
     id: 'tools',
     label: 'Tools',
@@ -163,7 +166,7 @@ const ALL_GROUPS: NavGroup[] = [
     ],
   },
 
-  /* ── DEBUG (developer) ── */
+  /* ── DEBUG ── */
   {
     id: 'debug',
     label: 'Debug',
@@ -176,7 +179,7 @@ const ALL_GROUPS: NavGroup[] = [
     ],
   },
 
-  /* ── TRAINING (ml_engineer) ── */
+  /* ── TRAINING ── */
   {
     id: 'training',
     label: 'Training',
@@ -190,7 +193,7 @@ const ALL_GROUPS: NavGroup[] = [
     ],
   },
 
-  /* ── DATA (ml_engineer) ── */
+  /* ── DATA ── */
   {
     id: 'data',
     label: 'Data',
@@ -202,7 +205,7 @@ const ALL_GROUPS: NavGroup[] = [
     ],
   },
 
-  /* ── ANALYTICS (ml_engineer) ── */
+  /* ── ANALYTICS ── */
   {
     id: 'analytics',
     label: 'Analytics',
@@ -216,7 +219,7 @@ const ALL_GROUPS: NavGroup[] = [
     ],
   },
 
-  /* ── REPORTS (viewer) ── */
+  /* ── REPORTS ── */
   {
     id: 'reports',
     label: 'Reports',
@@ -230,7 +233,7 @@ const ALL_GROUPS: NavGroup[] = [
     ],
   },
 
-  /* ── AGENTS read-only (viewer) ── */
+  /* ── AGENTS read-only ── */
   {
     id: 'agents-readonly',
     label: 'Agents',
@@ -243,7 +246,7 @@ const ALL_GROUPS: NavGroup[] = [
     ],
   },
 
-  /* ── SYSTEM (admin only) ── */
+  /* ── SYSTEM ── */
   {
     id: 'system',
     label: 'System',
@@ -262,7 +265,7 @@ const ALL_GROUPS: NavGroup[] = [
     bottom: true,
   },
 
-  /* ── MY ACCOUNT (all roles) ── */
+  /* ── MY ACCOUNT ── */
   {
     id: 'account',
     label: 'My Account',
@@ -368,25 +371,28 @@ function NavIconWithFlyout({
         }}
         className={`flex items-center justify-center w-full h-11 rounded-md transition-colors border-l-[3px] cursor-pointer bg-transparent ${
           isGroupActive
-            ? 'bg-white/10 border-primary text-white'
-            : 'border-transparent text-text-on-dark/65 hover:bg-white/[0.08] hover:text-text-on-dark'
+            ? 'bg-sidebar-accent border-sidebar-accent-foreground text-sidebar-accent-foreground'
+            : 'border-transparent text-sidebar-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground'
         }`}
       >
         <Icon size={18} strokeWidth={isGroupActive ? 2 : 1.5} aria-hidden="true" />
       </button>
 
       {open && typeof document !== 'undefined' && createPortal(
-        <div
+        <motion.div
           ref={flyoutRef}
+          initial={{ opacity: 0, x: -8 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ duration: 0.12, ease: 'easeOut' }}
           onMouseLeave={(e) => {
             const related = e.relatedTarget as Node | null;
             if (btnRef.current?.contains(related)) return;
             setOpen(false);
           }}
           style={{ position: 'fixed', top: pos.top, left: pos.left, zIndex: 9999 }}
-          className="bg-bg-elevated border border-white/10 rounded-lg shadow-xl min-w-[180px] py-1.5"
+          className="bg-popover text-popover-foreground border border-border rounded-lg shadow-xl min-w-[180px] py-1.5 backdrop-blur-md"
         >
-          <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-text-on-dark/60 border-b border-white/5 mb-1">
+          <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground border-b border-border mb-1">
             {group.label}
           </div>
           {group.items.map(({ href, label }) => {
@@ -399,15 +405,15 @@ function NavIconWithFlyout({
                 onClick={() => setOpen(false)}
                 className={`block px-3 py-2 text-[13px] no-underline transition-colors ${
                   active
-                    ? 'text-white bg-white/10 font-semibold'
-                    : 'text-text-on-dark/75 hover:text-text-on-dark hover:bg-white/5'
+                    ? 'text-sidebar-accent-foreground bg-sidebar-accent font-semibold'
+                    : 'text-popover-foreground/80 hover:text-popover-foreground hover:bg-accent/40'
                 }`}
               >
                 {label}
               </Link>
             );
           })}
-        </div>,
+        </motion.div>,
         document.body,
       )}
     </div>
@@ -447,7 +453,7 @@ function getActiveGroupId(pathname: string, groups: NavGroup[]): string | null {
 export function NavSidebar() {
   const pathname = usePathname();
   const { expanded, setExpanded, mobile } = useSidebar();
-  const { navGroups: allowedGroupIds, favorites } = useRole();
+  const { navGroups: allowedGroupIds } = useRole();
 
   // Filter groups by role
   const roleGroups = ALL_GROUPS.filter((g) => allowedGroupIds.includes(g.id));
@@ -513,8 +519,10 @@ export function NavSidebar() {
         <button
           onClick={() => toggleGroup(group.id)}
           aria-expanded={!isCollapsed}
-          className={`w-full flex items-center gap-2.5 px-5 py-2.5 text-[11px] font-semibold uppercase tracking-wider transition-colors cursor-pointer bg-transparent border-none min-h-[36px] ${
-            isGroupActive ? 'text-primary' : 'text-text-on-dark/60 hover:text-text-on-dark/80'
+          className={`w-full flex items-center gap-2.5 px-5 py-2.5 text-[11px] font-semibold uppercase tracking-[0.08em] transition-colors cursor-pointer bg-transparent border-none min-h-[36px] ${
+            isGroupActive
+              ? 'text-sidebar-accent-foreground'
+              : 'text-sidebar-muted-foreground hover:text-sidebar-foreground'
           }`}
         >
           <Icon size={12} strokeWidth={2.5} aria-hidden="true" />
@@ -538,8 +546,8 @@ export function NavSidebar() {
               {...(tourAttr ? { 'data-tour': tourAttr } : {})}
               className={`block px-5 py-2 text-[13px] no-underline transition-colors border-l-[3px] ${
                 active
-                  ? 'text-white bg-white/10 border-primary font-semibold'
-                  : 'text-text-on-dark/75 border-transparent hover:text-text-on-dark hover:bg-white/5'
+                  ? 'text-sidebar-accent-foreground bg-sidebar-accent border-sidebar-accent-foreground font-semibold'
+                  : 'text-sidebar-foreground/80 border-transparent hover:text-sidebar-foreground hover:bg-sidebar-accent/40'
               }`}
             >
               {label}
@@ -552,25 +560,47 @@ export function NavSidebar() {
 
   return (
     <>
-      {/* Header */}
+      {/* Header — only logo + collapse toggle (theme toggle moved to footer) */}
       <div className={`flex items-center justify-between shrink-0 ${expanded ? 'px-5 py-4' : 'px-3 py-4'}`}>
         {expanded ? (
-          <Link href="/" className="flex items-center gap-2.5 no-underline">
-            <img src="/brand/logo.svg" alt="Sagewai" className="h-7 w-7" />
-            <span className="text-base font-bold font-[family-name:var(--font-heading)] tracking-wide bg-clip-text text-transparent" style={{ backgroundImage: 'var(--gradient-brand)' }}>
-              SAGEWAI
-            </span>
+          <Link href="/" className="flex items-center no-underline" aria-label="Sagewai home">
+            {/* Full logo (includes wordmark). Light variant for light mode,
+                dark variant for dark mode. */}
+            <img
+              src="/brand/sagewai_logo.svg"
+              alt="Sagewai"
+              className="h-7 w-auto block dark:hidden"
+            />
+            <img
+              src="/brand/sagewai_logo_dark.svg"
+              alt="Sagewai"
+              className="h-7 w-auto hidden dark:block"
+            />
           </Link>
         ) : (
-          <Link href="/" className="mx-auto no-underline">
-            <img src="/brand/logo.svg" alt="Sagewai" className="h-7 w-7" />
+          <Link href="/" className="mx-auto no-underline" aria-label="Sagewai home">
+            <img src="/brand/sagewai_icon.svg" alt="Sagewai" className="h-7 w-7" />
           </Link>
         )}
-        <div className="flex items-center gap-0.5">
-          <ThemeToggle />
-          <SidebarToggle />
-        </div>
+        {expanded && <SidebarToggle />}
       </div>
+
+      {/* Search / command palette trigger (expanded only) */}
+      {expanded && (
+        <div className="px-5 mb-3 shrink-0">
+          <button
+            type="button"
+            onClick={openCommandPalette}
+            className="w-full flex items-center gap-2 px-3 py-2 text-[13px] rounded-md border border-sidebar-border bg-sidebar-accent/30 text-sidebar-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent/60 transition-colors cursor-pointer"
+          >
+            <Search size={14} aria-hidden="true" />
+            <span className="flex-1 text-left">Search…</span>
+            <kbd className="text-[10px] font-semibold tracking-wider px-1.5 py-0.5 rounded border border-sidebar-border bg-sidebar/40">
+              ⌘K
+            </kbd>
+          </button>
+        </div>
+      )}
 
       {/* Workspace switcher — cloud + expanded only */}
       {isCloud && expanded && (
@@ -580,7 +610,7 @@ export function NavSidebar() {
       )}
 
       {/* Divider */}
-      {expanded && <div className="mx-5 mb-3 border-t border-white/8" />}
+      {expanded && <div className="mx-5 mb-3 border-t border-sidebar-border" />}
 
       {/* Main navigation groups */}
       <nav className="flex-1 overflow-y-auto pb-md" aria-label="Main navigation">
@@ -588,10 +618,21 @@ export function NavSidebar() {
 
         {/* Separator before bottom groups */}
         {bottomGroups.length > 0 && (
-          <div className="mx-5 my-2 border-t border-white/10" />
+          <div className="mx-5 my-2 border-t border-sidebar-border" />
         )}
         {bottomGroups.map(renderGroup)}
       </nav>
+
+      {/* Footer — theme toggle + collapse toggle (collapsed mode only) */}
+      <div
+        className={`shrink-0 border-t border-sidebar-border flex items-center ${
+          expanded ? 'px-5 py-3 justify-between' : 'px-2 py-3 flex-col gap-2'
+        }`}
+      >
+        {expanded && <span className="text-[11px] text-sidebar-muted-foreground">Theme</span>}
+        <ThemeToggle />
+        {!expanded && <SidebarToggle />}
+      </div>
     </>
   );
 }

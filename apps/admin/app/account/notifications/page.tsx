@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { adminApi } from '@/utils/api';
 import {
   Card, Button, Badge, Skeleton, EmptyState, useToast, TextInput, FormField,
-} from '@sagecurator/ui';
+} from '@/components/ui/legacy';
 import { Mail, MessageSquare, Bell, Trash2, Play, Check, X } from 'lucide-react';
 
 /* ─── Types ─── */

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Card, Badge, EmptyState } from '@sagecurator/ui';
+import { Card, Badge, EmptyState } from '@/components/ui/legacy';
 
 interface ModelMetrics {
   model: string;

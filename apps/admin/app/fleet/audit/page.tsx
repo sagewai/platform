@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { Badge, Card, EmptyState } from '@sagecurator/ui';
+import { Badge, Card, EmptyState } from '@/components/ui/legacy';
 import { Search, ChevronDown, ChevronRight } from 'lucide-react';
 import type { FleetAuditEvent } from '@/utils/types';
 

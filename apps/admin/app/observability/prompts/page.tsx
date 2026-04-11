@@ -5,7 +5,7 @@ import { adminApi } from '@/utils/api';
 import { playgroundApi } from '@/utils/playground-api';
 import type { PromptLogSummary, PromptLogDetail } from '@/utils/types';
 import type { ReplayResponse } from '@/utils/types';
-import { Card, Badge, Button, Skeleton, EmptyState, useToast } from '@sagecurator/ui';
+import { Card, Badge, Button, Skeleton, EmptyState, useToast } from '@/components/ui/legacy';
 import { Copy, Download, Bookmark, BookmarkCheck, Search, X, Trash2 } from 'lucide-react';
 
 export default function PromptHistoryPage() {

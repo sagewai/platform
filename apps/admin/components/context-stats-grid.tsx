@@ -1,6 +1,6 @@
 'use client';
 
-import { Card } from '@sagecurator/ui';
+import { Card } from '@/components/ui/legacy';
 import { FileText, Layers, Target, Database } from 'lucide-react';
 import type { ContextStats, ContextScopeInfo } from '@/utils/types';
 

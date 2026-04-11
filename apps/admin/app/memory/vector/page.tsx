@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { adminApi } from '@/utils/api';
 import type { VectorStats, VectorSearchResult } from '@/utils/types';
 import { StatCard } from '@/components/stat-card';
-import { Card, Button, Skeleton } from '@sagecurator/ui';
+import { Card, Button, Skeleton } from '@/components/ui/legacy';
 import { HelpPanel } from '@/components/help-panel';
 
 export default function VectorStorePage() {

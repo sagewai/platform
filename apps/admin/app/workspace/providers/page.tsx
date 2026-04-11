@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { adminApi } from '@/utils/api';
 import type { LLMProvider, Workspace } from '@/utils/types';
-import { Card, Button, Badge, EmptyState, Skeleton, useToast } from '@sagecurator/ui';
+import { Card, Button, Badge, EmptyState, Skeleton, useToast } from '@/components/ui/legacy';
 
 const PROVIDER_OPTIONS = ['openai', 'anthropic', 'google', 'mistral', 'cohere', 'groq'];
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Button, TextArea, useToast } from '@sagecurator/ui';
+import { Button, TextArea, useToast } from '@/components/ui/legacy';
 import { Pencil, Trash2, X, Check } from 'lucide-react';
 import type { ContextChunk } from '@/utils/types';
 

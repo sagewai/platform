@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { Badge, Card, Button, EmptyState } from '@sagecurator/ui';
+import { Badge, Card, Button, EmptyState } from '@/components/ui/legacy';
 import { Shield, Plus, Pencil, Trash2, ToggleLeft, ToggleRight } from 'lucide-react';
 const DEMO_POLICIES = [
   {

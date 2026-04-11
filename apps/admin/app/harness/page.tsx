@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Badge, Card } from '@sagecurator/ui';
+import { Badge, Card } from '@/components/ui/legacy';
 import type { LucideIcon } from 'lucide-react';
 import { Gauge, Zap, DollarSign, Shield, Key, Activity, ArrowDownRight, ArrowUpRight } from 'lucide-react';
 

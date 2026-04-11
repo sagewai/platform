@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AGUIEvent, RunTimeline } from '@/utils/agui-types';
 import { EventTimeline } from './event-timeline';
-import { Button } from '@sagecurator/ui';
+import { Button } from '@/components/ui/legacy';
 import { authSSE } from '@/utils/auth';
 
 const SSE_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL

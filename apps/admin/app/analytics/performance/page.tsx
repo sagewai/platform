@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Card } from '@sagecurator/ui';
+import { Card } from '@/components/ui/legacy';
 import { useLicense } from '@/utils/license';
 import { PremiumUpgradeCTA } from '@/components/premium-upgrade-cta';
 import { adminApi } from '@/utils/api';

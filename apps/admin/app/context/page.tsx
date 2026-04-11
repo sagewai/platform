@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Card } from '@sagecurator/ui';
+import { Card } from '@/components/ui/legacy';
 import { FileText, Search, Settings2, Sparkles } from 'lucide-react';
 import { adminApi } from '@/utils/api';
 import type { ContextStats, ContextScopeInfo } from '@/utils/types';

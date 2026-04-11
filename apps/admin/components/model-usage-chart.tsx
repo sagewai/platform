@@ -1,7 +1,15 @@
 'use client';
 
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { Card, EmptyState } from '@sagecurator/ui';
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from 'recharts';
+import { BarChart3 } from 'lucide-react';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import {
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from '@/components/ui/chart';
+import { EmptyState } from '@/components/ui/empty-state';
 
 interface ModelUsageEntry {
   model: string;
@@ -12,52 +20,56 @@ interface ModelUsageChartProps {
   data: ModelUsageEntry[];
 }
 
-const COLORS = ['#26C6DA', '#FFB74D', '#9C27B0', '#FF7043', '#4CAF50', '#EF5350', '#1EAFC2'];
+const config = {
+  tokens: {
+    label: 'Tokens',
+    color: 'var(--chart-2)',
+  },
+} satisfies ChartConfig;
 
 export function ModelUsageChart({ data }: ModelUsageChartProps) {
-  if (data.length === 0) {
-    return (
-      <Card>
-        <h3 className="mt-0 mb-md text-base font-semibold font-[family-name:var(--font-heading)]">
-          Token Usage by Model
-        </h3>
-        <EmptyState title="No Data" description="No usage data available yet." />
-      </Card>
-    );
-  }
-
   return (
     <Card>
-      <h3 className="mt-0 mb-md text-base font-semibold font-[family-name:var(--font-heading)]">
-        Token Usage by Model
-      </h3>
-      <ResponsiveContainer width="100%" height={280}>
-        <PieChart>
-          <Pie
-            data={data}
-            cx="50%"
-            cy="50%"
-            outerRadius={100}
-            dataKey="tokens"
-            nameKey="model"
-            label={((props: { name?: string; percent?: number }) =>
-              `${props.name ?? ''} (${((props.percent ?? 0) * 100).toFixed(0)}%)`) as unknown as boolean
-            }
-            labelLine={false}
-            stroke="none"
-          >
-            {data.map((_entry, index) => (
-              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-            ))}
-          </Pie>
-          <Tooltip
-            formatter={(value) => [Number(value ?? 0).toLocaleString(), 'Tokens']}
-            contentStyle={{ borderRadius: 8, fontSize: 13, backgroundColor: '#111B2E', border: '1px solid #1E3A5F', color: '#E8EAED' }}
-            labelStyle={{ color: '#9AA0A6' }}
+      <CardHeader>
+        <CardTitle className="text-base font-semibold">Token Usage by Model</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {data.length === 0 ? (
+          <EmptyState
+            icon={BarChart3}
+            title="No usage data yet"
+            description="Token usage by model will appear once agents start running."
+            className="border-0 py-6"
           />
-          <Legend />
-        </PieChart>
-      </ResponsiveContainer>
+        ) : (
+          <ChartContainer config={config} className="h-72 w-full">
+            <BarChart data={data} margin={{ left: 8, right: 8, top: 8, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+              <XAxis
+                dataKey="model"
+                tickLine={false}
+                axisLine={false}
+                tick={{ fontSize: 12, fill: 'var(--muted-foreground)' }}
+                interval={0}
+              />
+              <YAxis
+                tickLine={false}
+                axisLine={false}
+                tick={{ fontSize: 12, fill: 'var(--muted-foreground)' }}
+                tickFormatter={(v: number) => v.toLocaleString()}
+              />
+              <ChartTooltip
+                content={
+                  <ChartTooltipContent
+                    formatter={(value) => [Number(value ?? 0).toLocaleString(), 'Tokens']}
+                  />
+                }
+              />
+              <Bar dataKey="tokens" fill="var(--chart-2)" radius={[6, 6, 0, 0]} />
+            </BarChart>
+          </ChartContainer>
+        )}
+      </CardContent>
     </Card>
   );
 }

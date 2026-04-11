@@ -1,6 +1,6 @@
 'use client';
 
-import { Badge } from '@sagecurator/ui';
+import { Badge } from '@/components/ui/legacy';
 import { X } from 'lucide-react';
 import type { CanvasNodeData } from './canvas-node';
 

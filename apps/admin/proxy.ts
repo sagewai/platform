@@ -17,7 +17,8 @@ const HAS_DEV_TOKEN = !!process.env.NEXT_PUBLIC_ADMIN_DEV_TOKEN;
 const AUTH_PUBLIC = new Set(['/login', '/register', '/forgot-password']);
 
 /**
- * Next.js middleware — runs server-side before every matched route.
+ * Next.js proxy — runs server-side before every matched route. (Formerly
+ * `middleware` in Next 15; renamed in Next 16.)
  *
  * Flow:
  *   1. If setup not done → redirect everything to /setup (except /setup itself).
@@ -26,7 +27,7 @@ const AUTH_PUBLIC = new Set(['/login', '/register', '/forgot-password']);
  *   4. If setup done + auth cookie + on auth page → redirect to /.
  *   5. Otherwise → allow through.
  */
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // ── 1. Check setup status ──────────────────────────────────────────────

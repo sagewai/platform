@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Card, Badge, Button, EmptyState, Dialog } from '@sagecurator/ui';
+import { Card, Badge, Button, EmptyState, Dialog } from '@/components/ui/legacy';
 import { adminApi } from '@/utils/api';
 import type { WorkflowRun } from '@/utils/types';
 import { CheckCircle, HelpCircle, XCircle, Clock, RefreshCw } from 'lucide-react';

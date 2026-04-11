@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { adminApi } from '@/utils/api';
 import { setTokens } from '@/utils/auth';
 import { useConnection } from '@/utils/connection';
-import { Button } from '@sagecurator/ui';
+import { Button } from '@/components/ui/legacy';
 import { WifiOff, Mail, Lock } from 'lucide-react';
 
 export default function LoginPage() {
@@ -43,12 +43,14 @@ export default function LoginPage() {
       <div className="absolute bottom-[-20%] right-[-10%] w-[600px] h-[600px] rounded-full opacity-[0.07] blur-[120px]" style={{ background: 'radial-gradient(circle, #26C6DA, transparent)' }} />
 
       <div className="w-[420px] relative z-10">
-        {/* Logo */}
+        {/* Logo — full logo already contains the wordmark, so the separate
+            SAGEWAI heading is no longer rendered. */}
         <div className="text-center mb-8">
-          <img src="/brand/logo.svg" alt="Sagewai" className="h-12 w-12 mx-auto mb-3" />
-          <h1 className="text-3xl font-bold font-[family-name:var(--font-heading)] m-0 mb-2">
-            <span className="bg-clip-text text-transparent" style={{ backgroundImage: 'var(--gradient-brand)' }}>SAGEWAI</span>
-          </h1>
+          <img
+            src="/brand/sagewai_logo_dark.svg"
+            alt="Sagewai"
+            className="h-12 w-auto mx-auto mb-3"
+          />
           <p className="m-0 text-text-secondary text-sm">Sign in to your account</p>
         </div>
 

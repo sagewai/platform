@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Card, Button, Skeleton, EmptyState } from '@sagecurator/ui';
+import { Card, Button, Skeleton, EmptyState } from '@/components/ui/legacy';
 import { ShieldCheck, Copy, AlertTriangle, BarChart2 } from 'lucide-react';
 
 export default function DataQualityPage() {

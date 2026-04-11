@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { adminApi } from '@/utils/api';
 import type { BillingPlan, BillingSubscription, BillingUsage, BillingInvoice } from '@/utils/types';
-import { Card, Button, Badge, Skeleton, useToast } from '@sagecurator/ui';
+import { Card, Button, Badge, Skeleton, useToast } from '@/components/ui/legacy';
 import {
   CreditCard,
   Zap,

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Card } from '@sagecurator/ui';
+import { Card } from '@/components/ui/legacy';
 import { adminApi } from '@/utils/api';
 import { startTour, shouldShowTour } from '@/utils/tours';
 import type { HealthSummary, QueueStats } from '@/utils/types';

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { Button, useToast } from '@sagecurator/ui';
+import { Button, useToast } from '@/components/ui/legacy';
 import { Plus, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import { adminApi } from '@/utils/api';
 import type { ContextDocument } from '@/utils/types';

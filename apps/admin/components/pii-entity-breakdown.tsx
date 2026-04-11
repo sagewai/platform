@@ -1,7 +1,7 @@
 'use client';
 
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { Card, EmptyState } from '@sagecurator/ui';
+import { Card, EmptyState } from '@/components/ui/legacy';
 
 interface EntityEntry {
   entity: string;

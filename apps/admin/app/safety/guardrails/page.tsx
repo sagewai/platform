@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { adminApi } from '@/utils/api';
 import type { GuardrailConfig, AgentSummary } from '@/utils/types';
-import { Card, Toggle, Skeleton, EmptyState } from '@sagecurator/ui';
+import { Card, Toggle, Skeleton, EmptyState } from '@/components/ui/legacy';
 import { HelpPanel } from '@/components/help-panel';
 
 const GUARDRAIL_TYPES = ['pii', 'hallucination', 'content_filter'] as const;

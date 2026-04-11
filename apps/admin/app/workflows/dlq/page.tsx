@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Card, Badge, EmptyState, ConfirmDialog } from '@sagecurator/ui';
+import { Card, Badge, EmptyState, ConfirmDialog } from '@/components/ui/legacy';
 import { adminApi } from '@/utils/api';
 import type { DLQEntry } from '@/utils/types';
 import { AlertTriangle, HelpCircle, RefreshCw, RotateCcw, Trash2 } from 'lucide-react';

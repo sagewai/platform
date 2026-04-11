@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { useToast } from '@sagecurator/ui';
+import { useToast } from '@/components/ui/legacy';
 import { authSSE } from '@/utils/auth';
 
 const API_BASE = process.env.NEXT_PUBLIC_ADMIN_API_URL

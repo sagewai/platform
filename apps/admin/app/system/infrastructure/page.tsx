@@ -11,7 +11,7 @@ import {
   Skeleton,
   Badge,
   useToast,
-} from '@sagecurator/ui';
+} from '@/components/ui/legacy';
 import { Check, X, Database, Network, Cpu, RefreshCw } from 'lucide-react';
 
 export default function InfrastructureSettingsPage() {

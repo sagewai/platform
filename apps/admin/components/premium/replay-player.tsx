@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { GitBranch } from 'lucide-react';
-import { Button } from '@sagecurator/ui';
+import { Button } from '@/components/ui/legacy';
 import type { WorkflowEvent } from '@/utils/types';
 import { ExecutionCanvas } from './execution-canvas';
 import { ReplayTimeline } from './replay-timeline';

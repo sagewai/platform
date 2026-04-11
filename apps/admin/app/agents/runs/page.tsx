@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import { adminApi } from '@/utils/api';
 import type { RunSummary, WorkflowRun } from '@/utils/types';
 import Link from 'next/link';
-import { Card, Badge, Button, Skeleton, EmptyState } from '@sagecurator/ui';
+import { Card, Badge, Button, Skeleton, EmptyState } from '@/components/ui/legacy';
 import { ResponsiveTable } from '@/components/responsive-table';
 
 /** Unified run row — can come from agent_runs or workflow_runs */

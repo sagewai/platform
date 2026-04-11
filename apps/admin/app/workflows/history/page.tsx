@@ -4,7 +4,7 @@ import { adminApi } from '@/utils/api';
 import type { WorkflowRun, WorkflowRunStatus } from '@/utils/types';
 import Link from 'next/link';
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { Card, Badge, Button, EmptyState, Skeleton } from '@sagecurator/ui';
+import { Card, Badge, Button, EmptyState, Skeleton } from '@/components/ui/legacy';
 import { Search, X, RotateCcw } from 'lucide-react';
 
 function statusVariant(status: string): 'success' | 'error' | 'info' | 'warning' | 'default' {

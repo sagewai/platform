@@ -1,6 +1,6 @@
 'use client';
 
-import { Card } from '@sagecurator/ui';
+import { Card } from '@/components/ui/legacy';
 import { Lock } from 'lucide-react';
 
 export function PremiumUpgradeCTA({ feature }: { feature: string }) {

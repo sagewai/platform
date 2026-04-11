@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { adminApi } from '@/utils/api';
 import type { EvalDatasetSummary, EvalRunDetail, AgentSummary, AvailableModel } from '@/utils/types';
-import { Card, Button, Skeleton } from '@sagecurator/ui';
+import { Card, Button, Skeleton } from '@/components/ui/legacy';
 import { Play, CheckCircle2, XCircle } from 'lucide-react';
 import { HelpPanel } from '@/components/help-panel';
 

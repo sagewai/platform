@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { Card, Button } from '@sagecurator/ui';
+import { Card, Button } from '@/components/ui/legacy';
 import { GitBranch } from 'lucide-react';
 import type { WorkflowEvent } from '@/utils/types';
 

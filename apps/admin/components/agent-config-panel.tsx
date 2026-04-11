@@ -6,7 +6,7 @@ import { playgroundApi } from '@/utils/playground-api';
 import { adminApi } from '@/utils/api';
 import type { AgentSpec, InferencePreset } from '@/utils/playground-api';
 import type { AvailableModel, CapabilityItem } from '@/utils/types';
-import { Card, Button } from '@sagecurator/ui';
+import { Card, Button } from '@/components/ui/legacy';
 import { AlertCircle, ChevronDown, ChevronRight, Brain, Sparkles, HelpCircle, Copy, Check } from 'lucide-react';
 
 export interface AgentConfigDefaults {

@@ -9,7 +9,7 @@ import type { AgentSummary, AvailableModel } from '@/utils/types';
 import { PipelineGraph } from './pipeline-graph';
 import { WorkflowStepCard } from './workflow-step-card';
 import { WorkflowAgentPanel } from './workflow-agent-panel';
-import { Button, Card, Select, TextInput, TextArea, Badge, useToast } from '@sagecurator/ui';
+import { Button, Card, Select, TextInput, TextArea, Badge, useToast } from '@/components/ui/legacy';
 import { ShareButton } from './share-button';
 import { useWorkflowRun } from '@/hooks/use-workflow-run';
 import { Copy, Download, Save, FolderOpen } from 'lucide-react';

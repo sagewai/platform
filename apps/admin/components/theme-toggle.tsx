@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Sun, Moon } from 'lucide-react';
+import { toast } from 'sonner';
 
 const STORAGE_KEY = 'sagewai-theme';
 
@@ -12,9 +13,18 @@ function getInitialTheme(): 'light' | 'dark' {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
+function applyTheme(theme: 'light' | 'dark') {
+  const root = document.documentElement;
+  root.setAttribute('data-theme', theme);
+  // shadcn's `.dark` class is the second source of truth — keep them in lock-step.
+  root.classList.toggle('dark', theme === 'dark');
+}
+
 /**
- * Local ThemeToggle override — fixes hydration mismatch from @sagecurator/ui
- * and uses sidebar-friendly colors (white icons instead of theme-dependent).
+ * Theme toggle — drives both the legacy `data-theme="dark"` attribute (used by
+ * the brand tokens in tokens/src/index.css) and the shadcn `.dark` class (used
+ * by the @custom-variant in globals.css). Both must move together so the brand
+ * tokens and the shadcn primitives stay in sync.
  */
 export function ThemeToggle() {
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
@@ -24,14 +34,15 @@ export function ThemeToggle() {
     setMounted(true);
     const initial = getInitialTheme();
     setTheme(initial);
-    document.documentElement.setAttribute('data-theme', initial);
+    applyTheme(initial);
   }, []);
 
   const toggle = () => {
     const next = theme === 'light' ? 'dark' : 'light';
     setTheme(next);
-    document.documentElement.setAttribute('data-theme', next);
+    applyTheme(next);
     localStorage.setItem(STORAGE_KEY, next);
+    toast.success(`Switched to ${next} mode`, { duration: 1500 });
   };
 
   if (!mounted) return <div className="w-8 h-8" />;
@@ -40,7 +51,7 @@ export function ThemeToggle() {
     <button
       onClick={toggle}
       aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
-      className="w-8 h-8 flex items-center justify-center rounded-md text-white/60 hover:text-white hover:bg-white/10 transition-colors cursor-pointer bg-transparent border-none"
+      className="w-8 h-8 flex items-center justify-center rounded-md text-sidebar-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors cursor-pointer bg-transparent border-none"
     >
       {theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
     </button>

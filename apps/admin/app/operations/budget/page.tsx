@@ -5,7 +5,7 @@ import { adminApi } from '@/utils/api';
 import type { BudgetLimit } from '@/utils/types';
 import { BudgetForm } from '@/components/budget-form';
 import { FallbackChainEditor } from '@/components/fallback-chain-editor';
-import { Card, Button, Badge, Skeleton, EmptyState } from '@sagecurator/ui';
+import { Card, Button, Badge, Skeleton, EmptyState } from '@/components/ui/legacy';
 
 export default function BudgetManagerPage() {
   const [limits, setLimits] = useState<BudgetLimit[]>([]);

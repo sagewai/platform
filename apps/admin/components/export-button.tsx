@@ -1,6 +1,6 @@
 'use client';
 
-import { Button } from '@sagecurator/ui';
+import { Button } from '@/components/ui/legacy';
 
 const API_BASE = process.env.NEXT_PUBLIC_ADMIN_API_URL
   ? process.env.NEXT_PUBLIC_ADMIN_API_URL.replace(/\/admin$/, '')

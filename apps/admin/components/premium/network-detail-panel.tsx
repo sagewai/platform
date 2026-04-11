@@ -1,6 +1,6 @@
 'use client';
 
-import { Card } from '@sagecurator/ui';
+import { Card } from '@/components/ui/legacy';
 import { X } from 'lucide-react';
 
 interface NodeDetail {

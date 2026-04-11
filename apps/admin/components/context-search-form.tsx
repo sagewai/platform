@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Button, TextInput } from '@sagecurator/ui';
+import { Button, TextInput } from '@/components/ui/legacy';
 import { Search } from 'lucide-react';
 
 interface Props {

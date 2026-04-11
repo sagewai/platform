@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { adminApi } from '@/utils/api';
 import type { AccountInfo } from '@/utils/types';
-import { Card, Button, FormField, TextInput, Skeleton, useToast } from '@sagecurator/ui';
+import { Card, Button, FormField, TextInput, Skeleton, useToast } from '@/components/ui/legacy';
 
 export default function AccountSettingsPage() {
   const [account, setAccount] = useState<AccountInfo | null>(null);

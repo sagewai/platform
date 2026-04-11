@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Card, Button } from '@sagecurator/ui';
+import { Card, Button } from '@/components/ui/legacy';
 import { adminApi } from '@/utils/api';
 import { HelpCircle, Play, CheckCircle } from 'lucide-react';
 

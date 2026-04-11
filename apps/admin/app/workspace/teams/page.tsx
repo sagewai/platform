@@ -1,6 +1,6 @@
 'use client';
 
-import { Card, EmptyState } from '@sagecurator/ui';
+import { Card, EmptyState } from '@/components/ui/legacy';
 
 export default function TeamsPage() {
   return (

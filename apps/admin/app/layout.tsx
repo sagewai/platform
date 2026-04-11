@@ -2,10 +2,14 @@
 
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { SidebarProvider, ToastProvider } from '@sagecurator/ui';
+import { SidebarProvider } from '@/components/ui/legacy';
+import { Toaster } from '@/components/ui/sonner';
+import { TooltipProvider } from '@/components/ui/tooltip';
 import { AppSidebarShell } from '@/components/app-sidebar-shell';
 import { NavSidebar } from '@/components/nav-sidebar';
 import { PageTransition } from '@/components/page-transition';
+import { CommandPalette } from '@/components/command-palette';
+import { ErrorBoundary } from '@/components/error-boundary';
 import { WorkflowToastListener } from '@/components/workflow-toast-listener';
 import { ConnectionError } from '@/components/connection-error';
 import { ConnectionProvider, useConnection } from '@/utils/connection';
@@ -92,8 +96,11 @@ function AppShell({ children }: { children: React.ReactNode }) {
     <LicenseProvider>
       <SidebarProvider>
         <AppSidebarShell sidebar={<NavSidebar />}>
-          <PageTransition>{children}</PageTransition>
+          <ErrorBoundary>
+            <PageTransition>{children}</PageTransition>
+          </ErrorBoundary>
         </AppSidebarShell>
+        <CommandPalette />
         <WorkflowToastListener />
       </SidebarProvider>
     </LicenseProvider>
@@ -105,20 +112,22 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning className={cn(fontVariables, "font-sans", geist.variable)}>
       <head>
         <link rel="icon" href="/brand/favicon.ico" sizes="any" />
-        <link rel="apple-touch-icon" href="/brand/logo-256.png" />
+        <link rel="icon" type="image/svg+xml" href="/brand/sagewai_icon.svg" />
+        <link rel="apple-touch-icon" href="/brand/sagewai_icon.webp" />
         <meta name="application-name" content="Sagewai Admin" />
         <meta property="og:title" content="Sagewai Admin" />
         <meta property="og:description" content="Agent Infrastructure You Own — manage agents, workflows, and AI infrastructure" />
-        <meta property="og:image" content="/brand/logo-256.png" />
+        <meta property="og:image" content="/brand/sagewai_logo.webp" />
         {/* External script for CSP compliance — avoids unsafe-inline */}
         <script src="/theme-init.js" />
       </head>
       <body>
-        <ToastProvider>
+        <TooltipProvider delay={200}>
           <ConnectionProvider>
             <AppShell>{children}</AppShell>
           </ConnectionProvider>
-        </ToastProvider>
+        </TooltipProvider>
+        <Toaster richColors closeButton position="bottom-right" />
       </body>
     </html>
   );

@@ -6,7 +6,7 @@ import { adminApi } from '@/utils/api';
 import { authFetch } from '@/utils/auth';
 import type { StrategyResult, StrategyDetail } from '@/utils/playground-api';
 import type { AvailableModel } from '@/utils/types';
-import { Card, Badge, Button } from '@sagecurator/ui';
+import { Card, Badge, Button } from '@/components/ui/legacy';
 import {
   ChevronDown,
   ChevronRight,

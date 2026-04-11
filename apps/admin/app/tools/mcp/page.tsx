@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { adminApi } from '@/utils/api';
 import type { McpServer, McpTool, McpCallResponse } from '@/utils/types';
-import { Card, Button, Badge, Skeleton, EmptyState } from '@sagecurator/ui';
+import { Card, Button, Badge, Skeleton, EmptyState } from '@/components/ui/legacy';
 
 export default function McpToolsPage() {
   const [servers, setServers] = useState<McpServer[]>([]);

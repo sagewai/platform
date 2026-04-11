@@ -1,7 +1,7 @@
 'use client';
 
-import { Badge, Card } from '@sagecurator/ui';
-import type { BadgeVariant } from '@sagecurator/ui';
+import { Badge, Card } from '@/components/ui/legacy';
+import type { BadgeVariant } from '@/components/ui/legacy';
 import {
   Brain,
   Cpu,

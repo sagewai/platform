@@ -12,7 +12,7 @@ import { playgroundApi } from '@/utils/playground-api';
 import type { AgentSpec } from '@/utils/playground-api';
 import type { AvailableModel } from '@/utils/types';
 import { ChevronLeft, Settings2, Copy, X, Check, Code2 } from 'lucide-react';
-import { Button } from '@sagecurator/ui';
+import { Button } from '@/components/ui/legacy';
 
 /** Generate Python code from an AgentSpec. */
 function generatePythonCode(spec: AgentSpec): string {

@@ -5,7 +5,7 @@ import { adminApi } from '@/utils/api';
 import { playgroundApi } from '@/utils/playground-api';
 import { StatCard } from '@/components/stat-card';
 import { ModelComparisonTable } from '@/components/model-comparison-table';
-import { Skeleton } from '@sagecurator/ui';
+import { Skeleton } from '@/components/ui/legacy';
 
 const LOCAL_PROVIDERS = new Set(['ollama', 'lmstudio']);
 

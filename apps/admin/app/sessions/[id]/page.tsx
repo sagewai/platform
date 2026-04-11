@@ -2,7 +2,7 @@ import Link from 'next/link';
 
 import { adminApi } from '@/utils/api';
 import type { SessionMessagesResponse } from '@/utils/types';
-import { Card, EmptyState } from '@sagecurator/ui';
+import { Card, EmptyState } from '@/components/ui/legacy';
 
 export const dynamic = 'force-dynamic';
 

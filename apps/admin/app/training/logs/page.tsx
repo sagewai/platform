@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Card, Button, Skeleton, EmptyState } from '@sagecurator/ui';
+import { Card, Button, Skeleton, EmptyState } from '@/components/ui/legacy';
 import { Download, Filter, Search } from 'lucide-react';
 
 interface RunLog {

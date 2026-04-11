@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Card } from '@sagecurator/ui';
+import { Card } from '@/components/ui/legacy';
 import { Layers } from 'lucide-react';
 import { adminApi } from '@/utils/api';
 import type { ContextSearchResult } from '@/utils/types';

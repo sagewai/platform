@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Button } from '@sagecurator/ui';
+import { Button } from '@/components/ui/legacy';
 import { Trash2, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
 import { ScopeBadge } from './scope-badge';
 import { SourceBadge } from './source-badge';

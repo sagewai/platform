@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import Link from 'next/link';
-import { Badge, Card, Skeleton, EmptyState, Button } from '@sagecurator/ui';
+import { Badge, Card, Skeleton, EmptyState, Button } from '@/components/ui/legacy';
 import { Server, Search, CheckCircle, XCircle, Clock, ShieldOff, Shield, Zap } from 'lucide-react';
 import type { FleetWorker } from '@/utils/types';
 

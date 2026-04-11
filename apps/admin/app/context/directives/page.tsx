@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Card, Button, useToast } from '@sagecurator/ui';
+import { Card, Button, useToast } from '@/components/ui/legacy';
 import { Sparkles, BookOpen, Cpu, Brain } from 'lucide-react';
 import { adminApi } from '@/utils/api';
 import { ScopeBadge } from '@/components/scope-badge';

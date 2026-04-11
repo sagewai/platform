@@ -6,7 +6,7 @@ import { playgroundApi } from '@/utils/playground-api';
 import { StatCard } from '@/components/stat-card';
 import { CostByModelChart } from '@/components/cost-by-model-chart';
 import { CostBreakdownTable } from '@/components/cost-breakdown-table';
-import { Badge, Skeleton } from '@sagecurator/ui';
+import { Badge, Skeleton } from '@/components/ui/legacy';
 
 const LOCAL_PROVIDERS = new Set(['ollama', 'lmstudio']);
 

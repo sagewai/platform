@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Card, EmptyState } from '@sagecurator/ui';
+import { Card, EmptyState } from '@/components/ui/legacy';
 
 interface CostBreakdownEntry {
   name: string;

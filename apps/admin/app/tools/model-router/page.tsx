@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { adminApi } from '@/utils/api';
 import type { RoutingRule, RouteTestResponse, AvailableModel } from '@/utils/types';
-import { Card, Button, Skeleton, EmptyState } from '@sagecurator/ui';
+import { Card, Button, Skeleton, EmptyState } from '@/components/ui/legacy';
 
 export default function ModelRouterPage() {
   const [rules, setRules] = useState<RoutingRule[]>([]);
