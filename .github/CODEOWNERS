@@ -1,2 +1,44 @@
-# All files owned by Arda Diri
-* @sagecurator
+# Sagewai platform — code ownership
+#
+# Every file under this repo has a default owner of @sagecurator (the
+# project lead). Branch protection on `main` requires a review from a
+# CODEOWNERS entry on every PR.
+#
+# As trusted maintainers are onboarded, add them as co-owners per path.
+
+# ── Default ────────────────────────────────────────────────────────────
+*                                       @sagecurator
+
+# ── SDK (Python) ───────────────────────────────────────────────────────
+/packages/sdk/                          @sagecurator
+/packages/sdk/sagewai/fleet/            @sagecurator
+/packages/sdk/sagewai/gateway/          @sagecurator
+/packages/sdk/sagewai/admin/            @sagecurator
+/packages/sdk/sagewai/cli/              @sagecurator
+/packages/sdk/sagewai/mcp/              @sagecurator
+
+# ── Apps ───────────────────────────────────────────────────────────────
+/apps/admin/                            @sagecurator
+/apps/docs/                             @sagecurator
+/apps/backend/                          @sagecurator
+/apps/vscode-extension/                 @sagecurator
+
+# ── Governance and licensing (highest sensitivity) ─────────────────────
+/LICENSE                                @sagecurator
+/COMMERCIAL-LICENSE.md                  @sagecurator
+/CLA.md                                 @sagecurator
+/CODE_OF_CONDUCT.md                     @sagecurator
+/SECURITY.md                            @sagecurator
+/TRADEMARK.md                           @sagecurator
+
+# ── CI / release pipelines ─────────────────────────────────────────────
+/.github/                               @sagecurator
+/.github/workflows/                     @sagecurator
+/.changeset/                            @sagecurator
+
+# ── Root tooling ───────────────────────────────────────────────────────
+/Makefile                               @sagecurator
+/pyproject.toml                         @sagecurator
+/pnpm-workspace.yaml                    @sagecurator
+/docker-compose.yml                     @sagecurator
+/scripts/                               @sagecurator
