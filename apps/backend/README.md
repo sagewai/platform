@@ -43,9 +43,12 @@ docker compose up -d
 
 ## Health check
 
-`GET /health` returns 200 when the server is ready to accept requests. The
-Dockerfile wires this as a `HEALTHCHECK` so orchestrators (compose, k8s) can
-track readiness.
+`GET /openapi.json` returns 200 whenever FastAPI is up, without requiring
+any database connection. The Dockerfile wires this as a `HEALTHCHECK` so
+orchestrators (compose, k8s) can track readiness without hitting the DB.
+The SDK does not currently expose a dedicated `/health` route — that's a
+known gap tracked separately; once added, update this field and the
+`HEALTHCHECK` line in the Dockerfile.
 
 ## Volume mounts
 
