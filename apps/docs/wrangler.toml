@@ -1,7 +1,7 @@
 # Cloudflare Workers deployment for docs.sagewai.ai
 # For production deployment, set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN
 # in CI environment, or add account_id here for local deploys.
-name = "sagewai-docs"
+name = "docs"
 compatibility_date = "2026-04-04"
 
 [assets]
