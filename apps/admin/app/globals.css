@@ -1,0 +1,411 @@
+@import "tailwindcss";
+@import "./brand-tokens.css";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+/*
+ ---break---
+ */
+/* Match BOTH .dark class and the existing [data-theme="dark"] attribute so shadcn
+   primitives respect the same theme selector the rest of the app already uses. */
+@custom-variant dark (&:where(.dark, .dark *, [data-theme="dark"], [data-theme="dark"] *));
+
+@source "../components";
+@source ".";
+
+/*
+ * Admin Console — Dark theme applied via data-theme="dark" on <html>.
+ * All color tokens are inherited from the shared UI dark mode overrides.
+ * This file only contains admin-specific element styling.
+ */
+
+body {
+  background: var(--color-bg-page);
+  color: var(--color-text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Password mask */
+.password-mask {
+  -webkit-text-security: disc;
+  text-security: disc;
+}
+
+/* Selection */
+::selection {
+  background: rgba(38, 198, 218, 0.3);
+  color: var(--color-text-primary);
+}
+
+/* Recharts tooltip + legend */
+.recharts-default-tooltip {
+  background-color: var(--color-bg-surface) !important;
+  border: 1px solid var(--color-border) !important;
+  border-radius: 8px !important;
+  color: var(--color-text-primary) !important;
+}
+
+.recharts-tooltip-label {
+  color: var(--color-text-secondary) !important;
+}
+
+.recharts-legend-item-text {
+  color: var(--color-text-secondary) !important;
+}
+
+/* Tables */
+table {
+  border-color: var(--color-border);
+}
+
+th {
+  color: var(--color-text-secondary);
+  border-color: var(--color-border);
+}
+
+td {
+  border-color: var(--color-border);
+}
+
+tr:hover td {
+  background-color: var(--color-bg-subtle);
+}
+
+/* Inputs */
+input, select, textarea {
+  color: var(--color-text-primary);
+}
+
+input::placeholder, textarea::placeholder {
+  color: var(--color-text-muted);
+}
+
+/* Code blocks */
+code {
+  background-color: var(--color-primary-light);
+  color: var(--color-primary);
+}
+
+pre {
+  background-color: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+/* Links */
+a {
+  color: inherit;
+}
+
+/* Driver.js tour popover */
+.driver-popover {
+  background-color: var(--color-bg-surface) !important;
+  border: 1px solid var(--color-border) !important;
+  color: var(--color-text-primary) !important;
+  border-radius: 0.75rem !important;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6) !important;
+}
+
+.driver-popover .driver-popover-title {
+  font-family: var(--font-heading) !important;
+  font-weight: 700 !important;
+  font-size: 0.95rem !important;
+  color: var(--color-text-primary) !important;
+}
+
+.driver-popover .driver-popover-description {
+  color: var(--color-text-secondary) !important;
+  font-size: 0.85rem !important;
+  line-height: 1.5 !important;
+}
+
+.driver-popover .driver-popover-progress-text {
+  color: var(--color-text-muted) !important;
+  font-size: 0.75rem !important;
+}
+
+.driver-popover .driver-popover-navigation-btns button {
+  border-radius: 0.375rem !important;
+  font-size: 0.8rem !important;
+  padding: 0.35rem 0.75rem !important;
+}
+
+.driver-popover .driver-popover-next-btn {
+  background-color: var(--color-primary) !important;
+  color: var(--color-bg-page) !important;
+  text-shadow: none !important;
+}
+
+.driver-popover .driver-popover-prev-btn {
+  color: var(--color-text-secondary) !important;
+}
+
+.driver-popover .driver-popover-close-btn {
+  color: var(--color-text-muted) !important;
+}
+
+.driver-popover .driver-popover-arrow-side-left.driver-popover-arrow,
+.driver-popover .driver-popover-arrow-side-right.driver-popover-arrow,
+.driver-popover .driver-popover-arrow-side-top.driver-popover-arrow,
+.driver-popover .driver-popover-arrow-side-bottom.driver-popover-arrow {
+  border-color: var(--color-bg-surface) !important;
+}
+
+/*
+ ---break---
+ */
+
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-muted-foreground: var(--sidebar-muted-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+
+  /*
+   * Restore Tailwind 4's default container scale.
+   *
+   * tokens/src/index.css declares --spacing-xs … --spacing-2xl with pixel
+   * values (4px, 8px, 16px, 24px, 32px, 48px) for use with the spacing
+   * utilities (p-md, gap-lg, etc.). Because Tailwind 4 reads max-w-*, w-*,
+   * h-*, min-w-* from the spacing scale when those share names with the
+   * default container scale, the spacing values were clobbering the
+   * container sizes — so max-w-xl resolved to 32px instead of 36rem and
+   * text got squeezed into a thin column.
+   *
+   * Re-declaring --container-* restores the expected container sizes so
+   * max-w-xl, max-w-md, max-w-2xl, etc. read from here instead of from the
+   * spacing scale.
+   */
+  --container-3xs: 16rem;
+  --container-2xs: 18rem;
+  --container-xs: 20rem;
+  --container-sm: 24rem;
+  --container-md: 28rem;
+  --container-lg: 32rem;
+  --container-xl: 36rem;
+  --container-2xl: 42rem;
+  --container-3xl: 48rem;
+  --container-4xl: 56rem;
+  --container-5xl: 64rem;
+  --container-6xl: 72rem;
+  --container-7xl: 80rem;
+}
+
+/*
+ ---break---
+ */
+
+/*
+ * Brand-token bridge.
+ *
+ * shadcn/ui primitives consume `--background`, `--foreground`, `--primary`,
+ * etc. via Tailwind 4's `@theme inline` block above, which aliases each as
+ * `--color-primary: var(--primary)` and friends. The brand-token file at
+ * tokens/src/index.css ALSO owns the `--color-*` namespace, which means we
+ * can't just write `--primary: var(--color-primary)` — that produces a
+ * circular reference and collapses every color to nothing.
+ *
+ * Instead we inline the concrete brand hex values directly. Light / dark are
+ * separate blocks driven by both `.dark` (shadcn) and `[data-theme="dark"]`
+ * (legacy selector used by the rest of the app).
+ */
+:root {
+  --background: #FFFFFF;
+  --foreground: #0F172A;
+  --card: #F8FAFC;
+  --card-foreground: #0F172A;
+  --popover: #FFFFFF;
+  --popover-foreground: #0F172A;
+  --primary: #0E7490;
+  --primary-foreground: #FFFFFF;
+  --secondary: #F1F5F9;
+  --secondary-foreground: #0F172A;
+  --muted: #F1F5F9;
+  --muted-foreground: #64748B;
+  --accent: #CCFBF1;
+  --accent-foreground: #0E7490;
+  --destructive: #DC2626;
+  --destructive-foreground: #FFFFFF;
+  --border: #E2E8F0;
+  --input: #E2E8F0;
+  --ring: #0E7490;
+  --radius: 0.625rem;
+
+  /* Chart palette — brand accents */
+  --chart-1: #0E7490; /* sage cyan */
+  --chart-2: #7E22CE; /* purple */
+  --chart-3: #C2410C; /* orange */
+  --chart-4: #B45309; /* gold */
+  --chart-5: #15803D; /* green */
+
+  /* Sidebar palette — follows the global theme. */
+  --sidebar: #F8FAFC;
+  --sidebar-foreground: #0F172A;
+  --sidebar-primary: #0E7490;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #CCFBF1;
+  --sidebar-accent-foreground: #0E7490;
+  --sidebar-border: #E2E8F0;
+  --sidebar-ring: #0E7490;
+  --sidebar-muted-foreground: #64748B;
+}
+
+/*
+ ---break---
+ */
+
+[data-theme="dark"],
+.dark {
+  --background: #0A1628;
+  --foreground: #F0F4F8;
+  --card: #132440;
+  --card-foreground: #F0F4F8;
+  --popover: #132440;
+  --popover-foreground: #F0F4F8;
+  --primary: #26C6DA;
+  --primary-foreground: #0A1628;
+  --secondary: #1A2B4A;
+  --secondary-foreground: #F0F4F8;
+  --muted: #1A2B4A;
+  --muted-foreground: #94A3B8;
+  --accent: rgba(38, 198, 218, 0.12);
+  --accent-foreground: #26C6DA;
+  --destructive: #EF5350;
+  --destructive-foreground: #FFFFFF;
+  --border: rgba(255, 255, 255, 0.08);
+  --input: rgba(255, 255, 255, 0.08);
+  --ring: #26C6DA;
+
+  --chart-1: #26C6DA;
+  --chart-2: #9C27B0;
+  --chart-3: #FF7043;
+  --chart-4: #FFB74D;
+  --chart-5: #4CAF50;
+
+  --sidebar: #0A1628;
+  --sidebar-foreground: #F0F4F8;
+  --sidebar-primary: #26C6DA;
+  --sidebar-primary-foreground: #0A1628;
+  --sidebar-accent: rgba(38, 198, 218, 0.12);
+  --sidebar-accent-foreground: #26C6DA;
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+  --sidebar-ring: #26C6DA;
+  --sidebar-muted-foreground: rgba(240, 244, 248, 0.65);
+}
+
+/*
+ ---break---
+ */
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+/*
+ * Restore Tailwind 4's default container scale for max-w-* / min-w-* / w-*
+ * utilities. tokens/src/index.css declares --spacing-xs through --spacing-2xl
+ * (4/8/16/24/32/48 px) which Tailwind 4 uses as the source for these named
+ * utilities — so `max-w-xl` was resolving to 32px and squeezing text into a
+ * thin column. We override the utilities here so they read container sizes
+ * instead, matching Tailwind's defaults.
+ */
+@layer utilities {
+  .max-w-xs  { max-width: 20rem; }
+  .max-w-sm  { max-width: 24rem; }
+  .max-w-md  { max-width: 28rem; }
+  .max-w-lg  { max-width: 32rem; }
+  .max-w-xl  { max-width: 36rem; }
+  .max-w-2xl { max-width: 42rem; }
+  .max-w-3xl { max-width: 48rem; }
+  .max-w-4xl { max-width: 56rem; }
+  .max-w-5xl { max-width: 64rem; }
+  .max-w-6xl { max-width: 72rem; }
+  .max-w-7xl { max-width: 80rem; }
+
+  /*
+   * Responsive variants. Tailwind's breakpoint-prefixed classes (sm:max-w-*,
+   * md:max-w-*, lg:max-w-*) are generated separately from the un-prefixed
+   * ones and also read from the spacing scale, so we need to override them
+   * explicitly. Without these, shadcn's DialogContent (which uses
+   * `sm:max-w-sm`) collapses to 8px at ≥640px.
+   */
+  @media (min-width: 40rem) {
+    .sm\:max-w-xs  { max-width: 20rem; }
+    .sm\:max-w-sm  { max-width: 24rem; }
+    .sm\:max-w-md  { max-width: 28rem; }
+    .sm\:max-w-lg  { max-width: 32rem; }
+    .sm\:max-w-xl  { max-width: 36rem; }
+    .sm\:max-w-2xl { max-width: 42rem; }
+    .sm\:max-w-3xl { max-width: 48rem; }
+  }
+  @media (min-width: 48rem) {
+    .md\:max-w-xs  { max-width: 20rem; }
+    .md\:max-w-sm  { max-width: 24rem; }
+    .md\:max-w-md  { max-width: 28rem; }
+    .md\:max-w-lg  { max-width: 32rem; }
+    .md\:max-w-xl  { max-width: 36rem; }
+    .md\:max-w-2xl { max-width: 42rem; }
+    .md\:max-w-3xl { max-width: 48rem; }
+  }
+  @media (min-width: 64rem) {
+    .lg\:max-w-xs  { max-width: 20rem; }
+    .lg\:max-w-sm  { max-width: 24rem; }
+    .lg\:max-w-md  { max-width: 28rem; }
+    .lg\:max-w-lg  { max-width: 32rem; }
+    .lg\:max-w-xl  { max-width: 36rem; }
+    .lg\:max-w-2xl { max-width: 42rem; }
+    .lg\:max-w-3xl { max-width: 48rem; }
+  }
+}

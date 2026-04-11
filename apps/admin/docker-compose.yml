@@ -1,0 +1,20 @@
+# Sagewai Admin Panel — Docker Compose for local production testing
+#
+# Usage:
+#   docker compose up --build
+#
+# The admin panel connects to the Sagewai backend API.
+# Set NEXT_PUBLIC_ADMIN_API_URL to point to your backend.
+
+services:
+  admin:
+    build:
+      context: ..
+      dockerfile: admin/Dockerfile
+    ports:
+      - "3008:3008"
+    environment:
+      - NEXT_PUBLIC_ADMIN_API_URL=${NEXT_PUBLIC_ADMIN_API_URL:-http://host.docker.internal:8000/admin}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
