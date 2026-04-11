@@ -579,7 +579,16 @@ export function NavSidebar() {
           </Link>
         ) : (
           <Link href="/" className="mx-auto no-underline" aria-label="Sagewai home">
-            <img src="/brand/sagewai_icon.svg" alt="Sagewai" className="h-7 w-7" />
+            <img
+              src="/brand/sagewai_icon.svg"
+              alt="Sagewai"
+              className="h-7 w-7 block dark:hidden"
+            />
+            <img
+              src="/brand/sagewai_icon_dark.svg"
+              alt="Sagewai"
+              className="h-7 w-7 hidden dark:block"
+            />
           </Link>
         )}
         {expanded && <SidebarToggle />}

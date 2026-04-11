@@ -2,54 +2,124 @@
 <!-- Created with Inkscape (http://www.inkscape.org/) -->
 
 <svg
-   width="149.20724mm"
-   height="31.64686mm"
-   viewBox="0 0 149.20724 31.64686"
+   width="137.97939mm"
+   height="32.363609mm"
+   viewBox="0 0 137.97939 32.363609"
    version="1.1"
    id="svg1"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
    xmlns="http://www.w3.org/2000/svg"
    xmlns:svg="http://www.w3.org/2000/svg">
   <defs
-     id="defs1" />
+     id="defs1">
+    <linearGradient
+       id="linearGradient72">
+      <stop
+         style="stop-color:#ffffff;stop-opacity:1;"
+         offset="0"
+         id="stop70" />
+      <stop
+         style="stop-color:#ff7043;stop-opacity:0;"
+         offset="0.5"
+         id="stop71" />
+      <stop
+         style="stop-color:#9c27b0;stop-opacity:0;"
+         offset="1"
+         id="stop72" />
+    </linearGradient>
+    <linearGradient
+       id="linearGradient4">
+      <stop
+         style="stop-color:#ff7043;stop-opacity:1;"
+         offset="0"
+         id="stop5" />
+      <stop
+         style="stop-color:#9c27b0;stop-opacity:1;"
+         offset="0.5"
+         id="stop7" />
+      <stop
+         style="stop-color:#26c6da;stop-opacity:1;"
+         offset="1"
+         id="stop6" />
+    </linearGradient>
+    <linearGradient
+       id="linearGradient2">
+      <stop
+         style="stop-color:#ff7043;stop-opacity:0;"
+         offset="0"
+         id="stop2" />
+      <stop
+         style="stop-color:#ff7043;stop-opacity:0;"
+         offset="0.5"
+         id="stop4" />
+      <stop
+         style="stop-color:#9c27b0;stop-opacity:0;"
+         offset="1"
+         id="stop3" />
+    </linearGradient>
+    <linearGradient
+       xlink:href="#linearGradient4"
+       id="linearGradient63"
+       gradientUnits="userSpaceOnUse"
+       gradientTransform="translate(8.4907999,-3.5905636)"
+       x1="103.6665"
+       y1="223.47395"
+       x2="158.69945"
+       y2="224.32745" />
+    <linearGradient
+       xlink:href="#linearGradient2"
+       id="linearGradient64"
+       gradientUnits="userSpaceOnUse"
+       gradientTransform="translate(8.4907999,-3.5905636)"
+       x1="103.6665"
+       y1="223.47395"
+       x2="158.69945"
+       y2="224.32745" />
+    <linearGradient
+       xlink:href="#linearGradient4"
+       id="linearGradient69"
+       gradientUnits="userSpaceOnUse"
+       gradientTransform="translate(8.4907999,28.773036)"
+       x1="103.6665"
+       y1="223.47395"
+       x2="158.69945"
+       y2="224.32745" />
+    <linearGradient
+       xlink:href="#linearGradient72"
+       id="linearGradient70"
+       gradientUnits="userSpaceOnUse"
+       gradientTransform="translate(8.4907999,28.773036)"
+       x1="103.6665"
+       y1="223.47395"
+       x2="158.69945"
+       y2="224.32745" />
+  </defs>
   <g
      id="layer1"
-     transform="translate(-43.008476,-55.516881)">
-    <g
-       id="g14-7"
-       transform="translate(-0.33954732,-42.275126)">
-      <g
-         id="g15">
-        <text
-           xml:space="preserve"
-           style="font-size:32.4556px;line-height:1.25;font-family:Montserrat;-inkscape-font-specification:Montserrat;writing-mode:lr-tb;direction:ltr;fill:#1a2b3c;stroke:#1a2b3c;stroke-width:0.265;stroke-dasharray:none"
-           x="42.57177"
-           y="122.75034"
-           id="text1-0"><tspan
-             id="tspan1-0"
-             style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-family:Montserrat;-inkscape-font-specification:'Montserrat Bold';fill:#ffffff;fill-opacity:1;stroke:#ffffff;stroke-width:0.265;stroke-dasharray:none;stroke-opacity:1"
-             x="42.57177"
-             y="122.75034">Sage</tspan></text>
-        <text
-           xml:space="preserve"
-           style="font-style:normal;font-variant:normal;font-weight:500;font-stretch:normal;font-size:32.4556px;line-height:1.25;font-family:Montserrat;-inkscape-font-specification:'Montserrat Medium';writing-mode:lr-tb;direction:ltr;fill:#26c6da;fill-opacity:1;stroke:#26c6da;stroke-width:0.264583;stroke-opacity:1"
-           x="126.24107"
-           y="122.49319"
-           id="text5-6"><tspan
-             id="tspan5-7"
-             style="fill:#26c6da;fill-opacity:1;stroke:#26c6da;stroke-width:0.264583;stroke-opacity:1"
-             x="126.24107"
-             y="122.49319">W</tspan></text>
-        <text
-           xml:space="preserve"
-           style="font-style:normal;font-variant:normal;font-weight:300;font-stretch:normal;font-size:32.4556px;line-height:1.25;font-family:Montserrat;-inkscape-font-specification:'Montserrat Light';writing-mode:lr-tb;direction:ltr;fill:#26c6da;fill-opacity:1;stroke:#26c6da;stroke-width:0.264583;stroke-opacity:1"
-           x="162.04451"
-           y="122.49319"
-           id="text7-8"><tspan
-             id="tspan7-0"
-             style="font-style:normal;font-variant:normal;font-weight:500;font-stretch:normal;font-family:Montserrat;-inkscape-font-specification:'Montserrat Medium';stroke:#26c6da;stroke-width:0.264583;stroke-opacity:1"
-             x="162.04451"
-             y="122.49319">Ai</tspan></text>
-      </g>
-    </g>
+     transform="translate(-29.535441,-237.3454)">
+    <text
+       xml:space="preserve"
+       style="font-weight:bold;font-size:32.4556px;line-height:1.25;font-family:Montserrat;-inkscape-font-specification:'Montserrat Bold';writing-mode:lr-tb;direction:ltr;fill:url(#linearGradient63);fill-opacity:1;stroke:url(#linearGradient64);stroke-width:0.264999;stroke-opacity:1"
+       x="29.018816"
+       y="230.65689"
+       id="text63"><tspan
+         id="tspan63"
+         style="fill:url(#linearGradient63);fill-opacity:1;stroke:url(#linearGradient64);stroke-width:0.265;stroke-opacity:1"
+         x="29.018816"
+         y="230.65689"><tspan
+   style="fill:url(#linearGradient63);fill-opacity:1;stroke:url(#linearGradient64);stroke-opacity:1"
+   id="tspan66">sage</tspan>wai</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-weight:bold;font-size:32.4556px;line-height:1.25;font-family:Montserrat;-inkscape-font-specification:'Montserrat Bold';writing-mode:lr-tb;direction:ltr;fill:url(#linearGradient69);fill-opacity:1;stroke:url(#linearGradient70);stroke-width:0.264999;stroke-opacity:1"
+       x="29.018816"
+       y="263.02048"
+       id="text69"><tspan
+         id="tspan69"
+         style="fill:url(#linearGradient69);fill-opacity:1;stroke:url(#linearGradient70);stroke-width:0.265;stroke-opacity:1"
+         x="29.018816"
+         y="263.02048"><tspan
+   style="fill:url(#linearGradient69);fill-opacity:1;stroke:url(#linearGradient70);stroke-opacity:1"
+   id="tspan68">sage</tspan>wai</tspan></text>
   </g>
 </svg>

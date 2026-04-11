@@ -13,10 +13,20 @@ directories — import from here.
 | `sagewai_logo_dark.svg` | Primary wordmark for dark backgrounds |
 | `sagewai_logo.webp` | Raster wordmark, light |
 | `sagewai_logo_dark.webp` | Raster wordmark, dark |
-| `sagewai_icon.svg` | Square icon / avatar (vector) |
-| `sagewai_icon.webp` | Square icon / avatar (raster) |
+| `sagewai_icon.svg` | Square icon for light backgrounds |
+| `sagewai_icon_dark.svg` | Square icon for dark backgrounds |
+| `sagewai_icon.webp` | Raster square icon, light |
+| `sagewai_icon_dark.webp` | Raster square icon, dark |
 | `logo.svg` | Compact mark used inside the admin UI |
 | `favicon.ico` | Browser favicon |
+
+## Rule: prefer the wordmark
+
+**When the layout can fit the wordmark logo, use the wordmark — not the
+icon.** The icon is only a fallback for physically-constrained spaces
+(e.g., the admin sidebar collapsed state, browser favicons, app tiles,
+social-share avatars). Do not use the icon as a mobile-breakpoint
+substitute for the logo.
 
 ## Usage
 

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="47.228271mm"
+   height="18.245365mm"
+   viewBox="0 0 47.228271 18.245365"
+   version="1.1"
+   id="svg1"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs1">
+    <linearGradient
+       id="linearGradient30">
+      <stop
+         style="stop-color:#ff7043;stop-opacity:1;"
+         offset="0"
+         id="stop31" />
+      <stop
+         style="stop-color:#9c27b0;stop-opacity:1;"
+         offset="0.33492824"
+         id="stop33" />
+      <stop
+         style="stop-color:#26c6da;stop-opacity:1;"
+         offset="1"
+         id="stop32" />
+    </linearGradient>
+    <linearGradient
+       xlink:href="#linearGradient30"
+       id="linearGradient32"
+       x1="126.89479"
+       y1="154.08606"
+       x2="153.48175"
+       y2="154.5128"
+       gradientUnits="userSpaceOnUse"
+       gradientTransform="translate(-77.042607,127.95464)" />
+  </defs>
+  <g
+     id="layer1"
+     transform="translate(-29.535442,-273.41325)">
+    <text
+       xml:space="preserve"
+       style="font-weight:bold;font-size:32.4556px;line-height:1.25;font-family:Montserrat;-inkscape-font-specification:'Montserrat Bold';writing-mode:lr-tb;direction:ltr;fill:url(#linearGradient32);fill-opacity:1;stroke:#ff7043;stroke-width:0.264999;stroke-opacity:0"
+       x="29.018816"
+       y="291.26645"
+       id="text19"><tspan
+         id="tspan19"
+         style="fill:url(#linearGradient32);fill-opacity:1;stroke:#ff7043;stroke-width:0.265;stroke-opacity:0"
+         x="29.018816"
+         y="291.26645"><tspan
+           style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-family:Montserrat;-inkscape-font-specification:'Montserrat Bold';fill:url(#linearGradient32)"
+           id="tspan36"><tspan
+   style="fill:url(#linearGradient32);fill-opacity:1;stroke:#ffffff;stroke-opacity:1"
+   id="tspan67">s</tspan>w</tspan><tspan
+           id="tspan40"
+           style="font-style:normal;font-variant:normal;font-weight:500;font-stretch:normal;font-family:Montserrat;-inkscape-font-specification:'Montserrat Medium';fill:url(#linearGradient32)" /></tspan></text>
+  </g>
+</svg>

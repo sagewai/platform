@@ -57,21 +57,16 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
             </button>
 
             <Link href="/" className="flex items-center gap-2 shrink-0 min-w-0">
-              {/* Icon on mobile, full wordmark on sm+ with light/dark variants. */}
-              <img
-                src="/brand/sagewai_icon.svg"
-                alt="Sagewai"
-                className="h-8 w-8 sm:hidden"
-              />
+              {/* Full wordmark logo on all breakpoints. Light/dark variants. */}
               <img
                 src="/brand/sagewai_logo.svg"
                 alt="Sagewai"
-                className="h-8 w-auto hidden sm:block dark:sm:hidden"
+                className="h-8 w-auto block dark:hidden"
               />
               <img
                 src="/brand/sagewai_logo_dark.svg"
                 alt="Sagewai"
-                className="h-8 w-auto hidden dark:sm:block"
+                className="h-8 w-auto hidden dark:block"
               />
               <span className="text-xs bg-primary-light text-primary px-2 py-0.5 rounded-full font-medium shrink-0">
                 Docs

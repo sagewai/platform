@@ -2,27 +2,102 @@
 <!-- Created with Inkscape (http://www.inkscape.org/) -->
 
 <svg
-   width="36.582439mm"
-   height="22.98353mm"
-   viewBox="0 0 36.582439 22.98353"
+   width="47.228268mm"
+   height="18.245365mm"
+   viewBox="0 0 47.228268 18.245365"
    version="1.1"
    id="svg1"
+   inkscape:export-filename="bitmap.png"
+   inkscape:export-xdpi="96"
+   inkscape:export-ydpi="96"
+   inkscape:version="1.4.3 (0d15f75, 2025-12-25)"
+   sodipodi:docname="sagewai_logo_study.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
    xmlns="http://www.w3.org/2000/svg"
    xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:document-units="mm"
+     inkscape:zoom="1.16"
+     inkscape:cx="396.55172"
+     inkscape:cy="630.60345"
+     inkscape:window-width="1920"
+     inkscape:window-height="952"
+     inkscape:window-x="0"
+     inkscape:window-y="30"
+     inkscape:window-maximized="0"
+     inkscape:current-layer="layer1">
+    <inkscape:page
+       x="0"
+       y="0"
+       width="47.228268"
+       height="18.245365"
+       id="page2"
+       margin="0"
+       bleed="0" />
+  </sodipodi:namedview>
   <defs
-     id="defs1" />
+     id="defs1">
+    <linearGradient
+       id="linearGradient30"
+       inkscape:collect="always">
+      <stop
+         style="stop-color:#ff7043;stop-opacity:1;"
+         offset="0"
+         id="stop31" />
+      <stop
+         style="stop-color:#9c27b0;stop-opacity:1;"
+         offset="0.33492824"
+         id="stop33" />
+      <stop
+         style="stop-color:#26c6da;stop-opacity:1;"
+         offset="1"
+         id="stop32" />
+    </linearGradient>
+    <linearGradient
+       inkscape:collect="always"
+       xlink:href="#linearGradient30"
+       id="linearGradient68"
+       gradientUnits="userSpaceOnUse"
+       gradientTransform="translate(3.3179154,127.9546)"
+       x1="126.89479"
+       y1="154.08606"
+       x2="153.48175"
+       y2="154.5128" />
+  </defs>
   <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
      id="layer1"
-     transform="translate(-141.20203,-165.22331)">
+     transform="translate(-109.89594,-273.41325)">
     <text
        xml:space="preserve"
-       style="font-style:normal;font-variant:normal;font-weight:500;font-stretch:normal;font-size:32.4556px;line-height:1.25;font-family:Montserrat;-inkscape-font-specification:'Montserrat Medium';writing-mode:lr-tb;direction:ltr;fill:#26c6da;fill-opacity:1;stroke:#ff7043;stroke-width:0.264583;stroke-opacity:1"
-       x="140.62032"
-       y="188.07455"
-       id="text14"><tspan
-         id="tspan14"
-         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-family:Montserrat;-inkscape-font-specification:'Montserrat Bold';fill:#ff7043;fill-opacity:1;stroke:#ff7043;stroke-width:0.264583;stroke-opacity:1"
-         x="140.62032"
-         y="188.07455">W</tspan></text>
+       style="font-weight:bold;font-size:32.4556px;line-height:1.25;font-family:Montserrat;-inkscape-font-specification:'Montserrat Bold';writing-mode:lr-tb;direction:ltr;fill:url(#linearGradient68);fill-opacity:1;stroke:#ff7043;stroke-width:0.264999;stroke-opacity:0"
+       x="109.37933"
+       y="291.26645"
+       id="text19-9"
+       inkscape:export-filename="text19.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         sodipodi:role="line"
+         id="tspan19-4"
+         style="fill:url(#linearGradient68);fill-opacity:1;stroke:#ff7043;stroke-width:0.265;stroke-opacity:0"
+         x="109.37933"
+         y="291.26645"><tspan
+           style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-family:Montserrat;-inkscape-font-specification:'Montserrat Bold';fill:url(#linearGradient68)"
+           id="tspan36-3"><tspan
+   style="fill:url(#linearGradient68);fill-opacity:1;stroke:#1a2b3c;stroke-opacity:1"
+   id="tspan67-9">s</tspan>w</tspan><tspan
+           id="tspan40-0"
+           style="font-style:normal;font-variant:normal;font-weight:500;font-stretch:normal;font-family:Montserrat;-inkscape-font-specification:'Montserrat Medium';fill:url(#linearGradient68)" /></tspan></text>
   </g>
 </svg>

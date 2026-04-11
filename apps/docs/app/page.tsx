@@ -116,22 +116,16 @@ export default function LandingPage() {
       <nav className="sticky top-0 z-50 bg-bg-page/80 backdrop-blur-md border-b border-border">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2 shrink-0 min-w-0">
-            {/* Icon only on mobile to keep the nav uncluttered; full wordmark
-                logo on sm+ screens. Light/dark variants for the wordmark. */}
-            <img
-              src="/brand/sagewai_icon.svg"
-              alt="Sagewai"
-              className="h-8 w-8 sm:hidden"
-            />
+            {/* Full wordmark logo on all breakpoints. Light/dark variants. */}
             <img
               src="/brand/sagewai_logo.svg"
               alt="Sagewai"
-              className="h-8 w-auto hidden sm:block dark:sm:hidden"
+              className="h-8 w-auto block dark:hidden"
             />
             <img
               src="/brand/sagewai_logo_dark.svg"
               alt="Sagewai"
-              className="h-8 w-auto hidden dark:sm:block"
+              className="h-8 w-auto hidden dark:block"
             />
             <span className="text-xs bg-primary-light text-primary px-2 py-0.5 rounded-full font-medium shrink-0">
               SDK
