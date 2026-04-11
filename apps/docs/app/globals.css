@@ -1,4 +1,5 @@
-@import "@sagewai/tokens/src/index.css";
+@import "tailwindcss";
+@import "./brand-tokens.css";
 
 @source "../components";
 @source ".";

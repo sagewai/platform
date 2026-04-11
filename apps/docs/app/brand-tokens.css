@@ -1,4 +1,6 @@
-@import "tailwindcss";
+/* Brand tokens — owned by admin as of the @sagecurator/ui decommission.
+   Copied from the former tokens/src/index.css. Tailwind itself is imported
+   once in globals.css, so we don't re-import it here. */
 @import "./tokens/motion.css";
 
 @theme {
@@ -129,8 +131,8 @@ body {
   border-radius: 3px;
 }
 
-/* Focus rings */
-:focus-visible {
-  outline: 2px solid var(--color-primary);
-  outline-offset: 2px;
-}
+/* Focus rings — handled per-component by shadcn primitives
+   (focus-visible:ring-ring / focus-visible:border-ring). The former global
+   `*:focus-visible { outline: … }` rule was removed because it overrode
+   shadcn's `outline-hidden` on inputs like CommandInput, producing a
+   distracting blue box around the command palette search field. */

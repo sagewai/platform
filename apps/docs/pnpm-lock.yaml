@@ -17,9 +17,6 @@ importers:
       '@next/mdx':
         specifier: ^16.2.2
         version: 16.2.2(@mdx-js/loader@3.1.1)(@mdx-js/react@3.1.1(@types/react@19.2.14)(react@19.2.4))
-      '@sagewai/tokens':
-        specifier: ^0.1.0
-        version: 0.1.0(tailwindcss@4.2.2)
       lucide-react:
         specifier: ^1.7.0
         version: 1.7.0(react@19.2.4)
@@ -354,11 +351,6 @@ packages:
     engines: {node: '>= 10'}
     cpu: [x64]
     os: [win32]
-
-  '@sagewai/tokens@0.1.0':
-    resolution: {integrity: sha512-nupFwONPEU4V5aSGjzRiDUCBPQUh91BGDXK+OpZWSnFL46xkMKlgIyHdO/3wX03vakPvWsl+Atz9IRz3vnhMgA==}
-    peerDependencies:
-      tailwindcss: '>=4.0.0'
 
   '@swc/helpers@0.5.15':
     resolution: {integrity: sha512-JQ5TuMi45Owi4/BIMAJBoSQoOJu12oOk/gADqlcUL9JEdHB8vyjUSsxqeNXnmXHjYKMi2WcYtezGEEhqUI/E2g==}
@@ -1719,10 +1711,6 @@ snapshots:
 
   '@next/swc-win32-x64-msvc@16.2.2':
     optional: true
-
-  '@sagewai/tokens@0.1.0(tailwindcss@4.2.2)':
-    dependencies:
-      tailwindcss: 4.2.2
 
   '@swc/helpers@0.5.15':
     dependencies:
