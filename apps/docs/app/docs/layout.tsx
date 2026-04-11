@@ -10,8 +10,17 @@ export default function DocsLayout({ children }: { children: React.ReactNode }) 
         <div className="max-w-[90rem] mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-6">
             <Link href="/" className="flex items-center gap-2">
-              <img src="/brand/logo.svg" alt="Sagewai" className="h-8 w-8" />
-              <span className="text-xl font-bold text-primary">Sagewai</span>
+              {/* Full logo (includes wordmark) — light/dark variants. */}
+              <img
+                src="/brand/sagewai_logo.svg"
+                alt="Sagewai"
+                className="h-8 w-auto block dark:hidden"
+              />
+              <img
+                src="/brand/sagewai_logo_dark.svg"
+                alt="Sagewai"
+                className="h-8 w-auto hidden dark:block"
+              />
               <span className="text-xs bg-primary-light text-primary px-2 py-0.5 rounded-full font-medium">
                 Docs
               </span>

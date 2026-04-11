@@ -116,8 +116,17 @@ export default function LandingPage() {
       <nav className="sticky top-0 z-50 bg-bg-page/80 backdrop-blur-md border-b border-border">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <img src="/brand/logo.svg" alt="Sagewai" className="h-8 w-8" />
-            <span className="text-xl font-bold text-primary">Sagewai</span>
+            {/* Full logo (includes wordmark) — light/dark variants. */}
+            <img
+              src="/brand/sagewai_logo.svg"
+              alt="Sagewai"
+              className="h-8 w-auto block dark:hidden"
+            />
+            <img
+              src="/brand/sagewai_logo_dark.svg"
+              alt="Sagewai"
+              className="h-8 w-auto hidden dark:block"
+            />
             <span className="text-xs bg-primary-light text-primary px-2 py-0.5 rounded-full font-medium">
               SDK
             </span>
@@ -221,7 +230,7 @@ export default function LandingPage() {
             </p>
           </div>
           <div className="grid lg:grid-cols-2 gap-8">
-            <div>
+            <div className="min-w-0">
               <h3 className="text-lg font-semibold text-text-primary mb-2">Multi-Agent Workflows</h3>
               <p className="text-sm text-text-secondary mb-4">
                 Compose agents into sequential, parallel, or loop patterns. Each agent can use a
@@ -229,7 +238,7 @@ export default function LandingPage() {
               </p>
               <CodeBlock code={WORKFLOW_CODE} title="workflow.py" />
             </div>
-            <div>
+            <div className="min-w-0">
               <h3 className="text-lg font-semibold text-text-primary mb-2">Safety Guardrails</h3>
               <p className="text-sm text-text-secondary mb-4">
                 Protect inputs and outputs with PII detection, hallucination guards, content
@@ -342,8 +351,16 @@ export default function LandingPage() {
           <div className="grid md:grid-cols-4 gap-8">
             <div>
               <div className="flex items-center gap-2 mb-2">
-                <img src="/brand/logo.svg" alt="Sagewai" className="h-6 w-6" />
-                <span className="text-lg font-bold text-primary">Sagewai</span>
+                <img
+                  src="/brand/sagewai_logo.svg"
+                  alt="Sagewai"
+                  className="h-6 w-auto block dark:hidden"
+                />
+                <img
+                  src="/brand/sagewai_logo_dark.svg"
+                  alt="Sagewai"
+                  className="h-6 w-auto hidden dark:block"
+                />
               </div>
               <p className="text-sm text-text-muted mt-2">
                 Agent infrastructure you own.

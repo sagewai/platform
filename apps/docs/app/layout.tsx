@@ -5,13 +5,19 @@ export const metadata: Metadata = {
   title: 'Sagewai Documentation',
   description:
     'Agent infrastructure you own. Build production-grade AI agents with any model.',
-  icons: { icon: '/brand/favicon.ico' },
+  icons: {
+    icon: [
+      { url: '/brand/favicon.ico', sizes: 'any' },
+      { url: '/brand/sagewai_icon.svg', type: 'image/svg+xml' },
+    ],
+    apple: '/brand/sagewai_icon.webp',
+  },
   openGraph: {
     title: 'Sagewai Documentation',
     description: 'Agent infrastructure you own. Build production-grade AI agents with any model.',
     url: 'https://docs.sagewai.ai',
     siteName: 'Sagewai',
-    images: [{ url: '/brand/logo-512.png', width: 512, height: 512 }],
+    images: [{ url: '/brand/sagewai_logo.webp' }],
     type: 'website',
   },
   twitter: {
@@ -34,7 +40,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           })();
         ` }} />
       </head>
-      <body className="antialiased text-text-primary bg-bg-page">{children}</body>
+      <body className="antialiased text-text-primary bg-bg-page overflow-x-hidden">
+        {children}
+      </body>
     </html>
   );
 }
