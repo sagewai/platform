@@ -1,14 +1,22 @@
-name: SDK CI
+name: ci-sdk
 
 on:
   push:
     branches: [main]
-    paths: ['sagewai/**', 'tests/**', 'pyproject.toml']
+    paths:
+      - 'packages/sdk/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/ci-sdk.yml'
   pull_request:
-    paths: ['sagewai/**', 'tests/**', 'pyproject.toml']
+    paths:
+      - 'packages/sdk/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/ci-sdk.yml'
 
 concurrency:
-  group: sdk-ci-${{ github.ref }}
+  group: ci-sdk-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -23,7 +31,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --all-packages --group test
-      - run: uv run pytest tests/ -m "not integration" -o "addopts="
+      - run: uv run --package sagewai pytest packages/sdk/tests/ -m "not integration" -o "addopts="
 
   lint:
     runs-on: ubuntu-latest
@@ -31,9 +39,9 @@ jobs:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7
       - run: uv sync --all-packages
-      - run: uv run --with ruff ruff check sagewai/
+      - run: uv run --with ruff ruff check packages/sdk/sagewai/
         continue-on-error: true
-      - run: uv run --with mypy mypy sagewai/
+      - run: uv run --with mypy mypy packages/sdk/sagewai/
         continue-on-error: true
 
   build:
@@ -41,13 +49,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7
-      - run: uv build
+      - run: uv build --package sagewai
       - name: Verify wheel installs
         run: |
           uv venv --seed /tmp/test-venv
-          /tmp/test-venv/bin/pip install dist/sagewai-*.whl
+          /tmp/test-venv/bin/pip install packages/sdk/dist/sagewai-*.whl
           /tmp/test-venv/bin/python -c "import sagewai; print(f'Sagewai {sagewai.__version__} installed successfully')"
       - uses: actions/upload-artifact@v7
         with:
-          name: dist
-          path: dist/
+          name: sdk-dist
+          path: packages/sdk/dist/

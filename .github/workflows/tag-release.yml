@@ -1,0 +1,53 @@
+name: tag-release
+
+# Manual dispatch entry point for cutting a new unified release.
+#
+# This is a thin wrapper around scripts/release.sh which:
+#   1. Consumes pending .changeset/*.md files
+#   2. Computes the next unified version across sdk/admin/docs/vscode/backend
+#   3. Writes CHANGELOG.md + bumps every package manifest
+#   4. Commits and tags vX.Y.Z
+#   5. Pushes the tag — which triggers release-{sdk,admin,backend,docs,vscode}.yml in parallel
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 'Dry run (no tag, no push)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 9
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile=false
+
+      - name: Configure git
+        run: |
+          git config user.name "sagewai-release-bot"
+          git config user.email "release@sagewai.ai"
+
+      - name: Run release script
+        run: |
+          if [ "${{ inputs.dry-run }}" = "true" ]; then
+            ./scripts/release.sh --dry-run
+          else
+            ./scripts/release.sh
+            git push origin main --follow-tags
+          fi

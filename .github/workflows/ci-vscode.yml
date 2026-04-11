@@ -1,0 +1,41 @@
+name: ci-vscode
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/vscode-extension/**'
+      - '.github/workflows/ci-vscode.yml'
+  pull_request:
+    paths:
+      - 'apps/vscode-extension/**'
+      - '.github/workflows/ci-vscode.yml'
+
+concurrency:
+  group: ci-vscode-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 9
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile=false
+      - name: TypeScript check
+        working-directory: apps/vscode-extension
+        run: |
+          if [ -f tsconfig.json ]; then
+            npx tsc --noEmit
+          fi
+      - name: Package vsix (dry-run)
+        working-directory: apps/vscode-extension
+        run: |
+          npm install -g @vscode/vsce
+          vsce package --no-dependencies --out /tmp/sagewai-extension.vsix || true

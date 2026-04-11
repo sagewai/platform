@@ -1,9 +1,8 @@
-name: Publish SDK to PyPI
+name: release-sdk
 
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*.*.*']
 
 permissions:
   id-token: write
@@ -15,11 +14,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7
-      - run: uv build
+      - run: uv build --package sagewai
       - uses: actions/upload-artifact@v7
         with:
-          name: dist
-          path: dist/
+          name: sdk-dist
+          path: packages/sdk/dist/
 
   test:
     runs-on: ubuntu-latest
@@ -29,7 +28,7 @@ jobs:
         with:
           python-version: '3.13'
       - run: uv sync --all-packages --group test
-      - run: uv run pytest tests/ -m "not integration" -o "addopts="
+      - run: uv run --package sagewai pytest packages/sdk/tests/ -m "not integration" -o "addopts="
 
   publish-testpypi:
     runs-on: ubuntu-latest
@@ -38,7 +37,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: dist
+          name: sdk-dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e  # release/v1
         with:
@@ -51,6 +50,6 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: dist
+          name: sdk-dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e  # release/v1

@@ -1,0 +1,46 @@
+name: release-vscode
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: vscode-marketplace
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 9
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile=false
+      - name: Install vsce
+        run: npm install -g @vscode/vsce
+
+      - name: Sync version from tag
+        working-directory: apps/vscode-extension
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          node -e "const f='package.json';const p=require('./'+f);p.version='$TAG';require('fs').writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
+
+      - name: Publish to VS Code Marketplace
+        working-directory: apps/vscode-extension
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: vsce publish --no-dependencies --pat "$VSCE_PAT"
+
+      - name: Publish to Open VSX (optional)
+        working-directory: apps/vscode-extension
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        if: ${{ env.OVSX_PAT != '' }}
+        run: |
+          npm install -g ovsx
+          ovsx publish --pat "$OVSX_PAT"
