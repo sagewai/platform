@@ -139,6 +139,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
     "integration: tests that require external services (PostgreSQL)",
+    "perf: performance micro-benchmarks with fixed time budgets",
 ]
 
 [tool.black]

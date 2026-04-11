@@ -29,5 +29,22 @@ jobs:
         with:
           node-version: 20
           cache: pnpm
-      - run: pnpm install --frozen-lockfile=false
-      - run: pnpm --filter @sagewai/docs build
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Build (Next.js static export → apps/docs/out)
+        run: pnpm --filter @sagewai/docs build
+
+      - name: Verify out/ is populated
+        working-directory: apps/docs
+        run: |
+          if [ ! -d out ] || [ -z "$(ls -A out 2>/dev/null)" ]; then
+            echo "::error::apps/docs/out is missing or empty"
+            exit 1
+          fi
+          echo "out/ contains $(find out -type f | wc -l | tr -d ' ') files"
+
+      - name: Wrangler dry-run (bundle validation, no publish)
+        working-directory: apps/docs
+        run: npx wrangler deploy --dry-run

@@ -26,8 +26,8 @@ UV   := $(shell command -v uv 2>/dev/null || echo uv)
 PNPM := $(shell command -v pnpm 2>/dev/null || echo pnpm)
 
 .PHONY: help bootstrap install install-all clean \
-        test build lint format typecheck \
-        sdk-test sdk-build sdk-lint sdk-format sdk-typecheck \
+        test smoke perf build lint format typecheck \
+        sdk-test sdk-smoke sdk-perf sdk-build sdk-lint sdk-format sdk-typecheck \
         admin-dev admin-build admin-lint \
         docs-dev docs-build docs-lint \
         vscode-build vscode-lint \
@@ -58,7 +58,11 @@ clean:                           ## Remove build artifacts
 
 # ── Aggregate targets ──────────────────────────────────────────────────────
 
-test: sdk-test                   ## Run all tests (currently sdk only)
+test: sdk-test                   ## Run the full sdk unit test suite (2904 tests)
+
+smoke: sdk-smoke                 ## Fast 29-test smoke pass (no LLM, no services) — pre-commit check
+
+perf: sdk-perf                   ## Performance micro-benchmarks with fixed time budgets
 
 build: sdk-build admin-build docs-build vscode-build ## Build every package for release
 
@@ -70,8 +74,14 @@ typecheck: sdk-typecheck         ## Type-check all packages (Python only for now
 
 # ── SDK (Python) ───────────────────────────────────────────────────────────
 
-sdk-test:                        ## Run sdk unit tests
-	$(UV) run --package sagewai pytest packages/sdk/tests/ -m "not integration" -o "addopts="
+sdk-test:                        ## Run sdk unit tests (full suite, ~14s)
+	$(UV) run --package sagewai pytest packages/sdk/tests/ -m "not integration and not perf" -o "addopts="
+
+sdk-smoke:                       ## Run sdk smoke tests only (29 tests, ~1s)
+	$(UV) run --package sagewai pytest packages/sdk/tests/test_smoke.py -v -o "addopts="
+
+sdk-perf:                        ## Run sdk performance micro-benchmarks
+	$(UV) run --package sagewai pytest packages/sdk/tests/test_perf.py -v -m perf -o "addopts="
 
 sdk-build:                       ## Build sdk wheel + sdist
 	rm -rf packages/sdk/dist
