@@ -117,8 +117,54 @@ sagewai admin serve --port 8000
 # Visit http://localhost:8000/docs for the interactive API
 ```
 
+## Local models (no API key)
+
+Run agents with zero cloud costs using Ollama:
+
+```bash
+curl -fsSL https://ollama.ai/install.sh | sh
+ollama pull llama3.1:8b
+```
+
+```python
+from sagewai import UniversalAgent, providers
+
+agent = UniversalAgent(
+    name="local-bot",
+    model="llama3.1:8b",
+    **providers.ollama("llama3.1:8b"),
+)
+```
+
+See the [Local Inference guide](https://docs.sagewai.ai/docs/guides/local-inference) for vLLM, LM Studio, llama.cpp, and Unsloth.
+
+## Use from any language
+
+Start the harness proxy, then connect from TypeScript, Go, Rust, or any of 17 supported languages:
+
+```bash
+sagewai harness start --port 8100
+```
+
+```typescript
+// TypeScript
+import { SagewaiClient } from "sagewai";
+
+const client = new SagewaiClient({
+  baseUrl: "http://localhost:8100",
+  apiKey: "sk-harness-...",
+});
+const response = await client.chat({
+  model: "gpt-4o",
+  messages: [{ role: "user", content: "Hello from TypeScript!" }],
+});
+```
+
+See the [Client Wrappers guide](https://docs.sagewai.ai/docs/guides/client-wrappers) for all 17 languages.
+
 ## What's next
 
+- [Tutorials](https://docs.sagewai.ai/docs/guides/tutorials) — 8 step-by-step tutorials from beginner to enterprise
 - [Examples](sagewai/examples/) — 23 runnable examples covering every feature
 - [API Reference](https://docs.sagewai.ai) — full documentation
 - [GitHub](https://github.com/sagewai/sagewai) — source code and issues

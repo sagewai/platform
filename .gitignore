@@ -13,3 +13,4 @@ build/
 *.so
 .coverage
 htmlcov/
+.DS_Store

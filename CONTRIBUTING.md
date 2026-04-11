@@ -8,6 +8,36 @@ Thank you for your interest in contributing to Sagewai. This guide covers everyt
 - [uv](https://docs.astral.sh/uv/) package manager
 - Git
 
+## System Requirements
+
+- **Minimum:** Python 3.10+, 512 MB RAM (SDK only, cloud APIs)
+- **Development:** 2 GB RAM with PostgreSQL + Redis, or 8 GB+ for full Docker stack
+- **GPU:** Only needed for local inference (Ollama, vLLM, Unsloth) — not required for cloud APIs
+- See [Hardware Requirements](https://docs.sagewai.ai/docs/guides/hardware-requirements) for detailed profiles
+
+## Non-Docker Setup
+
+If you prefer not to use Docker, or want to use an alternative container runtime:
+
+**Podman (drop-in replacement):**
+```bash
+brew install podman podman-compose   # macOS
+alias docker=podman
+alias docker-compose=podman-compose
+```
+
+**Native PostgreSQL + Redis:**
+```bash
+brew install postgresql@15 redis     # macOS
+brew services start postgresql@15
+brew services start redis
+createdb sagecurator
+export DATABASE_URL=postgresql://localhost:5432/sagecurator
+export REDIS_URL=redis://localhost:6379
+```
+
+See [Infrastructure Management](https://docs.sagewai.ai/docs/guides/infrastructure) for full native setup, Podman details, and data volume management.
+
 ## Development Setup
 
 ```bash
