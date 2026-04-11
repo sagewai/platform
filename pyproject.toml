@@ -1,0 +1,16 @@
+# Sagewai platform — monorepo root.
+#
+# This is NOT a Python package. It exists only to declare the uv workspace
+# so `uv sync` at the repo root installs every package under `packages/*`
+# into one shared venv.
+#
+# The actual SDK lives at packages/sdk/ and is what `pip install sagewai`
+# pulls from PyPI. All Python config (dependencies, classifiers, scripts,
+# build backend) lives in that pyproject.toml — never here.
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv]
+# Monorepo root isn't a package itself.
+package = false

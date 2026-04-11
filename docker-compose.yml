@@ -1,0 +1,84 @@
+# Sagewai platform — one-command full stack.
+#
+# Starts postgres + redis + the Python FastAPI backend + the Next.js admin
+# UI, all wired together. Use this for a "just works" local or small-prod
+# demo instance.
+#
+# Usage:
+#   docker compose up -d          # start
+#   docker compose logs -f        # tail
+#   docker compose down           # stop
+#   docker compose down -v        # stop + wipe volumes (destructive)
+#
+# URLs:
+#   http://localhost:3008         # admin UI
+#   http://localhost:8000/docs    # backend OpenAPI explorer
+#
+# Data persistence:
+#   postgres data lives in the `sagewai-pg-data` named volume. Safe across
+#   `docker compose down` unless you pass `-v`.
+#
+# Image sources:
+#   ghcr.io/sagewai/backend:latest — built from apps/backend/
+#   ghcr.io/sagewai/admin:latest   — built from apps/admin/
+#   Both are published on every v*.*.* tag via .github/workflows/release-*.yml
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sagewai
+      POSTGRES_USER: sagewai
+      POSTGRES_PASSWORD: sagewai
+    volumes:
+      - sagewai-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sagewai -d sagewai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    image: ghcr.io/sagewai/backend:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://sagewai:sagewai@postgres:5432/sagewai
+      REDIS_URL: redis://redis:6379
+      SAGEWAI_LOG_LEVEL: INFO
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  admin:
+    image: ghcr.io/sagewai/admin:latest
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      NEXT_PUBLIC_ADMIN_API_URL: http://backend:8000/admin
+    ports:
+      - "3008:3008"
+
+volumes:
+  sagewai-pg-data:
