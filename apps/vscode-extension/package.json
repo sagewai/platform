@@ -1,0 +1,44 @@
+{
+  "name": "sagewai",
+  "displayName": "Sagewai",
+  "description": "Directive syntax highlighting and agent scaffolding for Sagewai SDK",
+  "version": "0.1.0",
+  "publisher": "sagewai",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Programming Languages", "Snippets"],
+  "activationEvents": ["onLanguage:python", "onLanguage:markdown"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "grammars": [{
+      "scopeName": "source.sagewai-directives",
+      "path": "./syntaxes/sagewai-directives.tmLanguage.json",
+      "injectTo": ["source.python", "text.html.markdown"]
+    }],
+    "snippets": [{
+      "language": "python",
+      "path": "./snippets/sagewai.json"
+    }],
+    "commands": [
+      {
+        "command": "sagewai.newAgent",
+        "title": "Sagewai: New Agent"
+      },
+      {
+        "command": "sagewai.newWorkflow",
+        "title": "Sagewai: New Workflow"
+      },
+      {
+        "command": "sagewai.addTool",
+        "title": "Sagewai: Add Tool"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  }
+}
