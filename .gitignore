@@ -1,16 +1,49 @@
+# ── Python / uv ────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.egg-info/
+*.egg
+*.so
 dist/
 build/
 .eggs/
-*.egg
 .venv/
 .env
+.env.*
+!.env.example
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
-*.so
 .coverage
 htmlcov/
+
+# ── Node / pnpm ────────────────────────────────────────────────────────
+node_modules/
+.pnpm-store/
+.pnpm-debug.log*
+
+# ── Next.js ────────────────────────────────────────────────────────────
+.next/
+out/
+.vercel/
+
+# ── VS Code extension ──────────────────────────────────────────────────
+apps/vscode-extension/out/
+apps/vscode-extension/*.vsix
+
+# ── Backend build artifact ─────────────────────────────────────────────
+apps/backend/dist/
+
+# ── Docker / compose runtime ───────────────────────────────────────────
+.docker-data/
+
+# ── OS / editor ────────────────────────────────────────────────────────
 .DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+!.vscode/extensions.json
+
+# ── Cloudflare Pages / Wrangler ────────────────────────────────────────
+.wrangler/

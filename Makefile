@@ -75,7 +75,7 @@ sdk-test:                        ## Run sdk unit tests
 
 sdk-build:                       ## Build sdk wheel + sdist
 	rm -rf packages/sdk/dist
-	$(UV) build --package sagewai
+	$(UV) build --package sagewai --out-dir packages/sdk/dist
 
 sdk-lint:                        ## Lint sdk with ruff
 	$(UV) run --with ruff ruff check packages/sdk/sagewai/
