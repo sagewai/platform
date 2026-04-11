@@ -121,10 +121,19 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
       )}
 
       <div className="flex max-w-[90rem] mx-auto">
-        {/* Sidebar — static column on lg+, fixed drawer on mobile */}
+        {/*
+         * Sidebar — fixed drawer on mobile, static column on lg+.
+         *
+         * Width uses explicit arbitrary values (`max-w-[20rem]`) instead of
+         * the named `max-w-xs` class. docs still depends on @sagewai/tokens
+         * which declares --spacing-xs in its @theme block; in Tailwind 4 that
+         * clobbers the default container scale so `max-w-xs` resolves to
+         * `var(--spacing-xs) = 4px`, collapsing the drawer to invisible on
+         * mobile. Arbitrary values bypass that collision entirely.
+         */}
         <div
           className={`
-            fixed inset-y-16 left-0 z-50 w-[85%] max-w-xs transform transition-transform duration-200 lg:static lg:inset-auto lg:w-auto lg:transform-none lg:translate-x-0
+            fixed inset-y-16 left-0 z-50 w-[min(85vw,20rem)] transform transition-transform duration-200 lg:static lg:inset-auto lg:w-auto lg:transform-none lg:translate-x-0
             ${open ? 'translate-x-0' : '-translate-x-full'}
             lg:block
           `}
