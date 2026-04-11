@@ -115,22 +115,28 @@ export default function LandingPage() {
       {/* Navigation */}
       <nav className="sticky top-0 z-50 bg-bg-page/80 backdrop-blur-md border-b border-border">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            {/* Full logo (includes wordmark) — light/dark variants. */}
+          <Link href="/" className="flex items-center gap-2 shrink-0 min-w-0">
+            {/* Icon only on mobile to keep the nav uncluttered; full wordmark
+                logo on sm+ screens. Light/dark variants for the wordmark. */}
+            <img
+              src="/brand/sagewai_icon.svg"
+              alt="Sagewai"
+              className="h-8 w-8 sm:hidden"
+            />
             <img
               src="/brand/sagewai_logo.svg"
               alt="Sagewai"
-              className="h-8 w-auto block dark:hidden"
+              className="h-8 w-auto hidden sm:block dark:sm:hidden"
             />
             <img
               src="/brand/sagewai_logo_dark.svg"
               alt="Sagewai"
-              className="h-8 w-auto hidden dark:block"
+              className="h-8 w-auto hidden dark:sm:block"
             />
-            <span className="text-xs bg-primary-light text-primary px-2 py-0.5 rounded-full font-medium">
+            <span className="text-xs bg-primary-light text-primary px-2 py-0.5 rounded-full font-medium shrink-0">
               SDK
             </span>
-          </div>
+          </Link>
           <div className="hidden md:flex items-center gap-8">
             <Link href="/docs/getting-started" className="text-sm text-text-secondary hover:text-primary transition-colors">
               Docs

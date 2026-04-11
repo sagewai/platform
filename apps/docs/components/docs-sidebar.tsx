@@ -117,7 +117,7 @@ export function DocsSidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="w-64 flex-shrink-0 border-r border-border bg-bg-surface overflow-y-auto h-[calc(100vh-64px)] sticky top-16">
+    <aside className="w-full h-[calc(100dvh-64px)] lg:w-64 lg:flex-shrink-0 lg:sticky lg:top-16 border-r border-border bg-bg-surface overflow-y-auto">
       <nav className="p-4 space-y-6">
         {SECTIONS.map((section) => (
           <div key={section.title}>
