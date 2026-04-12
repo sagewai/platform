@@ -45,5 +45,9 @@ Thumbs.db
 .vscode/
 !.vscode/extensions.json
 
+# ── Claude Code session state (local-only) ────────────────────────────
+.claude/
+TEST-SESSION-PROMPT.md
+
 # ── Cloudflare Pages / Wrangler ────────────────────────────────────────
 .wrangler/
