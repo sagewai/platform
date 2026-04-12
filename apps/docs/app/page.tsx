@@ -142,7 +142,7 @@ export default function LandingPage() {
               Guides
             </Link>
             <a
-              href="https://github.com/sagewai/sagewai"
+              href="https://github.com/sagewai/platform"
               className="text-sm text-text-secondary hover:text-primary transition-colors"
               target="_blank"
               rel="noopener noreferrer"
@@ -187,7 +187,7 @@ export default function LandingPage() {
                 Get Started
               </Link>
               <a
-                href="https://github.com/sagewai/sagewai"
+                href="https://github.com/sagewai/platform"
                 className="w-full sm:w-auto border border-border text-text-primary px-8 py-3.5 rounded-xl text-base font-semibold hover:border-primary hover:bg-bg-subtle transition-colors"
                 target="_blank"
                 rel="noopener noreferrer"
@@ -416,7 +416,7 @@ export default function LandingPage() {
               <ul className="space-y-2">
                 <li>
                   <a
-                    href="https://github.com/sagewai/sagewai"
+                    href="https://github.com/sagewai/platform"
                     className="text-sm text-text-secondary hover:text-primary"
                     target="_blank"
                     rel="noopener noreferrer"
@@ -426,7 +426,7 @@ export default function LandingPage() {
                 </li>
                 <li>
                   <a
-                    href="https://github.com/sagewai/sagewai/issues"
+                    href="https://github.com/sagewai/platform/issues"
                     className="text-sm text-text-secondary hover:text-primary"
                     target="_blank"
                     rel="noopener noreferrer"

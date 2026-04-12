@@ -420,7 +420,7 @@ export default function BillingPage() {
                       <Badge variant="info">Current</Badge>
                     ) : plan.id === 'enterprise' ? (
                       <a
-                        href="mailto:sales@sagewai.com"
+                        href="mailto:sales@sagewai.ai"
                         className="inline-flex items-center gap-1 text-xs text-primary hover:text-primary-hover transition-colors"
                       >
                         Contact Sales

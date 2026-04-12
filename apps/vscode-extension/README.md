@@ -1,6 +1,6 @@
 # Sagewai VS Code Extension
 
-Directive syntax highlighting and agent scaffolding for the [Sagewai SDK](https://github.com/sagewai/sagewai).
+Directive syntax highlighting and agent scaffolding for the [Sagewai SDK](https://github.com/sagewai/platform).
 
 ## Features
 
@@ -70,4 +70,4 @@ Type a prefix and press `Tab` to expand:
 
 ## License
 
-Part of the [Sagewai SDK](https://github.com/sagewai/sagewai) project by Sagecurator.
+Part of the [Sagewai SDK](https://github.com/sagewai/platform) project by Sagecurator.

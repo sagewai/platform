@@ -52,7 +52,7 @@ worker = WorkflowWorker(
     pool="gpu-workers",
     labels={"env": "production", "gpu": "true"},
     models=["llama3:70b", "mistral:7b"],   # models available on this machine
-    gateway_url="https://gateway.sagewai.com",
+    gateway_url="https://gateway.sagewai.ai",
     enrollment_key="wrt-1.eyJ...",          # from step 1
 )
 await worker.start()
@@ -112,7 +112,7 @@ The `target_model` filter is evaluated at claim time using `@>` operator on the 
 ```bash
 docker run --rm \
   -e ENROLLMENT_KEY="wrt-1.eyJ..." \
-  -e FLEET_GATEWAY_URL="https://gateway.sagewai.com" \
+  -e FLEET_GATEWAY_URL="https://gateway.sagewai.ai" \
   -e WORKER_POOL="default" \
   -e WORKER_MODELS="gpt-4o,claude-3-5-sonnet-20241022" \
   sagewai/worker:latest
@@ -149,7 +149,7 @@ spec:
                   name: sagewai-fleet
                   key: enrollment-key
             - name: FLEET_GATEWAY_URL
-              value: "https://gateway.sagewai.com"
+              value: "https://gateway.sagewai.ai"
             - name: WORKER_POOL
               value: "k8s-pool"
 ```

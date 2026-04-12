@@ -121,7 +121,7 @@ def cli(ctx: click.Context) -> None:
       sagewai status              Check infrastructure health
 
     \b
-    Documentation: https://docs.sagewai.dev
+    Documentation: https://docs.sagewai.ai
     """
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())

@@ -2,7 +2,7 @@
  * Workflow type definitions + YAML serialization helpers.
  *
  * Mirrors the Python YAML workflow spec in
- * packages/sagewai/sagewai/core/yaml_workflow.py
+ * packages/sdk/sagewai/core/yaml_workflow.py
  */
 
 import yaml from 'js-yaml';

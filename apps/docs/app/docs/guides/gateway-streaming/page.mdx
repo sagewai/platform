@@ -17,7 +17,7 @@ This means any client that works with OpenAI (LangChain, LlamaIndex, custom scri
 ### cURL example
 
 ```bash
-curl -X POST https://your-gateway.sagewai.com/v1/chat/completions \
+curl -X POST https://your-gateway.sagewai.ai/v1/chat/completions \
   -H "Authorization: Bearer $SAGEWAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -36,7 +36,7 @@ from openai import AsyncOpenAI
 
 client = AsyncOpenAI(
     api_key="your-sagewai-api-key",
-    base_url="https://your-gateway.sagewai.com/v1",
+    base_url="https://your-gateway.sagewai.ai/v1",
 )
 
 response = await client.chat.completions.create(
@@ -193,12 +193,12 @@ card = AgentCard(
     name="research-agent",
     description="Searches and summarizes information",
     capabilities=["web_search", "summarization"],
-    endpoint="https://your-gateway.sagewai.com/v1/chat/completions",
+    endpoint="https://your-gateway.sagewai.ai/v1/chat/completions",
     model="gpt-4o",
 )
 
 # Another agent discovers and calls it
-client = A2AClient(gateway_url="https://your-gateway.sagewai.com")
+client = A2AClient(gateway_url="https://your-gateway.sagewai.ai")
 result = await client.delegate(
     target_agent="research-agent",
     task="Summarize the latest LLM benchmarks",

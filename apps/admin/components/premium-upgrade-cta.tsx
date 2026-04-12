@@ -13,7 +13,7 @@ export function PremiumUpgradeCTA({ feature }: { feature: string }) {
           This premium feature is available with a Sagewai license.
         </p>
         <a
-          href="https://sagewai.com/pricing"
+          href="https://sagewai.ai/pricing"
           target="_blank"
           rel="noopener noreferrer"
           className="px-4 py-2 text-sm font-medium rounded bg-primary text-white hover:opacity-90"

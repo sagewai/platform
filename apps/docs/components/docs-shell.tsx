@@ -94,7 +94,7 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
               Guides
             </Link>
             <a
-              href="https://github.com/sagewai/sagewai"
+              href="https://github.com/sagewai/platform"
               className="text-sm text-text-secondary hover:text-primary transition-colors"
               target="_blank"
               rel="noopener noreferrer"
