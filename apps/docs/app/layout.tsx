@@ -4,6 +4,7 @@ import { CookieBanner } from '@/components/cookie-banner';
 import './globals.css';
 
 export const metadata: Metadata = {
+  metadataBase: new URL('https://docs.sagewai.ai'),
   title: 'Sagewai Documentation',
   description:
     'Agent infrastructure you own. Build production-grade AI agents with any model.',
@@ -33,7 +34,29 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        {/* TODO: Replace with <Script strategy="beforeInteractive"> + CSP nonce when adding Content-Security-Policy headers */}
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify({
+            '@context': 'https://schema.org',
+            '@graph': [
+              {
+                '@type': 'WebSite',
+                '@id': 'https://docs.sagewai.ai/#website',
+                url: 'https://docs.sagewai.ai',
+                name: 'Sagewai Documentation',
+                description: 'Technical documentation for the Sagewai AI agent infrastructure platform.',
+                publisher: { '@id': 'https://sagewai.ai/#organization' },
+              },
+              {
+                '@type': 'TechArticle',
+                headline: 'Sagewai Documentation',
+                description: 'Build production-grade AI agents with any model.',
+                url: 'https://docs.sagewai.ai',
+                publisher: { '@id': 'https://sagewai.ai/#organization' },
+              },
+            ],
+          }) }}
+        />
         <script dangerouslySetInnerHTML={{ __html: `
           (function() {
             var t = localStorage.getItem('sagewai-theme');

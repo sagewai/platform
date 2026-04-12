@@ -1,0 +1,44 @@
+# Sagewai Documentation
+
+> Technical documentation for the Sagewai AI agent infrastructure platform.
+
+## Getting Started
+
+- Quickstart: https://docs.sagewai.ai/docs/getting-started
+- First Agent Tutorial: https://docs.sagewai.ai/docs/guides/first-agent
+- Tutorials: https://docs.sagewai.ai/docs/guides/tutorials
+
+## Core Concepts
+
+- Agents: https://docs.sagewai.ai/docs/core-concepts/agents
+- Memory: https://docs.sagewai.ai/docs/core-concepts/memory
+- Guardrails: https://docs.sagewai.ai/docs/core-concepts/guardrails
+- Strategies: https://docs.sagewai.ai/docs/core-concepts/strategies
+- Workflows: https://docs.sagewai.ai/docs/core-concepts/workflows
+- Directives: https://docs.sagewai.ai/docs/core-concepts/directives
+- Safety: https://docs.sagewai.ai/docs/core-concepts/safety
+
+## API Reference
+
+- Python SDK: https://docs.sagewai.ai/docs/api-reference/python-sdk
+- REST API: https://docs.sagewai.ai/docs/api-reference/rest-api
+- Agents API: https://docs.sagewai.ai/docs/api-reference/agents
+- Tools API: https://docs.sagewai.ai/docs/api-reference/tools
+- Memory API: https://docs.sagewai.ai/docs/api-reference/memory
+- MCP Server: https://docs.sagewai.ai/docs/api-reference/mcp
+
+## Guides
+
+- Self-Hosted Deployment: https://docs.sagewai.ai/docs/guides/self-hosted
+- Admin Panel: https://docs.sagewai.ai/docs/guides/admin-panel
+- Fleet Architecture: https://docs.sagewai.ai/docs/guides/fleet-architecture
+- Client Wrappers (17 languages): https://docs.sagewai.ai/docs/guides/client-wrappers
+- Local Inference (Ollama, vLLM): https://docs.sagewai.ai/docs/guides/local-inference
+- Cost Management: https://docs.sagewai.ai/docs/guides/cost-management
+- PII Protection: https://docs.sagewai.ai/docs/guides/pii-protection
+
+## Links
+
+- Website: https://sagewai.ai
+- PyPI: https://pypi.org/project/sagewai/
+- Contact: hello@sagewai.ai
