@@ -437,8 +437,14 @@ export default function LandingPage() {
               </ul>
             </div>
           </div>
-          <div className="border-t border-border mt-8 pt-8 text-center text-sm text-text-muted">
-            Built by Sagecurator.
+          <div className="border-t border-border mt-8 pt-8 flex flex-col sm:flex-row items-center justify-between gap-3 text-sm text-text-muted">
+            <span>© 2026 Sagewai. All rights reserved.</span>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              <a href="https://sagewai.ai/privacy" className="hover:text-text-primary transition-colors">Privacy Policy</a>
+              <a href="https://sagewai.ai/terms" className="hover:text-text-primary transition-colors">Terms</a>
+              <a href="https://sagewai.ai/impressum" className="hover:text-text-primary transition-colors">Impressum</a>
+              <a href="https://sagewai.ai/cookies" className="hover:text-text-primary transition-colors">Cookies</a>
+            </div>
           </div>
         </div>
       </footer>

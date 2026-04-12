@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Menu, X } from 'lucide-react';
 import { DocsSidebar } from '@/components/docs-sidebar';
+import { DocsFooter } from '@/components/docs-footer';
 import { ThemeToggle } from '@/components/theme-toggle';
 
 /**
@@ -140,6 +141,8 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
           <article className="max-w-3xl">{children}</article>
         </main>
       </div>
+
+      <DocsFooter />
     </div>
   );
 }

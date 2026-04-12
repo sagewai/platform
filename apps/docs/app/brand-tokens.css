@@ -14,8 +14,8 @@
   --color-border: #E2E8F0;
   --color-border-dim: #F1F5F9;
   --color-text-primary: #0F172A;
-  --color-text-secondary: #64748B;
-  --color-text-muted: #94A3B8;
+  --color-text-secondary: #5C6B82;
+  --color-text-muted: #6B7280;
   --color-text-on-dark: #F0F4F8;
 
   /* Primary (Sage Teal — darkened for light bg contrast) */
@@ -76,13 +76,16 @@
   --font-family-mono: var(--font-mono);
 
   /* Dark-mode surface aliases (used by admin components) */
-  --color-bg-deep: #0A1628;
-  --color-surface-dark: #111B2E;
-  --color-surface-dark-hover: #1A2740;
+  --color-bg-deep: #F1F5F9;
+  --color-surface-dark: #E2E8F0;
+  --color-surface-dark-hover: #CBD5E1;
 }
 
 /* ── Dark Mode ──────────────────────────────────────────── */
 [data-theme="dark"] {
+  --color-bg-deep: #0A1628;
+  --color-surface-dark: #111B2E;
+  --color-surface-dark-hover: #1A2740;
   --color-bg-page: #0A1628;
   --color-bg-surface: #111D35;
   --color-bg-subtle: #1A2B4A;
@@ -93,7 +96,7 @@
   --color-border-dim: rgba(255, 255, 255, 0.03);
   --color-text-primary: #F0F4F8;
   --color-text-secondary: #94A3B8;
-  --color-text-muted: #64748B;
+  --color-text-muted: #7C8DA2;
   --color-primary: #26C6DA;
   --color-primary-hover: #1EAFC2;
   --color-primary-light: rgba(38, 198, 218, 0.1);
