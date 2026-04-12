@@ -19,10 +19,11 @@ from typing import Any
 import click
 
 # ---------------------------------------------------------------------------
-# Version constant
+# Version constant — derived from sagewai.__version__ so it tracks
+# pyproject.toml automatically on every release.
 # ---------------------------------------------------------------------------
 
-VERSION = "0.1.0"
+from sagewai import __version__ as VERSION  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Async helper

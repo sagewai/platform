@@ -37,10 +37,11 @@ import click
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Version constant
+# Version constant — derived from the top-level sagewai package so it stays
+# in sync with pyproject.toml on every release without manual edits.
 # ---------------------------------------------------------------------------
 
-VERSION = "0.1.0"
+from sagewai import __version__ as VERSION  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers  (kept here so tests can ``@patch("sagewai.cli._api_get")`` etc.)
