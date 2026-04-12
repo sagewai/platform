@@ -21,17 +21,21 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: pnpm/action-setup@4f4305e1fe60ad818b8ae6fc4a697cc47eab0b2d # v6
         with:
           version: 9
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: 20
           cache: pnpm
 
       - name: Install deps
         run: pnpm install --frozen-lockfile=false
+
+      - name: Audit JS deps
+        run: pnpm audit --audit-level=high
+        continue-on-error: true
 
       - name: Build (Next.js static export → apps/docs/out)
         run: pnpm --filter @sagewai/docs build

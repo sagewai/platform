@@ -2,3 +2,7 @@ packages:
   - "apps/admin"
   - "apps/docs"
   - "apps/vscode-extension"
+
+# Allow native build scripts (sharp, msw, esbuild) without interactive
+# approval in pnpm 10. Required for CI.
+dangerouslyAllowAllBuilds: true

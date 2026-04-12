@@ -50,3 +50,13 @@ The following are in scope:
 ### Recognition
 
 We appreciate security researchers who help keep Sagewai safe. With your permission, we will acknowledge your contribution in the release notes.
+
+## Supply Chain Security
+
+We take supply chain security seriously. See [SUPPLY-CHAIN.md](SUPPLY-CHAIN.md) for:
+
+- Dependency pinning policy (exact versions, SHA-pinned actions, digest-pinned Docker images)
+- CI security gates (vulnerability audit, licence compliance)
+- SBOM generation and artifact attestation
+- Emergency response for compromised dependencies
+- Licence allowlist

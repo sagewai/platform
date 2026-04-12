@@ -2,7 +2,7 @@ version: 2
 updates:
   # Python SDK dependencies
   - package-ecosystem: "pip"
-    directory: "/packages/sagewai"
+    directory: "/packages/sdk"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -27,10 +27,9 @@ updates:
     commit-message:
       prefix: "chore(ci):"
 
-  # Next.js / web dependencies (Turborepo root)
-  # Dependabot auto-discovers workspace packages in apps/*/ and packages/*/
+  # Admin UI (npm)
   - package-ecosystem: "npm"
-    directory: "/clients/web"
+    directory: "/apps/admin"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -39,5 +38,66 @@ updates:
       - "sagecurator"
     labels:
       - "security"
+      - "pillar:admin"
     commit-message:
-      prefix: "chore(web):"
+      prefix: "chore(admin):"
+
+  # Docs site (npm)
+  - package-ecosystem: "npm"
+    directory: "/apps/docs"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "sagecurator"
+    labels:
+      - "security"
+      - "pillar:docs"
+    commit-message:
+      prefix: "chore(docs):"
+
+  # VS Code extension (npm)
+  - package-ecosystem: "npm"
+    directory: "/apps/vscode-extension"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "sagecurator"
+    labels:
+      - "security"
+      - "pillar:vscode"
+    commit-message:
+      prefix: "chore(vscode):"
+
+  # Backend Docker image
+  - package-ecosystem: "docker"
+    directory: "/apps/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "sagecurator"
+    labels:
+      - "security"
+      - "pillar:backend"
+    commit-message:
+      prefix: "chore(backend):"
+
+  # Admin Docker image
+  - package-ecosystem: "docker"
+    directory: "/apps/admin"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "sagecurator"
+    labels:
+      - "security"
+      - "pillar:admin"
+    commit-message:
+      prefix: "chore(admin):"

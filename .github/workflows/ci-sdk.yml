@@ -26,8 +26,8 @@ jobs:
       matrix:
         python-version: ['3.10', '3.13']
     steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --all-packages --group test
@@ -36,26 +36,38 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
       - run: uv sync --all-packages
       - run: uv run --with ruff ruff check packages/sdk/sagewai/
         continue-on-error: true
       - run: uv run --with mypy mypy packages/sdk/sagewai/
         continue-on-error: true
 
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+      - run: uv sync --all-packages
+      - name: Vulnerability audit
+        run: uv run --with pip-audit pip-audit --strict
+      - name: Licence check
+        run: uv run --with pip-licenses pip-licenses --allow-only="MIT;Apache-2.0;Apache Software License;BSD License;BSD-2-Clause;BSD-3-Clause;ISC;PSF-2.0;Python-2.0;Python Software Foundation License;MPL-2.0;Mozilla Public License 2.0 (MPL 2.0);The Unlicense;Historical Permission Notice and Disclaimer (HPND);ISC License (ISCL);MIT License;Apache-2.0 OR MIT"
+        continue-on-error: true
+
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
       - run: uv build --package sagewai --out-dir packages/sdk/dist
       - name: Verify wheel installs
         run: |
           uv venv --seed /tmp/test-venv
           /tmp/test-venv/bin/pip install packages/sdk/dist/sagewai-*.whl
           /tmp/test-venv/bin/python -c "import sagewai; print(f'Sagewai {sagewai.__version__} installed successfully')"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: sdk-dist
           path: packages/sdk/dist/

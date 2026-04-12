@@ -19,7 +19,7 @@
 #     ghcr.io/sagewai/backend:latest
 
 # ── Stage 1: builder ────────────────────────────────────────────────────────
-FROM python:3.12-slim AS builder
+FROM python:3.12-slim@sha256:804ddf3251a60bbf9c92e73b7566c40428d54d0e79d3428194edf40da6521286 AS builder
 
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -48,7 +48,7 @@ RUN if ls /build/dist/sagewai-*.whl >/dev/null 2>&1; then \
 # explicit 'uvicorn' can be dropped.
 
 # ── Stage 2: runtime ────────────────────────────────────────────────────────
-FROM python:3.12-slim AS runtime
+FROM python:3.12-slim@sha256:804ddf3251a60bbf9c92e73b7566c40428d54d0e79d3428194edf40da6521286 AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

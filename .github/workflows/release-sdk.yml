@@ -7,24 +7,35 @@ on:
 permissions:
   id-token: write
   contents: read
+  attestations: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
       - run: uv build --package sagewai --out-dir packages/sdk/dist
-      - uses: actions/upload-artifact@v7
+      - name: Generate SBOM
+        uses: anchore/sbom-action@e11c554f704a0b820cbf8c51673f6945e0731532 # v0
+        with:
+          path: packages/sdk/dist/
+          artifact-name: sdk-sbom
+          format: cyclonedx-json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: sdk-dist
           path: packages/sdk/dist/
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@db473fddc028af60658334401dc6fa3ffd8669fd # v2
+        with:
+          subject-path: packages/sdk/dist/*.whl
 
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           python-version: '3.13'
       - run: uv sync --all-packages --group test
@@ -35,7 +46,7 @@ jobs:
     needs: [build, test]
     environment: testpypi
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: sdk-dist
           path: dist/
@@ -48,7 +59,7 @@ jobs:
     needs: [build, test, publish-testpypi]
     environment: pypi
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: sdk-dist
           path: dist/

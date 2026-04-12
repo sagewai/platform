@@ -108,6 +108,20 @@ git push origin main --follow-tags
 The tag push triggers release workflows for PyPI, GHCR, Cloudflare, and
 VS Code Marketplace.
 
+## Dependency Management
+
+See [SUPPLY-CHAIN.md](SUPPLY-CHAIN.md) for the full policy. Key rules:
+
+- **Always use exact versions.** `==X.Y.Z` for Python, `"X.Y.Z"` (no `^`) for npm.
+- **Never add a dependency without checking** its licence, maintenance status, and security score.
+- **Run audits locally** before committing dependency changes:
+  ```bash
+  uv run --with pip-audit pip-audit --strict       # Python
+  pnpm audit --audit-level=high                     # JavaScript
+  ```
+- **Dependabot** opens weekly PRs for updates. Review, verify CI passes, merge.
+- **Lock files** (`uv.lock`, `pnpm-lock.yaml`) are committed and must not be gitignored.
+
 ## Known Issues
 
 1. **`sagewai[fastapi]` extra is missing `uvicorn`.** Workaround: `uv pip install uvicorn` after sync.

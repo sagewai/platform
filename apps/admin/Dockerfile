@@ -15,7 +15,7 @@
 #     ghcr.io/sagewai/admin:latest
 
 # ──── Stage 1: Dependencies ────────────────────────────────────────────────
-FROM node:22-alpine AS deps
+FROM node:22-alpine@sha256:4d64b49e6c891c8fc821007cb1cdc6c0db7773110ac2c34bf2e6960adef62ed3 AS deps
 WORKDIR /app
 
 # Install pnpm via corepack and fetch dependencies using the frozen lockfile.
@@ -24,7 +24,7 @@ COPY package.json pnpm-lock.yaml ./
 RUN corepack enable pnpm && pnpm install --frozen-lockfile --prod=false
 
 # ──── Stage 2: Build ───────────────────────────────────────────────────────
-FROM node:22-alpine AS builder
+FROM node:22-alpine@sha256:4d64b49e6c891c8fc821007cb1cdc6c0db7773110ac2c34bf2e6960adef62ed3 AS builder
 WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
@@ -36,7 +36,7 @@ ENV NODE_ENV=production
 RUN corepack enable pnpm && pnpm build
 
 # ──── Stage 3: Production Runtime ──────────────────────────────────────────
-FROM node:22-alpine AS runner
+FROM node:22-alpine@sha256:4d64b49e6c891c8fc821007cb1cdc6c0db7773110ac2c34bf2e6960adef62ed3 AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
