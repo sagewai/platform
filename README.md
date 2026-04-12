@@ -245,21 +245,24 @@ cd platform
 ./scripts/bootstrap.sh          # installs uv + pnpm + syncs everything
 ```
 
-### Test and benchmark targets
+### Task runner (justfile)
 
-Every check has its own `make` target with a clear name. Run `make help`
-to see them all inline; the ones you'll reach for every day:
+Every task has its own `just` recipe. Run `just` to see them all; the
+ones you'll reach for every day:
 
-| Target | What it runs | Expected duration |
+| Recipe | What it runs | Expected duration |
 |---|---|---|
-| `make smoke` | 29 fast smoke tests (no LLM, no services). Pre-commit sanity check. | ~0.1 s |
-| `make test` | Full SDK unit test suite — 2904 tests, all mocks. | ~10 s |
-| `make perf` | Performance micro-benchmarks with fixed time budgets. Catches 10x regressions in hot paths. | ~0.1 s |
-| `make build` | Build sdk wheel + admin + docs + vscode-extension. | ~2 min |
-| `make dev-all` | Run backend (FastAPI) + admin UI concurrently on localhost. | — (long-running) |
-| `make compose-up` | Full stack via root `docker-compose.yml` (postgres + redis + backend + admin). | — (long-running) |
+| `just smoke` | 29 fast smoke tests (no LLM, no services). Pre-commit sanity check. | ~0.1 s |
+| `just test` | Full SDK unit test suite — 2904 tests, all mocks. | ~10 s |
+| `just perf` | Performance micro-benchmarks with fixed time budgets. Catches 10x regressions in hot paths. | ~0.1 s |
+| `just build` | Build sdk wheel + admin + docs + vscode-extension. | ~2 min |
+| `just dev-all` | Run backend (FastAPI) + admin UI concurrently on localhost. | — (long-running) |
+| `just compose-up` | Full stack via root `docker-compose.yml` (postgres + redis + backend + admin). | — (long-running) |
+| `just prereqs` | Check all development tools are installed. | instant |
 
-Package-scoped variants exist for targeted iteration: `sdk-test`, `sdk-smoke`, `sdk-perf`, `sdk-build`, `sdk-lint`, `admin-dev`, `admin-build`, `docs-dev`, `docs-build`, `vscode-build`, `backend-build`.
+Package-scoped variants exist for targeted iteration: `just sdk-test`, `just sdk-smoke`, `just sdk-perf`, `just sdk-build`, `just sdk-lint`, `just admin-dev`, `just admin-build`, `just docs-dev`, `just docs-build`, `just vscode-build`, `just backend-build`.
+
+See [DEVELOPMENT.md](DEVELOPMENT.md) for full setup instructions and prerequisites.
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full flow.
 

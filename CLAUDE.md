@@ -36,21 +36,24 @@ scripts/                         bootstrap.sh, deploy-docs.sh, deploy-web.sh, re
 .github/workflows/               ci-{sdk,admin,docs,vscode}.yml + release-* + tag-release
 ```
 
-## Every Make target
+## Every task (justfile)
 
-Run `make help` for the live list; the ones you'll reach for:
+Run `just` for the live list; the ones you'll reach for:
 
-| Target | What it runs | Duration |
+| Recipe | What it runs | Duration |
 |---|---|---|
-| `make bootstrap` | First-time setup (uv + pnpm + workspace sync) | ~90s |
-| `make smoke` | 29 fast smoke tests | ~0.1s |
-| `make test` | Full SDK unit suite (2904 tests) | ~10s |
-| `make perf` | 4 perf micro-benchmarks with fixed budgets | ~0.1s |
-| `make build` | sdk wheel + admin + docs + vscode builds | ~2 min |
-| `make dev-all` | Backend + admin UI concurrently | long-running |
-| `make compose-up` | Full stack (postgres + redis + backend + admin) | long-running |
+| `just bootstrap` | First-time setup (uv + pnpm + just + workspace sync) | ~90s |
+| `just smoke` | 29 fast smoke tests | ~0.1s |
+| `just test` | Full SDK unit suite (2904 tests) | ~10s |
+| `just perf` | 4 perf micro-benchmarks with fixed budgets | ~0.1s |
+| `just build` | sdk wheel + admin + docs + vscode builds | ~2 min |
+| `just dev-all` | Backend + admin UI concurrently | long-running |
+| `just compose-up` | Full stack (postgres + redis + backend + admin) | long-running |
+| `just prereqs` | Check all dev tools are installed | instant |
 
-Package-scoped variants: `sdk-test`, `sdk-smoke`, `sdk-perf`, `sdk-build`, `admin-dev`, `docs-dev`, `backend-build`.
+Package-scoped variants: `just sdk-test`, `just sdk-smoke`, `just sdk-perf`, `just sdk-build`, `just admin-dev`, `just docs-dev`, `just backend-build`.
+
+See `DEVELOPMENT.md` for full onboarding instructions and prerequisites.
 
 ## Versioning and release
 

@@ -24,6 +24,20 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 log "uv: $(uv --version)"
 
+# ── just ───────────────────────────────────────────────────────────────
+if ! command -v just >/dev/null 2>&1; then
+  log "installing just..."
+  if command -v brew >/dev/null 2>&1; then
+    brew install just
+  elif command -v cargo >/dev/null 2>&1; then
+    cargo install just
+  else
+    curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to "$HOME/.local/bin"
+    export PATH="$HOME/.local/bin:$PATH"
+  fi
+fi
+log "just: $(just --version)"
+
 # ── Node / pnpm ─────────────────────────────────────────────────────────
 if ! command -v node >/dev/null 2>&1; then
   err "node is not installed. Install Node.js 20+ (https://nodejs.org) and re-run."
@@ -52,4 +66,4 @@ if [ -d "$REPO_ROOT/.git" ] && [ -d "$REPO_ROOT/.githooks" ]; then
   git config core.hooksPath .githooks
 fi
 
-log "bootstrap complete. Try 'make test' or 'make dev-all'."
+log "bootstrap complete. Try 'just smoke' or 'just dev-all'."

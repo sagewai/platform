@@ -1,0 +1,100 @@
+# Sagewai SDK — task runner.
+#
+# Python package tasks: testing, linting, building, publishing, E2E.
+# Most developers should use the root justfile instead — it delegates here.
+
+set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
+
+# Show all available recipes
+default:
+    @just --list
+
+# ── Setup ──────────────────────────────────────────────────────────────────
+
+# Install core dependencies
+install:
+    uv sync --all-packages
+
+# Install all dependencies including test/dev
+install-all:
+    uv sync --all-packages --group test
+
+# ── Quality ────────────────────────────────────────────────────────────────
+
+# Run unit tests (no external services)
+test:
+    uv run pytest tests/ -m "not integration" -o "addopts="
+
+# Run 29 smoke tests (fast, no deps)
+test-smoke:
+    uv run pytest tests/test_smoke.py -v
+
+# Lint with ruff
+lint:
+    uv run --with ruff ruff check sagewai/
+
+# Format with ruff
+format:
+    uv run --with ruff ruff format sagewai/ tests/
+
+# Type-check with mypy
+typecheck:
+    uv run --with mypy mypy sagewai/
+
+# ── Build ──────────────────────────────────────────────────────────────────
+
+# Build wheel + sdist
+build:
+    rm -rf dist/
+    uv build
+
+# Remove build artifacts
+clean:
+    rm -rf dist/ build/ .pytest_cache .mypy_cache
+    find . -type d -name __pycache__ -not -path './.venv/*' -exec rm -rf {} + 2>/dev/null || true
+
+# ── Local Services ─────────────────────────────────────────────────────────
+
+# Start admin API server (port 8000)
+admin-serve:
+    uv run sagewai admin serve --port 8000
+
+# Start backend + admin UI (docker) in one command
+admin-up:
+    ./scripts/admin-up.sh
+
+# Check installation health
+doctor:
+    uv run sagewai doctor
+
+# Check infrastructure connectivity
+status:
+    uv run sagewai status
+
+# ── E2E Testing ────────────────────────────────────────────────────────────
+
+# Run offline E2E tests (no API keys needed)
+e2e-offline:
+    bash scripts/e2e-test.sh --offline
+
+# Run live E2E tests (needs API keys)
+e2e-live:
+    bash scripts/e2e-test.sh --live
+
+# Test all CLI subcommands
+e2e-cli:
+    bash scripts/e2e-test.sh --cli
+
+# Run full E2E suite
+e2e-all:
+    bash scripts/e2e-test.sh --all
+
+# ── Publish Pipeline ──────────────────────────────────────────────────────
+
+# Inspect package without uploading
+publish-check:
+    bash scripts/check-package.sh
+
+# Full TestPyPI round-trip (needs TESTPYPI_TOKEN)
+publish-test:
+    bash scripts/test-publish.sh
