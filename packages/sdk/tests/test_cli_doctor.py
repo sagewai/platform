@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from click.testing import CliRunner
 
+import sagewai
 from sagewai.cli import cli
 
 
@@ -19,7 +20,7 @@ def test_doctor_shows_version() -> None:
     runner = CliRunner()
     result = runner.invoke(cli, ["doctor"])
     assert "SDK version:" in result.output
-    assert "0.1.0" in result.output
+    assert sagewai.__version__ in result.output
 
 
 def test_doctor_shows_exports_count() -> None:
@@ -72,4 +73,4 @@ def test_cli_version_option() -> None:
     runner = CliRunner()
     result = runner.invoke(cli, ["--version"])
     assert result.exit_code == 0
-    assert "0.1.0" in result.output
+    assert sagewai.__version__ in result.output
