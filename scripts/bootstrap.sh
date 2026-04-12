@@ -39,8 +39,8 @@ fi
 log "pnpm: $(pnpm --version)"
 
 # ── Python workspace sync ───────────────────────────────────────────────
-log "syncing Python workspace (uv sync --all-packages)..."
-uv sync --all-packages
+log "syncing Python workspace (uv sync --all-packages --group test)..."
+uv sync --all-packages --group test
 
 # ── JS workspace install ────────────────────────────────────────────────
 log "syncing JS workspace (pnpm -r install)..."
