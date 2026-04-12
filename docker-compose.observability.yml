@@ -1,0 +1,70 @@
+# Sagewai observability stack — Grafana + VictoriaMetrics + VictoriaLogs + OTel Collector.
+#
+# Usage (alongside the main stack or standalone):
+#   docker compose -f docker-compose.observability.yml up -d
+#
+# URLs:
+#   http://localhost:3000         Grafana  (admin / admin)
+#   http://localhost:8428         VictoriaMetrics (Prometheus-compatible)
+#   http://localhost:9428         VictoriaLogs
+#   http://localhost:4317         OTel Collector (gRPC)
+#   http://localhost:4318         OTel Collector (HTTP)
+
+services:
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.115.0
+    restart: unless-stopped
+    ports:
+      - "8428:8428"
+    volumes:
+      - vm-data:/victoria-metrics-data
+    command:
+      - "-storageDataPath=/victoria-metrics-data"
+      - "-httpListenAddr=:8428"
+      - "-retentionPeriod=30d"
+
+  victorialogs:
+    image: victoriametrics/victoria-logs:v1.18.0-victorialogs
+    restart: unless-stopped
+    ports:
+      - "9428:9428"
+    volumes:
+      - vl-data:/victoria-logs-data
+    command:
+      - "-storageDataPath=/victoria-logs-data"
+      - "-httpListenAddr=:9428"
+      - "-retentionPeriod=30d"
+
+  otel-collector:
+    build: ./observability/otel-collector
+    restart: unless-stopped
+    ports:
+      - "4317:4317"   # gRPC
+      - "4318:4318"   # HTTP
+      - "8889:8889"   # Prometheus metrics exporter
+    depends_on:
+      - victoriametrics
+      - victorialogs
+
+  grafana:
+    build: ./observability/grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_INSTALL_PLUGINS: "https://github.com/VictoriaMetrics/victorialogs-datasource/releases/download/v0.14.2/victoriametrics-logs-datasource-v0.14.2.zip;victoriametrics-logs-datasource"
+      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: victoriametrics-logs-datasource
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - victoriametrics
+      - victorialogs
+
+volumes:
+  vm-data:
+  vl-data:
+  grafana-data:

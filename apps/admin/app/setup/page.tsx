@@ -3,23 +3,15 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { QRCodeSVG } from 'qrcode.react';
-import { Badge, Button, Card, FormField, TextInput, Select, TextArea } from '@/components/ui/legacy';
-import { Brain, Cpu, Languages, Mic, GitBranch, Layers, CheckCircle, XCircle } from 'lucide-react';
+import { Button, Card, FormField, TextInput, Select, TextArea } from '@/components/ui/legacy';
+import { Brain, Cpu, Layers } from 'lucide-react';
 import { adminApi } from '@/utils/api';
 import { setTokens } from '@/utils/auth';
 import { StepProgress } from '@/components/step-progress';
 import Link from 'next/link';
 
-const STEPS = ['Welcome', 'Organization', 'Application', 'Admin Account', 'Intelligence', '2FA Setup', 'Complete'];
+const STEPS = ['Welcome', 'Organization', 'Application', 'Admin Account', '2FA Setup', 'Complete'];
 
-const INTELLIGENCE_FEATURES = [
-  { label: 'Embeddings', dep: 'sentence-transformers', icon: Cpu, installed: true },
-  { label: 'Multi-Language', dep: 'lingua-language-detector', icon: Languages, installed: true },
-  { label: 'Entity Extraction', dep: 'gliner', icon: Brain, installed: true },
-  { label: 'Transcription', dep: 'faster-whisper', icon: Mic, installed: false },
-  { label: 'Summarization', dep: 'transformers + torch', icon: Layers, installed: false },
-  { label: 'Graph Builder', dep: 'built-in', icon: GitBranch, installed: true },
-];
 const TIMEZONES = [
   { value: 'UTC', label: 'UTC' },
   { value: 'America/New_York', label: 'Eastern Time (US)' },
@@ -108,7 +100,7 @@ export default function SetupPage() {
         // Login may not be available yet — user can log in manually.
       }
       setDone(true);
-      setStep(4); // Go to Intelligence info step
+      setStep(4); // Go to 2FA setup step
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Setup failed';
       setError(msg);
@@ -123,10 +115,10 @@ export default function SetupPage() {
     // Placeholder: real implementation calls POST /api/v1/setup/totp/verify
     await new Promise((r) => setTimeout(r, 600));
     setTotpVerifying(false);
-    setStep(6);
+    setStep(5);
   };
 
-  const skipTotp = () => setStep(6);
+  const skipTotp = () => setStep(5);
 
   const passwordStrength = (pw: string) => {
     if (pw.length < 8) return { label: 'Too short', color: 'bg-error' };
@@ -145,11 +137,16 @@ export default function SetupPage() {
   return (
     <div className="min-h-screen bg-bg-deep flex items-center justify-center p-md">
       <div className="w-full max-w-[36rem]">
-        {/* Logo — full logo on dark background */}
+        {/* Logo — swap per theme so it's always readable */}
+        <img
+          src="/brand/sagewai_logo.svg"
+          alt="Sagewai"
+          className="h-10 w-auto mx-auto mb-4 dark:hidden"
+        />
         <img
           src="/brand/sagewai_logo_dark.svg"
           alt="Sagewai"
-          className="h-10 w-auto mx-auto mb-4"
+          className="h-10 w-auto mx-auto mb-4 hidden dark:block"
         />
 
         {/* Step progress */}
@@ -231,58 +228,8 @@ export default function SetupPage() {
             </div>
           )}
 
-          {/* Step 4: Intelligence */}
+          {/* Step 4: 2FA Setup */}
           {step === 4 && (
-            <div className="flex flex-col gap-md">
-              <h2 className="text-xl font-bold font-[family-name:var(--font-heading)] text-text-primary">Intelligence Layer</h2>
-              <p className="text-sm text-text-secondary -mt-sm">
-                Sagewai includes a pluggable Intelligence Layer for embeddings, NLP, and multimodal processing.
-                Features activate automatically when their optional dependencies are installed.
-              </p>
-
-              <div className="space-y-2">
-                {INTELLIGENCE_FEATURES.map((f) => (
-                  <div
-                    key={f.label}
-                    className="flex items-center justify-between px-4 py-3 bg-bg-subtle rounded-lg"
-                  >
-                    <div className="flex items-center gap-3">
-                      <f.icon size={16} className="text-text-muted" />
-                      <div>
-                        <div className="text-sm font-medium text-text-primary">{f.label}</div>
-                        <div className="text-xs text-text-muted">
-                          <code className="font-[family-name:var(--font-mono)]">{f.dep}</code>
-                        </div>
-                      </div>
-                    </div>
-                    {f.installed ? (
-                      <Badge variant="success">
-                        <span className="flex items-center gap-1">
-                          <CheckCircle size={10} /> Available
-                        </span>
-                      </Badge>
-                    ) : (
-                      <Badge variant="default">
-                        <span className="flex items-center gap-1">
-                          <XCircle size={10} /> Not installed
-                        </span>
-                      </Badge>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              <div className="bg-bg-subtle rounded-lg px-4 py-3 mt-sm">
-                <p className="text-xs text-text-muted mb-1">Install intelligence features:</p>
-                <code className="text-sm font-[family-name:var(--font-mono)] text-text-primary select-all">
-                  pip install sagewai[intelligence]
-                </code>
-              </div>
-            </div>
-          )}
-
-          {/* Step 5: 2FA Setup */}
-          {step === 5 && (
             <div className="flex flex-col gap-md">
               <h2 className="text-xl font-bold font-[family-name:var(--font-heading)] text-text-primary">Two-Factor Authentication</h2>
               <p className="text-sm text-text-secondary -mt-sm">
@@ -337,8 +284,8 @@ export default function SetupPage() {
             </div>
           )}
 
-          {/* Step 6: Complete */}
-          {step === 6 && done && (
+          {/* Step 5: Complete */}
+          {step === 5 && done && (
             <div className="text-center py-lg">
               <div className="text-4xl mb-md">&#10003;</div>
               <h2 className="text-xl font-bold font-[family-name:var(--font-heading)] text-text-primary mb-2">Setup Complete</h2>
@@ -350,7 +297,7 @@ export default function SetupPage() {
               </div>
               <h3 className="text-sm font-semibold mb-sm text-text-primary">Getting Started</h3>
               <div className="grid gap-3 mb-lg text-left">
-                <Link href="/playground" className="flex items-center gap-3 px-4 py-3 bg-bg-subtle rounded-lg hover:bg-white/5 transition-colors no-underline group">
+                <Link href="/playground" className="flex items-center gap-3 px-4 py-3 bg-bg-subtle rounded-lg hover:bg-primary/5 dark:hover:bg-white/5 transition-colors no-underline group">
                   <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center text-primary flex-shrink-0">
                     <Brain size={18} />
                   </div>
@@ -359,7 +306,7 @@ export default function SetupPage() {
                     <div className="text-xs text-text-muted">Chat with agents and test tools</div>
                   </div>
                 </Link>
-                <Link href="/system/models" className="flex items-center gap-3 px-4 py-3 bg-bg-subtle rounded-lg hover:bg-white/5 transition-colors no-underline group">
+                <Link href="/system/models" className="flex items-center gap-3 px-4 py-3 bg-bg-subtle rounded-lg hover:bg-primary/5 dark:hover:bg-white/5 transition-colors no-underline group">
                   <div className="w-9 h-9 rounded-lg bg-secondary/10 flex items-center justify-center text-secondary flex-shrink-0">
                     <Cpu size={18} />
                   </div>
@@ -368,7 +315,7 @@ export default function SetupPage() {
                     <div className="text-xs text-text-muted">Connect OpenAI, Anthropic, Google, and more</div>
                   </div>
                 </Link>
-                <a href="https://docs.sagewai.ai" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 px-4 py-3 bg-bg-subtle rounded-lg hover:bg-white/5 transition-colors no-underline group">
+                <a href="https://docs.sagewai.ai" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 px-4 py-3 bg-bg-subtle rounded-lg hover:bg-primary/5 dark:hover:bg-white/5 transition-colors no-underline group">
                   <div className="w-9 h-9 rounded-lg bg-accent-purple/10 flex items-center justify-center text-accent-purple flex-shrink-0">
                     <Layers size={18} />
                   </div>
@@ -382,8 +329,8 @@ export default function SetupPage() {
             </div>
           )}
 
-          {/* Navigation (steps 1–4; step 5 (2FA) has its own buttons) */}
-          {step > 0 && step < 5 && (
+          {/* Navigation (steps 1–3; step 4 (2FA) has its own buttons) */}
+          {step > 0 && step < 4 && (
             <div className="flex justify-between mt-xl">
               {step <= 3 ? (
                 <Button variant="ghost" onClick={() => setStep(step - 1)}>Back</Button>

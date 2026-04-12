@@ -122,6 +122,18 @@ See [SUPPLY-CHAIN.md](SUPPLY-CHAIN.md) for the full policy. Key rules:
 - **Dependabot** opens weekly PRs for updates. Review, verify CI passes, merge.
 - **Lock files** (`uv.lock`, `pnpm-lock.yaml`) are committed and must not be gitignored.
 
+## macOS: `localhost` vs `127.0.0.1`
+
+macOS resolves `localhost` to `::1` (IPv6) while `127.0.0.1` is IPv4
+only. The admin panel's browser-side health check fetches
+`http://localhost:8000/...`. If you bind the backend to `--host
+127.0.0.1`, those requests hit `::1` and silently fail — the UI shows
+"Connecting to server…" forever.
+
+**Always use the CLI default** (`--host 0.0.0.0`, which listens on all
+interfaces) and open `http://localhost:3808` (not `127.0.0.1`) in your
+browser.
+
 ## Known Issues
 
 1. **`sagewai[fastapi]` extra is missing `uvicorn`.** Workaround: `uv pip install uvicorn` after sync.

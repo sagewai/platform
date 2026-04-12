@@ -2,12 +2,14 @@
   "name": "@sagewai/admin",
   "version": "0.1.0",
   "private": true,
-  "description": "Sagewai Admin Panel — web interface for managing agents, workflows, and AI infrastructure",
+  "description": "Sagewai Admin Panel \u2014 web interface for managing agents, workflows, and AI infrastructure",
   "scripts": {
     "dev": "next dev --port 3008",
     "build": "next build",
     "start": "next start",
-    "lint": "echo 'lint: skipped (no eslint config)'"
+    "lint": "echo 'lint: skipped (no eslint config)'",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
     "@base-ui/react": "1.3.0",
@@ -56,6 +58,7 @@
     "tw-animate-css": "1.4.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@tailwindcss/postcss": "4.2.2",
     "@types/d3-format": "3.0.4",
     "@types/node": "25.5.2",

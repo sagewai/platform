@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  - name: Sagewai
+    orgId: 1
+    folder: Sagewai
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

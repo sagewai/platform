@@ -51,10 +51,10 @@ export function GettingStarted() {
   if (dismissed) return null;
 
   return (
-    <div className="bg-bg-surface border border-white/10 rounded-xl p-6 mb-6">
+    <div className="bg-bg-surface border border-border rounded-xl p-6 mb-6">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-semibold font-[family-name:var(--font-heading)] m-0">Getting Started</h3>
-        <button onClick={dismiss} className="text-text-muted hover:text-white transition-colors cursor-pointer bg-transparent border-none">
+        <button onClick={dismiss} className="text-text-muted hover:text-text-primary transition-colors cursor-pointer bg-transparent border-none">
           <X size={16} />
         </button>
       </div>
@@ -67,13 +67,13 @@ export function GettingStarted() {
               <button
                 onClick={() => toggleItem(item.id)}
                 className={`mt-0.5 w-5 h-5 rounded-md border flex items-center justify-center flex-shrink-0 cursor-pointer transition-colors bg-transparent ${
-                  done ? 'bg-primary border-primary' : 'border-white/20 hover:border-primary/50'
+                  done ? 'bg-primary border-primary' : 'border-border hover:border-primary/50'
                 }`}
               >
                 {done && <Check size={12} className="text-white" />}
               </button>
               <div>
-                <Link href={item.href} className={`text-sm font-medium no-underline transition-colors ${done ? 'text-text-muted line-through' : 'text-white hover:text-primary'}`}>
+                <Link href={item.href} className={`text-sm font-medium no-underline transition-colors ${done ? 'text-text-muted line-through' : 'text-text-primary hover:text-primary'}`}>
                   {item.label}
                 </Link>
                 <p className="text-xs text-text-muted m-0 mt-0.5">{item.description}</p>

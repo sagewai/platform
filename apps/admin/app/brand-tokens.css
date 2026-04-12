@@ -14,7 +14,7 @@
   --color-border: #E2E8F0;
   --color-border-dim: #F1F5F9;
   --color-text-primary: #0F172A;
-  --color-text-secondary: #5C6B82;
+  --color-text-secondary: #475569;
   --color-text-muted: #6B7280;
   --color-text-on-dark: #F0F4F8;
 
@@ -76,9 +76,9 @@
   --font-family-mono: var(--font-mono);
 
   /* Dark-mode surface aliases (used by admin components) */
-  --color-bg-deep: #F1F5F9;
-  --color-surface-dark: #E2E8F0;
-  --color-surface-dark-hover: #CBD5E1;
+  --color-bg-deep: #E8EDF4;
+  --color-surface-dark: #FFFFFF;
+  --color-surface-dark-hover: #F1F5F9;
 }
 
 /* ── Dark Mode ──────────────────────────────────────────── */

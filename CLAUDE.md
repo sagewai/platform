@@ -90,6 +90,53 @@ variants.
 
 **There is no GitHub Actions deploy workflow for the static sites** — Cloudflare polls the repo from its own side and builds on push. CI in this repo only runs build-verification and `wrangler --dry-run` as a safety net.
 
+## CRITICAL — Admin panel setup and auth flow
+
+**DO NOT bypass the first-time setup wizard.** This is a secure
+environment. The admin panel MUST enforce this flow:
+
+1. **First launch** → `GET /api/v1/setup/status` returns
+   `{"setup_required": true}` → proxy redirects ALL routes to `/setup`.
+2. **Setup wizard** (7 steps) → collects org name, admin email,
+   admin password, app config → `POST /api/v1/setup` creates the
+   administrator account and marks setup as done.
+3. **After setup** → user is auto-logged in, redirected to dashboard.
+4. **Returning visits** → `setup_required: false` → proxy checks
+   for `sagewai_auth` cookie → no cookie → redirect to `/login`.
+5. **Login** → `POST /api/v1/auth/login` with email/password →
+   sets httpOnly cookie → dashboard loads.
+
+**Rules for any agent working on this codebase:**
+- NEVER hardcode `setup_required: false` — always check real state.
+- NEVER return placeholder auth tokens — always verify credentials.
+- NEVER skip the setup wizard for "convenience" — it is the security
+  boundary. Without it the platform is completely useless.
+- The admin state lives at `~/.sagewai/admin-state.json` (file-based
+  for local dev; Postgres-backed in production).
+- Password hashing uses PBKDF2-SHA256 with 600k iterations.
+- The guided tour (driver.js) auto-starts after first setup — do not
+  remove or disable it.
+
+## Issue tracking policy
+
+**When you encounter a problem too deep to fix in the current session,
+file a GitHub issue instead of leaving it broken or half-done.**
+
+Rules:
+- Create the issue with `gh issue create` on `sagewai/platform`.
+- **Always label** with one of the area labels:
+  `sdk`, `admin`, `cli`, `mcp`, `api`, `gateway`, `fleet`, `memory`,
+  `safety`, `docs`, `backend`, `vscode-extension`, `observability`,
+  `e2e-tests`, `ci`.
+- **Always label** with one priority: `bug`, `enhancement`, or `chore`.
+- Title format: `[area] short description`
+  e.g. `[admin] e2e: authenticated pages redirect to login due to silentRefresh`
+- Body must include: **Problem**, **Expected**, **Repro steps**,
+  and optionally **Proposed fix**.
+- Reference the issue number in any follow-up PR.
+- Never leave a known broken feature undocumented — if you can't
+  fix it now, the issue IS the deliverable.
+
 ## Known issues you may encounter
 
 1. **`sagewai[fastapi]` extra is missing `uvicorn`.** Workaround: `uv pip install uvicorn` after a fresh sync. A proper fix is to add `uvicorn` to the `[project.optional-dependencies]` `fastapi` array in `packages/sdk/pyproject.toml`.
@@ -99,6 +146,8 @@ variants.
 3. **Git commit author email is `ardadiri@mac-mini.local` in all existing history.** This is Ali's local git identity default from the macOS hostname. Minor hostname leak. Do **not** rewrite history to fix. For any new commits you author in a session, pass `-c user.email=ardadiri@gmail.com` explicitly.
 
 4. **Dependabot fires weekly PRs** across the monorepo and all 17 wrapper repos. They are routine action-version bumps; merge on sight unless a test fails.
+
+5. **macOS: always use `localhost` (not `127.0.0.1`) and bind to `0.0.0.0`.** macOS resolves `localhost` to `::1` (IPv6 loopback) while `127.0.0.1` is IPv4 only. If the backend binds to `--host 127.0.0.1`, the admin panel's browser-side health check (which fetches `http://localhost:8000/...`) will silently fail because the request goes to `::1` and the server isn't listening there. Always start with `--host 0.0.0.0` (the CLI default) and always use `localhost` in browser URLs. This affects most macOS developers.
 
 ## Governance
 

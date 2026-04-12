@@ -134,6 +134,14 @@ admin-build:
 admin-lint:
     pnpm --filter @sagewai/admin lint
 
+# Run admin e2e tests (starts backend + frontend automatically)
+admin-e2e:
+    pnpm --filter @sagewai/admin test:e2e
+
+# Run admin e2e tests in interactive UI mode
+admin-e2e-ui:
+    pnpm --filter @sagewai/admin test:e2e:ui
+
 # ── Docs (Next.js + Cloudflare) ────────────────────────────────────────────
 
 # Start docs dev server on :3010

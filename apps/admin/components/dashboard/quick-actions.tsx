@@ -48,10 +48,10 @@ export function QuickActions({ role }: { role: UserRole }) {
           <Link
             key={action.href}
             href={action.href}
-            className="bg-bg-surface border border-white/10 rounded-xl p-4 no-underline transition-all hover:border-primary/30 hover:bg-white/[0.03] group"
+            className="bg-bg-surface border border-border rounded-xl p-4 no-underline transition-all hover:border-primary/30 hover:bg-primary/5 dark:hover:bg-white/[0.03] group"
           >
             <Icon size={20} className="text-primary mb-2" />
-            <div className="text-sm font-medium text-white group-hover:text-primary transition-colors">{action.label}</div>
+            <div className="text-sm font-medium text-text-primary group-hover:text-primary transition-colors">{action.label}</div>
             <div className="text-xs text-text-muted mt-0.5">{action.description}</div>
           </Link>
         );

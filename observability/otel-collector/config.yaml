@@ -1,0 +1,56 @@
+# OpenTelemetry Collector configuration for Sagewai.
+#
+# Receives OTLP (gRPC + HTTP) from the SDK backend, then:
+#   - Exports metrics to VictoriaMetrics via Prometheus remote-write
+#   - Exports logs to VictoriaLogs via the JSON lines API
+#   - Batches and retries automatically
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+      http:
+        endpoint: "0.0.0.0:4318"
+
+processors:
+  batch:
+    send_batch_size: 1024
+    timeout: 5s
+  resource:
+    attributes:
+      - key: service.namespace
+        value: sagewai
+        action: upsert
+
+exporters:
+  # Metrics → VictoriaMetrics (Prometheus remote-write)
+  prometheusremotewrite:
+    endpoint: "http://victoriametrics:8428/api/v1/write"
+    tls:
+      insecure: true
+
+  # Logs → VictoriaLogs (JSON lines ingestion)
+  otlphttp/victorialogs:
+    endpoint: "http://victorialogs:9428/insert/opentelemetry"
+    tls:
+      insecure: true
+
+  # Debug exporter for local development (logs to collector stdout)
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch, resource]
+      exporters: [prometheusremotewrite, debug]
+    logs:
+      receivers: [otlp]
+      processors: [batch, resource]
+      exporters: [otlphttp/victorialogs, debug]
+    traces:
+      receivers: [otlp]
+      processors: [batch, resource]
+      exporters: [debug]

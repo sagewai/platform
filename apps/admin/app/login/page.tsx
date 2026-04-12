@@ -47,9 +47,14 @@ export default function LoginPage() {
             SAGEWAI heading is no longer rendered. */}
         <div className="text-center mb-8">
           <img
+            src="/brand/sagewai_logo.svg"
+            alt="Sagewai"
+            className="h-12 w-auto mx-auto mb-3 dark:hidden"
+          />
+          <img
             src="/brand/sagewai_logo_dark.svg"
             alt="Sagewai"
-            className="h-12 w-auto mx-auto mb-3"
+            className="h-12 w-auto mx-auto mb-3 hidden dark:block"
           />
           <p className="m-0 text-text-secondary text-sm">Sign in to your account</p>
         </div>
