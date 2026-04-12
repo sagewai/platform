@@ -106,16 +106,48 @@ environment. The admin panel MUST enforce this flow:
 5. **Login** → `POST /api/v1/auth/login` with email/password →
    sets httpOnly cookie → dashboard loads.
 
+**The core pipeline (MUST work end-to-end):**
+
+    Setup → Org → Projects → LLMs → Agents → Runs → Observability
+
+Without the first 4 links, nothing downstream works.
+
+**Architecture:**
+- `admin/state_file.py` — file-backed config store (`~/.sagewai/admin-state.json`)
+- `admin/provider_probes.py` — async LLM provider detection (Ollama, LM Studio, cloud)
+- `admin/serve.py` — complete FastAPI app factory with ALL routes
+- `cli/admin.py` — thin wrapper: creates AdminStateFile + calls serve.py
+
+**Roles (4 personas — defined in `apps/admin/utils/roles.ts`):**
+- **admin** — full access (manage system, build agents, train models, view analytics)
+- **developer** — build agents, use playground, manage tools (no system config)
+- **ml_engineer** — training, data, evaluations, intelligence (no system config)
+- **viewer** — read-only dashboards, reports, cost analytics
+
+Each role has specific `navGroups` (sidebar sections), `permissions`
+(binary capabilities), and `favorites` (pinned sidebar items).
+
+**State file schema (`~/.sagewai/admin-state.json`):**
+- `setup_complete`, `setup_at` — setup wizard state
+- `org_name`, `org_slug`, `contact_email`, `timezone` — org settings
+- `admin` — admin credentials (email, PBKDF2 hash, role)
+- `active_tokens` — list of valid auth tokens (last 10)
+- `projects` — array of tenant projects (slug, name, environment, default_model)
+- `providers` — array of LLM provider configs (name, type, api_key, status)
+
 **Rules for any agent working on this codebase:**
 - NEVER hardcode `setup_required: false` — always check real state.
 - NEVER return placeholder auth tokens — always verify credentials.
 - NEVER skip the setup wizard for "convenience" — it is the security
   boundary. Without it the platform is completely useless.
+- NEVER add routes inline in `cli/admin.py` — use `admin/serve.py`.
 - The admin state lives at `~/.sagewai/admin-state.json` (file-based
   for local dev; Postgres-backed in production).
 - Password hashing uses PBKDF2-SHA256 with 600k iterations.
 - The guided tour (driver.js) auto-starts after first setup — do not
   remove or disable it.
+- All frontend components exist and are intact — if a page shows
+  empty or broken, check the backend route first (`curl` the endpoint).
 
 ## Issue tracking policy
 

@@ -154,3 +154,137 @@ class HealthSnapshot(BaseModel):
 
 # Fix forward reference for RunDetail
 RunDetail.model_rebuild()
+
+
+# ── Organization / Tenant models ─────────────────────────────────────
+
+
+class OrgSettings(BaseModel):
+    """Organization-level settings persisted by the setup wizard."""
+
+    org_name: str = ""
+    org_slug: str = ""
+    app_url: str = ""
+    contact_email: str = ""
+    timezone: str = "UTC"
+    industry: str = ""
+    team_size: str = ""
+    admin_email: str = ""
+    completed_at: str = ""
+
+
+class Project(BaseModel):
+    """A project (tenant) within the organization."""
+
+    slug: str
+    name: str
+    environment: str = "production"
+    allowed_origins: str = ""
+    default_model: str | None = None
+    status: str = "active"
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class SetupRequest(BaseModel):
+    """First-time setup wizard payload."""
+
+    org_name: str
+    org_slug: str = ""
+    contact_email: str = ""
+    timezone: str = "UTC"
+    app_name: str = ""
+    app_description: str = ""
+    admin_name: str = ""
+    admin_email: str
+    admin_password: str
+
+
+class SetupResponse(BaseModel):
+    """First-time setup wizard result."""
+
+    ok: bool
+    org_slug: str = ""
+    app_slug: str = ""
+    message: str = ""
+
+
+# ── LLM Provider models ─────────────────────────────────────────────
+
+
+class ProviderConfig(BaseModel):
+    """Stored LLM provider configuration."""
+
+    id: str = ""
+    provider_name: str
+    provider_type: str = "hosted"
+    display_name: str = ""
+    config: dict[str, str] = Field(default_factory=dict)
+    status: str = "configured"
+    env_var_key: str = ""
+    env_var_set: bool = False
+
+
+class ProviderTestResult(BaseModel):
+    """Result of testing a provider connection."""
+
+    connected: bool
+    latency_ms: float = 0
+    error: str | None = None
+    models: list[str] | None = None
+    note: str | None = None
+
+
+class OllamaModelInfo(BaseModel):
+    """Model info from Ollama /api/tags endpoint."""
+
+    name: str
+    size: int = 0
+    modified_at: str = ""
+    parameter_size: str = ""
+    quantization: str = ""
+
+
+class LMStudioModelInfo(BaseModel):
+    """Model info from LM Studio /v1/models endpoint."""
+
+    id: str
+    owned_by: str = ""
+
+
+class AvailableModel(BaseModel):
+    """A model available for use (aggregated from all providers)."""
+
+    id: str
+    provider: str = ""
+    supports_tools: bool | None = None
+    api_base: str | None = None
+
+
+# ── Playground / Agent creation models ───────────────────────────────
+
+
+class InferencePreset(BaseModel):
+    """Pre-configured inference parameter set."""
+
+    name: str
+    temperature: float = 0.7
+    top_p: float = 0.95
+
+
+class CapabilityItem(BaseModel):
+    """A single tool, MCP server, memory backend, or guardrail."""
+
+    id: str
+    name: str
+    description: str = ""
+
+
+class CapabilityCatalog(BaseModel):
+    """All available capabilities for agent configuration."""
+
+    tools: list[CapabilityItem] = Field(default_factory=list)
+    mcp_servers: list[CapabilityItem] = Field(default_factory=list)
+    memory: list[CapabilityItem] = Field(default_factory=list)
+    guardrails: list[CapabilityItem] = Field(default_factory=list)
+    strategies: list[CapabilityItem] = Field(default_factory=list)

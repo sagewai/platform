@@ -82,11 +82,11 @@ export function ShareButton({
         </Button>
 
         {open && (
-          <div className="absolute right-0 top-full mt-1 z-50 bg-bg-elevated border border-white/10 rounded-lg shadow-xl min-w-[180px] py-1">
+          <div className="absolute right-0 top-full mt-1 z-50 bg-bg-elevated border border-border rounded-lg shadow-xl min-w-[180px] py-1">
             <button
               type="button"
               onClick={handleCopy}
-              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-text-on-dark/80 hover:bg-white/5 transition-colors"
+              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-text-primary hover:bg-primary/5 dark:hover:bg-white/5 transition-colors"
             >
               {copied ? <Check size={14} /> : <Copy size={14} />}
               Copy to clipboard
@@ -94,7 +94,7 @@ export function ShareButton({
             <button
               type="button"
               onClick={handleDownload}
-              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-text-on-dark/80 hover:bg-white/5 transition-colors"
+              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-text-primary hover:bg-primary/5 dark:hover:bg-white/5 transition-colors"
             >
               <Download size={14} />
               Download as .md
@@ -102,7 +102,7 @@ export function ShareButton({
             <button
               type="button"
               onClick={handleSaveClick}
-              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-text-on-dark/80 hover:bg-white/5 transition-colors"
+              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-text-primary hover:bg-primary/5 dark:hover:bg-white/5 transition-colors"
             >
               <Bookmark size={14} />
               Save as example
@@ -176,29 +176,29 @@ function SavePromptModal({
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50">
-      <div className="bg-bg-elevated border border-white/10 rounded-xl shadow-2xl w-full max-w-[28rem] p-6">
+      <div className="bg-bg-elevated border border-border rounded-xl shadow-2xl w-full max-w-[28rem] p-6">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-white">Save Prompt</h3>
-          <button type="button" onClick={onClose} className="text-text-on-dark/50 hover:text-white">
+          <h3 className="text-lg font-semibold text-text-primary">Save Prompt</h3>
+          <button type="button" onClick={onClose} className="text-text-muted hover:text-text-primary">
             <X size={18} />
           </button>
         </div>
 
         <div className="space-y-4">
           <div>
-            <label className="block text-sm text-text-on-dark/60 mb-1">Agent</label>
-            <div className="text-sm text-white">{agentName}</div>
+            <label className="block text-sm text-text-muted mb-1">Agent</label>
+            <div className="text-sm text-text-primary">{agentName}</div>
           </div>
 
           <div>
-            <label className="block text-sm text-text-on-dark/60 mb-1">Input preview</label>
-            <div className="text-sm text-text-on-dark/80 bg-white/5 rounded p-2 max-h-20 overflow-auto">
+            <label className="block text-sm text-text-muted mb-1">Input preview</label>
+            <div className="text-sm text-text-secondary bg-bg-subtle rounded p-2 max-h-20 overflow-auto">
               {inputText.slice(0, 200)}{inputText.length > 200 ? '...' : ''}
             </div>
           </div>
 
           <div>
-            <label htmlFor="save-tags" className="block text-sm text-text-on-dark/60 mb-1">
+            <label htmlFor="save-tags" className="block text-sm text-text-muted mb-1">
               Tags (comma-separated)
             </label>
             <input
@@ -207,7 +207,7 @@ function SavePromptModal({
               value={tags}
               onChange={(e) => setTags(e.target.value)}
               placeholder="e.g. good-example, summarization"
-              className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white placeholder:text-text-on-dark/30 focus:outline-none focus:ring-1 focus:ring-primary"
+              className="w-full bg-bg-subtle border border-border rounded-md px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-primary"
             />
           </div>
 
@@ -216,9 +216,9 @@ function SavePromptModal({
               type="checkbox"
               checked={isExample}
               onChange={(e) => setIsExample(e.target.checked)}
-              className="rounded border-white/20 bg-white/5 text-primary focus:ring-primary"
+              className="rounded border-border bg-bg-subtle text-primary focus:ring-primary"
             />
-            <span className="text-sm text-text-on-dark/80">Mark as few-shot example</span>
+            <span className="text-sm text-text-secondary">Mark as few-shot example</span>
           </label>
         </div>
 
