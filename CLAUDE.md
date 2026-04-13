@@ -51,7 +51,7 @@ Run `just` for the live list; the ones you'll reach for:
 | `just compose-up` | Full stack (postgres + redis + backend + admin) | long-running |
 | `just prereqs` | Check all dev tools are installed | instant |
 
-Package-scoped variants: `just sdk-test`, `just sdk-smoke`, `just sdk-perf`, `just sdk-build`, `just admin-dev`, `just docs-dev`, `just backend-build`.
+Package-scoped variants: `just sdk-test`, `just sdk-smoke`, `just sdk-perf`, `just sdk-build`, `just admin-dev`, `just docs-dev`, `just backend-build`, `just admin-e2e`.
 
 See `DEVELOPMENT.md` for full onboarding instructions and prerequisites.
 
@@ -204,15 +204,29 @@ Rules:
 
 5. **macOS: always use `localhost` (not `127.0.0.1`) and bind to `0.0.0.0`.** macOS resolves `localhost` to `::1` (IPv6). The CLI default `--host 0.0.0.0` is correct.
 
-6. **P2 API routes still missing (issue #44).** The core pipeline works (setup → org → projects → LLMs → agents → playground). Missing: budget limits, guardrail configs, audit events, memory vector/graph, eval datasets, MCP server management, token management, connectors, notifications, fleet admin, billing. These return 404 — the frontend pages exist but show empty states.
+6. ~~P2 API routes still missing~~ **FIXED** in PR #58 — all 144
+   endpoints now served. Issue #44 closed.
 
-7. **OTel custom metrics not appearing in VictoriaMetrics.** The SDK emits custom counters (`sagewai.agent.runs`, etc.) via OTel SDK and the collector receives them (visible in debug output), but the Prometheus remote-write exporter doesn't persist them to VictoriaMetrics. The HTTP instrumentation metrics (`http_server_active_requests`) work. Root cause: likely needs `cumulative_temporality_preference` config on the OTel metric exporter. HTTP performance + logs panels work fine in Grafana.
+7. ~~OTel custom metrics not appearing~~ **Partially fixed** in PR #58
+   (cumulative temporality). HTTP instrumentation metrics + logs
+   panels work in Grafana. Custom counters (`sagewai.agent.runs`)
+   may still need tuning — verify after generating traffic.
+
+8. **`@sagecurator/ui` is fully decommissioned.** Zero references
+   remain in the codebase (PR #59). The compat layer is at
+   `apps/admin/components/ui/legacy.tsx`. Never re-add references
+   to `@sagecurator/ui` or `@sagecurator` packages.
+
+9. **Workflow builder `--color-info` token** was missing (PR #61).
+   If you add new brand tokens, always define them in BOTH the
+   light-mode `@theme` block AND the `[data-theme="dark"]` block
+   in `apps/admin/app/brand-tokens.css`.
 
 ## Governance
 
 - Branch protection on `main`: PR required, code-owner review, linear history, `enforce_admins: true`, no force push, no delete.
 - CODEOWNERS: `@sagecurator` (sole maintainer).
-- Issues are **disabled** per the closed-governance model — community input goes through GitHub Discussions.
+- Issues are **enabled** — use area labels (`sdk`, `admin`, `cli`, etc.) and priority labels (`bug`, `enhancement`, `chore`).
 - `@sagecurator/maintainers` team is the only group with write access.
 
 ## Recent migration history
