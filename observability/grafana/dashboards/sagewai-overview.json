@@ -7,7 +7,20 @@
   "links": [],
   "schemaVersion": 39,
   "tags": ["sagewai"],
-  "templating": {"list": []},
+  "templating": {"list": [
+    {
+      "name": "project",
+      "label": "Project",
+      "type": "custom",
+      "query": "global,all",
+      "current": {"text": "all", "value": "all"},
+      "options": [
+        {"text": "All Projects", "value": "all", "selected": true},
+        {"text": "Global Only", "value": "global", "selected": false}
+      ],
+      "includeAll": false
+    }
+  ]},
   "time": {"from": "now-1h", "to": "now"},
   "title": "Sagewai Admin",
   "uid": "sagewai-overview",
@@ -121,7 +134,7 @@
     {"type": "row", "title": "Application Logs", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 28}, "collapsed": false, "panels": []},
 
     {
-      "title": "Logs",
+      "title": "Logs (filter by project_id in query)",
       "type": "logs",
       "gridPos": {"h": 12, "w": 24, "x": 0, "y": 29},
       "datasource": {"type": "victoriametrics-logs-datasource", "uid": "sagewai-vl"},
@@ -130,8 +143,12 @@
         "showTime": true,
         "sortOrder": "Descending",
         "wrapLogMessage": true,
-        "enableLogDetails": true
-      }
+        "enableLogDetails": true,
+        "showLabels": true,
+        "showCommonLabels": false,
+        "dedupStrategy": "none"
+      },
+      "description": "Filter by project: change query to include sagewai.project_id:\"your-slug\". Labels visible in log details."
     }
   ]
 }

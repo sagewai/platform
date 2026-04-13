@@ -102,7 +102,7 @@ const BASE_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL ?? 'http://localhost:8000
 const ANALYTICS_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL
   ? process.env.NEXT_PUBLIC_ADMIN_API_URL.replace(/\/admin$/, '')
   : 'http://localhost:8000';
-import { getCurrentProjectId } from './project-context';
+import { getCurrentProjectId } from './project-state';
 
 const clientOpts = { getToken: getAccessToken, getProjectId: getCurrentProjectId };
 const client = createFetchClient(BASE_URL, clientOpts);

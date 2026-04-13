@@ -40,15 +40,9 @@ const ProjectContext = createContext<ProjectContextValue>({
   refresh: () => {},
 });
 
-/**
- * Module-level getter so the API client can read the current project
- * without a React hook (same pattern as getAccessToken).
- */
-let _currentProjectId: string | null = null;
-
-export function getCurrentProjectId(): string | null {
-  return _currentProjectId;
-}
+import { setCurrentProjectId } from './project-state';
+// Re-export for convenience — components can import from either module
+export { getCurrentProjectId } from './project-state';
 
 export function ProjectProvider({ children }: { children: ReactNode }) {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -65,11 +59,11 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         const saved = localStorage.getItem(LS_KEY);
         if (saved && ps.find((p) => p.slug === saved)) {
           setCurrentSlug(saved);
-          _currentProjectId = saved;
+          setCurrentProjectId(saved);
         } else if (ps.length > 0) {
           // Auto-select default (first) project
           setCurrentSlug(ps[0].slug);
-          _currentProjectId = ps[0].slug;
+          setCurrentProjectId(ps[0].slug);
           localStorage.setItem(LS_KEY, ps[0].slug);
         }
         setLoaded(true);
@@ -85,7 +79,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 
   const setProject = useCallback((slug: string | null) => {
     setCurrentSlug(slug);
-    _currentProjectId = slug;
+    setCurrentProjectId(slug);
     if (slug) {
       localStorage.setItem(LS_KEY, slug);
     } else {

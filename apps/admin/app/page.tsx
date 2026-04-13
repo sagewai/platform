@@ -11,6 +11,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { ProjectBadge } from '@/components/project-badge';
 import type { RunSummary } from '@/utils/types';
 
 export const dynamic = 'force-dynamic';
@@ -52,7 +53,7 @@ export default async function DashboardPage() {
   // ── Header (always visible) ──
   const header = (
     <div className="flex items-center justify-between mt-0 mb-lg">
-      <h1 className="text-2xl font-bold font-[family-name:var(--font-heading)]">Dashboard</h1>
+      <h1 className="text-2xl font-bold font-[family-name:var(--font-heading)] flex items-center">Dashboard <ProjectBadge /></h1>
       <a href="/tv" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
         <Monitor className="mr-1.5 h-3.5 w-3.5" /> TV Mode
       </a>
