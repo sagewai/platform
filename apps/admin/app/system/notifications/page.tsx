@@ -14,13 +14,12 @@ interface ChannelConfig {
   channel_type: string;
   enabled: boolean;
   project_id?: string | null;
-  smtp_host?: string;
-  smtp_port?: number;
-  smtp_user?: string;
-  smtp_password?: string;
-  smtp_use_tls?: boolean;
-  from_address?: string;
-  to_addresses?: string[];
+  // Email (API-based — Resend, SendGrid, Postmark)
+  email_provider?: string;
+  email_api_key?: string;
+  email_from?: string;
+  email?: string;           // recipient
+  // Slack
   webhook_url?: string;
   slack_channel?: string;
 }
@@ -55,7 +54,7 @@ const CHANNEL_ICONS: Record<string, typeof Mail> = {
 };
 
 const CHANNEL_LABELS: Record<string, string> = {
-  email: 'Email (SMTP)',
+  email: 'Email (API)',
   slack: 'Slack Webhook',
   in_app: 'In-App Alerts',
 };
@@ -122,11 +121,9 @@ function ChannelsSection() {
   const [editingType, setEditingType] = useState<string | null>(null);
   const { toast } = useToast();
 
-  // Form state for email
-  const [smtpHost, setSmtpHost] = useState('');
-  const [smtpPort, setSmtpPort] = useState('587');
-  const [smtpUser, setSmtpUser] = useState('');
-  const [smtpPassword, setSmtpPassword] = useState('');
+  // Form state for email (API-key based)
+  const [emailProvider, setEmailProvider] = useState('resend');
+  const [emailApiKey, setEmailApiKey] = useState('');
   const [fromAddress, setFromAddress] = useState('');
   const [toAddresses, setToAddresses] = useState('');
 
@@ -154,12 +151,10 @@ function ChannelsSection() {
   function startEditing(type: string) {
     const existing = getChannelConfig(type);
     if (type === 'email' && existing) {
-      setSmtpHost(existing.smtp_host ?? '');
-      setSmtpPort(String(existing.smtp_port ?? 587));
-      setSmtpUser(existing.smtp_user ?? '');
-      setSmtpPassword(existing.smtp_password ?? '');
-      setFromAddress(existing.from_address ?? '');
-      setToAddresses((existing.to_addresses ?? []).join(', '));
+      setEmailProvider(existing.email_provider ?? 'resend');
+      setEmailApiKey(existing.email_api_key ?? '');
+      setFromAddress(existing.email_from ?? '');
+      setToAddresses(existing.email ?? '');
     } else if (type === 'slack' && existing) {
       setWebhookUrl(existing.webhook_url ?? '');
       setSlackChannel(existing.slack_channel ?? '');
@@ -173,12 +168,10 @@ function ChannelsSection() {
         await adminApi.saveNotificationChannel({
           channel_type: 'email',
           enabled: true,
-          smtp_host: smtpHost,
-          smtp_port: Number(smtpPort),
-          smtp_user: smtpUser,
-          smtp_password: smtpPassword,
-          from_address: fromAddress,
-          to_addresses: toAddresses.split(',').map((a) => a.trim()).filter(Boolean),
+          email_provider: emailProvider,
+          email_api_key: emailApiKey,
+          email_from: fromAddress,
+          email: toAddresses,
         });
       } else if (type === 'slack') {
         await adminApi.saveNotificationChannel({
@@ -262,7 +255,7 @@ function ChannelsSection() {
 
             {!isEditing && config && type === 'email' && (
               <div className="space-y-2 text-sm">
-                <p><span className="text-text-secondary">Host:</span> {config.smtp_host}:{config.smtp_port}</p>
+                <p><span className="text-text-secondary">Provider:</span> {config.email_provider ?? 'Not set'}</p>
                 <p><span className="text-text-secondary">From:</span> {config.from_address}</p>
                 <p><span className="text-text-secondary">To:</span> {(config.to_addresses ?? []).join(', ')}</p>
                 <div className="flex gap-2 mt-md">
@@ -296,12 +289,16 @@ function ChannelsSection() {
             {/* Email editing form */}
             {isEditing && type === 'email' && (
               <div className="space-y-3">
-                <FormField label="SMTP Host"><TextInput value={smtpHost} onChange={(e) => setSmtpHost(e.target.value)} placeholder="smtp.example.com" /></FormField>
-                <FormField label="SMTP Port"><TextInput value={smtpPort} onChange={(e) => setSmtpPort(e.target.value)} placeholder="587" /></FormField>
-                <FormField label="Username"><TextInput value={smtpUser} onChange={(e) => setSmtpUser(e.target.value)} placeholder="user@example.com" /></FormField>
-                <FormField label="Password"><TextInput type="password" value={smtpPassword} onChange={(e) => setSmtpPassword(e.target.value)} placeholder="password" /></FormField>
-                <FormField label="From Address"><TextInput value={fromAddress} onChange={(e) => setFromAddress(e.target.value)} placeholder="alerts@example.com" /></FormField>
-                <FormField label="To Addresses" hint="Comma-separated"><TextInput value={toAddresses} onChange={(e) => setToAddresses(e.target.value)} placeholder="admin@example.com, ops@example.com" /></FormField>
+                <FormField label="Provider">
+                  <select value={emailProvider} onChange={(e) => setEmailProvider(e.target.value)} className="w-full rounded-md border border-border bg-bg-surface px-3 py-2 text-sm text-text-primary">
+                    <option value="resend">Resend</option>
+                    <option value="sendgrid">SendGrid</option>
+                    <option value="postmark">Postmark</option>
+                  </select>
+                </FormField>
+                <FormField label="API Key" hint={emailProvider === 'resend' ? 'Starts with re_' : emailProvider === 'sendgrid' ? 'Starts with SG.' : 'Server API token'}><TextInput type="password" value={emailApiKey} onChange={(e) => setEmailApiKey(e.target.value)} placeholder={emailProvider === 'resend' ? 're_...' : emailProvider === 'sendgrid' ? 'SG...' : 'your-server-token'} /></FormField>
+                <FormField label="From Address"><TextInput value={fromAddress} onChange={(e) => setFromAddress(e.target.value)} placeholder="notifications@yourdomain.com" /></FormField>
+                <FormField label="To Address"><TextInput value={toAddresses} onChange={(e) => setToAddresses(e.target.value)} placeholder="admin@yourdomain.com" /></FormField>
                 <div className="flex gap-2">
                   <Button size="sm" onClick={() => handleSave('email')}>Save</Button>
                   <Button size="sm" variant="secondary" onClick={() => setEditingType(null)}>Cancel</Button>
