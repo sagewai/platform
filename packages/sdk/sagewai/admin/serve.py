@@ -1404,66 +1404,176 @@ def create_admin_serve_app(
         sf._write(data)
         return JSONResponse({"status": "ok"})
 
-    # ── Fleet ────────────────────────────────────────────────────
+    # ── Fleet (real SDK integration) ────────────────────────────
+    # Uses InMemoryFleetRegistry + FleetDispatcher from the SDK.
+    # Workers register, get approved, claim tasks by project/model/tags.
+
+    from sagewai.fleet import (
+        InMemoryFleetRegistry,
+        InMemoryTaskStore,
+        FleetDispatcher,
+        WorkerCapabilities,
+    )
+
+    fleet_registry = InMemoryFleetRegistry()
+    fleet_task_store = InMemoryTaskStore()
+    fleet_dispatcher = FleetDispatcher(
+        store=fleet_task_store, poll_timeout=5.0, poll_interval=1.0
+    )
+
+    @app.post("/api/v1/fleet/register")
+    async def fleet_register(request: Request) -> JSONResponse:
+        """Worker self-registration."""
+        body = await request.json()
+        pid = _project_id(request)
+        caps = WorkerCapabilities(
+            models_supported=body.get("models", []),
+            pool=body.get("pool", "default"),
+            labels=body.get("labels", {}),
+            max_concurrent=body.get("max_concurrent", 1),
+        )
+        # Add project_id as a label for scoped dispatch
+        if pid:
+            caps.labels["project_id"] = pid
+        worker = await fleet_registry.register_worker(
+            name=body.get("name", "worker"),
+            org_id=body.get("org_id", "default"),
+            capabilities=caps,
+            enrollment_key=body.get("enrollment_key"),
+        )
+        logger.info("Fleet worker registered: %s pool=%s models=%s",
+                     worker.name, caps.pool, caps.models_supported,
+                     extra={"event": "fleet.worker.registered", "worker_id": worker.id,
+                            "pool": caps.pool, "project_id": pid or "global"})
+        return JSONResponse({
+            "worker_id": worker.id,
+            "status": worker.approval_status.value,
+            "capabilities": {
+                "models": caps.models_supported,
+                "pool": caps.pool,
+                "labels": caps.labels,
+                "max_concurrent": caps.max_concurrent,
+            },
+        }, status_code=201)
+
+    @app.post("/api/v1/fleet/claim")
+    async def fleet_claim(request: Request) -> JSONResponse:
+        """Worker claims a task matching its capabilities."""
+        body = await request.json()
+        task = await fleet_dispatcher.claim(
+            worker_id=body.get("worker_id", ""),
+            org_id=body.get("org_id", "default"),
+            models_canonical=body.get("models", []),
+            pool=body.get("pool", "default"),
+            labels=body.get("labels"),
+        )
+        if task:
+            return JSONResponse(task)
+        return JSONResponse(None, status_code=204)
+
+    @app.post("/api/v1/fleet/report")
+    async def fleet_report(request: Request) -> JSONResponse:
+        """Worker reports task completion."""
+        body = await request.json()
+        await fleet_dispatcher.report(
+            worker_id=body.get("worker_id", ""),
+            org_id=body.get("org_id", "default"),
+            run_id=body.get("run_id", ""),
+            status=body.get("status", "completed"),
+            output=body.get("output"),
+            error=body.get("error"),
+        )
+        return JSONResponse({"status": "ok"})
+
+    @app.post("/api/v1/fleet/heartbeat")
+    async def fleet_heartbeat(request: Request) -> JSONResponse:
+        """Worker heartbeat."""
+        body = await request.json()
+        await fleet_registry.heartbeat(body.get("worker_id", ""))
+        return JSONResponse({"status": "ok"})
 
     @app.get("/api/v1/fleet/workers")
     async def list_fleet_workers() -> JSONResponse:
-        data = sf._read()
-        return JSONResponse(data.get("fleet_workers", []))
+        workers = await fleet_registry.list_workers(org_id="default")
+        return JSONResponse([
+            {
+                "id": w.id,
+                "name": w.name,
+                "status": w.approval_status.value,
+                "pool": w.capabilities.pool,
+                "models": w.capabilities.models_supported,
+                "labels": w.capabilities.labels,
+                "max_concurrent": w.capabilities.max_concurrent,
+                "last_heartbeat": w.last_heartbeat.isoformat() if w.last_heartbeat else None,
+                "registered_at": w.registered_at.isoformat(),
+            }
+            for w in workers
+        ])
 
     @app.get("/api/v1/fleet/workers/{worker_id}")
     async def get_fleet_worker(worker_id: str) -> JSONResponse:
-        data = sf._read()
-        worker = next((w for w in data.get("fleet_workers", []) if w.get("id") == worker_id), None)
-        if worker:
-            return JSONResponse(worker)
-        return JSONResponse({"detail": "Not found"}, status_code=404)
+        w = await fleet_registry.get_worker(worker_id)
+        if not w:
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        return JSONResponse({
+            "id": w.id, "name": w.name,
+            "status": w.approval_status.value,
+            "pool": w.capabilities.pool,
+            "models": w.capabilities.models_supported,
+            "labels": w.capabilities.labels,
+            "max_concurrent": w.capabilities.max_concurrent,
+            "last_heartbeat": w.last_heartbeat.isoformat() if w.last_heartbeat else None,
+            "registered_at": w.registered_at.isoformat(),
+        })
 
     @app.post("/api/v1/fleet/workers/{worker_id}/approve")
     async def approve_fleet_worker(worker_id: str) -> JSONResponse:
-        return JSONResponse({"status": "approved", "worker_id": worker_id})
+        w = await fleet_registry.approve_worker(worker_id, approved_by="admin")
+        return JSONResponse({"status": w.approval_status.value, "worker_id": w.id})
 
     @app.post("/api/v1/fleet/workers/{worker_id}/reject")
     async def reject_fleet_worker(worker_id: str) -> JSONResponse:
-        return JSONResponse({"status": "rejected", "worker_id": worker_id})
+        w = await fleet_registry.reject_worker(worker_id)
+        return JSONResponse({"status": w.approval_status.value, "worker_id": w.id})
 
     @app.post("/api/v1/fleet/workers/{worker_id}/revoke")
     async def revoke_fleet_worker(worker_id: str) -> JSONResponse:
-        return JSONResponse({"status": "revoked", "worker_id": worker_id})
+        w = await fleet_registry.revoke_worker(worker_id)
+        return JSONResponse({"status": w.approval_status.value, "worker_id": w.id})
 
     @app.get("/api/v1/fleet/enrollment-keys")
     async def list_fleet_enrollment_keys() -> JSONResponse:
-        data = sf._read()
-        return JSONResponse(data.get("fleet_enrollment_keys", []))
+        keys = await fleet_registry.list_enrollment_keys(org_id="default")
+        return JSONResponse([
+            {
+                "id": k.id, "name": k.name, "pool": ",".join(k.allowed_pools),
+                "max_uses": k.max_uses, "uses": k.current_uses,
+                "revoked": k.revoked,
+                "created_at": k.created_at.isoformat(),
+            }
+            for k in keys
+        ])
 
     @app.post("/api/v1/fleet/enrollment-keys")
     async def create_fleet_enrollment_key(request: Request) -> JSONResponse:
-        import secrets as _sec
         body = await request.json()
-        key = {
-            "id": f"ek-{_sec.token_hex(6)}",
-            "key": f"swek_{_sec.token_urlsafe(24)}",
-            "name": body.get("name", ""),
-            "pool": body.get("pool", "default"),
-            "max_uses": body.get("max_uses", 1),
-            "uses": 0,
-            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "revoked": False,
-        }
-        data = sf._read()
-        data.setdefault("fleet_enrollment_keys", []).append(key)
-        sf._write(data)
-        return JSONResponse(key, status_code=201)
+        key_record, raw_key = await fleet_registry.create_enrollment_key(
+            org_id="default",
+            name=body.get("name", ""),
+            created_by="admin",
+            max_uses=body.get("max_uses"),
+            allowed_pools=body.get("pools", [body.get("pool", "default")]),
+            allowed_models=body.get("models", []),
+        )
+        return JSONResponse({
+            "id": key_record.id, "key": raw_key, "name": key_record.name,
+            "max_uses": key_record.max_uses,
+        }, status_code=201)
 
     @app.delete("/api/v1/fleet/enrollment-keys/{key_id}")
     async def revoke_fleet_enrollment_key(key_id: str) -> JSONResponse:
-        data = sf._read()
-        for k in data.get("fleet_enrollment_keys", []):
-            if k.get("id") == key_id:
-                k["revoked"] = True
-                sf._write(data)
-                return JSONResponse({"status": "ok"})
-        return JSONResponse({"detail": "Not found"}, status_code=404)
+        await fleet_registry.revoke_enrollment_key(key_id)
+        return JSONResponse({"status": "ok"})
 
     @app.get("/api/v1/fleet/audit")
     async def list_fleet_audit() -> JSONResponse:
