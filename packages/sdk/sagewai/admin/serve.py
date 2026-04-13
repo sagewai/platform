@@ -1177,14 +1177,23 @@ def create_admin_serve_app(
                         yield f"event: step_error\ndata: {json.dumps({'step': i + 1, 'agent': agent_name, 'error': str(exc)[:200]})}\n\n"
 
                     step_dt = _wf_time.monotonic() - step_t0
+                    # Estimate tokens (~4 chars per token)
+                    step_input_tokens = len(current_input) // 4
+                    step_output_tokens = len(step_output) // 4
+                    step_tokens = step_input_tokens + step_output_tokens
+
                     steps.append({
                         "step": i + 1, "agent": agent_name, "model": model,
                         "duration_s": round(step_dt, 2),
                         "output_preview": step_output[:200],
+                        "total_tokens": step_tokens,
                     })
                     agents_data.append({
                         "name": agent_name, "model": model,
                         "output": step_output, "duration_s": round(step_dt, 2),
+                        "total_tokens": step_tokens,
+                        "input_tokens": step_input_tokens,
+                        "output_tokens": step_output_tokens,
                     })
 
                     yield f"event: step_completed\ndata: {json.dumps({'step': i + 1, 'agent': agent_name, 'duration_s': round(step_dt, 2)})}\n\n"
@@ -1210,7 +1219,11 @@ def create_admin_serve_app(
                 data["workflow_runs"] = data["workflow_runs"][:100]
                 sf._write(data)
 
-                yield f"event: workflow_finished\ndata: {json.dumps({'output': full_output, 'elapsed_seconds': elapsed, 'agents': agents_data, 'total_steps': len(steps), 'run_id': run_id})}\n\n"
+                total_tokens = sum(a.get("total_tokens", 0) for a in agents_data)
+                total_input_tokens = sum(a.get("input_tokens", 0) for a in agents_data)
+                total_output_tokens = sum(a.get("output_tokens", 0) for a in agents_data)
+
+                yield f"event: workflow_finished\ndata: {json.dumps({'output': full_output, 'elapsed_seconds': elapsed, 'agents': agents_data, 'total_steps': len(steps), 'run_id': run_id, 'total_tokens': total_tokens, 'total_input_tokens': total_input_tokens, 'total_output_tokens': total_output_tokens})}\n\n"
 
                 logger.info("Workflow run %s completed in %.1fs (%d steps)",
                              run_id, elapsed, len(steps),

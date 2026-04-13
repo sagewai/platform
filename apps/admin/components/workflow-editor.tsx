@@ -766,11 +766,11 @@ export function WorkflowEditor() {
                   <div className="flex items-center gap-4 text-xs text-text-muted border-t border-border pt-3">
                     {resultData.elapsed_seconds != null && <span>{resultData.elapsed_seconds}s</span>}
                     {resultData.total_tokens != null && (
-                      <span>{resultData.total_tokens.toLocaleString()} tokens</span>
+                      <span>{(resultData.total_tokens ?? 0).toLocaleString()} tokens</span>
                     )}
                     {resultData.total_input_tokens != null && resultData.total_output_tokens != null && (
                       <span className="text-text-muted/60">
-                        ({resultData.total_input_tokens.toLocaleString()} in / {resultData.total_output_tokens.toLocaleString()} out)
+                        ({(resultData.total_input_tokens ?? 0).toLocaleString()} in / {(resultData.total_output_tokens ?? 0).toLocaleString()} out)
                       </span>
                     )}
                     {resultData.agents && resultData.agents.length > 0 && (
@@ -801,7 +801,7 @@ export function WorkflowEditor() {
                             <tr key={a.name} className="border-t border-border">
                               <td className="px-3 py-1.5 font-medium text-text-primary">{a.name}</td>
                               <td className="px-3 py-1.5 font-[family-name:var(--font-mono)] text-text-muted">{a.model}</td>
-                              <td className="px-3 py-1.5 text-right">{a.total_tokens.toLocaleString()}</td>
+                              <td className="px-3 py-1.5 text-right">{(a.total_tokens ?? 0).toLocaleString()}</td>
                               <td className="px-3 py-1.5 text-right text-text-muted">
                                 {a.duration_ms ? `${(a.duration_ms / 1000).toFixed(1)}s` : '\u2014'}
                               </td>
