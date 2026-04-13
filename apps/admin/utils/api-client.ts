@@ -2,7 +2,7 @@
 
 export function createFetchClient(
   baseUrl: string,
-  opts?: { getToken?: () => string | null },
+  opts?: { getToken?: () => string | null; getProjectId?: () => string | null },
 ) {
   async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     const isFormData = typeof FormData !== 'undefined' && init?.body instanceof FormData;
@@ -13,6 +13,8 @@ export function createFetchClient(
     };
     const token = opts?.getToken?.();
     if (token) headers['Authorization'] = `Bearer ${token}`;
+    const projectId = opts?.getProjectId?.();
+    if (projectId) headers['X-Project-ID'] = projectId;
     const res = await fetch(`${baseUrl}${path}`, {
       ...init,
       headers,

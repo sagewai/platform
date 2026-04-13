@@ -332,16 +332,40 @@ class AdminStateFile:
         self._write(data)
         return True
 
+    # ── project scoping helper ───────────────────────────────────
+
+    @staticmethod
+    def _filter_by_project(
+        items: list[dict[str, Any]], project_id: str | None
+    ) -> list[dict[str, Any]]:
+        """Filter items by project scope.
+
+        - project_id=None → return ALL items (org-global view)
+        - project_id="X"  → return items with project_id=X OR project_id=None (global)
+        """
+        if project_id is None:
+            return items
+        return [
+            i for i in items
+            if i.get("project_id") in (project_id, None, "")
+        ]
+
     # ── playground agents ─────────────────────────────────────────
 
-    def list_agents(self) -> list[dict[str, Any]]:
+    def list_agents(
+        self, project_id: str | None = None
+    ) -> list[dict[str, Any]]:
         data = self._read()
-        return data.get("agents", [])
+        agents = data.get("agents", [])
+        return self._filter_by_project(agents, project_id)
 
-    def create_agent(self, spec: dict[str, Any]) -> dict[str, Any]:
+    def create_agent(
+        self, spec: dict[str, Any], project_id: str | None = None
+    ) -> dict[str, Any]:
         data = self._read()
         agents = data.setdefault("agents", [])
         name = spec.get("name", "")
+        spec["project_id"] = project_id
         # Replace if exists
         data["agents"] = [a for a in agents if a.get("name") != name]
         data["agents"].append(spec)
@@ -349,7 +373,8 @@ class AdminStateFile:
         return spec
 
     def get_agent(self, name: str) -> dict[str, Any] | None:
-        for a in self.list_agents():
+        data = self._read()
+        for a in data.get("agents", []):
             if a.get("name") == name:
                 return a
         return None
@@ -375,10 +400,13 @@ class AdminStateFile:
 
     # ── providers ────────────────────────────────────────────────
 
-    def list_providers(self) -> list[dict[str, Any]]:
+    def list_providers(
+        self, project_id: str | None = None
+    ) -> list[dict[str, Any]]:
         data = self._read()
         self._migrate(data)
         providers = data.get("providers", [])
+        providers = self._filter_by_project(providers, project_id)
         # Enrich with env-var detection
         for p in providers:
             env_key = p.get("env_var_key", "")

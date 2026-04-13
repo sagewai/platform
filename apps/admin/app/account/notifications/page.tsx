@@ -204,7 +204,7 @@ function ChannelsSection() {
   async function handleTest(type: string) {
     try {
       const result = await adminApi.testNotification({ channel_type: type as 'email' | 'slack' | 'in_app' });
-      if (result.delivered) {
+      if (result.sent) {
         toast('success', 'Test notification sent');
       } else {
         toast('error', 'Test notification failed');

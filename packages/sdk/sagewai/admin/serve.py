@@ -340,9 +340,10 @@ def create_admin_serve_app(
 
     # Override /admin/agents to also include playground-created agents
     @app.get("/admin/agents", include_in_schema=False)
-    async def admin_agents_merged() -> JSONResponse:
+    async def admin_agents_merged(request: Request) -> JSONResponse:
         """Merge SDK-registered agents with playground-created agents."""
-        playground_agents = sf.list_agents()
+        pid = _project_id(request)
+        playground_agents = sf.list_agents(project_id=pid)
         result = [
             {
                 "name": a.get("name", ""),
@@ -505,8 +506,9 @@ def create_admin_serve_app(
     # ── Providers ────────────────────────────────────────────────
 
     @app.get("/api/v1/providers")
-    async def list_providers() -> JSONResponse:
-        return JSONResponse(sf.list_providers())
+    async def list_providers(request: Request) -> JSONResponse:
+        pid = _project_id(request)
+        return JSONResponse(sf.list_providers(project_id=pid))
 
     @app.post("/api/v1/providers")
     async def upsert_provider(request: Request) -> JSONResponse:
@@ -586,7 +588,8 @@ def create_admin_serve_app(
         body = await request.json()
         if not body.get("name"):
             return JSONResponse({"detail": "Agent name is required"}, status_code=422)
-        agent = sf.create_agent(body)
+        pid = _project_id(request)
+        agent = sf.create_agent(body, project_id=pid)
         logger.info("Agent created: %s model=%s strategy=%s",
                      body["name"], body.get("model", ""), body.get("strategy", ""),
                      extra={"event": "agent.created", "agent_name": body["name"],
@@ -595,8 +598,9 @@ def create_admin_serve_app(
         return JSONResponse(agent, status_code=201)
 
     @app.get("/playground/agents")
-    async def playground_agents() -> JSONResponse:
-        agents = sf.list_agents()
+    async def playground_agents(request: Request) -> JSONResponse:
+        pid = _project_id(request)
+        agents = sf.list_agents(project_id=pid)
         return JSONResponse(agents)
 
     @app.get("/playground/agents/{name}")
@@ -1918,6 +1922,15 @@ def _extract_token(request: Request) -> str | None:
     return request.cookies.get("sagewai_auth")
 
 
+def _project_id(request: Request) -> str | None:
+    """Extract project scope from X-Project-ID header or query param.
+
+    Returns None for org-global scope (no filtering).
+    """
+    pid = request.headers.get("x-project-id") or request.query_params.get("project_id")
+    return pid if pid else None
+
+
 # ── OTel metrics (module-level so route handlers can use them) ────
 
 _otel_meter = None  # set by _init_otel if OTel is available
@@ -2072,6 +2085,7 @@ def _init_otel(app: FastAPI, version: str) -> None:
                         "http.status_code": response.status_code,
                         "http.duration_ms": round(dt, 1),
                         "sagewai.category": category,
+                        "sagewai.project_id": _project_id(request) or "global",
                     },
                 )
                 return response
