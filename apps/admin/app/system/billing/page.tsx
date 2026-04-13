@@ -167,10 +167,10 @@ function UsageMeter({
 /* ─── Main page ─── */
 
 export default function BillingPage() {
-  const [plans, setPlans] = useState<BillingPlan[]>(DEMO_PLANS);
-  const [subscription, setSubscription] = useState<BillingSubscription>(DEMO_SUBSCRIPTION);
-  const [usage, setUsage] = useState<BillingUsage>(DEMO_USAGE);
-  const [invoices, setInvoices] = useState<BillingInvoice[]>(DEMO_INVOICES);
+  const [plans, setPlans] = useState<BillingPlan[]>([]);
+  const [subscription, setSubscription] = useState<BillingSubscription | null>(null);
+  const [usage, setUsage] = useState<BillingUsage | null>(null);
+  const [invoices, setInvoices] = useState<BillingInvoice[]>([]);
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
 
@@ -198,7 +198,33 @@ export default function BillingPage() {
     fetchData();
   }, [fetchData]);
 
-  const currentPlan = plans.find((p) => p.id === subscription.plan) ?? plans[0];
+  const currentPlan = subscription ? plans.find((p) => p.id === sub.plan) ?? plans[0] : null;
+
+  // Self-hosted mode — no billing provider configured
+  if (!loading && !subscription) {
+    return (
+      <div className="max-w-4xl mx-auto">
+        <h1 className="text-2xl font-bold font-[family-name:var(--font-heading)] mt-0 mb-1">Billing</h1>
+        <p className="text-sm text-muted-foreground mb-lg">Manage your subscription and usage.</p>
+        <Card className="p-lg text-center">
+          <Server className="mx-auto h-10 w-10 text-primary mb-md" />
+          <h2 className="text-lg font-semibold mb-2">Self-Hosted Instance</h2>
+          <p className="text-sm text-muted-foreground max-w-md mx-auto mb-md">
+            You are running Sagewai on your own infrastructure. There is no billing
+            provider configured. All features are available under the AGPL-3.0 license.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            For commercial licensing, contact{' '}
+            <a href="mailto:licensing@sagewai.ai" className="text-primary no-underline hover:underline">licensing@sagewai.ai</a>
+          </p>
+        </Card>
+      </div>
+    );
+  }
+
+  // After the guard above, subscription + usage are guaranteed non-null
+  const sub = subscription as BillingSubscription;
+  const usg = usage as BillingUsage;
 
   const handleUpgrade = async (planId: string) => {
     try {
@@ -272,8 +298,8 @@ export default function BillingPage() {
               </p>
               <h2 className="text-xl font-bold mt-1">{currentPlan?.name ?? 'Free'}</h2>
             </div>
-            <Badge variant={statusVariant(subscription.status)}>
-              {subscription.status}
+            <Badge variant={statusVariant(sub.status)}>
+              {sub.status}
             </Badge>
           </div>
 
@@ -288,7 +314,7 @@ export default function BillingPage() {
             )}
           </div>
 
-          {subscription.cancel_at_period_end && (
+          {sub.cancel_at_period_end && (
             <p className="text-xs text-yellow-400">
               Cancels at end of period
             </p>
@@ -296,7 +322,7 @@ export default function BillingPage() {
 
           <p className="text-xs text-text-on-dark/40">
             Current period ends{' '}
-            {new Date(subscription.current_period_end).toLocaleDateString('en-US', {
+            {new Date(sub.current_period_end).toLocaleDateString('en-US', {
               month: 'long',
               day: 'numeric',
               year: 'numeric',
@@ -320,7 +346,7 @@ export default function BillingPage() {
               Current Period Usage
             </p>
             <span className="text-xs text-text-on-dark/30 font-mono">
-              {usage.period_start} -- {usage.period_end}
+              {usg.period_start} -- {usg.period_end}
             </span>
           </div>
 
@@ -328,20 +354,20 @@ export default function BillingPage() {
             <UsageMeter
               label="Agent Runs"
               icon={Zap}
-              used={usage.agent_runs}
+              used={usg.agent_runs}
               limit={runLimit}
             />
             <UsageMeter
               label="Storage"
               icon={HardDrive}
-              used={usage.storage_used_gb}
+              used={usg.storage_used_gb}
               limit={storageLimit}
               unit="GB"
             />
             <UsageMeter
               label="Workers"
               icon={Server}
-              used={usage.workers_active}
+              used={usg.workers_active}
               limit={workerLimit}
             />
           </div>
@@ -349,10 +375,10 @@ export default function BillingPage() {
           <div className="flex items-center gap-md text-xs text-text-muted pt-sm border-t border-border">
             <span className="flex items-center gap-1">
               <Activity size={12} />
-              {usage.api_calls.toLocaleString()} API calls
+              {usg.api_calls.toLocaleString()} API calls
             </span>
             <span>
-              {usage.connectors_active} connectors active
+              {usg.connectors_active} connectors active
             </span>
           </div>
         </Card>
@@ -369,7 +395,7 @@ export default function BillingPage() {
                 {plans.map((plan) => (
                   <th key={plan.id} className="text-center py-3 px-4 font-medium">
                     <div className="flex flex-col items-center gap-1">
-                      <span className={plan.id === subscription.plan ? 'text-primary' : ''}>
+                      <span className={plan.id === sub.plan ? 'text-primary' : ''}>
                         {plan.name}
                       </span>
                       <span className="text-xs text-text-muted font-normal">
@@ -416,7 +442,7 @@ export default function BillingPage() {
                 <td className="py-4" />
                 {plans.map((plan) => (
                   <td key={plan.id} className="text-center py-4 px-4">
-                    {plan.id === subscription.plan ? (
+                    {plan.id === sub.plan ? (
                       <Badge variant="info">Current</Badge>
                     ) : plan.id === 'enterprise' ? (
                       <a

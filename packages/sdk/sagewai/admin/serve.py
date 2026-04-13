@@ -1427,7 +1427,116 @@ def create_admin_serve_app(
 
     @app.post("/api/v1/notifications/test")
     async def test_notification(request: Request) -> JSONResponse:
-        return JSONResponse({"sent": True})
+        """Send a test notification to the specified channel."""
+        body = await request.json()
+        channel_type = body.get("channel_type", "")
+
+        # Find the saved channel config
+        data = sf._read()
+        channels = data.get("notification_channels", [])
+        channel = next(
+            (c for c in channels if c.get("channel_type") == channel_type),
+            None,
+        )
+
+        if channel_type == "slack":
+            webhook_url = channel.get("webhook_url", "") if channel else body.get("webhook_url", "")
+            if not webhook_url:
+                return JSONResponse({"sent": False, "error": "No Slack webhook URL configured"}, status_code=400)
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.post(webhook_url, json={
+                        "text": ":white_check_mark: *Sagewai Notification Test*\n\nThis is a test message from your Sagewai admin panel.\n\n_If you see this, your Slack webhook is configured correctly._",
+                    })
+                    if resp.status_code == 200:
+                        logger.info("Slack webhook test sent successfully",
+                                    extra={"event": "notification.test.success", "channel": "slack"})
+                        return JSONResponse({"sent": True})
+                    else:
+                        logger.warning("Slack webhook test failed: %d %s", resp.status_code, resp.text[:100],
+                                       extra={"event": "notification.test.failed", "channel": "slack"})
+                        return JSONResponse({"sent": False, "error": f"Slack returned {resp.status_code}: {resp.text[:200]}"})
+            except Exception as exc:
+                return JSONResponse({"sent": False, "error": str(exc)})
+
+        elif channel_type == "email":
+            # Email via API-key providers (Resend, Postmark, SendGrid).
+            # Provider is auto-detected from env vars or channel config.
+            email_to = channel.get("email", "") if channel else body.get("email", "")
+            if not email_to:
+                return JSONResponse({"sent": False, "error": "No email address configured"}, status_code=400)
+
+            # Resolve provider + API key from channel config or env
+            provider = (channel or {}).get("email_provider", "") or os.environ.get("EMAIL_PROVIDER", "")
+            api_key = (channel or {}).get("email_api_key", "") or os.environ.get("EMAIL_API_KEY", "")
+            from_email = (channel or {}).get("email_from", "") or os.environ.get("EMAIL_FROM", "notifications@sagewai.ai")
+
+            # Auto-detect provider from API key prefix
+            if not provider and api_key:
+                if api_key.startswith("re_"):
+                    provider = "resend"
+                elif api_key.startswith("SG."):
+                    provider = "sendgrid"
+                else:
+                    provider = "postmark"
+
+            if not api_key:
+                return JSONResponse({
+                    "sent": False,
+                    "error": "No email API key configured. Set EMAIL_API_KEY env var or configure in channel settings. Supported: Resend (re_*), Postmark, SendGrid (SG.*).",
+                }, status_code=400)
+
+            subject = "Sagewai Notification Test"
+            html_body = (
+                "<h2>Sagewai Notification Test</h2>"
+                "<p>This is a test message from your Sagewai admin panel.</p>"
+                "<p>If you received this, your email notifications are configured correctly.</p>"
+                "<hr><p style='color:#888;font-size:12px'>Sent by Sagewai &mdash; Agent Infrastructure You Own</p>"
+            )
+
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    if provider == "resend":
+                        resp = await client.post(
+                            "https://api.resend.com/emails",
+                            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                            json={"from": from_email, "to": [email_to], "subject": subject, "html": html_body},
+                        )
+                    elif provider == "sendgrid":
+                        resp = await client.post(
+                            "https://api.sendgrid.com/v3/mail/send",
+                            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                            json={
+                                "personalizations": [{"to": [{"email": email_to}]}],
+                                "from": {"email": from_email},
+                                "subject": subject,
+                                "content": [{"type": "text/html", "value": html_body}],
+                            },
+                        )
+                    elif provider == "postmark":
+                        resp = await client.post(
+                            "https://api.postmarkapp.com/email",
+                            headers={"X-Postmark-Server-Token": api_key, "Content-Type": "application/json"},
+                            json={"From": from_email, "To": email_to, "Subject": subject, "HtmlBody": html_body},
+                        )
+                    else:
+                        return JSONResponse({"sent": False, "error": f"Unknown email provider: {provider}"}, status_code=400)
+
+                    if resp.status_code in (200, 201, 202):
+                        logger.info("Email test sent via %s to %s", provider, email_to,
+                                    extra={"event": "notification.test.success", "channel": "email", "provider": provider})
+                        return JSONResponse({"sent": True, "provider": provider})
+                    else:
+                        logger.warning("Email test failed via %s: %d", provider, resp.status_code,
+                                       extra={"event": "notification.test.failed", "channel": "email", "provider": provider})
+                        return JSONResponse({"sent": False, "error": f"{provider} returned {resp.status_code}: {resp.text[:200]}"})
+            except Exception as exc:
+                return JSONResponse({"sent": False, "error": str(exc)})
+
+        else:
+            return JSONResponse({"sent": True, "note": f"Channel type '{channel_type}' — logged only (no delivery endpoint)"})
 
     # ── Triggers ─────────────────────────────────────────────────
 
@@ -1638,6 +1747,38 @@ def create_admin_serve_app(
             ).isoformat(),
             "services": [],
         })
+
+    # ── Billing (self-hosted: no provider) ────────────────────────
+
+    @app.get("/api/v1/billing/plans")
+    async def billing_plans() -> JSONResponse:
+        return JSONResponse([])
+
+    @app.get("/api/v1/billing/subscription")
+    async def billing_subscription() -> JSONResponse:
+        return JSONResponse(None, status_code=204)
+
+    @app.get("/api/v1/billing/usage")
+    async def billing_usage() -> JSONResponse:
+        return JSONResponse(None, status_code=204)
+
+    @app.get("/api/v1/billing/invoices")
+    async def billing_invoices() -> JSONResponse:
+        return JSONResponse([])
+
+    @app.post("/api/v1/billing/portal")
+    async def billing_portal() -> JSONResponse:
+        return JSONResponse(
+            {"detail": "No billing provider configured (self-hosted instance)"},
+            status_code=501,
+        )
+
+    @app.post("/api/v1/billing/checkout")
+    async def billing_checkout() -> JSONResponse:
+        return JSONResponse(
+            {"detail": "No billing provider configured (self-hosted instance)"},
+            status_code=501,
+        )
 
     # ── License ──────────────────────────────────────────────────
 
