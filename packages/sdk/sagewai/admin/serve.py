@@ -69,6 +69,8 @@ _CAPABILITIES = {
         {"id": "weather_lookup", "name": "Weather Lookup", "description": "Get current weather by location."},
         {"id": "knowledge_base", "name": "Knowledge Base", "description": "Search internal documentation."},
         {"id": "ticket_lookup", "name": "Ticket Lookup", "description": "Search support tickets and issues."},
+        {"id": "send_email", "name": "Send Email", "description": "Send an email via configured provider (Resend/SendGrid/Postmark). Args: to, subject, body."},
+        {"id": "send_slack", "name": "Send Slack Message", "description": "Post a message to a Slack channel via webhook. Args: message, channel (optional)."},
     ],
     "mcp_servers": [
         {"id": "filesystem", "name": "Filesystem", "description": "Read/write local files via MCP."},
@@ -1470,7 +1472,13 @@ def create_admin_serve_app(
             # Resolve provider + API key from channel config or env
             provider = (channel or {}).get("email_provider", "") or os.environ.get("EMAIL_PROVIDER", "")
             api_key = (channel or {}).get("email_api_key", "") or os.environ.get("EMAIL_API_KEY", "")
-            from_email = (channel or {}).get("email_from", "") or os.environ.get("EMAIL_FROM", "notifications@sagewai.ai")
+            from_email = (channel or {}).get("email_from", "") or os.environ.get("EMAIL_FROM", "")
+            # Resend requires a verified domain. Use their test address
+            # if no custom from-address is configured.
+            if not from_email and provider == "resend":
+                from_email = "onboarding@resend.dev"
+            elif not from_email:
+                from_email = "notifications@sagewai.ai"
 
             # Auto-detect provider from API key prefix
             if not provider and api_key:
@@ -1537,6 +1545,112 @@ def create_admin_serve_app(
 
         else:
             return JSONResponse({"sent": True, "note": f"Channel type '{channel_type}' — logged only (no delivery endpoint)"})
+
+    # ── Send notification (for agent tools) ────────────────────
+
+    @app.post("/api/v1/notifications/send")
+    async def send_notification(request: Request) -> JSONResponse:
+        """Send a notification — used by agent tools (send_email, send_slack).
+
+        Body params:
+          channel: "email" | "slack"
+          # For email:
+          to: str (recipient email)
+          subject: str
+          body: str (HTML or plain text)
+          # For slack:
+          message: str
+          webhook_url: str (optional — uses saved channel config if omitted)
+          channel_name: str (optional — overrides #channel in message)
+        """
+        body = await request.json()
+        ch = body.get("channel", "")
+
+        if ch == "slack":
+            webhook_url = body.get("webhook_url", "")
+            if not webhook_url:
+                # Fall back to saved channel config
+                data = sf._read()
+                saved = next((c for c in data.get("notification_channels", []) if c.get("channel_type") == "slack"), None)
+                webhook_url = (saved or {}).get("webhook_url", "")
+            if not webhook_url:
+                return JSONResponse({"sent": False, "error": "No Slack webhook URL"}, status_code=400)
+            message = body.get("message", "")
+            channel_name = body.get("channel_name", "")
+            payload: dict[str, Any] = {"text": message}
+            if channel_name:
+                payload["channel"] = channel_name
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.post(webhook_url, json=payload)
+                return JSONResponse({"sent": resp.status_code == 200, "status_code": resp.status_code})
+            except Exception as exc:
+                return JSONResponse({"sent": False, "error": str(exc)})
+
+        elif ch == "email":
+            # Use the same API-key email logic as test_notification
+            email_to = body.get("to", "")
+            subject = body.get("subject", "Sagewai Notification")
+            html_body = body.get("body", "")
+            if not email_to:
+                return JSONResponse({"sent": False, "error": "No recipient (to) specified"}, status_code=400)
+
+            data = sf._read()
+            saved = next((c for c in data.get("notification_channels", []) if c.get("channel_type") == "email"), None)
+            provider = (saved or {}).get("email_provider", "") or os.environ.get("EMAIL_PROVIDER", "")
+            api_key = (saved or {}).get("email_api_key", "") or os.environ.get("EMAIL_API_KEY", "")
+            from_email = (saved or {}).get("email_from", "") or os.environ.get("EMAIL_FROM", "")
+            if not from_email and provider == "resend":
+                from_email = "onboarding@resend.dev"
+            elif not from_email:
+                from_email = "notifications@sagewai.ai"
+
+            if not api_key:
+                return JSONResponse({"sent": False, "error": "No EMAIL_API_KEY configured"}, status_code=400)
+            if not provider and api_key:
+                if api_key.startswith("re_"):
+                    provider = "resend"
+                elif api_key.startswith("SG."):
+                    provider = "sendgrid"
+                else:
+                    provider = "postmark"
+
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    if provider == "resend":
+                        to_list = [email_to] if isinstance(email_to, str) else email_to
+                        resp = await client.post(
+                            "https://api.resend.com/emails",
+                            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                            json={"from": from_email, "to": to_list, "subject": subject, "html": html_body},
+                        )
+                    elif provider == "sendgrid":
+                        resp = await client.post(
+                            "https://api.sendgrid.com/v3/mail/send",
+                            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                            json={
+                                "personalizations": [{"to": [{"email": email_to}]}],
+                                "from": {"email": from_email},
+                                "subject": subject,
+                                "content": [{"type": "text/html", "value": html_body}],
+                            },
+                        )
+                    elif provider == "postmark":
+                        resp = await client.post(
+                            "https://api.postmarkapp.com/email",
+                            headers={"X-Postmark-Server-Token": api_key, "Content-Type": "application/json"},
+                            json={"From": from_email, "To": email_to, "Subject": subject, "HtmlBody": html_body},
+                        )
+                    else:
+                        return JSONResponse({"sent": False, "error": f"Unknown provider: {provider}"}, status_code=400)
+                return JSONResponse({"sent": resp.status_code in (200, 201, 202), "provider": provider})
+            except Exception as exc:
+                return JSONResponse({"sent": False, "error": str(exc)})
+
+        else:
+            return JSONResponse({"sent": False, "error": f"Unknown channel: {ch}"}, status_code=400)
 
     # ── Triggers ─────────────────────────────────────────────────
 
