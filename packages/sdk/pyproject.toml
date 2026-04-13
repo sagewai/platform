@@ -37,7 +37,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "litellm==1.83.0",
+    "litellm==1.83.4",
     "google-genai==1.72.0",
     "pydantic==2.12.5",
     "python-dotenv==1.2.2",
