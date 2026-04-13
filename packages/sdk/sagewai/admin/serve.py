@@ -1082,6 +1082,533 @@ def create_admin_serve_app(
         sf._write(data)
         return JSONResponse({"status": "ok"})
 
+    # ── Budget limits ────────────────────────────────────────────
+
+    @app.get("/api/v1/budget/limits")
+    async def list_budget_limits() -> JSONResponse:
+        data = sf._read()
+        return JSONResponse(data.get("budget_limits", []))
+
+    @app.post("/api/v1/budget/limits")
+    async def create_budget_limit(request: Request) -> JSONResponse:
+        body = await request.json()
+        data = sf._read()
+        limits = data.setdefault("budget_limits", [])
+        body.setdefault("created_at", datetime.datetime.now(datetime.timezone.utc).isoformat())
+        # Upsert by agent_name
+        agent = body.get("agent_name", "")
+        data["budget_limits"] = [l for l in limits if l.get("agent_name") != agent]
+        data["budget_limits"].append(body)
+        sf._write(data)
+        return JSONResponse(body, status_code=201)
+
+    @app.put("/api/v1/budget/limits/{agent_name}")
+    async def update_budget_limit(agent_name: str, request: Request) -> JSONResponse:
+        body = await request.json()
+        data = sf._read()
+        for l in data.get("budget_limits", []):
+            if l.get("agent_name") == agent_name:
+                l.update(body)
+                sf._write(data)
+                return JSONResponse(l)
+        return JSONResponse({"detail": "Not found"}, status_code=404)
+
+    @app.delete("/api/v1/budget/limits/{agent_name}")
+    async def delete_budget_limit(agent_name: str) -> JSONResponse:
+        data = sf._read()
+        limits = data.get("budget_limits", [])
+        data["budget_limits"] = [l for l in limits if l.get("agent_name") != agent_name]
+        sf._write(data)
+        return JSONResponse({"status": "ok"})
+
+    @app.get("/api/v1/budget/status/{agent_name}")
+    async def get_budget_status(agent_name: str) -> JSONResponse:
+        data = sf._read()
+        limit = next((l for l in data.get("budget_limits", []) if l.get("agent_name") == agent_name), None)
+        return JSONResponse({
+            "agent_name": agent_name,
+            "limit": limit,
+            "current_spend_usd": 0.0,
+            "remaining_usd": limit.get("daily_limit_usd", 0) if limit else 0,
+            "status": "ok",
+        })
+
+    # ── Guardrail configs ────────────────────────────────────────
+
+    @app.get("/api/v1/guardrails/configs")
+    async def list_guardrail_configs() -> JSONResponse:
+        data = sf._read()
+        return JSONResponse(data.get("guardrail_configs", []))
+
+    @app.get("/api/v1/guardrails/configs/{agent_name}")
+    async def get_guardrail_config(agent_name: str) -> JSONResponse:
+        data = sf._read()
+        config = next((c for c in data.get("guardrail_configs", []) if c.get("agent_name") == agent_name), None)
+        if config:
+            return JSONResponse(config)
+        return JSONResponse({"detail": "Not found"}, status_code=404)
+
+    @app.put("/api/v1/guardrails/configs/{agent_name}")
+    async def upsert_guardrail_config(agent_name: str, request: Request) -> JSONResponse:
+        body = await request.json()
+        body["agent_name"] = agent_name
+        data = sf._read()
+        configs = data.setdefault("guardrail_configs", [])
+        data["guardrail_configs"] = [c for c in configs if c.get("agent_name") != agent_name]
+        data["guardrail_configs"].append(body)
+        sf._write(data)
+        return JSONResponse(body)
+
+    @app.delete("/api/v1/guardrails/configs/{agent_name}/{guardrail_type}")
+    async def delete_guardrail_config(agent_name: str, guardrail_type: str) -> JSONResponse:
+        data = sf._read()
+        configs = data.get("guardrail_configs", [])
+        for c in configs:
+            if c.get("agent_name") == agent_name:
+                types = c.get("guardrails", [])
+                c["guardrails"] = [g for g in types if g.get("type") != guardrail_type]
+                sf._write(data)
+                return JSONResponse({"status": "ok"})
+        return JSONResponse({"detail": "Not found"}, status_code=404)
+
+    # ── Audit events ─────────────────────────────────────────────
+
+    @app.get("/api/v1/audit/events")
+    async def list_audit_events() -> JSONResponse:
+        data = sf._read()
+        return JSONResponse(data.get("audit_events", []))
+
+    @app.get("/api/v1/audit/export")
+    async def export_audit_events() -> JSONResponse:
+        data = sf._read()
+        return JSONResponse(data.get("audit_events", []))
+
+    # ── API tokens ───────────────────────────────────────────────
+
+    @app.get("/api/v1/tokens/")
+    async def list_tokens() -> JSONResponse:
+        data = sf._read()
+        return JSONResponse(data.get("api_tokens", []))
+
+    @app.post("/api/v1/tokens/")
+    async def create_token(request: Request) -> JSONResponse:
+        import secrets as _sec
+        body = await request.json()
+        token_value = f"sw_{_sec.token_urlsafe(32)}"
+        entry = {
+            "id": f"tok-{_sec.token_hex(6)}",
+            "name": body.get("name", "Unnamed"),
+            "token": token_value,
+            "prefix": token_value[:12],
+            "scopes": body.get("scopes", ["read"]),
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "last_used": None,
+            "revoked": False,
+        }
+        data = sf._read()
+        data.setdefault("api_tokens", []).append(entry)
+        sf._write(data)
+        return JSONResponse(entry, status_code=201)
+
+    @app.post("/api/v1/tokens/{token_id}/revoke")
+    async def revoke_token(token_id: str) -> JSONResponse:
+        data = sf._read()
+        for t in data.get("api_tokens", []):
+            if t.get("id") == token_id:
+                t["revoked"] = True
+                sf._write(data)
+                return JSONResponse({"status": "ok"})
+        return JSONResponse({"detail": "Not found"}, status_code=404)
+
+    @app.delete("/api/v1/tokens/{token_id}")
+    async def delete_token(token_id: str) -> JSONResponse:
+        data = sf._read()
+        tokens = data.get("api_tokens", [])
+        data["api_tokens"] = [t for t in tokens if t.get("id") != token_id]
+        sf._write(data)
+        return JSONResponse({"status": "ok"})
+
+    # ── Fleet ────────────────────────────────────────────────────
+
+    @app.get("/api/v1/fleet/workers")
+    async def list_fleet_workers() -> JSONResponse:
+        data = sf._read()
+        return JSONResponse(data.get("fleet_workers", []))
+
+    @app.get("/api/v1/fleet/workers/{worker_id}")
+    async def get_fleet_worker(worker_id: str) -> JSONResponse:
+        data = sf._read()
+        worker = next((w for w in data.get("fleet_workers", []) if w.get("id") == worker_id), None)
+        if worker:
+            return JSONResponse(worker)
+        return JSONResponse({"detail": "Not found"}, status_code=404)
+
+    @app.post("/api/v1/fleet/workers/{worker_id}/approve")
+    async def approve_fleet_worker(worker_id: str) -> JSONResponse:
+        return JSONResponse({"status": "approved", "worker_id": worker_id})
+
+    @app.post("/api/v1/fleet/workers/{worker_id}/reject")
+    async def reject_fleet_worker(worker_id: str) -> JSONResponse:
+        return JSONResponse({"status": "rejected", "worker_id": worker_id})
+
+    @app.post("/api/v1/fleet/workers/{worker_id}/revoke")
+    async def revoke_fleet_worker(worker_id: str) -> JSONResponse:
+        return JSONResponse({"status": "revoked", "worker_id": worker_id})
+
+    @app.get("/api/v1/fleet/enrollment-keys")
+    async def list_fleet_enrollment_keys() -> JSONResponse:
+        data = sf._read()
+        return JSONResponse(data.get("fleet_enrollment_keys", []))
+
+    @app.post("/api/v1/fleet/enrollment-keys")
+    async def create_fleet_enrollment_key(request: Request) -> JSONResponse:
+        import secrets as _sec
+        body = await request.json()
+        key = {
+            "id": f"ek-{_sec.token_hex(6)}",
+            "key": f"swek_{_sec.token_urlsafe(24)}",
+            "name": body.get("name", ""),
+            "pool": body.get("pool", "default"),
+            "max_uses": body.get("max_uses", 1),
+            "uses": 0,
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "revoked": False,
+        }
+        data = sf._read()
+        data.setdefault("fleet_enrollment_keys", []).append(key)
+        sf._write(data)
+        return JSONResponse(key, status_code=201)
+
+    @app.delete("/api/v1/fleet/enrollment-keys/{key_id}")
+    async def revoke_fleet_enrollment_key(key_id: str) -> JSONResponse:
+        data = sf._read()
+        for k in data.get("fleet_enrollment_keys", []):
+            if k.get("id") == key_id:
+                k["revoked"] = True
+                sf._write(data)
+                return JSONResponse({"status": "ok"})
+        return JSONResponse({"detail": "Not found"}, status_code=404)
+
+    @app.get("/api/v1/fleet/audit")
+    async def list_fleet_audit() -> JSONResponse:
+        return JSONResponse([])
+
+    # ── Sessions ─────────────────────────────────────────────────
+
+    @app.get("/api/v1/sessions/{session_id}/messages")
+    async def get_session_messages(session_id: str) -> JSONResponse:
+        return JSONResponse({"session_id": session_id, "messages": []})
+
+    # ── Account ──────────────────────────────────────────────────
+
+    @app.get("/api/v1/account")
+    async def get_account(request: Request) -> JSONResponse:
+        token = _extract_token(request)
+        user = sf.get_user_by_token(token) if token else None
+        if not user:
+            return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+        return JSONResponse(user)
+
+    @app.patch("/api/v1/account/profile")
+    async def update_profile(request: Request) -> JSONResponse:
+        body = await request.json()
+        data = sf._read()
+        admin = data.get("admin", {})
+        if body.get("display_name"):
+            admin["name"] = body["display_name"]
+            sf._write(data)
+        return JSONResponse({
+            "id": admin.get("id", ""),
+            "email": admin.get("email", ""),
+            "display_name": admin.get("name", ""),
+            "avatar_url": None,
+        })
+
+    @app.post("/api/v1/account/password")
+    async def change_password(request: Request) -> JSONResponse:
+        body = await request.json()
+        data = sf._read()
+        admin = data.get("admin", {})
+        from sagewai.admin.state_file import _verify_password, _hash_password
+        if not _verify_password(body.get("current_password", ""),
+                                admin.get("password_hash", ""), admin.get("password_salt", "")):
+            return JSONResponse({"detail": "Current password is incorrect"}, status_code=400)
+        new_hash, new_salt = _hash_password(body.get("new_password", ""))
+        admin["password_hash"] = new_hash
+        admin["password_salt"] = new_salt
+        sf._write(data)
+        return JSONResponse({"status": "ok"})
+
+    # ── Connectors ───────────────────────────────────────────────
+
+    @app.get("/api/v1/connectors")
+    async def list_connectors() -> JSONResponse:
+        data = sf._read()
+        return JSONResponse(data.get("connectors", []))
+
+    @app.post("/api/v1/connectors/{name}")
+    async def save_connector(name: str, request: Request) -> JSONResponse:
+        body = await request.json()
+        body["name"] = name
+        data = sf._read()
+        connectors = data.setdefault("connectors", [])
+        data["connectors"] = [c for c in connectors if c.get("name") != name]
+        data["connectors"].append(body)
+        sf._write(data)
+        return JSONResponse(body)
+
+    @app.post("/api/v1/connectors/{name}/test")
+    async def test_connector(name: str) -> JSONResponse:
+        return JSONResponse({"connected": True, "name": name})
+
+    @app.delete("/api/v1/connectors/{name}")
+    async def delete_connector(name: str) -> JSONResponse:
+        data = sf._read()
+        connectors = data.get("connectors", [])
+        data["connectors"] = [c for c in connectors if c.get("name") != name]
+        sf._write(data)
+        return JSONResponse({"status": "ok"})
+
+    # ── Notifications ────────────────────────────────────────────
+
+    @app.get("/api/v1/notifications/channels")
+    async def list_notification_channels() -> JSONResponse:
+        data = sf._read()
+        return JSONResponse(data.get("notification_channels", []))
+
+    @app.post("/api/v1/notifications/channels")
+    async def save_notification_channel(request: Request) -> JSONResponse:
+        import secrets as _sec
+        body = await request.json()
+        body.setdefault("id", f"ch-{_sec.token_hex(6)}")
+        data = sf._read()
+        channels = data.setdefault("notification_channels", [])
+        data["notification_channels"] = [c for c in channels if c.get("id") != body["id"]]
+        data["notification_channels"].append(body)
+        sf._write(data)
+        return JSONResponse(body, status_code=201)
+
+    @app.delete("/api/v1/notifications/channels/{channel_id}")
+    async def delete_notification_channel(channel_id: str) -> JSONResponse:
+        data = sf._read()
+        channels = data.get("notification_channels", [])
+        data["notification_channels"] = [c for c in channels if c.get("id") != channel_id]
+        sf._write(data)
+        return JSONResponse({"status": "ok"})
+
+    @app.get("/api/v1/notifications/triggers")
+    async def list_notification_triggers() -> JSONResponse:
+        data = sf._read()
+        return JSONResponse(data.get("notification_triggers", []))
+
+    @app.post("/api/v1/notifications/triggers")
+    async def save_notification_trigger(request: Request) -> JSONResponse:
+        import secrets as _sec
+        body = await request.json()
+        body.setdefault("id", f"tr-{_sec.token_hex(6)}")
+        data = sf._read()
+        triggers = data.setdefault("notification_triggers", [])
+        data["notification_triggers"] = [t for t in triggers if t.get("id") != body["id"]]
+        data["notification_triggers"].append(body)
+        sf._write(data)
+        return JSONResponse(body, status_code=201)
+
+    @app.delete("/api/v1/notifications/triggers/{trigger_id}")
+    async def delete_notification_trigger(trigger_id: str) -> JSONResponse:
+        data = sf._read()
+        triggers = data.get("notification_triggers", [])
+        data["notification_triggers"] = [t for t in triggers if t.get("id") != trigger_id]
+        sf._write(data)
+        return JSONResponse({"status": "ok"})
+
+    @app.get("/api/v1/notifications/history")
+    async def notification_history() -> JSONResponse:
+        return JSONResponse([])
+
+    @app.post("/api/v1/notifications/test")
+    async def test_notification(request: Request) -> JSONResponse:
+        return JSONResponse({"sent": True})
+
+    # ── Triggers ─────────────────────────────────────────────────
+
+    @app.get("/api/v1/triggers")
+    async def list_triggers() -> JSONResponse:
+        data = sf._read()
+        return JSONResponse(data.get("triggers", []))
+
+    @app.post("/api/v1/triggers")
+    async def create_trigger(request: Request) -> JSONResponse:
+        import secrets as _sec
+        body = await request.json()
+        body.setdefault("id", f"trig-{_sec.token_hex(6)}")
+        data = sf._read()
+        data.setdefault("triggers", []).append(body)
+        sf._write(data)
+        return JSONResponse(body, status_code=201)
+
+    @app.delete("/api/v1/triggers/{trigger_id}")
+    async def delete_trigger(trigger_id: str) -> JSONResponse:
+        data = sf._read()
+        triggers = data.get("triggers", [])
+        data["triggers"] = [t for t in triggers if t.get("id") != trigger_id]
+        sf._write(data)
+        return JSONResponse({"status": "ok"})
+
+    @app.patch("/api/v1/triggers/{trigger_id}/enable")
+    async def enable_trigger(trigger_id: str) -> JSONResponse:
+        data = sf._read()
+        for t in data.get("triggers", []):
+            if t.get("id") == trigger_id:
+                t["enabled"] = True
+                sf._write(data)
+                return JSONResponse(t)
+        return JSONResponse({"detail": "Not found"}, status_code=404)
+
+    @app.patch("/api/v1/triggers/{trigger_id}/disable")
+    async def disable_trigger(trigger_id: str) -> JSONResponse:
+        data = sf._read()
+        for t in data.get("triggers", []):
+            if t.get("id") == trigger_id:
+                t["enabled"] = False
+                sf._write(data)
+                return JSONResponse(t)
+        return JSONResponse({"detail": "Not found"}, status_code=404)
+
+    # ── Analytics extras ─────────────────────────────────────────
+
+    @app.get("/api/v1/analytics/workflow-heatmap")
+    async def analytics_workflow_heatmap() -> JSONResponse:
+        return JSONResponse({"data": []})
+
+    @app.get("/api/v1/analytics/agent-network")
+    async def analytics_agent_network() -> JSONResponse:
+        return JSONResponse({"nodes": [], "edges": []})
+
+    # ── MCP ──────────────────────────────────────────────────────
+
+    @app.get("/api/v1/mcp/servers")
+    async def list_mcp_servers() -> JSONResponse:
+        data = sf._read()
+        return JSONResponse(data.get("mcp_servers", []))
+
+    @app.post("/api/v1/mcp/discover")
+    async def discover_mcp_tools(request: Request) -> JSONResponse:
+        return JSONResponse({"tools": []})
+
+    @app.post("/api/v1/mcp/call")
+    async def call_mcp_tool(request: Request) -> JSONResponse:
+        return JSONResponse({"result": None, "error": "MCP server not connected"}, status_code=501)
+
+    # ── Context Engine ───────────────────────────────────────────
+
+    @app.get("/api/v1/context/stats")
+    async def context_stats() -> JSONResponse:
+        return JSONResponse({"documents": 0, "chunks": 0, "vectors": 0})
+
+    @app.get("/api/v1/context/scopes")
+    async def context_scopes() -> JSONResponse:
+        return JSONResponse([])
+
+    @app.get("/api/v1/context/documents")
+    async def list_context_documents() -> JSONResponse:
+        return JSONResponse([])
+
+    @app.post("/api/v1/context/search")
+    async def context_search(request: Request) -> JSONResponse:
+        return JSONResponse({"results": []})
+
+    # ── Memory ───────────────────────────────────────────────────
+
+    @app.get("/api/v1/memory/vector/stats")
+    async def vector_stats() -> JSONResponse:
+        return JSONResponse({"total_vectors": 0, "collections": []})
+
+    @app.post("/api/v1/memory/vector/search")
+    async def vector_search(request: Request) -> JSONResponse:
+        return JSONResponse({"results": []})
+
+    @app.post("/api/v1/memory/vector/ingest")
+    async def vector_ingest(request: Request) -> JSONResponse:
+        return JSONResponse({"status": "ok", "chunks": 0})
+
+    @app.get("/api/v1/memory/graph/stats")
+    async def graph_stats() -> JSONResponse:
+        return JSONResponse({"total_entities": 0, "total_relations": 0})
+
+    @app.post("/api/v1/memory/graph/query")
+    async def graph_query(request: Request) -> JSONResponse:
+        return JSONResponse({"entities": [], "relations": []})
+
+    @app.post("/api/v1/memory/graph/entity")
+    async def create_graph_entity(request: Request) -> JSONResponse:
+        return JSONResponse({"status": "ok", "entity": ""})
+
+    @app.post("/api/v1/memory/graph/relation")
+    async def create_graph_relation(request: Request) -> JSONResponse:
+        return JSONResponse({"status": "ok", "relation": ""})
+
+    @app.get("/api/v1/memory/graph/entities")
+    async def list_graph_entities() -> JSONResponse:
+        return JSONResponse({"entities": [], "count": 0})
+
+    @app.get("/api/v1/memory/graph/entity/{name}")
+    async def get_graph_entity(name: str) -> JSONResponse:
+        return JSONResponse({"name": name, "metadata": {}})
+
+    @app.get("/api/v1/memory/graph/entity/{name}/neighbors")
+    async def get_graph_neighbors(name: str) -> JSONResponse:
+        return JSONResponse({"entities": []})
+
+    @app.get("/api/v1/memory/graph/entity/{name}/relations")
+    async def get_graph_relations(name: str) -> JSONResponse:
+        return JSONResponse({"relations": []})
+
+    # ── Eval ─────────────────────────────────────────────────────
+
+    @app.get("/api/v1/eval/datasets")
+    async def list_eval_datasets() -> JSONResponse:
+        data = sf._read()
+        return JSONResponse(data.get("eval_datasets", []))
+
+    @app.post("/api/v1/eval/datasets")
+    async def create_eval_dataset(request: Request) -> JSONResponse:
+        import secrets as _sec
+        body = await request.json()
+        body.setdefault("id", f"ds-{_sec.token_hex(6)}")
+        body.setdefault("created_at", datetime.datetime.now(datetime.timezone.utc).isoformat())
+        data = sf._read()
+        data.setdefault("eval_datasets", []).append(body)
+        sf._write(data)
+        return JSONResponse(body, status_code=201)
+
+    @app.get("/api/v1/eval/datasets/{dataset_id}")
+    async def get_eval_dataset(dataset_id: str) -> JSONResponse:
+        data = sf._read()
+        ds = next((d for d in data.get("eval_datasets", []) if d.get("id") == dataset_id), None)
+        if ds:
+            return JSONResponse(ds)
+        return JSONResponse({"detail": "Not found"}, status_code=404)
+
+    @app.delete("/api/v1/eval/datasets/{dataset_id}")
+    async def delete_eval_dataset(dataset_id: str) -> JSONResponse:
+        data = sf._read()
+        datasets = data.get("eval_datasets", [])
+        data["eval_datasets"] = [d for d in datasets if d.get("id") != dataset_id]
+        sf._write(data)
+        return JSONResponse({"status": "ok"})
+
+    @app.post("/api/v1/eval/run")
+    async def run_eval(request: Request) -> JSONResponse:
+        return JSONResponse({"detail": "Evaluation requires a running agent with LLM keys"}, status_code=501)
+
+    @app.get("/api/v1/eval/runs")
+    async def list_eval_runs() -> JSONResponse:
+        return JSONResponse([])
+
+    @app.get("/api/v1/eval/runs/{run_id}")
+    async def get_eval_run(run_id: str) -> JSONResponse:
+        return JSONResponse({"detail": "Not found"}, status_code=404)
+
     # ── Agent templates ──────────────────────────────────────────
 
     @app.get("/api/v1/agents/templates")
@@ -1214,9 +1741,18 @@ def _init_otel(app: FastAPI, version: str) -> None:
         trace.set_tracer_provider(tp)
 
         # Metrics
+        # Use CUMULATIVE temporality so counters are compatible with
+        # Prometheus remote-write (VictoriaMetrics expects cumulative).
+        from opentelemetry.sdk.metrics.export import AggregationTemporality
+        metric_exporter = OTLPMetricExporter(
+            endpoint=f"{endpoint}/v1/metrics",
+            preferred_temporality={
+                # All instrument types → cumulative
+            },
+        )
         reader = PeriodicExportingMetricReader(
-            OTLPMetricExporter(endpoint=f"{endpoint}/v1/metrics"),
-            export_interval_millis=15_000,
+            metric_exporter,
+            export_interval_millis=10_000,
         )
         mp = MeterProvider(resource=resource, metric_readers=[reader])
         metrics.set_meter_provider(mp)
