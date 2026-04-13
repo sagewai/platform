@@ -307,11 +307,11 @@ export default function SetupPage() {
                   </div>
                 </Link>
                 <Link href="/system/models" className="flex items-center gap-3 px-4 py-3 bg-bg-subtle rounded-lg hover:bg-primary/5 dark:hover:bg-white/5 transition-colors no-underline group">
-                  <div className="w-9 h-9 rounded-lg bg-secondary/10 flex items-center justify-center text-secondary flex-shrink-0">
+                  <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center text-primary flex-shrink-0">
                     <Cpu size={18} />
                   </div>
                   <div>
-                    <div className="text-sm font-medium text-text-primary group-hover:text-secondary transition-colors">Configure LLM Provider</div>
+                    <div className="text-sm font-medium text-text-primary group-hover:text-primary transition-colors">Configure LLM Provider</div>
                     <div className="text-xs text-text-muted">Connect OpenAI, Anthropic, Google, and more</div>
                   </div>
                 </Link>

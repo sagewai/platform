@@ -66,8 +66,8 @@ export function GettingStarted() {
             <div key={item.id} className="flex items-start gap-3">
               <button
                 onClick={() => toggleItem(item.id)}
-                className={`mt-0.5 w-5 h-5 rounded-md border flex items-center justify-center flex-shrink-0 cursor-pointer transition-colors bg-transparent ${
-                  done ? 'bg-primary border-primary' : 'border-border hover:border-primary/50'
+                className={`mt-0.5 w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 cursor-pointer transition-colors ${
+                  done ? 'bg-primary border-primary' : 'border-text-muted/40 hover:border-primary bg-transparent'
                 }`}
               >
                 {done && <Check size={12} className="text-white" />}
