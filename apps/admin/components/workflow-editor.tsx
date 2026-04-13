@@ -300,62 +300,57 @@ export function WorkflowEditor() {
     setActiveRunId(null);
 
     try {
-      // Try durable submit first
-      const result = await adminApi.submitWorkflow(yamlToRun, testInput);
-      // Durable mode returned a run_id — track it via the hook
-      setActiveRunId(result.run_id);
-      toast('success', `Workflow submitted (${result.workflow_name})`);
-    } catch {
-      // Durable submit failed — fall back to inline SSE
-      try {
-        const resp = await authFetch(`${BASE}/workflows/run`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ yaml: yamlToRun, message: testInput }),
-        });
+      const resp = await authFetch(`${BASE}/workflows/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ yaml: yamlToRun, message: testInput }),
+      });
 
-        if (!resp.ok) {
-          const err = await resp.text();
-          setEvents([{ event: 'error', data: err }]);
-          setRunning(false);
-          return;
-        }
+      if (!resp.ok) {
+        const err = await resp.text();
+        setEvents([{ event: 'error', data: err }]);
+        setRunning(false);
+        return;
+      }
 
-        // Check if response is JSON (durable) or SSE (inline)
-        const contentType = resp.headers.get('content-type') || '';
-        if (contentType.includes('application/json')) {
-          const data = await resp.json();
-          setActiveRunId(data.run_id);
-          return;
-        }
+      // Stream SSE events from the workflow execution
+      for await (const evt of readSSE(resp)) {
+        setEvents((prev) => [...prev, evt]);
 
-        // SSE inline fallback
-        for await (const evt of readSSE(resp)) {
-          setEvents((prev) => [...prev, evt]);
-          if (evt.event === 'workflow_finished') {
-            try {
-              const parsed = JSON.parse(evt.data);
-              // Inline mode returns { output, agents, total_tokens, ... }
-              // Durable mode returns a raw string
-              if (typeof parsed === 'string') {
-                setResultData({ output: parsed });
-              } else {
-                setResultData(parsed);
-              }
-            } catch {
-              // Unparseable — use raw data as output text
-              setResultData({ output: evt.data });
+        // Stream text deltas (agent output tokens)
+        if (evt.event === 'text_message_content') {
+          try {
+            const { delta, agent: agentName } = JSON.parse(evt.data);
+            if (delta) {
+              setResultData((prev) => ({
+                ...prev,
+                output: (prev?.output ?? '') + delta,
+                _streamingAgent: agentName,
+              }));
             }
+          } catch { /* ignore parse error */ }
+        }
+
+        // Workflow finished — set final result
+        if (evt.event === 'workflow_finished') {
+          try {
+            const parsed = JSON.parse(evt.data);
+            setResultData(typeof parsed === 'string'
+              ? { output: parsed }
+              : parsed
+            );
+          } catch {
+            setResultData({ output: evt.data });
           }
         }
-        setRunning(false);
-      } catch (e) {
-        const detail = e instanceof TypeError
-          ? `${String(e)} — check browser console for CORS errors. Try a hard refresh (Cmd+Shift+R).`
-          : String(e);
-        setEvents((prev) => [...prev, { event: 'error', data: detail }]);
-        setRunning(false);
       }
+      setRunning(false);
+    } catch (e) {
+      const detail = e instanceof TypeError
+        ? `${String(e)} — check browser console for CORS errors.`
+        : String(e);
+      setEvents((prev) => [...prev, { event: 'error', data: detail }]);
+      setRunning(false);
     }
   }
 

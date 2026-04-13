@@ -1095,33 +1095,138 @@ def create_admin_serve_app(
         return JSONResponse([])
 
     @app.post("/workflows/run")
-    async def workflow_run(request: Request) -> JSONResponse:
+    async def workflow_run(request: Request):
+        """Execute a workflow — parse YAML, run each agent step, stream SSE."""
         import secrets as _sec
+        import time as _wf_time
+        import yaml as _yaml
+
         body = await request.json()
         pid = _project_id(request)
         run_id = f"wf-{_sec.token_hex(6)}"
+        yaml_str = body.get("yaml", body.get("yaml_content", ""))
+        message = body.get("message", body.get("input", ""))
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        run = {
-            "run_id": run_id,
-            "status": "completed",
-            "workflow_name": body.get("name", body.get("workflow_name", "")),
-            "yaml_content": body.get("yaml", body.get("yaml_content", "")),
-            "input": body.get("input", ""),
-            "output": "",
-            "steps": [],
-            "project_id": pid,
-            "started_at": now,
-            "finished_at": now,
-        }
-        data = sf._read()
-        data.setdefault("workflow_runs", []).insert(0, run)
-        # Keep last 100 runs
-        data["workflow_runs"] = data["workflow_runs"][:100]
-        sf._write(data)
-        logger.info("Workflow run %s for %s", run_id, run.get("workflow_name"),
-                     extra={"event": "workflow.run.completed", "run_id": run_id,
-                            "workflow_name": run.get("workflow_name", "")})
-        return JSONResponse({"run_id": run_id, "status": "completed"})
+
+        async def _execute():
+            t0 = _wf_time.monotonic()
+            steps = []
+            agents_data = []
+            full_output = ""
+
+            try:
+                wf_def = _yaml.safe_load(yaml_str) if yaml_str else None
+                if not wf_def or not isinstance(wf_def, dict):
+                    yield f"event: workflow_error\ndata: Invalid workflow YAML\n\n"
+                    return
+
+                wf_name = wf_def.get("name", "unnamed")
+                agents_defs = wf_def.get("agents", {})
+                workflow_node = wf_def.get("workflow", {})
+
+                yield f"event: workflow_started\ndata: {json.dumps({'run_id': run_id, 'name': wf_name})}\n\n"
+
+                # Extract agent steps from the workflow node
+                agent_steps = []
+                if workflow_node.get("type") == "sequential":
+                    for step in workflow_node.get("steps", []):
+                        if "agent" in step:
+                            agent_steps.append(step["agent"])
+                elif workflow_node.get("type") == "parallel":
+                    agent_steps = workflow_node.get("agents", [])
+                elif workflow_node.get("type") == "loop":
+                    agent_steps = [workflow_node.get("agent", "")]
+                elif "agent" in workflow_node:
+                    agent_steps = [workflow_node["agent"]]
+
+                if not agent_steps:
+                    agent_steps = list(agents_defs.keys())
+
+                yield f"event: workflow_steps\ndata: {json.dumps({'total': len(agent_steps), 'agents': agent_steps})}\n\n"
+
+                # Execute each agent step sequentially
+                current_input = message
+                for i, agent_name in enumerate(agent_steps):
+                    agent_def = agents_defs.get(agent_name, {})
+                    model = agent_def.get("model", "gpt-4o-mini")
+                    system_prompt = agent_def.get("system_prompt", f"You are the {agent_name} agent.")
+                    step_t0 = _wf_time.monotonic()
+
+                    yield f"event: step_started\ndata: {json.dumps({'step': i + 1, 'agent': agent_name, 'model': model})}\n\n"
+
+                    # Call LLM via litellm
+                    step_output = ""
+                    try:
+                        import litellm
+                        litellm.suppress_debug_info = True
+                        messages = [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": current_input},
+                        ]
+                        response = await litellm.acompletion(
+                            model=model, messages=messages, stream=True
+                        )
+                        async for chunk in response:
+                            delta = chunk.choices[0].delta.content or ""
+                            if delta:
+                                step_output += delta
+                                yield f"event: text_message_content\ndata: {json.dumps({'delta': delta, 'agent': agent_name, 'step': i + 1})}\n\n"
+
+                    except Exception as exc:
+                        step_output = f"Error in {agent_name}: {exc}"
+                        yield f"event: step_error\ndata: {json.dumps({'step': i + 1, 'agent': agent_name, 'error': str(exc)[:200]})}\n\n"
+
+                    step_dt = _wf_time.monotonic() - step_t0
+                    steps.append({
+                        "step": i + 1, "agent": agent_name, "model": model,
+                        "duration_s": round(step_dt, 2),
+                        "output_preview": step_output[:200],
+                    })
+                    agents_data.append({
+                        "name": agent_name, "model": model,
+                        "output": step_output, "duration_s": round(step_dt, 2),
+                    })
+
+                    yield f"event: step_completed\ndata: {json.dumps({'step': i + 1, 'agent': agent_name, 'duration_s': round(step_dt, 2)})}\n\n"
+
+                    # Chain output → next agent's input
+                    current_input = step_output
+                    full_output = step_output  # Last agent's output is the final output
+
+                elapsed = round(_wf_time.monotonic() - t0, 2)
+
+                # Persist run to history
+                run_record = {
+                    "run_id": run_id, "status": "completed",
+                    "workflow_name": wf_name, "yaml_content": yaml_str,
+                    "input": message, "output": full_output,
+                    "steps": steps, "project_id": pid,
+                    "elapsed_seconds": elapsed,
+                    "started_at": now,
+                    "finished_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                }
+                data = sf._read()
+                data.setdefault("workflow_runs", []).insert(0, run_record)
+                data["workflow_runs"] = data["workflow_runs"][:100]
+                sf._write(data)
+
+                yield f"event: workflow_finished\ndata: {json.dumps({'output': full_output, 'elapsed_seconds': elapsed, 'agents': agents_data, 'total_steps': len(steps), 'run_id': run_id})}\n\n"
+
+                logger.info("Workflow run %s completed in %.1fs (%d steps)",
+                             run_id, elapsed, len(steps),
+                             extra={"event": "workflow.run.completed", "run_id": run_id,
+                                    "workflow_name": wf_name, "elapsed_s": elapsed})
+
+            except Exception as exc:
+                yield f"event: workflow_error\ndata: {json.dumps({'error': str(exc)})}\n\n"
+                logger.error("Workflow run %s failed: %s", run_id, str(exc)[:200],
+                             extra={"event": "workflow.run.error", "run_id": run_id})
+
+        return StreamingResponse(
+            _execute(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )
 
     @app.get("/workflows/runs/{run_id}")
     async def workflow_run_detail(run_id: str) -> JSONResponse:
