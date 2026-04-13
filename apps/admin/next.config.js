@@ -47,7 +47,6 @@ const securityHeaders = [
 
 const nextConfig = {
   output: 'standalone',
-  // @sagecurator/ui was decommissioned — compat layer is at components/ui/legacy.tsx
   transpilePackages: [],
   async headers() {
     return [{ source: '/(.*)', headers: securityHeaders }];

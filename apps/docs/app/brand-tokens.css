@@ -1,6 +1,5 @@
-/* Brand tokens — owned by admin as of the @sagecurator/ui decommission.
-   Copied from the former tokens/src/index.css. Tailwind itself is imported
-   once in globals.css, so we don't re-import it here. */
+/* Brand design tokens. Tailwind itself is imported once in globals.css,
+   so we don't re-import it here. */
 @import "./tokens/motion.css";
 
 @theme {

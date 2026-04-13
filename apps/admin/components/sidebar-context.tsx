@@ -12,9 +12,7 @@ import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 /**
  * Sidebar state — expand/collapse, mobile detection.
  *
- * Owned locally by admin now that @sagecurator/ui is decommissioned.
- * API matches the former `useSidebar` / `SidebarProvider` / `SidebarToggle`
- * exports so no call sites have to change logic.
+ * Provides `useSidebar`, `SidebarProvider`, and `SidebarToggle`.
  */
 interface SidebarContextValue {
   expanded: boolean;

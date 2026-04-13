@@ -1,13 +1,11 @@
 'use client';
 
 /**
- * Legacy compat layer — re-exports the former `@sagecurator/ui` API using
- * shadcn/ui primitives and local implementations so admin can keep its
- * existing imports during the decommission without rewriting every page.
+ * Legacy compat layer — wraps shadcn/ui primitives to provide the
+ * component API used across the admin panel (Card, Button, Badge,
+ * FormField, TextInput, Select, TextArea, Tabs, Skeleton, useToast).
  *
- * Every call site that used to `import { X } from '@/components/ui/legacy'` now
- * `import { X } from '@/components/ui/legacy'`. The prop signatures are
- * preserved so most files need zero other changes.
+ * Prop signatures are preserved so most files need zero changes.
  *
  * New code should NOT import from this file — use the individual shadcn
  * primitives in `@/components/ui/*` directly.
