@@ -562,7 +562,7 @@ export default function WorkflowRunDetailPage({ params }: Props) {
                     source="workflow"
                   />
                 </div>
-                <div className="prose prose-sm prose-invert max-w-none text-text-primary [&_pre]:bg-[#111827] [&_pre]:p-3 [&_pre]:rounded [&_code]:text-xs [&_code]:font-[family-name:var(--font-mono)] [&_table]:text-xs [&_th]:px-2 [&_td]:px-2">
+                <div className="prose prose-sm dark:prose-invert max-w-none text-text-primary [&_pre]:bg-bg-subtle [&_pre]:p-3 [&_pre]:rounded [&_pre]:border [&_pre]:border-border [&_code]:text-xs [&_code]:font-[family-name:var(--font-mono)] [&_table]:text-xs [&_th]:px-2 [&_td]:px-2">
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>
                     {outputText}
                   </ReactMarkdown>
@@ -580,7 +580,7 @@ export default function WorkflowRunDetailPage({ params }: Props) {
 
         {/* Events tab */}
         {resultTab === 'events' && (
-          <div className="bg-[#111827] p-4 max-h-[600px] overflow-auto font-[family-name:var(--font-mono)] text-xs leading-[1.8]">
+          <div className="bg-bg-subtle p-4 max-h-[600px] overflow-auto font-[family-name:var(--font-mono)] text-xs leading-[1.8]">
             {events.length === 0 ? (
               <div className="text-text-muted text-center py-md">
                 {isActive ? 'Waiting for events...' : 'No events recorded.'}
@@ -611,7 +611,7 @@ export default function WorkflowRunDetailPage({ params }: Props) {
                       {evt.event_type.replace(/_/g, ' ')}
                     </span>
                     <span className="text-text-muted"> &mdash; </span>
-                    <span className="text-[#d1d5db] whitespace-pre-wrap">{parsedData}</span>
+                    <span className="text-text-secondary whitespace-pre-wrap">{parsedData}</span>
                   </div>
                 );
               })

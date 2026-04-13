@@ -374,7 +374,7 @@ export function WorkflowEditor() {
               onClick={() => mode === 'yaml' ? switchToVisual() : undefined}
               className={`px-3 py-1.5 text-xs border-none cursor-pointer transition-colors ${
                 mode === 'visual'
-                  ? 'bg-primary text-white'
+                  ? 'bg-primary text-text-on-dark'
                   : 'bg-bg-surface text-text-muted hover:text-text-primary'
               }`}
             >
@@ -385,7 +385,7 @@ export function WorkflowEditor() {
               onClick={() => mode === 'visual' ? switchToYaml() : undefined}
               className={`px-3 py-1.5 text-xs border-none border-l border-border cursor-pointer transition-colors ${
                 mode === 'yaml'
-                  ? 'bg-primary text-white'
+                  ? 'bg-primary text-text-on-dark'
                   : 'bg-bg-surface text-text-muted hover:text-text-primary'
               }`}
             >
@@ -743,7 +743,7 @@ export function WorkflowEditor() {
                         source="workflow"
                       />
                     </div>
-                    <div className="prose prose-sm prose-invert max-w-none text-text-primary [&_pre]:bg-[#111827] [&_pre]:p-3 [&_pre]:rounded [&_code]:text-xs [&_code]:font-[family-name:var(--font-mono)] [&_table]:text-xs [&_th]:px-2 [&_td]:px-2">
+                    <div className="prose prose-sm dark:prose-invert max-w-none text-text-primary [&_pre]:bg-bg-subtle [&_pre]:p-3 [&_pre]:rounded [&_pre]:border [&_pre]:border-border [&_code]:text-xs [&_code]:font-[family-name:var(--font-mono)] [&_table]:text-xs [&_th]:px-2 [&_td]:px-2">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
                         {resultData.output}
                       </ReactMarkdown>
@@ -763,7 +763,7 @@ export function WorkflowEditor() {
 
             {/* Events tab — raw SSE log */}
             {resultTab === 'events' && (
-              <div className="bg-[#111827] p-4 max-h-[500px] overflow-auto font-[family-name:var(--font-mono)] text-xs leading-[1.8]">
+              <div className="bg-bg-subtle p-4 max-h-[500px] overflow-auto font-[family-name:var(--font-mono)] text-xs leading-[1.8]">
                 {events.map((evt, i) => {
                   let parsedData = evt.data;
                   try {
@@ -787,7 +787,7 @@ export function WorkflowEditor() {
                         {evt.event}
                       </span>
                       <span className="text-text-muted"> &mdash; </span>
-                      <span className="text-[#d1d5db] whitespace-pre-wrap">{parsedData}</span>
+                      <span className="text-text-secondary whitespace-pre-wrap">{parsedData}</span>
                     </div>
                   );
                 })}

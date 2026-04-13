@@ -39,6 +39,8 @@
   --color-error-light: #FEF2F2;
   --color-warning: #D97706;
   --color-warning-light: #FEF3C7;
+  --color-info: #0891B2;
+  --color-info-light: #ECFEFF;
 
   /* Brand gradient */
   --gradient-brand: linear-gradient(135deg, #9C27B0 0%, #FF7043 50%, #26C6DA 100%);
@@ -111,6 +113,8 @@
   --color-error-light: rgba(239, 83, 80, 0.12);
   --color-warning: #FFB74D;
   --color-warning-light: rgba(255, 183, 77, 0.12);
+  --color-info: #22D3EE;
+  --color-info-light: rgba(34, 211, 238, 0.12);
 }
 
 [data-theme="dark"] ::selection {
