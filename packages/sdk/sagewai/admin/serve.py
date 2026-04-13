@@ -1196,7 +1196,32 @@ def create_admin_serve_app(
 
     @app.post("/workflows/validate")
     async def workflow_validate(request: Request) -> JSONResponse:
-        return JSONResponse({"valid": True, "errors": []})
+        """Validate workflow YAML and return parsed metadata."""
+        body = await request.json()
+        yaml_str = body.get("yaml", "")
+        if not yaml_str.strip():
+            return JSONResponse({"valid": False, "error": "Empty workflow YAML"})
+        try:
+            import yaml as _yaml
+            data = _yaml.safe_load(yaml_str)
+            if not data or not isinstance(data, dict):
+                return JSONResponse({"valid": False, "error": "Invalid YAML structure"})
+            name = data.get("name", "")
+            agents = list(data.get("agents", {}).keys()) if isinstance(data.get("agents"), dict) else []
+            workflow = data.get("workflow")
+            if not name:
+                return JSONResponse({"valid": False, "error": "Missing 'name' field"})
+            if not workflow:
+                return JSONResponse({"valid": False, "error": "Missing 'workflow' field"})
+            return JSONResponse({
+                "valid": True,
+                "errors": [],
+                "name": name,
+                "agents": agents,
+                "description": data.get("description", ""),
+            })
+        except Exception as exc:
+            return JSONResponse({"valid": False, "error": f"YAML parse error: {exc}"})
 
     @app.get("/workflows/registered-agents")
     async def workflow_registered_agents() -> JSONResponse:

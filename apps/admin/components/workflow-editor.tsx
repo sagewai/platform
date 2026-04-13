@@ -292,7 +292,7 @@ export function WorkflowEditor() {
   async function runWorkflow() {
     const yamlToRun = mode === 'visual' ? generatedYaml : yaml;
     if (!yamlToRun.trim() || !testInput.trim() || running) return;
-    if (!validation?.valid) return;
+    // Allow running even if validation hasn't completed — the backend validates too
 
     setRunning(true);
     setEvents([]);
@@ -391,18 +391,21 @@ export function WorkflowEditor() {
             </button>
           </div>
 
-          <span className="text-[13px] text-text-muted ml-2">Templates:</span>
-          {templates.map((t) => (
-            <Button
-              key={t.name}
-              variant="secondary"
-              onClick={() => loadTemplate(t)}
-              title={t.description}
-              className="text-xs"
+          {templates.length > 0 && (
+            <select
+              onChange={(e) => {
+                const tmpl = templates.find((t) => t.name === e.target.value);
+                if (tmpl) { loadTemplate(tmpl); e.target.value = ''; }
+              }}
+              defaultValue=""
+              className="px-2 py-1.5 text-xs rounded-md border border-border bg-bg-surface text-text-primary cursor-pointer"
             >
-              {t.name}
-            </Button>
-          ))}
+              <option value="" disabled>Load template...</option>
+              {templates.map((t) => (
+                <option key={t.name} value={t.name}>{t.name}</option>
+              ))}
+            </select>
+          )}
 
           <div className="ml-auto flex items-center gap-2">
             {registryName && (
@@ -411,7 +414,6 @@ export function WorkflowEditor() {
               </span>
             )}
             <Button
-              variant="secondary"
               onClick={saveToRegistry}
               disabled={saving}
               className="text-xs flex items-center gap-1"
@@ -644,7 +646,7 @@ export function WorkflowEditor() {
               />
               <Button
                 onClick={runWorkflow}
-                disabled={running || !validation?.valid || !testInput.trim()}
+                disabled={running || !testInput.trim()}
               >
                 {running ? 'Running...' : 'Run'}
               </Button>
@@ -684,26 +686,41 @@ export function WorkflowEditor() {
               </div>
             )}
 
-            {/* ── Run result card ── */}
-            {(events.length > 0 || resultData) && (
-              <Card className="p-4 flex flex-col gap-3">
+            {/* ── Run result (chat-like display) ── */}
+            {(events.length > 0 || resultData || running) && (
+              <div className="flex flex-col gap-3">
+                {/* User message */}
+                <div className="flex justify-end">
+                  <div className="bg-primary text-white px-4 py-2 rounded-2xl rounded-tr-md max-w-[80%] text-sm">
+                    {testInput}
+                  </div>
+                </div>
+
                 {/* Error state */}
                 {!resultData && !running && events.some((e) => e.event === 'error' || e.event === 'workflow_error') && (
-                  <div className="text-sm text-error">
-                    {events.filter((e) => e.event === 'error' || e.event === 'workflow_error').map((e) => e.data).join('\n')}
+                  <div className="flex">
+                    <div className="bg-error/10 border border-error/20 text-error px-4 py-2 rounded-2xl rounded-tl-md max-w-[80%] text-sm">
+                      {events.filter((e) => e.event === 'error' || e.event === 'workflow_error').map((e) => e.data).join('\n')}
+                    </div>
                   </div>
                 )}
 
                 {/* Running state */}
                 {running && !resultData && (
-                  <div className="text-sm text-text-muted">Running workflow...</div>
+                  <div className="flex">
+                    <div className="bg-bg-subtle px-4 py-2 rounded-2xl rounded-tl-md text-sm text-text-muted flex items-center gap-2">
+                      <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                      Running workflow...
+                    </div>
+                  </div>
                 )}
 
-                {/* Output */}
+                {/* Assistant output */}
                 {resultData?.output && (
-                  <>
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-text-muted uppercase tracking-wide">Output</span>
+                  <div className="flex flex-col gap-2">
+                    <div className="bg-bg-subtle px-4 py-3 rounded-2xl rounded-tl-md max-w-[90%]">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-semibold text-text-muted uppercase tracking-wide">Workflow Output</span>
                       <div className="flex gap-1.5">
                         <button
                           type="button"
@@ -740,12 +757,13 @@ export function WorkflowEditor() {
                         />
                       </div>
                     </div>
-                    <div className="prose prose-sm max-w-none text-text-primary [&_pre]:bg-bg-subtle [&_pre]:p-3 [&_pre]:rounded [&_pre]:border [&_pre]:border-border [&_code]:text-xs [&_code]:font-[family-name:var(--font-mono)] [&_table]:text-xs [&_th]:px-2 [&_td]:px-2 max-h-[400px] overflow-auto">
+                    <div className="prose prose-sm max-w-none text-text-primary [&_pre]:bg-bg-surface [&_pre]:p-3 [&_pre]:rounded [&_pre]:border [&_pre]:border-border [&_code]:text-xs [&_code]:font-[family-name:var(--font-mono)] [&_table]:text-xs [&_th]:px-2 [&_td]:px-2 max-h-[400px] overflow-auto">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
                         {resultData.output}
                       </ReactMarkdown>
                     </div>
-                  </>
+                    </div>
+                  </div>
                 )}
 
                 {/* Inline stats summary (replaces the separate Stats tab for common case) */}
@@ -838,7 +856,7 @@ export function WorkflowEditor() {
                     </div>
                   </details>
                 )}
-              </Card>
+              </div>
             )}
           </div>
         </details>
