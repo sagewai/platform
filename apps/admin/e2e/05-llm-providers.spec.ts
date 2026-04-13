@@ -1,11 +1,6 @@
 import { test, expect } from '@playwright/test';
-import { authenticate } from './mock-api';
 
 test.describe('LLM Provider Configuration', () => {
-  test.beforeEach(async ({ page }) => {
-    await authenticate(page);
-  });
-
   test('/system/models loads without crashing', async ({ page }) => {
     await page.goto('/system/models');
     await page.waitForTimeout(2000);

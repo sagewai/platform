@@ -1,11 +1,6 @@
 import { test, expect } from '@playwright/test';
-import { authenticate } from './mock-api';
 
 test.describe('Agent Templates', () => {
-  test.beforeEach(async ({ page }) => {
-    await authenticate(page);
-  });
-
   test('renders template list page', async ({ page }) => {
     await page.goto('/agents/templates');
     await expect(page.getByText('Agent Templates')).toBeVisible({ timeout: 10_000 });
@@ -29,10 +24,6 @@ test.describe('Agent Templates', () => {
 });
 
 test.describe('Create Agent from Template', () => {
-  test.beforeEach(async ({ page }) => {
-    await authenticate(page);
-  });
-
   test('pre-fills form from template', async ({ page }) => {
     await page.goto('/agents/new?templateId=hello-agent');
     await expect(page.getByText('Create from: Hello Agent')).toBeVisible({ timeout: 10_000 });

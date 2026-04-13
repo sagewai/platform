@@ -1,11 +1,6 @@
 import { test, expect } from '@playwright/test';
-import { authenticate } from './mock-api';
 
 test.describe('Dashboard', () => {
-  test.beforeEach(async ({ page }) => {
-    await authenticate(page);
-  });
-
   test('renders dashboard with header', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible({ timeout: 10_000 });

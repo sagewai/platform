@@ -1,11 +1,6 @@
 import { test, expect } from '@playwright/test';
-import { authenticate } from './mock-api';
 
 test.describe('Agent Registry', () => {
-  test.beforeEach(async ({ page }) => {
-    await authenticate(page);
-  });
-
   test('/agents loads without crashing', async ({ page }) => {
     await page.goto('/agents');
     await page.waitForTimeout(2000);

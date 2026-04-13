@@ -1,19 +1,20 @@
 /**
- * E2E test helpers — real backend, minimal browser-side mocks.
+ * E2E test helpers — real backend, browser-based auth via storageState.
  *
  * The Playwright config starts both the backend (port 8000) and the
  * frontend (port 3808) automatically. The backend uses in-memory
  * state so tests are fast and deterministic.
  *
- * We only mock two things from the browser side:
- *  1. Auth cookie — so the proxy doesn't redirect to /login
- *  2. SSE event stream — to avoid hanging connections
+ * Auth is handled by the `setup` project (auth.setup.ts) which logs
+ * in through the real browser UI and saves storageState to
+ * .auth/user.json. All test projects inherit this state automatically
+ * — no per-test cookie injection needed.
  */
 import type { Page } from '@playwright/test';
 
 /**
  * Set the auth cookie from the real backend.
- * Call `loginAndGetToken()` first to get a valid token.
+ * Kept as a fallback for edge cases where storageState isn't enough.
  */
 export async function setAuthCookie(page: Page, token: string) {
   await page.context().addCookies([
@@ -30,7 +31,7 @@ export async function setAuthCookie(page: Page, token: string) {
 
 /**
  * Run the setup wizard via API and return an auth token.
- * Call this once in beforeAll to bootstrap the backend state.
+ * Called by auth.setup.ts to bootstrap the backend before browser login.
  */
 export async function setupAndLogin(opts?: {
   orgName?: string;
@@ -73,20 +74,6 @@ export async function setupAndLogin(opts?: {
   const loginData = await loginRes.json();
 
   return { token: loginData.access_token, email, password };
-}
-
-/**
- * Authenticate the browser context — login fresh to get a valid
- * token (the backend only keeps one active token at a time).
- */
-export async function authenticate(page: Page) {
-  const { token } = await setupAndLogin();
-  await setAuthCookie(page, token);
-
-  // Mock SSE stream to avoid hanging connections
-  await page.route('**/admin/events/stream', (route) =>
-    route.fulfill({ body: '', contentType: 'text/event-stream' }),
-  );
 }
 
 /**
