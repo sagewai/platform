@@ -39,13 +39,10 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 RUN if ls /build/dist/sagewai-*.whl >/dev/null 2>&1; then \
-        pip install "/build/dist/$(basename /build/dist/sagewai-*.whl)[fastapi]" uvicorn; \
+        pip install "/build/dist/$(basename /build/dist/sagewai-*.whl)[fastapi]"; \
     else \
-        pip install "sagewai[fastapi]" uvicorn; \
+        pip install "sagewai[fastapi]"; \
     fi
-# Note: 'uvicorn' is installed explicitly because the sdk's [fastapi] extra
-# currently omits it. Once the sdk pyproject.toml is fixed upstream, the
-# explicit 'uvicorn' can be dropped.
 
 # ── Stage 2: runtime ────────────────────────────────────────────────────────
 FROM python:3.12-slim@sha256:804ddf3251a60bbf9c92e73b7566c40428d54d0e79d3428194edf40da6521286 AS runtime
@@ -74,7 +71,7 @@ WORKDIR /home/sagewai
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -fsS http://localhost:8000/openapi.json >/dev/null || exit 1
+    CMD curl -fsS http://localhost:8000/api/v1/health/summary >/dev/null || exit 1
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
 CMD ["sagewai", "admin", "serve", "--host", "0.0.0.0", "--port", "8000"]
