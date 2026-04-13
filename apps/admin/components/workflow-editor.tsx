@@ -224,7 +224,6 @@ export function WorkflowEditor() {
   }
 
   /* ─── Result state ─── */
-  const [resultTab, setResultTab] = useState<'output' | 'events' | 'stats'>('output');
   const [resultData, setResultData] = useState<{
     output?: string;
     elapsed_seconds?: number;
@@ -298,7 +297,6 @@ export function WorkflowEditor() {
     setRunning(true);
     setEvents([]);
     setResultData(null);
-    setResultTab('output');
     setActiveRunId(null);
 
     try {
@@ -618,288 +616,232 @@ export function WorkflowEditor() {
         {/* Pipeline graph */}
         <PipelineGraph validation={validation} definition={mode === 'visual' ? definition : (() => { try { return yamlToWorkflow(yaml); } catch { return null; } })()} />
 
-        {/* Test input + run */}
-        <div className="flex gap-2 items-end">
-          <textarea
-            value={testInput}
-            onChange={(e) => setTestInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                runWorkflow();
-              }
-            }}
-            placeholder="Enter a test message for the workflow... (Shift+Enter for new line)"
-            disabled={running}
-            rows={3}
-            className="flex-1 px-3 py-2 rounded-md border border-border text-sm bg-bg-surface outline-none resize-y min-h-[60px] max-h-[200px]"
-          />
-          <Button
-            onClick={runWorkflow}
-            disabled={running || !validation?.valid || !testInput.trim()}
-          >
-            {running ? 'Running...' : 'Run Workflow'}
-          </Button>
-          {running && activeRunId && (
-            <Button
-              variant="secondary"
-              onClick={() => durableRun.cancel()}
-              className="text-error"
-            >
-              Cancel
-            </Button>
-          )}
-        </div>
+        {/* ═══ Run Section (collapsible, collapsed by default) ═══ */}
+        <details className="group" open={running || resultData != null}>
+          <summary className="text-[12px] text-text-muted cursor-pointer select-none hover:text-text-primary transition-colors list-none flex items-center gap-1.5">
+            <span className="text-[10px] group-open:rotate-90 transition-transform">▶</span>
+            <span className="font-semibold uppercase tracking-wide">Test &amp; Run</span>
+            {running && <Badge className="text-[10px] ml-1">Running</Badge>}
+            {!running && resultData && <Badge className="text-[10px] ml-1 bg-success-light text-success">Done</Badge>}
+          </summary>
 
-        {/* Progress bar for durable runs */}
-        {activeRunId && durableRun.stepsTotal && durableRun.stepsTotal > 0 && (
-          <div className="flex items-center gap-2">
-            <div className="flex-1 h-2 rounded-full bg-bg-subtle overflow-hidden">
-              <div
-                className="h-full bg-primary rounded-full transition-all duration-300"
-                style={{
-                  width: `${Math.round((durableRun.stepsCompleted / durableRun.stepsTotal) * 100)}%`,
+          <div className="mt-3 flex flex-col gap-3">
+            {/* Test input + run button */}
+            <div className="flex gap-2 items-end">
+              <textarea
+                value={testInput}
+                onChange={(e) => setTestInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    runWorkflow();
+                  }
                 }}
+                placeholder="Enter a test message... (Shift+Enter for new line)"
+                disabled={running}
+                rows={2}
+                className="flex-1 px-3 py-2 rounded-md border border-border text-sm bg-bg-surface outline-none resize-y min-h-[48px] max-h-[120px]"
               />
-            </div>
-            <span className="text-[11px] text-text-muted whitespace-nowrap">
-              {durableRun.stepsCompleted}/{durableRun.stepsTotal} steps
-            </span>
-            {durableRun.isTerminal && (
-              <a
-                href={`/workflows/history/${activeRunId}`}
-                className="text-[11px] text-primary hover:underline"
+              <Button
+                onClick={runWorkflow}
+                disabled={running || !validation?.valid || !testInput.trim()}
               >
-                View in History
-              </a>
-            )}
-          </div>
-        )}
-
-        {/* Execution results */}
-        {(events.length > 0 || resultData) && (
-          <div className="border border-border rounded-lg overflow-hidden">
-            {/* Result tabs */}
-            <div className="flex border-b border-border bg-bg-subtle">
-              {(['output', 'events', 'stats'] as const).map((tab) => (
-                <button
-                  key={tab}
-                  type="button"
-                  onClick={() => setResultTab(tab)}
-                  className={`px-4 py-2 text-xs font-medium border-none cursor-pointer transition-colors ${
-                    resultTab === tab
-                      ? 'bg-bg-surface text-text-primary border-b-2 border-b-primary'
-                      : 'bg-transparent text-text-muted hover:text-text-primary'
-                  }`}
+                {running ? 'Running...' : 'Run'}
+              </Button>
+              {running && activeRunId && (
+                <Button
+                  variant="secondary"
+                  onClick={() => durableRun.cancel()}
+                  className="text-error"
                 >
-                  {tab === 'output' ? 'Output' : tab === 'events' ? 'Event Log' : 'Stats'}
-                  {tab === 'stats' && resultData?.total_tokens ? ` (${resultData.total_tokens} tok)` : ''}
-                </button>
-              ))}
-              {resultData?.elapsed_seconds != null && (
-                <span className="ml-auto px-3 py-2 text-[11px] text-text-muted self-center">
-                  {resultData.elapsed_seconds}s
-                </span>
+                  Cancel
+                </Button>
               )}
             </div>
 
-            {/* Output tab — full result rendered as markdown */}
-            {resultTab === 'output' && (
-              <div className="p-4 max-h-[500px] overflow-auto">
-                {resultData?.output ? (
+            {/* Progress bar for durable runs */}
+            {activeRunId && durableRun.stepsTotal && durableRun.stepsTotal > 0 && (
+              <div className="flex items-center gap-2">
+                <div className="flex-1 h-2 rounded-full bg-bg-subtle overflow-hidden">
+                  <div
+                    className="h-full bg-primary rounded-full transition-all duration-300"
+                    style={{
+                      width: `${Math.round((durableRun.stepsCompleted / durableRun.stepsTotal) * 100)}%`,
+                    }}
+                  />
+                </div>
+                <span className="text-[11px] text-text-muted whitespace-nowrap">
+                  {durableRun.stepsCompleted}/{durableRun.stepsTotal} steps
+                </span>
+                {durableRun.isTerminal && (
+                  <a
+                    href={`/workflows/history/${activeRunId}`}
+                    className="text-[11px] text-primary hover:underline"
+                  >
+                    View in History
+                  </a>
+                )}
+              </div>
+            )}
+
+            {/* ── Run result card ── */}
+            {(events.length > 0 || resultData) && (
+              <Card className="p-4 flex flex-col gap-3">
+                {/* Error state */}
+                {!resultData && !running && events.some((e) => e.event === 'error' || e.event === 'workflow_error') && (
+                  <div className="text-sm text-error">
+                    {events.filter((e) => e.event === 'error' || e.event === 'workflow_error').map((e) => e.data).join('\n')}
+                  </div>
+                )}
+
+                {/* Running state */}
+                {running && !resultData && (
+                  <div className="text-sm text-text-muted">Running workflow...</div>
+                )}
+
+                {/* Output */}
+                {resultData?.output && (
                   <>
-                    <div className="flex gap-1.5 mb-3">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          navigator.clipboard.writeText(resultData.output ?? '');
-                          toast('success', 'Copied to clipboard');
-                        }}
-                        className="flex items-center gap-1 text-[11px] text-text-muted hover:text-primary border border-border rounded px-2 py-1 bg-transparent cursor-pointer"
-                      >
-                        <Copy size={12} />
-                        Copy
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const blob = new Blob([resultData.output ?? ''], { type: 'text/markdown' });
-                          const url = URL.createObjectURL(blob);
-                          const a = document.createElement('a');
-                          a.href = url;
-                          a.download = `workflow-output.md`;
-                          a.click();
-                          URL.revokeObjectURL(url);
-                        }}
-                        className="flex items-center gap-1 text-[11px] text-text-muted hover:text-primary border border-border rounded px-2 py-1 bg-transparent cursor-pointer"
-                      >
-                        <Download size={12} />
-                        Download
-                      </button>
-                      <ShareButton
-                        agentName={validation?.name ?? 'workflow'}
-                        inputText={testInput}
-                        outputText={resultData?.output ?? ''}
-                        source="workflow"
-                      />
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-text-muted uppercase tracking-wide">Output</span>
+                      <div className="flex gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(resultData.output ?? '');
+                            toast('success', 'Copied to clipboard');
+                          }}
+                          className="flex items-center gap-1 text-[11px] text-text-muted hover:text-primary border border-border rounded px-2 py-1 bg-transparent cursor-pointer"
+                        >
+                          <Copy size={12} />
+                          Copy
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const blob = new Blob([resultData.output ?? ''], { type: 'text/markdown' });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `workflow-output.md`;
+                            a.click();
+                            URL.revokeObjectURL(url);
+                          }}
+                          className="flex items-center gap-1 text-[11px] text-text-muted hover:text-primary border border-border rounded px-2 py-1 bg-transparent cursor-pointer"
+                        >
+                          <Download size={12} />
+                          Download
+                        </button>
+                        <ShareButton
+                          agentName={validation?.name ?? 'workflow'}
+                          inputText={testInput}
+                          outputText={resultData?.output ?? ''}
+                          source="workflow"
+                        />
+                      </div>
                     </div>
-                    <div className="prose prose-sm dark:prose-invert max-w-none text-text-primary [&_pre]:bg-bg-subtle [&_pre]:p-3 [&_pre]:rounded [&_pre]:border [&_pre]:border-border [&_code]:text-xs [&_code]:font-[family-name:var(--font-mono)] [&_table]:text-xs [&_th]:px-2 [&_td]:px-2">
+                    <div className="prose prose-sm max-w-none text-text-primary [&_pre]:bg-bg-subtle [&_pre]:p-3 [&_pre]:rounded [&_pre]:border [&_pre]:border-border [&_code]:text-xs [&_code]:font-[family-name:var(--font-mono)] [&_table]:text-xs [&_th]:px-2 [&_td]:px-2 max-h-[400px] overflow-auto">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
                         {resultData.output}
                       </ReactMarkdown>
                     </div>
                   </>
-                ) : running ? (
-                  <div className="text-sm text-text-muted">Running workflow...</div>
-                ) : events.some((e) => e.event === 'error' || e.event === 'workflow_error') ? (
-                  <div className="text-sm text-error">
-                    {events.filter((e) => e.event === 'error' || e.event === 'workflow_error').map((e) => e.data).join('\n')}
-                  </div>
-                ) : (
-                  <div className="text-sm text-text-muted">Waiting for result...</div>
                 )}
-              </div>
-            )}
 
-            {/* Events tab — raw SSE log */}
-            {resultTab === 'events' && (
-              <div className="bg-bg-subtle p-4 max-h-[500px] overflow-auto font-[family-name:var(--font-mono)] text-xs leading-[1.8]">
-                {events.map((evt, i) => {
-                  let parsedData = evt.data;
-                  try {
-                    const obj = JSON.parse(evt.data);
-                    parsedData = JSON.stringify(obj, null, 2);
-                  } catch {
-                    // keep raw
-                  }
-
-                  return (
-                    <div key={i}>
-                      <span
-                        className={
-                          evt.event === 'workflow_finished'
-                            ? 'text-success'
-                            : evt.event === 'workflow_error' || evt.event === 'error'
-                              ? 'text-error'
-                              : 'text-info'
-                        }
-                      >
-                        {evt.event}
+                {/* Inline stats summary (replaces the separate Stats tab for common case) */}
+                {resultData && (resultData.elapsed_seconds != null || resultData.total_tokens != null) && (
+                  <div className="flex items-center gap-4 text-xs text-text-muted border-t border-border pt-3">
+                    {resultData.elapsed_seconds != null && <span>{resultData.elapsed_seconds}s</span>}
+                    {resultData.total_tokens != null && (
+                      <span>{resultData.total_tokens.toLocaleString()} tokens</span>
+                    )}
+                    {resultData.total_input_tokens != null && resultData.total_output_tokens != null && (
+                      <span className="text-text-muted/60">
+                        ({resultData.total_input_tokens.toLocaleString()} in / {resultData.total_output_tokens.toLocaleString()} out)
                       </span>
-                      <span className="text-text-muted"> &mdash; </span>
-                      <span className="text-text-secondary whitespace-pre-wrap">{parsedData}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {/* Stats tab — per-agent breakdown */}
-            {resultTab === 'stats' && (
-              <div className="p-4 max-h-[500px] overflow-auto">
-                {resultData ? (
-                  <div className="flex flex-col gap-3">
-                    {/* Summary */}
-                    <div className="grid grid-cols-3 gap-3">
-                      <div className="bg-bg-subtle rounded-lg p-3 text-center">
-                        <div className="text-lg font-semibold text-text-primary">{resultData.elapsed_seconds ?? '—'}s</div>
-                        <div className="text-[11px] text-text-muted">Duration</div>
-                      </div>
-                      <div className="bg-bg-subtle rounded-lg p-3 text-center">
-                        <div className="text-lg font-semibold text-text-primary">{resultData.total_tokens?.toLocaleString() ?? '—'}</div>
-                        <div className="text-[11px] text-text-muted">Total Tokens</div>
-                      </div>
-                      <div className="bg-bg-subtle rounded-lg p-3 text-center">
-                        <div className="text-lg font-semibold text-text-primary">{resultData.agents?.length ?? 0}</div>
-                        <div className="text-[11px] text-text-muted">Agents Used</div>
-                      </div>
-                    </div>
-
-                    {/* Token breakdown */}
-                    {resultData.total_tokens != null && resultData.total_tokens > 0 && (
-                      <div className="text-xs text-text-muted">
-                        Input: {resultData.total_input_tokens?.toLocaleString()} &middot; Output: {resultData.total_output_tokens?.toLocaleString()}
-                      </div>
                     )}
-
-                    {/* Per-agent table */}
                     {resultData.agents && resultData.agents.length > 0 && (
-                      <div className="border border-border rounded-lg overflow-hidden">
-                        <table className="w-full text-xs">
-                          <thead>
-                            <tr className="bg-bg-subtle text-text-muted">
-                              <th className="text-left px-3 py-2 font-medium">Agent</th>
-                              <th className="text-left px-3 py-2 font-medium">Model</th>
-                              <th className="text-right px-3 py-2 font-medium">Input</th>
-                              <th className="text-right px-3 py-2 font-medium">Output</th>
-                              <th className="text-right px-3 py-2 font-medium">Total</th>
-                              <th className="text-right px-3 py-2 font-medium">Duration</th>
-                              <th className="text-right px-3 py-2 font-medium">Calls</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {resultData.agents.map((a) => (
-                              <tr key={a.name} className="border-t border-border">
-                                <td className="px-3 py-2 font-medium text-text-primary">{a.name}</td>
-                                <td className="px-3 py-2 font-[family-name:var(--font-mono)] text-text-muted">{a.model}</td>
-                                <td className="px-3 py-2 text-right text-text-muted">{a.input_tokens.toLocaleString()}</td>
-                                <td className="px-3 py-2 text-right text-text-muted">{a.output_tokens.toLocaleString()}</td>
-                                <td className="px-3 py-2 text-right font-medium">{a.total_tokens.toLocaleString()}</td>
-                                <td className="px-3 py-2 text-right text-text-muted">
-                                  {a.duration_ms ? `${(a.duration_ms / 1000).toFixed(1)}s` : '\u2014'}
-                                </td>
-                                <td className="px-3 py-2 text-right text-text-muted">
-                                  {a.llm_calls ?? '\u2014'}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-
-                    {/* LLM Call Log */}
-                    {resultData.llm_call_log && resultData.llm_call_log.length > 0 && (
-                      <div>
-                        <div className="text-xs text-text-muted font-semibold mb-1.5 uppercase tracking-wide">
-                          LLM Call Log
-                        </div>
-                        <div className="border border-border rounded-lg overflow-hidden">
-                          <table className="w-full text-xs">
-                            <thead>
-                              <tr className="bg-bg-subtle text-text-muted">
-                                <th className="text-left px-3 py-1.5 font-medium">#</th>
-                                <th className="text-left px-3 py-1.5 font-medium">Agent</th>
-                                <th className="text-left px-3 py-1.5 font-medium">Model</th>
-                                <th className="text-right px-3 py-1.5 font-medium">Tokens</th>
-                                <th className="text-right px-3 py-1.5 font-medium">Duration</th>
-                                <th className="text-right px-3 py-1.5 font-medium">Cost</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {resultData.llm_call_log.map((call, i) => (
-                                <tr key={i} className="border-t border-border">
-                                  <td className="px-3 py-1.5 text-text-muted">{i + 1}</td>
-                                  <td className="px-3 py-1.5">{call.agent}</td>
-                                  <td className="px-3 py-1.5 font-[family-name:var(--font-mono)] text-text-muted">{call.model}</td>
-                                  <td className="px-3 py-1.5 text-right">{(call.input_tokens + call.output_tokens).toLocaleString()}</td>
-                                  <td className="px-3 py-1.5 text-right">{call.duration_ms ? `${(call.duration_ms / 1000).toFixed(1)}s` : '\u2014'}</td>
-                                  <td className="px-3 py-1.5 text-right text-success">{call.cost_usd ? `$${call.cost_usd.toFixed(4)}` : '\u2014'}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
+                      <span>{resultData.agents.length} agent{resultData.agents.length !== 1 ? 's' : ''}</span>
                     )}
                   </div>
-                ) : (
-                  <div className="text-sm text-text-muted">Run a workflow to see stats.</div>
                 )}
-              </div>
+
+                {/* Detailed stats (collapsible) */}
+                {resultData?.agents && resultData.agents.length > 0 && (
+                  <details>
+                    <summary className="text-[11px] text-text-muted cursor-pointer select-none hover:text-text-primary transition-colors list-none flex items-center gap-1">
+                      <span className="text-[10px]">▶</span>
+                      Per-Agent Breakdown
+                    </summary>
+                    <div className="mt-2 border border-border rounded-lg overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="bg-bg-subtle text-text-muted">
+                            <th className="text-left px-3 py-2 font-medium">Agent</th>
+                            <th className="text-left px-3 py-2 font-medium">Model</th>
+                            <th className="text-right px-3 py-2 font-medium">Tokens</th>
+                            <th className="text-right px-3 py-2 font-medium">Duration</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {resultData.agents.map((a) => (
+                            <tr key={a.name} className="border-t border-border">
+                              <td className="px-3 py-1.5 font-medium text-text-primary">{a.name}</td>
+                              <td className="px-3 py-1.5 font-[family-name:var(--font-mono)] text-text-muted">{a.model}</td>
+                              <td className="px-3 py-1.5 text-right">{a.total_tokens.toLocaleString()}</td>
+                              <td className="px-3 py-1.5 text-right text-text-muted">
+                                {a.duration_ms ? `${(a.duration_ms / 1000).toFixed(1)}s` : '\u2014'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+                )}
+
+                {/* Event log (collapsible) */}
+                {events.length > 0 && (
+                  <details>
+                    <summary className="text-[11px] text-text-muted cursor-pointer select-none hover:text-text-primary transition-colors list-none flex items-center gap-1">
+                      <span className="text-[10px]">▶</span>
+                      Event Log ({events.length})
+                    </summary>
+                    <div className="mt-2 bg-bg-subtle p-3 rounded-lg max-h-[300px] overflow-auto font-[family-name:var(--font-mono)] text-xs leading-[1.8]">
+                      {events.map((evt, i) => {
+                        let parsedData = evt.data;
+                        try {
+                          const obj = JSON.parse(evt.data);
+                          parsedData = JSON.stringify(obj, null, 2);
+                        } catch {
+                          // keep raw
+                        }
+
+                        return (
+                          <div key={i}>
+                            <span
+                              className={
+                                evt.event === 'workflow_finished'
+                                  ? 'text-success'
+                                  : evt.event === 'workflow_error' || evt.event === 'error'
+                                    ? 'text-error'
+                                    : 'text-info'
+                              }
+                            >
+                              {evt.event}
+                            </span>
+                            <span className="text-text-muted"> &mdash; </span>
+                            <span className="text-text-secondary whitespace-pre-wrap">{parsedData}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </details>
+                )}
+              </Card>
             )}
           </div>
-        )}
+        </details>
 
       </div>
     </div>
