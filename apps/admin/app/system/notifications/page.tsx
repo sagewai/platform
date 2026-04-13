@@ -6,6 +6,8 @@ import {
   Card, Button, Badge, Skeleton, EmptyState, useToast, TextInput, FormField,
 } from '@/components/ui/legacy';
 import { Mail, MessageSquare, Bell, Trash2, Play, Check, X } from 'lucide-react';
+import { ProjectBadge } from '@/components/project-badge';
+import { useProject } from '@/utils/project-context';
 
 /* ─── Types ─── */
 
@@ -81,11 +83,12 @@ export default function NotificationsPage() {
   return (
     <div className="space-y-lg">
       <div>
-        <h1 className="text-2xl font-bold font-[family-name:var(--font-heading)]">
-          Notifications
+        <h1 className="text-2xl font-bold font-[family-name:var(--font-heading)] flex items-center">
+          Notifications <ProjectBadge />
         </h1>
         <p className="text-text-secondary mt-1">
           Configure how you receive alerts for budget warnings, workflow failures, and system events.
+          Channels are scoped to the currently selected project.
         </p>
       </div>
 
@@ -118,25 +121,25 @@ export default function NotificationsPage() {
 function ChannelsSection() {
   const [channels, setChannels] = useState<ChannelConfig[]>([]);
   const [loading, setLoading] = useState(true);
-  const [editingType, setEditingType] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [addingType, setAddingType] = useState<string | null>(null);
   const { toast } = useToast();
 
-  // Form state for email (API-key based)
-  const [emailProvider, setEmailProvider] = useState('resend');
-  const [emailApiKey, setEmailApiKey] = useState('');
-  const [fromAddress, setFromAddress] = useState('');
-  const [toAddresses, setToAddresses] = useState('');
-
-  // Form state for slack
-  const [webhookUrl, setWebhookUrl] = useState('');
-  const [slackChannel, setSlackChannel] = useState('');
+  // Form state
+  const [formName, setFormName] = useState('');
+  const [formWebhookUrl, setFormWebhookUrl] = useState('');
+  const [formSlackChannel, setFormSlackChannel] = useState('');
+  const [formEmailProvider, setFormEmailProvider] = useState('resend');
+  const [formEmailApiKey, setFormEmailApiKey] = useState('');
+  const [formEmailFrom, setFormEmailFrom] = useState('');
+  const [formEmailTo, setFormEmailTo] = useState('');
 
   const fetchChannels = useCallback(async () => {
     try {
       const data = await adminApi.listNotificationChannels();
       setChannels(data as unknown as ChannelConfig[]);
     } catch {
-      // empty — no channels configured yet
+      // empty
     } finally {
       setLoading(false);
     }
@@ -144,50 +147,48 @@ function ChannelsSection() {
 
   useEffect(() => { fetchChannels(); }, [fetchChannels]);
 
-  function getChannelConfig(type: string): ChannelConfig | undefined {
-    return channels.find((c) => c.channel_type === type);
+  function resetForm() {
+    setFormName(''); setFormWebhookUrl(''); setFormSlackChannel('');
+    setFormEmailProvider('resend'); setFormEmailApiKey(''); setFormEmailFrom(''); setFormEmailTo('');
+    setEditingId(null); setAddingType(null);
   }
 
-  function startEditing(type: string) {
-    const existing = getChannelConfig(type);
-    if (type === 'email' && existing) {
-      setEmailProvider(existing.email_provider ?? 'resend');
-      setEmailApiKey(existing.email_api_key ?? '');
-      setFromAddress(existing.email_from ?? '');
-      setToAddresses(existing.email ?? '');
-    } else if (type === 'slack' && existing) {
-      setWebhookUrl(existing.webhook_url ?? '');
-      setSlackChannel(existing.slack_channel ?? '');
+  function startAdd(type: string) {
+    resetForm();
+    setAddingType(type);
+  }
+
+  function startEdit(ch: ChannelConfig) {
+    resetForm();
+    setEditingId(ch.id);
+    setFormName((ch as unknown as Record<string, string>).name ?? '');
+    if (ch.channel_type === 'slack') {
+      setFormWebhookUrl(ch.webhook_url ?? '');
+      setFormSlackChannel(ch.slack_channel ?? '');
+    } else if (ch.channel_type === 'email') {
+      setFormEmailProvider(ch.email_provider ?? 'resend');
+      setFormEmailApiKey(ch.email_api_key ?? '');
+      setFormEmailFrom(ch.email_from ?? '');
+      setFormEmailTo(ch.email ?? '');
     }
-    setEditingType(type);
   }
 
   async function handleSave(type: string) {
     try {
-      if (type === 'email') {
-        await adminApi.saveNotificationChannel({
-          channel_type: 'email',
-          enabled: true,
-          email_provider: emailProvider,
-          email_api_key: emailApiKey,
-          email_from: fromAddress,
-          email: toAddresses,
-        });
-      } else if (type === 'slack') {
-        await adminApi.saveNotificationChannel({
-          channel_type: 'slack',
-          enabled: true,
-          webhook_url: webhookUrl,
-          slack_channel: slackChannel || undefined,
-        });
-      } else {
-        await adminApi.saveNotificationChannel({
-          channel_type: 'in_app',
-          enabled: true,
-        });
+      const payload: Record<string, unknown> = { channel_type: type, enabled: true, name: formName || undefined };
+      if (type === 'slack') {
+        payload.webhook_url = formWebhookUrl;
+        payload.slack_channel = formSlackChannel || undefined;
+      } else if (type === 'email') {
+        payload.email_provider = formEmailProvider;
+        payload.email_api_key = formEmailApiKey;
+        payload.email_from = formEmailFrom;
+        payload.email = formEmailTo;
       }
+      if (editingId) payload.id = editingId;
+      await adminApi.saveNotificationChannel(payload);
       toast('success', 'Channel saved');
-      setEditingType(null);
+      resetForm();
       fetchChannels();
     } catch {
       toast('error', 'Failed to save channel');
@@ -198,7 +199,7 @@ function ChannelsSection() {
     try {
       const result = await adminApi.testNotification({ channel_type: type as 'email' | 'slack' | 'in_app' });
       if (result.sent) {
-        toast('success', 'Test notification sent successfully');
+        toast('success', 'Test notification sent');
       } else {
         toast('error', result.error || 'Test notification failed');
       }
@@ -210,7 +211,7 @@ function ChannelsSection() {
   async function handleDelete(id: string) {
     try {
       await adminApi.deleteNotificationChannel(id);
-      toast('success', 'Channel deleted');
+      toast('success', 'Channel removed');
       fetchChannels();
     } catch {
       toast('error', 'Failed to delete channel');
@@ -219,108 +220,140 @@ function ChannelsSection() {
 
   if (loading) return <Skeleton className="h-48" />;
 
+  const slackChannels = channels.filter((c) => c.channel_type === 'slack');
+  const emailChannels = channels.filter((c) => c.channel_type === 'email');
+  const isAddingSlack = addingType === 'slack';
+  const isAddingEmail = addingType === 'email';
+
   return (
-    <div className="grid gap-lg md:grid-cols-3">
-      {(['email', 'slack', 'in_app'] as const).map((type) => {
-        const Icon = CHANNEL_ICONS[type];
-        const config = getChannelConfig(type);
-        const isEditing = editingType === type;
+    <div className="space-y-lg">
+      {/* ── Slack Channels ── */}
+      <Card className="p-lg">
+        <div className="flex items-center justify-between mb-md">
+          <div className="flex items-center gap-2">
+            <MessageSquare size={18} className="text-text-secondary" />
+            <h3 className="font-semibold">Slack Channels</h3>
+            <Badge variant="default">{slackChannels.length}</Badge>
+          </div>
+          <Button size="sm" onClick={() => startAdd('slack')}>+ Add Channel</Button>
+        </div>
 
-        return (
-          <Card key={type} className="p-lg">
-            <div className="flex items-center justify-between mb-md">
-              <div className="flex items-center gap-2">
-                <Icon size={18} className="text-text-secondary" />
-                <h3 className="font-semibold">{CHANNEL_LABELS[type]}</h3>
+        {slackChannels.length === 0 && !isAddingSlack && (
+          <p className="text-sm text-text-muted py-md text-center">No Slack channels configured. Add one to receive notifications.</p>
+        )}
+
+        <div className="space-y-2">
+          {slackChannels.map((ch) => (
+            <div key={ch.id} className="flex items-center justify-between px-4 py-3 bg-bg-subtle rounded-lg">
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-text-primary truncate">
+                  {ch.slack_channel || 'Default channel'}
+                </div>
+                <div className="text-xs text-text-muted truncate">
+                  {ch.webhook_url ? `${ch.webhook_url.slice(0, 40)}...` : 'No webhook'}
+                </div>
               </div>
-              {config && (
-                <Badge variant={config.enabled ? 'success' : 'warning'}>
-                  {config.enabled ? 'Active' : 'Disabled'}
-                </Badge>
-              )}
+              <div className="flex items-center gap-1.5 shrink-0">
+                <Button size="sm" variant="ghost" onClick={() => handleTest('slack')} title="Test">
+                  <Play size={14} />
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => startEdit(ch)} title="Edit">
+                  Edit
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => handleDelete(ch.id)} title="Remove" className="text-error hover:text-error">
+                  <Trash2 size={14} />
+                </Button>
+              </div>
             </div>
+          ))}
+        </div>
 
-            {!isEditing && !config && type !== 'in_app' && (
-              <div className="text-center py-md">
-                <p className="text-text-secondary text-sm mb-md">Not configured</p>
-                <Button size="sm" onClick={() => startEditing(type)}>Configure</Button>
-              </div>
-            )}
+        {/* Add/Edit Slack form */}
+        {(isAddingSlack || (editingId && channels.find(c => c.id === editingId)?.channel_type === 'slack')) && (
+          <div className="mt-md p-4 border border-border rounded-lg space-y-3">
+            <FormField label="Channel name (e.g., #alerts, #agent-runs)">
+              <TextInput value={formSlackChannel} onChange={(e) => setFormSlackChannel(e.target.value)} placeholder="#alerts" />
+            </FormField>
+            <FormField label="Webhook URL">
+              <TextInput value={formWebhookUrl} onChange={(e) => setFormWebhookUrl(e.target.value)} placeholder="https://hooks.slack.com/services/..." />
+            </FormField>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={() => handleSave('slack')}>Save</Button>
+              <Button size="sm" variant="secondary" onClick={resetForm}>Cancel</Button>
+            </div>
+          </div>
+        )}
+      </Card>
 
-            {!isEditing && type === 'in_app' && (
-              <div className="text-sm text-text-secondary">
-                <p>In-app notifications are always enabled. Alerts appear in the Execution Monitor SSE stream.</p>
-              </div>
-            )}
+      {/* ── Email ── */}
+      <Card className="p-lg">
+        <div className="flex items-center justify-between mb-md">
+          <div className="flex items-center gap-2">
+            <Mail size={18} className="text-text-secondary" />
+            <h3 className="font-semibold">Email (API)</h3>
+            {emailChannels.length > 0 && <Badge variant="success">Active</Badge>}
+          </div>
+          {emailChannels.length === 0 && (
+            <Button size="sm" onClick={() => startAdd('email')}>Configure</Button>
+          )}
+        </div>
 
-            {!isEditing && config && type === 'email' && (
-              <div className="space-y-2 text-sm">
-                <p><span className="text-text-secondary">Provider:</span> {config.email_provider ?? 'Not set'}</p>
-                <p><span className="text-text-secondary">API Key:</span> {config.email_api_key ? '***configured***' : 'not set'}</p>
-                <p><span className="text-text-secondary">From:</span> {config.email_from || 'default'}</p>
-                <p><span className="text-text-secondary">To:</span> {config.email || 'not set'}</p>
-                <div className="flex gap-2 mt-md">
-                  <Button size="sm" variant="secondary" onClick={() => startEditing(type)}>Edit</Button>
-                  <Button size="sm" variant="secondary" onClick={() => handleTest(type)}>
-                    <Play size={14} className="mr-1" /> Test
-                  </Button>
-                  <Button size="sm" variant="danger" onClick={() => handleDelete(config.id)}>
-                    <Trash2 size={14} />
-                  </Button>
-                </div>
-              </div>
-            )}
+        {emailChannels.length === 0 && !isAddingEmail && (
+          <p className="text-sm text-text-muted py-md text-center">No email provider configured.</p>
+        )}
 
-            {!isEditing && config && type === 'slack' && (
-              <div className="space-y-2 text-sm">
-                <p><span className="text-text-secondary">Webhook:</span> {config.webhook_url ? '***configured***' : 'not set'}</p>
-                {config.slack_channel && <p><span className="text-text-secondary">Channel:</span> {config.slack_channel}</p>}
-                <div className="flex gap-2 mt-md">
-                  <Button size="sm" variant="secondary" onClick={() => startEditing(type)}>Edit</Button>
-                  <Button size="sm" variant="secondary" onClick={() => handleTest(type)}>
-                    <Play size={14} className="mr-1" /> Test
-                  </Button>
-                  <Button size="sm" variant="danger" onClick={() => handleDelete(config.id)}>
-                    <Trash2 size={14} />
-                  </Button>
-                </div>
-              </div>
-            )}
+        {emailChannels.map((ch) => (
+          <div key={ch.id} className="space-y-2 text-sm">
+            <p><span className="text-text-secondary">Provider:</span> {ch.email_provider ?? 'Not set'}</p>
+            <p><span className="text-text-secondary">API Key:</span> {ch.email_api_key ? '***configured***' : 'not set'}</p>
+            <p><span className="text-text-secondary">From:</span> {ch.email_from || 'default'}</p>
+            <p><span className="text-text-secondary">To:</span> {ch.email || 'not set'}</p>
+            <div className="flex gap-2 mt-md">
+              <Button size="sm" variant="secondary" onClick={() => startEdit(ch)}>Edit</Button>
+              <Button size="sm" variant="secondary" onClick={() => handleTest('email')}>
+                <Play size={14} className="mr-1" /> Test
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => handleDelete(ch.id)} className="text-error hover:text-error">
+                <Trash2 size={14} />
+              </Button>
+            </div>
+          </div>
+        ))}
 
-            {/* Email editing form */}
-            {isEditing && type === 'email' && (
-              <div className="space-y-3">
-                <FormField label="Provider">
-                  <select value={emailProvider} onChange={(e) => setEmailProvider(e.target.value)} className="w-full rounded-md border border-border bg-bg-surface px-3 py-2 text-sm text-text-primary">
-                    <option value="resend">Resend</option>
-                    <option value="sendgrid">SendGrid</option>
-                    <option value="postmark">Postmark</option>
-                  </select>
-                </FormField>
-                <FormField label="API Key" hint={emailProvider === 'resend' ? 'Starts with re_' : emailProvider === 'sendgrid' ? 'Starts with SG.' : 'Server API token'}><TextInput type="password" value={emailApiKey} onChange={(e) => setEmailApiKey(e.target.value)} placeholder={emailProvider === 'resend' ? 're_...' : emailProvider === 'sendgrid' ? 'SG...' : 'your-server-token'} /></FormField>
-                <FormField label="From Address"><TextInput value={fromAddress} onChange={(e) => setFromAddress(e.target.value)} placeholder="notifications@yourdomain.com" /></FormField>
-                <FormField label="To Address"><TextInput value={toAddresses} onChange={(e) => setToAddresses(e.target.value)} placeholder="admin@yourdomain.com" /></FormField>
-                <div className="flex gap-2">
-                  <Button size="sm" onClick={() => handleSave('email')}>Save</Button>
-                  <Button size="sm" variant="secondary" onClick={() => setEditingType(null)}>Cancel</Button>
-                </div>
-              </div>
-            )}
+        {/* Add/Edit Email form */}
+        {(isAddingEmail || (editingId && channels.find(c => c.id === editingId)?.channel_type === 'email')) && (
+          <div className="mt-md p-4 border border-border rounded-lg space-y-3">
+            <FormField label="Provider">
+              <select value={formEmailProvider} onChange={(e) => setFormEmailProvider(e.target.value)} className="w-full rounded-md border border-border bg-bg-surface px-3 py-2 text-sm text-text-primary">
+                <option value="resend">Resend</option>
+                <option value="sendgrid">SendGrid</option>
+                <option value="postmark">Postmark</option>
+              </select>
+            </FormField>
+            <FormField label="API Key" hint={formEmailProvider === 'resend' ? 'Starts with re_' : formEmailProvider === 'sendgrid' ? 'Starts with SG.' : 'Server API token'}>
+              <TextInput type="password" value={formEmailApiKey} onChange={(e) => setFormEmailApiKey(e.target.value)} placeholder={formEmailProvider === 'resend' ? 're_...' : formEmailProvider === 'sendgrid' ? 'SG...' : 'your-server-token'} />
+            </FormField>
+            <FormField label="From Address"><TextInput value={formEmailFrom} onChange={(e) => setFormEmailFrom(e.target.value)} placeholder="notifications@yourdomain.com" /></FormField>
+            <FormField label="To Address"><TextInput value={formEmailTo} onChange={(e) => setFormEmailTo(e.target.value)} placeholder="admin@yourdomain.com" /></FormField>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={() => handleSave('email')}>Save</Button>
+              <Button size="sm" variant="secondary" onClick={resetForm}>Cancel</Button>
+            </div>
+          </div>
+        )}
+      </Card>
 
-            {/* Slack editing form */}
-            {isEditing && type === 'slack' && (
-              <div className="space-y-3">
-                <FormField label="Webhook URL"><TextInput value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} placeholder="https://hooks.slack.com/services/..." /></FormField>
-                <FormField label="Channel (optional)"><TextInput value={slackChannel} onChange={(e) => setSlackChannel(e.target.value)} placeholder="#alerts" /></FormField>
-                <div className="flex gap-2">
-                  <Button size="sm" onClick={() => handleSave('slack')}>Save</Button>
-                  <Button size="sm" variant="secondary" onClick={() => setEditingType(null)}>Cancel</Button>
-                </div>
-              </div>
-            )}
-          </Card>
-        );
-      })}
+      {/* ── In-App Alerts ── */}
+      <Card className="p-lg">
+        <div className="flex items-center gap-2 mb-md">
+          <Bell size={18} className="text-text-secondary" />
+          <h3 className="font-semibold">In-App Alerts</h3>
+          <Badge variant="success">Always On</Badge>
+        </div>
+        <p className="text-sm text-text-secondary">
+          In-app notifications are always enabled. Alerts appear in the Execution Monitor SSE stream.
+        </p>
+      </Card>
     </div>
   );
 }

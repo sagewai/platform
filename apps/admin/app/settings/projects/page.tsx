@@ -144,11 +144,13 @@ export default function ProjectsPage() {
           const isExpanded = expandedSlug === project.slug;
           return (
             <Card key={project.slug} className="!p-0 overflow-hidden">
-              {/* Accordion header */}
-              <button
-                type="button"
+              {/* Accordion header — div (not button) so nested delete button is valid HTML */}
+              <div
+                role="button"
+                tabIndex={0}
                 onClick={() => handleExpand(project)}
-                className="w-full flex items-center justify-between gap-md px-lg py-md bg-transparent border-0 cursor-pointer text-left hover:bg-bg-subtle/50 transition-colors"
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleExpand(project); }}
+                className="w-full flex items-center justify-between gap-md px-lg py-md cursor-pointer text-left hover:bg-bg-subtle/50 transition-colors"
               >
                 <div className="flex items-center gap-md min-w-0">
                   {isExpanded
@@ -174,7 +176,7 @@ export default function ProjectsPage() {
                     </button>
                   )}
                 </div>
-              </button>
+              </div>
 
               {/* Accordion body */}
               {isExpanded && (
