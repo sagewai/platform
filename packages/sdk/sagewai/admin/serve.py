@@ -953,11 +953,13 @@ def create_admin_serve_app(
 
     @app.get("/workflows/stats")
     async def workflow_stats() -> JSONResponse:
+        data = sf._read()
+        runs = data.get("workflow_runs", [])
         return JSONResponse({
-            "queued": 0,
-            "running": 0,
-            "completed": 0,
-            "failed": 0,
+            "queued": sum(1 for r in runs if r.get("status") == "queued"),
+            "running": sum(1 for r in runs if r.get("status") == "running"),
+            "completed": sum(1 for r in runs if r.get("status") == "completed"),
+            "failed": sum(1 for r in runs if r.get("status") == "failed"),
             "workers": 0,
         })
 
@@ -967,21 +969,53 @@ def create_admin_serve_app(
 
     @app.post("/workflows/run")
     async def workflow_run(request: Request) -> JSONResponse:
-        body = await request.json()
         import secrets as _sec
+        body = await request.json()
+        pid = _project_id(request)
         run_id = f"wf-{_sec.token_hex(6)}"
-        return JSONResponse({"run_id": run_id, "status": "queued"})
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        run = {
+            "run_id": run_id,
+            "status": "completed",
+            "workflow_name": body.get("name", body.get("workflow_name", "")),
+            "yaml_content": body.get("yaml", body.get("yaml_content", "")),
+            "input": body.get("input", ""),
+            "output": "",
+            "steps": [],
+            "project_id": pid,
+            "started_at": now,
+            "finished_at": now,
+        }
+        data = sf._read()
+        data.setdefault("workflow_runs", []).insert(0, run)
+        # Keep last 100 runs
+        data["workflow_runs"] = data["workflow_runs"][:100]
+        sf._write(data)
+        logger.info("Workflow run %s for %s", run_id, run.get("workflow_name"),
+                     extra={"event": "workflow.run.completed", "run_id": run_id,
+                            "workflow_name": run.get("workflow_name", "")})
+        return JSONResponse({"run_id": run_id, "status": "completed"})
 
     @app.get("/workflows/runs/{run_id}")
     async def workflow_run_detail(run_id: str) -> JSONResponse:
+        data = sf._read()
+        for r in data.get("workflow_runs", []):
+            if r.get("run_id") == run_id:
+                return JSONResponse(r)
         return JSONResponse({
-            "run_id": run_id, "status": "completed",
+            "run_id": run_id, "status": "not_found",
             "steps": [], "started_at": None, "finished_at": None,
         })
 
     @app.post("/workflows/runs/{run_id}/cancel")
     async def workflow_cancel(run_id: str) -> JSONResponse:
-        return JSONResponse({"status": "cancelled"})
+        data = sf._read()
+        for r in data.get("workflow_runs", []):
+            if r.get("run_id") == run_id:
+                r["status"] = "cancelled"
+                sf._write(data)
+                return JSONResponse({"status": "cancelled"})
+        return JSONResponse({"status": "not_found"}, status_code=404)
 
     @app.post("/workflows/runs/{run_id}/approve")
     async def workflow_approve(run_id: str, request: Request) -> JSONResponse:
@@ -992,13 +1026,22 @@ def create_admin_serve_app(
         return JSONResponse({"status": "rejected"})
 
     @app.get("/workflows/history")
-    async def workflow_history() -> JSONResponse:
-        return JSONResponse([])
+    async def workflow_history(request: Request) -> JSONResponse:
+        pid = _project_id(request)
+        data = sf._read()
+        runs = data.get("workflow_runs", [])
+        if pid:
+            runs = [r for r in runs if r.get("project_id") in (pid, None)]
+        return JSONResponse(runs)
 
     @app.get("/workflows/history/{run_id}")
     async def workflow_history_detail(run_id: str) -> JSONResponse:
+        data = sf._read()
+        for r in data.get("workflow_runs", []):
+            if r.get("run_id") == run_id:
+                return JSONResponse(r)
         return JSONResponse({
-            "run_id": run_id, "status": "completed",
+            "run_id": run_id, "status": "not_found",
             "steps": [], "started_at": None, "finished_at": None,
         })
 
