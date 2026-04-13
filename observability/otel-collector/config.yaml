@@ -2,8 +2,9 @@
 #
 # Receives OTLP (gRPC + HTTP) from the SDK backend, then:
 #   - Exports metrics to VictoriaMetrics via Prometheus remote-write
-#   - Exports logs to VictoriaLogs via the JSON lines API
-#   - Batches and retries automatically
+#   - Exports logs to VictoriaLogs via the OTLP HTTP API
+#   - Traces logged to stdout (no persistent store yet)
+#   - Health-check log noise is filtered out
 
 receivers:
   otlp:
@@ -17,11 +18,20 @@ processors:
   batch:
     send_batch_size: 1024
     timeout: 5s
+
   resource:
     attributes:
       - key: service.namespace
         value: sagewai
         action: upsert
+
+  # Filter out health-check noise from logs (polled every 30s)
+  filter/health:
+    logs:
+      exclude:
+        match_type: regexp
+        bodies:
+          - ".*health/summary.*"
 
 exporters:
   # Metrics → VictoriaMetrics (Prometheus remote-write)
@@ -30,13 +40,13 @@ exporters:
     tls:
       insecure: true
 
-  # Logs → VictoriaLogs (JSON lines ingestion)
+  # Logs → VictoriaLogs (OTLP HTTP ingestion)
   otlphttp/victorialogs:
     endpoint: "http://victorialogs:9428/insert/opentelemetry"
     tls:
       insecure: true
 
-  # Debug exporter for local development (logs to collector stdout)
+  # Debug exporter for local development
   debug:
     verbosity: basic
 
@@ -48,7 +58,7 @@ service:
       exporters: [prometheusremotewrite, debug]
     logs:
       receivers: [otlp]
-      processors: [batch, resource]
+      processors: [batch, resource, filter/health]
       exporters: [otlphttp/victorialogs, debug]
     traces:
       receivers: [otlp]

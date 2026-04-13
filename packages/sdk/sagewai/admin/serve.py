@@ -384,6 +384,9 @@ def create_admin_serve_app(
         })
         if not result.get("ok"):
             return JSONResponse(result, status_code=409)
+        logger.info("Setup completed for org=%s", result.get("org_slug"),
+                     extra={"event": "setup.completed", "org_slug": result.get("org_slug", "")})
+        otel_count("setup.completions")
         return JSONResponse(result)
 
     # ── Auth ─────────────────────────────────────────────────────
@@ -395,9 +398,15 @@ def create_admin_serve_app(
             body.get("email", ""), body.get("password", "")
         )
         if not result:
+            logger.warning("Login failed for email=%s", body.get("email", ""),
+                           extra={"event": "auth.login.failed", "email": body.get("email", "")})
+            otel_count("auth.logins", status="failed")
             return JSONResponse(
                 {"detail": "Invalid email or password"}, status_code=401
             )
+        logger.info("Login success for email=%s", result["user"]["email"],
+                     extra={"event": "auth.login.success", "email": result["user"]["email"]})
+        otel_count("auth.logins", status="success")
         resp = JSONResponse(result)
         resp.set_cookie(
             key="sagewai_auth", value=result["access_token"],
@@ -501,6 +510,8 @@ def create_admin_serve_app(
     async def upsert_provider(request: Request) -> JSONResponse:
         body = await request.json()
         result = sf.upsert_provider(body)
+        logger.info("Provider configured: %s", body.get("provider_name", ""),
+                     extra={"event": "provider.configured", "provider": body.get("provider_name", "")})
         return JSONResponse({"id": result.get("id", "")})
 
     @app.post("/api/v1/providers/{provider_id}/test")
@@ -518,6 +529,16 @@ def create_admin_serve_app(
             provider.get("provider_name", ""),
             provider.get("config", {}),
         )
+        status = "success" if result.get("connected") else "failed"
+        logger.info("Provider test %s: %s latency=%.0fms",
+                     status, provider.get("provider_name", ""), result.get("latency_ms", 0),
+                     extra={"event": f"provider.test.{status}",
+                            "provider": provider.get("provider_name", ""),
+                            "latency_ms": result.get("latency_ms", 0)})
+        otel_count("provider.tests", provider=provider.get("provider_name", ""), status=status)
+        if result.get("latency_ms"):
+            otel_record("provider.test.latency", result["latency_ms"],
+                        provider=provider.get("provider_name", ""))
         return JSONResponse(result)
 
     @app.delete("/api/v1/providers/{provider_id}")
@@ -564,6 +585,11 @@ def create_admin_serve_app(
         if not body.get("name"):
             return JSONResponse({"detail": "Agent name is required"}, status_code=422)
         agent = sf.create_agent(body)
+        logger.info("Agent created: %s model=%s strategy=%s",
+                     body["name"], body.get("model", ""), body.get("strategy", ""),
+                     extra={"event": "agent.created", "agent_name": body["name"],
+                            "model": body.get("model", ""), "strategy": body.get("strategy", "")})
+        otel_count("agent.created", agent_name=body["name"])
         return JSONResponse(agent, status_code=201)
 
     @app.get("/playground/agents")
@@ -606,10 +632,18 @@ def create_admin_serve_app(
     async def playground_run(request: Request):
         """Run an agent and stream the response as SSE."""
 
+        import time as _run_time
         body = await request.json()
         agent_name = body.get("agent_name", "")
         message = body.get("message", "")
         agent_spec = sf.get_agent(agent_name)
+        _run_t0 = _run_time.monotonic()
+
+        logger.info("Agent run started: agent=%s model=%s",
+                     agent_name, (agent_spec or {}).get("model", ""),
+                     extra={"event": "agent.run.started", "agent_name": agent_name,
+                            "model": (agent_spec or {}).get("model", "")})
+        otel_count("agent.runs", agent_name=agent_name)
 
         async def _generate():
             model = (agent_spec or {}).get("model", "")
@@ -638,15 +672,28 @@ def create_admin_serve_app(
                         full_output += delta
                         yield f"event: text_message_content\ndata: {json.dumps({'delta': delta})}\n\n"
 
+                dt = _run_time.monotonic() - _run_t0
+                logger.info("Agent run completed: agent=%s model=%s tokens=%d duration=%.1fs",
+                             agent_name, model, len(full_output.split()), dt,
+                             extra={"event": "agent.run.completed", "agent_name": agent_name,
+                                    "model": model, "duration_s": round(dt, 2)})
+                otel_record("agent.run.duration", dt, agent_name=agent_name, model=model)
                 yield f"event: run_finished\ndata: {json.dumps({'output': full_output, 'status': 'completed'})}\n\n"
 
             except ImportError:
                 msg = "litellm is not installed. Run: uv pip install litellm"
+                logger.error("Agent run failed: litellm not installed",
+                             extra={"event": "agent.run.error", "agent_name": agent_name, "error": msg})
+                otel_count("agent.run.errors", agent_name=agent_name, error="import")
                 yield f"event: text_message_content\ndata: {json.dumps({'delta': msg})}\n\n"
                 yield f"event: run_finished\ndata: {json.dumps({'output': msg, 'status': 'error'})}\n\n"
 
             except Exception as exc:
                 error_msg = str(exc)
+                logger.error("Agent run failed: agent=%s error=%s", agent_name, error_msg[:200],
+                             extra={"event": "agent.run.error", "agent_name": agent_name,
+                                    "model": model, "error": error_msg[:200]})
+                otel_count("agent.run.errors", agent_name=agent_name, error="runtime")
                 if "api_key" in error_msg.lower() or "authentication" in error_msg.lower():
                     guidance = (
                         f"No API key configured for model '{model}'. "
@@ -1089,8 +1136,55 @@ def _extract_token(request: Request) -> str | None:
     return request.cookies.get("sagewai_auth")
 
 
+# ── OTel metrics (module-level so route handlers can use them) ────
+
+_otel_meter = None  # set by _init_otel if OTel is available
+_otel_counters: dict[str, Any] = {}
+_otel_histograms: dict[str, Any] = {}
+
+
+def otel_count(name: str, value: int = 1, **labels: str) -> None:
+    """Increment an OTel counter (no-op if OTel not installed)."""
+    c = _otel_counters.get(name)
+    if c:
+        c.add(value, labels)
+
+
+def otel_record(name: str, value: float, **labels: str) -> None:
+    """Record an OTel histogram observation (no-op if OTel not installed)."""
+    h = _otel_histograms.get(name)
+    if h:
+        h.record(value, labels)
+
+
+def _classify_route(path: str) -> str:
+    """Classify a request path into a business category."""
+    if path.startswith("/api/v1/setup"):
+        return "setup"
+    if path.startswith("/api/v1/auth"):
+        return "auth"
+    if path.startswith("/api/v1/organization"):
+        return "org"
+    if path.startswith("/api/v1/project"):
+        return "project"
+    if path.startswith("/api/v1/provider"):
+        return "provider"
+    if path.startswith("/playground"):
+        return "playground"
+    if path.startswith("/workflow"):
+        return "workflow"
+    if path.startswith("/api/v1/agents/template"):
+        return "template"
+    if path.startswith("/admin"):
+        return "admin"
+    if path.startswith("/api/v1/health"):
+        return "health"
+    return "other"
+
+
 def _init_otel(app: FastAPI, version: str) -> None:
     """Set up OpenTelemetry if packages are installed."""
+    global _otel_meter
     try:
         from opentelemetry import trace, metrics
         from opentelemetry.sdk.trace import TracerProvider
@@ -1114,10 +1208,12 @@ def _init_otel(app: FastAPI, version: str) -> None:
             "service.namespace": "sagewai",
         })
 
+        # Traces
         tp = TracerProvider(resource=resource)
         tp.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=f"{endpoint}/v1/traces")))
         trace.set_tracer_provider(tp)
 
+        # Metrics
         reader = PeriodicExportingMetricReader(
             OTLPMetricExporter(endpoint=f"{endpoint}/v1/metrics"),
             export_interval_millis=15_000,
@@ -1125,6 +1221,30 @@ def _init_otel(app: FastAPI, version: str) -> None:
         mp = MeterProvider(resource=resource, metric_readers=[reader])
         metrics.set_meter_provider(mp)
 
+        # ── Custom business metrics ──────────────────────────────
+        _otel_meter = metrics.get_meter("sagewai.admin", version)
+
+        _otel_counters["agent.runs"] = _otel_meter.create_counter(
+            "sagewai.agent.runs", description="Total agent runs", unit="{run}")
+        _otel_counters["agent.run.errors"] = _otel_meter.create_counter(
+            "sagewai.agent.run.errors", description="Failed agent runs", unit="{error}")
+        _otel_counters["auth.logins"] = _otel_meter.create_counter(
+            "sagewai.auth.logins", description="Login attempts", unit="{attempt}")
+        _otel_counters["setup.completions"] = _otel_meter.create_counter(
+            "sagewai.setup.completions", description="Setup wizard completions", unit="{completion}")
+        _otel_counters["provider.tests"] = _otel_meter.create_counter(
+            "sagewai.provider.tests", description="Provider connection tests", unit="{test}")
+        _otel_counters["agent.created"] = _otel_meter.create_counter(
+            "sagewai.agent.created", description="Agents created", unit="{agent}")
+        _otel_counters["llm.tokens"] = _otel_meter.create_counter(
+            "sagewai.llm.tokens", description="LLM tokens consumed", unit="{token}")
+
+        _otel_histograms["agent.run.duration"] = _otel_meter.create_histogram(
+            "sagewai.agent.run.duration", description="Agent run duration", unit="s")
+        _otel_histograms["provider.test.latency"] = _otel_meter.create_histogram(
+            "sagewai.provider.test.latency", description="Provider test latency", unit="ms")
+
+        # Logs → OTel collector
         lp = LoggerProvider(resource=resource)
         lp.add_log_record_processor(BatchLogRecordProcessor(
             OTLPLogExporter(endpoint=f"{endpoint}/v1/logs")
@@ -1140,12 +1260,29 @@ def _init_otel(app: FastAPI, version: str) -> None:
         _app_log = logging.getLogger("sagewai.admin")
         _app_log.setLevel(logging.INFO)
 
+        # ── Structured request logging middleware ────────────────
         class _ReqLog(BaseHTTPMiddleware):
             async def dispatch(self, request: Request, call_next: Any) -> Any:
                 t0 = _time.monotonic()
                 response = await call_next(request)
                 dt = (_time.monotonic() - t0) * 1000
-                _app_log.info("%s %s %d %.1fms", request.method, request.url.path, response.status_code, dt)
+                path = request.url.path
+                category = _classify_route(path)
+                # Skip health check noise
+                if category == "health":
+                    return response
+                _app_log.info(
+                    "%s %s %d %.1fms",
+                    request.method, path, response.status_code, dt,
+                    extra={
+                        "event": "http.request",
+                        "http.method": request.method,
+                        "http.route": path,
+                        "http.status_code": response.status_code,
+                        "http.duration_ms": round(dt, 1),
+                        "sagewai.category": category,
+                    },
+                )
                 return response
 
         app.add_middleware(_ReqLog)

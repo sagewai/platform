@@ -1,85 +1,158 @@
 {
-  "annotations": { "list": [] },
+  "annotations": {"list": []},
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
   "id": null,
   "links": [],
+  "schemaVersion": 39,
+  "tags": ["sagewai"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "title": "Sagewai Admin",
+  "uid": "sagewai-overview",
   "panels": [
+
+    {"type": "row", "title": "System Health", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0}, "collapsed": false, "panels": []},
+
     {
-      "title": "HTTP Request Rate",
-      "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "" },
-      "targets": [
-        {
-          "expr": "rate(http_server_request_duration_seconds_count{service_namespace=\"sagewai\"}[5m])",
-          "legendFormat": "{{http_route}} {{http_method}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "reqps",
-          "custom": { "drawStyle": "line", "fillOpacity": 10 }
-        }
-      }
-    },
-    {
-      "title": "HTTP Request Latency (p95)",
-      "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "" },
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.95, rate(http_server_request_duration_seconds_bucket{service_namespace=\"sagewai\"}[5m]))",
-          "legendFormat": "{{http_route}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": { "drawStyle": "line", "fillOpacity": 10 }
-        }
-      }
+      "title": "Active Requests",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 1},
+      "datasource": {"type": "prometheus"},
+      "targets": [{"expr": "sum(http_server_active_requests{service_namespace=\"sagewai\"})", "legendFormat": "active"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 10}, {"color": "red", "value": 50}]}}}
     },
     {
       "title": "Error Rate (5xx)",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 8 },
-      "datasource": { "type": "prometheus", "uid": "" },
-      "targets": [
-        {
-          "expr": "sum(rate(http_server_request_duration_seconds_count{service_namespace=\"sagewai\",http_status_code=~\"5..\"}[5m]))",
-          "legendFormat": "5xx/s"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": { "unit": "reqps", "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.1 }] } }
-      }
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 1},
+      "datasource": {"type": "prometheus"},
+      "targets": [{"expr": "sum(rate(http_server_request_duration_seconds_count{service_namespace=\"sagewai\",http_response_status_code=~\"5..\"}[5m])) or vector(0)", "legendFormat": "5xx/s"}],
+      "fieldConfig": {"defaults": {"unit": "reqps", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.01}]}}}
     },
     {
-      "title": "Active Requests",
+      "title": "Setup Completions",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 8 },
-      "datasource": { "type": "prometheus", "uid": "" },
-      "targets": [
-        {
-          "expr": "sum(http_server_active_requests{service_namespace=\"sagewai\"})",
-          "legendFormat": "active"
-        }
-      ]
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 1},
+      "datasource": {"type": "prometheus"},
+      "targets": [{"expr": "sum(sagewai_setup_completions_total) or vector(0)", "legendFormat": "setups"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "blue", "value": null}]}}}
     },
+    {
+      "title": "Agents Created",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 1},
+      "datasource": {"type": "prometheus"},
+      "targets": [{"expr": "sum(sagewai_agent_created_total) or vector(0)", "legendFormat": "agents"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "blue", "value": null}]}}}
+    },
+
+    {"type": "row", "title": "HTTP Performance", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 5}, "collapsed": false, "panels": []},
+
+    {
+      "title": "Request Rate by Route",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 6},
+      "datasource": {"type": "prometheus"},
+      "targets": [{"expr": "sum by (http_route) (rate(http_server_request_duration_seconds_count{service_namespace=\"sagewai\",http_route!~\"/api/v1/health/.*\"}[5m]))", "legendFormat": "{{http_route}}"}],
+      "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"drawStyle": "line", "fillOpacity": 15, "stacking": {"mode": "normal"}}}}
+    },
+    {
+      "title": "P95 Latency by Route",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 6},
+      "datasource": {"type": "prometheus"},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{service_namespace=\"sagewai\",http_route!~\"/api/v1/health/.*\"}[5m])))", "legendFormat": "{{http_route}}"}],
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {"drawStyle": "line", "fillOpacity": 10}}}
+    },
+
+    {"type": "row", "title": "Agent Activity", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 14}, "collapsed": false, "panels": []},
+
+    {
+      "title": "Agent Runs",
+      "type": "timeseries",
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 15},
+      "datasource": {"type": "prometheus"},
+      "targets": [{"expr": "sum by (agent_name) (rate(sagewai_agent_runs_total[5m]))", "legendFormat": "{{agent_name}}"}],
+      "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"drawStyle": "bars", "fillOpacity": 80}}}
+    },
+    {
+      "title": "Run Duration (p95)",
+      "type": "timeseries",
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 15},
+      "datasource": {"type": "prometheus"},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(sagewai_agent_run_duration_seconds_bucket[5m])))", "legendFormat": "p95"}],
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {"drawStyle": "line", "fillOpacity": 10}}}
+    },
+    {
+      "title": "Run Errors",
+      "type": "stat",
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 15},
+      "datasource": {"type": "prometheus"},
+      "targets": [{"expr": "sum(sagewai_agent_run_errors_total) or vector(0)", "legendFormat": "errors"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}}
+    },
+
+    {"type": "row", "title": "LLM Providers", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 22}, "collapsed": false, "panels": []},
+
+    {
+      "title": "Provider Tests",
+      "type": "timeseries",
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 23},
+      "datasource": {"type": "prometheus"},
+      "targets": [
+        {"expr": "sum by (provider, status) (rate(sagewai_provider_tests_total[5m]))", "legendFormat": "{{provider}} ({{status}})"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"drawStyle": "bars", "fillOpacity": 60}}}
+    },
+    {
+      "title": "Provider Latency",
+      "type": "timeseries",
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 23},
+      "datasource": {"type": "prometheus"},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le, provider) (rate(sagewai_provider_test_latency_milliseconds_bucket[5m])))", "legendFormat": "{{provider}} p95"}],
+      "fieldConfig": {"defaults": {"unit": "ms", "custom": {"drawStyle": "line", "fillOpacity": 10}}}
+    },
+    {
+      "title": "LLM Tokens",
+      "type": "timeseries",
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 23},
+      "datasource": {"type": "prometheus"},
+      "targets": [{"expr": "sum(rate(sagewai_llm_tokens_total[5m]))", "legendFormat": "tokens/s"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "fillOpacity": 20}}}
+    },
+
+    {"type": "row", "title": "Auth & Security", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 30}, "collapsed": false, "panels": []},
+
+    {
+      "title": "Login Attempts",
+      "type": "timeseries",
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 31},
+      "datasource": {"type": "prometheus"},
+      "targets": [
+        {"expr": "sum by (status) (rate(sagewai_auth_logins_total[5m]))", "legendFormat": "{{status}}"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"drawStyle": "bars", "fillOpacity": 60}},
+        "overrides": [{"matcher": {"id": "byName", "options": "failed"}, "properties": [{"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}}]}]}
+    },
+    {
+      "title": "Failed Logins (total)",
+      "type": "stat",
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 31},
+      "datasource": {"type": "prometheus"},
+      "targets": [{"expr": "sum(sagewai_auth_logins_total{status=\"failed\"}) or vector(0)", "legendFormat": "failed"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 5}, {"color": "red", "value": 20}]}}}
+    },
+
+    {"type": "row", "title": "Application Logs", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 37}, "collapsed": false, "panels": []},
+
     {
       "title": "Logs",
       "type": "logs",
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 12 },
-      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "" },
-      "targets": [
-        {
-          "expr": "*",
-          "refId": "A"
-        }
-      ],
+      "gridPos": {"h": 12, "w": 24, "x": 0, "y": 38},
+      "datasource": {"type": "victoriametrics-logs-datasource"},
+      "targets": [{"expr": "service.name:\"sagewai-admin\"", "refId": "A"}],
       "options": {
         "showTime": true,
         "sortOrder": "Descending",
@@ -87,11 +160,5 @@
         "enableLogDetails": true
       }
     }
-  ],
-  "schemaVersion": 39,
-  "tags": ["sagewai"],
-  "templating": { "list": [] },
-  "time": { "from": "now-1h", "to": "now" },
-  "title": "Sagewai Overview",
-  "uid": "sagewai-overview"
+  ]
 }
