@@ -513,6 +513,9 @@ def create_admin_serve_app(
     @app.post("/api/v1/providers")
     async def upsert_provider(request: Request) -> JSONResponse:
         body = await request.json()
+        pid = _project_id(request)
+        if pid:
+            body["project_id"] = pid
         result = sf.upsert_provider(body)
         logger.info("Provider configured: %s", body.get("provider_name", ""),
                      extra={"event": "provider.configured", "provider": body.get("provider_name", "")})
@@ -731,6 +734,7 @@ def create_admin_serve_app(
     @app.post("/api/v1/prompts/logs")
     async def save_prompt_log(request: Request) -> JSONResponse:
         body = await request.json()
+        pid = _project_id(request)
         import secrets as _sec
         log_id = f"log-{_sec.token_hex(6)}"
         entry = {
@@ -743,6 +747,8 @@ def create_admin_serve_app(
             "tags": body.get("tags", []),
             "source": body.get("source", "playground"),
             "is_example": body.get("is_example", False),
+            "quality": body.get("quality", 0),
+            "project_id": pid,
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         }
         data = sf._read()
@@ -784,15 +790,136 @@ def create_admin_serve_app(
         return JSONResponse({"detail": "Replay requires a running agent"}, status_code=501)
 
     @app.get("/api/v1/prompts/export")
-    async def export_prompts() -> JSONResponse:
+    async def export_prompts(request: Request) -> JSONResponse:
+        pid = _project_id(request)
         data = sf._read()
-        return JSONResponse(data.get("prompt_logs", []))
+        logs = data.get("prompt_logs", [])
+        if pid:
+            logs = [l for l in logs if l.get("project_id") in (pid, None)]
+        return JSONResponse(logs)
 
     @app.get("/api/v1/prompts/examples")
-    async def list_prompt_examples() -> JSONResponse:
+    async def list_prompt_examples(request: Request) -> JSONResponse:
+        pid = _project_id(request)
         data = sf._read()
         examples = [l for l in data.get("prompt_logs", []) if l.get("is_example")]
+        if pid:
+            examples = [e for e in examples if e.get("project_id") in (pid, None)]
         return JSONResponse(examples)
+
+    # ── Training data export (for Unsloth fine-tuning) ───────────
+
+    @app.get("/api/v1/training/export")
+    async def export_training_data(request: Request):
+        """Export training samples as JSONL for fine-tuning with Unsloth.
+
+        Query params:
+          format: "alpaca" (default) | "sharegpt" | "raw"
+          project_id: filter by project (also reads X-Project-ID header)
+          min_quality: minimum quality rating (1-5, default 0)
+          agent_name: filter by agent
+        """
+        from starlette.responses import Response
+
+        pid = _project_id(request) or request.query_params.get("project_id")
+        fmt = request.query_params.get("format", "alpaca")
+        min_quality = int(request.query_params.get("min_quality", "0"))
+        agent_filter = request.query_params.get("agent_name")
+
+        data = sf._read()
+        samples = [l for l in data.get("prompt_logs", []) if l.get("is_example")]
+
+        # Filter
+        if pid:
+            samples = [s for s in samples if s.get("project_id") in (pid, None)]
+        if min_quality > 0:
+            samples = [s for s in samples if (s.get("quality", 0) or 0) >= min_quality]
+        if agent_filter:
+            samples = [s for s in samples if s.get("agent_name") == agent_filter]
+
+        lines = []
+        for s in samples:
+            inp = s.get("input_text", "")
+            out = s.get("output_text", "")
+            if not inp or not out:
+                continue
+
+            if fmt == "sharegpt":
+                # ShareGPT format — multi-turn conversations
+                entry = {
+                    "conversations": [
+                        {"from": "human", "value": inp},
+                        {"from": "gpt", "value": out},
+                    ]
+                }
+            elif fmt == "raw":
+                # Raw format — all fields
+                entry = s
+            else:
+                # Alpaca format (default) — instruction/input/output
+                system = ""
+                agent = sf.get_agent(s.get("agent_name", ""))
+                if agent:
+                    system = agent.get("system_prompt", "")
+                entry = {
+                    "instruction": system or "You are a helpful assistant.",
+                    "input": inp,
+                    "output": out,
+                }
+
+            lines.append(json.dumps(entry, ensure_ascii=False))
+
+        content = "\n".join(lines)
+        filename = f"training-data-{fmt}-{len(lines)}samples.jsonl"
+
+        logger.info("Training data exported: %d samples, format=%s, project=%s",
+                     len(lines), fmt, pid or "all",
+                     extra={"event": "training.export", "samples": len(lines),
+                            "format": fmt, "project_id": pid or "global"})
+
+        return Response(
+            content=content,
+            media_type="application/x-ndjson",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @app.get("/api/v1/training/stats")
+    async def training_stats(request: Request) -> JSONResponse:
+        """Training data statistics for the current project."""
+        pid = _project_id(request)
+        data = sf._read()
+        all_logs = data.get("prompt_logs", [])
+        examples = [l for l in all_logs if l.get("is_example")]
+        if pid:
+            examples = [e for e in examples if e.get("project_id") in (pid, None)]
+
+        # Stats by agent
+        by_agent: dict[str, int] = {}
+        for e in examples:
+            agent = e.get("agent_name", "unknown")
+            by_agent[agent] = by_agent.get(agent, 0) + 1
+
+        return JSONResponse({
+            "total_samples": len(examples),
+            "total_logs": len(all_logs),
+            "by_agent": by_agent,
+            "formats_available": ["alpaca", "sharegpt", "raw"],
+            "export_url": "/api/v1/training/export",
+        })
+
+    @app.post("/api/v1/training/samples/{log_id}/quality")
+    async def rate_training_sample(log_id: str, request: Request) -> JSONResponse:
+        """Rate a training sample quality (1-5)."""
+        body = await request.json()
+        quality = body.get("quality", 3)
+        data = sf._read()
+        for log in data.get("prompt_logs", []):
+            if log.get("log_id") == log_id:
+                log["quality"] = max(1, min(5, int(quality)))
+                log["is_example"] = True  # rating implies it's a training sample
+                sf._write(data)
+                return JSONResponse({"status": "ok", "quality": log["quality"]})
+        return JSONResponse({"detail": "Not found"}, status_code=404)
 
     @app.get("/strategies/list")
     async def strategies_list() -> JSONResponse:
