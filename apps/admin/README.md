@@ -4,7 +4,7 @@ Full-featured admin console for managing agents, workflows, fleet, harness, inte
 
 ## Tech Stack
 
-- Next.js 15, React 19, TypeScript
+- Next.js 16, React 19, TypeScript
 - Tailwind CSS 4
 - recharts, @xyflow/react, d3-sankey, dagre, framer-motion
 - react-markdown, react-syntax-highlighter, qrcode.react, driver.js, js-yaml
@@ -13,10 +13,13 @@ Full-featured admin console for managing agents, workflows, fleet, harness, inte
 
 ```bash
 # From the monorepo root
-make web APP=admin
+just admin-dev
 
 # Or directly
-cd clients/web && pnpm run --filter @sagecurator/admin dev
+cd apps/admin && pnpm dev
+
+# With backend API URL (required for full functionality)
+NEXT_PUBLIC_ADMIN_API_URL=http://localhost:8000/admin pnpm dev
 ```
 
 ## Pages
