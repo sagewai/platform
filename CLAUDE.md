@@ -115,8 +115,20 @@ Without the first 4 links, nothing downstream works.
 **Architecture:**
 - `admin/state_file.py` — file-backed config store (`~/.sagewai/admin-state.json`)
 - `admin/provider_probes.py` — async LLM provider detection (Ollama, LM Studio, cloud)
-- `admin/serve.py` — complete FastAPI app factory with ALL routes
+- `admin/serve.py` — complete FastAPI app factory with ALL routes (144 endpoints)
 - `cli/admin.py` — thin wrapper: creates AdminStateFile + calls serve.py
+
+**Project scoping (multi-tenancy):**
+- Every entity has a `project_id` field: `null` = org-global, `"slug"` = project-scoped
+- Strict isolation: agents in project A cannot see agents in project B
+- Org-global resources (`project_id=null`) are visible to all projects
+- Frontend: `ProjectProvider` context + `useProject()` hook
+- API client injects `X-Project-ID` header on every request automatically
+- Backend: `_project_id(request)` helper reads the header, passes to `_filter_by_project()`
+- Project selector in sidebar: dropdown with "All Projects (Global)" + per-project list
+- OTel logs tagged with `sagewai.project_id` for per-project Grafana filtering
+- Applies to: agents, providers, runs, workflows, budgets, guardrails,
+  notifications, connectors, tokens, eval datasets, fleet — everything
 
 **Roles (4 personas — defined in `apps/admin/utils/roles.ts`):**
 - **admin** — full access (manage system, build agents, train models, view analytics)
