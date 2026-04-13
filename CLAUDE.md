@@ -139,17 +139,25 @@ Each role has specific `navGroups` (sidebar sections), `permissions`
 - `saved_workflows` — workflow registry entries
 
 **Observability stack (`docker-compose.observability.yml`):**
-- **VictoriaMetrics** (:8428) — Prometheus-compatible metrics store
-- **VictoriaLogs** (:9428) — structured log store
-- **OTel Collector** (:4317/:4318) — receives OTLP, routes to VM/VL
+- **VictoriaMetrics** (:8428) — scrapes OTel collector's Prometheus endpoint (:8889) every 10s
+- **VictoriaLogs** (:9428) — receives logs via OTLP HTTP from collector
+- **OTel Collector** (:4317/:4318) — receives OTLP, exposes Prometheus on :8889
 - **Grafana** (:3000) — dashboards (admin/admin, anonymous enabled)
 - Start: `docker compose -f docker-compose.observability.yml up -d --build`
-- Dashboard: "Sagewai Admin" — 6 rows, 15 panels (health, HTTP, agents, providers, auth, logs)
+- Dashboard: "Sagewai Admin" — 5 rows, 14 panels (health, HTTP, status codes, OTel pipeline, logs)
+- Key metrics: `http_server_duration_milliseconds` (histogram),
+  `http_server_active_requests` (gauge), `http_server_response_size_bytes` (histogram)
+- Labels: `http_target` (route), `http_status_code`, `service_name="sagewai-admin"`
+- **IMPORTANT:** Do NOT use `prometheusremotewrite` exporter — it silently drops
+  histograms and counters. Always use the `prometheus` exporter + VM scraping.
 - Backend emits structured business events: `setup.completed`, `auth.login.*`,
   `agent.created`, `agent.run.*`, `provider.test.*`, `provider.configured`
-- Custom OTel metrics: `sagewai.agent.runs`, `.run.errors`, `.auth.logins`,
-  `.provider.tests`, `.agent.run.duration`, `.provider.test.latency`
 - Health check noise filtered from logs pipeline
+
+**Email notifications (API-based, no SMTP):**
+- Supports Resend (`re_*` keys), SendGrid (`SG.*` keys), Postmark
+- Auto-detects provider from API key prefix
+- Configure: `EMAIL_API_KEY` + `EMAIL_FROM` env vars or per-channel in admin UI
 
 **E2e tests (`apps/admin/e2e/`):**
 - Playwright with browser-based auth via storageState
@@ -207,10 +215,10 @@ Rules:
 6. ~~P2 API routes still missing~~ **FIXED** in PR #58 — all 144
    endpoints now served. Issue #44 closed.
 
-7. ~~OTel custom metrics not appearing~~ **Partially fixed** in PR #58
-   (cumulative temporality). HTTP instrumentation metrics + logs
-   panels work in Grafana. Custom counters (`sagewai.agent.runs`)
-   may still need tuning — verify after generating traffic.
+7. ~~OTel custom metrics not appearing~~ **FIXED** in PR #66 — switched
+   from `prometheusremotewrite` (silently dropped histograms/counters)
+   to Prometheus scrape endpoint + VictoriaMetrics scraping. 25 metrics
+   now visible in Grafana. Never use `prometheusremotewrite` again.
 
 8. **`@sagecurator/ui` is fully decommissioned.** Zero references
    remain in the codebase (PR #59). The compat layer is at
