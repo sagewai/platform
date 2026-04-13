@@ -15,7 +15,7 @@ import { setupAndLogin, resetBackendState } from './mock-api';
 import { mkdirSync } from 'fs';
 import { dirname } from 'path';
 
-const AUTH_FILE = 'apps/admin/.auth/user.json';
+const AUTH_FILE = '.auth/user.json';
 
 setup('authenticate via browser login', async ({ page }) => {
   // Reset backend to fresh-install state
