@@ -130,6 +130,24 @@ Without the first 4 links, nothing downstream works.
 - Applies to: agents, providers, runs, workflows, budgets, guardrails,
   notifications, connectors, tokens, eval datasets, fleet — everything
 
+**Fleet (real SDK integration — `sagewai.fleet`):**
+- `InMemoryFleetRegistry` — worker registration, approval, heartbeat, enrollment keys
+- `FleetDispatcher` + `InMemoryTaskStore` — task claim/report with capability matching
+- Workers register with: `models_supported`, `pool`, `labels` (including `project_id`)
+- Dispatch matches by: model, pool, labels, project scope
+- Cross-project isolation: healthcare worker can't claim finance tasks
+- Enrollment keys for bulk onboarding with pool/model restrictions
+- See Example 26 for full demo
+
+**Training data pipeline (for Unsloth fine-tuning):**
+- `GET /api/v1/training/export?format=alpaca` — JSONL export
+- `GET /api/v1/training/stats` — sample counts by agent
+- `POST /api/v1/training/samples/{id}/quality` — rate 1-5
+- Formats: `alpaca` (instruction/input/output), `sharegpt` (conversations), `raw`
+- Project-scoped: each project collects and exports its own training data
+- Pipeline: Collect → Curate → Export → Unsloth fine-tune → Ollama deploy → $0/token
+- See Example 25 for full demo
+
 **Roles (4 personas — defined in `apps/admin/utils/roles.ts`):**
 - **admin** — full access (manage system, build agents, train models, view analytics)
 - **developer** — build agents, use playground, manage tools (no system config)
