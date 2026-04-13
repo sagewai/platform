@@ -1444,7 +1444,7 @@ def create_admin_serve_app(
         if channel_type == "slack":
             webhook_url = channel.get("webhook_url", "") if channel else body.get("webhook_url", "")
             if not webhook_url:
-                return JSONResponse({"sent": False, "error": "No Slack webhook URL configured"}, status_code=400)
+                return JSONResponse({"sent": False, "error": "No Slack webhook URL configured. Go to System → Notifications to add one."})
             try:
                 import httpx
                 async with httpx.AsyncClient(timeout=10.0) as client:
@@ -1467,7 +1467,7 @@ def create_admin_serve_app(
             # Provider is auto-detected from env vars or channel config.
             email_to = channel.get("email", "") if channel else body.get("email", "")
             if not email_to:
-                return JSONResponse({"sent": False, "error": "No email address configured"}, status_code=400)
+                return JSONResponse({"sent": False, "error": "No email address configured. Go to System → Notifications to add one."})
 
             # Resolve provider + API key from channel config or env
             provider = (channel or {}).get("email_provider", "") or os.environ.get("EMAIL_PROVIDER", "")
@@ -1530,7 +1530,7 @@ def create_admin_serve_app(
                             json={"From": from_email, "To": email_to, "Subject": subject, "HtmlBody": html_body},
                         )
                     else:
-                        return JSONResponse({"sent": False, "error": f"Unknown email provider: {provider}"}, status_code=400)
+                        return JSONResponse({"sent": False, "error": f"Unknown email provider: {provider}"}, )
 
                     if resp.status_code in (200, 201, 202):
                         logger.info("Email test sent via %s to %s", provider, email_to,
@@ -1607,7 +1607,7 @@ def create_admin_serve_app(
                 from_email = "notifications@sagewai.ai"
 
             if not api_key:
-                return JSONResponse({"sent": False, "error": "No EMAIL_API_KEY configured"}, status_code=400)
+                return JSONResponse({"sent": False, "error": "No EMAIL_API_KEY configured"}, )
             if not provider and api_key:
                 if api_key.startswith("re_"):
                     provider = "resend"

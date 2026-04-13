@@ -936,7 +936,7 @@ export const adminApi = {
   },
 
   testNotification: (config: { channel_type: 'email' | 'slack' | 'in_app'; project_id?: string }) =>
-    analyticsClient.post<{ delivered: boolean; channel_type: string; results: boolean[] }>(
+    analyticsClient.post<{ sent: boolean; error?: string }>(
       '/api/v1/notifications/test',
       config,
     ),

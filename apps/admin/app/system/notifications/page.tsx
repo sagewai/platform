@@ -256,8 +256,9 @@ function ChannelsSection() {
             {!isEditing && config && type === 'email' && (
               <div className="space-y-2 text-sm">
                 <p><span className="text-text-secondary">Provider:</span> {config.email_provider ?? 'Not set'}</p>
-                <p><span className="text-text-secondary">From:</span> {config.from_address}</p>
-                <p><span className="text-text-secondary">To:</span> {(config.to_addresses ?? []).join(', ')}</p>
+                <p><span className="text-text-secondary">API Key:</span> {config.email_api_key ? '***configured***' : 'not set'}</p>
+                <p><span className="text-text-secondary">From:</span> {config.email_from || 'default'}</p>
+                <p><span className="text-text-secondary">To:</span> {config.email || 'not set'}</p>
                 <div className="flex gap-2 mt-md">
                   <Button size="sm" variant="secondary" onClick={() => startEditing(type)}>Edit</Button>
                   <Button size="sm" variant="secondary" onClick={() => handleTest(type)}>
