@@ -44,7 +44,7 @@ Run `just` for the live list; the ones you'll reach for:
 |---|---|---|
 | `just bootstrap` | First-time setup (uv + pnpm + just + workspace sync) | ~90s |
 | `just smoke` | 29 fast smoke tests | ~0.1s |
-| `just test` | Full SDK unit suite (2904 tests) | ~10s |
+| `just test` | Full SDK unit suite (2928 tests) | ~10s |
 | `just perf` | 4 perf micro-benchmarks with fixed budgets | ~0.1s |
 | `just build` | sdk wheel + admin + docs + vscode builds | ~2 min |
 | `just dev-all` | Backend + admin UI concurrently | long-running |
@@ -134,6 +134,28 @@ Each role has specific `navGroups` (sidebar sections), `permissions`
 - `active_tokens` — list of valid auth tokens (last 10)
 - `projects` — array of tenant projects (slug, name, environment, default_model)
 - `providers` — array of LLM provider configs (name, type, api_key, status)
+- `agents` — array of playground-created agent specs
+- `prompt_logs` — saved prompt logs (from Share → Save as example)
+- `saved_workflows` — workflow registry entries
+
+**Observability stack (`docker-compose.observability.yml`):**
+- **VictoriaMetrics** (:8428) — Prometheus-compatible metrics store
+- **VictoriaLogs** (:9428) — structured log store
+- **OTel Collector** (:4317/:4318) — receives OTLP, routes to VM/VL
+- **Grafana** (:3000) — dashboards (admin/admin, anonymous enabled)
+- Start: `docker compose -f docker-compose.observability.yml up -d --build`
+- Dashboard: "Sagewai Admin" — 6 rows, 15 panels (health, HTTP, agents, providers, auth, logs)
+- Backend emits structured business events: `setup.completed`, `auth.login.*`,
+  `agent.created`, `agent.run.*`, `provider.test.*`, `provider.configured`
+- Custom OTel metrics: `sagewai.agent.runs`, `.run.errors`, `.auth.logins`,
+  `.provider.tests`, `.agent.run.duration`, `.provider.test.latency`
+- Health check noise filtered from logs pipeline
+
+**E2e tests (`apps/admin/e2e/`):**
+- Playwright with browser-based auth via storageState
+- Backend + frontend auto-started by playwright.config.ts
+- Run: `just admin-e2e` or `pnpm --filter @sagewai/admin test:e2e`
+- Auth setup project logs in via real browser, saves `.auth/user.json`
 
 **Rules for any agent working on this codebase:**
 - NEVER hardcode `setup_required: false` — always check real state.
@@ -171,15 +193,20 @@ Rules:
 
 ## Known issues you may encounter
 
-1. **`sagewai[fastapi]` extra is missing `uvicorn`.** Workaround: `uv pip install uvicorn` after a fresh sync. A proper fix is to add `uvicorn` to the `[project.optional-dependencies]` `fastapi` array in `packages/sdk/pyproject.toml`.
+1. ~~`sagewai[fastapi]` extra missing `uvicorn`~~ **FIXED** in PR #48.
 
-2. **No `/health` route on the admin FastAPI.** The Dockerfile `HEALTHCHECK` and `docker-compose.yml` healthcheck both hit `/openapi.json` as a proxy. If a dedicated `/health` route is added to the SDK, update both.
+2. ~~No `/health` route on the admin FastAPI~~ **FIXED** in PR #41.
+   Routes: `GET /api/v1/health/summary` and `/api/v1/health/detailed`.
 
-3. **Git commit author email is `ardadiri@mac-mini.local` in all existing history.** This is Ali's local git identity default from the macOS hostname. Minor hostname leak. Do **not** rewrite history to fix. For any new commits you author in a session, pass `-c user.email=ardadiri@gmail.com` explicitly.
+3. **Git commit author email is `ardadiri@mac-mini.local` in all existing history.** Do **not** rewrite history. Pass `-c user.email=ardadiri@gmail.com` on every commit.
 
-4. **Dependabot fires weekly PRs** across the monorepo and all 17 wrapper repos. They are routine action-version bumps; merge on sight unless a test fails.
+4. **Dependabot fires weekly PRs** across the monorepo and all 17 wrapper repos. Routine action-version bumps; merge on sight unless a test fails.
 
-5. **macOS: always use `localhost` (not `127.0.0.1`) and bind to `0.0.0.0`.** macOS resolves `localhost` to `::1` (IPv6 loopback) while `127.0.0.1` is IPv4 only. If the backend binds to `--host 127.0.0.1`, the admin panel's browser-side health check (which fetches `http://localhost:8000/...`) will silently fail because the request goes to `::1` and the server isn't listening there. Always start with `--host 0.0.0.0` (the CLI default) and always use `localhost` in browser URLs. This affects most macOS developers.
+5. **macOS: always use `localhost` (not `127.0.0.1`) and bind to `0.0.0.0`.** macOS resolves `localhost` to `::1` (IPv6). The CLI default `--host 0.0.0.0` is correct.
+
+6. **P2 API routes still missing (issue #44).** The core pipeline works (setup → org → projects → LLMs → agents → playground). Missing: budget limits, guardrail configs, audit events, memory vector/graph, eval datasets, MCP server management, token management, connectors, notifications, fleet admin, billing. These return 404 — the frontend pages exist but show empty states.
+
+7. **OTel custom metrics not appearing in VictoriaMetrics.** The SDK emits custom counters (`sagewai.agent.runs`, etc.) via OTel SDK and the collector receives them (visible in debug output), but the Prometheus remote-write exporter doesn't persist them to VictoriaMetrics. The HTTP instrumentation metrics (`http_server_active_requests`) work. Root cause: likely needs `cumulative_temporality_preference` config on the OTel metric exporter. HTTP performance + logs panels work fine in Grafana.
 
 ## Governance
 
