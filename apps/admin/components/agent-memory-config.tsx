@@ -84,7 +84,7 @@ export function AgentMemoryConfigPanel({ agentName, initialConfig, onSave }: Pro
                 className={`px-3 py-1.5 rounded text-xs font-medium border transition-colors ${
                   active
                     ? 'bg-primary/20 border-primary/50 text-primary'
-                    : 'bg-white/5 border-white/10 text-text-muted hover:border-white/20'
+                    : 'bg-bg-subtle border-border text-text-muted hover:border-text-muted'
                 }`}
               >
                 {scope.charAt(0).toUpperCase() + scope.slice(1)}
@@ -127,7 +127,7 @@ export function AgentMemoryConfigPanel({ agentName, initialConfig, onSave }: Pro
                     className={`px-3 py-1.5 rounded text-xs font-medium border transition-colors ${
                       active
                         ? 'bg-primary/20 border-primary/50 text-primary'
-                        : 'bg-white/5 border-white/10 text-text-muted hover:border-white/20'
+                        : 'bg-bg-subtle border-border text-text-muted hover:border-text-muted'
                     }`}
                   >
                     {strategy === 'bm25' ? 'BM25' : strategy.charAt(0).toUpperCase() + strategy.slice(1)}
@@ -145,7 +145,7 @@ export function AgentMemoryConfigPanel({ agentName, initialConfig, onSave }: Pro
             <button
               onClick={() => setReranking(!reranking)}
               className={`relative w-10 h-5 rounded-full transition-colors ${
-                reranking ? 'bg-primary' : 'bg-white/20'
+                reranking ? 'bg-primary' : 'bg-border'
               }`}
             >
               <span
@@ -190,7 +190,7 @@ export function AgentMemoryConfigPanel({ agentName, initialConfig, onSave }: Pro
           <button
             onClick={() => setAutoLearn(!autoLearn)}
             className={`relative w-10 h-5 rounded-full transition-colors ${
-              autoLearn ? 'bg-primary' : 'bg-white/20'
+              autoLearn ? 'bg-primary' : 'bg-border'
             }`}
           >
             <span

@@ -23,7 +23,7 @@ export function StepProgress({ steps, currentStep }: StepProgressProps) {
                     ? 'bg-primary text-white'
                     : isCurrent
                     ? 'bg-primary/20 border-2 border-primary text-primary'
-                    : 'bg-white/5 border border-white/20 text-text-secondary'
+                    : 'bg-bg-subtle border border-border text-text-secondary'
                 }`}
               >
                 {isCompleted ? '\u2713' : i + 1}
@@ -41,7 +41,7 @@ export function StepProgress({ steps, currentStep }: StepProgressProps) {
             {!isLast && (
               <div
                 className={`w-8 h-0.5 mx-1 mt-[-14px] ${
-                  isCompleted ? 'bg-primary' : 'bg-white/10'
+                  isCompleted ? 'bg-primary' : 'bg-border'
                 }`}
               />
             )}

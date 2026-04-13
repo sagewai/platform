@@ -57,7 +57,7 @@ export function ContextSearchForm({ onSearch, loading }: Props) {
                 className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
                   active
                     ? 'bg-primary/20 border-primary/50 text-primary'
-                    : 'bg-white/5 border-white/10 text-text-muted hover:border-white/20'
+                    : 'bg-bg-subtle border-border text-text-muted hover:border-text-muted'
                 }`}
               >
                 {scope}

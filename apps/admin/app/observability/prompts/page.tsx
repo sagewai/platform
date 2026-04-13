@@ -222,7 +222,7 @@ export default function PromptHistoryPage() {
             <button
               type="button"
               onClick={() => setFilterAgent('')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-white border-none bg-transparent cursor-pointer"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary border-none bg-transparent cursor-pointer"
             >
               <X size={12} />
             </button>
@@ -256,7 +256,7 @@ export default function PromptHistoryPage() {
                 <button
                   type="button"
                   onClick={() => handleExpand(log.log_id)}
-                  className="w-full flex items-center gap-3 px-4 py-2.5 text-left bg-transparent border-none cursor-pointer hover:bg-white/[0.03] transition-colors"
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-left bg-transparent border-none cursor-pointer hover:bg-primary/5 dark:hover:bg-white/[0.03] transition-colors"
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-0.5 flex-wrap">

@@ -81,7 +81,7 @@ export default function ContextDashboardPage() {
             const Icon = action.icon;
             return (
               <Link key={action.href} href={action.href} className="no-underline">
-                <Card className="p-md hover:bg-white/[0.03] transition-colors h-full">
+                <Card className="p-md hover:bg-primary/5 dark:hover:bg-white/[0.03] transition-colors h-full">
                   <Icon size={20} className={`${action.color} mb-2`} />
                   <div className="font-medium text-sm mb-1">{action.label}</div>
                   <div className="text-xs text-text-muted leading-relaxed">{action.description}</div>

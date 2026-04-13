@@ -59,7 +59,7 @@ export default function TrainingLogsPage() {
             placeholder="Search by agent or model..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full bg-white/5 border border-white/10 rounded-lg pl-9 pr-3 py-2 text-sm"
+            className="w-full bg-bg-surface border border-border rounded-lg pl-9 pr-3 py-2 text-sm"
           />
         </div>
         <Button>
@@ -89,7 +89,7 @@ export default function TrainingLogsPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-white/10">
+                <tr className="border-b border-border">
                   <th className="text-left p-3 font-medium">
                     <input type="checkbox" checked={selected.size === filtered.length && filtered.length > 0} onChange={selectAll} />
                   </th>
@@ -105,7 +105,7 @@ export default function TrainingLogsPage() {
               </thead>
               <tbody>
                 {filtered.map((log) => (
-                  <tr key={log.id} className="border-b border-white/5 hover:bg-white/[0.02]">
+                  <tr key={log.id} className="border-b border-border hover:bg-primary/5 dark:hover:bg-white/[0.02]">
                     <td className="p-3"><input type="checkbox" checked={selected.has(log.id)} onChange={() => toggleSelect(log.id)} /></td>
                     <td className="p-3 font-medium">{log.agent_name}</td>
                     <td className="p-3 text-text-secondary">{log.model}</td>

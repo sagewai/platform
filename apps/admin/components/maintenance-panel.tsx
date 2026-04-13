@@ -41,7 +41,7 @@ export function MaintenancePanel() {
       </div>
 
       {report && (
-        <div className="mt-md border-t border-white/10 pt-md">
+        <div className="mt-md border-t border-border pt-md">
           <div className="flex items-center gap-2 mb-3">
             <CheckCircle size={14} className="text-green-400" />
             <span className="text-xs font-medium text-green-400">Maintenance Complete</span>

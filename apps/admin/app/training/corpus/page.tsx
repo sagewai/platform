@@ -65,7 +65,7 @@ export default function CorpusPage() {
               </div>
               <div className="flex gap-2">
                 <Button className="flex-1"><Download size={12} className="mr-1" />Export</Button>
-                <button className="p-2 text-text-muted hover:text-error transition-colors cursor-pointer bg-transparent border border-white/10 rounded-lg">
+                <button className="p-2 text-text-muted hover:text-error transition-colors cursor-pointer bg-transparent border border-border rounded-lg">
                   <Trash2 size={14} />
                 </button>
               </div>

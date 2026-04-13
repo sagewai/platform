@@ -170,7 +170,7 @@ export default function AgentRunsPage() {
           <button
             type="button"
             onClick={() => fetchRuns()}
-            className="text-xs text-error hover:text-white border border-error/30 rounded px-2 py-1 bg-transparent cursor-pointer ml-3"
+            className="text-xs text-error hover:text-text-primary border border-error/30 rounded px-2 py-1 bg-transparent cursor-pointer ml-3"
           >
             Retry
           </button>

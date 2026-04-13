@@ -16,8 +16,8 @@ export function ContextStatsGrid({ stats, scopes, loading }: Props) {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-md">
         {[1, 2, 3, 4].map((i) => (
           <Card key={i} className="p-md animate-pulse">
-            <div className="h-4 bg-white/10 rounded w-20 mb-2" />
-            <div className="h-8 bg-white/10 rounded w-16" />
+            <div className="h-4 bg-bg-subtle rounded w-20 mb-2" />
+            <div className="h-8 bg-bg-subtle rounded w-16" />
           </Card>
         ))}
       </div>
@@ -76,7 +76,7 @@ export function ContextStatsGrid({ stats, scopes, loading }: Props) {
                       {s.document_count} docs / {s.chunk_count} chunks
                     </span>
                   </div>
-                  <div className="h-2 bg-white/5 rounded-full overflow-hidden">
+                  <div className="h-2 bg-bg-subtle rounded-full overflow-hidden">
                     <div
                       className="h-full bg-primary rounded-full transition-all"
                       style={{ width: `${pct}%` }}
@@ -97,7 +97,7 @@ export function ContextStatsGrid({ stats, scopes, loading }: Props) {
             {Object.entries(stats.by_source).map(([source, count]) => (
               <div key={source} className="flex items-center gap-2 text-xs">
                 <span className="capitalize font-medium">{source}</span>
-                <span className="bg-white/10 px-2 py-0.5 rounded text-text-muted">{count}</span>
+                <span className="bg-bg-subtle px-2 py-0.5 rounded text-text-muted">{count}</span>
               </div>
             ))}
           </div>

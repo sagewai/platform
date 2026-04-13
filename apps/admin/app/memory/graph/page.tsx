@@ -17,7 +17,7 @@ const ENTITY_KIND_COLORS: Record<string, string> = {
   concept: 'bg-teal-500/15 text-teal-400',
   location: 'bg-amber-500/15 text-amber-400',
   event: 'bg-rose-500/15 text-rose-400',
-  default: 'bg-white/10 text-text-secondary',
+  default: 'bg-bg-subtle text-text-secondary',
 };
 
 function entityKindBadge(metadata: Record<string, unknown>) {

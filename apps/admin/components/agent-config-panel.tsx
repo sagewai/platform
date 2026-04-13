@@ -418,7 +418,7 @@ Remember our previous conversations:
           type="button"
           onClick={() => setAutoLearn(!autoLearn)}
           className={`relative w-9 h-5 rounded-full transition-colors border-none cursor-pointer ${
-            autoLearn ? 'bg-primary' : 'bg-white/20'
+            autoLearn ? 'bg-primary' : 'bg-border'
           }`}
         >
           <span

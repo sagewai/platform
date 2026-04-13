@@ -154,7 +154,7 @@ function UsageMeter({
           {limit === -1 ? 'Unlimited' : `${limit.toLocaleString()}${unit ? ` ${unit}` : ''}`}
         </span>
       </div>
-      <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+      <div className="h-2 rounded-full bg-bg-subtle overflow-hidden">
         <div
           className={`h-full rounded-full transition-all duration-500 ${barColor}`}
           style={{ width: `${pct}%` }}
@@ -346,7 +346,7 @@ export default function BillingPage() {
             />
           </div>
 
-          <div className="flex items-center gap-md text-xs text-text-on-dark/40 pt-sm border-t border-white/5">
+          <div className="flex items-center gap-md text-xs text-text-muted pt-sm border-t border-border">
             <span className="flex items-center gap-1">
               <Activity size={12} />
               {usage.api_calls.toLocaleString()} API calls
@@ -364,15 +364,15 @@ export default function BillingPage() {
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-white/10">
-                <th className="text-left py-3 pr-4 text-text-on-dark/40 font-medium">Feature</th>
+              <tr className="border-b border-border">
+                <th className="text-left py-3 pr-4 text-text-muted font-medium">Feature</th>
                 {plans.map((plan) => (
                   <th key={plan.id} className="text-center py-3 px-4 font-medium">
                     <div className="flex flex-col items-center gap-1">
                       <span className={plan.id === subscription.plan ? 'text-primary' : ''}>
                         {plan.name}
                       </span>
-                      <span className="text-xs text-text-on-dark/40 font-normal">
+                      <span className="text-xs text-text-muted font-normal">
                         {plan.price_monthly != null
                           ? plan.price_monthly === 0
                             ? 'Free'
@@ -387,8 +387,8 @@ export default function BillingPage() {
             <tbody>
               {['workers', 'connectors', 'agent_runs_monthly', 'storage_gb', 'fleet', 'premium_support'].map(
                 (featureKey) => (
-                  <tr key={featureKey} className="border-b border-white/5">
-                    <td className="py-3 pr-4 text-text-on-dark/60">{featureLabel(featureKey)}</td>
+                  <tr key={featureKey} className="border-b border-border">
+                    <td className="py-3 pr-4 text-text-secondary">{featureLabel(featureKey)}</td>
                     {plans.map((plan) => {
                       const val = plan.features[featureKey];
                       const isBool = typeof val === 'boolean';
@@ -462,7 +462,7 @@ export default function BillingPage() {
         ) : (
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-white/10 text-text-on-dark/40">
+              <tr className="border-b border-border text-text-muted">
                 <th className="text-left py-2 font-medium">Date</th>
                 <th className="text-left py-2 font-medium">Invoice</th>
                 <th className="text-right py-2 font-medium">Amount</th>
@@ -472,7 +472,7 @@ export default function BillingPage() {
             </thead>
             <tbody>
               {invoices.map((inv) => (
-                <tr key={inv.id} className="border-b border-white/5">
+                <tr key={inv.id} className="border-b border-border">
                   <td className="py-3 text-text-on-dark/70">
                     {new Date(inv.date).toLocaleDateString('en-US', {
                       month: 'short',

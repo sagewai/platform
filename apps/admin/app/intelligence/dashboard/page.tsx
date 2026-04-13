@@ -325,7 +325,7 @@ export default function IntelligenceDashboardPage() {
                     className="border-b border-border last:border-0 hover:bg-bg-subtle transition-colors"
                   >
                     <td className="py-2.5 px-3">
-                      <span className="inline-block px-2 py-0.5 text-[11px] font-mono font-semibold bg-white/5 border border-border rounded">
+                      <span className="inline-block px-2 py-0.5 text-[11px] font-mono font-semibold bg-bg-subtle border border-border rounded">
                         {f.phase}
                       </span>
                     </td>

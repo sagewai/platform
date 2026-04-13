@@ -126,7 +126,7 @@ export function EventTimeline({ events }: EventTimelineProps) {
           >
             {/* Timeline dot — keep style for dynamic EVENT_COLORS */}
             <div
-              className="absolute -left-5 top-1.5 w-3 h-3 rounded-full border-2 border-white shadow-[0_0_0_1px_var(--color-border)]"
+              className="absolute -left-5 top-1.5 w-3 h-3 rounded-full border-2 border-bg-surface shadow-[0_0_0_1px_var(--color-border)]"
               style={{ background: color }}
             />
             <div className="flex items-center gap-2 mb-1">

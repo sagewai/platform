@@ -36,15 +36,15 @@ export default function SecurityPage() {
         <div className="space-y-4 max-w-md">
           <div>
             <label className="block text-sm font-medium mb-1.5 text-text-secondary">Current Password</label>
-            <input type="password" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm" />
+            <input type="password" className="w-full bg-bg-surface border border-border rounded-lg px-3 py-2 text-sm" />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1.5 text-text-secondary">New Password</label>
-            <input type="password" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm" />
+            <input type="password" className="w-full bg-bg-surface border border-border rounded-lg px-3 py-2 text-sm" />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1.5 text-text-secondary">Confirm New Password</label>
-            <input type="password" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm" />
+            <input type="password" className="w-full bg-bg-surface border border-border rounded-lg px-3 py-2 text-sm" />
           </div>
           <Button>Update Password</Button>
         </div>

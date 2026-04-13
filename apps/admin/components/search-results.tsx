@@ -24,7 +24,7 @@ export function SearchResults({ results, query }: Props) {
     <div className="space-y-3">
       <div className="text-xs text-text-muted mb-2">{results.length} results</div>
       {results.map((r, idx) => (
-        <Card key={`${r.chunk_id}-${idx}`} className="p-md hover:bg-white/[0.03] transition-colors">
+        <Card key={`${r.chunk_id}-${idx}`} className="p-md hover:bg-primary/5 dark:hover:bg-white/[0.03] transition-colors">
           <div className="flex items-start justify-between gap-3 mb-2">
             <div className="flex items-center gap-2">
               <span className="text-xs font-mono text-text-muted">#{idx + 1}</span>
@@ -32,7 +32,7 @@ export function SearchResults({ results, query }: Props) {
               <SourceBadge source={r.source} />
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-20 h-1.5 bg-white/10 rounded-full overflow-hidden">
+              <div className="w-20 h-1.5 bg-bg-subtle rounded-full overflow-hidden">
                 <div
                   className="h-full bg-primary rounded-full"
                   style={{ width: `${Math.round(r.score * 100)}%` }}

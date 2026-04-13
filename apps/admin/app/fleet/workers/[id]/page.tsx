@@ -284,7 +284,7 @@ export default function WorkerDetailPage() {
             onClick={() => setActiveTab(tab.id)}
             className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-[1px] cursor-pointer bg-transparent ${
               activeTab === tab.id
-                ? 'border-primary text-white'
+                ? 'border-primary text-text-primary'
                 : 'border-transparent text-text-muted hover:text-text-secondary'
             }`}
           >
@@ -421,7 +421,7 @@ export default function WorkerDetailPage() {
               {localWorker.capabilities.models_supported.map((m) => (
                 <span
                   key={m}
-                  className="inline-block px-2.5 py-1 text-[13px] bg-white/5 border border-border rounded-md"
+                  className="inline-block px-2.5 py-1 text-[13px] bg-bg-subtle border border-border rounded-md"
                 >
                   {m}
                 </span>
@@ -440,7 +440,7 @@ export default function WorkerDetailPage() {
                 {Object.entries(localWorker.capabilities.labels).map(([k, v]) => (
                   <span
                     key={k}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[13px] bg-white/5 border border-border rounded-md"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[13px] bg-bg-subtle border border-border rounded-md"
                   >
                     <span className="text-text-muted">{k}:</span>
                     <span>{v}</span>

@@ -101,7 +101,7 @@ export default function DirectivesPage() {
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-left text-text-muted text-xs border-b border-white/10">
+              <tr className="text-left text-text-muted text-xs border-b border-border">
                 <th className="pb-2 pr-4 font-medium">Sigil</th>
                 <th className="pb-2 pr-4 font-medium">Description</th>
                 <th className="pb-2 font-medium">Example</th>
@@ -109,9 +109,9 @@ export default function DirectivesPage() {
             </thead>
             <tbody>
               {SIGILS.map((s) => (
-                <tr key={s.sigil} className="border-b border-white/5">
+                <tr key={s.sigil} className="border-b border-border">
                   <td className="py-2.5 pr-4">
-                    <code className="bg-white/5 px-1.5 py-0.5 rounded text-xs font-mono text-primary">{s.sigil}</code>
+                    <code className="bg-bg-subtle px-1.5 py-0.5 rounded text-xs font-mono text-primary">{s.sigil}</code>
                   </td>
                   <td className="py-2.5 pr-4 text-xs text-text-muted">{s.description}</td>
                   <td className="py-2.5">
@@ -135,8 +135,8 @@ export default function DirectivesPage() {
         </p>
         <div className="space-y-2">
           {TEMPLATES.map((t) => (
-            <div key={t.syntax} className="flex items-start gap-3 py-2 border-b border-white/5 last:border-0">
-              <code className="bg-white/5 px-2 py-1 rounded text-xs font-mono text-primary shrink-0">{t.syntax}</code>
+            <div key={t.syntax} className="flex items-start gap-3 py-2 border-b border-border last:border-0">
+              <code className="bg-bg-subtle px-2 py-1 rounded text-xs font-mono text-primary shrink-0">{t.syntax}</code>
               <span className="text-xs text-text-muted">{t.description}</span>
             </div>
           ))}
@@ -221,7 +221,7 @@ export default function DirectivesPage() {
         {memories.length > 0 ? (
           <div className="space-y-2">
             {memories.map((m) => (
-              <div key={m.id} className="border border-white/10 rounded p-3 bg-bg-surface">
+              <div key={m.id} className="border border-border rounded p-3 bg-bg-surface">
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-xs font-medium">{m.title}</span>
                   <ScopeBadge scope={m.scope} />

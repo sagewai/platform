@@ -301,7 +301,7 @@ export default function EnrollmentKeysPage() {
                             {key.allowed_pools.map((p) => (
                               <span
                                 key={p}
-                                className="inline-block px-1.5 py-0.5 text-[11px] bg-white/5 border border-border rounded"
+                                className="inline-block px-1.5 py-0.5 text-[11px] bg-bg-subtle border border-border rounded"
                               >
                                 {p}
                               </span>
@@ -317,7 +317,7 @@ export default function EnrollmentKeysPage() {
                             {key.allowed_models.map((m) => (
                               <span
                                 key={m}
-                                className="inline-block px-1.5 py-0.5 text-[11px] bg-white/5 border border-border rounded"
+                                className="inline-block px-1.5 py-0.5 text-[11px] bg-bg-subtle border border-border rounded"
                               >
                                 {m}
                               </span>

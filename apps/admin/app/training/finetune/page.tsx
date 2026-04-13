@@ -26,7 +26,7 @@ export default function FineTunePage() {
   }, []);
 
   const statusColors: Record<string, string> = {
-    queued: 'bg-white/10 text-text-secondary',
+    queued: 'bg-bg-subtle text-text-secondary',
     running: 'bg-primary/20 text-primary',
     completed: 'bg-success/20 text-success',
     failed: 'bg-error/20 text-error',
@@ -75,7 +75,7 @@ export default function FineTunePage() {
                     {job.loss !== null && <span className="text-text-muted flex items-center gap-1"><TrendingDown size={12} />Loss: {job.loss.toFixed(4)}</span>}
                     {job.eta && <span className="text-text-muted">ETA: {job.eta}</span>}
                   </div>
-                  <div className="w-full bg-white/5 rounded-full h-2">
+                  <div className="w-full bg-bg-subtle rounded-full h-2">
                     <div className="bg-primary h-2 rounded-full transition-all" style={{ width: `${(job.epoch / job.total_epochs) * 100}%` }} />
                   </div>
                 </div>

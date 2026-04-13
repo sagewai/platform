@@ -899,7 +899,7 @@ function FewShotExamplesSection({
                 <button
                   type="button"
                   onClick={() => setExpandedId(isOpen ? null : ex.log_id)}
-                  className="w-full flex items-start gap-2 px-3 py-2.5 text-left bg-transparent border-none cursor-pointer hover:bg-white/[0.03] transition-colors"
+                  className="w-full flex items-start gap-2 px-3 py-2.5 text-left bg-transparent border-none cursor-pointer hover:bg-primary/5 dark:hover:bg-white/[0.03] transition-colors"
                 >
                   {isOpen ? <ChevronDown size={12} className="mt-0.5 shrink-0 text-text-muted" /> : <ChevronRight size={12} className="mt-0.5 shrink-0 text-text-muted" />}
                   <div className="flex-1 min-w-0">

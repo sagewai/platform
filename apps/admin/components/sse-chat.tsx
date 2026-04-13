@@ -44,7 +44,7 @@ function CopyButton({ text }: { text: string }) {
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
       }}
-      className="absolute top-2 right-2 p-1 rounded bg-white/10 hover:bg-white/20 text-white/60 hover:text-white transition-colors border-none cursor-pointer"
+      className="absolute top-2 right-2 p-1 rounded bg-bg-subtle hover:bg-border text-text-muted hover:text-text-primary transition-colors border-none cursor-pointer"
       title="Copy code"
     >
       {copied ? <Check size={14} /> : <Copy size={14} />}
@@ -203,7 +203,7 @@ function AgentLogs({ logs, isLive, onAnalyze }: { logs: AgentLog[]; isLive?: boo
               <button
                 type="button"
                 onClick={handleCopy}
-                className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-transparent hover:bg-white/10 border border-border/50 cursor-pointer text-text-muted transition-colors"
+                className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-transparent hover:bg-primary/5 dark:hover:bg-white/10 border border-border/50 cursor-pointer text-text-muted transition-colors"
                 title="Copy logs to clipboard"
               >
                 {copied ? <Check size={10} /> : <ClipboardCopy size={10} />}
@@ -239,7 +239,7 @@ function MarkdownContent({ content }: { content: string }) {
           if (match) {
             return (
               <div className="relative my-2 rounded-lg overflow-hidden">
-                <div className="flex items-center justify-between px-3 py-1.5 bg-[#1e1e2e] text-[11px] text-white/50 font-[family-name:var(--font-mono)]">
+                <div className="flex items-center justify-between px-3 py-1.5 bg-[#1e1e2e] text-[11px] text-text-muted font-[family-name:var(--font-mono)]">
                   {match[1]}
                 </div>
                 <CopyButton text={codeString} />

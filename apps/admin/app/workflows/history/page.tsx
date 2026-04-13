@@ -139,7 +139,7 @@ export default function WorkflowHistoryPage() {
               <button
                 type="button"
                 onClick={() => setSearchQuery('')}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-white border-none bg-transparent cursor-pointer"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary border-none bg-transparent cursor-pointer"
               >
                 <X size={12} />
               </button>

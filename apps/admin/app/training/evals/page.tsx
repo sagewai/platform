@@ -48,7 +48,7 @@ export default function EvalsPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-white/10">
+                <tr className="border-b border-border">
                   <th className="text-left p-3 font-medium">Dataset</th>
                   <th className="text-left p-3 font-medium">Model</th>
                   <th className="text-right p-3 font-medium">Score</th>
@@ -59,7 +59,7 @@ export default function EvalsPage() {
               </thead>
               <tbody>
                 {results.map((r) => (
-                  <tr key={r.id} className="border-b border-white/5 hover:bg-white/[0.02]">
+                  <tr key={r.id} className="border-b border-border hover:bg-primary/5 dark:hover:bg-white/[0.02]">
                     <td className="p-3 font-medium">{r.dataset}</td>
                     <td className="p-3 text-text-secondary">{r.model}</td>
                     <td className="p-3 text-right">

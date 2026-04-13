@@ -24,7 +24,7 @@ export function ChunkList({ chunks, loading, onUpdate, onDelete }: Props) {
     return (
       <div className="space-y-2">
         {[1, 2, 3].map((i) => (
-          <div key={i} className="h-20 bg-white/5 rounded animate-pulse" />
+          <div key={i} className="h-20 bg-bg-subtle rounded animate-pulse" />
         ))}
       </div>
     );
@@ -66,7 +66,7 @@ export function ChunkList({ chunks, loading, onUpdate, onDelete }: Props) {
   return (
     <div className="space-y-3">
       {chunks.map((chunk) => (
-        <div key={chunk.id} className="border border-white/10 rounded-lg p-md bg-bg-surface">
+        <div key={chunk.id} className="border border-border rounded-lg p-md bg-bg-surface">
           <div className="flex items-start justify-between gap-3 mb-2">
             <div className="flex items-center gap-2 text-xs text-text-muted">
               <span className="font-mono">#{chunk.chunk_index}</span>
@@ -79,7 +79,7 @@ export function ChunkList({ chunks, loading, onUpdate, onDelete }: Props) {
                 <>
                   <button
                     onClick={() => startEdit(chunk)}
-                    className="p-1 text-text-muted hover:text-white transition-colors"
+                    className="p-1 text-text-muted hover:text-text-primary transition-colors"
                     title="Edit chunk"
                   >
                     <Pencil size={13} />

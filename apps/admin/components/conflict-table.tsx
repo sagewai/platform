@@ -21,7 +21,7 @@ export function ConflictTable({ conflicts, loading, onResolved }: Props) {
     return (
       <div className="space-y-2">
         {[1, 2].map((i) => (
-          <div key={i} className="h-24 bg-white/5 rounded animate-pulse" />
+          <div key={i} className="h-24 bg-bg-subtle rounded animate-pulse" />
         ))}
       </div>
     );
@@ -62,13 +62,13 @@ export function ConflictTable({ conflicts, loading, onResolved }: Props) {
           </div>
 
           <div className="grid grid-cols-2 gap-3 mb-3">
-            <div className="border border-white/10 rounded p-2">
+            <div className="border border-border rounded p-2">
               <div className="text-[10px] text-text-muted mb-1 font-mono">Chunk A</div>
               <div className="text-xs leading-relaxed">
                 {c.chunk_a_content.length > 200 ? c.chunk_a_content.slice(0, 200) + '...' : c.chunk_a_content}
               </div>
             </div>
-            <div className="border border-white/10 rounded p-2">
+            <div className="border border-border rounded p-2">
               <div className="text-[10px] text-text-muted mb-1 font-mono">Chunk B</div>
               <div className="text-xs leading-relaxed">
                 {c.chunk_b_content.length > 200 ? c.chunk_b_content.slice(0, 200) + '...' : c.chunk_b_content}

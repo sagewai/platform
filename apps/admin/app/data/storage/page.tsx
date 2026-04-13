@@ -77,7 +77,7 @@ export default function StoragePage() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-white/10">
+                <tr className="border-b border-border">
                   <th className="text-left p-3 font-medium">Name</th>
                   <th className="text-left p-3 font-medium">Type</th>
                   <th className="text-right p-3 font-medium">Files</th>
@@ -87,9 +87,9 @@ export default function StoragePage() {
               </thead>
               <tbody>
                 {buckets.map((b) => (
-                  <tr key={b.id} className="border-b border-white/5 hover:bg-white/[0.02]">
+                  <tr key={b.id} className="border-b border-border hover:bg-primary/5 dark:hover:bg-white/[0.02]">
                     <td className="p-3 font-medium">{b.name}</td>
-                    <td className="p-3"><span className="px-2 py-0.5 rounded bg-white/5 text-xs uppercase">{b.type}</span></td>
+                    <td className="p-3"><span className="px-2 py-0.5 rounded bg-bg-subtle text-xs uppercase">{b.type}</span></td>
                     <td className="p-3 text-right">{b.files}</td>
                     <td className="p-3 text-right">{b.size_gb.toFixed(2)} GB</td>
                     <td className="p-3 text-text-secondary">{new Date(b.last_modified).toLocaleDateString()}</td>
