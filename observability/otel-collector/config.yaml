@@ -1,10 +1,10 @@
 # OpenTelemetry Collector configuration for Sagewai.
 #
-# Receives OTLP (gRPC + HTTP) from the SDK backend, then:
-#   - Exports metrics to VictoriaMetrics via Prometheus remote-write
-#   - Exports logs to VictoriaLogs via the OTLP HTTP API
+# Receives OTLP from the backend, then:
+#   - Exposes metrics on :8889 for VictoriaMetrics to scrape (Prometheus format)
+#   - Exports logs to VictoriaLogs via OTLP HTTP
 #   - Traces logged to stdout (no persistent store yet)
-#   - Health-check log noise is filtered out
+#   - Health-check log noise filtered out
 
 receivers:
   otlp:
@@ -25,7 +25,6 @@ processors:
         value: sagewai
         action: upsert
 
-  # Filter out health-check noise from logs (polled every 30s)
   filter/health:
     logs:
       exclude:
@@ -34,11 +33,11 @@ processors:
           - ".*health/summary.*"
 
 exporters:
-  # Metrics → VictoriaMetrics (Prometheus remote-write)
-  prometheusremotewrite:
-    endpoint: "http://victoriametrics:8428/api/v1/write"
-    tls:
-      insecure: true
+  # Metrics → Prometheus endpoint for VictoriaMetrics to scrape
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    resource_to_telemetry_conversion:
+      enabled: true
 
   # Logs → VictoriaLogs (OTLP HTTP ingestion)
   otlphttp/victorialogs:
@@ -55,7 +54,7 @@ service:
     metrics:
       receivers: [otlp]
       processors: [batch, resource]
-      exporters: [prometheusremotewrite, debug]
+      exporters: [prometheus, debug]
     logs:
       receivers: [otlp]
       processors: [batch, resource, filter/health]
