@@ -2,8 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { Card } from '@/components/ui/legacy';
-import { useLicense } from '@/utils/license';
-import { PremiumUpgradeCTA } from '@/components/premium-upgrade-cta';
 import { adminApi } from '@/utils/api';
 import { NetworkControls } from '@/components/premium/network-controls';
 import dynamic from 'next/dynamic';
@@ -27,7 +25,6 @@ interface EdgeData {
 }
 
 export default function AgentNetworkPage() {
-  const license = useLicense();
   const [nodes, setNodes] = useState<NodeData[]>([]);
   const [edges, setEdges] = useState<EdgeData[]>([]);
   const [loading, setLoading] = useState(true);
@@ -41,11 +38,6 @@ export default function AgentNetworkPage() {
   const [filter, setFilter] = useState('');
 
   useEffect(() => {
-    if (!license.isPremium && !license.loading) {
-      setLoading(false);
-      return;
-    }
-
     async function load() {
       try {
         const data = await adminApi.getAgentNetwork(fromDate, toDate);
@@ -59,7 +51,7 @@ export default function AgentNetworkPage() {
     }
 
     load();
-  }, [fromDate, toDate, license.isPremium, license.loading]);
+  }, [fromDate, toDate]);
 
   // Filter nodes by name if filter is set
   const filteredNodes = filter
@@ -69,17 +61,6 @@ export default function AgentNetworkPage() {
   const filteredEdges = edges.filter(
     (e) => filteredNodeIds.has(e.source) && filteredNodeIds.has(e.target),
   );
-
-  if (!license.isPremium && !license.loading) {
-    return (
-      <div className="max-w-5xl mx-auto">
-        <h1 className="text-2xl font-bold font-[family-name:var(--font-heading)] mb-lg">
-          Agent Network
-        </h1>
-        <PremiumUpgradeCTA feature="Agent Interaction Network" />
-      </div>
-    );
-  }
 
   return (
     <div className="max-w-6xl mx-auto">

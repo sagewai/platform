@@ -14,9 +14,6 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Copy, Download, Play, RotateCcw } from 'lucide-react';
 import dynamic from 'next/dynamic';
-import { useLicense } from '@/utils/license';
-import { PremiumUpgradeCTA } from '@/components/premium-upgrade-cta';
-
 const ExecutionCanvas = dynamic(
   () => import('@/components/premium/execution-canvas').then((m) => m.ExecutionCanvas),
   { loading: () => <p className="text-sm text-text-muted p-md">Loading canvas...</p> },
@@ -187,7 +184,6 @@ export default function WorkflowRunDetailPage({ params }: Props) {
   const [replaying, setReplaying] = useState(false);
   const [resultTab, setResultTab] = useState<'output' | 'events' | 'stats' | 'costflow' | 'canvas' | 'replay'>('output');
   const { toast } = useToast();
-  const license = useLicense();
   const abortRef = useRef<AbortController | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -522,7 +518,6 @@ export default function WorkflowRunDetailPage({ params }: Props) {
             >
               {tab === 'output' ? 'Output' : tab === 'events' ? 'Event Log' : tab === 'stats' ? 'Stats' : tab === 'costflow' ? 'Cost Flow' : tab === 'canvas' ? 'Canvas' : 'Replay'}
               {tab === 'stats' && resultStats?.total_tokens ? ` (${resultStats.total_tokens.toLocaleString()} tok)` : ''}
-              {(tab === 'costflow' || tab === 'canvas' || tab === 'replay') && <span className="ml-1 text-[9px] px-1 py-0.5 rounded bg-primary/20 text-primary">PRO</span>}
             </button>
           ))}
           {resultStats?.elapsed_seconds != null && (
@@ -681,16 +676,12 @@ export default function WorkflowRunDetailPage({ params }: Props) {
         {/* Cost Flow tab */}
         {resultTab === 'costflow' && (
           <div className="p-4">
-            {license.isPremium ? (
-              resultStats?.agents && resultStats.agents.length > 0 ? (
-                <SankeyDiagram agents={resultStats.agents} />
-              ) : (
-                <div className="text-sm text-text-muted text-center py-8">
-                  No token data available for cost flow visualization.
-                </div>
-              )
+            {resultStats?.agents && resultStats.agents.length > 0 ? (
+              <SankeyDiagram agents={resultStats.agents} />
             ) : (
-              <PremiumUpgradeCTA feature="Token & Cost Flow Visualization" />
+              <div className="text-sm text-text-muted text-center py-8">
+                No token data available for cost flow visualization.
+              </div>
             )}
           </div>
         )}
@@ -698,16 +689,12 @@ export default function WorkflowRunDetailPage({ params }: Props) {
         {/* Canvas tab */}
         {resultTab === 'canvas' && (
           <div className="p-4">
-            {license.isPremium ? (
-              <ExecutionCanvas
-                runId={runId}
-                workflowDefinition={parsedDef as Record<string, unknown> | null}
-                events={events}
-                isLive={isActive}
-              />
-            ) : (
-              <PremiumUpgradeCTA feature="Live Execution Canvas" />
-            )}
+            <ExecutionCanvas
+              runId={runId}
+              workflowDefinition={parsedDef as Record<string, unknown> | null}
+              events={events}
+              isLive={isActive}
+            />
           </div>
         )}
 
@@ -715,15 +702,11 @@ export default function WorkflowRunDetailPage({ params }: Props) {
         {resultTab === 'replay' && (
           <div className="p-4">
             {!isActive && events.length > 0 ? (
-              license.isPremium ? (
-                <ReplayPlayer
-                  runId={runId}
-                  workflowDefinition={parsedDef as Record<string, unknown> | null}
-                  events={events}
-                />
-              ) : (
-                <PremiumUpgradeCTA feature="Execution Replay & Time-Travel Debugger" />
-              )
+              <ReplayPlayer
+                runId={runId}
+                workflowDefinition={parsedDef as Record<string, unknown> | null}
+                events={events}
+              />
             ) : (
               <div className="text-sm text-text-muted text-center py-8">
                 {isActive

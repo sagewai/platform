@@ -2,10 +2,8 @@
 
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useLicense } from '@/utils/license';
 import { adminApi } from '@/utils/api';
 import { authSSE } from '@/utils/auth';
-import { PremiumUpgradeCTA } from '@/components/premium-upgrade-cta';
 import { TVLiveNumbers } from '@/components/premium/tv-live-numbers';
 import { TVEventFeed, type TVEvent } from '@/components/premium/tv-event-feed';
 import { TVStatusBoard } from '@/components/premium/tv-status-board';
@@ -20,7 +18,6 @@ const API_BASE = process.env.NEXT_PUBLIC_ADMIN_API_URL ?? 'http://localhost:8000
 function TVDashboard() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { isPremium, loading } = useLicense();
 
   const cycleSpeed = Number(searchParams.get('cycle') || '30');
   const queueAlertThreshold = Number(searchParams.get('queue_alert') || '100');
@@ -41,8 +38,6 @@ function TVDashboard() {
 
   // Poll stats every 5s
   useEffect(() => {
-    if (loading || !isPremium) return;
-
     const poll = async () => {
       try {
         const [s, w, dlq, costs] = await Promise.all([
@@ -66,12 +61,10 @@ function TVDashboard() {
     poll();
     const interval = setInterval(poll, 5000);
     return () => clearInterval(interval);
-  }, [loading, isPremium]);
+  }, []);
 
   // SSE subscription for live events
   useEffect(() => {
-    if (loading || !isPremium) return;
-
     const controller = authSSE(
       `${API_BASE}/workflow-events/stream`,
       (type, data) => {
@@ -89,7 +82,7 @@ function TVDashboard() {
       { reconnect: true },
     );
     return () => controller.abort();
-  }, [loading, isPremium]);
+  }, []);
 
   // Auto-cycle screens
   useEffect(() => {
@@ -126,22 +119,6 @@ function TVDashboard() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleKeyDown]);
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-white/40 text-lg">Loading...</div>
-      </div>
-    );
-  }
-
-  if (!isPremium) {
-    return (
-      <div className="flex items-center justify-center h-screen bg-[#0A1628]">
-        <PremiumUpgradeCTA feature="TV Mode Operations Dashboard" />
-      </div>
-    );
-  }
 
   return (
     <div className="h-screen w-screen overflow-hidden bg-[#0A1628] relative">

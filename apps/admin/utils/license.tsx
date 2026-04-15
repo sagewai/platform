@@ -1,8 +1,11 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { authFetch } from './auth';
+import { createContext, useContext, type ReactNode } from 'react';
 
+// Sagewai is AGPL-3.0 open source — every feature is delivered to every
+// user. The LicenseProvider used to fetch /license and gate visualizations
+// like Cost Flow, Canvas, Replay, TV Dashboard, and Analytics heatmaps.
+// Now it always reports the full feature set so the UI renders everything.
 interface LicenseState {
   isPremium: boolean;
   tier: string;
@@ -11,43 +14,18 @@ interface LicenseState {
   error: boolean;
 }
 
-const LicenseContext = createContext<LicenseState>({
-  isPremium: false,
-  tier: 'free',
+const OPEN_SOURCE_STATE: LicenseState = {
+  isPremium: true,
+  tier: 'agpl',
   features: [],
-  loading: true,
+  loading: false,
   error: false,
-});
+};
 
-const API_BASE = process.env.NEXT_PUBLIC_ADMIN_API_URL
-  ? process.env.NEXT_PUBLIC_ADMIN_API_URL.replace(/\/admin$/, '')
-  : 'http://localhost:8000';
+const LicenseContext = createContext<LicenseState>(OPEN_SOURCE_STATE);
 
 export function LicenseProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<LicenseState>({
-    isPremium: false,
-    tier: 'free',
-    features: [],
-    loading: true,
-    error: false,
-  });
-
-  useEffect(() => {
-    authFetch(`${API_BASE}/license`)
-      .then((r) => r.json())
-      .then((data) =>
-        setState({
-          isPremium: data.tier === 'premium',
-          tier: data.tier,
-          features: data.features || [],
-          loading: false,
-          error: false,
-        }),
-      )
-      .catch(() => setState((s) => ({ ...s, loading: false, error: true })));
-  }, []);
-
-  return <LicenseContext.Provider value={state}>{children}</LicenseContext.Provider>;
+  return <LicenseContext.Provider value={OPEN_SOURCE_STATE}>{children}</LicenseContext.Provider>;
 }
 
 export function useLicense() {

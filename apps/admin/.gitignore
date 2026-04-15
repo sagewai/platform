@@ -7,4 +7,6 @@ next-env.d.ts
 .env.local
 .DS_Store
 .auth/
+test-results/
+playwright-report/
 pnpm-lock.yaml

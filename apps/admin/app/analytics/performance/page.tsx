@@ -2,8 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { Card } from '@/components/ui/legacy';
-import { useLicense } from '@/utils/license';
-import { PremiumUpgradeCTA } from '@/components/premium-upgrade-cta';
 import { adminApi } from '@/utils/api';
 import { HeatmapControls } from '@/components/premium/heatmap-controls';
 import dynamic from 'next/dynamic';
@@ -30,18 +28,12 @@ interface HeatmapDataPoint {
 }
 
 export default function PerformancePage() {
-  const license = useLicense();
   const [data, setData] = useState<HeatmapDataPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState(90);
   const [filter, setFilter] = useState('');
 
   useEffect(() => {
-    if (!license.isPremium && !license.loading) {
-      setLoading(false);
-      return;
-    }
-
     async function load() {
       setLoading(true);
       try {
@@ -55,22 +47,11 @@ export default function PerformancePage() {
     }
 
     load();
-  }, [days, license.isPremium, license.loading]);
+  }, [days]);
 
   const filteredData = filter
     ? data.filter((d) => d.workflow_name.toLowerCase().includes(filter.toLowerCase()))
     : data;
-
-  if (!license.isPremium && !license.loading) {
-    return (
-      <div className="max-w-5xl mx-auto">
-        <h1 className="text-2xl font-bold font-[family-name:var(--font-heading)] mb-lg">
-          Performance
-        </h1>
-        <PremiumUpgradeCTA feature="Workflow Performance Heatmap" />
-      </div>
-    );
-  }
 
   // Summary stats
   const totalRuns = filteredData.reduce((s, d) => s + d.total_runs, 0);

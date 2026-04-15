@@ -2,52 +2,16 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { adminApi } from '@/utils/api';
-import type { RunSummary, WorkflowRun } from '@/utils/types';
+import type { RunSummary } from '@/utils/types';
 import Link from 'next/link';
-import { Card, Badge, Button, Skeleton, EmptyState } from '@/components/ui/legacy';
+import { Card, Badge, Skeleton, EmptyState } from '@/components/ui/legacy';
 import { ResponsiveTable } from '@/components/responsive-table';
 
-/** Unified run row — can come from agent_runs or workflow_runs */
-interface UnifiedRun {
-  run_id: string;
-  name: string;
-  source: 'agent' | 'workflow';
-  status: string;
-  total_tokens: number;
-  started_at: number | null;
-  detail_href: string;
-}
-
-function toUnifiedFromAgent(r: RunSummary): UnifiedRun {
-  return {
-    run_id: r.run_id,
-    name: r.agent_name,
-    source: 'agent',
-    status: r.status,
-    total_tokens: r.total_tokens,
-    started_at: r.started_at,
-    detail_href: `/runs/${r.run_id}`,
-  };
-}
-
-function toUnifiedFromWorkflow(r: WorkflowRun): UnifiedRun {
-  const created = new Date(r.created_at).getTime() / 1000;
-  return {
-    run_id: r.run_id,
-    name: r.workflow_name,
-    source: 'workflow',
-    status: r.status,
-    total_tokens: 0,
-    started_at: created,
-    detail_href: `/workflows/history/${r.run_id}`,
-  };
-}
-
 export default function AgentRunsPage() {
-  const [runs, setRuns] = useState<UnifiedRun[]>([]);
+  const [runs, setRuns] = useState<RunSummary[]>([]);
   const [nameFilter, setNameFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
-  const [sourceFilter, setSourceFilter] = useState<'' | 'agent' | 'workflow'>('');
+  const [runTypeFilter, setRunTypeFilter] = useState<'' | 'standalone' | 'workflow_step'>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,20 +19,8 @@ export default function AgentRunsPage() {
     setLoading(true);
     setError(null);
     try {
-      // Fetch both sources in parallel
-      const [agentPage, workflowRuns] = await Promise.all([
-        adminApi.listRuns({ limit: 100 }).catch(() => ({ items: [] as RunSummary[], next_cursor: null, has_more: false })),
-        adminApi.listWorkflowRuns({ limit: 100 }).catch(() => [] as WorkflowRun[]),
-      ]);
-
-      const agentUnified = agentPage.items.map(toUnifiedFromAgent);
-      const workflowUnified = workflowRuns.map(toUnifiedFromWorkflow);
-
-      // Merge and sort by started_at descending
-      const all = [...agentUnified, ...workflowUnified].sort(
-        (a, b) => (b.started_at ?? 0) - (a.started_at ?? 0),
-      );
-      setRuns(all);
+      const page = await adminApi.listRuns({ limit: 200 });
+      setRuns(page.items);
     } catch (err: any) {
       setRuns([]);
       setError(err?.message || 'Failed to load runs. Make sure the backend is running.');
@@ -81,40 +33,43 @@ export default function AgentRunsPage() {
     fetchRuns();
   }, [fetchRuns]);
 
-  // Client-side filtering
+  // Client-side filtering — all records are agent runs; run_type
+  // distinguishes standalone playground invocations from inline steps
+  // that ran inside a workflow.
   const filtered = useMemo(() => {
     let result = runs;
     if (nameFilter) {
       const q = nameFilter.toLowerCase();
-      result = result.filter((r) => r.name.toLowerCase().includes(q));
+      result = result.filter((r) => r.agent_name.toLowerCase().includes(q));
     }
     if (statusFilter) {
       result = result.filter((r) => r.status === statusFilter);
     }
-    if (sourceFilter) {
-      result = result.filter((r) => r.source === sourceFilter);
+    if (runTypeFilter) {
+      result = result.filter((r) => r.run_type === runTypeFilter);
     }
     return result;
-  }, [runs, nameFilter, statusFilter, sourceFilter]);
+  }, [runs, nameFilter, statusFilter, runTypeFilter]);
 
   const stats = useMemo(() => {
     const total = runs.length;
-    const agentCount = runs.filter((r) => r.source === 'agent').length;
-    const workflowCount = runs.filter((r) => r.source === 'workflow').length;
+    const standalone = runs.filter((r) => r.run_type === 'standalone').length;
+    const inWorkflow = runs.filter((r) => r.run_type === 'workflow_step').length;
     const completed = runs.filter((r) => r.status === 'completed').length;
     const failed = runs.filter((r) => r.status === 'failed').length;
     const completedPct = total > 0 ? Math.round((completed / total) * 100) : 0;
-    return { total, agentCount, workflowCount, completedPct, failed };
+    return { total, standalone, inWorkflow, completedPct, failed };
   }, [runs]);
 
   return (
     <div className="max-w-6xl mx-auto">
       <div className="mb-md">
         <h1 className="mt-0 mb-2 text-2xl font-bold font-[family-name:var(--font-heading)]">
-          All Runs
+          Agent Runs
         </h1>
         <p className="mt-0 text-sm text-text-secondary">
-          Unified execution history — agent runs from Playground and workflow runs combined.
+          Every agent execution — standalone playground runs and inline agents invoked by a workflow.
+          For group-level workflow metrics, see <Link href="/workflows/history" className="text-primary no-underline hover:underline">Workflow History</Link>.
         </p>
       </div>
 
@@ -131,17 +86,17 @@ export default function AgentRunsPage() {
           </Card>
           <Card>
             <div className="p-4">
-              <p className="text-xs text-text-muted uppercase tracking-wide mb-1">Agent Runs</p>
+              <p className="text-xs text-text-muted uppercase tracking-wide mb-1">Standalone</p>
               <p className="text-2xl font-bold font-[family-name:var(--font-heading)]">
-                {stats.agentCount}
+                {stats.standalone}
               </p>
             </div>
           </Card>
           <Card>
             <div className="p-4">
-              <p className="text-xs text-text-muted uppercase tracking-wide mb-1">Workflow Runs</p>
+              <p className="text-xs text-text-muted uppercase tracking-wide mb-1">In Workflow</p>
               <p className="text-2xl font-bold font-[family-name:var(--font-heading)]">
-                {stats.workflowCount}
+                {stats.inWorkflow}
               </p>
             </div>
           </Card>
@@ -170,7 +125,7 @@ export default function AgentRunsPage() {
           <button
             type="button"
             onClick={() => fetchRuns()}
-            className="text-xs text-error hover:text-text-primary border border-error/30 rounded px-2 py-1 bg-transparent cursor-pointer ml-3"
+            className="text-xs text-error hover:text-white border border-error/30 rounded px-2 py-1 bg-transparent cursor-pointer ml-3"
           >
             Retry
           </button>
@@ -180,7 +135,7 @@ export default function AgentRunsPage() {
       {/* Filters */}
       <div className="flex gap-3 mb-md flex-wrap">
         <input
-          placeholder="Filter by name..."
+          placeholder="Filter by agent name..."
           value={nameFilter}
           onChange={(e) => setNameFilter(e.target.value)}
           className="px-3 py-2 border border-border rounded-md text-sm w-[220px] bg-bg-surface"
@@ -198,13 +153,13 @@ export default function AgentRunsPage() {
           <option value="cancelled">Cancelled</option>
         </select>
         <select
-          value={sourceFilter}
-          onChange={(e) => setSourceFilter(e.target.value as '' | 'agent' | 'workflow')}
+          value={runTypeFilter}
+          onChange={(e) => setRunTypeFilter(e.target.value as '' | 'standalone' | 'workflow_step')}
           className="px-3 py-2 border border-border rounded-md text-sm bg-bg-surface"
         >
-          <option value="">All sources</option>
-          <option value="agent">Agent (Playground)</option>
-          <option value="workflow">Workflow</option>
+          <option value="">All run types</option>
+          <option value="standalone">Standalone (Playground)</option>
+          <option value="workflow_step">In Workflow</option>
         </select>
         <button
           type="button"
@@ -220,7 +175,7 @@ export default function AgentRunsPage() {
         <Skeleton lines={5} />
       ) : filtered.length === 0 ? (
         <EmptyState
-          title="No Runs Found"
+          title="No Agent Runs"
           description={
             runs.length === 0
               ? 'No execution history yet. Run an agent in the Playground or execute a workflow to see runs here.'
@@ -232,8 +187,8 @@ export default function AgentRunsPage() {
           <ResponsiveTable
             columns={[
               { key: 'run_id', label: 'Run ID' },
-              { key: 'name', label: 'Name' },
-              { key: 'source', label: 'Source' },
+              { key: 'agent_name', label: 'Agent' },
+              { key: 'run_type', label: 'Run Type' },
               { key: 'status', label: 'Status' },
               { key: 'tokens', label: 'Tokens' },
               { key: 'started', label: 'Started' },
@@ -241,18 +196,24 @@ export default function AgentRunsPage() {
             rows={filtered.map((run) => ({
               run_id: (
                 <Link
-                  href={run.detail_href}
+                  href={`/runs/${run.run_id}`}
                   className="text-primary no-underline font-[family-name:var(--font-mono)] text-xs hover:underline"
                 >
                   {run.run_id.slice(0, 12)}...
                 </Link>
               ),
-              name: run.name,
-              source: (
-                <Badge variant={run.source === 'workflow' ? 'warning' : 'info'}>
-                  {run.source}
-                </Badge>
-              ),
+              agent_name: run.agent_name,
+              run_type:
+                run.run_type === 'workflow_step' && run.parent_workflow_run_id ? (
+                  <Link
+                    href={`/workflows/history/${run.parent_workflow_run_id}`}
+                    className="no-underline"
+                  >
+                    <Badge variant="warning">in workflow</Badge>
+                  </Link>
+                ) : (
+                  <Badge variant="info">standalone</Badge>
+                ),
               status: (
                 <Badge
                   variant={

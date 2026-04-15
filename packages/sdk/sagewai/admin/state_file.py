@@ -403,6 +403,53 @@ class AdminStateFile:
                 return a
         return None
 
+    # ── agent runs (individual agent executions) ────────────────
+    #
+    # Stored as data["agent_runs"]. One row per agent execution — both
+    # standalone playground runs and inline-agent steps from workflow
+    # runs. Each row carries a run_type ("standalone" | "workflow_step")
+    # and, for workflow steps, the parent_workflow_run_id so that the
+    # admin UI can link back to the workflow history.
+
+    _AGENT_RUNS_MAX = 500
+
+    def save_agent_run(self, run: dict[str, Any]) -> dict[str, Any]:
+        """Persist an agent run record. Truncates to the most recent 500."""
+        data = self._read()
+        runs = data.setdefault("agent_runs", [])
+        runs.insert(0, run)
+        data["agent_runs"] = runs[: self._AGENT_RUNS_MAX]
+        self._write(data)
+        return run
+
+    def list_agent_runs(
+        self,
+        *,
+        project_id: str | None = None,
+        agent_name: str | None = None,
+        status: str | None = None,
+        run_type: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        data = self._read()
+        runs = data.get("agent_runs", [])
+        runs = self._filter_by_project(runs, project_id)
+        if agent_name:
+            runs = [r for r in runs if r.get("agent_name") == agent_name]
+        if status:
+            runs = [r for r in runs if r.get("status") == status]
+        if run_type:
+            runs = [r for r in runs if r.get("run_type") == run_type]
+        return runs[offset : offset + limit]
+
+    def get_agent_run(self, run_id: str) -> dict[str, Any] | None:
+        data = self._read()
+        for r in data.get("agent_runs", []):
+            if r.get("run_id") == run_id:
+                return r
+        return None
+
     # ── providers ────────────────────────────────────────────────
 
     def list_providers(

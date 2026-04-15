@@ -327,9 +327,117 @@ def create_admin_serve_app(
         allow_headers=["*"],
     )
 
-    # Existing routers
     state = AdminState()
     analytics = AnalyticsStore()
+
+    # Override /admin/agents and /admin/runs BEFORE include_router so
+    # these direct app routes match first (Starlette matches routes in
+    # registration order — whichever is added first wins). They merge
+    # registry/playground agents and read agent runs from the file store
+    # so the admin UI sees everything, not just SDK-registered state.
+    @app.get("/admin/agents", include_in_schema=False)
+    async def admin_agents_merged(request: Request) -> JSONResponse:
+        """List every visible agent — playground specs from the file store."""
+        pid = _project_id(request)
+        playground_agents = sf.list_agents(project_id=pid)
+        # Count runs per agent from the file store
+        runs_by_agent: dict[str, int] = {}
+        for r in sf.list_agent_runs(project_id=pid, limit=1000, offset=0):
+            name = r.get("agent_name", "")
+            if name:
+                runs_by_agent[name] = runs_by_agent.get(name, 0) + 1
+        result = [
+            {
+                "name": a.get("name", ""),
+                "capabilities": a.get("capabilities", []),
+                "model": a.get("model", ""),
+                "source": "playground",
+                "strategy": a.get("strategy", ""),
+                "tags": a.get("tags", []),
+                "status": "active",
+                "total_runs": runs_by_agent.get(a.get("name", ""), 0),
+            }
+            for a in playground_agents
+        ]
+        return JSONResponse(result)
+
+    def _iso_to_epoch(value: Any) -> float | None:
+        """Convert an ISO 8601 string to epoch seconds for the admin UI."""
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        try:
+            return datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return None
+
+    @app.get("/admin/runs", include_in_schema=False)
+    async def admin_runs_merged(
+        request: Request,
+        agent_name: str | None = None,
+        status: str | None = None,
+        run_type: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> JSONResponse:
+        """List agent runs from the file store (standalone + workflow steps)."""
+        pid = _project_id(request)
+        runs = sf.list_agent_runs(
+            project_id=pid,
+            agent_name=agent_name,
+            status=status,
+            run_type=run_type,
+            limit=limit + 1,
+            offset=offset,
+        )
+        items_raw = runs[:limit]
+        has_more = len(runs) > limit
+        items = [
+            {
+                "run_id": r.get("run_id", ""),
+                "agent_name": r.get("agent_name", ""),
+                "status": r.get("status", ""),
+                "input_preview": (r.get("input_text") or "")[:100],
+                "output_preview": (r.get("output_text") or "")[:100],
+                "started_at": _iso_to_epoch(r.get("started_at")),
+                "completed_at": _iso_to_epoch(r.get("completed_at")),
+                "total_tokens": r.get("total_tokens", 0),
+                "run_type": r.get("run_type", "standalone"),
+                "parent_workflow_run_id": r.get("parent_workflow_run_id"),
+            }
+            for r in items_raw
+        ]
+        return JSONResponse({
+            "items": items,
+            "next_cursor": None,
+            "has_more": has_more,
+        })
+
+    @app.get("/admin/runs/{run_id}", include_in_schema=False)
+    async def admin_run_detail(run_id: str) -> JSONResponse:
+        """Return full detail for a single agent run from the file store."""
+        r = sf.get_agent_run(run_id)
+        if r is None:
+            return JSONResponse({"detail": f"Run '{run_id}' not found"}, status_code=404)
+        return JSONResponse({
+            "run_id": r.get("run_id", ""),
+            "agent_name": r.get("agent_name", ""),
+            "status": r.get("status", ""),
+            "input_text": r.get("input_text", ""),
+            "output_text": r.get("output_text", ""),
+            "started_at": r.get("started_at"),
+            "completed_at": r.get("completed_at"),
+            "total_tokens": r.get("total_tokens", 0),
+            "tool_calls": r.get("tool_calls", []),
+            "steps": [],
+            "run_type": r.get("run_type", "standalone"),
+            "parent_workflow_run_id": r.get("parent_workflow_run_id"),
+        })
+
+    # Existing routers (note: the /admin/agents and /admin/runs routes
+    # added above shadow the router's defaults thanks to registration
+    # order — Starlette matches on first hit)
     app.include_router(create_admin_router(state), prefix="/admin")
     app.include_router(
         create_analytics_router(analytics), prefix="/api/v1/analytics"
@@ -337,25 +445,6 @@ def create_admin_serve_app(
     app.include_router(
         create_analytics_router(analytics), prefix="/analytics"
     )
-
-    # Override /admin/agents to also include playground-created agents
-    @app.get("/admin/agents", include_in_schema=False)
-    async def admin_agents_merged(request: Request) -> JSONResponse:
-        """Merge SDK-registered agents with playground-created agents."""
-        pid = _project_id(request)
-        playground_agents = sf.list_agents(project_id=pid)
-        result = [
-            {
-                "name": a.get("name", ""),
-                "model": a.get("model", ""),
-                "strategy": a.get("strategy", ""),
-                "status": "idle",
-                "total_runs": 0,
-                "source": "playground",
-            }
-            for a in playground_agents
-        ]
-        return JSONResponse(result)
 
     # ── Setup ────────────────────────────────────────────────────
 
@@ -641,12 +730,17 @@ def create_admin_serve_app(
     async def playground_run(request: Request):
         """Run an agent and stream the response as SSE."""
 
+        import secrets as _run_sec
         import time as _run_time
         body = await request.json()
-        agent_name = body.get("agent_name", "")
+        # The admin UI sends either `agent_name` or `name`; accept both.
+        agent_name = body.get("agent_name") or body.get("name") or ""
         message = body.get("message", "")
+        pid = _project_id(request)
         agent_spec = sf.get_agent(agent_name)
+        run_id = f"run-{_run_sec.token_hex(6)}"
         _run_t0 = _run_time.monotonic()
+        _started_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         logger.info("Agent run started: agent=%s model=%s",
                      agent_name, (agent_spec or {}).get("model", ""),
@@ -657,8 +751,11 @@ def create_admin_serve_app(
         async def _generate():
             model = (agent_spec or {}).get("model", "")
             system_prompt = (agent_spec or {}).get("system_prompt", "")
+            full_output = ""
+            status = "completed"
 
-            # Try to call the LLM via litellm
+            yield f"event: run_started\ndata: {json.dumps({'run_id': run_id, 'agent': agent_name})}\n\n"
+
             try:
                 import litellm
                 litellm.suppress_debug_info = True
@@ -674,7 +771,6 @@ def create_admin_serve_app(
                     stream=True,
                 )
 
-                full_output = ""
                 async for chunk in response:
                     delta = chunk.choices[0].delta.content or ""
                     if delta:
@@ -687,32 +783,59 @@ def create_admin_serve_app(
                              extra={"event": "agent.run.completed", "agent_name": agent_name,
                                     "model": model, "duration_s": round(dt, 2)})
                 otel_record("agent.run.duration", dt, agent_name=agent_name, model=model)
-                yield f"event: run_finished\ndata: {json.dumps({'output': full_output, 'status': 'completed'})}\n\n"
+                yield f"event: run_finished\ndata: {json.dumps({'output': full_output, 'status': 'completed', 'run_id': run_id})}\n\n"
 
             except ImportError:
-                msg = "litellm is not installed. Run: uv pip install litellm"
+                status = "failed"
+                full_output = "litellm is not installed. Run: uv pip install litellm"
                 logger.error("Agent run failed: litellm not installed",
-                             extra={"event": "agent.run.error", "agent_name": agent_name, "error": msg})
+                             extra={"event": "agent.run.error", "agent_name": agent_name, "error": full_output})
                 otel_count("agent.run.errors", agent_name=agent_name, error="import")
-                yield f"event: text_message_content\ndata: {json.dumps({'delta': msg})}\n\n"
-                yield f"event: run_finished\ndata: {json.dumps({'output': msg, 'status': 'error'})}\n\n"
+                yield f"event: text_message_content\ndata: {json.dumps({'delta': full_output})}\n\n"
+                yield f"event: run_finished\ndata: {json.dumps({'output': full_output, 'status': 'error', 'run_id': run_id})}\n\n"
 
             except Exception as exc:
+                status = "failed"
                 error_msg = str(exc)
                 logger.error("Agent run failed: agent=%s error=%s", agent_name, error_msg[:200],
                              extra={"event": "agent.run.error", "agent_name": agent_name,
                                     "model": model, "error": error_msg[:200]})
                 otel_count("agent.run.errors", agent_name=agent_name, error="runtime")
                 if "api_key" in error_msg.lower() or "authentication" in error_msg.lower():
-                    guidance = (
+                    full_output = (
                         f"No API key configured for model '{model}'. "
                         f"Go to System → AI Models to add your API key, "
                         f"or set the environment variable (e.g., OPENAI_API_KEY)."
                     )
                 else:
-                    guidance = f"Error running agent: {error_msg}"
-                yield f"event: text_message_content\ndata: {json.dumps({'delta': guidance})}\n\n"
-                yield f"event: run_finished\ndata: {json.dumps({'output': guidance, 'status': 'error'})}\n\n"
+                    full_output = f"Error running agent: {error_msg}"
+                yield f"event: text_message_content\ndata: {json.dumps({'delta': full_output})}\n\n"
+                yield f"event: run_finished\ndata: {json.dumps({'output': full_output, 'status': 'error', 'run_id': run_id})}\n\n"
+
+            finally:
+                # Persist the run record — success and failure alike.
+                # Without this, /admin/runs is always empty for playground
+                # traffic (no Postgres RunStore and the in-memory AdminState
+                # isn't wired to this handler).
+                try:
+                    est_tokens = (len(message) + len(full_output)) // 4
+                    sf.save_agent_run({
+                        "run_id": run_id,
+                        "agent_name": agent_name,
+                        "model": model,
+                        "status": status,
+                        "input_text": message,
+                        "output_text": full_output,
+                        "total_tokens": est_tokens,
+                        "started_at": _started_at,
+                        "completed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                        "run_type": "standalone",
+                        "parent_workflow_run_id": None,
+                        "tool_calls": [],
+                        "project_id": pid,
+                    })
+                except Exception as persist_exc:
+                    logger.error("Failed to persist agent run %s: %s", run_id, persist_exc)
 
         return StreamingResponse(
             _generate(),
@@ -1113,18 +1236,28 @@ def create_admin_serve_app(
             steps = []
             agents_data = []
             full_output = ""
+            events_log: list[dict[str, Any]] = []
+
+            def _emit(event_type: str, payload: dict[str, Any]) -> str:
+                """Record event for replay + format as SSE frame."""
+                events_log.append({
+                    "event_type": event_type,
+                    "data": payload,
+                    "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                })
+                return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n"
 
             try:
                 wf_def = _yaml.safe_load(yaml_str) if yaml_str else None
                 if not wf_def or not isinstance(wf_def, dict):
-                    yield f"event: workflow_error\ndata: Invalid workflow YAML\n\n"
+                    yield _emit("workflow_error", {"error": "Invalid workflow YAML"})
                     return
 
                 wf_name = wf_def.get("name", "unnamed")
                 agents_defs = wf_def.get("agents", {})
                 workflow_node = wf_def.get("workflow", {})
 
-                yield f"event: workflow_started\ndata: {json.dumps({'run_id': run_id, 'name': wf_name})}\n\n"
+                yield _emit("workflow_started", {"run_id": run_id, "name": wf_name})
 
                 # Extract agent steps from the workflow node
                 agent_steps = []
@@ -1142,7 +1275,7 @@ def create_admin_serve_app(
                 if not agent_steps:
                     agent_steps = list(agents_defs.keys())
 
-                yield f"event: workflow_steps\ndata: {json.dumps({'total': len(agent_steps), 'agents': agent_steps})}\n\n"
+                yield _emit("workflow_steps", {"total": len(agent_steps), "agents": agent_steps})
 
                 # Execute each agent step sequentially
                 current_input = message
@@ -1151,11 +1284,13 @@ def create_admin_serve_app(
                     model = agent_def.get("model", "gpt-4o-mini")
                     system_prompt = agent_def.get("system_prompt", f"You are the {agent_name} agent.")
                     step_t0 = _wf_time.monotonic()
+                    step_started_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
-                    yield f"event: step_started\ndata: {json.dumps({'step': i + 1, 'agent': agent_name, 'model': model})}\n\n"
+                    yield _emit("step_started", {"step": i + 1, "agent": agent_name, "model": model})
 
                     # Call LLM via litellm
                     step_output = ""
+                    step_status = "completed"
                     try:
                         import litellm
                         litellm.suppress_debug_info = True
@@ -1170,23 +1305,26 @@ def create_admin_serve_app(
                             delta = chunk.choices[0].delta.content or ""
                             if delta:
                                 step_output += delta
-                                yield f"event: text_message_content\ndata: {json.dumps({'delta': delta, 'agent': agent_name, 'step': i + 1})}\n\n"
+                                yield _emit("text_message_content", {"delta": delta, "agent": agent_name, "step": i + 1})
 
                     except Exception as exc:
+                        step_status = "failed"
                         step_output = f"Error in {agent_name}: {exc}"
-                        yield f"event: step_error\ndata: {json.dumps({'step': i + 1, 'agent': agent_name, 'error': str(exc)[:200]})}\n\n"
+                        yield _emit("step_error", {"step": i + 1, "agent": agent_name, "error": str(exc)[:200]})
 
                     step_dt = _wf_time.monotonic() - step_t0
                     # Estimate tokens (~4 chars per token)
                     step_input_tokens = len(current_input) // 4
                     step_output_tokens = len(step_output) // 4
                     step_tokens = step_input_tokens + step_output_tokens
+                    step_run_id = f"run-{_sec.token_hex(6)}"
 
                     steps.append({
                         "step": i + 1, "agent": agent_name, "model": model,
                         "duration_s": round(step_dt, 2),
                         "output_preview": step_output[:200],
                         "total_tokens": step_tokens,
+                        "run_id": step_run_id,
                     })
                     agents_data.append({
                         "name": agent_name, "model": model,
@@ -1196,34 +1334,72 @@ def create_admin_serve_app(
                         "output_tokens": step_output_tokens,
                     })
 
-                    yield f"event: step_completed\ndata: {json.dumps({'step': i + 1, 'agent': agent_name, 'duration_s': round(step_dt, 2)})}\n\n"
+                    # Record this step as an individual agent run so
+                    # /agents/runs can surface inline workflow steps.
+                    try:
+                        sf.save_agent_run({
+                            "run_id": step_run_id,
+                            "agent_name": agent_name,
+                            "model": model,
+                            "status": step_status,
+                            "input_text": current_input,
+                            "output_text": step_output,
+                            "total_tokens": step_tokens,
+                            "started_at": step_started_at,
+                            "completed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                            "run_type": "workflow_step",
+                            "parent_workflow_run_id": run_id,
+                            "tool_calls": [],
+                            "project_id": pid,
+                        })
+                    except Exception as persist_exc:
+                        logger.error("Failed to persist workflow step run %s: %s", step_run_id, persist_exc)
+
+                    yield _emit("step_completed", {"step": i + 1, "agent": agent_name, "duration_s": round(step_dt, 2)})
 
                     # Chain output → next agent's input
                     current_input = step_output
                     full_output = step_output  # Last agent's output is the final output
 
                 elapsed = round(_wf_time.monotonic() - t0, 2)
+                total_tokens = sum(a.get("total_tokens", 0) for a in agents_data)
+                total_input_tokens = sum(a.get("input_tokens", 0) for a in agents_data)
+                total_output_tokens = sum(a.get("output_tokens", 0) for a in agents_data)
 
-                # Persist run to history
+                finished_payload = {
+                    "output": full_output,
+                    "elapsed_seconds": elapsed,
+                    "agents": agents_data,
+                    "total_steps": len(steps),
+                    "run_id": run_id,
+                    "total_tokens": total_tokens,
+                    "total_input_tokens": total_input_tokens,
+                    "total_output_tokens": total_output_tokens,
+                }
+
+                # Persist run to history. The UI expects `run.output` to
+                # be a rich dict (used to extract stats), so store the
+                # finished_payload rather than the plain string.
                 run_record = {
                     "run_id": run_id, "status": "completed",
                     "workflow_name": wf_name, "yaml_content": yaml_str,
-                    "input": message, "output": full_output,
+                    "input": message, "output": finished_payload,
                     "steps": steps, "project_id": pid,
                     "elapsed_seconds": elapsed,
+                    "total_tokens": total_tokens,
+                    "total_input_tokens": total_input_tokens,
+                    "total_output_tokens": total_output_tokens,
+                    "agents": agents_data,
                     "started_at": now,
                     "finished_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "events": events_log,
                 }
                 data = sf._read()
                 data.setdefault("workflow_runs", []).insert(0, run_record)
                 data["workflow_runs"] = data["workflow_runs"][:100]
                 sf._write(data)
 
-                total_tokens = sum(a.get("total_tokens", 0) for a in agents_data)
-                total_input_tokens = sum(a.get("input_tokens", 0) for a in agents_data)
-                total_output_tokens = sum(a.get("output_tokens", 0) for a in agents_data)
-
-                yield f"event: workflow_finished\ndata: {json.dumps({'output': full_output, 'elapsed_seconds': elapsed, 'agents': agents_data, 'total_steps': len(steps), 'run_id': run_id, 'total_tokens': total_tokens, 'total_input_tokens': total_input_tokens, 'total_output_tokens': total_output_tokens})}\n\n"
+                yield _emit("workflow_finished", finished_payload)
 
                 logger.info("Workflow run %s completed in %.1fs (%d steps)",
                              run_id, elapsed, len(steps),
@@ -1231,7 +1407,7 @@ def create_admin_serve_app(
                                     "workflow_name": wf_name, "elapsed_s": elapsed})
 
             except Exception as exc:
-                yield f"event: workflow_error\ndata: {json.dumps({'error': str(exc)})}\n\n"
+                yield _emit("workflow_error", {"error": str(exc)})
                 logger.error("Workflow run %s failed: %s", run_id, str(exc)[:200],
                              extra={"event": "workflow.run.error", "run_id": run_id})
 
@@ -1251,6 +1427,37 @@ def create_admin_serve_app(
             "run_id": run_id, "status": "not_found",
             "steps": [], "started_at": None, "finished_at": None,
         })
+
+    @app.get("/workflows/runs/{run_id}/events")
+    async def workflow_run_events(run_id: str):
+        """Stream stored events for a completed workflow run as SSE.
+
+        Live events for an in-flight run arrive via the /workflows/run
+        POST response. This endpoint is the replay-only path used by the
+        history detail page to populate the Events tab for completed runs.
+        """
+        data = sf._read()
+        target = None
+        for r in data.get("workflow_runs", []):
+            if r.get("run_id") == run_id:
+                target = r
+                break
+
+        async def _replay():
+            if target is None:
+                yield f"event: not_found\ndata: {json.dumps({'run_id': run_id})}\n\n"
+                return
+            for evt in target.get("events", []):
+                payload = evt.get("data", {})
+                yield f"event: {evt.get('event_type', 'message')}\ndata: {json.dumps(payload)}\n\n"
+            # Signal stream end so the client stops polling
+            yield "event: stream_end\ndata: {}\n\n"
+
+        return StreamingResponse(
+            _replay(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )
 
     @app.post("/workflows/runs/{run_id}/cancel")
     async def workflow_cancel(run_id: str) -> JSONResponse:
