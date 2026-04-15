@@ -9,10 +9,17 @@ import { test, expect } from '@playwright/test';
  * For a full wizard walkthrough (from fresh state), run:
  *   rm ~/.sagewai/admin-state.json
  *   just admin-e2e -- e2e/01-setup-wizard.spec.ts
+ *
+ * The proxy (apps/admin/proxy.ts) redirects authenticated users away
+ * from /login, so these tests have to run unauthenticated to exercise
+ * the real post-setup landing pages.
  */
+test.use({ storageState: { cookies: [], origins: [] } });
+
 test.describe('Setup Wizard', () => {
   test('setup is complete — redirects away from /setup', async ({ page }) => {
     // After global-setup, setup_required is false → /setup redirects to /
+    // which (unauthenticated) then redirects to /login.
     await page.goto('/setup');
     await expect(page).not.toHaveURL(/\/setup/);
   });

@@ -40,7 +40,12 @@ _DEFAULT_STATE_DIR = Path.home() / ".sagewai"
 _DEFAULT_STATE_FILE = _DEFAULT_STATE_DIR / "admin-state.json"
 
 _PBKDF2_ITERATIONS = 600_000
-_MAX_TOKENS = 10
+# Every /auth/refresh rotates the token and appends a new one. The full e2e
+# suite fires ~30+ refreshes in one run, which would otherwise evict the
+# token saved in Playwright's shared storageState and fail every test that
+# loads an authenticated page. 200 is plenty for e2e and for real users who
+# may be signed in from several browsers at once.
+_MAX_TOKENS = 200
 
 
 # ── helpers ──────────────────────────────────────────────────────────

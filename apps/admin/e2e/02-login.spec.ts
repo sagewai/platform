@@ -1,10 +1,25 @@
 import { test, expect } from '@playwright/test';
 import { setupAndLogin } from './mock-api';
 
+// Login tests must start from an unauthenticated browser. The global
+// auth.setup project saves an authenticated storageState that every test
+// inherits by default — that state makes /login silently redirect to /
+// and breaks every assertion here. Override with an empty storageState
+// for this file only.
+test.use({ storageState: { cookies: [], origins: [] } });
+
 let credentials: { email: string; password: string };
 
 test.beforeAll(async () => {
-  credentials = await setupAndLogin();
+  // Must match the credentials auth.setup.ts used — by the time this file
+  // runs, the admin account is already created and setupAndLogin() is a
+  // pure login. Using the default `admin@test.sagewai.dev` here would hit
+  // a 401 and the later "successful login" test would submit mismatched
+  // credentials in the UI.
+  credentials = await setupAndLogin({
+    email: 'admin@e2e.test',
+    password: 'E2ePass!123',
+  });
 });
 
 test.describe('Login', () => {
