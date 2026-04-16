@@ -525,3 +525,41 @@ class TestCrossPillar:
         # Query by action
         filtered = backend.query(action="agent.chat", limit=3)
         assert len(filtered) <= 3
+
+
+# ═══════════════════════════════════════════════════════════════
+# Autopilot — eval harness
+# ═══════════════════════════════════════════════════════════════
+
+# sagewai.autopilot.eval_harness
+from sagewai.autopilot.eval_harness import (
+    EvalConfig,
+    EvalHarness,
+    EvalReport,
+    GoldenGoal,
+    GoldenGoalSet,
+    SYNTHETIC_GOLDEN_GOALS,
+    run_eval,
+)
+
+
+def test_smoke_eval_harness_types_importable():
+    assert GoldenGoal is not None
+    assert GoldenGoalSet is not None
+    assert EvalReport is not None
+    assert EvalConfig is not None
+
+
+def test_smoke_eval_harness_class_importable():
+    assert EvalHarness is not None
+    assert run_eval is not None
+
+
+def test_smoke_synthetic_golden_goals_non_empty():
+    assert len(SYNTHETIC_GOLDEN_GOALS.goals) >= 50
+
+
+def test_smoke_eval_config_defaults():
+    cfg = EvalConfig()
+    assert cfg.auto_route_threshold == 0.85
+    assert cfg.picker_threshold == 0.65

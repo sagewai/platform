@@ -65,6 +65,14 @@ from .curator import (
     Promoter,
     TrainingDataset,
 )
+from .eval_harness import (
+    EvalConfig,
+    EvalHarness,
+    EvalReport,
+    GoldenGoal,
+    GoldenGoalSet,
+    run_eval,
+)
 
 __all__ = [
     # Errors
@@ -121,4 +129,11 @@ __all__ = [
     "PromotionResult",
     "Promoter",
     "TrainingDataset",
+    # Eval harness
+    "EvalHarness",
+    "EvalConfig",
+    "EvalReport",
+    "GoldenGoal",
+    "GoldenGoalSet",
+    "run_eval",
 ]
