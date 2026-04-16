@@ -50,6 +50,13 @@ from .routing import (
     SynthesisNeeded,
     build_preview,
 )
+from .controller import (
+    AutopilotController,
+    ControllerConfig,
+    MissionDriver,
+    MissionRunResult,
+    StepResult,
+)
 
 __all__ = [
     # Errors
@@ -93,4 +100,10 @@ __all__ = [
     "SlotExtractor",
     "RuleBasedExtractor",
     "build_preview",
+    # Controller
+    "AutopilotController",
+    "MissionDriver",
+    "ControllerConfig",
+    "MissionRunResult",
+    "StepResult",
 ]
