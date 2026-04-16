@@ -37,6 +37,19 @@ from .models import (
 )
 from .slots import SlotSpec
 from .validators import ValidatorRegistry, default_registry
+from .routing import (
+    AutoRouted,
+    ConfidenceConfig,
+    GoalRouter,
+    PickerNeeded,
+    RankedBlueprint,
+    RoutingDecision,
+    RoutingResult,
+    RuleBasedExtractor,
+    SlotExtractor,
+    SynthesisNeeded,
+    build_preview,
+)
 
 __all__ = [
     # Errors
@@ -68,4 +81,16 @@ __all__ = [
     # Top-level
     "Blueprint",
     "Mission",
+    # Routing
+    "GoalRouter",
+    "ConfidenceConfig",
+    "RoutingDecision",
+    "AutoRouted",
+    "PickerNeeded",
+    "SynthesisNeeded",
+    "RankedBlueprint",
+    "RoutingResult",
+    "SlotExtractor",
+    "RuleBasedExtractor",
+    "build_preview",
 ]
