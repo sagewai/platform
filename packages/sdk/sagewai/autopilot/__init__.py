@@ -57,6 +57,14 @@ from .controller import (
     MissionRunResult,
     StepResult,
 )
+from .curator import (
+    Curator,
+    CuratorConfig,
+    FineTuneJob,
+    PromotionResult,
+    Promoter,
+    TrainingDataset,
+)
 
 __all__ = [
     # Errors
@@ -106,4 +114,11 @@ __all__ = [
     "ControllerConfig",
     "MissionRunResult",
     "StepResult",
+    # Curator (Layer 5 learning loop)
+    "Curator",
+    "CuratorConfig",
+    "FineTuneJob",
+    "PromotionResult",
+    "Promoter",
+    "TrainingDataset",
 ]
