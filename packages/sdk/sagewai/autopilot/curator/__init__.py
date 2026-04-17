@@ -16,11 +16,15 @@ Public API surface for the curator subpackage. Callers import
 from __future__ import annotations
 
 from .curator import Curator
+from .fine_tune import FineTuneConfig, FineTuneExecutor, FineTuneResult
 from .promoter import Promoter
 from .types import CuratorConfig, FineTuneJob, PromotionResult, TrainingDataset
 
 __all__ = [
     "Curator",
+    "FineTuneConfig",
+    "FineTuneExecutor",
+    "FineTuneResult",
     "Promoter",
     "TrainingDataset",
     "FineTuneJob",

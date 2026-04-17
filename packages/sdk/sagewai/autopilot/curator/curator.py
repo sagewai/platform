@@ -18,18 +18,32 @@ The :class:`Curator` is stateful but synchronous. Typical usage::
     jobs = curator.clear_pending_jobs()
     for job in jobs:
         schedule_fine_tune(job)  # caller's responsibility
+
+Pass a :class:`~sagewai.autopilot.curator.fine_tune.FineTuneExecutor` at
+construction time to have the Curator execute jobs inline when a dataset
+threshold is crossed::
+
+    from sagewai.autopilot.curator import Curator, FineTuneExecutor, FineTuneConfig
+    executor = FineTuneExecutor(config=FineTuneConfig(output_dir="/models"))
+    curator = Curator(executor=executor)
 """
 
 from __future__ import annotations
 
+import logging
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sagewai.autopilot.blueprint import Blueprint
 from sagewai.autopilot.controller import MissionRunResult
 
 from .filter import eval_quality_filter
 from .types import CuratorConfig, DatasetFormat, FineTuneJob, TrainingDataset
+
+if TYPE_CHECKING:
+    from .fine_tune import FineTuneExecutor
+
+logger = logging.getLogger(__name__)
 
 
 class Curator:
@@ -42,8 +56,13 @@ class Curator:
             consumed by the caller via :meth:`clear_pending_jobs`.
     """
 
-    def __init__(self, config: CuratorConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: CuratorConfig | None = None,
+        executor: FineTuneExecutor | None = None,
+    ) -> None:
         self.config: CuratorConfig = config or CuratorConfig()
+        self.executor: FineTuneExecutor | None = executor
         self.datasets: dict[str, TrainingDataset] = {}
         self.pending_jobs: list[FineTuneJob] = []
         self._seen_mission_ids: set[str] = set()
@@ -208,4 +227,22 @@ class Curator:
                 deploy_as=loop_config.deploy_as,
                 status="pending",
             )
+
+            if self.executor is not None:
+                # Execute inline and update job status from result.
+                dataset = self.datasets.get(dataset_id)
+                if dataset is not None:
+                    result = self.executor.execute(job, dataset)
+                    logger.info(
+                        "FineTuneExecutor returned status=%s for job %s",
+                        result.status,
+                        job.job_id,
+                    )
+                    job = job.model_copy(
+                        update={
+                            "status": result.status,
+                            "error": result.reason if result.status == "failed" else None,
+                        }
+                    )
+
             self.pending_jobs.append(job)
