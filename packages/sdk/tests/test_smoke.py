@@ -563,3 +563,22 @@ def test_smoke_eval_config_defaults():
     cfg = EvalConfig()
     assert cfg.auto_route_threshold == 0.85
     assert cfg.picker_threshold == 0.65
+
+
+# ── Example 28 smoke ──────────────────────────────────────────────
+
+
+def test_smoke_example_28_autopilot_quickstart_importable():
+    """Example 28 must import cleanly and expose a main() callable."""
+    import importlib
+
+    mod = importlib.import_module("sagewai.examples.28_autopilot_quickstart")
+    assert callable(getattr(mod, "main", None))
+
+
+def test_smoke_example_28_autopilot_quickstart_main():
+    """Example 28 main() must run without error (offline, no real network)."""
+    import importlib
+
+    mod = importlib.import_module("sagewai.examples.28_autopilot_quickstart")
+    mod.main()

@@ -315,3 +315,115 @@ class TestMissionDriverWithScheduler:
         assert result.status in ("completed", "failed")
         # Scheduler should have nothing registered
         assert scheduler.list_scheduled() == []
+
+
+# ── Thread-safety ─────────────────────────────────────────────────────────────
+
+
+def test_scheduler_concurrent_schedule_no_exceptions():
+    """Concurrent schedule() calls must not raise and register all missions."""
+    import concurrent.futures
+
+    from sagewai.autopilot.controller.scheduler import MissionScheduler
+    from tests.autopilot.fixtures import make_synthetic_scheduled_blueprint
+
+    bp = make_synthetic_scheduled_blueprint()
+    scheduler = MissionScheduler()
+    errors: list[Exception] = []
+
+    def _schedule(idx: int) -> None:
+        mission = _make_mission_from_blueprint(bp, mission_id=f"ms-thread-{idx:04d}")
+        _advance_to_scheduled(mission)
+        try:
+            scheduler.schedule(mission)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+        futures = [pool.submit(_schedule, i) for i in range(40)]
+        concurrent.futures.wait(futures)
+
+    assert errors == [], f"Exceptions: {errors}"
+    assert len(scheduler.list_scheduled()) == 40
+
+
+def test_scheduler_concurrent_cancel_no_exceptions():
+    """Concurrent cancel() calls while tick() is running must not raise."""
+    import concurrent.futures
+    from datetime import datetime, timezone
+
+    from sagewai.autopilot.controller.scheduler import MissionScheduler
+    from tests.autopilot.fixtures import make_synthetic_scheduled_blueprint
+
+    bp = make_synthetic_scheduled_blueprint()
+    scheduler = MissionScheduler()
+
+    # Pre-populate
+    missions = []
+    for i in range(20):
+        m = _make_mission_from_blueprint(bp, mission_id=f"ms-cancel-{i:04d}")
+        _advance_to_scheduled(m)
+        scheduler.schedule(m)
+        missions.append(m)
+
+    errors: list[Exception] = []
+    past = datetime(2000, 1, 1, tzinfo=timezone.utc)
+
+    def _tick() -> None:
+        try:
+            scheduler.tick(now=past)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    def _cancel(mid: str) -> None:
+        try:
+            scheduler.cancel(mid)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        tick_futs = [pool.submit(_tick) for _ in range(5)]
+        cancel_futs = [pool.submit(_cancel, m.mission_id) for m in missions]
+        concurrent.futures.wait(tick_futs + cancel_futs)
+
+    assert errors == [], f"Exceptions: {errors}"
+
+
+def test_scheduler_concurrent_pause_no_exceptions():
+    """pause() under concurrent tick() must not raise."""
+    import concurrent.futures
+    from datetime import datetime, timezone
+
+    from sagewai.autopilot.controller.scheduler import MissionScheduler
+    from tests.autopilot.fixtures import make_synthetic_scheduled_blueprint
+
+    bp = make_synthetic_scheduled_blueprint()
+    scheduler = MissionScheduler()
+    missions = []
+    for i in range(10):
+        m = _make_mission_from_blueprint(bp, mission_id=f"ms-pause-{i:04d}")
+        _advance_to_scheduled(m)
+        scheduler.schedule(m)
+        missions.append(m)
+
+    errors: list[Exception] = []
+    past = datetime(2000, 1, 1, tzinfo=timezone.utc)
+
+    def _tick() -> None:
+        try:
+            scheduler.tick(now=past)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    def _pause(mid: str) -> None:
+        try:
+            scheduler.pause(mid)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+        futs = [pool.submit(_tick) for _ in range(3)]
+        futs += [pool.submit(_pause, m.mission_id) for m in missions]
+        concurrent.futures.wait(futs)
+
+    assert errors == []

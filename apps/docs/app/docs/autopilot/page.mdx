@@ -1,0 +1,263 @@
+# Autopilot
+
+Sagewai Autopilot lets you state a goal in plain English and have the platform design, provision, run, and continuously improve the agents that deliver it. Instead of writing agent code, you describe the outcome you want and Autopilot handles the rest — routing your goal to the best matching blueprint, extracting slot values, scheduling a mission, and driving execution through the agent graph.
+
+Autopilot is built for production operations teams who want durable, observable, self-improving agent workflows without the overhead of managing prompt engineering or model selection. The hosted blueprint service learns from every mission run, so routing accuracy improves over time and you can export training data for private fine-tuning at any point.
+
+---
+
+## Architecture
+
+```
+User goal (plain text)
+        │
+        ▼
+  ┌─────────────┐   retrieve_blueprints()   ┌──────────────────────┐
+  │  GoalRouter │ ────────────────────────► │ SagewaiLLMClient     │
+  │             │ ◄──── ranked candidates ─ │ (hosted service)     │
+  └──────┬──────┘                           └──────────────────────┘
+         │ ConfidenceConfig gates the result
+         │
+   ┌─────┴──────────────┐
+   │                    │                   │
+AutoRouted         PickerNeeded      SynthesisNeeded
+   │                    │                   │
+   │             User picks one     Service generates new blueprint
+   │                    │
+   ▼                    ▼
+AutopilotController (approve → schedule)
+         │
+         ▼
+   MissionDriver  →  AgentGraph  →  AgentExecutor (LiteLLM)
+         │
+         ▼
+      Curator  →  TrainingDataset  →  FineTuneJob
+```
+
+---
+
+## Quick start
+
+### 1. Enable Autopilot
+
+```python
+import httpx
+
+httpx.post("http://localhost:8765/api/v1/autopilot/enable", json={"tier": "anonymous"})
+```
+
+Or via CLI:
+
+```bash
+sagewai autopilot enable --tier anonymous
+```
+
+### 2. Submit a goal
+
+```python
+resp = httpx.post(
+    "http://localhost:8765/api/v1/autopilot/goal",
+    json={"goal": "run daily competitive research on 3 vendors"},
+    headers={"X-Project-ID": "my-project"},
+)
+data = resp.json()
+print(data["kind"])   # "auto_routed" | "picker_needed" | "synthesis_needed"
+print(data["preview"])
+```
+
+Or via CLI:
+
+```bash
+sagewai autopilot goal "run daily competitive research on 3 vendors" \
+  --project my-project
+```
+
+### 3. Approve and monitor
+
+Once you receive an `auto_routed` result, approve the mission:
+
+```python
+httpx.post(
+    "http://localhost:8765/api/v1/autopilot/missions/{mission_id}/approve",
+    headers={"X-Project-ID": "my-project"},
+)
+```
+
+Then monitor progress:
+
+```bash
+sagewai autopilot missions --project my-project
+```
+
+---
+
+## API reference
+
+All routes are under `/api/v1/autopilot` and require the `sagewai_auth` cookie (or a `Bearer` token). Use the `X-Project-ID` header for project-scoped isolation.
+
+### `GET /api/v1/autopilot/status`
+
+Return the current autopilot configuration.
+
+**Response**
+
+```json
+{
+  "enabled": true,
+  "tier": "anonymous",
+  "instance_id": "a3f1..."
+}
+```
+
+---
+
+### `POST /api/v1/autopilot/enable`
+
+Enable autopilot for the current instance.
+
+**Request body**
+
+```json
+{ "tier": "anonymous" }
+```
+
+`tier` values: `anonymous`, `free`, `skip` (skip = bypass service, use synthesis only).
+
+**Response**: `200 OK` with `{"ok": true}`.
+
+---
+
+### `POST /api/v1/autopilot/disable`
+
+Disable autopilot. Running missions are not affected.
+
+**Response**: `200 OK` with `{"ok": true}`.
+
+---
+
+### `POST /api/v1/autopilot/goal`
+
+Route a plain-English goal to a blueprint.
+
+**Request body**
+
+```json
+{ "goal": "run daily competitive research on 3 vendors" }
+```
+
+**Response — `auto_routed`**
+
+```json
+{
+  "kind": "auto_routed",
+  "mission_id": "ms-abc123",
+  "blueprint_id": "SYNTHETIC_scheduled_research",
+  "preview": "Schedule: 0 9 * * 1-5\nVendors: 3 URLs\n...",
+  "slots": { "vendors": [], "schedule": "0 9 * * 1-5" }
+}
+```
+
+**Response — `picker_needed`**
+
+```json
+{
+  "kind": "picker_needed",
+  "candidates": [
+    { "blueprint_json": "{...}", "score": 0.72 },
+    { "blueprint_json": "{...}", "score": 0.68 }
+  ]
+}
+```
+
+**Response — `synthesis_needed`**
+
+```json
+{
+  "kind": "synthesis_needed",
+  "goal": "run daily competitive research on 3 vendors"
+}
+```
+
+---
+
+### `GET /api/v1/autopilot/missions`
+
+List all missions for the current project.
+
+**Response**
+
+```json
+[
+  {
+    "mission_id": "ms-abc123",
+    "blueprint_id": "scheduled_research",
+    "status": "scheduled",
+    "project_id": "my-project",
+    "created_at": "2026-04-15T09:00:00Z"
+  }
+]
+```
+
+---
+
+### `POST /api/v1/autopilot/missions/{mission_id}/approve`
+
+Approve a draft mission and advance it to `SCHEDULED`.
+
+**Response**: `200 OK` with the updated mission object.
+
+---
+
+### `DELETE /api/v1/autopilot/missions/{mission_id}`
+
+Cancel a mission. Has no effect if the mission is already `COMPLETED` or `FAILED`.
+
+**Response**: `200 OK` with `{"cancelled": true}`.
+
+---
+
+## CLI commands
+
+```bash
+# Show autopilot status
+sagewai autopilot status [--host localhost] [--port 8765] [--token TOKEN]
+
+# Enable autopilot
+sagewai autopilot enable [--tier anonymous] [--host localhost] [--port 8765]
+
+# Disable autopilot
+sagewai autopilot disable [--host localhost] [--port 8765]
+
+# Route a goal and see the result
+sagewai autopilot goal "your goal text" [--project PROJECT_ID]
+
+# List active missions
+sagewai autopilot missions [--project PROJECT_ID]
+```
+
+---
+
+## Configuration
+
+Autopilot behaviour can be tuned via environment variables without changing code.
+
+| Variable | Default | Description |
+|---|---|---|
+| `AUTOPILOT_AUTO_ROUTE_THRESHOLD` | `0.85` | Minimum score for automatic blueprint selection. |
+| `AUTOPILOT_PICKER_THRESHOLD` | `0.65` | Minimum score to show the user a picker. |
+| `AUTOPILOT_CACHE_TTL` | `3600` | Blueprint cache TTL in seconds. |
+| `SAGEWAI_LLM_BASE_URL` | `https://api.sagewai.ai` | Base URL for the hosted blueprint service. |
+
+**Example** — lower the auto-route threshold in a test environment:
+
+```bash
+export AUTOPILOT_AUTO_ROUTE_THRESHOLD=0.70
+export AUTOPILOT_PICKER_THRESHOLD=0.50
+sagewai autopilot goal "..."
+```
+
+---
+
+## Need more?
+
+Contact [licensing@sagewai.ai](mailto:licensing@sagewai.ai) for custom rates.

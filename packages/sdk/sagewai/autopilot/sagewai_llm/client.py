@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import os
 import re
 from typing import Any
 
@@ -57,6 +58,11 @@ DEFAULT_BASE_URL = "https://api.sagewai.ai"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
 
+def _default_base_url() -> str:
+    """Return base URL from ``SAGEWAI_LLM_BASE_URL`` env var or the default."""
+    return os.environ.get("SAGEWAI_LLM_BASE_URL", DEFAULT_BASE_URL)
+
+
 def _now_iso() -> str:
     return _dt.datetime.now(tz=_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -67,13 +73,13 @@ class SagewaiLLMClient:
     def __init__(
         self,
         *,
-        base_url: str = DEFAULT_BASE_URL,
+        base_url: str | None = None,
         identity: InstanceIdentity,
         cache: BlueprintCache,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
-        self.base_url = base_url.rstrip("/")
+        self.base_url = (base_url if base_url is not None else _default_base_url()).rstrip("/")
         self.identity = identity
         self.cache = cache
         self._http = http_client or httpx.AsyncClient(timeout=timeout_seconds)

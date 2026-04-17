@@ -31,6 +31,7 @@ threshold is crossed::
 from __future__ import annotations
 
 import logging
+import threading
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -70,6 +71,7 @@ class Curator:
         # fine-tune job was enqueued, to avoid re-enqueuing on every
         # subsequent sample.
         self._last_job_threshold_hit: dict[str, int] = {}
+        self._lock = threading.RLock()
 
     # ── Public API ─────────────────────────────────────────────────
 
@@ -93,32 +95,33 @@ class Curator:
             List of dataset IDs that received a new sample this call.
             Empty list if no hooks passed their quality filter.
         """
-        if self.config.deduplicate_by_mission_id:
-            if result.mission_id in self._seen_mission_ids:
-                return []
-            self._seen_mission_ids.add(result.mission_id)
+        with self._lock:
+            if self.config.deduplicate_by_mission_id:
+                if result.mission_id in self._seen_mission_ids:
+                    return []
+                self._seen_mission_ids.add(result.mission_id)
 
-        added: list[str] = []
-        project_id: str = context.get("project_id", "default")
+            added: list[str] = []
+            project_id: str = context.get("project_id", "default")
 
-        for hook in blueprint.training_data_hooks:
-            if not eval_quality_filter(hook.quality_filter, context):
-                continue
+            for hook in blueprint.training_data_hooks:
+                if not eval_quality_filter(hook.quality_filter, context):
+                    continue
 
-            dataset_id = self._resolve_dataset_name(hook.dataset, context)
-            sample = self._build_sample(result, hook.format)  # type: ignore[arg-type]
-            self._append_sample(dataset_id, project_id, hook.format, sample)  # type: ignore[arg-type]
-            added.append(dataset_id)
+                dataset_id = self._resolve_dataset_name(hook.dataset, context)
+                sample = self._build_sample(result, hook.format)  # type: ignore[arg-type]
+                self._append_sample(dataset_id, project_id, hook.format, sample)  # type: ignore[arg-type]
+                added.append(dataset_id)
 
-            # Check fine-tune trigger
-            if blueprint.learning_loop_target is not None:
-                self._maybe_enqueue_job(
-                    dataset_id=dataset_id,
-                    project_id=project_id,
-                    loop_config=blueprint.learning_loop_target,
-                )
+                # Check fine-tune trigger
+                if blueprint.learning_loop_target is not None:
+                    self._maybe_enqueue_job(
+                        dataset_id=dataset_id,
+                        project_id=project_id,
+                        loop_config=blueprint.learning_loop_target,
+                    )
 
-        return added
+            return added
 
     def dataset_sample_count(self, dataset_id: str) -> int:
         """Return the number of samples in a dataset, or 0 if unknown."""
@@ -127,9 +130,10 @@ class Curator:
 
     def clear_pending_jobs(self) -> list[FineTuneJob]:
         """Pop and return all pending fine-tune jobs, clearing the queue."""
-        jobs = list(self.pending_jobs)
-        self.pending_jobs = []
-        return jobs
+        with self._lock:
+            jobs = list(self.pending_jobs)
+            self.pending_jobs = []
+            return jobs
 
     # ── Internal helpers ───────────────────────────────────────────
 
@@ -185,7 +189,10 @@ class Curator:
         fmt: DatasetFormat,
         sample: dict[str, Any],
     ) -> None:
-        """Append a sample to the named dataset, creating it if needed."""
+        """Append a sample to the named dataset, creating it if needed.
+
+        Must be called while ``self._lock`` is held.
+        """
         if dataset_id not in self.datasets:
             self.datasets[dataset_id] = TrainingDataset(
                 dataset_id=dataset_id,
@@ -210,6 +217,8 @@ class Curator:
 
         A job is enqueued exactly once per threshold crossing — further
         samples beyond the threshold do not produce additional jobs.
+
+        Must be called while ``self._lock`` is held.
         """
         count = self.dataset_sample_count(dataset_id)
         threshold = loop_config.trigger_after_labeled_samples

@@ -115,8 +115,7 @@ class HealingEngine:
         """
         if contexts is not None and len(contexts) != len(results):
             raise ValueError(
-                f"contexts length ({len(contexts)}) must match "
-                f"results length ({len(results)})"
+                f"contexts length ({len(contexts)}) must match " f"results length ({len(results)})"
             )
 
         actions: list[HealingAction] = []

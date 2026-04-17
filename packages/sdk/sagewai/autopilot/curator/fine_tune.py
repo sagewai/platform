@@ -136,9 +136,7 @@ class FineTuneExecutor:
             import unsloth  # noqa: F401 — existence check only
             from unsloth import FastLanguageModel  # type: ignore[import]
         except ImportError:
-            logger.info(
-                "unsloth is not installed — fine-tune job %s skipped", job.job_id
-            )
+            logger.info("unsloth is not installed — fine-tune job %s skipped", job.job_id)
             return FineTuneResult(
                 status="skipped",
                 reason="unsloth not installed",
@@ -171,9 +169,7 @@ class FineTuneExecutor:
         output_path.mkdir(parents=True, exist_ok=True)
 
         # Export dataset to a temporary JSONL file.
-        with tempfile.NamedTemporaryFile(
-            suffix=".jsonl", mode="w", delete=False
-        ) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=".jsonl", mode="w", delete=False) as tmp:
             tmp_path = Path(tmp.name)
 
         sample_count = _export_dataset_to_jsonl(dataset, tmp_path)
@@ -214,8 +210,8 @@ class FineTuneExecutor:
 
         # Build HuggingFace dataset from the JSONL we exported.
         from datasets import load_dataset  # type: ignore[import]
-        from trl import SFTTrainer  # type: ignore[import]
         from transformers import TrainingArguments  # type: ignore[import]
+        from trl import SFTTrainer  # type: ignore[import]
 
         hf_dataset = load_dataset("json", data_files=str(tmp_path), split="train")
 

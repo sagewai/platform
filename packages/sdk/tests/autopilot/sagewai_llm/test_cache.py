@@ -78,3 +78,63 @@ def test_cache_creates_dir_if_missing(tmp_path: Path):
     c = BlueprintCache(subdir, ttl_seconds=3600)
     c.put("k", "v")
     assert subdir.exists()
+
+
+# ── Thread-safety ─────────────────────────────────────────────────
+
+
+def test_cache_concurrent_put_get_no_exceptions(tmp_path: Path):
+    """Concurrent put/get operations must not raise and be internally consistent."""
+    import concurrent.futures
+
+    c = BlueprintCache(tmp_path / "concurrent", ttl_seconds=3600)
+    errors: list[Exception] = []
+
+    def _put(idx: int) -> None:
+        try:
+            c.put(f"key-{idx}", f'{{"id":"SYNTHETIC_{idx}"}}')
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    def _get(idx: int) -> None:
+        try:
+            c.get(f"key-{idx}")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+        put_futs = [pool.submit(_put, i) for i in range(30)]
+        get_futs = [pool.submit(_get, i) for i in range(30)]
+        concurrent.futures.wait(put_futs + get_futs)
+
+    assert errors == [], f"Exceptions during concurrent put/get: {errors}"
+
+
+def test_cache_concurrent_clear_no_exceptions(tmp_path: Path):
+    """Concurrent clear() with puts must not raise."""
+    import concurrent.futures
+
+    c = BlueprintCache(tmp_path / "clear-test", ttl_seconds=3600)
+    errors: list[Exception] = []
+
+    for i in range(10):
+        c.put(f"key-{i}", f'{{"id":"SYNTHETIC_{i}"}}')
+
+    def _clear() -> None:
+        try:
+            c.clear()
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    def _put(idx: int) -> None:
+        try:
+            c.put(f"key-new-{idx}", f'{{"id":"NEW_{idx}"}}')
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+        futs = [pool.submit(_clear) for _ in range(3)]
+        futs += [pool.submit(_put, i) for i in range(15)]
+        concurrent.futures.wait(futs)
+
+    assert errors == [], f"Exceptions during concurrent clear: {errors}"

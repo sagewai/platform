@@ -189,10 +189,12 @@ cli.add_command(memory)
 # approve/reject, worker start/status, dlq list/retry/purge, db stats)
 # ---------------------------------------------------------------------------
 
+from sagewai.cli.autopilot_commands import autopilot_group  # noqa: E402
 from sagewai.cli.fleet import fleet_group  # noqa: E402
 from sagewai.cli.main import register_commands as _register_phase4  # noqa: E402
 
 cli.add_command(fleet_group, "fleet")
+cli.add_command(autopilot_group, "autopilot")
 _register_phase4(cli, workflow, db)
 
 

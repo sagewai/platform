@@ -27,10 +27,22 @@ Design decisions:
 from __future__ import annotations
 
 import enum
+import os
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .types import RankedBlueprint
+
+
+def _env_float(name: str, default: float) -> float:
+    """Read *name* from the environment and parse as float, falling back to *default*."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
 
 
 class RoutingDecision(enum.Enum):
@@ -58,8 +70,16 @@ class ConfidenceConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    auto_route_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
-    picker_threshold: float = Field(default=0.65, ge=0.0, le=1.0)
+    auto_route_threshold: float = Field(
+        default_factory=lambda: _env_float("AUTOPILOT_AUTO_ROUTE_THRESHOLD", 0.85),
+        ge=0.0,
+        le=1.0,
+    )
+    picker_threshold: float = Field(
+        default_factory=lambda: _env_float("AUTOPILOT_PICKER_THRESHOLD", 0.65),
+        ge=0.0,
+        le=1.0,
+    )
     picker_top_k: int = Field(default=3, gt=0)
 
     @model_validator(mode="after")

@@ -23,10 +23,9 @@
 
 from __future__ import annotations
 
-import calendar
 import logging
+import threading
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -37,11 +36,11 @@ logger = logging.getLogger(__name__)
 # ── CronParser ────────────────────────────────────────────────────────────────
 
 _FIELD_BOUNDS = [
-    (0, 59),   # minute
-    (0, 23),   # hour
-    (1, 31),   # day of month
-    (1, 12),   # month
-    (0, 6),    # day of week (0 = Sunday … 6 = Saturday; 7 also means Sunday per POSIX)
+    (0, 59),  # minute
+    (0, 23),  # hour
+    (1, 31),  # day of month
+    (1, 12),  # month
+    (0, 6),  # day of week (0 = Sunday … 6 = Saturday; 7 also means Sunday per POSIX)
 ]
 
 
@@ -135,17 +134,17 @@ class CronParser:
         minutes_f, hours_f, doms_f, months_f, dows_f = fields
         bounds = _FIELD_BOUNDS
 
-        minutes  = _expand_field_clean(minutes_f,  *bounds[0])
-        hours    = _expand_field_clean(hours_f,    *bounds[1])
-        doms     = _expand_field_clean(doms_f,     *bounds[2])
-        months   = _expand_field_clean(months_f,   *bounds[3])
+        minutes = _expand_field_clean(minutes_f, *bounds[0])
+        hours = _expand_field_clean(hours_f, *bounds[1])
+        doms = _expand_field_clean(doms_f, *bounds[2])
+        months = _expand_field_clean(months_f, *bounds[3])
         # Normalize day-of-week: 7 → 0 (both mean Sunday)
         raw_dows = _expand_field_clean(dows_f, 0, 7)
         dows = frozenset(d % 7 for d in raw_dows)
 
         # Start searching one minute after *after*
         candidate = after.replace(second=0, microsecond=0) + timedelta(minutes=1)
-        deadline  = after + timedelta(days=CronParser._MAX_SEARCH_DAYS)
+        deadline = after + timedelta(days=CronParser._MAX_SEARCH_DAYS)
 
         while candidate <= deadline:
             if candidate.month not in months:
@@ -224,6 +223,7 @@ class MissionScheduler:
 
     def __init__(self) -> None:
         self._entries: dict[str, ScheduledMission] = {}
+        self._lock = threading.RLock()
 
     # ── public interface ──────────────────────────────────────────────
 
@@ -241,22 +241,23 @@ class MissionScheduler:
         Returns:
             The :class:`ScheduledMission` entry added to the registry.
         """
-        cron = str(mission.slots.get("schedule", "* * * * *"))
-        now = datetime.now(tz=timezone.utc)
-        next_run = CronParser.next_fire(cron, now)
-        entry = ScheduledMission(
-            mission_id=mission.mission_id,
-            cron_expression=cron,
-            next_run_at=next_run,
-        )
-        self._entries[mission.mission_id] = entry
-        logger.info(
-            "Mission %s scheduled (cron=%r, next_run_at=%s)",
-            mission.mission_id,
-            cron,
-            next_run.isoformat(),
-        )
-        return entry
+        with self._lock:
+            cron = str(mission.slots.get("schedule", "* * * * *"))
+            now = datetime.now(tz=timezone.utc)
+            next_run = CronParser.next_fire(cron, now)
+            entry = ScheduledMission(
+                mission_id=mission.mission_id,
+                cron_expression=cron,
+                next_run_at=next_run,
+            )
+            self._entries[mission.mission_id] = entry
+            logger.info(
+                "Mission %s scheduled (cron=%r, next_run_at=%s)",
+                mission.mission_id,
+                cron,
+                next_run.isoformat(),
+            )
+            return entry
 
     def get_next_run(self, mission_id: str) -> datetime | None:
         """Return the next fire time for *mission_id*, or ``None`` if not found."""
@@ -276,11 +277,12 @@ class MissionScheduler:
             ``True`` if the mission was found and removed, ``False`` if
             it was not registered.
         """
-        if mission_id in self._entries:
-            del self._entries[mission_id]
-            logger.info("Mission %s cancelled from schedule.", mission_id)
-            return True
-        return False
+        with self._lock:
+            if mission_id in self._entries:
+                del self._entries[mission_id]
+                logger.info("Mission %s cancelled from schedule.", mission_id)
+                return True
+            return False
 
     def tick(self, now: datetime | None = None) -> list[Mission]:
         """Return missions whose ``next_run_at`` is at or before *now*.
@@ -301,31 +303,32 @@ class MissionScheduler:
         if now is None:
             now = datetime.now(tz=timezone.utc)
 
-        fired: list[Mission] = []
-        for mid, entry in list(self._entries.items()):
-            if entry.paused:
-                continue
-            if entry.next_run_at <= now:
-                # Compute next run after *now*
-                next_run = CronParser.next_fire(entry.cron_expression, now)
-                updated = ScheduledMission(
-                    mission_id=entry.mission_id,
-                    cron_expression=entry.cron_expression,
-                    next_run_at=next_run,
-                    last_run_at=now,
-                    run_count=entry.run_count + 1,
-                    paused=entry.paused,
-                )
-                self._entries[mid] = updated
-                # Return a lightweight Mission stub with mission_id only
-                fired.append(_make_stub_mission(entry.mission_id))
-                logger.info(
-                    "Mission %s fired at %s; next_run_at=%s",
-                    entry.mission_id,
-                    now.isoformat(),
-                    next_run.isoformat(),
-                )
-        return fired
+        with self._lock:
+            fired: list[Mission] = []
+            for mid, entry in list(self._entries.items()):
+                if entry.paused:
+                    continue
+                if entry.next_run_at <= now:
+                    # Compute next run after *now*
+                    next_run = CronParser.next_fire(entry.cron_expression, now)
+                    updated = ScheduledMission(
+                        mission_id=entry.mission_id,
+                        cron_expression=entry.cron_expression,
+                        next_run_at=next_run,
+                        last_run_at=now,
+                        run_count=entry.run_count + 1,
+                        paused=entry.paused,
+                    )
+                    self._entries[mid] = updated
+                    # Return a lightweight Mission stub with mission_id only
+                    fired.append(_make_stub_mission(entry.mission_id))
+                    logger.info(
+                        "Mission %s fired at %s; next_run_at=%s",
+                        entry.mission_id,
+                        now.isoformat(),
+                        next_run.isoformat(),
+                    )
+            return fired
 
     def pause(self, mission_id: str) -> bool:
         """Pause a scheduled mission so tick() will not fire it.
@@ -333,18 +336,19 @@ class MissionScheduler:
         Returns:
             ``True`` if found and paused, ``False`` if not registered.
         """
-        entry = self._entries.get(mission_id)
-        if entry is None:
-            return False
-        self._entries[mission_id] = ScheduledMission(
-            mission_id=entry.mission_id,
-            cron_expression=entry.cron_expression,
-            next_run_at=entry.next_run_at,
-            last_run_at=entry.last_run_at,
-            run_count=entry.run_count,
-            paused=True,
-        )
-        return True
+        with self._lock:
+            entry = self._entries.get(mission_id)
+            if entry is None:
+                return False
+            self._entries[mission_id] = ScheduledMission(
+                mission_id=entry.mission_id,
+                cron_expression=entry.cron_expression,
+                next_run_at=entry.next_run_at,
+                last_run_at=entry.last_run_at,
+                run_count=entry.run_count,
+                paused=True,
+            )
+            return True
 
 
 # ── internal helper ───────────────────────────────────────────────────────────

@@ -225,3 +225,71 @@ def test_clear_pending_jobs_returns_and_clears(event_driven_bp):
 def test_clear_pending_jobs_empty_returns_empty_list():
     c = Curator()
     assert c.clear_pending_jobs() == []
+
+
+# ── Thread-safety ─────────────────────────────────────────────────
+
+
+def test_curator_process_concurrent_no_exceptions():
+    """Concurrent calls to process() must not raise and must be consistent."""
+    import concurrent.futures
+    from typing import Any
+
+    bp = make_synthetic_scheduled_blueprint()
+    c = Curator(config=CuratorConfig(deduplicate_by_mission_id=False))
+
+    errors: list[Exception] = []
+
+    def _worker(idx: int) -> None:
+        result = make_run_result(mission_id=f"concurrent-{idx}")
+        ctx: dict[str, Any] = {"user_rating": 5}
+        try:
+            c.process(result, bp, ctx)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+        futures = [pool.submit(_worker, i) for i in range(50)]
+        concurrent.futures.wait(futures)
+
+    assert errors == [], f"Exceptions during concurrent process(): {errors}"
+    # At least some samples should have been recorded
+    total = sum(ds.sample_count for ds in c.datasets.values())
+    assert total == 50
+
+
+def test_curator_clear_pending_jobs_concurrent_no_duplicates():
+    """clear_pending_jobs() under concurrent writers must not lose or duplicate."""
+    import concurrent.futures
+    from typing import Any
+
+    bp = make_synthetic_scheduled_blueprint()
+    c = Curator(config=CuratorConfig(deduplicate_by_mission_id=False))
+
+    def _add(idx: int) -> None:
+        result = make_run_result(mission_id=f"cj-{idx}")
+        ctx: dict[str, Any] = {"user_rating": 5}
+        c.process(result, bp, ctx)
+
+    # First populate some entries
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+        futures = [pool.submit(_add, i) for i in range(20)]
+        concurrent.futures.wait(futures)
+
+    # Concurrent clear calls must not raise
+    errors: list[Exception] = []
+    all_jobs: list[list] = []
+
+    def _clear() -> None:
+        try:
+            all_jobs.append(c.clear_pending_jobs())
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(_clear) for _ in range(4)]
+        concurrent.futures.wait(futures)
+
+    assert errors == []
+    # After clearing the queue should be empty
+    assert c.pending_jobs == []
