@@ -96,6 +96,9 @@ import type {
   BillingSubscription,
   BillingUsage,
   BillingInvoice,
+  AutopilotStatus,
+  AutopilotGoalResponse,
+  AutopilotMissionsResponse,
 } from './types';
 
 const BASE_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL ?? 'http://localhost:8000/admin';
@@ -1247,4 +1250,28 @@ export const adminApi = {
 
   createBillingPortal: () =>
     analyticsClient.post<{ url: string }>('/api/v1/billing/portal', {}),
+
+  /* ─── Autopilot endpoints ─── */
+  getAutopilotStatus: () =>
+    analyticsClient.get<AutopilotStatus>('/api/v1/autopilot/status'),
+
+  enableAutopilot: (tier: string) =>
+    analyticsClient.post<AutopilotStatus>('/api/v1/autopilot/enable', { tier }),
+
+  disableAutopilot: () =>
+    analyticsClient.post<{ status: string }>('/api/v1/autopilot/disable', {}),
+
+  submitAutopilotGoal: (goal: string) =>
+    analyticsClient.post<AutopilotGoalResponse>('/api/v1/autopilot/goal', { goal }),
+
+  approveAutopilotMission: (missionId: string, blueprintId?: string) =>
+    analyticsClient.post<{ status: string; mission_id: string }>(
+      '/api/v1/autopilot/approve',
+      { mission_id: missionId, blueprint_id: blueprintId ?? null },
+    ),
+
+  listAutopilotMissions: (limit?: number) => {
+    const qs = limit ? `?limit=${limit}` : '';
+    return analyticsClient.get<AutopilotMissionsResponse>(`/api/v1/autopilot/missions${qs}`);
+  },
 };

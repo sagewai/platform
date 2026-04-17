@@ -29,6 +29,7 @@ import {
   FileBarChart,
   Cog,
   Search,
+  Zap,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useSidebar, SidebarToggle } from '@/components/ui/legacy';
@@ -88,6 +89,17 @@ export const ALL_GROUPS: NavGroup[] = [
       { href: '/workflows', label: 'Workflow Builder' },
       { href: '/workflows/registry', label: 'Workflow Registry' },
       { href: '/workflows/history', label: 'Workflow History' },
+    ],
+  },
+
+  /* ── AUTOPILOT ── */
+  {
+    id: 'autopilot',
+    label: 'Autopilot',
+    icon: Zap,
+    defaultHref: '/autopilot',
+    items: [
+      { href: '/autopilot', label: 'Autopilot' },
     ],
   },
 

@@ -1066,3 +1066,71 @@ export interface BillingInvoice {
   status: string;
   pdf_url: string;
 }
+
+/* ─── Autopilot ─── */
+
+export type AutopilotTier = 'anonymous' | 'free' | 'custom';
+export type AutopilotMissionStatus =
+  | 'draft'
+  | 'approved'
+  | 'scheduled'
+  | 'running'
+  | 'completed'
+  | 'failed';
+export type AutopilotMode = 'scheduled' | 'event_driven' | 'batch';
+export type AutopilotRoutingResult = 'auto_routed' | 'picker_needed' | 'synthesis_needed';
+
+export interface AutopilotStatus {
+  enabled: boolean;
+  tier: AutopilotTier;
+  quota_used: number;
+  quota_limit: number | null;
+  install_id: string | null;
+}
+
+export interface AutopilotSlot {
+  key: string;
+  value: string;
+}
+
+export interface AutopilotBlueprint {
+  id: string;
+  title: string;
+  category: string;
+  mode: AutopilotMode;
+  slots: AutopilotSlot[];
+  estimated_cost: string | null;
+}
+
+export interface AutopilotGoalResponse {
+  routing_result: AutopilotRoutingResult;
+  mission_id: string | null;
+  blueprint: AutopilotBlueprint | null;
+  candidates: AutopilotBlueprint[];
+  message: string | null;
+}
+
+export interface AutopilotMissionStep {
+  step: string;
+  status: string;
+  output: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface AutopilotMission {
+  id: string;
+  blueprint_title: string;
+  blueprint_category: string;
+  status: AutopilotMissionStatus;
+  mode: AutopilotMode;
+  project_id: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  steps: AutopilotMissionStep[];
+}
+
+export interface AutopilotMissionsResponse {
+  missions: AutopilotMission[];
+  total: number;
+}

@@ -29,11 +29,11 @@ export const ROLE_PERMISSIONS: Record<UserRole, RolePermissions> = {
  */
 export const ROLE_NAV_GROUPS: Record<UserRole, string[]> = {
   admin: [
-    'home', 'build', 'intelligence', 'operations', 'observe',
+    'home', 'build', 'autopilot', 'intelligence', 'operations', 'observe',
     'harness', 'system', 'account',
   ],
   developer: [
-    'home', 'build', 'intelligence', 'tools', 'debug', 'account',
+    'home', 'build', 'autopilot', 'intelligence', 'tools', 'debug', 'account',
   ],
   ml_engineer: [
     'home', 'training', 'data', 'analytics', 'intelligence', 'account',
