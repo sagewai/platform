@@ -9,22 +9,27 @@
 # See COMMERCIAL_LICENSE.md for details.
 """Sagewai Autopilot controller — mission orchestration and execution.
 
-Public API surface (populated as Tasks complete):
+Public API surface:
 
 - :class:`MissionRunResult` — frozen result of a completed or failed run.
 - :class:`StepResult` — per-node result inside a :class:`MissionRunResult`.
 - :class:`ControllerConfig` — injectable configuration for the controller.
+- :class:`AgentExecutor` — executes a single agent node via LiteLLM.
+- :class:`ExecutorConfig` — configuration for :class:`AgentExecutor`.
 """
 
 from __future__ import annotations
 
 from .controller import AutopilotController
 from .driver import MissionDriver
+from .executor import AgentExecutor, ExecutorConfig
 from .types import ControllerConfig, MissionRunResult, StepResult
 
 __all__ = [
     "AutopilotController",
     "MissionDriver",
+    "AgentExecutor",
+    "ExecutorConfig",
     "ControllerConfig",
     "MissionRunResult",
     "StepResult",

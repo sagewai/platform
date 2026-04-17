@@ -9,10 +9,11 @@
 # See COMMERCIAL_LICENSE.md for details.
 """MissionDriver — executes a scheduled mission by walking its AgentGraph.
 
-This is a *stub* executor: no LLM calls are made. Each node is
-"executed" by emitting a :class:`~sagewai.autopilot.controller.types.StepResult`
-with ``output_preview="[stub] node_id completed"``. Branched graphs
-log a warning and execute only the entry node.
+Each node is executed by :class:`~sagewai.autopilot.controller.executor.AgentExecutor`
+which delegates to LiteLLM for LLM nodes and short-circuits for
+deterministic nodes.  When no LLM provider is configured the executor
+returns a "skipped" result rather than raising.  Branched graphs log a
+warning and execute only the entry node.
 
 The driver drives the :class:`~sagewai.autopilot.mission.Mission` state
 machine:  SCHEDULED → RUNNING → COMPLETED (or FAILED on exception).
@@ -27,23 +28,28 @@ from sagewai.autopilot._types import MissionState
 from sagewai.autopilot.errors import MissionLifecycleError
 from sagewai.autopilot.mission import Mission
 
+from .executor import AgentExecutor, ExecutorConfig
 from .types import MissionRunResult, StepResult
 
 logger = logging.getLogger(__name__)
 
 
 class MissionDriver:
-    """Executes a scheduled mission against its agent graph (stub).
+    """Executes a scheduled mission against its agent graph via AgentExecutor.
 
     Call :meth:`execute` with a :class:`Mission` that is in the
     SCHEDULED state.  The driver transitions the mission to RUNNING,
-    walks the ``AgentGraph``, and finally transitions to COMPLETED or
-    FAILED before returning a :class:`MissionRunResult`.
+    walks the ``AgentGraph`` calling :class:`AgentExecutor` for each
+    node, and finally transitions to COMPLETED or FAILED before
+    returning a :class:`MissionRunResult`.
 
-    No real agent execution takes place — every node produces a stub
-    ``StepResult``.  This design makes the class fully testable without
-    any LLM credentials or network access.
+    Args:
+        executor_config: Optional :class:`ExecutorConfig` forwarded to
+            the :class:`AgentExecutor`.  Defaults are used if not given.
     """
+
+    def __init__(self, executor_config: ExecutorConfig | None = None) -> None:
+        self._executor = AgentExecutor(executor_config)
 
     async def execute(self, mission: Mission) -> MissionRunResult:
         """Execute *mission* and return a :class:`MissionRunResult`.
@@ -53,7 +59,7 @@ class MissionDriver:
 
         Returns:
             A frozen :class:`MissionRunResult` describing every step
-            that was (stub-)executed and the final status.
+            executed and the final status.
 
         Raises:
             :class:`~sagewai.autopilot.errors.MissionLifecycleError`:
@@ -70,7 +76,7 @@ class MissionDriver:
         steps: list[StepResult] = []
 
         try:
-            steps = self._walk_graph(mission)
+            steps = await self._walk_graph(mission)
         except Exception as exc:  # noqa: BLE001
             duration = time.monotonic() - t0
             mission.transition_to(MissionState.FAILED)
@@ -105,35 +111,61 @@ class MissionDriver:
 
     # ── private helpers ─────────────────────────────────────────────
 
-    def _walk_graph(self, mission: Mission) -> list[StepResult]:
+    async def _walk_graph(self, mission: Mission) -> list[StepResult]:
         """Walk the mission's agent graph and return per-step results.
 
         For graphs with no branches, calls
         :meth:`~sagewai.autopilot.agent_graph.AgentGraph.traverse_linear`
         to get the ordered node list.  For graphs with branches, logs a
-        warning and executes only the entry node as a stub.
+        warning and executes only the entry node.
+
+        An accumulating context dict is passed between steps — each
+        step's ``output_preview`` is merged into the context under the
+        key ``"step_{node_id}_output"`` so subsequent nodes can see
+        prior results.
         """
         from sagewai.autopilot.blueprint import Blueprint
 
         bp = Blueprint.model_validate_json(mission.slots["__blueprint_json__"])
         graph = bp.agent_graph
 
+        # Build a mutable context from mission slots (excluding internals)
+        context: dict = {k: v for k, v in mission.slots.items() if not k.startswith("__")}
+
+        # Build a lookup from node_id → Agent
+        nodes_by_id = {agent.id: agent for agent in graph.nodes}
+
         if graph.branches:
             logger.warning(
-                "Mission %s: agent graph has branches — stub executor "
+                "Mission %s: agent graph has branches — executor "
                 "cannot resolve conditional edges; executing entry node "
-                "%r only.  Wire a real MissionDriver for branched graphs.",
+                "%r only.",
                 mission.mission_id,
                 graph.entry,
             )
-            return [self._stub_step(graph.entry)]
+            entry_agent = nodes_by_id[graph.entry]
+            step = await self._execute_node(entry_agent, context)
+            return [step]
 
         node_order = graph.traverse_linear()
-        return [self._stub_step(node_id) for node_id in node_order]
+        results: list[StepResult] = []
+        for node_id in node_order:
+            agent = nodes_by_id[node_id]
+            step = await self._execute_node(agent, context)
+            results.append(step)
+            # Accumulate output into context for next step
+            if step.output_preview:
+                context[f"step_{node_id}_output"] = step.output_preview
+        return results
 
-    def _stub_step(self, node_id: str) -> StepResult:
-        return StepResult(
-            node_id=node_id,
-            status="completed",
-            output_preview=f"[stub] {node_id} completed",
-        )
+    async def _execute_node(self, agent, context: dict) -> StepResult:
+        """Execute one agent node, catching any unexpected errors."""
+        try:
+            return await self._executor.execute(agent, context)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Unexpected error executing agent %r: %s", agent.id, exc)
+            return StepResult(
+                node_id=agent.id,
+                status="failed",
+                output_preview=str(exc)[:200],
+            )
