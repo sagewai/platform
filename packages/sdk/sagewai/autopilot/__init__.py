@@ -73,6 +73,18 @@ from .eval_harness import (
     GoldenGoalSet,
     run_eval,
 )
+from .healing import (
+    AlertOperator,
+    HealingAction,
+    HealingEngine,
+    HealingPolicy,
+    HealthMonitor,
+    HealthSignal,
+    MissionContext,
+    PauseBudget,
+    RetryMission,
+    RotateProvider,
+)
 
 __all__ = [
     # Errors
@@ -136,4 +148,15 @@ __all__ = [
     "GoldenGoal",
     "GoldenGoalSet",
     "run_eval",
+    # Healing (Layer 6 — self-healing ops)
+    "HealingPolicy",
+    "RotateProvider",
+    "PauseBudget",
+    "AlertOperator",
+    "RetryMission",
+    "HealingAction",
+    "HealthMonitor",
+    "HealthSignal",
+    "HealingEngine",
+    "MissionContext",
 ]
