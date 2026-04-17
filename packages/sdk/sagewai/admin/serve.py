@@ -446,6 +446,11 @@ def create_admin_serve_app(
         create_analytics_router(analytics), prefix="/analytics"
     )
 
+    # Autopilot routes (Plan 7)
+    from sagewai.admin.autopilot_routes import create_autopilot_router
+
+    app.include_router(create_autopilot_router(sf), prefix="/api/v1")
+
     # ── Setup ────────────────────────────────────────────────────
 
     @app.get("/api/v1/setup/status")
