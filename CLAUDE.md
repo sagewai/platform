@@ -15,6 +15,7 @@ archived.
 Companion projects live in separate repos:
 - `sagewai/web` — marketing site at sagewai.ai (Next.js + Cloudflare Workers)
 - `sagewai/sagewai-*` — 17 thin client wrappers (TS, Go, Rust, Java, etc.)
+- `sagewai/sagewai-llm` — **PRIVATE** proprietary hosted blueprint service (the autopilot brain). See below.
 - `sagewai/sagewai-enterprise` (future) — private cloud/SaaS management layer
 
 ## Layout
@@ -22,9 +23,12 @@ Companion projects live in separate repos:
 ```
 packages/sdk/                    Python SDK (sagewai on PyPI)
   sagewai/                       → cli, mcp, admin, gateway, fleet subpackages
-  tests/                         → pytest suite (2904 tests)
-  tests/test_smoke.py            → 29 smoke tests (no services)
+  sagewai/autopilot/             → Autopilot framework (Plans 1-8, see below)
+  tests/                         → pytest suite (~3600 tests)
+  tests/autopilot/               → 663 autopilot framework tests
+  tests/test_smoke.py            → 33 smoke tests (no services)
   tests/test_perf.py             → 4 perf micro-benchmarks (no services)
+  tests/test_admin_autopilot.py  → 40 admin autopilot route tests
   sagewai/examples/              → 23 runnable examples (01_hello_agent.py → 24_harness_agent.py)
 apps/admin/                      Next.js admin UI
 apps/docs/                       Next.js docs site
@@ -79,6 +83,44 @@ The tag push triggers every `release-*.yml` workflow in parallel.
 If you are asked to add copyright headers or licensing language to new
 files, use the exact phrasing from an existing file — do not invent new
 variants.
+
+## Autopilot system (Plans 1-8, PRs #97-#106)
+
+The autopilot lets operators state a goal in plain English and have the
+platform design, provision, run, and improve the agents that deliver it.
+
+**Architecture (OSS side — `sagewai.autopilot.*`):**
+```
+sagewai/autopilot/               Blueprint, SlotSpec, AgentGraph, Mission (Plan 1)
+sagewai/autopilot/sagewai_llm/   SagewaiLLMClient, HMAC signing, cache (Plan 2)
+sagewai/autopilot/routing/       GoalRouter, ConfidenceConfig, SlotExtractor (Plan 3)
+sagewai/autopilot/controller/    AutopilotController, MissionDriver (Plan 4)
+sagewai/autopilot/curator/       Curator, Promoter, TrainingDataset (Plan 5)
+sagewai/autopilot/eval_harness/  EvalHarness, 52 golden goals (Plan 6)
+sagewai/autopilot/healing/       HealthMonitor, HealingEngine (Plan 8)
+sagewai/admin/autopilot_*.py     6 admin API routes (Plan 7)
+apps/admin/app/autopilot/        Frontend: goal input, plan preview, missions (Phase 2)
+```
+
+**Private server (`sagewai/sagewai-llm` — PROPRIETARY):**
+- All production blueprints live there, NEVER in this OSS repo
+- 7 API routes: generate, retrieve, publish, feed, telemetry, eval, quota
+- HMAC auth, embedding-based retrieval, LiteLLM generation pipeline
+- Telemetry gap miner for continuous library growth
+- Landing page + API docs at the server root
+- **NEVER copy code, prompts, blueprints, or design details from that
+  repo to this one. Zero residue policy.**
+
+**Key invariants:**
+- ZERO production blueprints in this OSS repo — only `SYNTHETIC_` test fixtures
+- The OSS design spec (`docs/superpowers/specs/`) has proprietary sections
+  stripped (PR #99). Server-side architecture lives in the private repo.
+- The `SagewaiLLMClient` is the only bridge: it calls the hosted service
+  for blueprints. The platform works manually without the service.
+- Autopilot admin routes require `sagewai_auth` cookie, missions are
+  project-scoped via `X-Project-ID` header.
+
+**Test counts:** ~663 autopilot tests + 60 private server tests = 723 total
 
 ## Deployment model
 
