@@ -31,6 +31,11 @@ from sagewai.autopilot.mission import Mission
 from .executor import AgentExecutor, ExecutorConfig
 from .types import MissionRunResult, StepResult
 
+# Optional integrations — imported lazily to avoid circular deps
+# when fleet or scheduler are not used.
+FleetMissionAdapter = None  # set below if fleet_adapter module exists
+MissionScheduler = None  # set below if scheduler module exists
+
 logger = logging.getLogger(__name__)
 
 
@@ -48,8 +53,15 @@ class MissionDriver:
             the :class:`AgentExecutor`.  Defaults are used if not given.
     """
 
-    def __init__(self, executor_config: ExecutorConfig | None = None) -> None:
+    def __init__(
+        self,
+        executor_config: ExecutorConfig | None = None,
+        fleet_adapter: object | None = None,
+        scheduler: object | None = None,
+    ) -> None:
         self._executor = AgentExecutor(executor_config)
+        self._fleet_adapter = fleet_adapter
+        self._scheduler = scheduler
 
     async def execute(self, mission: Mission) -> MissionRunResult:
         """Execute *mission* and return a :class:`MissionRunResult`.
@@ -70,6 +82,26 @@ class MissionDriver:
                 from_state=mission.state.value,
                 to_state=MissionState.RUNNING.value,
             )
+
+        # If a scheduler is provided and blueprint mode is "scheduled",
+        # defer execution — the scheduler's tick() will call us back.
+        if self._scheduler is not None:
+            from sagewai.autopilot.blueprint import Blueprint
+
+            bp = Blueprint.model_validate_json(mission.slots.get("__blueprint_json__", "{}"))
+            if bp.mode.value == "scheduled" and hasattr(self._scheduler, "schedule"):
+                self._scheduler.schedule(mission)
+                logger.info(
+                    "Mission %s deferred to scheduler (mode=scheduled)",
+                    mission.mission_id,
+                )
+                return MissionRunResult(
+                    mission_id=mission.mission_id,
+                    status="deferred",
+                    steps=(),
+                    duration_seconds=0.0,
+                    error=None,
+                )
 
         mission.transition_to(MissionState.RUNNING)
         t0 = time.monotonic()
@@ -144,23 +176,29 @@ class MissionDriver:
                 graph.entry,
             )
             entry_agent = nodes_by_id[graph.entry]
-            step = await self._execute_node(entry_agent, context)
+            step = await self._execute_node(entry_agent, mission, context)
             return [step]
 
         node_order = graph.traverse_linear()
         results: list[StepResult] = []
         for node_id in node_order:
             agent = nodes_by_id[node_id]
-            step = await self._execute_node(agent, context)
+            step = await self._execute_node(agent, mission, context)
             results.append(step)
             # Accumulate output into context for next step
             if step.output_preview:
                 context[f"step_{node_id}_output"] = step.output_preview
         return results
 
-    async def _execute_node(self, agent, context: dict) -> StepResult:
-        """Execute one agent node, catching any unexpected errors."""
+    async def _execute_node(self, agent, mission, context: dict) -> StepResult:
+        """Execute one agent node, catching any unexpected errors.
+
+        If a fleet adapter is configured, delegates to it for dispatch.
+        Otherwise uses the local AgentExecutor.
+        """
         try:
+            if self._fleet_adapter is not None and hasattr(self._fleet_adapter, "dispatch_step"):
+                return await self._fleet_adapter.dispatch_step(agent, mission, context)
             return await self._executor.execute(agent, context)
         except Exception as exc:  # noqa: BLE001
             logger.error("Unexpected error executing agent %r: %s", agent.id, exc)

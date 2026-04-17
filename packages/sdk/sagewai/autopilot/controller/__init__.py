@@ -23,6 +23,8 @@ from __future__ import annotations
 from .controller import AutopilotController
 from .driver import MissionDriver
 from .executor import AgentExecutor, ExecutorConfig
+from .fleet_adapter import FleetMissionAdapter
+from .scheduler import CronParser, MissionScheduler, ScheduledMission
 from .types import ControllerConfig, MissionRunResult, StepResult
 
 __all__ = [
@@ -33,4 +35,8 @@ __all__ = [
     "ControllerConfig",
     "MissionRunResult",
     "StepResult",
+    "FleetMissionAdapter",
+    "MissionScheduler",
+    "ScheduledMission",
+    "CronParser",
 ]
