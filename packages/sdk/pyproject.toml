@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "sagewai"
 version = "0.1.1"
-description = "Open-source AI agent platform for production workloads — full-stack, durable, safe, and model-agnostic."
+description = "The autonomous agent platform. Describe the goal — autopilot designs the agents, the fleet runs them, and the training loop fine-tunes local models so runs get cheaper."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "AGPL-3.0-or-later"}

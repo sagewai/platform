@@ -16,31 +16,31 @@ const FEATURES = [
     icon: <Code2 size={28} />,
     title: 'SDK',
     description:
-      'Build agents in Python with multi-model support, custom tools, persistent memory, guardrails, and durable workflows. Three lines to your first agent, 100+ models via LiteLLM.',
+      'Python-native agent runtime — multi-model, tools via MCP, memory, guardrails, and LLM proxy in one import. Three lines to your first agent, 100+ models via LiteLLM.',
   },
   {
     icon: <Database size={28} />,
-    title: 'Registry',
+    title: 'Autopilot',
     description:
-      'Store, version, discover, and govern AI agents across your organization. Agent lifecycle management with approval workflows and audit trails.',
+      'State the goal in plain English. Autopilot designs the agent graph, extracts the slots, previews the plan, runs the mission, and heals on failure.',
   },
   {
     icon: <Shield size={28} />,
-    title: 'Harness',
+    title: 'Fleet',
     description:
-      'Proxy, route, and budget-control all LLM access. Point Claude Code, Cursor, or Codex at the harness for automatic cost optimization and policy enforcement.',
+      'Distributed workers with capability-based dispatch, project isolation, and enrollment keys. Run agents on your hardware, in your network — zero data egress.',
   },
   {
     icon: <BarChart3 size={28} />,
     title: 'Observatory',
     description:
-      'Source of truth for all AI expenditure. Cost tracking per model, OpenTelemetry tracing, Prometheus metrics, audit logs, and compliance-ready reporting.',
+      'OpenTelemetry tracing, VictoriaMetrics metrics, Grafana dashboards, cost tracking, audit trail. Your AI source of truth — answer "what did AI cost us this month?" in one click.',
   },
   {
     icon: <GraduationCap size={28} />,
-    title: 'Training',
+    title: 'Training Loop',
     description:
-      'Fine-tune domain-specific LLMs with Unsloth, serve locally, route through the Harness at $0 per token. Build legal, medical, or finance models with your own data.',
+      'Curate production runs, export for Unsloth, fine-tune local models, promote the good ones. Agents that get cheaper with use — $0 per token at the limit.',
   },
 ];
 
@@ -166,18 +166,19 @@ export default function LandingPage() {
         <div className="relative max-w-6xl mx-auto px-6 pt-24 pb-16">
           <div className="max-w-3xl mx-auto text-center">
             <div className="inline-flex items-center gap-2 bg-primary-light text-primary text-sm px-4 py-1.5 rounded-full mb-6 font-medium">
-              Open Source + Enterprise Platform
+              Open Source · The Autonomous Agent Platform
             </div>
             <h1 className="text-5xl md:text-6xl font-bold text-text-primary leading-tight tracking-tight mb-6">
-              Sagewai{' '}
+              The{' '}
               <span className="bg-gradient-to-r from-primary to-accent-purple bg-clip-text text-transparent">
-                The LLM-Agnostic
+                factory
               </span>{' '}
-              Agent Framework
+              that runs itself.
             </h1>
             <p className="text-xl text-text-secondary leading-relaxed mb-10 max-w-[42rem] mx-auto">
-              Build production-grade AI agents that work with any model. Multi-tenant, observable,
-              durable, and enterprise-ready. Three lines to your first agent.
+              Sagewai is the autonomous agent platform. Describe the goal — we design
+              the agents, run them in production, and fine-tune local models so every
+              run gets cheaper.
             </p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
               <Link
@@ -207,9 +208,9 @@ export default function LandingPage() {
       {/* Feature Cards (5 Pillars) */}
       <section className="max-w-6xl mx-auto px-6 py-20">
         <div className="text-center mb-12">
-          <h2 className="text-3xl font-bold text-text-primary mb-3">The 5 Pillars</h2>
+          <h2 className="text-3xl font-bold text-text-primary mb-3">What you get</h2>
           <p className="text-text-secondary max-w-[42rem] mx-auto">
-            Everything you need to build, govern, and operate AI agents at scale.
+            The five pillars of the autonomous agent platform — SDK, Autopilot, Fleet, Observatory, Training Loop.
           </p>
         </div>
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">

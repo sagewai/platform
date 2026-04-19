@@ -4,7 +4,9 @@
     <img alt="Sagewai" src="brand/sagewai_logo.svg" width="360">
   </picture>
 
-  <h3>Open-source agent infrastructure you own. Build production AI agents with any model.</h3>
+  <h3>The factory that runs itself.</h3>
+
+  <p><strong>Sagewai is the autonomous agent platform.</strong> Describe the goal — we design the agents, run them in production, and fine-tune local models so every run gets cheaper.</p>
 
   [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](./LICENSE)
   [![PyPI](https://img.shields.io/pypi/v/sagewai.svg)](https://pypi.org/project/sagewai/)
@@ -16,9 +18,9 @@
   <p>
     <a href="https://sagewai.ai">Website</a> ·
     <a href="https://docs.sagewai.ai">Docs</a> ·
+    <a href="./docs/positioning/one-pager.md">One-pager</a> ·
     <a href="#60-second-quickstart">Quickstart</a> ·
     <a href="#learn-in-5-examples">5-Example Tour</a> ·
-    <a href="#video-tutorials">Videos</a> ·
     <a href="https://sagewai.ai/commercial">Commercial license</a>
   </p>
 </div>
@@ -27,24 +29,22 @@
 
 ## What is Sagewai?
 
-**Sagewai is a full-stack, self-hosted platform for building and operating
-AI agents in production.** It gives you the agent framework, the admin UI,
-the observability, the worker fleet, and the tooling — all in one install.
-Point it at any model (Claude, GPT, Gemini, local) and any storage (Postgres,
-Redis, your vector store of choice), and start shipping agents your team
-actually uses.
+**Sagewai is the autonomous agent platform for developers.** You describe the
+goal; autopilot designs the agent graph, the fleet runs it in production,
+and the learning loop fine-tunes local models from the outcomes so runs get
+cheaper over time.
 
-Unlike agent libraries that stop at `agent.run()`, Sagewai gives you:
+Unlike frameworks that stop at `agent.run()`, Sagewai ships the whole loop:
 
-- A **FastAPI backend** with workflow store, budget/guardrails, analytics
-- A **Next.js admin panel** to inspect, debug, and configure runs
-- A **worker fleet** with mTLS, anomaly detection, and dispatch normalization
-- **MCP server** support so your agents slot into any MCP client
-- A **VS Code extension** for directive syntax highlighting and scaffolding
-- **Observability** via OpenTelemetry out of the box
+- **SDK** — Python-native runtime with multi-model, tools via MCP, memory, guardrails, and LLM proxy in one import
+- **Autopilot** — state the goal, autopilot designs and runs the agent graph
+- **Fleet** — distributed workers with capability dispatch and project isolation
+- **Observatory** — OpenTelemetry tracing, VictoriaMetrics metrics, Grafana dashboards, cost tracking, audit trail
+- **Training Loop** — curate runs, fine-tune local models with Unsloth, drive cost per run down over time
 
-All AGPL-3.0. All one `docker compose up`. All self-hostable on your own
-hardware, forever.
+All AGPL-3.0. All one `pip install` or `docker compose up`. All self-hostable on your own hardware, forever.
+
+See the [full one-pager](./docs/positioning/one-pager.md) for competitor comparison and who it's for.
 
 ---
 

@@ -176,10 +176,10 @@ importers:
         version: 3.0.0
       '@mdx-js/react':
         specifier: 3.0.0
-        version: 3.0.0(@types/react@19.0.0)(react@19.2.5)
+        version: 3.0.0(@types/react@19.2.14)(react@19.2.5)
       '@next/mdx':
         specifier: 16.2.3
-        version: 16.2.3(@mdx-js/loader@3.1.1)(@mdx-js/react@3.0.0(@types/react@19.0.0)(react@19.2.5))
+        version: 16.2.3(@mdx-js/loader@3.1.1)(@mdx-js/react@3.0.0(@types/react@19.2.14)(react@19.2.5))
       lucide-react:
         specifier: 1.8.0
         version: 1.8.0(react@19.2.5)
@@ -212,8 +212,8 @@ importers:
         specifier: 25.6.0
         version: 25.6.0
       '@types/react':
-        specifier: 19.0.0
-        version: 19.0.0
+        specifier: 19.2.14
+        version: 19.2.14
       '@types/react-dom':
         specifier: 19.0.0
         version: 19.0.0
@@ -230,8 +230,8 @@ importers:
         specifier: 1.115.0
         version: 1.115.0
       typescript:
-        specifier: 5.9.3
-        version: 5.9.3
+        specifier: 6.0.2
+        version: 6.0.2
 
 packages:
 
@@ -1509,9 +1509,6 @@ packages:
 
   '@types/react-syntax-highlighter@15.5.13':
     resolution: {integrity: sha512-uLGJ87j6Sz8UaBAooU0T6lWJ0dBmjZgN1PZTrj05TNql2/XpC6+4HhMT5syIdFUUt+FASfCeLLv4kBygNU+8qA==}
-
-  '@types/react@19.0.0':
-    resolution: {integrity: sha512-MY3oPudxvMYyesqs/kW1Bh8y9VqSmf+tzqw3ae8a9DZW68pUe3zAdHeI1jc6iAysuRdACnVknHP8AhwD4/dxtg==}
 
   '@types/react@19.2.14':
     resolution: {integrity: sha512-ilcTH/UniCkMdtexkoCN0bI7pMcJDvmQFPvuPvmEaYA/NSfFTAgdUSLAoVjaRJm7+6PvcM+q1zYOwS4wTYMF9w==}
@@ -3538,11 +3535,6 @@ packages:
     resolution: {integrity: sha512-OZs6gsjF4vMp32qrCbiVSkrFmXtG/AZhY3t0iAMrMBiAZyV9oALtXO8hsrHbMXF9x6L3grlFuwW2oAz7cav+Gw==}
     engines: {node: '>= 0.6'}
 
-  typescript@5.9.3:
-    resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
-    engines: {node: '>=14.17'}
-    hasBin: true
-
   typescript@6.0.2:
     resolution: {integrity: sha512-bGdAIrZ0wiGDo5l8c++HWtbaNCWTS4UTv7RaTH/ThVIgjkveJt83m74bBHMJkuCbslY8ixgLBVZJIOiQlQTjfQ==}
     engines: {node: '>=14.17'}
@@ -4218,10 +4210,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@mdx-js/react@3.0.0(@types/react@19.0.0)(react@19.2.5)':
+  '@mdx-js/react@3.0.0(@types/react@19.2.14)(react@19.2.5)':
     dependencies:
       '@types/mdx': 2.0.0
-      '@types/react': 19.0.0
+      '@types/react': 19.2.14
       react: 19.2.5
 
   '@mermaid-js/parser@1.1.0':
@@ -4261,12 +4253,12 @@ snapshots:
 
   '@next/env@16.2.3': {}
 
-  '@next/mdx@16.2.3(@mdx-js/loader@3.1.1)(@mdx-js/react@3.0.0(@types/react@19.0.0)(react@19.2.5))':
+  '@next/mdx@16.2.3(@mdx-js/loader@3.1.1)(@mdx-js/react@3.0.0(@types/react@19.2.14)(react@19.2.5))':
     dependencies:
       source-map: 0.7.6
     optionalDependencies:
       '@mdx-js/loader': 3.1.1
-      '@mdx-js/react': 3.0.0(@types/react@19.0.0)(react@19.2.5)
+      '@mdx-js/react': 3.0.0(@types/react@19.2.14)(react@19.2.5)
 
   '@next/swc-darwin-arm64@16.2.3':
     optional: true
@@ -5035,10 +5027,6 @@ snapshots:
   '@types/react-syntax-highlighter@15.5.13':
     dependencies:
       '@types/react': 19.2.14
-
-  '@types/react@19.0.0':
-    dependencies:
-      csstype: 3.2.3
 
   '@types/react@19.2.14':
     dependencies:
@@ -7437,8 +7425,6 @@ snapshots:
       content-type: 1.0.5
       media-typer: 1.1.0
       mime-types: 3.0.2
-
-  typescript@5.9.3: {}
 
   typescript@6.0.2: {}
 
