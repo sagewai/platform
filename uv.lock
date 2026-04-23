@@ -20,6 +20,7 @@ resolution-markers = [
 [manifest]
 members = [
     "sagewai",
+    "sagewai-tool-runner",
 ]
 
 [[package]]
@@ -39,6 +40,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ca/14/787e5498cd062640f0f3d92ef4ae4063174f76f9afd29d13fc52a319daae/accelerate-1.13.0.tar.gz", hash = "sha256:d631b4e0f5b3de4aff2d7e9e6857d164810dfc3237d54d017f075122d057b236", size = 402835, upload-time = "2026-03-04T19:34:12.359Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7e/46/02ac5e262d4af18054b3e922b2baedbb2a03289ee792162de60a865defc5/accelerate-1.13.0-py3-none-any.whl", hash = "sha256:cf1a3efb96c18f7b152eb0fa7490f3710b19c3f395699358f08decca2b8b62e0", size = 383744, upload-time = "2026-03-04T19:34:10.313Z" },
+]
+
+[[package]]
+name = "aiodocker"
+version = "0.9.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "yarl" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5c/43/b74412e22efb1bef190e8e6542d02dec9c220cf63e7810a4c2b6f6d5a49b/aiodocker-0.9.0.tar.gz", hash = "sha256:925819031be1a3b518815bcba17c08209351a7cbd1c888e1ce52631586dd24a8", size = 32488, upload-time = "2018-02-11T16:10:29.127Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bc/e1/3f5c1aa730b5e619c3b548d6f38ef61ea939f7d54fee65aa8bbf5348c424/aiodocker-0.9.0-py3-none-any.whl", hash = "sha256:f7719e8f0fc9e4fa9740d3e0613d3fed40373d8a0393c9cc2251a433b5307918", size = 23277, upload-time = "2018-02-11T16:10:28.001Z" },
 ]
 
 [[package]]
@@ -4546,6 +4560,9 @@ postgres = [
 prometheus = [
     { name = "prometheus-client" },
 ]
+sandbox = [
+    { name = "aiodocker" },
+]
 storage = [
     { name = "boto3" },
     { name = "google-cloud-storage" },
@@ -4570,6 +4587,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiodocker", marker = "extra == 'sandbox'", specifier = "==0.9.0" },
     { name = "alembic", marker = "extra == 'postgres'", specifier = "==1.18.4" },
     { name = "asyncpg", marker = "extra == 'postgres'", specifier = "==0.31.0" },
     { name = "boto3", marker = "extra == 'storage'", specifier = "==1.42.88" },
@@ -4606,7 +4624,7 @@ requires-dist = [
     { name = "tree-sitter-languages", marker = "extra == 'memory'", specifier = "==1.10.2" },
     { name = "uvicorn", marker = "extra == 'fastapi'", specifier = "==0.44.0" },
 ]
-provides-extras = ["memory", "fastapi", "postgres", "prometheus", "storage", "intelligence", "multimodal", "intelligence-full", "all"]
+provides-extras = ["memory", "fastapi", "postgres", "prometheus", "storage", "intelligence", "multimodal", "intelligence-full", "all", "sandbox"]
 
 [package.metadata.requires-dev]
 test = [
@@ -4624,6 +4642,28 @@ test = [
     { name = "sse-starlette", specifier = ">=1.6.0" },
     { name = "uvicorn", specifier = ">=0.23.0" },
 ]
+
+[[package]]
+name = "sagewai-tool-runner"
+version = "0.1.0"
+source = { editable = "packages/tool-runner" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pydantic", specifier = ">=2.12.5" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
+]
+provides-extras = ["dev"]
 
 [[package]]
 name = "scikit-learn"

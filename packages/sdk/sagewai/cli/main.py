@@ -42,6 +42,22 @@ from typing import Any
 import click
 
 
+def _parse_size(value: str) -> int:
+    """Parse '2g', '512m', '1024k' → bytes."""
+    s = value.strip().lower()
+    mul = 1
+    if s.endswith("g"):
+        mul = 1024**3
+        s = s[:-1]
+    elif s.endswith("m"):
+        mul = 1024**2
+        s = s[:-1]
+    elif s.endswith("k"):
+        mul = 1024
+        s = s[:-1]
+    return int(float(s) * mul)
+
+
 def _run_async(coro: Any) -> Any:
     """Run async function from sync CLI context."""
     return asyncio.run(coro)
@@ -327,6 +343,61 @@ def register_commands(
         help='Worker labels as JSON (e.g. \'{"zone":"eu","gpu":true}\')',
     )
     @click.option(
+        "--sandbox-mode",
+        type=click.Choice(["none", "per_tool", "per_run", "per_worker"]),
+        default=None,
+        help="Sandbox mode (overrides project environment default).",
+    )
+    @click.option(
+        "--sandbox-backend",
+        type=click.Choice(["docker", "null"]),
+        default="docker",
+        help="Sandbox backend implementation.",
+    )
+    @click.option(
+        "--sandbox-image",
+        default=None,
+        help="Default sandbox image (e.g., ghcr.io/sagewai/sandbox-base:dev).",
+    )
+    @click.option(
+        "--sandbox-network",
+        type=click.Choice(["none", "egress_allowlist", "full"]),
+        default="none",
+        help="Network policy for sandboxes.",
+    )
+    @click.option(
+        "--sandbox-cpu",
+        type=float,
+        default=2.0,
+        show_default=True,
+        help="CPU core limit per sandbox.",
+    )
+    @click.option(
+        "--sandbox-mem",
+        default="2g",
+        show_default=True,
+        help="Memory limit per sandbox (e.g., 2g, 512m).",
+    )
+    @click.option(
+        "--sandbox-pids",
+        type=int,
+        default=128,
+        show_default=True,
+        help="Max PIDs per sandbox.",
+    )
+    @click.option(
+        "--sandbox-disk",
+        default="5g",
+        show_default=True,
+        help="Tmpfs disk limit per sandbox (e.g., 5g).",
+    )
+    @click.option(
+        "--project-environment",
+        type=click.Choice(["production", "staging", "development"]),
+        default=None,
+        help="Project environment hint (used for mode default selection).",
+    )
+    @click.option(
         "--model",
         type=str,
         default=None,
@@ -357,6 +428,15 @@ def register_commands(
         api_base: str | None,
         api_key: str | None,
         db_url: str | None,
+        sandbox_mode: str | None,
+        sandbox_backend: str,
+        sandbox_image: str | None,
+        sandbox_network: str,
+        sandbox_cpu: float,
+        sandbox_mem: str,
+        sandbox_pids: int,
+        sandbox_disk: str,
+        project_environment: str | None,
     ) -> None:
         """Start a workflow worker with optional routing and credentials."""
         import json as _json
@@ -364,8 +444,8 @@ def register_commands(
         async def _run() -> None:
             store = await _get_store(db_url)
             from sagewai.core.worker import WorkflowWorker
-            from sagewai.models.worker import WorkerCredentials
             from sagewai.models.inference import InferenceParams
+            from sagewai.models.worker import WorkerCredentials
 
             # Build credentials from CLI flags
             creds: WorkerCredentials | None = None
@@ -386,6 +466,26 @@ def register_commands(
 
             parsed_labels = _json.loads(labels) if labels else None
 
+            from sagewai.sandbox.models import (
+                NetworkPolicy,
+                ResourceLimits,
+                SandboxConfig,
+                SandboxMode,
+            )
+
+            sbox_config = SandboxConfig(
+                mode=SandboxMode(sandbox_mode) if sandbox_mode else None,
+                backend=sandbox_backend,
+                default_image=sandbox_image or "ghcr.io/sagewai/sandbox-base:dev",
+                network_policy=NetworkPolicy(sandbox_network),
+                resource_limits=ResourceLimits(
+                    cpu=sandbox_cpu,
+                    mem_bytes=_parse_size(sandbox_mem),
+                    pids=sandbox_pids,
+                    disk_bytes=_parse_size(sandbox_disk),
+                ),
+            )
+
             w = WorkflowWorker(
                 store=store,
                 workflow_registry={},
@@ -395,6 +495,8 @@ def register_commands(
                 pool=pool,
                 labels=parsed_labels,
                 credentials=creds,
+                sandbox_config=sbox_config,
+                project_environment=project_environment,
             )
             click.echo(
                 f"Worker starting (id={w.worker_id}, pool={pool}, "

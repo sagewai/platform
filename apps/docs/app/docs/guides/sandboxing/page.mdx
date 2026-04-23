@@ -1,0 +1,63 @@
+# Sandboxing
+
+Sagewai workers can run tool calls (bash, code-eval, filesystem, …) inside an
+ephemeral container so a run in project A cannot read env, files, or tokens
+belonging to project B running on the same worker. This page covers the
+runtime options.
+
+## Modes
+
+| Mode | What it does | When to use |
+|---|---|---|
+| `none` | Tools run in the worker process with a scoped scratch directory and scrubbed env. | Local development, trusted single-tenant |
+| `per_tool` | One container per tool call. | Untrusted tools, trusted workflow |
+| `per_run` | One container per workflow run, reused across tool calls. | **Production default.** |
+| `per_worker` | One long-lived container per worker, pinned to one project. | Very low-latency single-project fleets |
+
+## Selection precedence
+
+Highest first:
+
+1. Worker CLI flag `--sandbox-mode`
+2. Worker config file (`~/.sagewai/worker.yaml`, not shipped in Plan 1)
+3. Project environment default (`production → per_run`, `staging → per_tool`, `development → none`)
+4. Hard default: `none`
+
+## Start a sandboxed worker
+
+```bash
+sagewai worker start \
+    --pool default \
+    --sandbox-mode per_run \
+    --sandbox-backend docker \
+    --sandbox-image ghcr.io/sagewai/sandbox-base:dev \
+    --sandbox-network none \
+    --sandbox-cpu 2 --sandbox-mem 4g --sandbox-pids 256 --sandbox-disk 10g \
+    --project-environment production
+```
+
+## Debugging
+
+```bash
+# Backend health
+sagewai sandbox doctor
+
+# Live sandboxes on this host
+sagewai sandbox list
+
+# Force-kill orphans
+sagewai sandbox reap --older-than 10m
+```
+
+## Fallback behavior
+
+If the requested backend is unhealthy (e.g., Docker daemon down):
+
+- **Non-production** projects fall back one mode (`per_run → per_tool → none`) with a `WARN` log.
+- **Production** projects refuse to start. The worker exits non-zero so the process supervisor can surface the outage.
+
+## Roadmap
+
+- **Plan 2** — full sandbox image family (`general`, `ml`, `ml-cuda`, `ops`, `erp`, `ecommerce`, `api`), published to GHCR with SHA-pinned digests.
+- **Plan 3** — fleet label advertisement for multi-tenant task routing, admin UI surfaces, Grafana dashboard row, egress-allowlist proxy.
+- **Future** — _Sagewai Sealed_ will replace the minimal env-var secret provider with JIT credentials, redaction, workload identity, and HITL approval.

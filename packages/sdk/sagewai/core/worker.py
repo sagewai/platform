@@ -54,6 +54,7 @@ import platform
 import time
 import traceback
 from contextvars import ContextVar
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -62,6 +63,12 @@ if TYPE_CHECKING:
     from sagewai.models.worker import WorkerCredentials
 
 from sagewai.fleet.normalizer import ModelNormalizer
+from sagewai.sandbox.backend import SandboxBackend
+from sagewai.sandbox.fallback import apply_fallback
+from sagewai.sandbox.models import SandboxConfig, SandboxMode
+from sagewai.sandbox.null_backend import NullBackend
+from sagewai.sandbox.pool import SandboxPool
+from sagewai.sandbox.registry import resolve_mode
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +152,11 @@ class WorkflowWorker:
         labels: dict[str, Any] | None = None,
         credentials: WorkerCredentials | None = None,
         models_supported: list[str] | None = None,
+        # ── sandboxing ────────────────────────────────────────────────
+        sandbox_backend: SandboxBackend | None = None,
+        sandbox_config: SandboxConfig | None = None,
+        sandbox_scratch_root: Path | None = None,
+        project_environment: str | None = None,
     ) -> None:
         self._store = store
         self._registry = workflow_registry
@@ -165,10 +177,64 @@ class WorkflowWorker:
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._active_tasks: set[asyncio.Task[None]] = set()
 
+        self._sandbox_backend_override = sandbox_backend
+        self._sandbox_config = sandbox_config or SandboxConfig()
+        self._sandbox_scratch_root = (
+            sandbox_scratch_root or Path.home() / ".sagewai" / "workers"
+        )
+        self._project_environment = project_environment
+        self._sandbox_pool: SandboxPool | None = None
+
     @property
     def worker_id(self) -> str:
         """Unique identifier for this worker process."""
         return f"{platform.node()}:{os.getpid()}"
+
+    async def _start_sandbox_pool(self) -> None:
+        """Resolve the effective mode, select a backend, and start the pool."""
+        cli_flag = self._sandbox_config.mode
+        effective = resolve_mode(
+            cli_flag=cli_flag,
+            config=self._sandbox_config,
+            project_environment=self._project_environment,
+        )
+
+        # Select backend
+        if effective is SandboxMode.NONE:
+            backend: SandboxBackend = NullBackend()
+        elif self._sandbox_backend_override is not None:
+            backend = self._sandbox_backend_override
+        else:
+            from sagewai.sandbox.docker_backend import DockerBackend  # lazy
+            backend = DockerBackend()
+
+        # Health check + fallback
+        health = await backend.health_check()
+        production = (self._project_environment == "production")
+        effective = apply_fallback(effective, health, production=production)
+
+        # If fallback dropped us to NONE, swap backend.
+        if effective is SandboxMode.NONE and backend.name != "null":
+            backend = NullBackend()
+
+        config = self._sandbox_config.model_copy(update={"mode": effective})
+        self._sandbox_pool = SandboxPool(
+            backend=backend,
+            config=config,
+            worker_id=self.worker_id.replace(":", "-"),
+            scratch_root=self._sandbox_scratch_root,
+        )
+        await self._sandbox_pool.start_reaper()
+        logger.info(
+            "sandbox pool started mode=%s backend=%s",
+            effective.value,
+            backend.name,
+        )
+
+    async def _stop_sandbox_pool(self) -> None:
+        if self._sandbox_pool is not None:
+            await self._sandbox_pool.stop()
+            self._sandbox_pool = None
 
     async def start(self) -> None:
         """Main loop: poll for pending runs, claim and execute.
@@ -210,6 +276,8 @@ class WorkflowWorker:
                     exc_info=True,
                 )
 
+        await self._start_sandbox_pool()
+
         try:
             _last_worker_heartbeat = 0.0
             while not self._shutdown_event.is_set():
@@ -249,6 +317,7 @@ class WorkflowWorker:
                         self.worker_id,
                         exc_info=True,
                     )
+            await self._stop_sandbox_pool()
             await self._drain()
             logger.info("WorkflowWorker stopped (id=%s)", self.worker_id)
 
