@@ -1,0 +1,5 @@
+# For local :dev builds, this .in does NOT include sagewai-tool-runner —
+# the Dockerfile installs it from the monorepo source directly.
+# The release-sandbox.yml workflow appends `sagewai-tool-runner==${TOOL_RUNNER_VERSION}`
+# and regenerates .txt before building :${VERSION} images from PyPI.
+pydantic==2.12.5

@@ -61,3 +61,20 @@ async def test_runner_unknown_method():
     first_line = stdout.decode("utf-8").splitlines()[0]
     resp = json.loads(first_line)
     assert resp["error"]["code"] == -32601
+
+
+@pytest.mark.asyncio
+async def test_runner_version_flag():
+    """--version prints the package version and exits 0."""
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "sagewai_tool_runner",
+        "--version",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+    assert proc.returncode == 0
+    from sagewai_tool_runner import __version__
+    assert stdout.decode("utf-8").strip() == __version__

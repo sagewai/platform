@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import sys
 
+from sagewai_tool_runner import __version__
 from sagewai_tool_runner.rpc import RpcError, RpcRequest, RpcResponse, parse_request
 from sagewai_tool_runner.tools.bash import run_bash
 
@@ -59,6 +60,9 @@ async def _loop() -> None:
 
 
 def main() -> None:
+    if "--version" in sys.argv:
+        print(__version__)
+        sys.exit(0)
     try:
         asyncio.run(_loop())
     except KeyboardInterrupt:

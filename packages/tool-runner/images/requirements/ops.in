@@ -1,0 +1,10 @@
+# Ops variant requirements.
+#
+# Resolution strategy: constrained against both base.txt and general.txt for
+# lockstep dependency alignment with the general image layer.
+# pip packages: kubernetes client, hetzner cloud API, and python-terraform wrapper.
+-c general.txt
+-c base.txt
+kubernetes
+hcloud
+python-terraform

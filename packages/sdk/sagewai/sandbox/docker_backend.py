@@ -32,6 +32,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from packaging.specifiers import SpecifierSet
+from packaging.version import Version
+
+from sagewai.sandbox import image_manifest
 from sagewai.sandbox.models import (
     BackendHealth,
     NetworkPolicy,
@@ -44,6 +48,10 @@ from sagewai.sandbox.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class SandboxError(RuntimeError):
+    """Raised when the sandbox cannot be safely started."""
 
 _SAGEWAI_LABEL_PREFIX = "sagewai."
 
@@ -233,6 +241,100 @@ class DockerBackend:
             )
         except Exception as exc:
             return BackendHealth(ok=False, backend="docker", detail=str(exc))
+
+    async def _inspect_image_digest(self, image_ref: str) -> str:
+        """Resolve ``image_ref`` to its RepoDigest sha256 via `docker inspect`.
+
+        Pulls the image first if necessary. Raises SandboxError if the image
+        cannot be inspected after a pull attempt.
+        """
+        docker_bin = _docker_bin()
+        pull = await asyncio.create_subprocess_exec(
+            docker_bin, "pull", image_ref,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        await pull.communicate()
+        # A non-zero pull exit code is tolerated: the image may be locally
+        # built (e.g. :dev) and simply not available in a remote registry.
+        # We proceed to inspect; if the image is absent locally, inspect
+        # will also fail and we raise there.
+
+        inspect = await asyncio.create_subprocess_exec(
+            docker_bin, "inspect", "--format", "{{index .RepoDigests 0}}", image_ref,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await inspect.communicate()
+        if inspect.returncode != 0:
+            raise SandboxError(f"docker inspect {image_ref!r} failed")
+        repo_digest = stdout.decode("utf-8").strip()
+        if "@" not in repo_digest:
+            raise SandboxError(
+                f"image {image_ref!r} has no RepoDigest — push it first"
+            )
+        return repo_digest.split("@", 1)[1]
+
+    async def verify_digest(
+        self, *, image_ref: str, actual_digest: str
+    ) -> None:
+        """Enforce the manifest's digest pin for known refs.
+
+        - Known ref (in manifest) + matching digest: silent pass.
+        - Known ref + mismatching digest: raise SandboxError.
+        - Unknown ref (BYO, :dev, third-party): INFO-log the unverified
+          digest and return. Auditors can reconstruct what actually ran.
+        """
+        expected = image_manifest.lookup_digest(image_ref)
+        if expected is None:
+            logger.info(
+                "unverified image %s (digest %s) — not in SDK manifest",
+                image_ref,
+                actual_digest,
+            )
+            return
+        if expected != actual_digest:
+            raise SandboxError(
+                f"digest mismatch for {image_ref!r}: "
+                f"expected {expected}, got {actual_digest}"
+            )
+
+    async def probe_runner(self, handle) -> str:
+        """Run `sagewai-tool-runner --version` in the sandbox; validate against
+        ``image_manifest.TOOL_RUNNER_VERSION_SPEC``.
+
+        Returns the reported version string on success. Raises SandboxError
+        if the runner is missing, unresponsive, or out of spec.
+        """
+        docker_bin = _docker_bin()
+        proc = await asyncio.create_subprocess_exec(
+            docker_bin, "exec", handle.sandbox_id,
+            "sagewai-tool-runner", "--version",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+        except asyncio.TimeoutError:
+            raise SandboxError("tool-runner probe timeout (10s)")
+        if proc.returncode != 0:
+            raise SandboxError(
+                f"tool-runner probe failed (exit={proc.returncode}): "
+                f"{stderr.decode('utf-8', errors='replace').strip()}"
+            )
+
+        version_str = stdout.decode("utf-8").strip()
+        try:
+            version = Version(version_str)
+        except Exception as exc:
+            raise SandboxError(
+                f"tool-runner returned unparseable version {version_str!r}"
+            ) from exc
+
+        spec = SpecifierSet(image_manifest.TOOL_RUNNER_VERSION_SPEC)
+        if version not in spec:
+            raise SandboxError(
+                f"tool-runner version {version_str} does not satisfy {spec} — "
+                f"rebuild the image against the current SDK"
+            )
+        return version_str
 
     async def start(
         self,

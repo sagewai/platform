@@ -1,0 +1,8 @@
+-c base.txt
+requests
+httpx
+beautifulsoup4
+lxml
+selectolax
+playwright
+azure-cli==2.72.0

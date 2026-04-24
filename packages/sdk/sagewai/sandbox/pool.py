@@ -83,6 +83,7 @@ class SandboxPool:
         self._worker_handle: SandboxHandle | None = None
         self._lock = asyncio.Lock()
         self._reaper_task: asyncio.Task | None = None
+        self._probed_digests: set[str] = set()
 
     @property
     def mode(self) -> SandboxMode:
@@ -149,11 +150,16 @@ class SandboxPool:
         factory_kwargs = await self._factory_kwargs(
             project_id=project_id, run_id=run_id, image=image
         )
+        maybe_probe = getattr(self._backend, "probe_runner", None)
         if mode is SandboxMode.NONE:
             return await self._backend.start(
                 **factory_kwargs, lifetime=SandboxLifetime.PER_RUN
             )
         if mode is SandboxMode.PER_TOOL:
+            # NOTE: probe caching by digest for PER_TOOL mode is a known gap —
+            # _ProxyHandle creates and destroys containers per exec(), so there
+            # is no persistent handle to probe against. This is a future
+            # optimization.
             return _ProxyHandle(self._backend.start, dict(factory_kwargs))
         if mode is SandboxMode.PER_RUN:
             async with self._lock:
@@ -163,6 +169,9 @@ class SandboxPool:
             handle = await self._backend.start(
                 **factory_kwargs, lifetime=SandboxLifetime.PER_RUN
             )
+            if maybe_probe is not None and handle.image_digest not in self._probed_digests:
+                await maybe_probe(handle)
+                self._probed_digests.add(handle.image_digest)
             async with self._lock:
                 self._per_run_handles[run_id] = handle
             return handle
@@ -173,6 +182,9 @@ class SandboxPool:
             handle = await self._backend.start(
                 **factory_kwargs, lifetime=SandboxLifetime.PER_WORKER
             )
+            if maybe_probe is not None and handle.image_digest not in self._probed_digests:
+                await maybe_probe(handle)
+                self._probed_digests.add(handle.image_digest)
             async with self._lock:
                 self._worker_handle = handle
             return handle

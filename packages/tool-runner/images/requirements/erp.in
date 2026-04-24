@@ -1,0 +1,6 @@
+-c general.txt
+-c base.txt
+odoo-client-lib
+requests-oauthlib
+simple-salesforce
+pyodbc

@@ -1,0 +1,5 @@
+-c general.txt
+-c base.txt
+httpie
+openapi-spec-validator
+jsonschema

@@ -1,0 +1,446 @@
+name: release-sandbox
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write     # for manifest commit
+  packages: write     # for GHCR push
+  id-token: write     # for Sigstore attestation
+  attestations: write
+
+env:
+  REGISTRY: ghcr.io
+  ORG: sagewai
+
+jobs:
+  wait-for-tool-runner:
+    # PyPI propagation can lag ~60s; block the matrix until the wheel is
+    # really fetchable. Prevents flaky `pip install sagewai-tool-runner==X`
+    # inside Dockerfiles.
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - id: meta
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for sagewai-tool-runner==${{ steps.meta.outputs.version }} on PyPI
+        run: |
+          set -eu
+          for i in $(seq 1 30); do
+            if curl -fsSL "https://pypi.org/pypi/sagewai-tool-runner/${{ steps.meta.outputs.version }}/json" > /dev/null; then
+              echo "tool-runner available on PyPI"
+              exit 0
+            fi
+            echo "attempt $i: not yet; sleeping 10s"
+            sleep 10
+          done
+          echo "tool-runner never appeared on PyPI"
+          exit 1
+
+  # ── Tier 1: build base (both arches in parallel) ──────────────────────
+  build-base:
+    needs: wait-for-tool-runner
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Load shared build args
+        run: |
+          set -a
+          source packages/tool-runner/images/snapshot.env
+          source packages/tool-runner/images/pins.env
+          set +a
+          env | grep -E "^(SNAPSHOT_DATE|PYTHON_DIGEST|GH_|YQ_)=" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+
+      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push base (${{ matrix.arch }})
+        id: build
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: packages/tool-runner/images/base/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.ORG }}/sandbox-base:${{ needs.wait-for-tool-runner.outputs.version }}-${{ matrix.arch }}
+          build-args: |
+            TOOL_RUNNER_VERSION=${{ needs.wait-for-tool-runner.outputs.version }}
+            SNAPSHOT_DATE=${{ env.SNAPSHOT_DATE }}
+            PYTHON_DIGEST=${{ env.PYTHON_DIGEST }}
+            GH_VERSION=${{ env.GH_VERSION }}
+            GH_AMD64_SHA256=${{ env.GH_AMD64_SHA256 }}
+            GH_ARM64_SHA256=${{ env.GH_ARM64_SHA256 }}
+            YQ_VERSION=${{ env.YQ_VERSION }}
+            YQ_AMD64_SHA256=${{ env.YQ_AMD64_SHA256 }}
+            YQ_ARM64_SHA256=${{ env.YQ_ARM64_SHA256 }}
+          cache-from: type=gha,scope=sandbox-base-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=sandbox-base-${{ matrix.arch }}
+
+      - name: Generate SBOM for base:${{ matrix.arch }}
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.ORG }}/sandbox-base:${{ needs.wait-for-tool-runner.outputs.version }}-${{ matrix.arch }}
+          artifact-name: sandbox-base-${{ matrix.arch }}-sbom
+          format: cyclonedx-json
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.ORG }}/sandbox-base
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Save arch digest
+        run: |
+          mkdir -p digest-artifacts
+          echo "${{ steps.build.outputs.digest }}" > "digest-artifacts/base-${{ matrix.arch }}.txt"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: digest-base-${{ matrix.arch }}
+          path: digest-artifacts/
+
+  # ── Tier 2: build general (layers on base; both arches in parallel) ───
+  build-general:
+    needs: [wait-for-tool-runner, build-base]
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Load shared build args
+        run: |
+          set -a
+          source packages/tool-runner/images/snapshot.env
+          source packages/tool-runner/images/pins.env
+          set +a
+          env | grep -E "^(SNAPSHOT_DATE|PYTHON_DIGEST|GH_|YQ_|AWS_CLI_|GCLOUD_|AZ_CLI_|CLAUDE_CODE_|CODEX_)=" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+
+      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve base digest for this arch
+        id: base-digest
+        run: |
+          DIGEST=$(docker buildx imagetools inspect \
+            ${{ env.REGISTRY }}/${{ env.ORG }}/sandbox-base:${{ needs.wait-for-tool-runner.outputs.version }}-${{ matrix.arch }} \
+            --format '{{.Manifest.Digest}}')
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push general (${{ matrix.arch }})
+        id: build
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: packages/tool-runner/images/general/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.ORG }}/sandbox-general:${{ needs.wait-for-tool-runner.outputs.version }}-${{ matrix.arch }}
+          build-args: |
+            TOOL_RUNNER_VERSION=${{ needs.wait-for-tool-runner.outputs.version }}
+            SANDBOX_BASE_DIGEST=${{ steps.base-digest.outputs.digest }}
+            AWS_CLI_VERSION=${{ env.AWS_CLI_VERSION }}
+            AWS_CLI_AMD64_SHA256=${{ env.AWS_CLI_AMD64_SHA256 }}
+            AWS_CLI_ARM64_SHA256=${{ env.AWS_CLI_ARM64_SHA256 }}
+            GCLOUD_VERSION=${{ env.GCLOUD_VERSION }}
+            GCLOUD_AMD64_SHA256=${{ env.GCLOUD_AMD64_SHA256 }}
+            GCLOUD_ARM64_SHA256=${{ env.GCLOUD_ARM64_SHA256 }}
+            AZ_CLI_VERSION=${{ env.AZ_CLI_VERSION }}
+            CLAUDE_CODE_VERSION=${{ env.CLAUDE_CODE_VERSION }}
+            CLAUDE_CODE_NPM_INTEGRITY=${{ env.CLAUDE_CODE_NPM_INTEGRITY }}
+            CODEX_VERSION=${{ env.CODEX_VERSION }}
+            CODEX_NPM_INTEGRITY=${{ env.CODEX_NPM_INTEGRITY }}
+          cache-from: type=gha,scope=sandbox-general-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=sandbox-general-${{ matrix.arch }}
+
+      - name: Generate SBOM for general:${{ matrix.arch }}
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.ORG }}/sandbox-general:${{ needs.wait-for-tool-runner.outputs.version }}-${{ matrix.arch }}
+          artifact-name: sandbox-general-${{ matrix.arch }}-sbom
+          format: cyclonedx-json
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.ORG }}/sandbox-general
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Save arch digest
+        run: |
+          mkdir -p digest-artifacts
+          echo "${{ steps.build.outputs.digest }}" > "digest-artifacts/general-${{ matrix.arch }}.txt"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: digest-general-${{ matrix.arch }}
+          path: digest-artifacts/
+
+  # ── Tier 3: build leaves (layer on general; 5 variants × 2 arches) ───
+  build-leaves:
+    needs: [wait-for-tool-runner, build-general]
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [ml, ops, erp, ecommerce, api]
+        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Load shared build args
+        run: |
+          set -a
+          source packages/tool-runner/images/snapshot.env
+          source packages/tool-runner/images/pins.env
+          set +a
+          env | grep -E "^(SNAPSHOT_DATE|PYTHON_DIGEST|GH_|YQ_|AWS_CLI_|GCLOUD_|AZ_CLI_|CLAUDE_CODE_|CODEX_|KUBECTL_|HELM_|TERRAFORM_|DOCKER_CLI_|SHOPIFY_|STRIPE_CLI_|SFDX_|STENCIL_CLI_|GRPCURL_|K6_|DECK_|APIGEECLI_|NEWMAN_|ASYNCAPI_CLI_|OPENAPI_GENERATOR_)=" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+
+      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve general digest for this arch
+        id: general-digest
+        run: |
+          DIGEST=$(docker buildx imagetools inspect \
+            ${{ env.REGISTRY }}/${{ env.ORG }}/sandbox-general:${{ needs.wait-for-tool-runner.outputs.version }}-${{ matrix.arch }} \
+            --format '{{.Manifest.Digest}}')
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push ${{ matrix.variant }} (${{ matrix.arch }})
+        id: build
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: packages/tool-runner/images/${{ matrix.variant }}/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.ORG }}/sandbox-${{ matrix.variant }}:${{ needs.wait-for-tool-runner.outputs.version }}-${{ matrix.arch }}
+          build-args: |
+            TOOL_RUNNER_VERSION=${{ needs.wait-for-tool-runner.outputs.version }}
+            SANDBOX_GENERAL_DIGEST=${{ steps.general-digest.outputs.digest }}
+            KUBECTL_VERSION=${{ env.KUBECTL_VERSION }}
+            KUBECTL_AMD64_SHA256=${{ env.KUBECTL_AMD64_SHA256 }}
+            KUBECTL_ARM64_SHA256=${{ env.KUBECTL_ARM64_SHA256 }}
+            HELM_VERSION=${{ env.HELM_VERSION }}
+            HELM_AMD64_SHA256=${{ env.HELM_AMD64_SHA256 }}
+            HELM_ARM64_SHA256=${{ env.HELM_ARM64_SHA256 }}
+            TERRAFORM_VERSION=${{ env.TERRAFORM_VERSION }}
+            TERRAFORM_AMD64_SHA256=${{ env.TERRAFORM_AMD64_SHA256 }}
+            TERRAFORM_ARM64_SHA256=${{ env.TERRAFORM_ARM64_SHA256 }}
+            DOCKER_CLI_VERSION=${{ env.DOCKER_CLI_VERSION }}
+            DOCKER_CLI_AMD64_SHA256=${{ env.DOCKER_CLI_AMD64_SHA256 }}
+            DOCKER_CLI_ARM64_SHA256=${{ env.DOCKER_CLI_ARM64_SHA256 }}
+            SHOPIFY_CLI_VERSION=${{ env.SHOPIFY_CLI_VERSION }}
+            SHOPIFY_CLI_NPM_INTEGRITY=${{ env.SHOPIFY_CLI_NPM_INTEGRITY }}
+            STRIPE_CLI_VERSION=${{ env.STRIPE_CLI_VERSION }}
+            STRIPE_CLI_AMD64_SHA256=${{ env.STRIPE_CLI_AMD64_SHA256 }}
+            STRIPE_CLI_ARM64_SHA256=${{ env.STRIPE_CLI_ARM64_SHA256 }}
+            SFDX_VERSION=${{ env.SFDX_VERSION }}
+            SFDX_NPM_INTEGRITY=${{ env.SFDX_NPM_INTEGRITY }}
+            STENCIL_CLI_VERSION=${{ env.STENCIL_CLI_VERSION }}
+            STENCIL_CLI_NPM_INTEGRITY=${{ env.STENCIL_CLI_NPM_INTEGRITY }}
+            GRPCURL_VERSION=${{ env.GRPCURL_VERSION }}
+            GRPCURL_AMD64_SHA256=${{ env.GRPCURL_AMD64_SHA256 }}
+            GRPCURL_ARM64_SHA256=${{ env.GRPCURL_ARM64_SHA256 }}
+            K6_VERSION=${{ env.K6_VERSION }}
+            K6_AMD64_SHA256=${{ env.K6_AMD64_SHA256 }}
+            K6_ARM64_SHA256=${{ env.K6_ARM64_SHA256 }}
+            DECK_VERSION=${{ env.DECK_VERSION }}
+            DECK_AMD64_SHA256=${{ env.DECK_AMD64_SHA256 }}
+            DECK_ARM64_SHA256=${{ env.DECK_ARM64_SHA256 }}
+            APIGEECLI_VERSION=${{ env.APIGEECLI_VERSION }}
+            APIGEECLI_AMD64_SHA256=${{ env.APIGEECLI_AMD64_SHA256 }}
+            NEWMAN_VERSION=${{ env.NEWMAN_VERSION }}
+            NEWMAN_NPM_INTEGRITY=${{ env.NEWMAN_NPM_INTEGRITY }}
+            ASYNCAPI_CLI_VERSION=${{ env.ASYNCAPI_CLI_VERSION }}
+            ASYNCAPI_CLI_NPM_INTEGRITY=${{ env.ASYNCAPI_CLI_NPM_INTEGRITY }}
+            OPENAPI_GENERATOR_VERSION=${{ env.OPENAPI_GENERATOR_VERSION }}
+            OPENAPI_GENERATOR_JAR_SHA256=${{ env.OPENAPI_GENERATOR_JAR_SHA256 }}
+          cache-from: type=gha,scope=sandbox-${{ matrix.variant }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=sandbox-${{ matrix.variant }}-${{ matrix.arch }}
+
+      - name: Generate SBOM for ${{ matrix.variant }}:${{ matrix.arch }}
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.ORG }}/sandbox-${{ matrix.variant }}:${{ needs.wait-for-tool-runner.outputs.version }}-${{ matrix.arch }}
+          artifact-name: sandbox-${{ matrix.variant }}-${{ matrix.arch }}-sbom
+          format: cyclonedx-json
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.ORG }}/sandbox-${{ matrix.variant }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Save arch digest
+        run: |
+          mkdir -p digest-artifacts
+          echo "${{ steps.build.outputs.digest }}" > "digest-artifacts/${{ matrix.variant }}-${{ matrix.arch }}.txt"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: digest-${{ matrix.variant }}-${{ matrix.arch }}
+          path: digest-artifacts/
+
+  # ── Final: assemble multi-arch manifests + commit digests ─────────────
+  manifest-and-commit:
+    needs: [wait-for-tool-runner, build-base, build-general, build-leaves]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SAGEWAI_BOT_PAT }}   # fine-scoped; contents:write on platform repo
+
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+
+      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v6
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: digest-artifacts
+
+      - name: Extract version
+        id: meta
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          MINOR=$(echo "$VERSION" | cut -d. -f1,2)
+          echo "major=${MAJOR}" >> "$GITHUB_OUTPUT"
+          echo "minor=${MINOR}" >> "$GITHUB_OUTPUT"
+
+      - name: Assemble multi-arch manifests and capture digests
+        id: manifest
+        run: |
+          set -eu
+          mkdir -p digests
+          for variant in base general ml ops erp ecommerce api; do
+            AMD64_DIGEST=$(cat "digest-artifacts/${variant}-amd64.txt")
+            ARM64_DIGEST=$(cat "digest-artifacts/${variant}-arm64.txt")
+            VERSION="${{ steps.meta.outputs.version }}"
+            MAJOR="${{ steps.meta.outputs.major }}"
+            MINOR="${{ steps.meta.outputs.minor }}"
+            BASE_REF="${{ env.REGISTRY }}/${{ env.ORG }}/sandbox-${variant}"
+
+            docker buildx imagetools create \
+              -t "${BASE_REF}:${VERSION}" \
+              -t "${BASE_REF}:${MINOR}" \
+              -t "${BASE_REF}:${MAJOR}" \
+              -t "${BASE_REF}:latest" \
+              "${BASE_REF}:${VERSION}-amd64" \
+              "${BASE_REF}:${VERSION}-arm64"
+
+            MULTI_DIGEST=$(docker buildx imagetools inspect "${BASE_REF}:${VERSION}" --format '{{.Manifest.Digest}}')
+            echo "${variant}=${MULTI_DIGEST}" >> "digests/manifest.txt"
+          done
+          cat digests/manifest.txt
+
+      - name: Rewrite image_manifest.py
+        run: |
+          set -eu
+          python <<'EOF'
+          import pathlib
+          version = "${{ steps.meta.outputs.version }}"
+          digests = {}
+          for line in pathlib.Path("digests/manifest.txt").read_text().splitlines():
+              variant, digest = line.split("=", 1)
+              digests[variant] = digest
+          header = '''\
+          # Copyright 2026 Ali Arda Diri, Berlin, Germany
+          #
+          # This file is part of Sagewai, licensed under the GNU Affero General
+          # Public License v3.0 or later (AGPL-3.0-or-later). You may use,
+          # modify, and distribute this file under the terms of the AGPL.
+          # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
+          #
+          # This file is also available under a commercial license.
+          # See COMMERCIAL_LICENSE.md for details.
+          """Auto-generated image manifest — DO NOT EDIT BY HAND.
+
+          Regenerated by release-sandbox.yml on every vX.Y.Z tag.
+          """
+          from __future__ import annotations
+
+          import re
+
+          '''
+          body = header
+          body += f'SDK_VERSION: str = "{version}"\n\n'
+          body += 'TOOL_RUNNER_VERSION_SPEC: str = ">=0.1,<0.2"\n\n'
+          body += 'PINNED_DIGESTS: dict[str, str] = {\n'
+          for v in ("base", "general", "ml", "ops", "erp", "ecommerce", "api"):
+              body += f'    "{v}": "{digests[v]}",\n'
+          body += '}\n\n\n'
+          body += pathlib.Path("packages/sdk/sagewai/sandbox/_manifest_lookup_snippet.py").read_text()
+          pathlib.Path("packages/sdk/sagewai/sandbox/image_manifest.py").write_text(body)
+          EOF
+
+      - name: Commit and push manifest
+        run: |
+          git config user.email "sagewai-bot@users.noreply.github.com"
+          git config user.name "sagewai-bot"
+          git add packages/sdk/sagewai/sandbox/image_manifest.py
+          git commit -m "chore(release): pin image digests for sagewai ${{ steps.meta.outputs.version }}
+
+          [skip ci]"
+          git push origin HEAD:main

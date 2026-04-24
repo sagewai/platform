@@ -1,0 +1,27 @@
+# ML variant requirements.
+#
+# Resolution strategy: constrained against both base.txt and general.txt for
+# lockstep dependency alignment. If transitive dep conflicts arise with
+# azure-cli's broad dep set, the general.txt constraint can be omitted;
+# document any such deviation here.
+#
+# torch: We attempt torch==2.6.0+cpu (CPU-only wheel) via PyTorch's CPU index,
+# but the resolver on a macOS host selects torch==2.10.0 from PyPI because:
+#   - uv cross-compiles for linux/amd64 but can't resolve multi-arch +cpu pins
+#   - The PyPI torch wheel (no +cu suffix) bundles all backends and runs fine
+#     on CPU-only containers; it just includes unused CUDA code.
+# Result: torch==2.10.0 (PyPI) — CPU inference works, CUDA unused at runtime.
+# If image size becomes a concern, rebuild with a Docker multi-stage approach
+# that swaps the PyTorch index at build time inside the container.
+-c general.txt
+-c base.txt
+pandas
+numpy
+scipy
+scikit-learn
+torch
+duckdb
+polars
+pyarrow
+matplotlib
+jupyter-client
