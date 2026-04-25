@@ -1169,3 +1169,70 @@ export interface SandboxResolutionPreview {
   network_policy: SandboxResolutionField;
   resolved: SandboxRequirementsResponse;
 }
+
+// ── Sealed-i ─────────────────────────────────────────────────────────
+
+export interface ProfileMetadata {
+  id: string;
+  name: string;
+  description: string;
+  owner: string | null;
+  tags: string[];
+  last_rotated_at: string | null;
+  allowed_workflows: string[];
+  env: Record<string, string>;
+  secret_keys: string[];
+}
+
+export interface Profile extends ProfileMetadata {
+  secrets: Record<string, string>;
+}
+
+export interface ProfileWritePayload {
+  id?: string;
+  name: string;
+  description?: string;
+  owner?: string;
+  tags?: string[];
+  allowed_workflows?: string[];
+  env?: Record<string, string>;
+  secrets?: Record<string, string>;
+}
+
+export interface SealedAuditEvent {
+  id: number;
+  event_type: string;
+  actor_type: 'admin' | 'system' | 'runtime';
+  actor_id: string | null;
+  profile_id: string | null;
+  secret_key: string | null;
+  run_id: string | null;
+  project_id: string | null;
+  details: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface SealedStatus {
+  master_key_configured: boolean;
+  master_key_source: 'env-var' | 'keychain' | 'file' | 'none';
+  master_key_last_rotated_at: string | null;
+  audit_retention_days: number;
+  reveal_rate_limit_per_admin_per_hour: number;
+  backends_registered: string[];
+}
+
+export interface SealedSystemConfig {
+  profile_ref: string | null;
+  overrides: Record<string, string>;
+}
+
+export interface SealedWorkflowConfig {
+  profile_ref: string | null;
+  overrides: Record<string, string>;
+}
+
+export interface EffectiveProfile {
+  env: Record<string, string>;
+  secret_keys: string[];
+  cascade_origins: Record<string, string>;
+}

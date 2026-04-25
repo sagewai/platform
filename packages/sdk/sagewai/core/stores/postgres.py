@@ -91,9 +91,10 @@ class PostgresStore(WorkflowStore):
             INSERT INTO workflow_runs (
                 id, workflow_name, run_id, status, data, owner_id, updated_at,
                 requires_sandbox_mode, requires_image, requires_variant,
-                requires_network_policy
+                requires_network_policy,
+                security_profile_ref, effective_env_keys, effective_secret_keys
             )
-            VALUES ($1, $2, $3, $4, $5::jsonb, $6, NOW(), $7, $8, $9, $10)
+            VALUES ($1, $2, $3, $4, $5::jsonb, $6, NOW(), $7, $8, $9, $10, $11, $12, $13)
             ON CONFLICT (id) DO UPDATE SET
                 status = EXCLUDED.status,
                 data = EXCLUDED.data,
@@ -102,7 +103,10 @@ class PostgresStore(WorkflowStore):
                 requires_sandbox_mode = EXCLUDED.requires_sandbox_mode,
                 requires_image = EXCLUDED.requires_image,
                 requires_variant = EXCLUDED.requires_variant,
-                requires_network_policy = EXCLUDED.requires_network_policy
+                requires_network_policy = EXCLUDED.requires_network_policy,
+                security_profile_ref = EXCLUDED.security_profile_ref,
+                effective_env_keys = EXCLUDED.effective_env_keys,
+                effective_secret_keys = EXCLUDED.effective_secret_keys
             """,
             key,
             run.workflow_name,
@@ -114,6 +118,9 @@ class PostgresStore(WorkflowStore):
             run.requires_image,
             run.requires_variant.value if run.requires_variant else None,
             run.requires_network_policy.value,
+            run.security_profile_ref,
+            run.effective_env_keys,
+            run.effective_secret_keys,
         )
 
     async def load_run(self, workflow_name: str, run_id: str) -> WorkflowRun | None:
@@ -855,7 +862,7 @@ class PostgresStore(WorkflowStore):
             except Exception:
                 project_defaults = None
 
-        requirements = resolve_requirements(
+        requirements = await resolve_requirements(
             explicit_mode=requires_sandbox_mode,
             explicit_image=requires_image,
             explicit_network_policy=requires_network_policy,
@@ -1254,6 +1261,54 @@ class PostgresStore(WorkflowStore):
             f"mode or network policy mismatch "
             f"(pool '{row['target_pool']}' has {candidates} workers)"
         )
+
+    # ------------------------------------------------------------------
+    # Sealed audit retention sweep
+    # ------------------------------------------------------------------
+
+    async def sealed_audit_cleanup(self, *, retention_days: int | None = None) -> int:
+        """Delete sealed_audit_events older than the retention threshold.
+
+        retention_days: explicit override; when None, reads from
+            AdminStateFile().get_sealed_config()["audit_retention_days"]
+            (default 365).
+
+        Returns the count of rows deleted. Emits one
+        ``audit_retention_cleanup`` audit event when count > 0 so the
+        deletion itself is auditable.
+
+        Intended to be invoked daily by the admin/scheduler process.
+        Idempotent — safe to call repeatedly.
+        """
+        from sagewai.admin.state_file import AdminStateFile
+        from sagewai.sealed.audit import AuditWriter
+
+        if retention_days is None:
+            state = AdminStateFile()
+            retention_days = state.get_sealed_config().get("audit_retention_days", 365)
+
+        deleted = await self._pool.fetchval(
+            """
+            WITH d AS (
+                DELETE FROM sealed_audit_events
+                WHERE created_at < NOW() - MAKE_INTERVAL(days => $1)
+                RETURNING id
+            )
+            SELECT count(*) FROM d
+            """,
+            float(retention_days),
+        )
+
+        deleted_count = int(deleted or 0)
+        if deleted_count:
+            await AuditWriter(self).emit(
+                event_type="audit_retention_cleanup",
+                details={
+                    "deleted_count": deleted_count,
+                    "retention_days": retention_days,
+                },
+            )
+        return deleted_count
 
     # ------------------------------------------------------------------
     # Internal helpers

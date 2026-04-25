@@ -182,6 +182,15 @@ def admin_project_set_sandbox_defaults(
     )
 
 
+from sagewai.cli.sealed import sealed_group  # noqa: E402
+
+admin.add_command(sealed_group)
+
+from sagewai.cli.profiles import profiles_group  # noqa: E402
+
+admin.add_command(profiles_group)
+
+
 @admin.command("health")
 @click.option("--json", "as_json", is_flag=True, help="Output raw JSON.")
 def admin_health(as_json: bool) -> None:

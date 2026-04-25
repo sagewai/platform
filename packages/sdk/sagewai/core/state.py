@@ -104,6 +104,11 @@ class WorkflowRun:
     requires_variant: SandboxImageVariant | None = None
     requires_network_policy: NetworkPolicy = NetworkPolicy.NONE
 
+    # ── sealed-i cascade resolution (resolved at enqueue) ──
+    security_profile_ref: str | None = None
+    effective_env_keys: list[str] = field(default_factory=list)
+    effective_secret_keys: list[str] = field(default_factory=list)
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a dictionary."""
         return {
@@ -122,6 +127,9 @@ class WorkflowRun:
                 self.requires_variant.value if self.requires_variant else None
             ),
             "requires_network_policy": self.requires_network_policy.value,
+            "security_profile_ref": self.security_profile_ref,
+            "effective_env_keys": self.effective_env_keys,
+            "effective_secret_keys": self.effective_secret_keys,
             "steps": {
                 name: {
                     "status": rec.status.value,
@@ -174,6 +182,9 @@ class WorkflowRun:
             requires_network_policy=NetworkPolicy(
                 data.get("requires_network_policy", "none")
             ),
+            security_profile_ref=data.get("security_profile_ref"),
+            effective_env_keys=data.get("effective_env_keys", []),
+            effective_secret_keys=data.get("effective_secret_keys", []),
         )
 
 
@@ -500,6 +511,8 @@ class DurableWorkflow:
         requires_sandbox_mode: SandboxMode | None = None,
         requires_image: str | None = None,
         requires_network_policy: NetworkPolicy | None = None,
+        security_profile_ref: str | None = None,
+        security_overrides: dict[str, str] | None = None,
     ) -> str:
         """Create and persist a WorkflowRun with resolved sandbox requirements.
 
@@ -517,6 +530,10 @@ class DurableWorkflow:
             Explicit image reference (e.g. ``ghcr.io/sagewai/sandbox-ml:0.1.5``).
         requires_network_policy:
             Explicit network policy for this run.
+        security_profile_ref:
+            Optional Sealed-i profile reference for this run (user-level override).
+        security_overrides:
+            Optional per-key env overrides applied on top of the resolved profile.
         """
         from sagewai.sandbox.resolution import resolve_requirements
 
@@ -531,12 +548,64 @@ class DurableWorkflow:
 
         agent_req = getattr(self, "_agent_requirements", None)
 
-        requirements = resolve_requirements(
+        # Sealed-i cascade build
+        sealed_levels = None
+        audit_writer = None
+        audit_context = None
+        try:
+            from sagewai.admin.state_file import AdminStateFile
+            from sagewai.sealed.audit import AuditWriter
+            from sagewai.sealed.resolution import CascadeLevel
+
+            state = AdminStateFile()
+            sealed_cfg = state.get_sealed_config()
+            workflow_cfg = state.get_workflow_sealed_config(self.name) or {}
+
+            code_profile_ref = getattr(type(self), "security_profile_ref", None)
+            code_overrides = getattr(type(self), "security_overrides", None)
+
+            sealed_levels = [
+                CascadeLevel(
+                    name="system",
+                    profile_ref=sealed_cfg.get("system_profile_ref"),
+                    overrides=sealed_cfg.get("system_overrides"),
+                ),
+                CascadeLevel(
+                    name="workflow",
+                    profile_ref=workflow_cfg.get("profile_ref") or code_profile_ref,
+                    overrides=workflow_cfg.get("overrides") or code_overrides,
+                ),
+                CascadeLevel(
+                    name="user",
+                    profile_ref=security_profile_ref,
+                    overrides=security_overrides,
+                ),
+            ]
+
+            # Only emit audit if the cascade has anything to resolve
+            if any(lv.profile_ref for lv in sealed_levels):
+                audit_writer = AuditWriter(self._store)
+                audit_context = {
+                    "workflow_name": self.name,
+                    "project_id": getattr(self, "project_id", None),
+                }
+            else:
+                sealed_levels = None  # skip resolve_security_profile altogether
+        except Exception as exc:
+            # Sealed config is opt-in; if it can't be loaded (no admin state, etc.),
+            # log + proceed without sealed resolution. Sandbox cascade still runs.
+            logger.debug("Sealed cascade build skipped: %s", exc)
+            sealed_levels = None
+
+        requirements = await resolve_requirements(
             explicit_mode=requires_sandbox_mode,
             explicit_image=requires_image,
             explicit_network_policy=requires_network_policy,
             agent_requirements=agent_req,
             project_defaults=project_defaults,
+            sealed_levels=sealed_levels,
+            audit_writer=audit_writer,
+            audit_context=audit_context,
         )
 
         run_id = _generate_run_id(self.name, input_data or {})
@@ -549,6 +618,9 @@ class DurableWorkflow:
             requires_image=requirements.image,
             requires_variant=requirements.variant,
             requires_network_policy=requirements.network_policy,
+            security_profile_ref=requirements.security_profile_ref,
+            effective_env_keys=list(requirements.effective_env_keys),
+            effective_secret_keys=list(requirements.effective_secret_keys),
         )
         await self._store.save_run(run)
         logger.info(

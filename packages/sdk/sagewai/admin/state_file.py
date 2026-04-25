@@ -106,6 +106,32 @@ class AdminStateFile:
             return {}
         return json.loads(self._path.read_text())
 
+    def get_sealed_config(self) -> dict[str, Any]:
+        """Return sealed.* sub-tree (system_profile_ref, system_overrides, retention, etc.)."""
+        state = self._read()
+        return state.get("sealed", {})
+
+    def get_workflow_sealed_config(self, workflow_name: str) -> dict[str, Any] | None:
+        """Return workflow-level sealed config from admin-state.workflows[name].
+
+        Returns None if no workflow record or no sealed config on it.
+        """
+        state = self._read()
+        workflows = state.get("workflows") or {}
+        if isinstance(workflows, dict):
+            workflow = workflows.get(workflow_name)
+        elif isinstance(workflows, list):
+            workflow = next((w for w in workflows if w.get("name") == workflow_name), None)
+        else:
+            return None
+        if not workflow:
+            return None
+        profile_ref = workflow.get("security_profile_ref")
+        overrides = workflow.get("security_overrides")
+        if profile_ref is None and not overrides:
+            return None
+        return {"profile_ref": profile_ref, "overrides": overrides or {}}
+
     def _write(self, data: dict[str, Any]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         # Atomic write: tmp file + rename

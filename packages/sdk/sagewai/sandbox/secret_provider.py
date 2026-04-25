@@ -33,6 +33,7 @@ class SecretProvider(Protocol):
         run_id: str,
         agent_id: str | None,
         declared_scopes: list[str],
+        **kwargs: object,
     ) -> Mapping[str, str]:
         ...
 
@@ -54,6 +55,7 @@ class EnvSecretProvider:
         run_id: str,
         agent_id: str | None,
         declared_scopes: list[str],
+        **_kwargs: object,
     ) -> Mapping[str, str]:
         entries = self._store.get(project_id) or {}
         return dict(entries)

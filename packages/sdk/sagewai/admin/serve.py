@@ -456,6 +456,11 @@ def create_admin_serve_app(
 
     sandbox_routes.register(app, sf)
 
+    # Sealed environment routes (Sealed-i)
+    from sagewai.admin import sealed_routes  # noqa: E402
+
+    sealed_routes.register(app, sf)
+
     # ── Setup ────────────────────────────────────────────────────
 
     @app.get("/api/v1/setup/status")

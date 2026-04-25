@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from sagewai.admin.state_file import AdminStateFile
+    from sagewai.sealed.audit import AuditWriter
+    from sagewai.sealed.resolution import CascadeLevel
 
 from sagewai.sandbox import image_manifest
 from sagewai.sandbox.models import (
@@ -69,13 +71,17 @@ class SandboxRequirements:
     image: str
     variant: SandboxImageVariant | None
     network_policy: NetworkPolicy
+    # ── sealed-i cascade output (Task 12 populates these) ──
+    security_profile_ref: str | None = None
+    effective_env_keys: tuple[str, ...] = ()
+    effective_secret_keys: tuple[str, ...] = ()
 
 
 class SandboxRequirementsError(RuntimeError):
     """Raised when STRICT mode is on and the cascade hit the SDK hard default."""
 
 
-def resolve_requirements(
+async def resolve_requirements(
     *,
     explicit_mode: SandboxMode | None = None,
     explicit_image: str | None = None,
@@ -84,6 +90,10 @@ def resolve_requirements(
     project_defaults: SandboxRequirements | None = None,
     strict: bool | None = None,
     with_origins: bool = False,
+    # NEW in Sealed-i — optional; absent means no cascade resolution
+    sealed_levels: list[CascadeLevel] | None = None,
+    audit_writer: AuditWriter | None = None,
+    audit_context: dict | None = None,
 ) -> SandboxRequirements | tuple[SandboxRequirements, dict[str, SandboxResolutionOrigin]]:
     """Resolve the cascade (explicit → agent → project → SDK default).
 
@@ -101,6 +111,12 @@ def resolve_requirements(
     name and the value records which cascade layer supplied it. When False
     (default), returns only ``SandboxRequirements`` — existing callers are
     unaffected.
+
+    ``sealed_levels``, ``audit_writer``, and ``audit_context`` are optional
+    Sealed-i cascade args. When ``sealed_levels`` is provided, the sealed
+    profile cascade is resolved and the result is stored on the returned
+    ``SandboxRequirements`` as ``security_profile_ref``,
+    ``effective_env_keys``, and ``effective_secret_keys``.
     """
     if strict is None:
         strict = os.environ.get("SAGEWAI_SANDBOX_STRICT_REQUIREMENTS") == "1"
@@ -150,11 +166,33 @@ def resolve_requirements(
             field,
         )
 
+    # Sealed-i cascade resolution (optional)
+    if sealed_levels:
+        from sagewai.sealed.resolution import resolve_security_profile
+        effective_profile = await resolve_security_profile(
+            levels=sealed_levels,
+            audit_writer=audit_writer,
+            audit_context=audit_context,
+        )
+        security_profile_ref_value = next(
+            (lv.profile_ref for lv in reversed(sealed_levels) if lv.profile_ref),
+            None,
+        )
+        effective_env_keys_value = tuple(sorted(effective_profile.env.keys()))
+        effective_secret_keys_value = tuple(sorted(effective_profile.secret_keys))
+    else:
+        security_profile_ref_value = None
+        effective_env_keys_value = ()
+        effective_secret_keys_value = ()
+
     resolved = SandboxRequirements(
         sandbox_mode=mode,
         image=image,
         variant=image_manifest.lookup_variant(image),
         network_policy=network,
+        security_profile_ref=security_profile_ref_value,
+        effective_env_keys=effective_env_keys_value,
+        effective_secret_keys=effective_secret_keys_value,
     )
 
     if with_origins:

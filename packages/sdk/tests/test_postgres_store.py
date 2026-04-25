@@ -173,6 +173,24 @@ class TestPostgresStoreIntegration:
         assert loaded.requires_variant is None
         assert loaded.requires_network_policy is NetworkPolicy.NONE
 
+    @pytest.mark.asyncio
+    async def test_workflow_run_persists_sealed_fields(self, pg_store):
+        """Saving a run with sealed cascade fields round-trips via Postgres."""
+        run = WorkflowRun(
+            workflow_name="wf",
+            run_id="r-sealed-1",
+            security_profile_ref="builtin://acme-prod",
+            effective_env_keys=["OPENAI_API_KEY", "DEBUG"],
+            effective_secret_keys=["OPENAI_API_KEY"],
+        )
+        await pg_store.save_run(run)
+        loaded = await pg_store.load_run("wf", "r-sealed-1")
+        assert loaded is not None
+        assert loaded.security_profile_ref == "builtin://acme-prod"
+        assert "OPENAI_API_KEY" in loaded.effective_env_keys
+        assert "DEBUG" in loaded.effective_env_keys
+        assert "OPENAI_API_KEY" in loaded.effective_secret_keys
+
 
 @pytest.fixture
 def admin_state_factory(tmp_path, monkeypatch):
@@ -230,3 +248,76 @@ class TestGetProjectDefaults:
 
         admin_state_factory(projects=[{"slug": "acme", "name": "acme"}])  # no default_sandbox_requirements
         assert await pg_store.get_project_defaults("acme") is None
+
+
+@pytest.mark.integration
+class TestSealedAuditCleanup:
+    """Tests for PostgresStore.sealed_audit_cleanup()."""
+
+    @pytest.mark.asyncio
+    async def test_sealed_audit_cleanup_deletes_old_rows(self, pg_store):
+        """sealed_audit_cleanup deletes rows older than retention_days."""
+        # Clean up any rows left by previous test runs to keep the test idempotent
+        await pg_store._pool.execute(
+            "DELETE FROM sealed_audit_events WHERE event_type IN ('test_old', 'test_fresh')"
+        )
+
+        # Insert one fresh row + one row that's 400 days old
+        await pg_store._pool.execute(
+            """
+            INSERT INTO sealed_audit_events
+              (event_type, actor_type, details, created_at)
+            VALUES ('test_old', 'system', '{}'::jsonb, NOW() - INTERVAL '400 days')
+            """
+        )
+        await pg_store._pool.execute(
+            """
+            INSERT INTO sealed_audit_events
+              (event_type, actor_type, details, created_at)
+            VALUES ('test_fresh', 'system', '{}'::jsonb, NOW())
+            """
+        )
+
+        deleted = await pg_store.sealed_audit_cleanup(retention_days=365)
+        assert deleted >= 1  # the 400-day-old row plus possibly older test rows
+
+        # Verify only the old test row was removed (fresh remains)
+        fresh_count = await pg_store._pool.fetchval(
+            "SELECT count(*) FROM sealed_audit_events WHERE event_type = 'test_fresh'"
+        )
+        assert fresh_count == 1
+        old_count = await pg_store._pool.fetchval(
+            "SELECT count(*) FROM sealed_audit_events WHERE event_type = 'test_old'"
+        )
+        assert old_count == 0
+
+        # Cleanup after the test to keep DB tidy across runs
+        await pg_store._pool.execute(
+            "DELETE FROM sealed_audit_events WHERE event_type = 'test_fresh'"
+        )
+
+    @pytest.mark.asyncio
+    async def test_sealed_audit_cleanup_emits_event_when_rows_deleted(self, pg_store):
+        """When rows are deleted, an audit_retention_cleanup event is emitted."""
+        await pg_store._pool.execute(
+            """
+            INSERT INTO sealed_audit_events
+              (event_type, actor_type, details, created_at)
+            VALUES ('test_old_emit', 'system', '{}'::jsonb, NOW() - INTERVAL '400 days')
+            """
+        )
+
+        before = await pg_store._pool.fetchval(
+            "SELECT count(*) FROM sealed_audit_events WHERE event_type = 'audit_retention_cleanup'"
+        )
+        deleted = await pg_store.sealed_audit_cleanup(retention_days=365)
+        assert deleted >= 1
+        after = await pg_store._pool.fetchval(
+            "SELECT count(*) FROM sealed_audit_events WHERE event_type = 'audit_retention_cleanup'"
+        )
+        assert after == before + 1  # exactly one cleanup event emitted
+
+        # Cleanup the cleanup events to keep the test idempotent
+        await pg_store._pool.execute(
+            "DELETE FROM sealed_audit_events WHERE event_type = 'audit_retention_cleanup'"
+        )

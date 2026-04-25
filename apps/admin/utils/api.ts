@@ -102,6 +102,14 @@ import type {
   SandboxRequirementsPayload,
   SandboxRequirementsResponse,
   SandboxResolutionPreview,
+  ProfileMetadata,
+  Profile,
+  ProfileWritePayload,
+  SealedAuditEvent,
+  SealedStatus,
+  SealedSystemConfig,
+  SealedWorkflowConfig,
+  EffectiveProfile,
 } from './types';
 
 const BASE_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL ?? 'http://localhost:8000/admin';
@@ -1358,6 +1366,154 @@ export const adminApi = {
       credentials: 'include',
     });
     if (!res.ok) throw new Error(`getSandboxResolutionPreview: ${res.status}`);
+    return res.json();
+  },
+
+  /* ─── Sealed-i endpoints ─── */
+
+  getSealedStatus: async (): Promise<SealedStatus> => {
+    const res = await fetch('/api/v1/admin/sealed/status', { credentials: 'include' });
+    if (!res.ok) throw new Error(`getSealedStatus: ${res.status}`);
+    return res.json();
+  },
+
+  listProfiles: async (): Promise<ProfileMetadata[]> => {
+    const res = await fetch('/api/v1/admin/sealed/profiles', { credentials: 'include' });
+    if (!res.ok) throw new Error(`listProfiles: ${res.status}`);
+    return res.json();
+  },
+
+  getProfile: async (id: string): Promise<ProfileMetadata | null> => {
+    const res = await fetch(`/api/v1/admin/sealed/profiles/${encodeURIComponent(id)}`, {
+      credentials: 'include',
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`getProfile: ${res.status}`);
+    return res.json();
+  },
+
+  getProfileFull: async (id: string): Promise<Profile | null> => {
+    const res = await fetch(`/api/v1/admin/sealed/profiles/${encodeURIComponent(id)}/full`, {
+      credentials: 'include',
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`getProfileFull: ${res.status}`);
+    return res.json();
+  },
+
+  createProfile: async (payload: ProfileWritePayload): Promise<Profile> => {
+    const res = await fetch('/api/v1/admin/sealed/profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      credentials: 'include',
+    });
+    if (!res.ok) throw new Error(`createProfile: ${res.status}`);
+    return res.json();
+  },
+
+  updateSealedProfile: async (id: string, payload: ProfileWritePayload): Promise<Profile> => {
+    const res = await fetch(`/api/v1/admin/sealed/profiles/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      credentials: 'include',
+    });
+    if (!res.ok) throw new Error(`updateSealedProfile: ${res.status}`);
+    return res.json();
+  },
+
+  deleteProfile: async (id: string): Promise<void> => {
+    const res = await fetch(`/api/v1/admin/sealed/profiles/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    });
+    if (!res.ok && res.status !== 204) throw new Error(`deleteProfile: ${res.status}`);
+  },
+
+  revealSecret: async (profileId: string, secretKey: string): Promise<{ value: string }> => {
+    const res = await fetch(
+      `/api/v1/admin/sealed/profiles/${encodeURIComponent(profileId)}/reveal/${encodeURIComponent(secretKey)}`,
+      { method: 'POST', credentials: 'include' },
+    );
+    if (!res.ok) throw new Error(`revealSecret: ${res.status}`);
+    return res.json();
+  },
+
+  getSealedSystem: async (): Promise<SealedSystemConfig> => {
+    const res = await fetch('/api/v1/admin/sealed/system', { credentials: 'include' });
+    if (!res.ok) throw new Error(`getSealedSystem: ${res.status}`);
+    return res.json();
+  },
+
+  putSealedSystem: async (payload: SealedSystemConfig): Promise<SealedSystemConfig> => {
+    const res = await fetch('/api/v1/admin/sealed/system', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      credentials: 'include',
+    });
+    if (!res.ok) throw new Error(`putSealedSystem: ${res.status}`);
+    return res.json();
+  },
+
+  getSealedWorkflow: async (name: string): Promise<SealedWorkflowConfig | null> => {
+    const res = await fetch(
+      `/api/v1/admin/sealed/workflows/${encodeURIComponent(name)}`,
+      { credentials: 'include' },
+    );
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`getSealedWorkflow: ${res.status}`);
+    return res.json();
+  },
+
+  putSealedWorkflow: async (name: string, payload: SealedWorkflowConfig): Promise<SealedWorkflowConfig> => {
+    const res = await fetch(`/api/v1/admin/sealed/workflows/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      credentials: 'include',
+    });
+    if (!res.ok) throw new Error(`putSealedWorkflow: ${res.status}`);
+    return res.json();
+  },
+
+  getSealedPreview: async (query: {
+    project?: string;
+    workflow?: string;
+    user_profile_ref?: string;
+    user_overrides?: Record<string, string>;
+  }): Promise<EffectiveProfile> => {
+    const params = new URLSearchParams();
+    if (query.project) params.set('project', query.project);
+    if (query.workflow) params.set('workflow', query.workflow);
+    if (query.user_profile_ref) params.set('user_profile_ref', query.user_profile_ref);
+    if (query.user_overrides) params.set('user_overrides_json', JSON.stringify(query.user_overrides));
+    const res = await fetch(`/api/v1/admin/sealed/preview?${params}`, { credentials: 'include' });
+    if (!res.ok) throw new Error(`getSealedPreview: ${res.status}`);
+    return res.json();
+  },
+
+  getSealedAudit: async (query: {
+    profile_id?: string;
+    event_type?: string;
+    actor_id?: string;
+    since?: string;
+    until?: string;
+    limit?: number;
+  }): Promise<SealedAuditEvent[]> => {
+    const params = new URLSearchParams();
+    if (query.profile_id) params.set('profile_id', query.profile_id);
+    if (query.event_type) params.set('event_type', query.event_type);
+    if (query.actor_id) params.set('actor_id', query.actor_id);
+    if (query.since) params.set('since', query.since);
+    if (query.until) params.set('until', query.until);
+    if (query.limit != null) params.set('limit', String(query.limit));
+    const qs = params.toString();
+    const res = await fetch(`/api/v1/admin/sealed/audit${qs ? `?${qs}` : ''}`, {
+      credentials: 'include',
+    });
+    if (!res.ok) throw new Error(`getSealedAudit: ${res.status}`);
     return res.json();
   },
 };

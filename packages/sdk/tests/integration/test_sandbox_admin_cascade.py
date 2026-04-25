@@ -139,7 +139,7 @@ async def test_project_default_inherited_when_no_agent_override(admin_client):
         network_policy=NetworkPolicy(defaults_dict["network_policy"]),
     )
 
-    resolved = resolve_requirements(
+    resolved = await resolve_requirements(
         agent_requirements=None,
         project_defaults=project_defaults,
     )

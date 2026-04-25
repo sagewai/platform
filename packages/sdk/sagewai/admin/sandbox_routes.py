@@ -344,7 +344,7 @@ async def get_sandbox_preview(
     explicit_image = draft_image
     explicit_network = NetworkPolicy(draft_network_policy) if draft_network_policy else None
 
-    resolved, origins = resolve_requirements(
+    resolved, origins = await resolve_requirements(
         explicit_mode=explicit_mode,
         explicit_image=explicit_image,
         explicit_network_policy=explicit_network,

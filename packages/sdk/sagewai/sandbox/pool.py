@@ -118,11 +118,27 @@ class SandboxPool:
 
     @asynccontextmanager
     async def acquire(
-        self, *, project_id: str, run_id: str, image: str
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        image: str,
+        # NEW in Sealed-i — propagated to _factory_kwargs → secret provider
+        security_profile_ref: str | None = None,
+        effective_env_keys: list[str] | None = None,
+        effective_secret_keys: list[str] | None = None,
+        workflow_name: str | None = None,
     ) -> AsyncIterator[SandboxHandle]:
         mode = self.mode
         handle = await self._acquire_handle(
-            mode=mode, project_id=project_id, run_id=run_id, image=image
+            mode=mode,
+            project_id=project_id,
+            run_id=run_id,
+            image=image,
+            security_profile_ref=security_profile_ref,
+            effective_env_keys=effective_env_keys,
+            effective_secret_keys=effective_secret_keys,
+            workflow_name=workflow_name,
         )
         try:
             yield handle
@@ -145,10 +161,25 @@ class SandboxPool:
             # per_worker handle is retained for the pool's lifetime (stop() cleans up).
 
     async def _acquire_handle(
-        self, *, mode: SandboxMode, project_id: str, run_id: str, image: str
+        self,
+        *,
+        mode: SandboxMode,
+        project_id: str,
+        run_id: str,
+        image: str,
+        security_profile_ref: str | None = None,
+        effective_env_keys: list[str] | None = None,
+        effective_secret_keys: list[str] | None = None,
+        workflow_name: str | None = None,
     ) -> SandboxHandle:
         factory_kwargs = await self._factory_kwargs(
-            project_id=project_id, run_id=run_id, image=image
+            project_id=project_id,
+            run_id=run_id,
+            image=image,
+            security_profile_ref=security_profile_ref,
+            effective_env_keys=effective_env_keys,
+            effective_secret_keys=effective_secret_keys,
+            workflow_name=workflow_name,
         )
         maybe_probe = getattr(self._backend, "probe_runner", None)
         if mode is SandboxMode.NONE:
@@ -191,13 +222,29 @@ class SandboxPool:
         raise ValueError(f"unknown sandbox mode: {mode!r}")
 
     async def _factory_kwargs(
-        self, *, project_id: str, run_id: str, image: str
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        image: str,
+        security_profile_ref: str | None = None,
+        effective_env_keys: list[str] | None = None,
+        effective_secret_keys: list[str] | None = None,
+        workflow_name: str | None = None,
     ) -> dict:
+        sealed_levels = self._build_sealed_levels(
+            workflow_name=workflow_name,
+            security_profile_ref=security_profile_ref,
+        )
         env = await self._secret_provider.env_for(
             project_id=project_id,
             run_id=run_id,
             agent_id=None,
             declared_scopes=[],
+            security_profile_ref=security_profile_ref,
+            effective_env_keys=effective_env_keys,
+            effective_secret_keys=effective_secret_keys,
+            sealed_levels=sealed_levels,
         )
         workdir = self._scratch_root / self._worker_id / "runs" / run_id
         workdir.mkdir(parents=True, exist_ok=True)
@@ -211,6 +258,56 @@ class SandboxPool:
             "resource_limits": self._config.resource_limits,
             "workdir_mount": workdir,
         }
+
+    def _build_sealed_levels(
+        self,
+        *,
+        workflow_name: str | None,
+        security_profile_ref: str | None,
+    ) -> list | None:
+        """Re-build the sealed cascade at injection time.
+
+        Returns None when nothing is configured (the secret provider then
+        no-ops). Re-fetching admin-state at injection time means rotations
+        between enqueue and start are surfaced via profile.drift_at_injection.
+        """
+        if not security_profile_ref and workflow_name is None:
+            return None
+        try:
+            from sagewai.admin.state_file import AdminStateFile
+            from sagewai.sealed.resolution import CascadeLevel
+        except ImportError:
+            return None
+
+        try:
+            state = AdminStateFile()
+            sealed_cfg = state.get_sealed_config()
+            workflow_cfg = (
+                state.get_workflow_sealed_config(workflow_name) if workflow_name else None
+            ) or {}
+        except Exception:
+            return None
+
+        levels = [
+            CascadeLevel(
+                name="system",
+                profile_ref=sealed_cfg.get("system_profile_ref"),
+                overrides=sealed_cfg.get("system_overrides"),
+            ),
+            CascadeLevel(
+                name="workflow",
+                profile_ref=workflow_cfg.get("profile_ref"),
+                overrides=workflow_cfg.get("overrides"),
+            ),
+            CascadeLevel(
+                name="user",
+                profile_ref=security_profile_ref,
+                overrides=None,
+            ),
+        ]
+        if not any(lv.profile_ref for lv in levels):
+            return None
+        return levels
 
     def advertised_labels(self) -> dict[str, str]:
         """Labels this pool contributes to worker registration.

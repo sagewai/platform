@@ -4,8 +4,9 @@ import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { PageLayout, Button, Badge, Card, FormField, TextInput, TextArea, Select, ConfirmDialog, useToast } from '@/components/ui/legacy';
 import { adminApi } from '@/utils/api';
-import type { Project, AvailableModel, SandboxRequirementsResponse } from '@/utils/types';
+import type { Project, AvailableModel, SandboxRequirementsResponse, ProfileMetadata, SealedSystemConfig } from '@/utils/types';
 import { SandboxRequirementsForm } from '@/components/sandbox-requirements-form';
+import { SealedCascadePreview } from '@/components/sealed-cascade-preview';
 import { ChevronDown, ChevronRight, Trash2, AlertCircle } from 'lucide-react';
 
 export default function ProjectsPage() {
@@ -225,6 +226,9 @@ export default function ProjectsPage() {
                   <div className="mt-md">
                     <ProjectSandboxDefaultsCard slug={project.slug} />
                   </div>
+                  <div className="mt-md">
+                    <SystemSealedConfigCard />
+                  </div>
                 </div>
               )}
             </Card>
@@ -241,6 +245,118 @@ export default function ProjectsPage() {
         confirmText={deleteSlug || ''}
       />
     </PageLayout>
+  );
+}
+
+/* ─── System Sealed Config Card ─── */
+
+function SystemSealedConfigCard() {
+  const [systemCfg, setSystemCfg] = useState<SealedSystemConfig | null>(null);
+  const [profileChoices, setProfileChoices] = useState<ProfileMetadata[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [overrides, setOverrides] = useState<{ key: string; value: string }[]>([]);
+  const [profileRef, setProfileRef] = useState('');
+
+  useEffect(() => {
+    Promise.all([
+      adminApi.getSealedSystem(),
+      adminApi.listProfiles(),
+    ]).then(([cfg, profiles]) => {
+      setSystemCfg(cfg);
+      setProfileChoices(profiles);
+      setProfileRef(cfg.profile_ref ?? '');
+      setOverrides(Object.entries(cfg.overrides).map(([k, v]) => ({ key: k, value: v })));
+    }).catch(() => {});
+  }, []);
+
+  async function onSave() {
+    setBusy(true);
+    try {
+      const cfg: SealedSystemConfig = {
+        profile_ref: profileRef || null,
+        overrides: Object.fromEntries(overrides.filter((r) => r.key).map((r) => [r.key, r.value])),
+      };
+      await adminApi.putSealedSystem(cfg);
+      setSystemCfg(cfg);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!systemCfg) return <div className="text-sm text-neutral-500">Loading…</div>;
+
+  return (
+    <div className="rounded border border-neutral-200 p-4 mt-4">
+      <h3 className="text-sm font-semibold text-neutral-700">Security profile (system default)</h3>
+      <p className="mt-1 text-xs text-neutral-500 mb-3">
+        System-level Sealed cascade base. Workflow + user levels override per key.
+      </p>
+
+      <label className="block mb-3">
+        <span className="text-xs text-neutral-600">Profile</span>
+        <select
+          value={profileRef}
+          onChange={(e) => setProfileRef(e.target.value)}
+          className="block w-full rounded border border-neutral-300 p-1 text-sm mt-1"
+        >
+          <option value="">— none —</option>
+          {profileChoices.map((p) => (
+            <option key={p.id} value={p.id}>{p.name} ({p.id})</option>
+          ))}
+        </select>
+      </label>
+
+      <fieldset className="mb-3">
+        <legend className="text-xs text-neutral-600">Inline overrides</legend>
+        {overrides.map((row, i) => (
+          <div key={i} className="flex gap-2 mt-1">
+            <input
+              value={row.key}
+              onChange={(e) => {
+                const next = [...overrides]; next[i] = { ...next[i], key: e.target.value }; setOverrides(next);
+              }}
+              placeholder="KEY"
+              className="rounded border border-neutral-300 p-1 text-sm flex-1"
+            />
+            <input
+              value={row.value}
+              onChange={(e) => {
+                const next = [...overrides]; next[i] = { ...next[i], value: e.target.value }; setOverrides(next);
+              }}
+              placeholder="value (empty = remove key)"
+              className="rounded border border-neutral-300 p-1 text-sm flex-1"
+            />
+            <button
+              type="button"
+              onClick={() => setOverrides(overrides.filter((_, j) => j !== i))}
+              className="text-xs text-rose-600 bg-transparent border-0 cursor-pointer"
+            >
+              Remove
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={() => setOverrides([...overrides, { key: '', value: '' }])}
+          className="mt-1 text-xs text-blue-600 bg-transparent border-0 cursor-pointer"
+        >
+          + Add override
+        </button>
+      </fieldset>
+
+      <button
+        type="button"
+        onClick={onSave}
+        disabled={busy}
+        className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white disabled:opacity-50 cursor-pointer"
+      >
+        {busy ? 'Saving…' : 'Save'}
+      </button>
+
+      <div className="mt-4">
+        <SealedCascadePreview />
+      </div>
+    </div>
   );
 }
 

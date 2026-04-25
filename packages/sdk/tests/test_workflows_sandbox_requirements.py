@@ -16,6 +16,17 @@ from sagewai.sandbox.models import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _clear_sealed_registry():
+    """Isolate the sealed backend registry for each test."""
+    from sagewai.sealed import refs
+    saved = refs._BACKENDS.copy()
+    refs._BACKENDS.clear()
+    yield
+    refs._BACKENDS.clear()
+    refs._BACKENDS.update(saved)
+
+
 @pytest.fixture
 def mock_store():
     class _MockStore:
@@ -69,3 +80,80 @@ async def test_enqueue_falls_through_to_sdk_default(mock_store, caplog):
     # Three WARN entries — one per field that fell through
     warns = [r for r in caplog.records if r.levelname == "WARNING"]
     assert sum("sandbox resolution" in r.message for r in warns) == 3
+
+
+@pytest.mark.asyncio
+async def test_enqueue_resolves_sealed_cascade(tmp_path, monkeypatch):
+    """workflow.enqueue resolves sealed levels and persists effective_*_keys on the run."""
+    from cryptography.fernet import Fernet
+
+    from sagewai.core.state import DurableWorkflow
+    from sagewai.sealed import refs
+    from sagewai.sealed.builtin_backend import BuiltinAdminStoreBackend
+    from sagewai.sealed.crypto import Crypto
+    from sagewai.sealed.models import ProfileWritePayload
+
+    # Set up a BuiltinAdminStoreBackend with a known profile
+    crypto = Crypto(Fernet.generate_key())
+    backend = BuiltinAdminStoreBackend(
+        profiles_path=tmp_path / "profiles.json",
+        crypto=crypto,
+        audit_writer=None,
+    )
+    refs._BACKENDS["builtin"] = backend
+
+    await backend.save_profile(ProfileWritePayload(
+        id="acme",
+        name="Acme",
+        secrets={"OPENAI_API_KEY": "sk-secret"},
+        env={"DEBUG": "0"},
+    ))
+
+    # Point a minimal admin-state.json at a fresh file so AdminStateFile
+    # won't fail — we just need it to return an empty sealed config so the
+    # cascade falls through to the user-level profile_ref we pass at enqueue.
+    import json
+    state_file = tmp_path / "admin-state.json"
+    state_file.write_text(json.dumps({"setup_complete": True, "sealed": {}}))
+    monkeypatch.setenv("SAGEWAI_ADMIN_STATE_FILE", str(state_file))
+
+    wf = DurableWorkflow(name="my-workflow", store=mock_store_factory())
+    run_id = await wf.enqueue(
+        input_data={"x": 1},
+        security_profile_ref="builtin://acme",
+    )
+
+    saved = wf._store.last_saved_run  # type: ignore[attr-defined]
+    assert saved is not None
+    assert saved.run_id == run_id
+    # The last non-None profile_ref in the cascade was the user-level one
+    assert saved.security_profile_ref == "builtin://acme"
+    # Both env and secret keys are present
+    assert set(saved.effective_env_keys) >= {"DEBUG", "OPENAI_API_KEY"}
+    assert "OPENAI_API_KEY" in saved.effective_secret_keys
+    # env key DEBUG is NOT a secret
+    assert "DEBUG" not in saved.effective_secret_keys
+
+
+def mock_store_factory():
+    """Return a fresh mock store that also supports audit writes (has a mock _pool)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    class _MockStore:
+        def __init__(self):
+            self.last_saved_run = None
+            # AuditWriter calls self._store._pool.execute(...) — provide a mock
+            pool = MagicMock()
+            pool.execute = AsyncMock()
+            self._pool = pool
+
+        async def save_run(self, run):
+            self.last_saved_run = run
+
+        async def load_run(self, *_):
+            return None
+
+        async def get_project_defaults(self, *_):
+            return None
+
+    return _MockStore()

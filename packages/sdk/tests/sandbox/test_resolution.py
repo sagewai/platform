@@ -15,14 +15,15 @@ from sagewai.sandbox.resolution import (
 )
 
 
-def test_resolve_explicit_wins():
+@pytest.mark.asyncio
+async def test_resolve_explicit_wins():
     project = SandboxRequirements(
         sandbox_mode=SandboxMode.PER_TOOL,
         image="ghcr.io/sagewai/sandbox-base:0.0.0-dev",
         variant=SandboxImageVariant.BASE,
         network_policy=NetworkPolicy.FULL,
     )
-    result = resolve_requirements(
+    result = await resolve_requirements(
         explicit_mode=SandboxMode.PER_RUN,
         explicit_image="ghcr.io/sagewai/sandbox-ml:0.1.5",
         explicit_network_policy=NetworkPolicy.NONE,
@@ -34,7 +35,8 @@ def test_resolve_explicit_wins():
     assert result.network_policy is NetworkPolicy.NONE
 
 
-def test_resolve_agent_beats_project():
+@pytest.mark.asyncio
+async def test_resolve_agent_beats_project():
     agent = SandboxRequirements(
         sandbox_mode=SandboxMode.PER_WORKER,
         image="ghcr.io/sagewai/sandbox-general:0.0.0-dev",
@@ -47,7 +49,7 @@ def test_resolve_agent_beats_project():
         variant=None,
         network_policy=NetworkPolicy.FULL,
     )
-    result = resolve_requirements(
+    result = await resolve_requirements(
         agent_requirements=agent,
         project_defaults=project,
         strict=False,
@@ -56,20 +58,22 @@ def test_resolve_agent_beats_project():
     assert result.network_policy is NetworkPolicy.EGRESS_ALLOWLIST
 
 
-def test_resolve_project_beats_sdk_default():
+@pytest.mark.asyncio
+async def test_resolve_project_beats_sdk_default():
     project = SandboxRequirements(
         sandbox_mode=SandboxMode.PER_RUN,
         image="ghcr.io/sagewai/sandbox-ops:0.0.0-dev",
         variant=None,
         network_policy=NetworkPolicy.FULL,
     )
-    result = resolve_requirements(project_defaults=project, strict=False)
+    result = await resolve_requirements(project_defaults=project, strict=False)
     assert result.sandbox_mode is SandboxMode.PER_RUN
 
 
-def test_resolve_fallthrough_to_sdk_default(caplog):
+@pytest.mark.asyncio
+async def test_resolve_fallthrough_to_sdk_default(caplog):
     with caplog.at_level(logging.WARNING, logger="sagewai.sandbox.resolution"):
-        result = resolve_requirements(strict=False)
+        result = await resolve_requirements(strict=False)
     assert result.sandbox_mode is SandboxMode.NONE
     assert result.network_policy is NetworkPolicy.NONE
     assert result.image.startswith("ghcr.io/sagewai/sandbox-base:")
@@ -80,15 +84,17 @@ def test_resolve_fallthrough_to_sdk_default(caplog):
     assert any("network_policy" in m for m in warn_messages)
 
 
-def test_resolve_strict_raises_on_fallthrough():
+@pytest.mark.asyncio
+async def test_resolve_strict_raises_on_fallthrough():
     with pytest.raises(SandboxRequirementsError) as ei:
-        resolve_requirements(strict=True)
+        await resolve_requirements(strict=True)
     assert "sandbox_mode" in str(ei.value)
     assert "image" in str(ei.value)
     assert "network_policy" in str(ei.value)
 
 
-def test_resolve_per_field_independent():
+@pytest.mark.asyncio
+async def test_resolve_per_field_independent():
     """Caller sets only mode; image + network fall through to SDK default."""
     project = SandboxRequirements(
         sandbox_mode=SandboxMode.NONE,
@@ -96,7 +102,7 @@ def test_resolve_per_field_independent():
         variant=None,
         network_policy=NetworkPolicy.FULL,
     )
-    result = resolve_requirements(
+    result = await resolve_requirements(
         explicit_mode=SandboxMode.PER_WORKER,
         project_defaults=project,
         strict=False,
@@ -107,10 +113,11 @@ def test_resolve_per_field_independent():
     assert result.network_policy is NetworkPolicy.FULL
 
 
-def test_resolve_variant_populated_from_image(monkeypatch):
+@pytest.mark.asyncio
+async def test_resolve_variant_populated_from_image(monkeypatch):
     from sagewai.sandbox import image_manifest
     monkeypatch.setitem(image_manifest.PINNED_DIGESTS, "ml", "sha256:" + "0" * 64)
-    result = resolve_requirements(
+    result = await resolve_requirements(
         explicit_mode=SandboxMode.PER_RUN,
         explicit_image="ghcr.io/sagewai/sandbox-ml:0.1.5",
         explicit_network_policy=NetworkPolicy.FULL,
@@ -119,10 +126,11 @@ def test_resolve_variant_populated_from_image(monkeypatch):
     assert result.variant is SandboxImageVariant.ML
 
 
-def test_resolve_variant_none_for_byo(monkeypatch):
+@pytest.mark.asyncio
+async def test_resolve_variant_none_for_byo(monkeypatch):
     from sagewai.sandbox import image_manifest
     monkeypatch.setattr(image_manifest, "PINNED_DIGESTS", {})
-    result = resolve_requirements(
+    result = await resolve_requirements(
         explicit_mode=SandboxMode.PER_RUN,
         explicit_image="ghcr.io/acme/custom:1.0",
         explicit_network_policy=NetworkPolicy.FULL,
@@ -131,13 +139,15 @@ def test_resolve_variant_none_for_byo(monkeypatch):
     assert result.variant is None
 
 
-def test_resolve_strict_from_env(monkeypatch):
+@pytest.mark.asyncio
+async def test_resolve_strict_from_env(monkeypatch):
     monkeypatch.setenv("SAGEWAI_SANDBOX_STRICT_REQUIREMENTS", "1")
     with pytest.raises(SandboxRequirementsError):
-        resolve_requirements()   # no strict= kwarg → reads env var
+        await resolve_requirements()   # no strict= kwarg → reads env var
 
 
-def test_resolve_requirements_with_origins_per_field():
+@pytest.mark.asyncio
+async def test_resolve_requirements_with_origins_per_field():
     """with_origins=True returns (resolved, origins) with per-field origin."""
     from sagewai.sandbox.models import NetworkPolicy, SandboxMode
     from sagewai.sandbox.resolution import (
@@ -153,7 +163,7 @@ def test_resolve_requirements_with_origins_per_field():
         network_policy=NetworkPolicy.NONE,
     )
 
-    resolved, origins = resolve_requirements(
+    resolved, origins = await resolve_requirements(
         explicit_mode=SandboxMode.PER_RUN,        # explicit wins for mode
         project_defaults=project_default,         # project wins for image + network
         with_origins=True,
@@ -165,25 +175,27 @@ def test_resolve_requirements_with_origins_per_field():
     assert origins["network_policy"] is SandboxResolutionOrigin.PROJECT_DEFAULT
 
 
-def test_resolve_requirements_with_origins_sdk_default():
+@pytest.mark.asyncio
+async def test_resolve_requirements_with_origins_sdk_default():
     """When everything falls through, origin is SDK_DEFAULT."""
     from sagewai.sandbox.resolution import (
         SandboxResolutionOrigin,
         resolve_requirements,
     )
 
-    _, origins = resolve_requirements(strict=False, with_origins=True)
+    _, origins = await resolve_requirements(strict=False, with_origins=True)
     assert origins["sandbox_mode"] is SandboxResolutionOrigin.SDK_DEFAULT
     assert origins["image"] is SandboxResolutionOrigin.SDK_DEFAULT
     assert origins["network_policy"] is SandboxResolutionOrigin.SDK_DEFAULT
 
 
-def test_resolve_requirements_without_origins_backwards_compat():
+@pytest.mark.asyncio
+async def test_resolve_requirements_without_origins_backwards_compat():
     """Default with_origins=False returns plain SandboxRequirements (existing callers)."""
     from sagewai.sandbox.models import NetworkPolicy, SandboxMode
     from sagewai.sandbox.resolution import SandboxRequirements, resolve_requirements
 
-    result = resolve_requirements(
+    result = await resolve_requirements(
         explicit_mode=SandboxMode.PER_RUN,
         explicit_image="ghcr.io/sagewai/sandbox-base:1.0",
         explicit_network_policy=NetworkPolicy.NONE,
@@ -192,7 +204,8 @@ def test_resolve_requirements_without_origins_backwards_compat():
     # Single return value, no tuple unpacking — existing callers see no change.
 
 
-def test_resolve_requirements_with_origins_agent_layer():
+@pytest.mark.asyncio
+async def test_resolve_requirements_with_origins_agent_layer():
     """Agent requirements surface as AGENT origin (preview endpoint re-tags)."""
     from sagewai.sandbox.models import NetworkPolicy, SandboxMode
     from sagewai.sandbox.resolution import (
@@ -207,7 +220,7 @@ def test_resolve_requirements_with_origins_agent_layer():
         variant=None,
         network_policy=NetworkPolicy.FULL,
     )
-    _, origins = resolve_requirements(
+    _, origins = await resolve_requirements(
         agent_requirements=agent_reqs,
         with_origins=True,
     )
