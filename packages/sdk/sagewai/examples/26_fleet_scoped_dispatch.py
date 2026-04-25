@@ -75,6 +75,8 @@ from sagewai.fleet import (
     InMemoryTaskStore,
     WorkerCapabilities,
 )
+from sagewai.sandbox import image_manifest
+from sagewai.sandbox.models import NetworkPolicy, SandboxMode
 
 
 async def main() -> None:
@@ -195,6 +197,9 @@ async def main() -> None:
             "pool": "gpu",
             "labels": {"project_id": "healthcare"},
             "payload": "Patient presents with chest pain and shortness of breath. Assess risk.",
+            "requires_sandbox_mode": SandboxMode.PER_RUN,
+            "requires_image": f"ghcr.io/sagewai/sandbox-ml:{image_manifest.SDK_VERSION}",
+            "requires_network_policy": NetworkPolicy.NONE,
         },
         {
             "run_id": "task-finance-analysis",
@@ -202,6 +207,9 @@ async def main() -> None:
             "pool": "default",
             "labels": {"project_id": "finance"},
             "payload": "Analyze Q3 earnings report for ACME Corp and identify key risks.",
+            "requires_sandbox_mode": SandboxMode.PER_RUN,
+            "requires_image": f"ghcr.io/sagewai/sandbox-general:{image_manifest.SDK_VERSION}",
+            "requires_network_policy": NetworkPolicy.FULL,
         },
         {
             "run_id": "task-training-finetune",
@@ -209,6 +217,9 @@ async def main() -> None:
             "pool": "training",
             "labels": {"training": "true"},
             "payload": "Fine-tune llama3 on healthcare Q&A dataset (2000 samples).",
+            "requires_sandbox_mode": SandboxMode.PER_RUN,
+            "requires_image": f"ghcr.io/sagewai/sandbox-ml:{image_manifest.SDK_VERSION}",
+            "requires_network_policy": NetworkPolicy.NONE,
         },
     ]
 

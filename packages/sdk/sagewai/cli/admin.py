@@ -116,6 +116,72 @@ def admin_serve(host: str, port: int) -> None:
         raise SystemExit(1)
 
 
+@admin.group("project")
+def admin_project() -> None:
+    """Manage project-level settings (sandbox defaults, etc.).
+
+    \b
+    Examples:
+      sagewai admin project set-sandbox-defaults acme \\
+          --mode per_run \\
+          --image ghcr.io/sagewai/sandbox-general:0.1.0 \\
+          --network-policy full
+    """
+
+
+@admin_project.command("set-sandbox-defaults")
+@click.argument("project_id")
+@click.option(
+    "--mode",
+    type=click.Choice(["none", "per_tool", "per_run", "per_worker"]),
+    required=True,
+    help="Default sandbox isolation mode for this project.",
+)
+@click.option(
+    "--image",
+    required=True,
+    help="Default image reference for this project.",
+)
+@click.option(
+    "--network-policy",
+    type=click.Choice(["none", "egress_allowlist", "full"]),
+    required=True,
+    help="Default network policy for this project.",
+)
+def admin_project_set_sandbox_defaults(
+    project_id: str, mode: str, image: str, network_policy: str
+) -> None:
+    """Write default_sandbox_requirements for a project to admin-state.json."""
+    from sagewai.admin.state_file import AdminStateFile
+
+    state = AdminStateFile()
+    data = state._read()
+    projects = data.setdefault("projects", [])
+
+    if isinstance(projects, dict):
+        target = projects.setdefault(project_id, {})
+    else:
+        # list-of-dicts shape (existing AdminStateFile schema)
+        target = next(
+            (p for p in projects if p.get("slug") == project_id or p.get("id") == project_id),
+            None,
+        )
+        if target is None:
+            target = {"slug": project_id}
+            projects.append(target)
+
+    target["default_sandbox_requirements"] = {
+        "sandbox_mode": mode,
+        "image": image,
+        "network_policy": network_policy,
+    }
+    state._write(data)
+    click.echo(
+        f"Set sandbox defaults for project '{project_id}': "
+        f"mode={mode} image={image} network_policy={network_policy}"
+    )
+
+
 @admin.command("health")
 @click.option("--json", "as_json", is_flag=True, help="Output raw JSON.")
 def admin_health(as_json: bool) -> None:

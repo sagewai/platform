@@ -8,6 +8,10 @@
 # This file is also available under a commercial license.
 # See COMMERCIAL_LICENSE.md for details.
 """Tests for sandbox mode and image resolution."""
+import os
+
+import pytest
+
 from sagewai.sandbox.models import SandboxConfig, SandboxMode
 from sagewai.sandbox.registry import (
     mode_rank,
@@ -123,3 +127,54 @@ def test_network_policy_rank_rejects_unknown():
 
     with pytest.raises(ValueError):
         network_policy_rank("bogus")
+
+
+# ---------------------------------------------------------------------------
+# Python ↔ SQL rank parity tests (require SAGEWAI_DATABASE_URL)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def pg_pool():
+    """Lightweight asyncpg pool fixture for parity tests."""
+    if not os.environ.get("SAGEWAI_DATABASE_URL"):
+        pytest.skip("SAGEWAI_DATABASE_URL not set")
+    import asyncpg
+
+    pool = await asyncpg.create_pool(
+        os.environ["SAGEWAI_DATABASE_URL"], min_size=1, max_size=2
+    )
+    try:
+        yield pool
+    finally:
+        await pool.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode_value", ["none", "per_tool", "per_run", "per_worker"])
+async def test_python_sql_mode_rank_parity(mode_value, pg_pool):
+    from sagewai.sandbox.models import SandboxMode
+    from sagewai.sandbox.registry import mode_rank
+
+    python_rank = mode_rank(SandboxMode(mode_value))
+    async with pg_pool.acquire() as conn:
+        sql_rank = await conn.fetchval("SELECT sandbox_mode_rank($1)", mode_value)
+    assert python_rank == sql_rank, (
+        f"Drift: mode_value={mode_value} Python={python_rank} SQL={sql_rank}"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "policy_value", ["none", "egress_allowlist", "full"]
+)
+async def test_python_sql_network_policy_rank_parity(policy_value, pg_pool):
+    from sagewai.sandbox.models import NetworkPolicy
+    from sagewai.sandbox.registry import network_policy_rank
+
+    python_rank = network_policy_rank(NetworkPolicy(policy_value))
+    async with pg_pool.acquire() as conn:
+        sql_rank = await conn.fetchval("SELECT network_policy_rank($1)", policy_value)
+    assert python_rank == sql_rank, (
+        f"Drift: policy_value={policy_value} Python={python_rank} SQL={sql_rank}"
+    )

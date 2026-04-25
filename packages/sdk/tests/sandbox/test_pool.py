@@ -65,3 +65,75 @@ async def test_pool_scratch_dir_created(tmp_path: Path):
     async with pool.acquire(project_id="p1", run_id="r1", image="null"):
         expected = tmp_path / "w1" / "runs" / "r1"
         assert expected.is_dir()
+
+
+@pytest.mark.asyncio
+async def test_advertised_labels_default_all_variants(monkeypatch, tmp_path):
+    from sagewai.sandbox import image_manifest
+    from sagewai.sandbox.models import SandboxConfig, SandboxMode
+    from sagewai.sandbox.null_backend import NullBackend
+    from sagewai.sandbox.pool import SandboxPool
+
+    monkeypatch.setattr(
+        image_manifest,
+        "PINNED_DIGESTS",
+        {
+            "base": "sha256:" + "0" * 64,
+            "general": "sha256:" + "1" * 64,
+            "ml": "sha256:" + "2" * 64,
+        },
+    )
+    pool = SandboxPool(
+        backend=NullBackend(),
+        config=SandboxConfig(mode=SandboxMode.PER_RUN),
+        worker_id="w-test",
+        scratch_root=tmp_path,
+    )
+    labels = pool.advertised_labels()
+    assert labels["sandbox.mode"] == "per_run"
+    assert labels["sandbox.backend"] == "null"
+    assert labels["sandbox.network_policy"] == "none"
+    advertised = set(labels["sandbox.image_variants"].split(","))
+    assert advertised == {"base", "general", "ml"}
+
+
+@pytest.mark.asyncio
+async def test_advertised_labels_override_variants(tmp_path):
+    from sagewai.sandbox.models import (
+        SandboxConfig,
+        SandboxImageVariant,
+        SandboxMode,
+    )
+    from sagewai.sandbox.null_backend import NullBackend
+    from sagewai.sandbox.pool import SandboxPool
+
+    config = SandboxConfig(
+        mode=SandboxMode.PER_RUN,
+        image_variants=[SandboxImageVariant.ML],
+    )
+    pool = SandboxPool(
+        backend=NullBackend(),
+        config=config,
+        worker_id="w-test",
+        scratch_root=tmp_path,
+    )
+    labels = pool.advertised_labels()
+    assert labels["sandbox.image_variants"] == "ml"
+
+
+@pytest.mark.asyncio
+async def test_advertised_labels_empty_manifest(monkeypatch, tmp_path):
+    from sagewai.sandbox import image_manifest
+    from sagewai.sandbox.models import SandboxConfig, SandboxMode
+    from sagewai.sandbox.null_backend import NullBackend
+    from sagewai.sandbox.pool import SandboxPool
+
+    monkeypatch.setattr(image_manifest, "PINNED_DIGESTS", {})
+    pool = SandboxPool(
+        backend=NullBackend(),
+        config=SandboxConfig(mode=SandboxMode.PER_RUN),
+        worker_id="w-test",
+        scratch_root=tmp_path,
+    )
+    labels = pool.advertised_labels()
+    assert labels["sandbox.image_variants"] == ""

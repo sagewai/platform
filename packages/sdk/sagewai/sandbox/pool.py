@@ -212,6 +212,32 @@ class SandboxPool:
             "workdir_mount": workdir,
         }
 
+    def advertised_labels(self) -> dict[str, str]:
+        """Labels this pool contributes to worker registration.
+
+        Keys are namespaced with ``sandbox.`` to avoid colliding with
+        operator-defined labels.
+        """
+        return {
+            "sandbox.mode": self._config.mode.value,
+            "sandbox.backend": self._backend.name,
+            "sandbox.image_variants": self._advertised_variants_csv(),
+            "sandbox.network_policy": self._config.network_policy.value,
+        }
+
+    def _advertised_variants_csv(self) -> str:
+        """CSV of image variants this worker accepts routing for.
+
+        Default: every variant in image_manifest.PINNED_DIGESTS.
+        Override: list[SandboxImageVariant] in SandboxConfig.image_variants
+        for pre-warmed / restricted pools.
+        """
+        override = self._config.image_variants
+        if override is not None:
+            return ",".join(v.value for v in override)
+        from sagewai.sandbox.image_manifest import PINNED_DIGESTS
+        return ",".join(sorted(PINNED_DIGESTS.keys()))
+
     async def _reap_loop(self) -> None:
         while True:
             try:

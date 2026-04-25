@@ -253,13 +253,20 @@ class WorkflowWorker:
             self._poll_interval,
         )
 
+        await self._start_sandbox_pool()
+
+        # Build merged labels: operator labels + sandbox capability labels
+        merged_labels = dict(self._labels or {})
+        if self._sandbox_pool is not None:
+            merged_labels.update(self._sandbox_pool.advertised_labels())
+
         # Register in the workers table for visibility and load balancing
         if hasattr(self._store, "register_worker"):
             try:
                 await self._store.register_worker(
                     self.worker_id,
                     pool=self._pool,
-                    labels=self._labels,
+                    labels=merged_labels,
                     project_id=self._project_id,
                     max_concurrent=self._max_concurrent,
                     metadata={
@@ -275,8 +282,6 @@ class WorkflowWorker:
                     self.worker_id,
                     exc_info=True,
                 )
-
-        await self._start_sandbox_pool()
 
         try:
             _last_worker_heartbeat = 0.0

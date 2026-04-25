@@ -87,7 +87,6 @@ from sagewai.examples._factory import (
     WorkItem,
     bootstrap,
     collect_sample,
-    export_jsonl,
     register_trained_tier,
     run_unsloth_stub,
     seed_fleet,
@@ -98,7 +97,8 @@ from sagewai.fleet import (
     InMemoryFleetRegistry,
     InMemoryTaskStore,
 )
-
+from sagewai.sandbox import image_manifest
+from sagewai.sandbox.models import NetworkPolicy, SandboxMode
 
 TENANT = "app-factory"
 ORG_ID = "factory-demo"
@@ -406,6 +406,9 @@ async def _dispatch_stage(
         "payload": json.dumps(
             {**pipeline.work_item.to_task_metadata(), "stage": stage_name}
         ),
+        "requires_sandbox_mode": SandboxMode.PER_RUN,
+        "requires_image": f"ghcr.io/sagewai/sandbox-general:{image_manifest.SDK_VERSION}",
+        "requires_network_policy": NetworkPolicy.FULL,
     }
     task_store.enqueue(task)
 

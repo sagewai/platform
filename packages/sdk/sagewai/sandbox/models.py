@@ -71,6 +71,7 @@ class SandboxConfig(BaseModel):
     default_image: str = "ghcr.io/sagewai/sandbox-base:dev"   # :dev until Plan 2
     network_policy: NetworkPolicy = NetworkPolicy.NONE
     resource_limits: ResourceLimits = Field(default_factory=ResourceLimits)
+    image_variants: list[SandboxImageVariant] | None = None   # None → all manifest variants
 
 
 class ToolCall(BaseModel):

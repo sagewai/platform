@@ -20,21 +20,19 @@ Exercises:
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 from sagewai.autopilot._types import MissionState
-from sagewai.autopilot.agent_graph import Agent, AgentGraph, AgentKind
+from sagewai.autopilot.agent_graph import Agent, AgentKind
 from sagewai.autopilot.blueprint import Blueprint
 from sagewai.autopilot.controller.driver import MissionDriver
 from sagewai.autopilot.controller.fleet_adapter import FleetMissionAdapter
 from sagewai.autopilot.mission import Mission
-from sagewai.autopilot.models import EvalRef, Metric, ProviderRequirement
 from sagewai.fleet.dispatcher import FleetDispatcher, InMemoryTaskStore
 from sagewai.fleet.registry import InMemoryFleetRegistry
+from sagewai.sandbox import image_manifest
+from sagewai.sandbox.models import NetworkPolicy, SandboxMode
 from tests.autopilot.fixtures import make_synthetic_scheduled_blueprint
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -210,6 +208,9 @@ class TestFleetMissionAdapterDispatchStep:
                 "project_id": "proj-finance",
             },
             "payload": {"node_id": "scout"},
+            "requires_sandbox_mode": SandboxMode.NONE,
+            "requires_image": f"ghcr.io/sagewai/sandbox-base:{image_manifest.SDK_VERSION}",
+            "requires_network_policy": NetworkPolicy.NONE,
         })
 
         # Worker from healthcare project tries to claim.
@@ -237,6 +238,9 @@ class TestFleetMissionAdapterDispatchStep:
                 "project_id": "proj-finance",
             },
             "payload": {"node_id": "scout"},
+            "requires_sandbox_mode": SandboxMode.NONE,
+            "requires_image": f"ghcr.io/sagewai/sandbox-base:{image_manifest.SDK_VERSION}",
+            "requires_network_policy": NetworkPolicy.NONE,
         })
 
         task = await store.claim_task(
@@ -331,3 +335,105 @@ class TestMissionDriverFleetIntegration:
         result = await driver.execute(mission)
 
         assert result.mission_id == mission.mission_id
+
+
+# ---------------------------------------------------------------------------
+# Blueprint.sandbox_requirements pass-through tests (Task 17)
+# ---------------------------------------------------------------------------
+
+
+class TestBlueprintSandboxRequirementsPassThrough:
+    """Verify that Blueprint.sandbox_requirements flows into the fleet task dict."""
+
+    @pytest.mark.asyncio
+    async def test_sandbox_requirements_none_by_default(self) -> None:
+        """Existing blueprints without sandbox_requirements default to None."""
+        bp = make_synthetic_scheduled_blueprint()
+        assert bp.sandbox_requirements is None
+
+    @pytest.mark.asyncio
+    async def test_sandbox_requirements_stored_in_blueprint(self) -> None:
+        """A Blueprint with sandbox_requirements round-trips correctly."""
+        from sagewai.sandbox.models import NetworkPolicy, SandboxImageVariant, SandboxMode
+        from sagewai.sandbox.resolution import SandboxRequirements
+
+        base_bp = make_synthetic_scheduled_blueprint()
+        reqs = SandboxRequirements(
+            sandbox_mode=SandboxMode.PER_RUN,
+            image="ghcr.io/sagewai/sandbox-ml:0.1.5",
+            variant=SandboxImageVariant.ML,
+            network_policy=NetworkPolicy.FULL,
+        )
+        bp = Blueprint.model_validate(
+            base_bp.model_dump(mode="python") | {"sandbox_requirements": reqs}
+        )
+        assert bp.sandbox_requirements == reqs
+
+        # Round-trip through JSON (as used by MissionDriver._walk_graph)
+        restored = Blueprint.model_validate_json(bp.model_dump_json())
+        assert restored.sandbox_requirements == reqs
+
+    @pytest.mark.asyncio
+    async def test_task_carries_sandbox_fields_when_blueprint_has_requirements(self) -> None:
+        """Enqueued fleet task dict contains requires_sandbox_mode/image/network_policy."""
+        from sagewai.sandbox.models import NetworkPolicy, SandboxImageVariant, SandboxMode
+        from sagewai.sandbox.resolution import SandboxRequirements
+
+        reqs = SandboxRequirements(
+            sandbox_mode=SandboxMode.PER_RUN,
+            image="ghcr.io/sagewai/sandbox-ml:0.1.5",
+            variant=SandboxImageVariant.ML,
+            network_policy=NetworkPolicy.FULL,
+        )
+        base_bp = make_synthetic_scheduled_blueprint()
+        bp = Blueprint.model_validate(
+            base_bp.model_dump(mode="python") | {"sandbox_requirements": reqs}
+        )
+
+        adapter, store = _make_adapter()
+        mission = _make_mission(project_id="proj-sandbox-test", bp=bp)
+        agent = _make_agent("scout")
+
+        captured: list[dict] = []
+        original_enqueue = store.enqueue
+
+        def _capture(task: dict) -> None:
+            captured.append(task)
+            original_enqueue(task)
+
+        store.enqueue = _capture  # type: ignore[method-assign]
+
+        await adapter.dispatch_step(agent, mission, {})
+
+        assert len(captured) == 1
+        task = captured[0]
+        assert task["requires_sandbox_mode"] == SandboxMode.PER_RUN
+        assert task["requires_image"] == "ghcr.io/sagewai/sandbox-ml:0.1.5"
+        assert task["requires_network_policy"] == NetworkPolicy.FULL
+
+    @pytest.mark.asyncio
+    async def test_task_carries_none_sandbox_fields_when_blueprint_has_no_requirements(
+        self,
+    ) -> None:
+        """Enqueued task has None sandbox fields when blueprint.sandbox_requirements is None."""
+        adapter, store = _make_adapter()
+        # Default blueprint has no sandbox_requirements
+        mission = _make_mission(project_id="proj-no-sandbox")
+        agent = _make_agent("scout")
+
+        captured: list[dict] = []
+        original_enqueue = store.enqueue
+
+        def _capture(task: dict) -> None:
+            captured.append(task)
+            original_enqueue(task)
+
+        store.enqueue = _capture  # type: ignore[method-assign]
+
+        await adapter.dispatch_step(agent, mission, {})
+
+        assert len(captured) == 1
+        task = captured[0]
+        assert task["requires_sandbox_mode"] is None
+        assert task["requires_image"] is None
+        assert task["requires_network_policy"] is None

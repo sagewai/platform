@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Badge, Card, Skeleton, EmptyState, Button } from '@/components/ui/legacy';
 import { Server, Search, CheckCircle, XCircle, Clock, ShieldOff, Shield, Zap } from 'lucide-react';
 import type { FleetWorker } from '@/utils/types';
+import { SandboxSummary, UnsandboxedBadge } from './_components/SandboxSummary';
 
 // TODO: wire to adminApi.listFleetWorkers()
 const DEMO_WORKERS: FleetWorker[] = [
@@ -18,7 +19,12 @@ const DEMO_WORKERS: FleetWorker[] = [
       models_canonical: [],
       pool: 'gpu-cluster',
       max_concurrent: 4,
-      labels: {},
+      labels: {
+        'sandbox.mode': 'per_run',
+        'sandbox.backend': 'gvisor',
+        'sandbox.image_variants': 'python3.12,nodejs20',
+        'sandbox.network_policy': 'egress-restricted',
+      },
       sdk_version: '0.1.0',
     },
     last_heartbeat: new Date(Date.now() - 30000).toISOString(),
@@ -314,6 +320,9 @@ export default function FleetWorkersPage() {
                     Pool
                   </th>
                   <th className="text-left py-2.5 px-3 text-xs text-text-muted uppercase tracking-wide">
+                    Sandbox
+                  </th>
+                  <th className="text-left py-2.5 px-3 text-xs text-text-muted uppercase tracking-wide">
                     Models
                   </th>
                   <th className="text-left py-2.5 px-3 text-xs text-text-muted uppercase tracking-wide">
@@ -331,12 +340,15 @@ export default function FleetWorkersPage() {
                     className="border-b border-border last:border-0 hover:bg-bg-subtle transition-colors"
                   >
                     <td className="py-2.5 px-3 font-medium">
-                      <Link
-                        href={`/fleet/workers/${w.id}`}
-                        className="text-primary hover:underline no-underline"
-                      >
-                        {w.name}
-                      </Link>
+                      <div className="flex items-center gap-0">
+                        <Link
+                          href={`/fleet/workers/${w.id}`}
+                          className="text-primary hover:underline no-underline"
+                        >
+                          {w.name}
+                        </Link>
+                        <UnsandboxedBadge labels={w.capabilities.labels} />
+                      </div>
                       <div className="text-[11px] text-text-muted">{w.id}</div>
                     </td>
                     <td className="py-2.5 px-3">
@@ -360,6 +372,9 @@ export default function FleetWorkersPage() {
                       </div>
                     </td>
                     <td className="py-2.5 px-3 text-[13px]">{w.capabilities.pool}</td>
+                    <td className="py-2.5 px-3">
+                      <SandboxSummary labels={w.capabilities.labels} />
+                    </td>
                     <td className="py-2.5 px-3">
                       <div className="flex flex-wrap gap-1">
                         {w.capabilities.models_supported.map((m) => (

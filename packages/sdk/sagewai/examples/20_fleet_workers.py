@@ -42,6 +42,8 @@ from sagewai.fleet import (
     WorkerApprovalStatus,
     WorkerCapabilities,
 )
+from sagewai.sandbox import image_manifest
+from sagewai.sandbox.models import NetworkPolicy, SandboxMode
 
 
 async def main() -> None:
@@ -127,12 +129,18 @@ async def main() -> None:
         "model": "gpt-4o",
         "pool": "gpu",
         "payload": "Analyze quarterly earnings report",
+        "requires_sandbox_mode": SandboxMode.NONE,
+        "requires_image": f"ghcr.io/sagewai/sandbox-base:{image_manifest.SDK_VERSION}",
+        "requires_network_policy": NetworkPolicy.NONE,
     })
     task_store.enqueue({
         "run_id": "run-002",
         "model": "gpt-4o-mini",
         "pool": "default",
         "payload": "Summarize meeting notes",
+        "requires_sandbox_mode": SandboxMode.NONE,
+        "requires_image": f"ghcr.io/sagewai/sandbox-base:{image_manifest.SDK_VERSION}",
+        "requires_network_policy": NetworkPolicy.NONE,
     })
     print("  Enqueued: run-001 (gpt-4o, gpu pool)")
     print("  Enqueued: run-002 (gpt-4o-mini, default pool)")

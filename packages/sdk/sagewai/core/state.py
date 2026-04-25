@@ -47,6 +47,12 @@ from enum import Enum
 from typing import Any
 
 from sagewai.errors import SagewaiWorkflowError
+from sagewai.sandbox import image_manifest
+from sagewai.sandbox.models import (
+    NetworkPolicy,
+    SandboxImageVariant,
+    SandboxMode,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +96,14 @@ class WorkflowRun:
     signals: dict[str, Any] = field(default_factory=dict)
     project_id: str | None = None
 
+    # ── sandbox requirements (Plan 3a) — resolved at enqueue, concrete on disk ──
+    requires_sandbox_mode: SandboxMode = SandboxMode.NONE
+    requires_image: str = field(
+        default_factory=lambda: f"ghcr.io/sagewai/sandbox-base:{image_manifest.SDK_VERSION}"
+    )
+    requires_variant: SandboxImageVariant | None = None
+    requires_network_policy: NetworkPolicy = NetworkPolicy.NONE
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a dictionary."""
         return {
@@ -102,6 +116,12 @@ class WorkflowRun:
             "completed_at": self.completed_at,
             "signals": self.signals,
             "project_id": self.project_id,
+            "requires_sandbox_mode": self.requires_sandbox_mode.value,
+            "requires_image": self.requires_image,
+            "requires_variant": (
+                self.requires_variant.value if self.requires_variant else None
+            ),
+            "requires_network_policy": self.requires_network_policy.value,
             "steps": {
                 name: {
                     "status": rec.status.value,
@@ -129,6 +149,7 @@ class WorkflowRun:
                 started_at=s.get("started_at"),
                 completed_at=s.get("completed_at"),
             )
+        variant_val = data.get("requires_variant")
         return cls(
             workflow_name=data["workflow_name"],
             run_id=data["run_id"],
@@ -140,6 +161,19 @@ class WorkflowRun:
             completed_at=data.get("completed_at"),
             signals=data.get("signals", {}),
             project_id=data.get("project_id"),
+            requires_sandbox_mode=SandboxMode(
+                data.get("requires_sandbox_mode", "none")
+            ),
+            requires_image=data.get(
+                "requires_image",
+                f"ghcr.io/sagewai/sandbox-base:{image_manifest.SDK_VERSION}",
+            ),
+            requires_variant=(
+                SandboxImageVariant(variant_val) if variant_val else None
+            ),
+            requires_network_policy=NetworkPolicy(
+                data.get("requires_network_policy", "none")
+            ),
         )
 
 
@@ -458,6 +492,72 @@ class DurableWorkflow:
     def step_names(self) -> list[str]:
         """List registered step names in order."""
         return [s.name for s in self._steps]
+
+    async def enqueue(
+        self,
+        input_data: Any = None,
+        *,
+        requires_sandbox_mode: SandboxMode | None = None,
+        requires_image: str | None = None,
+        requires_network_policy: NetworkPolicy | None = None,
+    ) -> str:
+        """Create and persist a WorkflowRun with resolved sandbox requirements.
+
+        Runs the cascade: explicit kwargs → agent spec → project defaults →
+        SDK hard default. Returns the new run_id. The run is saved to the store
+        in PENDING status for a worker to claim.
+
+        Parameters
+        ----------
+        input_data:
+            Arbitrary JSON-serialisable input passed to the first step.
+        requires_sandbox_mode:
+            Explicit sandbox isolation level for this run.
+        requires_image:
+            Explicit image reference (e.g. ``ghcr.io/sagewai/sandbox-ml:0.1.5``).
+        requires_network_policy:
+            Explicit network policy for this run.
+        """
+        from sagewai.sandbox.resolution import resolve_requirements
+
+        project_defaults = None
+        if hasattr(self._store, "get_project_defaults"):
+            try:
+                project_defaults = await self._store.get_project_defaults(
+                    getattr(self, "project_id", None)
+                )
+            except Exception:
+                project_defaults = None
+
+        agent_req = getattr(self, "_agent_requirements", None)
+
+        requirements = resolve_requirements(
+            explicit_mode=requires_sandbox_mode,
+            explicit_image=requires_image,
+            explicit_network_policy=requires_network_policy,
+            agent_requirements=agent_req,
+            project_defaults=project_defaults,
+        )
+
+        run_id = _generate_run_id(self.name, input_data or {})
+        run = WorkflowRun(
+            workflow_name=self.name,
+            run_id=run_id,
+            input_data=input_data,
+            started_at=time.time(),
+            requires_sandbox_mode=requirements.sandbox_mode,
+            requires_image=requirements.image,
+            requires_variant=requirements.variant,
+            requires_network_policy=requirements.network_policy,
+        )
+        await self._store.save_run(run)
+        logger.info(
+            "Workflow %s enqueued run %s (mode=%s)",
+            self.name,
+            run_id,
+            requirements.sandbox_mode.value,
+        )
+        return run_id
 
 
 class WorkflowWaiting(Exception):  # noqa: N818

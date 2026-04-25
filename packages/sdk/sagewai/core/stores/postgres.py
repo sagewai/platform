@@ -59,6 +59,7 @@ class PostgresStore(WorkflowStore):
         self._pool = pool
         self._owner_id = _owner_id()
         self._load_balancer: Any = None  # lazily created, cached for RR counter
+        self._emitted_unroutable: set[str] = set()  # dedup: (run_id, hour_bucket)
 
     async def initialize(self) -> None:
         """Create the connection pool if not already provided."""
@@ -81,19 +82,27 @@ class PostgresStore(WorkflowStore):
             await self._pool.close()
 
     async def save_run(self, run: WorkflowRun) -> None:
-        """Upsert a workflow run as JSONB."""
+        """Upsert a workflow run as JSONB plus typed sandbox requirement columns."""
         key = f"{run.workflow_name}:{run.run_id}"
         data = json.dumps(run.to_dict(), default=str)
 
         await self._pool.execute(
             """
-            INSERT INTO workflow_runs (id, workflow_name, run_id, status, data, owner_id, updated_at)
-            VALUES ($1, $2, $3, $4, $5::jsonb, $6, NOW())
+            INSERT INTO workflow_runs (
+                id, workflow_name, run_id, status, data, owner_id, updated_at,
+                requires_sandbox_mode, requires_image, requires_variant,
+                requires_network_policy
+            )
+            VALUES ($1, $2, $3, $4, $5::jsonb, $6, NOW(), $7, $8, $9, $10)
             ON CONFLICT (id) DO UPDATE SET
                 status = EXCLUDED.status,
                 data = EXCLUDED.data,
                 owner_id = EXCLUDED.owner_id,
-                updated_at = NOW()
+                updated_at = NOW(),
+                requires_sandbox_mode = EXCLUDED.requires_sandbox_mode,
+                requires_image = EXCLUDED.requires_image,
+                requires_variant = EXCLUDED.requires_variant,
+                requires_network_policy = EXCLUDED.requires_network_policy
             """,
             key,
             run.workflow_name,
@@ -101,6 +110,10 @@ class PostgresStore(WorkflowStore):
             run.status.value,
             data,
             self._owner_id,
+            run.requires_sandbox_mode.value,
+            run.requires_image,
+            run.requires_variant.value if run.requires_variant else None,
+            run.requires_network_policy.value,
         )
 
     async def load_run(self, workflow_name: str, run_id: str) -> WorkflowRun | None:
@@ -399,6 +412,122 @@ class PostgresStore(WorkflowStore):
         wf_run._steps_total = row["steps_total"]
         return wf_run
 
+    async def claim_task(
+        self,
+        worker_id: str,
+        org_id: str,
+        models_canonical: list[str],
+        pool: str,
+        labels: dict[str, str] | None,
+        *,
+        worker_sandbox_mode: Any = None,
+        worker_sandbox_variants: list[Any] | None = None,
+        worker_network_policy: Any = None,
+    ) -> dict[str, Any] | None:
+        """Atomically claim a pending task for a fleet worker.
+
+        Implements the :class:`~sagewai.fleet.dispatcher.TaskStore` protocol
+        and extends it with three sandbox capability predicates so that only
+        workers that can satisfy the run's sandbox requirements will claim it.
+
+        Sandbox matching rules
+        ----------------------
+        1. ``sandbox_mode_rank(requires_sandbox_mode) <= worker_mode_rank``
+           — the worker must support at least the required isolation level.
+        2. ``requires_variant IS NULL OR requires_variant = ANY(worker_variants)``
+           — NULL means BYO (matches any variant-capable worker); a specific
+           variant must appear in the worker's advertised list.
+        3. ``network_policy_rank(requires_network_policy) <= worker_network_rank``
+           — the worker must support at least the required network policy.
+        """
+        from sagewai.sandbox.models import NetworkPolicy, SandboxImageVariant, SandboxMode
+        from sagewai.sandbox.registry import mode_rank
+        from sagewai.sandbox.registry import network_policy_rank as net_rank
+
+        # Resolve defaults so callers can pass None for backward compat
+        if worker_sandbox_mode is None:
+            worker_sandbox_mode = SandboxMode.NONE
+        if worker_network_policy is None:
+            worker_network_policy = NetworkPolicy.NONE
+
+        worker_mode_rank_int = mode_rank(worker_sandbox_mode)
+        worker_network_rank_int = net_rank(worker_network_policy)
+        worker_variants_str: list[str] = [
+            v.value if isinstance(v, SandboxImageVariant) else str(v)
+            for v in (worker_sandbox_variants or [])
+        ]
+
+        conditions = ["status = 'pending'"]
+        params: list[Any] = [worker_id]
+        idx = 2
+
+        # org_id scoping
+        conditions.append(f"(org_id IS NULL OR org_id = ${idx})")
+        params.append(org_id)
+        idx += 1
+
+        # Pool matching: unrouted runs match any worker
+        conditions.append(f"(target_pool IS NULL OR target_pool = ${idx})")
+        params.append(pool)
+        idx += 1
+
+        # Label matching: unrouted runs match any worker
+        if labels:
+            conditions.append(f"(target_labels IS NULL OR target_labels <@ ${idx}::jsonb)")
+            params.append(json.dumps(labels))
+            idx += 1
+
+        # Model matching
+        if models_canonical:
+            conditions.append(
+                f"(target_model IS NULL OR target_model = ANY(${idx}::text[]))"
+            )
+            params.append(models_canonical)
+            idx += 1
+
+        # Sandbox mode rank: worker must meet or exceed the task's required rank
+        conditions.append(f"sandbox_mode_rank(requires_sandbox_mode) <= ${idx}")
+        params.append(worker_mode_rank_int)
+        idx += 1
+
+        # Variant matching: NULL means BYO (universal), otherwise must be in worker list
+        conditions.append(
+            f"(requires_variant IS NULL OR requires_variant = ANY(${idx}::text[]))"
+        )
+        params.append(worker_variants_str)
+        idx += 1
+
+        # Network policy rank: worker must meet or exceed the task's required rank
+        conditions.append(f"network_policy_rank(requires_network_policy) <= ${idx}")
+        params.append(worker_network_rank_int)
+        idx += 1
+
+        where = " AND ".join(conditions)
+        row = await self._pool.fetchrow(
+            f"""
+            UPDATE workflow_runs
+            SET status = 'running', owner_id = $1, updated_at = NOW()
+            WHERE id = (
+                SELECT id FROM workflow_runs
+                WHERE {where}
+                ORDER BY COALESCE(priority, 0) DESC, created_at ASC
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING run_id, workflow_name, data, input, output
+            """,
+            *params,
+        )
+        if row is None:
+            return None
+
+        inp = row["input"]
+        return {
+            "run_id": row["run_id"],
+            "workflow_name": row["workflow_name"],
+            "payload": inp if isinstance(inp, dict) else json.loads(inp or "{}"),
+        }
+
     async def complete_run(
         self,
         workflow_name: str,
@@ -652,6 +781,9 @@ class PostgresStore(WorkflowStore):
         worker_id: str | None = None,
         routing_strategy: str | None = None,
         capacity_threshold: float = 0.9,
+        requires_sandbox_mode: Any = None,
+        requires_image: str | None = None,
+        requires_network_policy: Any = None,
     ) -> tuple[str, bool]:
         """Enqueue a workflow for execution by a WorkflowWorker.
 
@@ -713,12 +845,33 @@ class PostgresStore(WorkflowStore):
                     exc_info=True,
                 )
 
+        # Resolve sandbox requirements cascade
+        from sagewai.sandbox.resolution import resolve_requirements
+
+        project_defaults = None
+        if project_id:
+            try:
+                project_defaults = await self.get_project_defaults(project_id)
+            except Exception:
+                project_defaults = None
+
+        requirements = resolve_requirements(
+            explicit_mode=requires_sandbox_mode,
+            explicit_image=requires_image,
+            explicit_network_policy=requires_network_policy,
+            project_defaults=project_defaults,
+        )
+
         wf_run = WorkflowRun(
             workflow_name=workflow_name,
             run_id=run_id,
             input_data=input_data,
             started_at=time.time(),
             project_id=project_id,
+            requires_sandbox_mode=requirements.sandbox_mode,
+            requires_image=requirements.image,
+            requires_variant=requirements.variant,
+            requires_network_policy=requirements.network_policy,
         )
         return await self.enqueue_run(
             wf_run,
@@ -965,6 +1118,142 @@ class PostgresStore(WorkflowStore):
             "registered_at": str(row["registered_at"]),
             "metadata": meta,
         }
+
+    # ------------------------------------------------------------------
+    # Project defaults
+    # ------------------------------------------------------------------
+
+    async def get_project_defaults(self, project_id: str):
+        """Return project-level SandboxRequirements defaults, or None if unset.
+
+        Reads admin-state.json (file-backed config store). When the admin UI
+        surface ships in Plan 3b, this helper stays compatible — the UI
+        writes to the same store.
+        """
+        from sagewai.admin.state_file import AdminStateFile
+        from sagewai.sandbox import image_manifest
+        from sagewai.sandbox.models import NetworkPolicy, SandboxMode
+        from sagewai.sandbox.resolution import SandboxRequirements
+
+        state = AdminStateFile()
+        project = state.get_project(project_id)
+        if not project:
+            return None
+        defaults = project.get("default_sandbox_requirements")
+        if not defaults:
+            return None
+
+        mode_str = defaults.get("sandbox_mode", "none")
+        image = defaults.get(
+            "image",
+            f"ghcr.io/sagewai/sandbox-base:{image_manifest.SDK_VERSION}",
+        )
+        policy_str = defaults.get("network_policy", "none")
+
+        return SandboxRequirements(
+            sandbox_mode=SandboxMode(mode_str),
+            image=image,
+            variant=image_manifest.lookup_variant(image),
+            network_policy=NetworkPolicy(policy_str),
+        )
+
+    # ------------------------------------------------------------------
+    # Unroutable-run sweep
+    # ------------------------------------------------------------------
+
+    async def sweep_unroutable_runs(
+        self, *, grace_seconds: int = 30, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """Find stuck PENDING runs and emit sagewai.run.unroutable events.
+
+        Dedup key: (run_id, current_hour). Each run emits at most one event
+        per hour, even across multiple sweep cycles.
+
+        Returns the list of newly-emitted event dicts (empty if none).
+        Disabled via SAGEWAI_SANDBOX_EMIT_UNROUTABLE_EVENTS=0.
+        """
+        import datetime
+        import os
+
+        if os.environ.get("SAGEWAI_SANDBOX_EMIT_UNROUTABLE_EVENTS", "1") != "1":
+            return []
+
+        rows = await self._pool.fetch(
+            """
+            SELECT run_id, workflow_name, org_id, target_pool,
+                   requires_sandbox_mode, requires_image, requires_variant,
+                   requires_network_policy,
+                   EXTRACT(EPOCH FROM (NOW() - created_at))::INT AS pending_seconds
+            FROM workflow_runs
+            WHERE status = 'pending'
+              AND created_at < NOW() - MAKE_INTERVAL(secs => $1)
+            ORDER BY created_at ASC
+            LIMIT $2
+            """,
+            float(grace_seconds),
+            limit,
+        )
+
+        hour_bucket = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d-%H")
+        emitted: list[dict[str, Any]] = []
+        for row in rows:
+            dedup_key = f"{row['run_id']}:{hour_bucket}"
+            if dedup_key in self._emitted_unroutable:
+                continue
+            self._emitted_unroutable.add(dedup_key)
+
+            diagnosis = await self._diagnose_unroutable(row)
+
+            logger.info(
+                "sagewai.run.unroutable: run_id=%s reason=%s pending_seconds=%d "
+                "required=%s diagnosis=%s",
+                row["run_id"],
+                "no_capable_worker",
+                row["pending_seconds"],
+                {
+                    "sandbox_mode": row["requires_sandbox_mode"],
+                    "variant": row["requires_variant"],
+                    "network_policy": row["requires_network_policy"],
+                    "pool": row["target_pool"],
+                },
+                diagnosis,
+            )
+            emitted.append({
+                "run_id": row["run_id"],
+                "diagnosis": diagnosis,
+                "pending_seconds": row["pending_seconds"],
+            })
+        return emitted
+
+    async def _diagnose_unroutable(self, row: Any) -> str:
+        """Best-effort explanation of why the row doesn't match any worker."""
+        candidates = await self._pool.fetchval(
+            "SELECT count(*) FROM workers WHERE status='active' AND pool=$1",
+            row["target_pool"],
+        )
+        if not candidates:
+            return f"no active workers in pool '{row['target_pool']}'"
+
+        if row["requires_variant"] is not None:
+            variant_match = await self._pool.fetchval(
+                """
+                SELECT count(*) FROM workers
+                WHERE status='active' AND pool=$1
+                  AND $2 = ANY(string_to_array(labels->>'sandbox.image_variants', ','))
+                """,
+                row["target_pool"],
+                row["requires_variant"],
+            )
+            if not variant_match:
+                return (
+                    f"no worker in pool '{row['target_pool']}' advertises "
+                    f"variant={row['requires_variant']}; candidate count={candidates}"
+                )
+
+        return (
+            f"mode or network policy mismatch "
+            f"(pool '{row['target_pool']}' has {candidates} workers)"
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers

@@ -26,6 +26,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from sagewai.sandbox.resolution import SandboxRequirements
+
 from ._types import Mode
 from .agent_graph import AgentGraph
 from .errors import BlueprintValidationError, SlotValidationError
@@ -59,6 +61,13 @@ class Blueprint(BaseModel):
     success_criteria: EvalRef
     training_data_hooks: tuple[TrainingHook, ...] = ()
     learning_loop_target: LearningLoopConfig | None = None
+    sandbox_requirements: SandboxRequirements | None = Field(
+        default=None,
+        description=(
+            "Required sandbox posture for runs of this blueprint. "
+            "Falls back through agent → project → SDK default if None."
+        ),
+    )
 
     @model_validator(mode="after")
     def _required_and_optional_slots_disjoint(self) -> Blueprint:

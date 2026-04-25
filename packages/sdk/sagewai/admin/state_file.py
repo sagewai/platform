@@ -35,7 +35,6 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-
 _DEFAULT_STATE_DIR = Path.home() / ".sagewai"
 _DEFAULT_STATE_FILE = _DEFAULT_STATE_DIR / "admin-state.json"
 
@@ -93,7 +92,12 @@ class AdminStateFile:
     """
 
     def __init__(self, path: str | Path | None = None) -> None:
-        self._path = Path(path) if path else _DEFAULT_STATE_FILE
+        if path is not None:
+            self._path = Path(path)
+        elif "SAGEWAI_ADMIN_STATE_FILE" in os.environ:
+            self._path = Path(os.environ["SAGEWAI_ADMIN_STATE_FILE"])
+        else:
+            self._path = _DEFAULT_STATE_FILE
 
     # ── low-level I/O ────────────────────────────────────────────
 
@@ -336,6 +340,22 @@ class AdminStateFile:
             return False
         self._write(data)
         return True
+
+    def get_project(self, project_id: str) -> dict[str, Any] | None:
+        """Return the project dict for ``project_id`` or None.
+
+        Handles both list-of-dicts (matching on ``slug`` or ``id``) and
+        dict-keyed-by-slug shapes for forward-compatibility.
+        """
+        state = self._read()
+        projects = state.get("projects", [])
+        if isinstance(projects, dict):
+            return projects.get(project_id)
+        if isinstance(projects, list):
+            for p in projects:
+                if p.get("slug") == project_id or p.get("id") == project_id:
+                    return p
+        return None
 
     # ── project scoping helper ───────────────────────────────────
 

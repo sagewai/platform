@@ -134,3 +134,99 @@ class TestPostgresStoreIntegration:
     async def test_load_nonexistent_returns_none(self, pg_store):
         result = await pg_store.load_run("nope", "nope")
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_workflow_run_persists_sandbox_requirements(self, pg_store):
+        """Saving a WorkflowRun with sandbox requirements round-trips via Postgres."""
+        from sagewai.sandbox.models import (
+            NetworkPolicy,
+            SandboxImageVariant,
+            SandboxMode,
+        )
+
+        run = WorkflowRun(
+            workflow_name="wf",
+            run_id="r-sandbox-1",
+            requires_sandbox_mode=SandboxMode.PER_RUN,
+            requires_image="ghcr.io/sagewai/sandbox-ml:0.1.5",
+            requires_variant=SandboxImageVariant.ML,
+            requires_network_policy=NetworkPolicy.FULL,
+        )
+        await pg_store.save_run(run)
+        loaded = await pg_store.load_run("wf", "r-sandbox-1")
+        assert loaded is not None
+        assert loaded.requires_sandbox_mode is SandboxMode.PER_RUN
+        assert loaded.requires_image == "ghcr.io/sagewai/sandbox-ml:0.1.5"
+        assert loaded.requires_variant is SandboxImageVariant.ML
+        assert loaded.requires_network_policy is NetworkPolicy.FULL
+
+    @pytest.mark.asyncio
+    async def test_workflow_run_defaults_on_save(self, pg_store):
+        """Saving a WorkflowRun without requirements uses safe defaults."""
+        from sagewai.sandbox.models import NetworkPolicy, SandboxMode
+
+        run = WorkflowRun(workflow_name="wf", run_id="r-sandbox-2")
+        await pg_store.save_run(run)
+        loaded = await pg_store.load_run("wf", "r-sandbox-2")
+        assert loaded.requires_sandbox_mode is SandboxMode.NONE
+        assert loaded.requires_image.startswith("ghcr.io/sagewai/sandbox-base:")
+        assert loaded.requires_variant is None
+        assert loaded.requires_network_policy is NetworkPolicy.NONE
+
+
+@pytest.fixture
+def admin_state_factory(tmp_path, monkeypatch):
+    """Write a temporary admin-state.json with custom contents."""
+    import json
+
+    state_file = tmp_path / "admin-state.json"
+    monkeypatch.setenv("SAGEWAI_ADMIN_STATE_FILE", str(state_file))
+
+    def _write(**state_kwargs):
+        state_file.write_text(json.dumps(state_kwargs))
+
+    return _write
+
+
+@pytest.mark.integration
+class TestGetProjectDefaults:
+    """Tests for PostgresStore.get_project_defaults() reading admin-state."""
+
+    @pytest.mark.asyncio
+    async def test_get_project_defaults_returns_configured(
+        self, pg_store, admin_state_factory
+    ):
+        """Project with default_sandbox_requirements returns them as SandboxRequirements."""
+        from sagewai.sandbox.models import (
+            NetworkPolicy,
+            SandboxMode,
+        )
+
+        admin_state_factory(
+            projects=[
+                {
+                    "slug": "acme",
+                    "default_sandbox_requirements": {
+                        "sandbox_mode": "per_run",
+                        "image": "ghcr.io/sagewai/sandbox-ml:0.1.5",
+                        "network_policy": "full",
+                    },
+                }
+            ]
+        )
+        defaults = await pg_store.get_project_defaults("acme")
+        assert defaults is not None
+        assert defaults.sandbox_mode is SandboxMode.PER_RUN
+        assert defaults.image == "ghcr.io/sagewai/sandbox-ml:0.1.5"
+        assert defaults.network_policy is NetworkPolicy.FULL
+
+    @pytest.mark.asyncio
+    async def test_get_project_defaults_returns_none_for_unconfigured(
+        self, pg_store, admin_state_factory
+    ):
+        """Project not in admin-state OR project without defaults → None."""
+        admin_state_factory(projects=[])
+        assert await pg_store.get_project_defaults("ghost-project") is None
+
+        admin_state_factory(projects=[{"slug": "acme", "name": "acme"}])  # no default_sandbox_requirements
+        assert await pg_store.get_project_defaults("acme") is None

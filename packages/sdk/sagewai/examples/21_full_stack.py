@@ -52,6 +52,8 @@ from sagewai.harness.models import (
 from sagewai.harness.store import InMemoryHarnessStore
 from sagewai.observability.audit import AuditEvent, AuditLogger, InMemoryAuditBackend
 from sagewai.observability.costs import CostTracker
+from sagewai.sandbox import image_manifest
+from sagewai.sandbox.models import NetworkPolicy, SandboxMode
 
 
 async def main() -> None:
@@ -165,6 +167,9 @@ async def main() -> None:
         "model": "gpt-4o-mini",
         "pool": "default",
         "payload": "What are the benefits of agentic AI?",
+        "requires_sandbox_mode": SandboxMode.NONE,
+        "requires_image": f"ghcr.io/sagewai/sandbox-base:{image_manifest.SDK_VERSION}",
+        "requires_network_policy": NetworkPolicy.FULL,
     })
 
     task = await dispatcher.claim(

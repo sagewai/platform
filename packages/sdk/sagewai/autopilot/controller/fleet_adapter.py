@@ -46,6 +46,7 @@ from .types import StepResult
 if TYPE_CHECKING:
     from sagewai.autopilot.agent_graph import Agent
     from sagewai.autopilot.mission import Mission
+    from sagewai.sandbox.resolution import SandboxRequirements
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +122,9 @@ class FleetMissionAdapter:
         # Derive model tier from blueprint providers_required (first entry).
         model_tier = self._extract_model_tier(mission)
 
+        # Extract sandbox requirements from blueprint (if set).
+        sandbox_reqs = self._extract_sandbox_requirements(mission)
+
         task: dict = {
             "run_id": run_id,
             "model": model_tier,
@@ -135,6 +139,11 @@ class FleetMissionAdapter:
                 "mission_id": mission.mission_id,
                 "context": context,
             },
+            # Sandbox requirements forwarded from blueprint.sandbox_requirements.
+            # None means "use fleet worker defaults / cascade".
+            "requires_sandbox_mode": sandbox_reqs.sandbox_mode if sandbox_reqs else None,
+            "requires_image": sandbox_reqs.image if sandbox_reqs else None,
+            "requires_network_policy": sandbox_reqs.network_policy if sandbox_reqs else None,
         }
 
         # Enqueue the task into the store so the dispatcher can see it.
@@ -215,6 +224,28 @@ class FleetMissionAdapter:
                 "FleetMissionAdapter: could not extract model tier from blueprint; using 'default'",
             )
         return "default"
+
+    def _extract_sandbox_requirements(
+        self,
+        mission: Mission,
+    ) -> SandboxRequirements | None:
+        """Return the blueprint's :class:`~sagewai.sandbox.resolution.SandboxRequirements`.
+
+        Returns ``None`` when the blueprint has no ``sandbox_requirements``
+        set, or when the blueprint JSON cannot be parsed.  The ``None``
+        signals to the fleet worker that it should apply its own defaults
+        (cascade: agent spec → project defaults → SDK default).
+        """
+        try:
+            from sagewai.autopilot.blueprint import Blueprint
+
+            bp = Blueprint.model_validate_json(mission.slots.get("__blueprint_json__", "{}"))
+            return bp.sandbox_requirements
+        except Exception:
+            logger.debug(
+                "FleetMissionAdapter: could not extract sandbox requirements from blueprint",
+            )
+        return None
 
     def _enqueue(self, task: dict) -> None:
         """Enqueue a task into the dispatcher's backing store.

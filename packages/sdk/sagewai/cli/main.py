@@ -185,23 +185,54 @@ def register_commands(
     @click.option(
         "--db-url", envvar="DATABASE_URL", help="PostgreSQL connection URL"
     )
+    @click.option(
+        "--requires-sandbox-mode",
+        type=click.Choice(["none", "per_tool", "per_run", "per_worker"]),
+        default=None,
+        help="Minimum sandbox isolation required for this run.",
+    )
+    @click.option(
+        "--requires-image",
+        default=None,
+        help="Full image reference required (ghcr.io/sagewai/sandbox-ml:0.1.5 or BYO).",
+    )
+    @click.option(
+        "--requires-network-policy",
+        type=click.Choice(["none", "egress_allowlist", "full"]),
+        default=None,
+        help="Network policy required for this run.",
+    )
     def workflow_enqueue(
         workflow_name: str,
         input_json: str,
         priority: int,
         db_url: str | None,
+        requires_sandbox_mode: str | None,
+        requires_image: str | None,
+        requires_network_policy: str | None,
     ) -> None:
         """Enqueue a workflow for execution."""
 
         async def _run() -> None:
+            from sagewai.sandbox.models import NetworkPolicy, SandboxMode
+
             store = await _get_store(db_url)
             try:
                 input_data = json.loads(input_json)
             except json.JSONDecodeError:
                 click.echo("Error: Invalid JSON input", err=True)
                 sys.exit(1)
+
+            mode_enum = SandboxMode(requires_sandbox_mode) if requires_sandbox_mode else None
+            net_enum = NetworkPolicy(requires_network_policy) if requires_network_policy else None
+
             run_id, is_new = await store.enqueue_workflow(
-                workflow_name, input_data, priority=priority
+                workflow_name,
+                input_data,
+                priority=priority,
+                requires_sandbox_mode=mode_enum,
+                requires_image=requires_image,
+                requires_network_policy=net_enum,
             )
             if is_new:
                 click.echo(
@@ -392,6 +423,12 @@ def register_commands(
         help="Tmpfs disk limit per sandbox (e.g., 5g).",
     )
     @click.option(
+        "--sandbox-image-variants",
+        default=None,
+        help="Comma-separated variant names this worker accepts "
+             "(e.g., base,general,ml). Default: all variants in the SDK's manifest.",
+    )
+    @click.option(
         "--project-environment",
         type=click.Choice(["production", "staging", "development"]),
         default=None,
@@ -436,10 +473,34 @@ def register_commands(
         sandbox_mem: str,
         sandbox_pids: int,
         sandbox_disk: str,
+        sandbox_image_variants: str | None,
         project_environment: str | None,
     ) -> None:
         """Start a workflow worker with optional routing and credentials."""
         import json as _json
+
+        # Validate --sandbox-image-variants early (before async / DB connection)
+        from sagewai.sandbox.models import (
+            NetworkPolicy,
+            ResourceLimits,
+            SandboxConfig,
+            SandboxImageVariant,
+            SandboxMode,
+        )
+
+        parsed_variants = None
+        if sandbox_image_variants:
+            try:
+                parsed_variants = [
+                    SandboxImageVariant(v.strip())
+                    for v in sandbox_image_variants.split(",")
+                    if v.strip()
+                ]
+            except ValueError as exc:
+                raise click.BadParameter(
+                    f"--sandbox-image-variants: {exc}. "
+                    f"Valid: base, general, ml, ops, erp, ecommerce, api"
+                )
 
         async def _run() -> None:
             store = await _get_store(db_url)
@@ -466,13 +527,6 @@ def register_commands(
 
             parsed_labels = _json.loads(labels) if labels else None
 
-            from sagewai.sandbox.models import (
-                NetworkPolicy,
-                ResourceLimits,
-                SandboxConfig,
-                SandboxMode,
-            )
-
             sbox_config = SandboxConfig(
                 mode=SandboxMode(sandbox_mode) if sandbox_mode else None,
                 backend=sandbox_backend,
@@ -484,6 +538,7 @@ def register_commands(
                     pids=sandbox_pids,
                     disk_bytes=_parse_size(sandbox_disk),
                 ),
+                image_variants=parsed_variants,
             )
 
             w = WorkflowWorker(

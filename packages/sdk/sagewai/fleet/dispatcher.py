@@ -46,6 +46,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Protocol, runtime_checkable
 
+from sagewai.sandbox.models import NetworkPolicy, SandboxImageVariant, SandboxMode
+
 logger = logging.getLogger(__name__)
 
 
@@ -69,8 +71,15 @@ class TaskStore(Protocol):
         models_canonical: list[str],
         pool: str,
         labels: dict[str, str] | None,
+        *,
+        worker_sandbox_mode: SandboxMode = SandboxMode.NONE,
+        worker_sandbox_variants: list[SandboxImageVariant] | None = None,
+        worker_network_policy: NetworkPolicy = NetworkPolicy.NONE,
     ) -> dict[str, Any] | None:
         """Attempt to claim a single task matching the worker's capabilities.
+
+        The three keyword-only sandbox params allow the store to filter out
+        tasks whose requirements exceed the worker's capabilities.
 
         Returns:
             A task dict with at least ``run_id`` and ``payload`` keys, or
@@ -128,8 +137,17 @@ class InMemoryTaskStore:
         models_canonical: list[str],
         pool: str,
         labels: dict[str, str] | None,
+        *,
+        worker_sandbox_mode: SandboxMode = SandboxMode.NONE,
+        worker_sandbox_variants: list[SandboxImageVariant] | None = None,
+        worker_network_policy: NetworkPolicy = NetworkPolicy.NONE,
     ) -> dict[str, Any] | None:
-        """Claim the first matching task from the pending queue."""
+        """Claim the first matching task from the pending queue.
+
+        The sandbox kwargs are accepted for protocol compatibility with
+        :class:`PostgresStore` but are not enforced in the in-memory store
+        (sandbox filtering is a Postgres SQL concern; unit tests stub it out).
+        """
         for i, task in enumerate(self._pending):
             # Model filter
             task_model = task.get("model")
@@ -216,12 +234,19 @@ class FleetDispatcher:
         models_canonical: list[str],
         pool: str = "default",
         labels: dict[str, str] | None = None,
+        *,
+        worker_sandbox_mode: SandboxMode = SandboxMode.NONE,
+        worker_sandbox_variants: list[SandboxImageVariant] | None = None,
+        worker_network_policy: NetworkPolicy = NetworkPolicy.NONE,
     ) -> dict[str, Any] | None:
         """Long-poll for a task matching the worker's capabilities.
 
         Polls the store every ``poll_interval`` seconds for up to
         ``poll_timeout`` seconds.  Returns the task dict on success or
         ``None`` on timeout.
+
+        The three keyword-only sandbox params are forwarded to the underlying
+        store so that only tasks the worker can satisfy are claimed.
 
         If encryption is configured, the ``payload`` field is decrypted
         before returning.  A ``RUN_CLAIMED`` audit event is recorded on
@@ -237,6 +262,9 @@ class FleetDispatcher:
                 models_canonical=models_canonical,
                 pool=pool,
                 labels=labels,
+                worker_sandbox_mode=worker_sandbox_mode,
+                worker_sandbox_variants=worker_sandbox_variants,
+                worker_network_policy=worker_network_policy,
             )
             if task is not None:
                 # Decrypt payload if encryption is configured
