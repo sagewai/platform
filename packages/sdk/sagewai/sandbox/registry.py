@@ -10,7 +10,7 @@
 """Mode precedence and image resolution helpers."""
 from __future__ import annotations
 
-from sagewai.sandbox.models import SandboxConfig, SandboxMode
+from sagewai.sandbox.models import NetworkPolicy, SandboxConfig, SandboxMode
 
 _MODE_RANK: dict[SandboxMode, int] = {
     SandboxMode.NONE: 0,
@@ -33,6 +33,20 @@ def mode_rank(mode: SandboxMode | str) -> int:
     if isinstance(mode, str):
         mode = SandboxMode(mode)
     return _MODE_RANK[mode]
+
+
+_NETWORK_POLICY_RANK: dict[NetworkPolicy, int] = {
+    NetworkPolicy.NONE: 0,
+    NetworkPolicy.EGRESS_ALLOWLIST: 1,
+    NetworkPolicy.FULL: 2,
+}
+
+
+def network_policy_rank(policy: NetworkPolicy | str) -> int:
+    """Return integer rank for a network policy. Higher = more permissive."""
+    if isinstance(policy, str):
+        policy = NetworkPolicy(policy)
+    return _NETWORK_POLICY_RANK[policy]
 
 
 def resolve_mode(

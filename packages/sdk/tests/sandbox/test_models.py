@@ -68,3 +68,32 @@ def test_backend_health_repr():
     h = BackendHealth(ok=True, backend="docker", detail="daemon reachable")
     assert h.ok
     assert "docker" in h.backend
+
+
+def test_sandbox_image_variant_values():
+    from sagewai.sandbox.models import SandboxImageVariant
+
+    assert SandboxImageVariant.BASE.value == "base"
+    assert SandboxImageVariant.GENERAL.value == "general"
+    assert SandboxImageVariant.ML.value == "ml"
+    assert SandboxImageVariant.OPS.value == "ops"
+    assert SandboxImageVariant.ERP.value == "erp"
+    assert SandboxImageVariant.ECOMMERCE.value == "ecommerce"
+    assert SandboxImageVariant.API.value == "api"
+    # ML_CUDA deferred to Plan 2.1
+    assert "ml-cuda" not in {v.value for v in SandboxImageVariant}
+
+
+def test_sandbox_image_variant_round_trip():
+    from sagewai.sandbox.models import SandboxImageVariant
+
+    assert SandboxImageVariant("ml") is SandboxImageVariant.ML
+
+
+def test_sandbox_image_variant_rejects_unknown():
+    import pytest
+
+    from sagewai.sandbox.models import SandboxImageVariant
+
+    with pytest.raises(ValueError):
+        SandboxImageVariant("bogus-variant")

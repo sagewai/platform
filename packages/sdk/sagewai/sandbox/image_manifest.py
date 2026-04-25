@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import re
 
+from sagewai.sandbox.models import SandboxImageVariant
+
 # Version of the SDK wheel this manifest was generated into. Before the
 # first release this reads "0.0.0-dev" and PINNED_DIGESTS is empty.
 SDK_VERSION: str = "0.0.0-dev"
@@ -52,3 +54,34 @@ def lookup_digest(image_ref: str) -> str | None:
         return None
     variant = match.group("variant")
     return PINNED_DIGESTS.get(variant)
+
+
+def lookup_variant(image_ref: str) -> SandboxImageVariant | None:
+    """Return the variant for a known Sagewai-published image, or None for BYO.
+
+    Matches only tag-form refs under the sagewai org (e.g.
+    ``ghcr.io/sagewai/sandbox-base:0.1.5``). Digest-form refs (``@sha256:...``)
+    are treated as outside scope and return None — callers that pass
+    digest-form refs should skip the lookup and trust the ref directly.
+
+    Returns None when:
+      - ref does not start with ``ghcr.io/sagewai/sandbox-``
+      - the variant segment is not a known SandboxImageVariant enum value
+      - the variant IS a known enum value but not present in the current
+        SDK's PINNED_DIGESTS (pre-release state or partial release)
+    """
+    prefix = "ghcr.io/sagewai/sandbox-"
+    if not image_ref.startswith(prefix):
+        return None
+    rest = image_ref[len(prefix):]
+    # Require tag-form: variant + ':' + tag
+    if ":" not in rest:
+        return None
+    variant_name = rest.split(":", 1)[0]
+    try:
+        variant = SandboxImageVariant(variant_name)
+    except ValueError:
+        return None
+    if variant.value not in PINNED_DIGESTS:
+        return None
+    return variant

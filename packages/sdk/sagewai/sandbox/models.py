@@ -41,6 +41,19 @@ class NetworkPolicy(str, Enum):
     FULL = "full"
 
 
+class SandboxImageVariant(str, Enum):
+    """Known Sagewai-published image variants. BYO images skip this enum."""
+
+    BASE = "base"
+    GENERAL = "general"
+    ML = "ml"
+    OPS = "ops"
+    ERP = "erp"
+    ECOMMERCE = "ecommerce"
+    API = "api"
+    # ML_CUDA = "ml-cuda" — added in Plan 2.1 when GPU CI ships
+
+
 class ResourceLimits(BaseModel):
     """Per-sandbox resource limits enforced by the backend."""
 

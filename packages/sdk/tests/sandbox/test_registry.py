@@ -92,3 +92,34 @@ def test_resolve_sandbox_image_falls_back_to_worker_default():
 def test_resolve_sandbox_image_hard_default():
     img = resolve_sandbox_image(None, None, None, None)
     assert img == "ghcr.io/sagewai/sandbox-general:latest"
+
+
+def test_network_policy_rank_ordering():
+    from sagewai.sandbox.models import NetworkPolicy
+    from sagewai.sandbox.registry import network_policy_rank
+
+    assert network_policy_rank(NetworkPolicy.NONE) == 0
+    assert network_policy_rank(NetworkPolicy.EGRESS_ALLOWLIST) == 1
+    assert network_policy_rank(NetworkPolicy.FULL) == 2
+    assert (
+        network_policy_rank(NetworkPolicy.NONE)
+        < network_policy_rank(NetworkPolicy.EGRESS_ALLOWLIST)
+        < network_policy_rank(NetworkPolicy.FULL)
+    )
+
+
+def test_network_policy_rank_accepts_string():
+    from sagewai.sandbox.registry import network_policy_rank
+
+    assert network_policy_rank("none") == 0
+    assert network_policy_rank("egress_allowlist") == 1
+    assert network_policy_rank("full") == 2
+
+
+def test_network_policy_rank_rejects_unknown():
+    import pytest
+
+    from sagewai.sandbox.registry import network_policy_rank
+
+    with pytest.raises(ValueError):
+        network_policy_rank("bogus")
