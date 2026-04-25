@@ -20,6 +20,11 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+from enum import Enum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sagewai.admin.state_file import AdminStateFile
 
 from sagewai.sandbox import image_manifest
 from sagewai.sandbox.models import (
@@ -29,6 +34,23 @@ from sagewai.sandbox.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class SandboxResolutionOrigin(str, Enum):
+    """Per-field cascade origin for resolution previews.
+
+    Backward-compat note: ``AGENT`` is the generic origin for any value
+    that came from the ``agent_requirements`` layer. The Plan 3b-i preview
+    endpoint re-tags this as ``ADMIN_OVERRIDE`` or ``BLUEPRINT`` based on
+    where ``resolve_agent_requirements()`` actually sourced the value.
+    """
+
+    EXPLICIT = "explicit"
+    AGENT = "agent"
+    ADMIN_OVERRIDE = "admin_override"
+    BLUEPRINT = "blueprint"
+    PROJECT_DEFAULT = "project_default"
+    SDK_DEFAULT = "sdk_default"
 
 _SDK_DEFAULT_MODE = SandboxMode.NONE
 _SDK_DEFAULT_NETWORK = NetworkPolicy.NONE
@@ -61,7 +83,8 @@ def resolve_requirements(
     agent_requirements: SandboxRequirements | None = None,
     project_defaults: SandboxRequirements | None = None,
     strict: bool | None = None,
-) -> SandboxRequirements:
+    with_origins: bool = False,
+) -> SandboxRequirements | tuple[SandboxRequirements, dict[str, SandboxResolutionOrigin]]:
     """Resolve the cascade (explicit → agent → project → SDK default).
 
     Each field (mode, image, network_policy) is resolved independently —
@@ -72,11 +95,18 @@ def resolve_requirements(
     is set in the environment; otherwise False. In strict mode, fallthrough
     to the SDK hard default raises SandboxRequirementsError. Otherwise the
     fallthrough is logged as WARNING (one per fallthrough field).
+
+    When ``with_origins=True``, returns a ``(SandboxRequirements,
+    dict[str, SandboxResolutionOrigin])`` tuple where each key is a field
+    name and the value records which cascade layer supplied it. When False
+    (default), returns only ``SandboxRequirements`` — existing callers are
+    unaffected.
     """
     if strict is None:
         strict = os.environ.get("SAGEWAI_SANDBOX_STRICT_REQUIREMENTS") == "1"
 
     fallbacks: list[str] = []
+    origins: dict[str, SandboxResolutionOrigin] | None = {} if with_origins else None
 
     mode = _resolve_one(
         "sandbox_mode",
@@ -85,6 +115,7 @@ def resolve_requirements(
         project_defaults.sandbox_mode if project_defaults else None,
         _SDK_DEFAULT_MODE,
         fallbacks,
+        origins,
     )
     image = _resolve_one(
         "image",
@@ -93,6 +124,7 @@ def resolve_requirements(
         project_defaults.image if project_defaults else None,
         _sdk_default_image(),
         fallbacks,
+        origins,
     )
     network = _resolve_one(
         "network_policy",
@@ -101,6 +133,7 @@ def resolve_requirements(
         project_defaults.network_policy if project_defaults else None,
         _SDK_DEFAULT_NETWORK,
         fallbacks,
+        origins,
     )
 
     if fallbacks and strict:
@@ -117,20 +150,76 @@ def resolve_requirements(
             field,
         )
 
-    return SandboxRequirements(
+    resolved = SandboxRequirements(
         sandbox_mode=mode,
         image=image,
         variant=image_manifest.lookup_variant(image),
         network_policy=network,
     )
 
+    if with_origins:
+        return resolved, origins  # type: ignore[return-value]
+    return resolved
 
-def _resolve_one(name, explicit, agent_val, project_val, sdk_default, fallbacks):
+
+async def resolve_agent_requirements(
+    agent_name: str,
+    *,
+    blueprint_requirements: SandboxRequirements | None,
+    admin_state: AdminStateFile | None = None,
+) -> SandboxRequirements | None:
+    """Merge admin-state override (if any) with Blueprint declaration.
+
+    All-or-nothing: if admin override is set in admin-state, it fully
+    replaces the Blueprint values. Returns None when neither admin nor
+    Blueprint provides requirements.
+
+    Plan 3b-i adds a new layer to the resolution cascade between
+    explicit (level 1) and project default (level 4):
+      - level 2: admin override (this function — from admin-state.json)
+      - level 3: Blueprint (this function — from autopilot code)
+
+    The lazy ``AdminStateFile`` import avoids any potential circular
+    dependency between admin and sandbox subpackages.
+    """
+    from sagewai.admin.state_file import AdminStateFile
+
+    state = admin_state or AdminStateFile()
+    agent = state.get_agent(agent_name)
+    override_dict = (agent or {}).get("sandbox_requirements_override")
+    if override_dict:
+        return SandboxRequirements(
+            sandbox_mode=SandboxMode(override_dict["sandbox_mode"]),
+            image=override_dict["image"],
+            variant=image_manifest.lookup_variant(override_dict["image"]),
+            network_policy=NetworkPolicy(override_dict["network_policy"]),
+        )
+    return blueprint_requirements
+
+
+def _resolve_one(
+    name,
+    explicit,
+    agent_val,
+    project_val,
+    sdk_default,
+    fallbacks,
+    origins: dict[str, SandboxResolutionOrigin] | None = None,
+):
+    """Resolve one field via the cascade. Records origin if provided."""
     if explicit is not None:
+        if origins is not None:
+            origins[name] = SandboxResolutionOrigin.EXPLICIT
         return explicit
     if agent_val is not None:
+        if origins is not None:
+            origins[name] = SandboxResolutionOrigin.AGENT
         return agent_val
     if project_val is not None:
+        if origins is not None:
+            origins[name] = SandboxResolutionOrigin.PROJECT_DEFAULT
         return project_val
     fallbacks.append(name)
+    if origins is not None:
+        origins[name] = SandboxResolutionOrigin.SDK_DEFAULT
     return sdk_default

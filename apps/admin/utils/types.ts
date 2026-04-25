@@ -102,6 +102,8 @@ export interface AgentDetail {
   tags: string[];
   fallback_models: string[];
   total_runs: number;
+  sandbox_requirements_override?: SandboxRequirementsResponse | null;
+  sandbox_requirements_blueprint?: SandboxRequirementsResponse | null;
 }
 
 export interface RunSummary {
@@ -1133,4 +1135,37 @@ export interface AutopilotMission {
 export interface AutopilotMissionsResponse {
   missions: AutopilotMission[];
   total: number;
+}
+
+// ── sandbox config (Plan 3b-i) ──────────────────────────────────────
+
+export type SandboxModeValue = 'none' | 'per_tool' | 'per_run' | 'per_worker';
+export type NetworkPolicyValue = 'none' | 'egress_allowlist' | 'full';
+export type SandboxImageVariantValue =
+  | 'base' | 'general' | 'ml' | 'ops' | 'erp' | 'ecommerce' | 'api';
+export type SandboxResolutionOrigin =
+  | 'explicit' | 'admin_override' | 'blueprint' | 'project_default' | 'sdk_default';
+
+export interface SandboxRequirementsPayload {
+  sandbox_mode: SandboxModeValue;
+  image: string;
+  network_policy: NetworkPolicyValue;
+  required_secret_scopes: string[];
+}
+
+export interface SandboxRequirementsResponse extends SandboxRequirementsPayload {
+  variant: SandboxImageVariantValue | null;
+}
+
+export interface SandboxResolutionField {
+  value: string;
+  origin: SandboxResolutionOrigin;
+}
+
+export interface SandboxResolutionPreview {
+  sandbox_mode: SandboxResolutionField;
+  image: SandboxResolutionField;
+  variant: SandboxImageVariantValue | null;
+  network_policy: SandboxResolutionField;
+  resolved: SandboxRequirementsResponse;
 }

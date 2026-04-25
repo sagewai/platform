@@ -9,6 +9,7 @@ import { Card, Badge, Button, FormField, TextInput, TextArea, Select, Tabs, Skel
 import { AlertCircle, Bookmark, ChevronDown, ChevronRight, MessageSquare, Tag, X, Plus, Pencil, Trash2, Plug } from 'lucide-react';
 import { SSEChat } from '@/components/sse-chat';
 import { AgentMemoryConfigPanel } from '@/components/agent-memory-config';
+import { SandboxTab } from './_components/sandbox-tab';
 
 interface Props {
   params: Promise<{ name: string }>;
@@ -171,6 +172,7 @@ export default function AgentDetailPage({ params }: Props) {
     { id: 'overview', label: 'Overview' },
     ...(agent.source === 'playground' ? [{ id: 'chat', label: 'Chat' }] : []),
     { id: 'config', label: 'Configuration' },
+    { id: 'sandbox', label: 'Sandbox' },
     { id: 'memory', label: 'Memory & Context' },
     { id: 'runs', label: `Runs (${agent.total_runs})` },
   ];
@@ -789,6 +791,8 @@ export default function AgentDetailPage({ params }: Props) {
         />
         </>
       )}
+
+      {activeTab === 'sandbox' && <SandboxTab agent={agent} />}
 
       {activeTab === 'memory' && (
         <AgentMemoryConfigPanel

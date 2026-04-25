@@ -4,7 +4,8 @@ import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { PageLayout, Button, Badge, Card, FormField, TextInput, TextArea, Select, ConfirmDialog, useToast } from '@/components/ui/legacy';
 import { adminApi } from '@/utils/api';
-import type { Project, AvailableModel } from '@/utils/types';
+import type { Project, AvailableModel, SandboxRequirementsResponse } from '@/utils/types';
+import { SandboxRequirementsForm } from '@/components/sandbox-requirements-form';
 import { ChevronDown, ChevronRight, Trash2, AlertCircle } from 'lucide-react';
 
 export default function ProjectsPage() {
@@ -221,6 +222,9 @@ export default function ProjectsPage() {
                   <Button onClick={handleSaveDetail} disabled={saving}>
                     {saving ? 'Saving...' : 'Save Changes'}
                   </Button>
+                  <div className="mt-md">
+                    <ProjectSandboxDefaultsCard slug={project.slug} />
+                  </div>
                 </div>
               )}
             </Card>
@@ -237,5 +241,41 @@ export default function ProjectsPage() {
         confirmText={deleteSlug || ''}
       />
     </PageLayout>
+  );
+}
+
+/* ─── Sandbox Defaults Card ─── */
+
+function ProjectSandboxDefaultsCard({ slug }: { slug: string }) {
+  const [defaults, setDefaults] = useState<SandboxRequirementsResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    adminApi
+      .getProjectSandboxDefaults(slug)
+      .then((d) => setDefaults(d))
+      .catch(() => setDefaults(null))
+      .finally(() => setLoading(false));
+  }, [slug]);
+
+  if (loading) return <div className="text-xs text-neutral-500">Loading sandbox defaults…</div>;
+
+  return (
+    <div className="rounded border border-neutral-200 p-4">
+      <h3 className="text-sm font-semibold text-neutral-700">Sandbox defaults</h3>
+      <p className="mt-1 text-xs text-neutral-500">
+        Default sandbox requirements for runs in this project. Agents and explicit run-time
+        kwargs can override these.
+      </p>
+      <div className="mt-3">
+        <SandboxRequirementsForm
+          scope="project"
+          scopeId={slug}
+          initialValues={defaults}
+          onSaved={(d) => setDefaults(d)}
+          onCleared={() => setDefaults(null)}
+        />
+      </div>
+    </div>
   );
 }

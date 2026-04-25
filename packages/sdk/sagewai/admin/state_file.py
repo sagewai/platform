@@ -398,10 +398,19 @@ class AdminStateFile:
         return spec
 
     def get_agent(self, name: str) -> dict[str, Any] | None:
-        data = self._read()
-        for a in data.get("agents", []):
-            if a.get("name") == name:
-                return a
+        """Return the agent dict for ``name`` or None if not present.
+
+        Handles both list-of-dicts (matching on ``name``) and
+        dict-keyed-by-name shapes for forward-compatibility.
+        """
+        state = self._read()
+        agents = state.get("agents", [])
+        if isinstance(agents, dict):
+            return agents.get(name)
+        if isinstance(agents, list):
+            for a in agents:
+                if a.get("name") == name:
+                    return a
         return None
 
     def delete_agent(self, name: str) -> bool:

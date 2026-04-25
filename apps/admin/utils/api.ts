@@ -99,6 +99,9 @@ import type {
   AutopilotStatus,
   AutopilotGoalResponse,
   AutopilotMissionsResponse,
+  SandboxRequirementsPayload,
+  SandboxRequirementsResponse,
+  SandboxResolutionPreview,
 } from './types';
 
 const BASE_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL ?? 'http://localhost:8000/admin';
@@ -1273,5 +1276,88 @@ export const adminApi = {
   listAutopilotMissions: (limit?: number) => {
     const qs = limit ? `?limit=${limit}` : '';
     return analyticsClient.get<AutopilotMissionsResponse>(`/api/v1/autopilot/missions${qs}`);
+  },
+
+  /* ─── Sandbox config endpoints (Plan 3b-i) ─── */
+  getProjectSandboxDefaults: async (slug: string): Promise<SandboxRequirementsResponse | null> => {
+    const res = await fetch(`/api/v1/admin/projects/${encodeURIComponent(slug)}/sandbox-defaults`, {
+      credentials: 'include',
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`getProjectSandboxDefaults: ${res.status}`);
+    return res.json();
+  },
+
+  putProjectSandboxDefaults: async (
+    slug: string, payload: SandboxRequirementsPayload
+  ): Promise<SandboxRequirementsResponse> => {
+    const res = await fetch(`/api/v1/admin/projects/${encodeURIComponent(slug)}/sandbox-defaults`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      credentials: 'include',
+    });
+    if (!res.ok) throw new Error(`putProjectSandboxDefaults: ${res.status}`);
+    return res.json();
+  },
+
+  deleteProjectSandboxDefaults: async (slug: string): Promise<void> => {
+    const res = await fetch(`/api/v1/admin/projects/${encodeURIComponent(slug)}/sandbox-defaults`, {
+      method: 'DELETE',
+      credentials: 'include',
+    });
+    if (!res.ok && res.status !== 204) {
+      throw new Error(`deleteProjectSandboxDefaults: ${res.status}`);
+    }
+  },
+
+  getAgentSandboxRequirements: async (name: string): Promise<SandboxRequirementsResponse | null> => {
+    const res = await fetch(`/api/v1/admin/agents/${encodeURIComponent(name)}/sandbox-requirements`, {
+      credentials: 'include',
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`getAgentSandboxRequirements: ${res.status}`);
+    return res.json();
+  },
+
+  putAgentSandboxRequirements: async (
+    name: string, payload: SandboxRequirementsPayload
+  ): Promise<SandboxRequirementsResponse> => {
+    const res = await fetch(`/api/v1/admin/agents/${encodeURIComponent(name)}/sandbox-requirements`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      credentials: 'include',
+    });
+    if (!res.ok) throw new Error(`putAgentSandboxRequirements: ${res.status}`);
+    return res.json();
+  },
+
+  deleteAgentSandboxRequirements: async (name: string): Promise<void> => {
+    const res = await fetch(`/api/v1/admin/agents/${encodeURIComponent(name)}/sandbox-requirements`, {
+      method: 'DELETE',
+      credentials: 'include',
+    });
+    if (!res.ok && res.status !== 204) {
+      throw new Error(`deleteAgentSandboxRequirements: ${res.status}`);
+    }
+  },
+
+  getSandboxResolutionPreview: async (query: {
+    project?: string;
+    agent?: string;
+    draft?: Partial<SandboxRequirementsPayload>;
+  }): Promise<SandboxResolutionPreview> => {
+    const params = new URLSearchParams();
+    if (query.project) params.set('project', query.project);
+    if (query.agent) params.set('agent', query.agent);
+    if (query.draft?.sandbox_mode) params.set('draft_mode', query.draft.sandbox_mode);
+    if (query.draft?.image) params.set('draft_image', query.draft.image);
+    if (query.draft?.network_policy) params.set('draft_network_policy', query.draft.network_policy);
+    const res = await fetch(`/api/v1/admin/sandbox/preview?${params}`, {
+      credentials: 'include',
+    });
+    if (!res.ok) throw new Error(`getSandboxResolutionPreview: ${res.status}`);
+    return res.json();
   },
 };

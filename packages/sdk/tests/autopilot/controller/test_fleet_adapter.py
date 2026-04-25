@@ -407,9 +407,10 @@ class TestBlueprintSandboxRequirementsPassThrough:
 
         assert len(captured) == 1
         task = captured[0]
-        assert task["requires_sandbox_mode"] == SandboxMode.PER_RUN
+        # Plan 3b-i: sandbox fields are stored as serialisable strings (enum .value)
+        assert task["requires_sandbox_mode"] == SandboxMode.PER_RUN.value
         assert task["requires_image"] == "ghcr.io/sagewai/sandbox-ml:0.1.5"
-        assert task["requires_network_policy"] == NetworkPolicy.FULL
+        assert task["requires_network_policy"] == NetworkPolicy.FULL.value
 
     @pytest.mark.asyncio
     async def test_task_carries_none_sandbox_fields_when_blueprint_has_no_requirements(
@@ -437,3 +438,52 @@ class TestBlueprintSandboxRequirementsPassThrough:
         assert task["requires_sandbox_mode"] is None
         assert task["requires_image"] is None
         assert task["requires_network_policy"] is None
+
+    @pytest.mark.asyncio
+    async def test_admin_override_takes_precedence_over_blueprint(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """When admin-state has an override for the entry agent, it replaces Blueprint."""
+        import json
+
+        from sagewai.sandbox.models import (
+            NetworkPolicy,
+            SandboxImageVariant,
+            SandboxMode,
+        )
+        from sagewai.sandbox.resolution import SandboxRequirements
+
+        # Seed admin-state with an override for "scout" (entry node of synthetic blueprint)
+        state_file = tmp_path / "admin-state.json"
+        state_file.write_text(json.dumps({
+            "agents": [{
+                "name": "scout",
+                "sandbox_requirements_override": {
+                    "sandbox_mode": "per_run",
+                    "image": "ghcr.io/sagewai/sandbox-ml:0.1.5",
+                    "network_policy": "full",
+                    "required_secret_scopes": [],
+                },
+            }]
+        }))
+        monkeypatch.setenv("SAGEWAI_ADMIN_STATE_FILE", str(state_file))
+
+        # Build a blueprint with weaker requirements than the admin override
+        base_bp = make_synthetic_scheduled_blueprint()
+        weak_reqs = SandboxRequirements(
+            sandbox_mode=SandboxMode.NONE,
+            image="ghcr.io/sagewai/sandbox-base:1.0",
+            variant=SandboxImageVariant.BASE,
+            network_policy=NetworkPolicy.NONE,
+        )
+        bp = Blueprint.model_validate(
+            base_bp.model_dump(mode="python") | {"sandbox_requirements": weak_reqs}
+        )
+
+        adapter, _store = _make_adapter()
+        result = await adapter._extract_sandbox_requirements(bp)
+
+        # Admin override values must win, not Blueprint
+        assert result["requires_sandbox_mode"] == "per_run"
+        assert result["requires_image"] == "ghcr.io/sagewai/sandbox-ml:0.1.5"
+        assert result["requires_network_policy"] == "full"

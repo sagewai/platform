@@ -451,6 +451,11 @@ def create_admin_serve_app(
 
     app.include_router(create_autopilot_router(sf), prefix="/api/v1")
 
+    # Sandbox config routes (Plan 3b-i)
+    from sagewai.admin import sandbox_routes
+
+    sandbox_routes.register(app, sf)
+
     # ── Setup ────────────────────────────────────────────────────
 
     @app.get("/api/v1/setup/status")

@@ -46,7 +46,6 @@ from .types import StepResult
 if TYPE_CHECKING:
     from sagewai.autopilot.agent_graph import Agent
     from sagewai.autopilot.mission import Mission
-    from sagewai.sandbox.resolution import SandboxRequirements
 
 logger = logging.getLogger(__name__)
 
@@ -122,8 +121,15 @@ class FleetMissionAdapter:
         # Derive model tier from blueprint providers_required (first entry).
         model_tier = self._extract_model_tier(mission)
 
-        # Extract sandbox requirements from blueprint (if set).
-        sandbox_reqs = self._extract_sandbox_requirements(mission)
+        # Extract sandbox requirements, consulting admin-state for overrides
+        # (Plan 3b-i: level 2 admin override takes precedence over level 3 Blueprint).
+        try:
+            from sagewai.autopilot.blueprint import Blueprint as _Blueprint
+
+            _bp = _Blueprint.model_validate_json(mission.slots.get("__blueprint_json__", "{}"))
+        except Exception:
+            _bp = None
+        sandbox_fields = await self._extract_sandbox_requirements(_bp)
 
         task: dict = {
             "run_id": run_id,
@@ -139,11 +145,9 @@ class FleetMissionAdapter:
                 "mission_id": mission.mission_id,
                 "context": context,
             },
-            # Sandbox requirements forwarded from blueprint.sandbox_requirements.
+            # Sandbox requirements resolved via admin override → Blueprint cascade.
             # None means "use fleet worker defaults / cascade".
-            "requires_sandbox_mode": sandbox_reqs.sandbox_mode if sandbox_reqs else None,
-            "requires_image": sandbox_reqs.image if sandbox_reqs else None,
-            "requires_network_policy": sandbox_reqs.network_policy if sandbox_reqs else None,
+            **sandbox_fields,
         }
 
         # Enqueue the task into the store so the dispatcher can see it.
@@ -225,27 +229,54 @@ class FleetMissionAdapter:
             )
         return "default"
 
-    def _extract_sandbox_requirements(
+    async def _extract_sandbox_requirements(
         self,
-        mission: Mission,
-    ) -> SandboxRequirements | None:
-        """Return the blueprint's :class:`~sagewai.sandbox.resolution.SandboxRequirements`.
+        blueprint: object,
+    ) -> dict[str, str | None]:
+        """Resolve sandbox requirements for a blueprint's entry agent.
 
-        Returns ``None`` when the blueprint has no ``sandbox_requirements``
-        set, or when the blueprint JSON cannot be parsed.  The ``None``
-        signals to the fleet worker that it should apply its own defaults
-        (cascade: agent spec → project defaults → SDK default).
+        Plan 3b-i: admin-state override (level 2) takes precedence over
+        blueprint-declared values (level 3) via resolve_agent_requirements().
+
+        Returns a flat dict with keys ``requires_sandbox_mode``,
+        ``requires_image``, and ``requires_network_policy``.  String values
+        (or ``None``) are used so the task dict is JSON-serialisable.
         """
-        try:
-            from sagewai.autopilot.blueprint import Blueprint
+        from sagewai.sandbox.resolution import resolve_agent_requirements
 
-            bp = Blueprint.model_validate_json(mission.slots.get("__blueprint_json__", "{}"))
-            return bp.sandbox_requirements
+        try:
+            agent_name: str | None = None
+            blueprint_reqs = None
+            if blueprint is not None:
+                agent_name = getattr(
+                    getattr(blueprint, "agent_graph", None), "entry", None
+                )
+                blueprint_reqs = getattr(blueprint, "sandbox_requirements", None)
+
+            if agent_name is None:
+                reqs = blueprint_reqs
+            else:
+                reqs = await resolve_agent_requirements(
+                    agent_name,
+                    blueprint_requirements=blueprint_reqs,
+                )
         except Exception:
             logger.debug(
-                "FleetMissionAdapter: could not extract sandbox requirements from blueprint",
+                "FleetMissionAdapter: could not resolve sandbox requirements from blueprint",
             )
-        return None
+            reqs = None
+
+        if reqs is None:
+            return {
+                "requires_sandbox_mode": None,
+                "requires_image": None,
+                "requires_network_policy": None,
+            }
+        return {
+            "requires_sandbox_mode": reqs.sandbox_mode.value,
+            "requires_image": reqs.image,
+            "requires_network_policy": reqs.network_policy.value,
+        }
 
     def _enqueue(self, task: dict) -> None:
         """Enqueue a task into the dispatcher's backing store.

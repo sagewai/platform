@@ -1,7 +1,9 @@
 """Tests for the admin state file store."""
 
 import json
+
 import pytest
+
 from sagewai.admin.state_file import AdminStateFile
 
 
@@ -270,3 +272,79 @@ class TestMigration:
         )
         sf.reset()
         assert not sf.is_setup_complete()
+
+
+def test_admin_state_get_agent_known(tmp_path, monkeypatch):
+    """get_agent returns the agent dict when present."""
+    import json
+
+    from sagewai.admin.state_file import AdminStateFile
+
+    state_file = tmp_path / "admin-state.json"
+    state_file.write_text(json.dumps({
+        "agents": [
+            {"name": "writer", "model": "gpt-4o", "sandbox_requirements_override": None},
+            {"name": "researcher", "model": "claude-3"},
+        ]
+    }))
+    monkeypatch.setenv("SAGEWAI_ADMIN_STATE_FILE", str(state_file))
+
+    state = AdminStateFile()
+    agent = state.get_agent("writer")
+    assert agent is not None
+    assert agent["model"] == "gpt-4o"
+
+
+def test_admin_state_get_agent_missing(tmp_path, monkeypatch):
+    """get_agent returns None for unknown name."""
+    import json
+
+    from sagewai.admin.state_file import AdminStateFile
+
+    state_file = tmp_path / "admin-state.json"
+    state_file.write_text(json.dumps({"agents": []}))
+    monkeypatch.setenv("SAGEWAI_ADMIN_STATE_FILE", str(state_file))
+
+    state = AdminStateFile()
+    assert state.get_agent("ghost") is None
+
+
+def test_admin_state_get_agent_no_agents_key(tmp_path, monkeypatch):
+    """get_agent returns None if 'agents' key missing entirely."""
+    import json
+
+    from sagewai.admin.state_file import AdminStateFile
+
+    state_file = tmp_path / "admin-state.json"
+    state_file.write_text(json.dumps({"projects": []}))
+    monkeypatch.setenv("SAGEWAI_ADMIN_STATE_FILE", str(state_file))
+
+    state = AdminStateFile()
+    assert state.get_agent("writer") is None
+
+
+def test_admin_state_set_agent_sandbox_override_round_trip(tmp_path, monkeypatch):
+    """Writing an override field then re-reading round-trips through the JSON."""
+    import json
+
+    from sagewai.admin.state_file import AdminStateFile
+
+    state_file = tmp_path / "admin-state.json"
+    state_file.write_text(json.dumps({"agents": [{"name": "writer", "model": "gpt-4o"}]}))
+    monkeypatch.setenv("SAGEWAI_ADMIN_STATE_FILE", str(state_file))
+
+    state = AdminStateFile()
+    data = state._read()
+    agent = next(a for a in data["agents"] if a["name"] == "writer")
+    agent["sandbox_requirements_override"] = {
+        "sandbox_mode": "per_run",
+        "image": "ghcr.io/sagewai/sandbox-ml:0.1.5",
+        "network_policy": "full",
+        "required_secret_scopes": [],
+    }
+    state._write(data)
+
+    fresh = AdminStateFile()
+    reloaded = fresh.get_agent("writer")
+    assert reloaded["sandbox_requirements_override"]["sandbox_mode"] == "per_run"
+    assert reloaded["model"] == "gpt-4o"   # other fields preserved
