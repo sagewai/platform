@@ -10,7 +10,9 @@ This document holds ready-to-paste opening prompts for the next 8 work threads. 
 
 ---
 
-## Thread 1 — Mode-aware runner + migration + just hygiene
+## Thread 1 — Mode-aware runner + migration + just hygiene  ✅ SHIPPED (PR #155, 2026-04-26)
+
+**Status:** Run-level execution mode is shipped. Migration 005, `ExecutionMode` enum, and `WorkflowRun.execution_mode` are live on `main`. Migration headers and justfile grouping are also done. **Per-step mode override is a follow-up** — write a separate plan for it before opening a new thread.
 
 **Goal:** Make the architecture docs' invariants real in code. Small, focused refactor.
 
@@ -881,7 +883,7 @@ Plan to: docs/superpowers/plans/YYYY-MM-DD-sealed-v-signal-sources.md
 ## Thread queue summary
 
 ```
-Thread 1   (Mode-aware runner)            ─► blocks Threads 2-7, 9, 10
+Thread 1   (Mode-aware runner)            ─► ✅ SHIPPED (PR #155); per-step mode is a follow-up
 Thread 1.5 (Pre-v1.0 cleanup audit)       ─► PARALLEL with everything; blocks v1.0 release
 Thread 2   (Plan 1.5 pooling)             ─► after 1
 Thread 3   (Plan SBX-K8S)                 ─► after 2
@@ -911,7 +913,7 @@ If you have ~2-3 calendar weeks of capacity:
 
 | Day | Thread | Why |
 |---|---|---|
-| 1 | Thread 1 (mode-aware runner refactor) | unblocks the rest |
+| 1 | Thread 1 (mode-aware runner refactor) ✅ shipped PR #155 | unblocked the rest |
 | 1-3 (parallel) | Thread 1.5 Phase 0 (cleanup inventory) | produces tracking issue; subsequent phases run alongside everything |
 | 2-4 | Thread 2 (Plan 1.5 pooling) | unlocks production performance |
 | 2-3 (parallel) | Thread 8a (docs site) | quick win, propagates the architecture publicly |

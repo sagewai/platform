@@ -244,7 +244,24 @@ Are all credentials needed at start known at enqueue time?
 
 ## Mixing modes within a workflow
 
-Real workflows almost always mix modes. The `requires_sandbox_mode` field on `WorkflowRun` is the LEGACY single-mode marker (Plan 3a's `SandboxMode` enum); the per-step mode is the future. Until that refactor lands, the practical pattern is:
+Real workflows almost always mix modes. Today there are two layers:
+
+- **Run-level `execution_mode` (shipped, PR #155).** Every `WorkflowRun` carries an `ExecutionMode` field — `BARE` / `SANDBOXED` / `IDENTITY` / `FULL` / `FULL_JIT` — set on `enqueue` and persisted via migration `005_execution_mode`. The worker reads this on dispatch. The legacy `requires_sandbox_mode` column (Plan 3a's `SandboxMode` enum) is kept for back-compat — it still drives the fleet's worker-capability matching predicates — and is now **derived** from `execution_mode` at enqueue (BARE → NONE; everything else → PER_RUN).
+- **Per-step mode (future).** The decorator API below is illustrative of where this is going. When per-step mode lands, a single workflow run will carry a different mode per step.
+
+Today's run-level API:
+
+```python
+from sagewai.core.state import ExecutionMode
+
+run_id = await workflow.enqueue(
+    input_data={"brief": "..."},
+    execution_mode=ExecutionMode.FULL,        # Mode 3
+    security_profile_ref="customer-portfolio",
+)
+```
+
+The future per-step decorator API:
 
 ```python
 @workflow.step("plan")          # Mode 0 implicit
@@ -254,7 +271,7 @@ async def plan(brief: str) -> dict:
 
 @workflow.step(
     "build_site",
-    sandbox_mode=SandboxMode.PER_RUN,
+    execution_mode=ExecutionMode.FULL,
     security_profile_ref="customer-portfolio",
     cli_agent="claude-code",
 )                                # Mode 3 explicit
@@ -268,7 +285,7 @@ async def summarise(artifact_path: str) -> str:
     return await sagewai_agent.summarise_changes(artifact_path)
 ```
 
-This is illustrative — the actual decorator API is in flux, see the `Mode-aware runner` plan when it lands.
+The per-step decorator is illustrative — that follow-up plan has not yet been written.
 
 ---
 
@@ -335,7 +352,8 @@ Total: 1 customer LLM bill (Step 2), 0 customer credentials touched outside the 
 
 | Plan | Mode it requires / extends |
 |---|---|
-| Mode-aware runner refactor | All — first-classes the `mode` field on workflow runs |
+| Mode-aware runner refactor — run-level (shipped, PR #155) | All — first-classes the `execution_mode` field on workflow runs |
+| Mode-aware runner refactor — per-step (future) | All — moves `execution_mode` to the step level so a single run can mix modes |
 | Plan 1.5 (sandbox pooling) | Modes 1+ — pools the sandbox containers |
 | Plan ART (artifact destination) | Mode 3+ — formalises the artifact upload contract |
 | Sealed-iii.B (redaction) | Mode 1+ — scrubs RPC traffic and CLI stdout |
