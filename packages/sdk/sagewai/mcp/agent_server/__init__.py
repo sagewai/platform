@@ -198,7 +198,6 @@ def _parse_args() -> argparse.Namespace:
 
 async def _async_main() -> None:
     args = _parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     server = await create_agent_server(
         gateway_url=args.gateway_url,
         token=args.token,
