@@ -474,6 +474,32 @@ def create_admin_serve_app(
             await _revocation_store.initialize()
             revocation_routes.register(app, _revocation_store)
 
+    # Harness admin routes (LLM proxy: policies, keys, spend, audit, config).
+    # Backend implementation lives in sagewai.harness; mounting its admin
+    # router here makes apps/admin/app/harness/* pages functional. Uses
+    # process-local InMemoryHarnessStore — data does not survive admin
+    # restarts. PostgresHarnessStore (sagewai.harness.postgres_store) is the
+    # production path; can be wired conditionally on SAGEWAI_DATABASE_URL
+    # following the Sealed-iii.A pattern above when needed.
+    from sagewai.harness import (
+        HarnessConfig,
+        InMemoryHarnessStore,
+        RequestClassifier,
+    )
+    from sagewai.harness.admin_api import create_harness_admin_router
+
+    _harness_store = InMemoryHarnessStore()
+    _harness_classifier = RequestClassifier()
+    _harness_config = HarnessConfig()
+    app.include_router(
+        create_harness_admin_router(
+            store=_harness_store,
+            classifier=_harness_classifier,
+            config=_harness_config,
+        ),
+        prefix="/api/v1/harness",
+    )
+
     # ── Setup ────────────────────────────────────────────────────
 
     @app.get("/api/v1/setup/status")
