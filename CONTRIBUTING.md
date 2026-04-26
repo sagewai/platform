@@ -31,8 +31,8 @@ alias docker-compose=podman-compose
 brew install postgresql@15 redis     # macOS
 brew services start postgresql@15
 brew services start redis
-createdb sagecurator
-export DATABASE_URL=postgresql://localhost:5432/sagecurator
+createdb sagewai
+export DATABASE_URL=postgresql://localhost:5432/sagewai
 export REDIS_URL=redis://localhost:6379
 ```
 

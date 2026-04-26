@@ -141,7 +141,7 @@ Copy `.env.example` and fill in your values. The key variables:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DATABASE_URL` | PostgreSQL connection string | `postgresql://sagecurator:sagecurator_password@localhost:5432/sagecurator` |
+| `DATABASE_URL` | PostgreSQL connection string | `postgresql://sagewai:sagewai_password@localhost:5432/sagewai` |
 | `OPENAI_API_KEY` | OpenAI API key (or another LLM provider key) | -- |
 | `JWT_SECRET` | Secret for JWT token signing | -- |
 
@@ -208,10 +208,10 @@ make db-fresh     # Drop schema + migrate + seed
 
 ```bash
 # Backup
-pg_dump -h localhost -U sagecurator sagecurator > backup.sql
+pg_dump -h localhost -U sagewai sagewai > backup.sql
 
 # Restore
-psql -h localhost -U sagecurator sagecurator < backup.sql
+psql -h localhost -U sagewai sagewai < backup.sql
 ```
 
 ### Migration management

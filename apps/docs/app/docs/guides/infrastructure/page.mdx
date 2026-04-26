@@ -146,16 +146,16 @@ For environments where containers are not available or not desired.
 # macOS
 brew install postgresql@15
 brew services start postgresql@15
-createdb sagecurator
+createdb sagewai
 
 # Ubuntu/Debian
 sudo apt install postgresql-15
-sudo -u postgres createdb sagecurator
+sudo -u postgres createdb sagewai
 ```
 
 Set the connection string:
 ```bash
-export DATABASE_URL=postgresql://localhost:5432/sagecurator
+export DATABASE_URL=postgresql://localhost:5432/sagewai
 ```
 
 ### Redis
@@ -204,31 +204,31 @@ Download from [nebula-graph.io](https://nebula-graph.io) or skip — the in-memo
 
 | Service | Volume Name | Data Contents |
 |---------|-------------|--------------|
-| PostgreSQL | `sagecurator_postgres_data` | Workflows, runs, workers, audit logs |
-| Milvus | `sagecurator_milvus_data` | Vector embeddings |
-| MinIO | `sagecurator_minio_data` | Milvus object storage |
-| etcd | `sagecurator_etcd_data` | Milvus metadata |
-| NebulaGraph | `sagecurator_nebula_*` | Graph data and metadata |
+| PostgreSQL | `sagewai_postgres_data` | Workflows, runs, workers, audit logs |
+| Milvus | `sagewai_milvus_data` | Vector embeddings |
+| MinIO | `sagewai_minio_data` | Milvus object storage |
+| etcd | `sagewai_etcd_data` | Milvus metadata |
+| NebulaGraph | `sagewai_nebula_*` | Graph data and metadata |
 | Redis | In-memory | Cache only (no persistence by default) |
 
 ### Backup
 
 ```bash
 # PostgreSQL backup
-docker compose exec postgres pg_dump -U sagecurator sagecurator > backup.sql
+docker compose exec postgres pg_dump -U sagewai sagewai > backup.sql
 
 # PostgreSQL backup (compressed)
-docker compose exec postgres pg_dump -U sagecurator -Fc sagecurator > backup.dump
+docker compose exec postgres pg_dump -U sagewai -Fc sagewai > backup.dump
 ```
 
 ### Restore
 
 ```bash
 # From SQL dump
-docker compose exec -T postgres psql -U sagecurator sagecurator < backup.sql
+docker compose exec -T postgres psql -U sagewai sagewai < backup.sql
 
 # From compressed dump
-docker compose exec -T postgres pg_restore -U sagecurator -d sagecurator < backup.dump
+docker compose exec -T postgres pg_restore -U sagewai -d sagewai < backup.dump
 ```
 
 ### Full Reset
