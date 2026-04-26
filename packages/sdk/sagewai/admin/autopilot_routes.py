@@ -69,6 +69,7 @@ from sagewai.admin.autopilot_state import (
     save_mission,
     set_autopilot_config,
 )
+from sagewai.admin.serve import _extract_token, _project_id
 from sagewai.admin.state_file import AdminStateFile
 from sagewai.autopilot.routing import ConfidenceConfig, GoalRouter, RoutingResult
 from sagewai.autopilot.sagewai_llm import BlueprintCache, SagewaiLLMClient
@@ -81,20 +82,6 @@ _VALID_TIERS = frozenset({"anonymous", "free", "premium", "skip"})
 
 def _now_iso() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
-
-
-def _extract_token(request: Request) -> str | None:
-    """Get auth token from Authorization header or cookie."""
-    auth = request.headers.get("authorization", "")
-    if auth.startswith("Bearer "):
-        return auth[7:]
-    return request.cookies.get("sagewai_auth")
-
-
-def _project_id(request: Request) -> str | None:
-    """Extract project scope from X-Project-ID header or query param."""
-    pid = request.headers.get("x-project-id") or request.query_params.get("project_id")
-    return pid if pid else None
 
 
 def _require_auth(request: Request, sf: AdminStateFile) -> JSONResponse | None:
