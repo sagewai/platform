@@ -11,6 +11,18 @@ Read in order:
 
 Every implementation plan and spec is checked against these four docs. If something in a plan diverges from this architecture, fix the doc OR fix the plan — never both at once without explicit reconciliation.
 
+## User-facing render
+
+The docs site at <https://docs.sagewai.ai> mirrors these four documents in user-facing tone under the **Architecture** section (5 pages: overview + the four chapters). Internal jargon (`Sealed-iii.A`, `Plan 1.5`, …) is replaced with descriptive prose; the conceptual model is identical. Sources:
+
+- `apps/docs/app/docs/architecture/page.mdx` — section index
+- `apps/docs/app/docs/architecture/runtime-topology/page.mdx`
+- `apps/docs/app/docs/architecture/security-tiers/page.mdx`
+- `apps/docs/app/docs/architecture/execution-modes/page.mdx`
+- `apps/docs/app/docs/architecture/sandbox-backends/page.mdx` (URL slug differs from this filename — operators search "sandbox backends," not "execution backends")
+
+When you change one of the four canonical docs in this directory, update the corresponding page in `apps/docs/app/docs/architecture/` in the same PR. The `docs(architecture):` PR-title convention catches both.
+
 ## Change procedure
 
 1. Open a PR titled `docs(architecture): <doc-name> — <one-line summary>`.

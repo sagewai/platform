@@ -326,8 +326,17 @@ message. It gives Claude the exact workflow and constraints.
 ## Where to find more
 
 - `README.md` — marquee README with 5-example tour, quickstart, videos
+- `docs/architecture/README.md` — canonical runtime architecture (4 docs: runtime topology, security tiers, execution modes, execution backends). Mirrored in user-facing tone at `apps/docs/app/docs/architecture/` (5 pages — overview + 4 chapters). Update both in the same PR.
 - `apps/docs/CLOUDFLARE.md` — docs-site deploy model
 - `packages/sdk/pyproject.toml` — Python deps, scripts, pytest markers
 - `packages/sdk/README.md` — SDK API surface
 - `brand/README.md` — canonical brand asset rules
 - `.changeset/README.md` — release flow
+
+## Docs-site MDX gotchas
+
+When editing `apps/docs/app/**/*.mdx`:
+
+- The MDX pipeline runs `remark-gfm` + `rehype-slug` (the latter as `['rehype-slug']` — string-name only; Turbopack rejects function references for serializability). Heading IDs auto-generate using github-slugger (em-dash spaces collapse to double hyphen, lowercase). Cross-page anchor links rely on this.
+- Turbopack's MDX parser interprets `<digit` and `<lowercase` as JSX tag starts. Body prose containing `<100ms`, `<1s`, `<X minutes` etc. must be HTML-entity escaped (`&lt;100ms`). Code fences are fine.
+- Anti-patterns sections use a numbered list with bold inline subjects (`1. **Subject.** explanation`), NOT h3 headings — keeps the list shape recognisable and prevents anti-patterns from drowning out higher-level structure in any future ToC.
