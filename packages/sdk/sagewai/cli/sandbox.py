@@ -145,6 +145,7 @@ def sandbox_validate(image: str) -> None:
         backend = DockerBackend()
         failures: list[str] = []
         workdir = Path(tempfile.mkdtemp(prefix="sagewai-validate-"))
+        prev_host_secret = os.environ.get("HOST_SECRET")
         os.environ.setdefault("HOST_SECRET", "leak-me-please")
 
         try:
@@ -229,6 +230,8 @@ def sandbox_validate(image: str) -> None:
                 await handle.stop()
         finally:
             await backend.close()
+            if prev_host_secret is None:
+                os.environ.pop("HOST_SECRET", None)
 
         if failures:
             click.echo(
