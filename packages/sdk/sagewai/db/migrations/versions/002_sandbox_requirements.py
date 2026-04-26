@@ -7,7 +7,22 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL_LICENSE.md for details.
-"""Add sandbox_requirements columns to workflow_runs (Plan 3a).
+"""Sandbox requirement columns + capability rank functions.
+
+Spec:        Plan 3a (sandbox fleet routing + admin read-out)
+Driving plan: Plan 3a Tasks 5-20
+PR:          #148
+
+Summary
+-------
+Adds the four sandbox-requirement columns on ``workflow_runs`` that the
+fleet dispatcher uses to route runs to capable workers:
+``requires_sandbox_mode``, ``requires_image``, ``requires_variant``,
+``requires_network_policy``. Three CHECK constraints lock the enum
+values; a partial index speeds claims of pending runs by capability.
+Two SQL helper functions (``sandbox_mode_rank``, ``network_policy_rank``)
+are created so the dispatcher can compare worker capability ≥ run
+requirement in a single predicate.
 
 Revision ID: 002_sandbox_requirements
 Revises: 001_initial

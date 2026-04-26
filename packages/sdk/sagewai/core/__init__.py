@@ -43,6 +43,7 @@ from sagewai.core.self_correction import SelfCorrectionStrategy
 from sagewai.core.session import InMemorySessionStore, SessionRecord, SessionStore
 from sagewai.core.state import (
     DurableWorkflow,
+    ExecutionMode,
     InMemoryStore,
     StepStatus,
     WorkflowStepError,
@@ -98,6 +99,7 @@ __all__ = [
     "EnvironmentConfig",
     "EnvironmentMode",
     "EventCallback",
+    "ExecutionMode",
     "ExecutionStrategy",
     "InMemorySessionStore",
     "InMemoryStore",

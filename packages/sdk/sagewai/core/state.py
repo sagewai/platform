@@ -69,6 +69,34 @@ class StepStatus(str, Enum):
     WAITING = "waiting"
 
 
+class ExecutionMode(str, Enum):
+    """Per-run execution mode (architecture's Mode 0/1/2/3/3b taxonomy).
+
+    Maps to docs/architecture/execution-modes.md. The worker reads this
+    field off the run row and dispatches accordingly. Per-step override
+    is a follow-up — for now the run-level mode is what the worker sees.
+    """
+
+    BARE = "bare"           # Mode 0: inline on worker, no sandbox
+    SANDBOXED = "sandboxed" # Mode 1: sandbox, no identity
+    IDENTITY = "identity"   # Mode 2: sandbox + Sealed identity injected
+    FULL = "full"           # Mode 3: + CLI agent + artifact destination
+    FULL_JIT = "full_jit"   # Mode 3b: + bidirectional JIT credential callback
+
+
+def sandbox_mode_for(execution_mode: ExecutionMode) -> SandboxMode:
+    """Derive the legacy SandboxMode from an ExecutionMode.
+
+    BARE → NONE; everything else → PER_RUN. Used at enqueue to keep the
+    Plan 3a routing predicates (worker capability matching, capacity
+    label projection) functional while ExecutionMode becomes the
+    primary driver.
+    """
+    if execution_mode is ExecutionMode.BARE:
+        return SandboxMode.NONE
+    return SandboxMode.PER_RUN
+
+
 @dataclass
 class StepRecord:
     """Record of a single step execution."""
@@ -96,6 +124,12 @@ class WorkflowRun:
     completed_at: float | None = None
     signals: dict[str, Any] = field(default_factory=dict)
     project_id: str | None = None
+
+    # ── execution mode (architecture Mode 0/1/2/3/3b) ──
+    # First-class taxonomy from docs/architecture/execution-modes.md. Worker
+    # dispatch reads this field. requires_sandbox_mode below is derived at
+    # enqueue and kept for back-compat (Plan 3a routing predicates use it).
+    execution_mode: ExecutionMode = ExecutionMode.BARE
 
     # ── sandbox requirements (Plan 3a) — resolved at enqueue, concrete on disk ──
     requires_sandbox_mode: SandboxMode = SandboxMode.NONE
@@ -126,6 +160,7 @@ class WorkflowRun:
             "completed_at": self.completed_at,
             "signals": self.signals,
             "project_id": self.project_id,
+            "execution_mode": self.execution_mode.value,
             "requires_sandbox_mode": self.requires_sandbox_mode.value,
             "requires_image": self.requires_image,
             "requires_variant": (
@@ -176,6 +211,9 @@ class WorkflowRun:
             completed_at=data.get("completed_at"),
             signals=data.get("signals", {}),
             project_id=data.get("project_id"),
+            execution_mode=ExecutionMode(
+                data.get("execution_mode", "bare")
+            ),
             requires_sandbox_mode=SandboxMode(
                 data.get("requires_sandbox_mode", "none")
             ),
@@ -538,6 +576,7 @@ class DurableWorkflow:
         self,
         input_data: Any = None,
         *,
+        execution_mode: ExecutionMode = ExecutionMode.BARE,
         requires_sandbox_mode: SandboxMode | None = None,
         requires_image: str | None = None,
         requires_network_policy: NetworkPolicy | None = None,
@@ -554,8 +593,12 @@ class DurableWorkflow:
         ----------
         input_data:
             Arbitrary JSON-serialisable input passed to the first step.
+        execution_mode:
+            First-class execution mode (Mode 0/1/2/3/3b — see
+            docs/architecture/execution-modes.md). Drives worker dispatch.
         requires_sandbox_mode:
-            Explicit sandbox isolation level for this run.
+            Explicit sandbox isolation level for this run. If omitted, derived
+            from ``execution_mode`` (BARE → NONE; everything else → PER_RUN).
         requires_image:
             Explicit image reference (e.g. ``ghcr.io/sagewai/sandbox-ml:0.1.5``).
         requires_network_policy:
@@ -629,8 +672,16 @@ class DurableWorkflow:
 
         revocation_registry = _build_revocation_registry(self._store)
 
+        # Derive a default sandbox mode from execution_mode if the caller
+        # didn't pin one explicitly. Keeps Plan 3a routing predicates functional.
+        derived_mode = (
+            requires_sandbox_mode
+            if requires_sandbox_mode is not None
+            else sandbox_mode_for(execution_mode)
+        )
+
         requirements = await resolve_requirements(
-            explicit_mode=requires_sandbox_mode,
+            explicit_mode=derived_mode,
             explicit_image=requires_image,
             explicit_network_policy=requires_network_policy,
             agent_requirements=agent_req,
@@ -647,6 +698,7 @@ class DurableWorkflow:
             run_id=run_id,
             input_data=input_data,
             started_at=time.time(),
+            execution_mode=execution_mode,
             requires_sandbox_mode=requirements.sandbox_mode,
             requires_image=requirements.image,
             requires_variant=requirements.variant,

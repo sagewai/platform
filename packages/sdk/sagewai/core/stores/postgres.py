@@ -90,18 +90,20 @@ class PostgresStore(WorkflowStore):
             """
             INSERT INTO workflow_runs (
                 id, workflow_name, run_id, status, data, owner_id, updated_at,
+                execution_mode,
                 requires_sandbox_mode, requires_image, requires_variant,
                 requires_network_policy,
                 security_profile_ref, effective_env_keys, effective_secret_keys,
                 revoked_at, revoke_reason
             )
             VALUES ($1, $2, $3, $4, $5::jsonb, $6, NOW(), $7, $8, $9, $10, $11, $12, $13,
-                    $14, $15)
+                    $14, $15, $16)
             ON CONFLICT (id) DO UPDATE SET
                 status = EXCLUDED.status,
                 data = EXCLUDED.data,
                 owner_id = EXCLUDED.owner_id,
                 updated_at = NOW(),
+                execution_mode = EXCLUDED.execution_mode,
                 requires_sandbox_mode = EXCLUDED.requires_sandbox_mode,
                 requires_image = EXCLUDED.requires_image,
                 requires_variant = EXCLUDED.requires_variant,
@@ -118,6 +120,7 @@ class PostgresStore(WorkflowStore):
             run.status.value,
             data,
             self._owner_id,
+            run.execution_mode.value,
             run.requires_sandbox_mode.value,
             run.requires_image,
             run.requires_variant.value if run.requires_variant else None,
@@ -794,6 +797,7 @@ class PostgresStore(WorkflowStore):
         worker_id: str | None = None,
         routing_strategy: str | None = None,
         capacity_threshold: float = 0.9,
+        execution_mode: Any = None,
         requires_sandbox_mode: Any = None,
         requires_image: str | None = None,
         requires_network_policy: Any = None,
@@ -859,6 +863,7 @@ class PostgresStore(WorkflowStore):
                 )
 
         # Resolve sandbox requirements cascade
+        from sagewai.core.state import ExecutionMode, sandbox_mode_for
         from sagewai.sandbox.resolution import resolve_requirements
 
         project_defaults = None
@@ -868,8 +873,23 @@ class PostgresStore(WorkflowStore):
             except Exception:
                 project_defaults = None
 
+        # Normalise execution_mode (accept enum or str). Default to BARE (Mode 0).
+        if execution_mode is None:
+            exec_mode = ExecutionMode.BARE
+        elif isinstance(execution_mode, ExecutionMode):
+            exec_mode = execution_mode
+        else:
+            exec_mode = ExecutionMode(execution_mode)
+
+        # If caller didn't pin a sandbox mode explicitly, derive from execution_mode.
+        derived_mode = (
+            requires_sandbox_mode
+            if requires_sandbox_mode is not None
+            else sandbox_mode_for(exec_mode)
+        )
+
         requirements = await resolve_requirements(
-            explicit_mode=requires_sandbox_mode,
+            explicit_mode=derived_mode,
             explicit_image=requires_image,
             explicit_network_policy=requires_network_policy,
             project_defaults=project_defaults,
@@ -881,6 +901,7 @@ class PostgresStore(WorkflowStore):
             input_data=input_data,
             started_at=time.time(),
             project_id=project_id,
+            execution_mode=exec_mode,
             requires_sandbox_mode=requirements.sandbox_mode,
             requires_image=requirements.image,
             requires_variant=requirements.variant,

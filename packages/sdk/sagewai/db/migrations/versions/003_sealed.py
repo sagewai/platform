@@ -7,7 +7,21 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL_LICENSE.md for details.
-"""Sealed-i — sealed_audit_events table + workflow_runs columns.
+"""Sealed-i — sealed_audit_events table + workflow_runs cascade columns.
+
+Spec:        Sealed-i (profile management foundation, the moat)
+Driving plan: Sealed-i Task 7 — audit + cascade-resolution persistence
+PR:          #150
+
+Summary
+-------
+Creates the ``sealed_audit_events`` table with three indexes for the
+common query patterns (recent events, per-profile timeline, per-run
+trace) and adds the cascade-resolution result columns on
+``workflow_runs``: ``security_profile_ref`` (the run's user-level
+profile ref), ``effective_env_keys`` and ``effective_secret_keys``
+(NAMES only — values stay in the sandbox per the trust-boundary
+invariant in docs/architecture/runtime-topology.md).
 
 Revision ID: 003_sealed
 Revises: 002_sandbox_requirements

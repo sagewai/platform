@@ -479,10 +479,23 @@ class WorkflowWorker:
         heartbeat loop, and calls ``wf.run()``. Updates the store
         on completion or failure.
 
+        The run-level ``execution_mode`` (architecture's Mode 0/1/2/3/3b)
+        is logged here. Per-step mode override and per-mode dispatch
+        branching are a follow-up; today the existing sandbox-pool path
+        handles all modes, with mode-specific behaviour delegated to the
+        Sealed cascade resolver and pool acquisition.
+
         Args:
             wf_run: The claimed WorkflowRun with ``_input``
                 attached by ``claim_pending_run``.
         """
+        logger.info(
+            "Dispatching %s run %s (execution_mode=%s, sandbox_mode=%s)",
+            wf_run.workflow_name,
+            wf_run.run_id,
+            wf_run.execution_mode.value,
+            wf_run.requires_sandbox_mode.value,
+        )
         workflow = self._registry.get(wf_run.workflow_name)
         if workflow is None:
             error_msg = f"Unknown workflow: {wf_run.workflow_name}"

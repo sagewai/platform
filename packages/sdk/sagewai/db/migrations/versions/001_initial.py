@@ -7,11 +7,16 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL_LICENSE.md for details.
-"""Squashed migration — all tables (002-006 merged into 001).
+"""Squashed initial schema — all tables from the pre-monorepo era.
 
-Revision ID: 001_initial
-Revises: None
-Create Date: 2026-03-26 (squashed 2026-04-03)
+Spec:        n/a (pre-monorepo migrations 001-006 squashed into one initial)
+Driving plan: initial Sagewai SDK release (v0.1.0) + monorepo consolidation
+PR:          baseline (squashed 2026-04-03 from the SDK v0.1.0 release tree)
+
+Summary
+-------
+Single squashed migration covering every table that pre-dated the
+mode-aware / sealed eras. Future migrations layer on top.
 
 Includes tables from:
 - 001: core (users, orgs, workspaces, agents, workflows, prompts, sessions,
@@ -21,6 +26,10 @@ Includes tables from:
 - 004: workers table, workflow_runs routing columns
 - 005: fleet (enrollment_keys, fleet_audit_events, workers fleet columns)
 - 006: harness (harness_keys, harness_policies, harness_spend, harness_audit)
+
+Revision ID: 001_initial
+Revises: None
+Create Date: 2026-03-26 (squashed 2026-04-03)
 """
 
 from collections.abc import Sequence

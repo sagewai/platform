@@ -9,6 +9,18 @@
 # See COMMERCIAL_LICENSE.md for details.
 """Sealed-iii.A — sealed_revocations table + workflow_runs.revoked_at columns.
 
+Spec:        Sealed-iii.A (mid-run revocation API + pool reset hook)
+Driving plan: Sealed-iii.A — revocation registry, fan-out, pool reset
+PR:          #151
+
+Summary
+-------
+Adds the ``sealed_revocations`` table with a unique partial index that
+enforces "at most one active revocation per (profile_id, secret_key)"
+plus a per-profile timeline index. Extends ``workflow_runs`` with
+``revoked_at`` / ``revoke_reason`` so the worker's between-steps
+revocation poll can abort and surface the cause to operators.
+
 Revision ID: 004_sealed_revocations
 Revises: 003_sealed
 Create Date: 2026-04-25

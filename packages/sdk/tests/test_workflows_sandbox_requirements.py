@@ -67,7 +67,12 @@ async def test_enqueue_explicit_requirements_persist(mock_store):
 
 @pytest.mark.asyncio
 async def test_enqueue_falls_through_to_sdk_default(mock_store, caplog):
-    """No explicit, no project defaults → SDK default with WARN logs."""
+    """No explicit, no project defaults → SDK default with WARN logs.
+
+    Note: ``sandbox_mode`` is now derived from ``execution_mode`` (BARE → NONE)
+    at enqueue, so it never falls through. Only ``image`` and
+    ``network_policy`` still emit fall-through warnings.
+    """
     import logging
 
     from sagewai.core.state import DurableWorkflow
@@ -77,9 +82,8 @@ async def test_enqueue_falls_through_to_sdk_default(mock_store, caplog):
         await wf.enqueue(input_data={"x": 1})
     saved = mock_store.last_saved_run
     assert saved.requires_sandbox_mode is SandboxMode.NONE
-    # Three WARN entries — one per field that fell through
     warns = [r for r in caplog.records if r.levelname == "WARNING"]
-    assert sum("sandbox resolution" in r.message for r in warns) == 3
+    assert sum("sandbox resolution" in r.message for r in warns) == 2
 
 
 @pytest.mark.asyncio
@@ -220,3 +224,61 @@ async def test_enqueue_blocks_when_secret_is_revoked(tmp_path, monkeypatch):
             input_data={"x": 1},
             security_profile_ref="builtin://acme",
         )
+
+
+# ── ExecutionMode (mode-aware runner) ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_enqueue_default_execution_mode_is_bare(mock_store):
+    """Default enqueue produces a BARE run with derived sandbox_mode=NONE."""
+    from sagewai.core.state import DurableWorkflow, ExecutionMode
+
+    wf = DurableWorkflow(name="wf", store=mock_store)
+    await wf.enqueue(input_data={"x": 1})
+    saved = mock_store.last_saved_run
+    assert saved.execution_mode is ExecutionMode.BARE
+    assert saved.requires_sandbox_mode is SandboxMode.NONE
+
+
+@pytest.mark.asyncio
+async def test_enqueue_execution_mode_drives_sandbox_mode(mock_store):
+    """SANDBOXED/IDENTITY/FULL/FULL_JIT all derive PER_RUN at enqueue."""
+    from sagewai.core.state import DurableWorkflow, ExecutionMode
+
+    for mode in (
+        ExecutionMode.SANDBOXED,
+        ExecutionMode.IDENTITY,
+        ExecutionMode.FULL,
+        ExecutionMode.FULL_JIT,
+    ):
+        wf = DurableWorkflow(name="wf", store=mock_store)
+        await wf.enqueue(input_data={"x": 1}, execution_mode=mode)
+        saved = mock_store.last_saved_run
+        assert saved.execution_mode is mode
+        assert saved.requires_sandbox_mode is SandboxMode.PER_RUN
+
+
+@pytest.mark.asyncio
+async def test_workflow_run_round_trips_execution_mode():
+    """to_dict / from_dict preserve execution_mode."""
+    from sagewai.core.state import ExecutionMode, WorkflowRun
+
+    run = WorkflowRun(
+        workflow_name="wf",
+        run_id="r1",
+        execution_mode=ExecutionMode.IDENTITY,
+    )
+    restored = WorkflowRun.from_dict(run.to_dict())
+    assert restored.execution_mode is ExecutionMode.IDENTITY
+
+
+def test_sandbox_mode_for_helper():
+    """sandbox_mode_for: BARE→NONE, others→PER_RUN."""
+    from sagewai.core.state import ExecutionMode, sandbox_mode_for
+
+    assert sandbox_mode_for(ExecutionMode.BARE) is SandboxMode.NONE
+    assert sandbox_mode_for(ExecutionMode.SANDBOXED) is SandboxMode.PER_RUN
+    assert sandbox_mode_for(ExecutionMode.IDENTITY) is SandboxMode.PER_RUN
+    assert sandbox_mode_for(ExecutionMode.FULL) is SandboxMode.PER_RUN
+    assert sandbox_mode_for(ExecutionMode.FULL_JIT) is SandboxMode.PER_RUN
