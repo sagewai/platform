@@ -120,3 +120,48 @@ async def test_drift_detection_emits_event(monkeypatch, tmp_path):
         if c.args[1] == "profile.drift_at_injection"
     ]
     assert len(drift_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_env_for_raises_secret_revoked_when_registry_blocks(monkeypatch, tmp_path):
+    """Sandbox-start defense: if a key is now revoked, env_for raises."""
+    from datetime import datetime, timezone
+
+    from cryptography.fernet import Fernet
+
+    from sagewai.sealed.builtin_backend import BuiltinAdminStoreBackend
+    from sagewai.sealed.crypto import Crypto
+    from sagewai.sealed.models import ProfileWritePayload
+    from sagewai.sealed.resolution import CascadeLevel
+    from sagewai.sealed.revocation import Revocation, SecretRevokedError
+
+    backend = BuiltinAdminStoreBackend(
+        profiles_path=tmp_path / "profiles.json",
+        crypto=Crypto(Fernet.generate_key()),
+        audit_writer=None,
+    )
+    monkeypatch.setattr("sagewai.sealed.refs._BACKENDS", {"builtin": backend})
+    await backend.save_profile(ProfileWritePayload(
+        id="acme", name="A", secrets={"K": "v"}, env={},
+    ))
+
+    class _StubRegistry:
+        async def find_active_for_keys(self, *, profile_id, secret_keys):
+            return {
+                "K": Revocation(
+                    id=99, profile_id=profile_id, secret_key="K",
+                    revoked_at=datetime.now(timezone.utc),
+                    reason="leaked", hard=False,
+                )
+            }
+
+    audit = _fake_audit()
+    p = SealedSecretProvider(audit, revocation_registry=_StubRegistry())
+    with pytest.raises(SecretRevokedError):
+        await p.env_for(
+            project_id="x", run_id="r", agent_id=None, declared_scopes=[],
+            security_profile_ref="acme",
+            effective_env_keys=["K"],
+            effective_secret_keys=["K"],
+            sealed_levels=[CascadeLevel(name="user", profile_ref="acme", overrides=None)],
+        )

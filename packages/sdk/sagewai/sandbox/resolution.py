@@ -21,7 +21,7 @@ import logging
 import os
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from sagewai.admin.state_file import AdminStateFile
@@ -94,6 +94,7 @@ async def resolve_requirements(
     sealed_levels: list[CascadeLevel] | None = None,
     audit_writer: AuditWriter | None = None,
     audit_context: dict | None = None,
+    revocation_registry: Any | None = None,  # NEW in Sealed-iii.A
 ) -> SandboxRequirements | tuple[SandboxRequirements, dict[str, SandboxResolutionOrigin]]:
     """Resolve the cascade (explicit → agent → project → SDK default).
 
@@ -173,6 +174,7 @@ async def resolve_requirements(
             levels=sealed_levels,
             audit_writer=audit_writer,
             audit_context=audit_context,
+            revocation_registry=revocation_registry,  # NEW in Sealed-iii.A
         )
         security_profile_ref_value = next(
             (lv.profile_ref for lv in reversed(sealed_levels) if lv.profile_ref),

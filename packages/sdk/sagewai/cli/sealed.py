@@ -166,3 +166,155 @@ def sealed_restore() -> None:
                 click.echo(f"  ✗ Verification decrypt failed: {exc}", err=True)
                 sys.exit(1)
     click.echo("  ✓ Key restored. (No existing profiles to verify against.)")
+
+
+async def _get_store():
+    """Construct a PostgresStore using SAGEWAI_DATABASE_URL."""
+    import os
+
+    from sagewai.core.stores.postgres import PostgresStore
+
+    url = os.environ.get("SAGEWAI_DATABASE_URL")
+    if not url:
+        raise click.UsageError(
+            "SAGEWAI_DATABASE_URL not set; revocation requires Postgres."
+        )
+    store = PostgresStore(database_url=url)
+    await store.initialize()
+    return store
+
+
+@sealed_group.command("revoke")
+@click.argument("profile_id")
+@click.argument("secret_key", required=False, default=None)
+@click.option("--reason", required=True, help="Reason for revocation (audit)")
+@click.option("--hard", is_flag=True, help="Also abort in-flight runs")
+@click.option("--yes", is_flag=True, help="Skip confirmation prompt")
+def sealed_revoke(profile_id, secret_key, reason, hard, yes):
+    """Revoke a secret or whole profile."""
+
+    async def _run():
+        from sagewai.sealed.audit import AuditWriter
+        from sagewai.sealed.revocation import (
+            RevocationConflictError,
+            RevocationRegistry,
+        )
+
+        store = await _get_store()
+        try:
+            reg = RevocationRegistry(store, audit_writer=AuditWriter(store))
+
+            # If hard, preview affected runs first
+            if hard and not yes:
+                rows = await store._pool.fetch(
+                    """
+                    SELECT run_id FROM workflow_runs
+                    WHERE status = 'running'
+                      AND security_profile_ref = $1
+                      AND ($2::text IS NULL OR $2 = ANY(effective_secret_keys))
+                    """,
+                    profile_id,
+                    secret_key,
+                )
+                count = len(rows)
+                click.echo(
+                    f"\n  Hard revoke will mark {count} in-flight run(s) as failed:\n"
+                )
+                for row in rows[:10]:
+                    click.echo(f"    - {row['run_id']}")
+                if count > 10:
+                    click.echo(f"    ... and {count - 10} more")
+                click.confirm("\n  Continue?", abort=True)
+
+            # Bulk profile revoke (no secret_key) requires explicit current_keys
+            # which the CLI does not currently auto-discover. Explicit per-key
+            # revoke is the v1 path.
+            if secret_key is None:
+                click.echo(
+                    "  Bulk profile revoke (omitting secret_key) is not "
+                    "supported via CLI in v1. Specify --reason and a "
+                    "secret_key explicitly.",
+                    err=True,
+                )
+                raise click.Abort()
+
+            try:
+                rows = await reg.revoke(
+                    profile_id=profile_id,
+                    secret_key=secret_key,
+                    reason=reason,
+                    actor_id="cli",
+                    hard=hard,
+                )
+            except RevocationConflictError as exc:
+                click.echo(f"  ✗ {exc}", err=True)
+                raise click.Abort()
+
+            for r in rows:
+                click.echo(f"  ✓ Revoked {r.profile_id}/{r.secret_key} (id={r.id})")
+        finally:
+            await store.close()
+
+    asyncio.run(_run())
+
+
+@sealed_group.command("lift-revocation")
+@click.argument("revocation_id", type=int)
+@click.option("--yes", is_flag=True)
+def sealed_lift(revocation_id, yes):
+    """Lift a previous revocation."""
+
+    async def _run():
+        from sagewai.sealed.audit import AuditWriter
+        from sagewai.sealed.revocation import (
+            RevocationConflictError,
+            RevocationRegistry,
+        )
+
+        store = await _get_store()
+        try:
+            reg = RevocationRegistry(store, audit_writer=AuditWriter(store))
+            if not yes:
+                click.confirm(f"Lift revocation {revocation_id}?", abort=True)
+            try:
+                r = await reg.lift(revocation_id, actor_id="cli")
+            except (LookupError, RevocationConflictError) as exc:
+                click.echo(f"  ✗ {exc}", err=True)
+                raise click.Abort()
+            click.echo(f"  ✓ Lifted {r.profile_id}/{r.secret_key}")
+        finally:
+            await store.close()
+
+    asyncio.run(_run())
+
+
+@sealed_group.command("list-revocations")
+@click.option("--profile", default=None)
+@click.option("--include-lifted", is_flag=True)
+@click.option("--limit", type=int, default=200)
+def sealed_list_revocations(profile, include_lifted, limit):
+    """List active (or all) revocations as JSON."""
+    import json as _json
+
+    async def _run():
+        from sagewai.sealed.revocation import RevocationRegistry
+
+        store = await _get_store()
+        try:
+            reg = RevocationRegistry(store)
+            rows = await (
+                reg.list_all(profile_id=profile, include_lifted=True, limit=limit)
+                if include_lifted
+                else reg.list_active(profile_id=profile, limit=limit)
+            )
+            click.echo(
+                _json.dumps(
+                    [r.model_dump(mode="json") for r in rows],
+                    indent=2,
+                    default=str,
+                )
+            )
+        finally:
+            await store.close()
+
+    asyncio.run(_run())

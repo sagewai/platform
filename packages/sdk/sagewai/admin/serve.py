@@ -461,6 +461,19 @@ def create_admin_serve_app(
 
     sealed_routes.register(app, sf)
 
+    # Sealed revocation routes (Sealed-iii.A) — requires Postgres
+    _db_url = os.environ.get("SAGEWAI_DATABASE_URL")
+    if _db_url:
+        from sagewai.admin import revocation_routes  # noqa: E402
+        from sagewai.core.stores.postgres import PostgresStore as _PostgresStore
+
+        _revocation_store = _PostgresStore(database_url=_db_url)
+
+        @app.on_event("startup")
+        async def _init_revocation_store() -> None:  # type: ignore[misc]
+            await _revocation_store.initialize()
+            revocation_routes.register(app, _revocation_store)
+
     # ── Setup ────────────────────────────────────────────────────
 
     @app.get("/api/v1/setup/status")

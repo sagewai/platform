@@ -43,6 +43,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from typing import Any
 
@@ -109,6 +110,10 @@ class WorkflowRun:
     effective_env_keys: list[str] = field(default_factory=list)
     effective_secret_keys: list[str] = field(default_factory=list)
 
+    # ── sealed-iii.A revocation (set on hard-revoke fan-out) ──
+    revoked_at: datetime | None = None
+    revoke_reason: str | None = None
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a dictionary."""
         return {
@@ -130,6 +135,8 @@ class WorkflowRun:
             "security_profile_ref": self.security_profile_ref,
             "effective_env_keys": self.effective_env_keys,
             "effective_secret_keys": self.effective_secret_keys,
+            "revoked_at": (self.revoked_at.isoformat() if self.revoked_at else None),
+            "revoke_reason": self.revoke_reason,
             "steps": {
                 name: {
                     "status": rec.status.value,
@@ -185,6 +192,12 @@ class WorkflowRun:
             security_profile_ref=data.get("security_profile_ref"),
             effective_env_keys=data.get("effective_env_keys", []),
             effective_secret_keys=data.get("effective_secret_keys", []),
+            revoked_at=(
+                datetime.fromisoformat(data["revoked_at"])
+                if data.get("revoked_at")
+                else None
+            ),
+            revoke_reason=data.get("revoke_reason"),
         )
 
 
@@ -272,6 +285,23 @@ def _generate_run_id(workflow_name: str, input_data: Any) -> str:
     """Generate a deterministic run ID from workflow name and input."""
     content = f"{workflow_name}:{json.dumps(input_data, sort_keys=True, default=str)}"
     return hashlib.sha256(content.encode()).hexdigest()[:16]
+
+
+def _build_revocation_registry(store: Any) -> Any | None:
+    """Construct a RevocationRegistry if the store supports it, else None.
+
+    Best-effort: any failure returns None (registry-less behavior).
+    Module-level so tests can monkeypatch.
+    """
+    try:
+        from sagewai.sealed.audit import AuditWriter
+        from sagewai.sealed.revocation import RevocationRegistry
+        # The registry needs an asyncpg pool — check that the store exposes one
+        if not hasattr(store, "_pool"):
+            return None
+        return RevocationRegistry(store, audit_writer=AuditWriter(store))
+    except Exception:
+        return None
 
 
 class DurableWorkflow:
@@ -597,6 +627,8 @@ class DurableWorkflow:
             logger.debug("Sealed cascade build skipped: %s", exc)
             sealed_levels = None
 
+        revocation_registry = _build_revocation_registry(self._store)
+
         requirements = await resolve_requirements(
             explicit_mode=requires_sandbox_mode,
             explicit_image=requires_image,
@@ -606,6 +638,7 @@ class DurableWorkflow:
             sealed_levels=sealed_levels,
             audit_writer=audit_writer,
             audit_context=audit_context,
+            revocation_registry=revocation_registry,  # NEW in Sealed-iii.A
         )
 
         run_id = _generate_run_id(self.name, input_data or {})

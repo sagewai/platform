@@ -191,6 +191,24 @@ class TestPostgresStoreIntegration:
         assert "DEBUG" in loaded.effective_env_keys
         assert "OPENAI_API_KEY" in loaded.effective_secret_keys
 
+    @pytest.mark.asyncio
+    async def test_workflow_run_persists_revocation_fields(self, pg_store):
+        """revoked_at + revoke_reason round-trip through Postgres."""
+        from datetime import datetime, timezone
+
+        revoked = datetime(2026, 4, 25, 12, 0, 0, tzinfo=timezone.utc)
+        run = WorkflowRun(
+            workflow_name="wf",
+            run_id="r-rev-1",
+            revoked_at=revoked,
+            revoke_reason="active breach",
+        )
+        await pg_store.save_run(run)
+        loaded = await pg_store.load_run("wf", "r-rev-1")
+        assert loaded is not None
+        assert loaded.revoked_at == revoked
+        assert loaded.revoke_reason == "active breach"
+
 
 @pytest.fixture
 def admin_state_factory(tmp_path, monkeypatch):

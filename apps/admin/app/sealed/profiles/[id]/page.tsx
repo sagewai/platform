@@ -1,25 +1,38 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { adminApi } from "@/utils/api";
-import type { Profile } from "@/utils/types";
+import type { Profile, Revocation } from "@/utils/types";
 import { ProfileForm } from "@/components/profile-form";
 import { RevealButton } from "@/components/reveal-button";
+import { RevokeButton } from "@/components/revoke-button";
 
 export default function ProfileDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [revocations, setRevocations] = useState<Revocation[]>([]);
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    adminApi.getProfileFull(id).then((p) => {
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [p, revs] = await Promise.all([
+        adminApi.getProfileFull(id),
+        adminApi.listRevocations({ profile_id: id }),
+      ]);
       setProfile(p);
+      setRevocations(revs);
+    } finally {
       setLoading(false);
-    });
+    }
   }, [id]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
 
   if (loading) return <div>Loading…</div>;
   if (!profile) return <div className="text-rose-600">Profile not found.</div>;
@@ -110,14 +123,35 @@ export default function ProfileDetailPage() {
         ) : (
           <table className="text-sm border-collapse">
             <tbody>
-              {profile.secret_keys.map((k) => (
-                <tr key={k} className="border-b">
-                  <td className="font-mono pr-4">{k}</td>
-                  <td>
-                    <RevealButton profileId={profile.id} secretKey={k} />
-                  </td>
-                </tr>
-              ))}
+              {profile.secret_keys.map((k) => {
+                const activeRevocation = revocations.find(
+                  (r) => r.secret_key === k && r.lifted_at === null
+                );
+                return (
+                  <tr key={k} className="border-b">
+                    <td className="font-mono pr-4">{k}</td>
+                    <td>
+                      {activeRevocation ? (
+                        <span
+                          className="rounded bg-rose-100 px-2 py-0.5 text-xs text-rose-700"
+                          title={`Reason: ${activeRevocation.reason}\nRevoked: ${new Date(activeRevocation.revoked_at).toLocaleString()}`}
+                        >
+                          Revoked
+                        </span>
+                      ) : (
+                        <RevealButton profileId={profile.id} secretKey={k} />
+                      )}
+                    </td>
+                    <td>
+                      <RevokeButton
+                        profileId={profile.id}
+                        secretKey={k}
+                        onRevoked={refresh}
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

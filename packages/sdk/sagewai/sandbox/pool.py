@@ -23,6 +23,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 from sagewai.sandbox.backend import SandboxBackend, SandboxHandle
 from sagewai.sandbox.models import (
@@ -308,6 +309,64 @@ class SandboxPool:
         if not any(lv.profile_ref for lv in levels):
             return None
         return levels
+
+    @staticmethod
+    async def _release_with_cleanup(
+        *,
+        provider: Any,
+        run: Any,
+        handle: Any,
+    ) -> str:
+        """Cleanup hook for pool release. Returns 'pooled' or 'discarded'.
+
+        On any cleanup exception: emit discard audit (best-effort) and
+        return 'discarded'. Caller (the actual release path) is then
+        responsible for stopping `handle` and not pooling it.
+        """
+        try:
+            result = await provider.cleanup_run(
+                run_id=run.run_id,
+                project_id=getattr(run, "project_id", None),
+                sandbox_handle=handle,
+                effective_env_keys=list(getattr(run, "effective_env_keys", []) or []),
+                effective_secret_keys=list(getattr(run, "effective_secret_keys", []) or []),
+                security_profile_ref=getattr(run, "security_profile_ref", None),
+            )
+        except Exception as exc:
+            # Best-effort discard audit (use the provider's audit writer if
+            # we can reach it)
+            audit = getattr(provider, "_audit", None)
+            if audit is not None:
+                try:
+                    await audit.emit(
+                        event_type="pool.sandbox.discarded_after_cleanup_failure",
+                        run_id=run.run_id,
+                        project_id=getattr(run, "project_id", None),
+                        details={
+                            "error_type": type(exc).__name__,
+                            "error_message_redacted": str(exc)[:200],
+                            "env_keys_intended_to_scrub": sorted(
+                                getattr(run, "effective_env_keys", []) or []
+                            ),
+                        },
+                    )
+                except Exception:
+                    pass  # audit best-effort; pool decision is what matters
+            try:
+                await handle.stop()
+            except Exception:
+                pass
+            return "discarded"
+
+        # If provider reported a non-empty error field, also discard
+        if result.error:
+            try:
+                await handle.stop()
+            except Exception:
+                pass
+            return "discarded"
+
+        return "pooled"
 
     def advertised_labels(self) -> dict[str, str]:
         """Labels this pool contributes to worker registration.

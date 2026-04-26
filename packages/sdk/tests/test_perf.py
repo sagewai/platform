@@ -31,7 +31,6 @@ import pytest
 from sagewai.engines.universal import UniversalAgent
 from sagewai.models.tool import tool
 
-
 # ─── Helpers ─────────────────────────────────────────────────────────────
 
 def _timed(fn, *args, **kwargs) -> tuple[object, float]:
@@ -132,3 +131,54 @@ def test_mocked_chat_roundtrip_under_50ms() -> None:
     assert elapsed < 0.050, (
         f"mocked chat roundtrip took {elapsed*1000:.1f}ms — budget 50ms."
     )
+
+
+# ─── Sealed revocation lookup ────────────────────────────────────────────
+
+import os as _os_module  # noqa: E402
+
+
+@pytest.mark.skipif(
+    not _os_module.environ.get("SAGEWAI_DATABASE_URL"),
+    reason="SAGEWAI_DATABASE_URL not set",
+)
+@pytest.mark.asyncio
+async def test_revocation_lookup_perf():
+    """is_revoked indexed lookup must complete in <5ms p99 against 10k rows.
+
+    Plan 3a-style perf budget — fixed threshold, fail loud on regression.
+    """
+    import os as _os
+    import time as _time
+
+    from sagewai.core.stores.postgres import PostgresStore
+    from sagewai.sealed.revocation import RevocationRegistry
+
+    store = PostgresStore(database_url=_os.environ["SAGEWAI_DATABASE_URL"])
+    await store.initialize()
+    try:
+        await store._pool.execute("DELETE FROM sealed_revocations")
+        # Seed 10k rows (lifted, so they don't conflict on the unique index)
+        await store._pool.executemany(
+            """
+            INSERT INTO sealed_revocations
+              (profile_id, secret_key, reason, hard, lifted_at)
+            VALUES ($1, $2, 'perf seed', false, NOW())
+            """,
+            [(f"perf-{i // 100}", f"K_{i}") for i in range(10_000)],
+        )
+        reg = RevocationRegistry(store)
+
+        # 100 lookups; record p99
+        latencies = []
+        for i in range(100):
+            t0 = _time.monotonic()
+            await reg.is_revoked(profile_id=f"perf-{i // 10}", secret_key=f"K_{i}")
+            latencies.append(_time.monotonic() - t0)
+
+        latencies.sort()
+        p99 = latencies[int(len(latencies) * 0.99) - 1]
+        assert p99 < 0.005, f"is_revoked p99 latency {p99*1000:.2f}ms > 5ms budget"
+    finally:
+        await store._pool.execute("DELETE FROM sealed_revocations")
+        await store.close()

@@ -92,9 +92,11 @@ class PostgresStore(WorkflowStore):
                 id, workflow_name, run_id, status, data, owner_id, updated_at,
                 requires_sandbox_mode, requires_image, requires_variant,
                 requires_network_policy,
-                security_profile_ref, effective_env_keys, effective_secret_keys
+                security_profile_ref, effective_env_keys, effective_secret_keys,
+                revoked_at, revoke_reason
             )
-            VALUES ($1, $2, $3, $4, $5::jsonb, $6, NOW(), $7, $8, $9, $10, $11, $12, $13)
+            VALUES ($1, $2, $3, $4, $5::jsonb, $6, NOW(), $7, $8, $9, $10, $11, $12, $13,
+                    $14, $15)
             ON CONFLICT (id) DO UPDATE SET
                 status = EXCLUDED.status,
                 data = EXCLUDED.data,
@@ -106,7 +108,9 @@ class PostgresStore(WorkflowStore):
                 requires_network_policy = EXCLUDED.requires_network_policy,
                 security_profile_ref = EXCLUDED.security_profile_ref,
                 effective_env_keys = EXCLUDED.effective_env_keys,
-                effective_secret_keys = EXCLUDED.effective_secret_keys
+                effective_secret_keys = EXCLUDED.effective_secret_keys,
+                revoked_at = EXCLUDED.revoked_at,
+                revoke_reason = EXCLUDED.revoke_reason
             """,
             key,
             run.workflow_name,
@@ -121,6 +125,8 @@ class PostgresStore(WorkflowStore):
             run.security_profile_ref,
             run.effective_env_keys,
             run.effective_secret_keys,
+            run.revoked_at,
+            run.revoke_reason,
         )
 
     async def load_run(self, workflow_name: str, run_id: str) -> WorkflowRun | None:
@@ -1261,6 +1267,43 @@ class PostgresStore(WorkflowStore):
             f"mode or network policy mismatch "
             f"(pool '{row['target_pool']}' has {candidates} workers)"
         )
+
+    # ------------------------------------------------------------------
+    # Revoked-stuck-run recovery sweep
+    # ------------------------------------------------------------------
+
+    async def recover_revoked_stuck_runs(self) -> int:
+        """Find runs with revoked_at set + still status='running' and abort them.
+
+        Used to recover from worker crashes between seeing revoked_at and
+        completing the abort. Idempotent.
+        """
+        rows = await self._pool.fetch(
+            """
+            UPDATE workflow_runs
+            SET status = 'failed',
+                updated_at = NOW(),
+                output = COALESCE(output, '{}'::jsonb)
+                              || '{"error": "secret_revoked_recovered"}'::jsonb
+            WHERE status = 'running' AND revoked_at IS NOT NULL
+            RETURNING run_id
+            """,
+        )
+        # Audit emit best-effort per recovered row
+        if rows:
+            try:
+                from sagewai.sealed.audit import AuditWriter
+
+                writer = AuditWriter(self)
+                for r in rows:
+                    await writer.emit(
+                        event_type="run.aborted_by_revocation",
+                        run_id=r["run_id"],
+                        details={"recovery": True},
+                    )
+            except Exception:
+                pass
+        return len(rows)
 
     # ------------------------------------------------------------------
     # Sealed audit retention sweep

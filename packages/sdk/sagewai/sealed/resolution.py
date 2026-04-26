@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sagewai.sealed.models import EffectiveProfile
 from sagewai.sealed.refs import ProfileRef, resolve_backend
@@ -32,6 +32,7 @@ async def resolve_security_profile(
     levels: list[CascadeLevel],
     audit_writer: AuditWriter | None = None,
     audit_context: dict | None = None,
+    revocation_registry: Any | None = None,
 ) -> EffectiveProfile:
     """Resolve cascade levels into a single env dict + secret-key set.
 
@@ -40,6 +41,10 @@ async def resolve_security_profile(
     applied AFTER the profile_ref dereference at the same level.
 
     Empty-string override = tombstone (remove key from effective).
+
+    If *revocation_registry* is provided, every secret_key in the
+    effective set is checked against the registry.  Revoked keys raise
+    ``SecretRevokedError`` before the cascade.resolved audit event fires.
     """
     effective: dict[str, str] = {}
     secret_keys: set[str] = set()
@@ -88,6 +93,60 @@ async def resolve_security_profile(
                     # inline overrides NOT auto-tagged as secret
                     secret_keys.discard(key)
 
+    # Sealed-iii.A: revocation check
+    if revocation_registry is not None and secret_keys:
+        from sagewai.sealed.revocation import SecretRevokedError
+
+        # Map secret_key -> profile_id (the last cascading profile that wrote it)
+        sk_to_profile: dict[str, str] = {}
+        for level in levels:
+            if not level.profile_ref:
+                continue
+            ref_parsed = ProfileRef.parse(level.profile_ref)
+            backend = resolve_backend(ref_parsed)
+            try:
+                level_profile = await backend.get_profile(ref_parsed.path)
+            except Exception:
+                continue
+            for k in level_profile.secrets.keys():
+                sk_to_profile[k] = level_profile.id
+
+        # Check each secret_key in the effective set against its source profile
+        for sk in secret_keys:
+            profile_id = sk_to_profile.get(sk)
+            if profile_id is None:
+                continue
+            try:
+                actives = await revocation_registry.find_active_for_keys(
+                    profile_id=profile_id, secret_keys=[sk]
+                )
+            except Exception as exc:
+                from sagewai.sealed.revocation import RevocationCheckUnavailableError
+                raise RevocationCheckUnavailableError(
+                    f"revocation registry unreachable while checking "
+                    f"{profile_id!r}/{sk!r}: {exc}"
+                ) from exc
+            if sk in actives:
+                revocation = actives[sk]
+                if audit_writer:
+                    await audit_writer.emit(
+                        event_type="profile.access_denied",
+                        profile_id=profile_id,
+                        secret_key=sk,
+                        details={
+                            "reason": "secret_revoked",
+                            "revocation_id": revocation.id,
+                            "revocation_reason": revocation.reason,
+                        },
+                        context=audit_context,
+                    )
+                raise SecretRevokedError(
+                    profile_id=profile_id,
+                    secret_key=sk,
+                    revocation_id=revocation.id,
+                    reason=revocation.reason,
+                )
+
     if audit_writer:
         await audit_writer.emit(
             event_type="profile.cascade.resolved",
@@ -96,6 +155,7 @@ async def resolve_security_profile(
                 "effective_env_keys": sorted(effective.keys()),
                 "effective_secret_keys": sorted(secret_keys),
                 "cascade_origins": cascade_origins,
+                "revoked_keys_blocked": [],
             },
             context=audit_context,
         )

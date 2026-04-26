@@ -110,6 +110,7 @@ import type {
   SealedSystemConfig,
   SealedWorkflowConfig,
   EffectiveProfile,
+  Revocation,
 } from './types';
 
 const BASE_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL ?? 'http://localhost:8000/admin';
@@ -1514,6 +1515,72 @@ export const adminApi = {
       credentials: 'include',
     });
     if (!res.ok) throw new Error(`getSealedAudit: ${res.status}`);
+    return res.json();
+  },
+
+  /* ─── Sealed-iii.A — revocation endpoints ─── */
+
+  listRevocations: async (query: {
+    profile_id?: string;
+    include_lifted?: boolean;
+    limit?: number;
+  } = {}): Promise<Revocation[]> => {
+    const params = new URLSearchParams();
+    if (query.profile_id) params.set('profile_id', query.profile_id);
+    if (query.include_lifted) params.set('include_lifted', 'true');
+    if (query.limit) params.set('limit', String(query.limit));
+    const qs = params.toString();
+    const res = await fetch(
+      `/api/v1/admin/sealed/revocations${qs ? `?${qs}` : ''}`,
+      { credentials: 'include' },
+    );
+    if (!res.ok) throw new Error(`listRevocations: ${res.status}`);
+    return res.json();
+  },
+
+  revokeSecret: async (payload: {
+    profile_id: string;
+    secret_key: string | null;
+    reason: string;
+    hard?: boolean;
+    current_keys?: string[];
+  }): Promise<{ revocations: Revocation[]; affected_runs: string[] }> => {
+    const res = await fetch('/api/v1/admin/sealed/revocations', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(`revokeSecret: ${res.status} ${JSON.stringify(err)}`);
+    }
+    return res.json();
+  },
+
+  liftRevocation: async (id: number): Promise<Revocation> => {
+    const res = await fetch(`/api/v1/admin/sealed/revocations/${id}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(`liftRevocation: ${res.status} ${JSON.stringify(err)}`);
+    }
+    return res.json();
+  },
+
+  previewRevoke: async (
+    profile_id: string,
+    secret_key: string | null,
+  ): Promise<{ affected_runs: string[] }> => {
+    const params = new URLSearchParams({ profile_id });
+    if (secret_key) params.set('secret_key', secret_key);
+    const res = await fetch(
+      `/api/v1/admin/sealed/revocations/preview?${params.toString()}`,
+      { credentials: 'include' },
+    );
+    if (!res.ok) throw new Error(`previewRevoke: ${res.status}`);
     return res.json();
   },
 };

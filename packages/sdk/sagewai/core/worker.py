@@ -93,6 +93,77 @@ def get_worker_credentials() -> WorkerCredentials | None:
     return _worker_credentials.get()
 
 
+async def _check_run_revocation_and_abort(
+    *,
+    store: Any,
+    run_id: str,
+    sandbox: Any,
+) -> bool:
+    """Check workflow_runs.revoked_at; if set, stop sandbox + mark run failed.
+
+    Reads the typed ``revoked_at`` column directly via SQL (NOT via
+    ``load_run``/JSONB) so that hard-revoke fan-out written by Task 4's
+    SQL UPDATE is visible before the next ``save_run`` call.
+
+    Returns True if abort happened, False otherwise. Idempotent: subsequent
+    calls on a run already aborted just see status='failed' and return False.
+    """
+    row = await store._pool.fetchrow(
+        """
+        SELECT revoked_at, revoke_reason, status
+        FROM workflow_runs WHERE run_id = $1
+        """,
+        run_id,
+    )
+    if row is None:
+        return False
+    if row["revoked_at"] is None:
+        return False
+    if row["status"] != "running":
+        return False  # already aborted or never running
+
+    # Stop sandbox (best-effort)
+    try:
+        await sandbox.stop()
+    except Exception:
+        logger.exception(
+            "sandbox.stop failed during revocation abort run_id=%s", run_id,
+        )
+
+    # Mark run failed
+    await store._pool.execute(
+        """
+        UPDATE workflow_runs
+        SET status = 'failed',
+            updated_at = NOW(),
+            output = COALESCE(output, '{}'::jsonb) || '{"error": "secret_revoked"}'::jsonb
+        WHERE run_id = $1 AND status = 'running'
+        """,
+        run_id,
+    )
+
+    # Audit emit (best-effort)
+    try:
+        from sagewai.sealed.audit import AuditWriter
+
+        await AuditWriter(store).emit(
+            event_type="run.aborted_by_revocation",
+            run_id=run_id,
+            details={
+                "revoke_reason": row["revoke_reason"],
+                "original_revoked_at": row["revoked_at"].isoformat()
+                if row["revoked_at"]
+                else None,
+            },
+        )
+    except Exception:
+        logger.exception(
+            "audit emit failed during revocation abort run_id=%s", run_id,
+        )
+
+    return True
+
+
 class WorkflowWorker:
     """Distributed workflow execution consumer.
 

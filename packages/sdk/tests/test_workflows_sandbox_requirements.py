@@ -142,9 +142,12 @@ def mock_store_factory():
     class _MockStore:
         def __init__(self):
             self.last_saved_run = None
-            # AuditWriter calls self._store._pool.execute(...) — provide a mock
+            # AuditWriter calls self._store._pool.execute(...) — provide a mock.
+            # RevocationRegistry.find_active_for_keys calls _pool.fetch(...)
+            # — return an empty list (no revocations) by default.
             pool = MagicMock()
             pool.execute = AsyncMock()
+            pool.fetch = AsyncMock(return_value=[])
             self._pool = pool
 
         async def save_run(self, run):
@@ -157,3 +160,63 @@ def mock_store_factory():
             return None
 
     return _MockStore()
+
+
+@pytest.mark.asyncio
+async def test_enqueue_blocks_when_secret_is_revoked(tmp_path, monkeypatch):
+    """Enqueue raises SecretRevokedError when a profile key is revoked."""
+    import json
+    from datetime import datetime, timezone
+
+    from cryptography.fernet import Fernet
+
+    from sagewai.core.state import DurableWorkflow
+    from sagewai.sealed.builtin_backend import BuiltinAdminStoreBackend
+    from sagewai.sealed.crypto import Crypto
+    from sagewai.sealed.models import ProfileWritePayload
+    from sagewai.sealed.revocation import (
+        Revocation,
+        SecretRevokedError,
+    )
+
+    backend = BuiltinAdminStoreBackend(
+        profiles_path=tmp_path / "profiles.json",
+        crypto=Crypto(Fernet.generate_key()),
+        audit_writer=None,
+    )
+    monkeypatch.setattr("sagewai.sealed.refs._BACKENDS", {"builtin": backend})
+    await backend.save_profile(ProfileWritePayload(
+        id="acme", name="A", secrets={"K": "v"},
+    ))
+
+    # Stub registry that says K is revoked
+    class _StubRegistry:
+        async def find_active_for_keys(self, *, profile_id, secret_keys):
+            return {
+                "K": Revocation(
+                    id=1,
+                    profile_id=profile_id,
+                    secret_key="K",
+                    revoked_at=datetime.now(timezone.utc),
+                    reason="leaked",
+                    hard=False,
+                )
+            } if "K" in secret_keys else {}
+
+    monkeypatch.setattr(
+        "sagewai.core.state._build_revocation_registry",
+        lambda store: _StubRegistry(),
+    )
+
+    # Point admin-state at a minimal file so AdminStateFile loads cleanly
+    state_file = tmp_path / "admin-state.json"
+    state_file.write_text(json.dumps({"setup_complete": True, "sealed": {}}))
+    monkeypatch.setenv("SAGEWAI_ADMIN_STATE_FILE", str(state_file))
+
+    wf = DurableWorkflow(name="my-workflow", store=mock_store_factory())
+
+    with pytest.raises(SecretRevokedError):
+        await wf.enqueue(
+            input_data={"x": 1},
+            security_profile_ref="builtin://acme",
+        )

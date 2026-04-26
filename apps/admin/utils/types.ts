@@ -1236,3 +1236,17 @@ export interface EffectiveProfile {
   secret_keys: string[];
   cascade_origins: Record<string, string>;
 }
+
+// ── Sealed-iii.A — revocations ────────────────────────────────────────
+
+export interface Revocation {
+  id: number;
+  profile_id: string;
+  secret_key: string;
+  revoked_at: string;
+  revoked_by: string | null;
+  reason: string;
+  hard: boolean;
+  lifted_at: string | null;
+  lifted_by: string | null;
+}
