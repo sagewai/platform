@@ -1,0 +1,84 @@
+# Architecture
+
+Sagewai is a control plane plus a worker fleet. The control plane
+plans, persists, and dispatches work; the worker fleet executes it.
+Every workflow run flows through this split. This page introduces
+the model. The four chapters that follow ([Runtime
+topology](/docs/architecture/runtime-topology),
+[Security tiers](/docs/architecture/security-tiers),
+[Execution modes](/docs/architecture/execution-modes),
+[Sandbox backends](/docs/architecture/sandbox-backends)) drill in.
+
+## Three invariants
+
+Three statements that the entire platform is structured to keep true:
+
+### 1. The worker is the only executor
+
+The control plane (admin server, CLI, autopilot) plans and dispatches
+— it never runs a workflow step. Workers consume work; they do not
+allocate it. This means you can scale execution capacity (workers)
+independently from planning capacity (control plane), and a saturated
+fleet does not stall planning.
+
+### 2. The execution mode is per-step, not per-deployment
+
+A single workflow run can plan in [Mode 0](/docs/architecture/execution-modes#mode-0--bare)
+on the worker, run an isolated tool call in [Mode 1](/docs/architecture/execution-modes#mode-1--sandboxed-no-identity),
+hit a customer database in [Mode 2](/docs/architecture/execution-modes#mode-2--identity-no-cli-agent),
+and dispatch a CLI agent like Claude Code in [Mode 3](/docs/architecture/execution-modes#mode-3--full-cli-agent)
+— each step picks its own mode. You don't pay sandbox cost for cheap
+planning steps and you don't lose isolation for sensitive ones.
+
+### 3. The sandbox is the trust boundary (when present)
+
+When a step runs in Mode 1+, the sandbox container is the security
+boundary. Customer secrets exist inside it, env-injected from the
+[Sealed Identity](/docs/architecture/security-tiers) backend. The
+worker host knows secret KEY NAMES but never holds plaintext values.
+The control plane sees neither.
+
+## Two backend surfaces
+
+Sagewai has two pluggable backend types. They are independent — choose
+each to fit your infrastructure:
+
+| Backend type | What it picks | Examples |
+|---|---|---|
+| **Sandbox backend** | where the sandbox container, pod, or function lives | Docker, Kubernetes, Lambda |
+| **Identity backend** | where Sealed Identity values come from | Builtin (file-based), Vault, 1Password, AWS Secrets Manager, SOPS, Bitwarden |
+
+A single deployment can mix: Kubernetes sandbox + Vault identity, or
+Docker sandbox + Builtin identity, or anything else. See
+[Sandbox backends](/docs/architecture/sandbox-backends) for the
+sandbox decision guide. Identity backend selection is covered in the
+Sealed-ii decomposition (link forthcoming as that ships).
+
+## When you need this section
+
+Read this section if you want to:
+
+- Understand how a workflow run actually executes
+- Decide which sandbox backend to deploy on
+- Pick the right execution mode for a workflow step
+- Reason about credential isolation and audit
+- Evaluate Sagewai for a security-sensitive deployment
+
+If you just want to write your first agent, jump to the
+[Quickstart](/docs/getting-started). The architecture is consistent
+underneath, but you do not need to internalise it to start building.
+
+## Canonical reference
+
+These four user-facing pages mirror the four authoritative
+architecture documents in the platform repo:
+
+- [`docs/architecture/runtime-topology.md`](https://github.com/sagewai/platform/blob/main/docs/architecture/runtime-topology.md)
+- [`docs/architecture/security-tiers.md`](https://github.com/sagewai/platform/blob/main/docs/architecture/security-tiers.md)
+- [`docs/architecture/execution-modes.md`](https://github.com/sagewai/platform/blob/main/docs/architecture/execution-modes.md)
+- [`docs/architecture/execution-backends.md`](https://github.com/sagewai/platform/blob/main/docs/architecture/execution-backends.md)
+
+Those internal docs are the contract between implementation threads;
+this section is the user-facing render. They stay in sync via the
+`docs(architecture)` PR-title convention — when an internal doc
+changes, the corresponding page here is updated in the same PR.

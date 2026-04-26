@@ -5,6 +5,11 @@ ephemeral container so a run in project A cannot read env, files, or tokens
 belonging to project B running on the same worker. This page covers the
 runtime options.
 
+> **Looking for the conceptual model?** This page is the operator
+> handbook for configuring the worker. For the architecture decision
+> guide (Docker vs Kubernetes vs Lambda, mode/backend compatibility),
+> see [Architecture: Sandbox backends](/docs/architecture/sandbox-backends).
+
 ## Modes
 
 | Mode | What it does | When to use |

@@ -18,8 +18,20 @@ const SECTIONS: NavSection[] = [
     title: 'Getting Started',
     items: [
       { label: 'Introduction & Quickstart', href: '/docs/getting-started' },
+      { label: 'Minimal Setup (No sandbox)', href: '/docs/getting-started/minimal-setup' },
       { label: 'Tutorials', href: '/docs/guides/tutorials' },
       { label: 'Video Tutorials', href: '/docs/guides/video-tutorials' },
+    ],
+  },
+  // ── Architecture ──────────────────────────────────────────────
+  {
+    title: 'Architecture',
+    items: [
+      { label: 'Overview', href: '/docs/architecture' },
+      { label: 'Runtime Topology', href: '/docs/architecture/runtime-topology' },
+      { label: 'Security Tiers', href: '/docs/architecture/security-tiers' },
+      { label: 'Execution Modes', href: '/docs/architecture/execution-modes' },
+      { label: 'Sandbox Backends', href: '/docs/architecture/sandbox-backends' },
     ],
   },
   // ── Pillar: SDK ──────────────────────────────────────────────
