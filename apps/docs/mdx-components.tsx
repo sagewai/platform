@@ -44,7 +44,14 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
       if (child?.props?.className === 'language-mermaid' && typeof child.props.children === 'string') {
         return <Mermaid chart={child.props.children} />;
       }
-      return <pre className="bg-bg-deep text-text-on-dark rounded-lg p-4 overflow-x-auto text-sm font-mono mb-4 leading-6" {...props} />;
+      // Code blocks are an "always-dark island" against the page so they
+      // remain readable in both light and dark themes. Previously this
+      // used `bg-bg-deep` + `text-text-on-dark`, but `--color-bg-deep`
+      // flips to a light gray (#F1F5F9) in light mode while
+      // `--color-text-on-dark` stays near-white — producing white text
+      // on a light background. Tailwind's built-in slate scale keeps
+      // contrast stable regardless of the active theme.
+      return <pre className="bg-slate-900 text-slate-100 rounded-lg p-4 overflow-x-auto text-sm font-mono mb-4 leading-6" {...props} />;
     },
     code: (props: React.HTMLAttributes<HTMLElement>) => {
       const isInline = typeof props.children === 'string' && !props.className;

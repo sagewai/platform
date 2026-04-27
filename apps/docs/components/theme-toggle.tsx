@@ -15,6 +15,11 @@ export function ThemeToggle() {
       ? stored
       : window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     setTheme(initial);
+    // Apply the resolved theme to <html> so brand-tokens.css and Tailwind's
+    // data-theme dark variant fire on first render — without this, a user
+    // who chose dark on a previous visit (or whose OS prefers dark) would
+    // see the light variant on every page reload until they re-toggled.
+    document.documentElement.setAttribute('data-theme', initial);
   }, []);
 
   const toggle = () => {

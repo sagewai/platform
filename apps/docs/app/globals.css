@@ -5,6 +5,20 @@
 @source ".";
 
 /*
+ * Tailwind 4 dark-mode strategy.
+ *
+ * The theme toggle (components/theme-toggle.tsx) sets `data-theme="dark"`
+ * on <html>, matching the same convention used by brand-tokens.css and the
+ * sibling sagewai/web marketing site. By default Tailwind 4's `dark:`
+ * variant is wired to `prefers-color-scheme`, which means classes like
+ * `dark:hidden` / `dark:block` (used by the navbar logo) silently failed
+ * to fire after the toggle. This @custom-variant declaration retargets
+ * `dark:` at the data-theme attribute so the toggle and the Tailwind
+ * variants stay in sync.
+ */
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+/*
  * Mobile overflow safety.
  *
  * Long lines inside <pre> code blocks (MDX fences, raw <pre> tags) would
