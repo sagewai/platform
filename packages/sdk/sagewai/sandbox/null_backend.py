@@ -32,6 +32,7 @@ from sagewai.sandbox.models import (
     ToolCall,
     ToolResult,
 )
+from sagewai.sandbox.pool_protocol import PoolStrategy
 
 
 class NullSandboxHandle:
@@ -88,6 +89,11 @@ class NullSandboxHandle:
                 duration_ms=int((time.monotonic() - started) * 1000),
             )
 
+    async def set_env(self, env: dict[str, str]) -> None:
+        """Update the env used by subsequent exec calls. Plan 1.5: warm reuse
+        requires this to actually replace the stored env."""
+        self._env = dict(env)
+
     async def copy_in(self, src: Path, dst: PurePosixPath) -> None:
         raise NotImplementedError("NullBackend does not support copy_in")
 
@@ -105,6 +111,7 @@ class NullBackend:
     """In-process backend for mode=none."""
 
     name = "null"
+    pool_strategy = PoolStrategy.LOCAL_CACHE
 
     async def health_check(self) -> BackendHealth:
         return BackendHealth(ok=True, backend="null", detail="in-process")

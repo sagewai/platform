@@ -1891,10 +1891,13 @@ def create_admin_serve_app(
 
     @app.post("/api/v1/fleet/heartbeat")
     async def fleet_heartbeat(request: Request) -> JSONResponse:
-        """Worker heartbeat."""
+        """Worker heartbeat. Optionally carries pool_stats snapshot."""
         body = await request.json()
-        await fleet_registry.heartbeat(body.get("worker_id", ""))
-        return JSONResponse({"status": "ok"})
+        pool_stats = body.get("pool_stats")
+        await fleet_registry.heartbeat(
+            body.get("worker_id", ""), pool_stats=pool_stats,
+        )
+        return JSONResponse({"ok": True})
 
     @app.get("/api/v1/fleet/workers")
     async def list_fleet_workers() -> JSONResponse:
@@ -1944,6 +1947,19 @@ def create_admin_serve_app(
     async def revoke_fleet_worker(worker_id: str) -> JSONResponse:
         w = await fleet_registry.revoke_worker(worker_id)
         return JSONResponse({"status": w.approval_status.value, "worker_id": w.id})
+
+    @app.get("/api/v1/admin/fleet/workers/{worker_id}/pool-stats")
+    async def get_worker_pool_stats(worker_id: str) -> JSONResponse:
+        """Return the latest pool_stats snapshot from the worker's heartbeat cache.
+
+        Returns 404 if the worker is unknown.
+        Returns the snapshot (or null payload if worker reported nothing yet).
+        """
+        worker = await fleet_registry.get_worker(worker_id)
+        if worker is None:
+            return JSONResponse({"error": "worker not found"}, status_code=404)
+        snap = await fleet_registry.get_pool_stats(worker_id)
+        return JSONResponse(snap if snap else {"snapshot": None})
 
     @app.get("/api/v1/fleet/enrollment-keys")
     async def list_fleet_enrollment_keys() -> JSONResponse:

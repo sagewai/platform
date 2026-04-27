@@ -67,7 +67,7 @@ from sagewai.sandbox.backend import SandboxBackend
 from sagewai.sandbox.fallback import apply_fallback
 from sagewai.sandbox.models import SandboxConfig, SandboxMode
 from sagewai.sandbox.null_backend import NullBackend
-from sagewai.sandbox.pool import SandboxPool
+from sagewai.sandbox.pool_protocol import SandboxPool
 from sagewai.sandbox.registry import resolve_mode
 
 logger = logging.getLogger(__name__)
@@ -162,6 +162,40 @@ async def _check_run_revocation_and_abort(
         )
 
     return True
+
+
+def _build_pool(
+    *,
+    backend,
+    config,
+    worker_id: str,
+    scratch_root,
+    sealed_secret_provider=None,
+    audit_writer=None,
+):
+    """Pick the SandboxPool implementation based on backend.pool_strategy.
+
+    Plan 1.5 ships LocalCacheSandboxPool (Docker, Null, future Firecracker).
+    Threads 3 and 4 add ExternalMinReplicasSandboxPool (K8s) and
+    ProviderManagedSandboxPool (Lambda) — when those land, extend this
+    factory with a new branch.
+    """
+    from sagewai.sandbox.pool_protocol import PoolStrategy
+
+    strategy = getattr(backend, "pool_strategy", None)
+    if strategy == PoolStrategy.LOCAL_CACHE:
+        from sagewai.sandbox.local_cache_pool import LocalCacheSandboxPool
+        return LocalCacheSandboxPool(
+            backend=backend,
+            config=config,
+            worker_id=worker_id,
+            scratch_root=scratch_root,
+            sealed_secret_provider=sealed_secret_provider,
+            audit_writer=audit_writer,
+        )
+    raise NotImplementedError(
+        f"Pool strategy {strategy} not yet implemented (Threads 3 + 4)"
+    )
 
 
 class WorkflowWorker:
@@ -289,13 +323,15 @@ class WorkflowWorker:
             backend = NullBackend()
 
         config = self._sandbox_config.model_copy(update={"mode": effective})
-        self._sandbox_pool = SandboxPool(
+        self._sandbox_pool = _build_pool(
             backend=backend,
             config=config,
             worker_id=self.worker_id.replace(":", "-"),
             scratch_root=self._sandbox_scratch_root,
+            sealed_secret_provider=None,   # wired when secret-provider integration lands
+            audit_writer=None,             # wired when audit integration lands
         )
-        await self._sandbox_pool.start_reaper()
+        await self._sandbox_pool.start()
         logger.info(
             "sandbox pool started mode=%s backend=%s",
             effective.value,
@@ -369,6 +405,17 @@ class WorkflowWorker:
                     try:
                         await self._store.worker_heartbeat(self.worker_id)
                         _last_worker_heartbeat = now
+                        # TODO(pool-stats-heartbeat): emit pool_stats to fleet
+                        # registry alongside this store heartbeat.  The
+                        # InMemoryFleetRegistry.worker_heartbeat() already
+                        # accepts a `pool_stats` kwarg, but WorkflowWorker
+                        # currently holds no reference to a fleet registry —
+                        # it only has a postgres store.  Wiring requires
+                        # either injecting the fleet registry here or having
+                        # the store forward the snapshot.  Tracked in
+                        # https://github.com/sagewai/platform/issues — file
+                        # a follow-up issue to thread self._sandbox_pool
+                        # .stats_snapshot() through to the fleet registry.
                     except Exception:  # noqa: broad-exception-caught
                         logger.warning(
                             "Worker heartbeat failed for %s", self.worker_id

@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { Badge, Card, Button, EmptyState } from '@/components/ui/legacy';
 import { ArrowLeft, Heart, Cpu, Shield, AlertTriangle, Zap } from 'lucide-react';
 import type { FleetWorker } from '@/utils/types';
+import { PoolStatsPanel } from '@/components/pool-stats-panel';
 
 // TODO: wire to adminApi.getFleetWorker(id)
 const DEMO_WORKERS: FleetWorker[] = [
@@ -407,6 +408,11 @@ export default function WorkerDetailPage() {
               </div>
             </Card>
           )}
+
+          {/* Sandbox pool stats */}
+          <div className="md:col-span-2">
+            <PoolStatsPanel workerId={workerId} />
+          </div>
         </div>
       )}
 

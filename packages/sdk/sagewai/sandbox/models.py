@@ -73,6 +73,13 @@ class SandboxConfig(BaseModel):
     resource_limits: ResourceLimits = Field(default_factory=ResourceLimits)
     image_variants: list[SandboxImageVariant] | None = None   # None → all manifest variants
 
+    # Plan 1.5 — pool sizing knobs
+    pool_max_warm_per_tuple: int = Field(default=4, ge=0)
+    pool_max_warm_global: int = Field(default=16, ge=0)
+    pool_idle_timeout_s: int = Field(default=600, ge=0)
+    pool_reap_interval_s: int = Field(default=60, ge=1)
+    pool_disable_warm_reuse: bool = False
+
 
 class ToolCall(BaseModel):
     """A single tool-call dispatched into a sandbox."""

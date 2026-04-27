@@ -46,6 +46,7 @@ from sagewai.sandbox.models import (
     ToolCall,
     ToolResult,
 )
+from sagewai.sandbox.pool_protocol import PoolStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,17 @@ class DockerSandboxHandle:
         self.sandbox_id = sandbox_id
         self._docker_bin = docker_bin
         self.mode = SandboxMode.PER_RUN  # pool adjusts for other lifetimes
+        self._exec_env: dict[str, str] = {}
+
+    async def set_env(self, env: dict[str, str]) -> None:
+        """Replace the exec-session env. The container's process env is not modified.
+
+        Plan 1.5: Tier-2 env is per-exec, not per-container. cleanup_run between
+        runs becomes ``set_env({})`` — an in-memory dict drop. See plan
+        docs/superpowers/plans/2026-04-26-plan-1-5-sandbox-pooling.md for the
+        rationale and the per-exec injection mechanics.
+        """
+        self._exec_env = dict(env)
 
     async def exec(self, tool_call: ToolCall) -> ToolResult:
         """Run one tool call via ``docker exec sagewai-tool-runner``."""
@@ -113,10 +125,15 @@ class DockerSandboxHandle:
         payload = (json.dumps(req) + "\n").encode()
 
         try:
+            env_args: list[str] = []
+            for k, v in self._exec_env.items():
+                env_args.extend(["--env", f"{k}={v}"])
+
             proc = await asyncio.create_subprocess_exec(
                 self._docker_bin,
                 "exec",
                 "-i",
+                *env_args,
                 self._container._id,
                 "sagewai-tool-runner",
                 stdin=asyncio.subprocess.PIPE,
@@ -220,6 +237,7 @@ class DockerBackend:
     """Docker-backed sandbox implementation — OSS default."""
 
     name = "docker"
+    pool_strategy = PoolStrategy.LOCAL_CACHE
 
     def __init__(self) -> None:
         import aiodocker
@@ -350,7 +368,6 @@ class DockerBackend:
         lifetime: SandboxLifetime,
     ) -> DockerSandboxHandle:
         sandbox_id = f"sgw-{uuid.uuid4().hex[:12]}"
-        env_list = [f"{k}={v}" for k, v in env.items()]
         binds: list[str] = []
         if workdir_mount is not None:
             workdir_mount.mkdir(parents=True, exist_ok=True)
@@ -372,7 +389,7 @@ class DockerBackend:
 
         container_config: dict[str, Any] = {
             "Image": image,
-            "Env": env_list,
+            "Env": [],
             "Tty": False,
             "WorkingDir": "/workspace",
             "Labels": {
@@ -396,7 +413,7 @@ class DockerBackend:
             "sandbox started id=%s image=%s run=%s", sandbox_id, image, run_id
         )
 
-        return DockerSandboxHandle(
+        handle = DockerSandboxHandle(
             client=self._client,
             container=container,
             image=image,
@@ -404,6 +421,8 @@ class DockerBackend:
             sandbox_id=sandbox_id,
             docker_bin=self._docker_bin,
         )
+        await handle.set_env(dict(env))
+        return handle
 
     async def reap(self, *, older_than: timedelta) -> int:
         """Force-remove sandboxes whose ``started_at`` label predates the cutoff."""

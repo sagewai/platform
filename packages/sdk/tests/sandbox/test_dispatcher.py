@@ -12,21 +12,35 @@ from pathlib import Path
 
 import pytest
 
-from sagewai.sandbox.models import SandboxConfig, SandboxMode
+from sagewai.core.state import ExecutionMode
+from sagewai.sandbox.models import SandboxConfig, SandboxImageVariant, SandboxMode
 from sagewai.sandbox.null_backend import NullBackend
-from sagewai.sandbox.pool import SandboxPool
+from sagewai.sandbox.local_cache_pool import LocalCacheSandboxPool
 from sagewai.sandbox.tool_dispatcher import SandboxedToolDispatcher
+
+
+def _acquire_kwargs(**overrides):
+    defaults = dict(
+        project_id="p1",
+        run_id="r1",
+        execution_mode=ExecutionMode.SANDBOXED,
+        image="null",
+        image_digest="sha256:" + "a" * 64,
+        image_variant=SandboxImageVariant.BASE,
+    )
+    defaults.update(overrides)
+    return defaults
 
 
 @pytest.mark.asyncio
 async def test_dispatcher_runs_bash(tmp_path: Path):
-    pool = SandboxPool(
+    pool = LocalCacheSandboxPool(
         backend=NullBackend(),
         config=SandboxConfig(mode=SandboxMode.PER_RUN),
         worker_id="w1",
         scratch_root=tmp_path,
     )
-    async with pool.acquire(project_id="p1", run_id="r1", image="null") as handle:
+    async with pool.acquire(**_acquire_kwargs()) as handle:
         d = SandboxedToolDispatcher(handle)
         result = await d.run(tool="bash", args={"command": "echo hi"}, call_id="c1")
         assert result.ok
@@ -35,13 +49,13 @@ async def test_dispatcher_runs_bash(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_dispatcher_passes_timeout(tmp_path: Path):
-    pool = SandboxPool(
+    pool = LocalCacheSandboxPool(
         backend=NullBackend(),
         config=SandboxConfig(mode=SandboxMode.PER_RUN),
         worker_id="w1",
         scratch_root=tmp_path,
     )
-    async with pool.acquire(project_id="p1", run_id="r1", image="null") as handle:
+    async with pool.acquire(**_acquire_kwargs()) as handle:
         d = SandboxedToolDispatcher(handle)
         result = await d.run(
             tool="bash",

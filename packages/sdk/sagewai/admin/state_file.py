@@ -111,6 +111,17 @@ class AdminStateFile:
         state = self._read()
         return state.get("sealed", {})
 
+    def get_sandbox_pool_config(self) -> dict[str, Any]:
+        """Return sandbox_pool.* sub-tree (pool sizing knobs from Plan 1.5)."""
+        state = self._read()
+        return dict(state.get("sandbox_pool") or {})
+
+    def set_sandbox_pool_config(self, cfg: dict[str, Any]) -> None:
+        """Replace the sandbox_pool config block."""
+        def _apply(state: dict[str, Any]) -> None:
+            state["sandbox_pool"] = dict(cfg)
+        self._mutate(_apply)
+
     def get_workflow_sealed_config(self, workflow_name: str) -> dict[str, Any] | None:
         """Return workflow-level sealed config from admin-state.workflows[name].
 

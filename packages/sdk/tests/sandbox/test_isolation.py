@@ -16,12 +16,14 @@ from pathlib import Path
 
 import pytest
 
+from sagewai.core.state import ExecutionMode
 from sagewai.sandbox.models import (
     SandboxConfig,
+    SandboxImageVariant,
     SandboxMode,
     ToolCall,
 )
-from sagewai.sandbox.pool import SandboxPool
+from sagewai.sandbox.local_cache_pool import LocalCacheSandboxPool
 from sagewai.sandbox.secret_provider import EnvSecretProvider
 
 pytestmark = pytest.mark.skipif(
@@ -41,20 +43,28 @@ async def test_cross_project_workspace_isolated(tmp_path: Path):
             "proj-b": {"B_SECRET": "beta"},
         }
     )
-    pool = SandboxPool(
+    pool = LocalCacheSandboxPool(
         backend=backend,
         config=SandboxConfig(
             mode=SandboxMode.PER_RUN, default_image="ghcr.io/sagewai/sandbox-base:dev"
         ),
         worker_id="w-iso",
         scratch_root=tmp_path,
-        secret_provider=secrets,
+        sealed_secret_provider=secrets,
+    )
+    _image = "ghcr.io/sagewai/sandbox-base:dev"
+    _digest = "sha256:" + "0" * 64  # placeholder; Docker backend resolves real digest
+    _acquire_common = dict(
+        execution_mode=ExecutionMode.SANDBOXED,
+        image=_image,
+        image_digest=_digest,
+        image_variant=SandboxImageVariant.BASE,
     )
     try:
         # Run A writes a file and asserts its own secret is visible.
         async with pool.acquire(
             project_id="proj-a", run_id="ra",
-            image="ghcr.io/sagewai/sandbox-base:dev",
+            **_acquire_common,
         ) as sbx_a:
             r = await sbx_a.exec(
                 ToolCall(
@@ -71,7 +81,7 @@ async def test_cross_project_workspace_isolated(tmp_path: Path):
         # Run B in a different project must not see run A's /workspace file.
         async with pool.acquire(
             project_id="proj-b", run_id="rb",
-            image="ghcr.io/sagewai/sandbox-base:dev",
+            **_acquire_common,
         ) as sbx_b:
             r = await sbx_b.exec(
                 ToolCall(

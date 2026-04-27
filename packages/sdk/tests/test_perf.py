@@ -182,3 +182,72 @@ async def test_revocation_lookup_perf():
     finally:
         await store._pool.execute("DELETE FROM sealed_revocations")
         await store.close()
+
+
+# ─── Sandbox pool warm-acquire ───────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_perf_pool_warm_acquire(tmp_path):
+    """Warm acquire ≤ 200ms p95 against a fast fake backend."""
+    import asyncio
+    import time
+    from unittest.mock import AsyncMock, MagicMock
+
+    from sagewai.core.state import ExecutionMode
+    from sagewai.sandbox.local_cache_pool import LocalCacheSandboxPool
+    from sagewai.sandbox.models import (
+        SandboxConfig, SandboxImageVariant, SandboxMode,
+    )
+    from sagewai.sandbox.pool_protocol import PoolStrategy
+
+    class _Backend:
+        name = "fake"
+        pool_strategy = PoolStrategy.LOCAL_CACHE
+
+        async def start(self, **kw):
+            h = MagicMock()
+            h.image_digest = kw["image_digest"]
+            h.set_env = AsyncMock()
+            h.stop = AsyncMock()
+            return h
+
+        async def probe_runner(self, h): return True
+        async def reap(self, *, older_than): return 0
+
+    pool = LocalCacheSandboxPool(
+        backend=_Backend(),
+        config=SandboxConfig(mode=SandboxMode.PER_RUN),
+        worker_id="bench",
+        scratch_root=tmp_path,
+        sealed_secret_provider=None,
+        audit_writer=AsyncMock(emit=AsyncMock()),
+    )
+    await pool.start()
+
+    # Warm the pool with 4 sandboxes
+    for i in range(4):
+        async with pool.acquire(
+            project_id="p", run_id=f"warm-{i}",
+            execution_mode=ExecutionMode.SANDBOXED,
+            image="img", image_digest="sha256:x",
+            image_variant=SandboxImageVariant.BASE,
+        ):
+            pass
+
+    # Measure 100 warm-only acquires
+    samples_ms: list[float] = []
+    for i in range(100):
+        t0 = time.monotonic()
+        async with pool.acquire(
+            project_id="p", run_id=f"hot-{i}",
+            execution_mode=ExecutionMode.SANDBOXED,
+            image="img", image_digest="sha256:x",
+            image_variant=SandboxImageVariant.BASE,
+        ):
+            pass
+        samples_ms.append((time.monotonic() - t0) * 1000)
+
+    samples_ms.sort()
+    p95 = samples_ms[int(len(samples_ms) * 0.95)]
+    assert p95 <= 200.0, f"warm acquire p95 = {p95:.1f}ms (budget 200ms)"
+    await pool.stop()

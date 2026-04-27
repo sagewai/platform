@@ -111,6 +111,7 @@ import type {
   SealedWorkflowConfig,
   EffectiveProfile,
   Revocation,
+  PoolStatsSnapshot,
 } from './types';
 
 const BASE_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL ?? 'http://localhost:8000/admin';
@@ -1239,6 +1240,18 @@ export const adminApi = {
     return analyticsClient.get<{ events: FleetAuditEvent[]; total: number }>(
       `/api/v1/fleet/audit${qs ? `?${qs}` : ''}`,
     );
+  },
+
+  getWorkerPoolStats: async (workerId: string): Promise<PoolStatsSnapshot | null> => {
+    const res = await fetch(
+      `/api/v1/admin/fleet/workers/${encodeURIComponent(workerId)}/pool-stats`,
+      { credentials: 'include' },
+    );
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`getWorkerPoolStats: ${res.status}`);
+    const j = await res.json();
+    if (j.snapshot === null || j.snapshot === undefined) return null;
+    return j as PoolStatsSnapshot;
   },
 
   /* ─── Billing endpoints ─── */

@@ -115,8 +115,17 @@ class FleetRegistry(ABC):
         """Revoke an approved worker."""
 
     @abstractmethod
-    async def heartbeat(self, worker_id: str) -> None:
-        """Update the worker's ``last_heartbeat`` timestamp."""
+    async def heartbeat(
+        self, worker_id: str, *, pool_stats: dict | None = None,
+    ) -> None:
+        """Update the worker's ``last_heartbeat`` timestamp.
+        Optionally cache the latest pool_stats snapshot for admin UI display.
+        """
+
+    @abstractmethod
+    async def get_pool_stats(self, worker_id: str) -> dict | None:
+        """Return the latest pool_stats snapshot received via heartbeat,
+        or None if the worker is unknown or has not reported stats yet."""
 
     # --- Enrollment Keys ---
 
@@ -170,6 +179,7 @@ class InMemoryFleetRegistry(FleetRegistry):
         self._workers: dict[str, WorkerRecord] = {}
         # Maps key_id -> (EnrollmentKey, raw_key_string)
         self._keys: dict[str, tuple[EnrollmentKey, str]] = {}
+        self._pool_stats_cache: dict[str, dict] = {}
 
     # --- Workers ---
 
@@ -300,13 +310,19 @@ class InMemoryFleetRegistry(FleetRegistry):
         self._workers[worker_id] = updated
         return updated
 
-    async def heartbeat(self, worker_id: str) -> None:
-        worker = self._workers.get(worker_id)
-        if worker is None:
-            raise ValueError(f"Worker {worker_id} not found")
-        self._workers[worker_id] = worker.model_copy(
-            update={"last_heartbeat": _now()}
-        )
+    async def heartbeat(
+        self, worker_id: str, *, pool_stats: dict | None = None,
+    ) -> None:
+        """Update the worker's last_heartbeat timestamp."""
+        record = self._workers.get(worker_id)
+        if record is None:
+            return
+        self._workers[worker_id] = record.model_copy(update={"last_heartbeat": _now()})
+        if pool_stats is not None:
+            self._pool_stats_cache[worker_id] = pool_stats
+
+    async def get_pool_stats(self, worker_id: str) -> dict | None:
+        return self._pool_stats_cache.get(worker_id)
 
     # --- Enrollment Keys ---
 
@@ -409,6 +425,7 @@ class PostgresFleetRegistry(FleetRegistry):
     ) -> None:
         self._pool = pool
         self._audit = audit_backend
+        self._pool_stats_cache: dict[str, dict] = {}
 
     # --- Workers ---
 
@@ -644,7 +661,9 @@ class PostgresFleetRegistry(FleetRegistry):
         assert worker is not None
         return worker
 
-    async def heartbeat(self, worker_id: str) -> None:
+    async def heartbeat(
+        self, worker_id: str, *, pool_stats: dict | None = None,
+    ) -> None:
         result = await self._pool.execute(
             "UPDATE workers SET last_heartbeat = $1 WHERE id = $2",
             _now(),
@@ -652,6 +671,11 @@ class PostgresFleetRegistry(FleetRegistry):
         )
         if result == "UPDATE 0":
             raise ValueError(f"Worker {worker_id} not found")
+        if pool_stats is not None:
+            self._pool_stats_cache[worker_id] = pool_stats
+
+    async def get_pool_stats(self, worker_id: str) -> dict | None:
+        return self._pool_stats_cache.get(worker_id)
 
     # --- Enrollment Keys ---
 

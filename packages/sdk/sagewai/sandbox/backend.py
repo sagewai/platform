@@ -25,6 +25,7 @@ from sagewai.sandbox.models import (
     ToolCall,
     ToolResult,
 )
+from sagewai.sandbox.pool_protocol import PoolStrategy
 
 
 @runtime_checkable
@@ -37,6 +38,7 @@ class SandboxHandle(Protocol):
     image_digest: str
 
     async def exec(self, tool_call: ToolCall) -> ToolResult: ...
+    async def set_env(self, env: dict[str, str]) -> None: ...
     async def copy_in(self, src: Path, dst: PurePosixPath) -> None: ...
     async def copy_out(self, src: PurePosixPath, dst: Path) -> None: ...
     async def stats(self) -> SandboxStats: ...
@@ -52,6 +54,7 @@ class SandboxBackend(Protocol):
     """
 
     name: str
+    pool_strategy: PoolStrategy
 
     async def health_check(self) -> BackendHealth: ...
 

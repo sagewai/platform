@@ -7,7 +7,7 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL_LICENSE.md for details.
-"""Tests for SandboxPool cleanup hook + discard-on-failure."""
+"""Tests for LocalCacheSandboxPool cleanup hook + discard-on-failure."""
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -18,7 +18,7 @@ from sagewai.sealed.revocation import CleanupResult
 @pytest.mark.asyncio
 async def test_release_calls_provider_cleanup():
     """On release, pool calls provider.cleanup_run with run context."""
-    from sagewai.sandbox.pool import SandboxPool
+    from sagewai.sandbox.local_cache_pool import LocalCacheSandboxPool
 
     fake_provider = MagicMock()
     fake_provider.env_for = AsyncMock(return_value={})
@@ -38,7 +38,7 @@ async def test_release_calls_provider_cleanup():
     handle = MagicMock()
     handle.stop = AsyncMock()
 
-    await SandboxPool._release_with_cleanup(
+    await LocalCacheSandboxPool._release_with_cleanup(
         provider=fake_provider,
         run=run,
         handle=handle,
@@ -53,7 +53,7 @@ async def test_release_calls_provider_cleanup():
 @pytest.mark.asyncio
 async def test_release_discards_sandbox_on_cleanup_exception():
     """When provider.cleanup_run raises, sandbox is stopped + not pooled."""
-    from sagewai.sandbox.pool import SandboxPool
+    from sagewai.sandbox.local_cache_pool import LocalCacheSandboxPool
 
     fake_provider = MagicMock()
     fake_provider.cleanup_run = AsyncMock(side_effect=RuntimeError("boom"))
@@ -70,7 +70,7 @@ async def test_release_discards_sandbox_on_cleanup_exception():
     handle = MagicMock()
     handle.stop = AsyncMock()
 
-    result = await SandboxPool._release_with_cleanup(
+    result = await LocalCacheSandboxPool._release_with_cleanup(
         provider=fake_provider,
         run=run,
         handle=handle,
@@ -82,7 +82,7 @@ async def test_release_discards_sandbox_on_cleanup_exception():
 @pytest.mark.asyncio
 async def test_release_pools_sandbox_on_clean_path():
     """Happy path: sandbox is returned to pool (not discarded)."""
-    from sagewai.sandbox.pool import SandboxPool
+    from sagewai.sandbox.local_cache_pool import LocalCacheSandboxPool
 
     fake_provider = MagicMock()
     fake_provider.cleanup_run = AsyncMock(return_value=CleanupResult(
@@ -101,7 +101,7 @@ async def test_release_pools_sandbox_on_clean_path():
     handle = MagicMock()
     handle.stop = AsyncMock()
 
-    result = await SandboxPool._release_with_cleanup(
+    result = await LocalCacheSandboxPool._release_with_cleanup(
         provider=fake_provider,
         run=run,
         handle=handle,

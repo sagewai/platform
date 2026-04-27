@@ -1034,6 +1034,35 @@ export interface FleetAuditEvent {
   created_at: string;
 }
 
+/* ─── Pool stats types (Plan 1.5) ─── */
+
+export interface PerTupleStats {
+  image_variant: string;
+  execution_mode: string;
+  network_policy: string;
+  warm_count: number;
+  warm_max: number;
+  active_count: number;
+  hit_rate_1h: number | null;
+  last_evict_at: string | null;
+  last_evict_reason: string | null;
+}
+
+export interface AggregateStats {
+  warm_count: number;
+  warm_max_global: number;
+  active_count: number;
+  hit_rate_1h: number | null;
+  last_evict_at: string | null;
+}
+
+export interface PoolStatsSnapshot {
+  worker_id: string;
+  captured_at: string;
+  per_tuple: PerTupleStats[];
+  aggregate: AggregateStats;
+}
+
 /* ─── Billing types ─── */
 
 export interface BillingPlan {

@@ -281,9 +281,10 @@ async def test_heartbeat(registry: InMemoryFleetRegistry, caps: WorkerCapabiliti
 
 
 @pytest.mark.asyncio
-async def test_heartbeat_nonexistent_raises(registry: InMemoryFleetRegistry):
-    with pytest.raises(ValueError, match="not found"):
-        await registry.heartbeat("no-such-id")
+async def test_heartbeat_nonexistent_is_noop(registry: InMemoryFleetRegistry):
+    # Plan 1.5: heartbeat for an unknown worker silently returns (no-op).
+    # The server-side pool_stats cache update must not raise on missing workers.
+    await registry.heartbeat("no-such-id")  # must not raise
 
 
 # ---------------------------------------------------------------------------

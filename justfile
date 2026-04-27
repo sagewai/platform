@@ -179,6 +179,10 @@ perf: sdk-perf
 sdk-perf:
     uv run --package sagewai pytest packages/sdk/tests/test_perf.py -v -m perf -o "addopts="
 
+# Run the Plan 1.5 sandbox pool warm-acquire benchmark
+bench-pool:
+    cd packages/sdk && uv run pytest tests/test_perf.py::test_perf_pool_warm_acquire -v
+
 # ── Build ──────────────────────────────────────────────────────────────────
 # Produce release artefacts — wheels, Next.js bundles, Docker images.
 
