@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { adminApi } from "@/utils/api";
-import type { ProfileMetadata, SealedWorkflowConfig } from "@/utils/types";
+import type { EffectiveProfile, ProfileMetadata, SealedWorkflowConfig } from "@/utils/types";
+import { ArtifactDestinationForm } from "@/components/artifact-destination-form";
 import { SealedCascadePreview } from "@/components/sealed-cascade-preview";
 
 export default function WorkflowSealedPage() {
@@ -13,10 +14,22 @@ export default function WorkflowSealedPage() {
   const [profileRef, setProfileRef] = useState("");
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [effectiveSecretKeys, setEffectiveSecretKeys] = useState<string[]>([]);
 
   useEffect(() => {
     adminApi.listProfiles().then(setProfiles).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!workflowName || !loaded) {
+      setEffectiveSecretKeys([]);
+      return;
+    }
+    adminApi
+      .getSealedPreview({ workflow: workflowName })
+      .then((p: EffectiveProfile) => setEffectiveSecretKeys(p.secret_keys ?? []))
+      .catch(() => setEffectiveSecretKeys([]));
+  }, [workflowName, loaded, profileRef]);
 
   async function loadWorkflow() {
     if (!workflowName) return;
@@ -139,6 +152,11 @@ export default function WorkflowSealedPage() {
           <div className="mt-md">
             <SealedCascadePreview workflow={workflowName} />
           </div>
+
+          <ArtifactDestinationForm
+            workflowName={workflowName}
+            effectiveSecretKeys={effectiveSecretKeys}
+          />
         </>
       )}
     </div>

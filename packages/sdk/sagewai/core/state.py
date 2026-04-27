@@ -47,6 +47,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
+from sagewai.artifacts.models import ArtifactDestination
 from sagewai.errors import SagewaiWorkflowError
 from sagewai.sandbox import image_manifest
 from sagewai.sandbox.models import (
@@ -148,6 +149,11 @@ class WorkflowRun:
     revoked_at: datetime | None = None
     revoke_reason: str | None = None
 
+    # ── plan ART (artifact destination) — resolved at enqueue ──
+    # See docs/superpowers/specs/2026-04-27-plan-art-artifact-destination-design.md.
+    # None = no upload (also covers all Mode 0/1/2 runs).
+    artifact_destination: ArtifactDestination | None = None
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a dictionary."""
         return {
@@ -172,6 +178,11 @@ class WorkflowRun:
             "effective_secret_keys": self.effective_secret_keys,
             "revoked_at": (self.revoked_at.isoformat() if self.revoked_at else None),
             "revoke_reason": self.revoke_reason,
+            "artifact_destination": (
+                self.artifact_destination.model_dump(mode="json")
+                if self.artifact_destination
+                else None
+            ),
             "steps": {
                 name: {
                     "status": rec.status.value,
@@ -236,6 +247,11 @@ class WorkflowRun:
                 else None
             ),
             revoke_reason=data.get("revoke_reason"),
+            artifact_destination=(
+                ArtifactDestination.model_validate(data["artifact_destination"])
+                if data.get("artifact_destination")
+                else None
+            ),
         )
 
 
@@ -582,6 +598,7 @@ class DurableWorkflow:
         requires_network_policy: NetworkPolicy | None = None,
         security_profile_ref: str | None = None,
         security_overrides: dict[str, str] | None = None,
+        artifact_destination: ArtifactDestination | None = None,
     ) -> str:
         """Create and persist a WorkflowRun with resolved sandbox requirements.
 
@@ -607,7 +624,13 @@ class DurableWorkflow:
             Optional Sealed-i profile reference for this run (user-level override).
         security_overrides:
             Optional per-key env overrides applied on top of the resolved profile.
+        artifact_destination:
+            Optional Plan ART artifact destination for this run (run-level
+            override, beats workflow code default and admin override). Mode 3+
+            only — set on Mode 0/1/2 runs and the upload step is skipped with
+            an ``artifact.mode_mismatch`` audit warning.
         """
+        from sagewai.artifacts.resolution import ArtifactDestinationLevels
         from sagewai.sandbox.resolution import resolve_requirements
 
         project_defaults = None
@@ -680,6 +703,29 @@ class DurableWorkflow:
             else sandbox_mode_for(execution_mode)
         )
 
+        # Plan ART cascade build — only resolve if at least one layer is set
+        artifact_destination_levels: ArtifactDestinationLevels | None = None
+        code_artifact_dest = getattr(type(self), "artifact_destination", None)
+        admin_artifact_dest: ArtifactDestination | None = None
+        try:
+            from sagewai.admin.state_file import AdminStateFile
+
+            admin_artifact_dest = AdminStateFile().get_workflow_artifact_destination(
+                self.name,
+            )
+        except Exception as exc:
+            logger.debug("Artifact destination admin override skipped: %s", exc)
+        if (
+            code_artifact_dest is not None
+            or admin_artifact_dest is not None
+            or artifact_destination is not None
+        ):
+            artifact_destination_levels = ArtifactDestinationLevels(
+                code_default=code_artifact_dest,
+                admin_override=admin_artifact_dest,
+                run_override=artifact_destination,
+            )
+
         requirements = await resolve_requirements(
             explicit_mode=derived_mode,
             explicit_image=requires_image,
@@ -690,7 +736,37 @@ class DurableWorkflow:
             audit_writer=audit_writer,
             audit_context=audit_context,
             revocation_registry=revocation_registry,  # NEW in Sealed-iii.A
+            artifact_destination_levels=artifact_destination_levels,
         )
+
+        # Mode-mismatch warning: artifact destination set but run isn't Mode 3+.
+        # Run still proceeds; the upload step will skip with an audit event.
+        if requirements.artifact_destination is not None and execution_mode in (
+            ExecutionMode.BARE,
+            ExecutionMode.SANDBOXED,
+            ExecutionMode.IDENTITY,
+        ):
+            logger.warning(
+                "Artifact destination set on a non-Mode-3+ run "
+                "(workflow=%s, execution_mode=%s) — upload will be skipped.",
+                self.name,
+                execution_mode.value,
+            )
+            if audit_writer is not None:
+                try:
+                    await audit_writer.emit(
+                        event_type="artifact.mode_mismatch",
+                        actor_type="system",
+                        details={
+                            "execution_mode": execution_mode.value,
+                            "destination_type": (
+                                requirements.artifact_destination.type.value
+                            ),
+                        },
+                        context=audit_context,
+                    )
+                except Exception as exc:
+                    logger.debug("artifact.mode_mismatch audit emit failed: %s", exc)
 
         run_id = _generate_run_id(self.name, input_data or {})
         run = WorkflowRun(
@@ -706,6 +782,7 @@ class DurableWorkflow:
             security_profile_ref=requirements.security_profile_ref,
             effective_env_keys=list(requirements.effective_env_keys),
             effective_secret_keys=list(requirements.effective_secret_keys),
+            artifact_destination=requirements.artifact_destination,
         )
         await self._store.save_run(run)
         logger.info(

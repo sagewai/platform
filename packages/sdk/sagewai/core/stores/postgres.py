@@ -94,10 +94,11 @@ class PostgresStore(WorkflowStore):
                 requires_sandbox_mode, requires_image, requires_variant,
                 requires_network_policy,
                 security_profile_ref, effective_env_keys, effective_secret_keys,
-                revoked_at, revoke_reason
+                revoked_at, revoke_reason,
+                artifact_destination
             )
             VALUES ($1, $2, $3, $4, $5::jsonb, $6, NOW(), $7, $8, $9, $10, $11, $12, $13,
-                    $14, $15, $16)
+                    $14, $15, $16, $17::jsonb)
             ON CONFLICT (id) DO UPDATE SET
                 status = EXCLUDED.status,
                 data = EXCLUDED.data,
@@ -112,7 +113,8 @@ class PostgresStore(WorkflowStore):
                 effective_env_keys = EXCLUDED.effective_env_keys,
                 effective_secret_keys = EXCLUDED.effective_secret_keys,
                 revoked_at = EXCLUDED.revoked_at,
-                revoke_reason = EXCLUDED.revoke_reason
+                revoke_reason = EXCLUDED.revoke_reason,
+                artifact_destination = EXCLUDED.artifact_destination
             """,
             key,
             run.workflow_name,
@@ -130,6 +132,11 @@ class PostgresStore(WorkflowStore):
             run.effective_secret_keys,
             run.revoked_at,
             run.revoke_reason,
+            (
+                json.dumps(run.artifact_destination.model_dump(mode="json"))
+                if run.artifact_destination
+                else None
+            ),
         )
 
     async def load_run(self, workflow_name: str, run_id: str) -> WorkflowRun | None:

@@ -470,6 +470,33 @@ class TestWorkflowRunFromDict:
         assert restored.steps == {}
         assert restored.signals == {}
 
+    def test_artifact_destination_round_trip(self):
+        from sagewai.artifacts.models import (
+            ArtifactDestination,
+            ArtifactDestinationType,
+        )
+
+        dest = ArtifactDestination(
+            type=ArtifactDestinationType.GITHUB,
+            target="https://github.com/acme/portfolio.git",
+            env_keys=["GITHUB_TOKEN"],
+            options={"branch": "main"},
+        )
+        run = WorkflowRun(
+            workflow_name="w", run_id="r", artifact_destination=dest,
+        )
+        d = run.to_dict()
+        assert d["artifact_destination"]["type"] == "github"
+        restored = WorkflowRun.from_dict(d)
+        assert restored.artifact_destination == dest
+
+    def test_artifact_destination_none_round_trip(self):
+        run = WorkflowRun(workflow_name="w", run_id="r")
+        d = run.to_dict()
+        assert d["artifact_destination"] is None
+        restored = WorkflowRun.from_dict(d)
+        assert restored.artifact_destination is None
+
 
 class TestRecoverStaleRuns:
     @pytest.mark.asyncio

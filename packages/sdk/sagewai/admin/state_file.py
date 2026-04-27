@@ -35,6 +35,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from sagewai.artifacts.models import ArtifactDestination
+
 _DEFAULT_STATE_DIR = Path.home() / ".sagewai"
 _DEFAULT_STATE_FILE = _DEFAULT_STATE_DIR / "admin-state.json"
 
@@ -142,6 +144,64 @@ class AdminStateFile:
         if profile_ref is None and not overrides:
             return None
         return {"profile_ref": profile_ref, "overrides": overrides or {}}
+
+    def _workflow_block(
+        self, state: dict[str, Any], workflow_name: str,
+    ) -> dict[str, Any] | None:
+        """Return the workflow record (dict-or-list shape), or None."""
+        workflows = state.get("workflows") or {}
+        if isinstance(workflows, dict):
+            return workflows.get(workflow_name)
+        if isinstance(workflows, list):
+            return next(
+                (w for w in workflows if w.get("name") == workflow_name), None,
+            )
+        return None
+
+    def get_workflow_artifact_destination(
+        self, workflow_name: str,
+    ) -> ArtifactDestination | None:
+        """Return the admin-override artifact destination for a workflow.
+
+        Plan ART. Returns None when no override is set.
+        """
+        state = self._read()
+        block = self._workflow_block(state, workflow_name)
+        if not block:
+            return None
+        raw = block.get("artifact_destination")
+        if raw is None:
+            return None
+        return ArtifactDestination.model_validate(raw)
+
+    def set_workflow_artifact_destination(
+        self, workflow_name: str, destination: ArtifactDestination,
+    ) -> None:
+        """Persist an admin-override artifact destination for a workflow."""
+        def _apply(state: dict[str, Any]) -> None:
+            workflows = state.setdefault("workflows", {})
+            if isinstance(workflows, list):
+                # Normalise list-shaped state to dict-shaped on first ART write
+                state["workflows"] = {w.get("name"): w for w in workflows if w.get("name")}
+                workflows = state["workflows"]
+            block = workflows.get(workflow_name) or {}
+            block["artifact_destination"] = destination.model_dump(mode="json")
+            workflows[workflow_name] = block
+        self._mutate(_apply)
+
+    def clear_workflow_artifact_destination(self, workflow_name: str) -> None:
+        """Remove the admin-override artifact destination for a workflow."""
+        def _apply(state: dict[str, Any]) -> None:
+            workflows = state.get("workflows") or {}
+            if isinstance(workflows, list):
+                block = next(
+                    (w for w in workflows if w.get("name") == workflow_name), None,
+                )
+            else:
+                block = workflows.get(workflow_name) if isinstance(workflows, dict) else None
+            if block and "artifact_destination" in block:
+                del block["artifact_destination"]
+        self._mutate(_apply)
 
     def _write(self, data: dict[str, Any]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)

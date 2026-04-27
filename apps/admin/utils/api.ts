@@ -112,6 +112,7 @@ import type {
   EffectiveProfile,
   Revocation,
   PoolStatsSnapshot,
+  ArtifactDestination,
 } from './types';
 
 const BASE_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL ?? 'http://localhost:8000/admin';
@@ -1595,5 +1596,48 @@ export const adminApi = {
     );
     if (!res.ok) throw new Error(`previewRevoke: ${res.status}`);
     return res.json();
+  },
+
+  // ── Plan ART — artifact destinations ──────────────────────────────
+  getWorkflowArtifactDestination: async (
+    name: string,
+  ): Promise<ArtifactDestination | null> => {
+    const res = await fetch(
+      `/api/v1/admin/workflows/${encodeURIComponent(name)}/artifact_destination`,
+      { credentials: 'include' },
+    );
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`getWorkflowArtifactDestination: ${res.status}`);
+    return res.json();
+  },
+
+  putWorkflowArtifactDestination: async (
+    name: string,
+    payload: ArtifactDestination,
+  ): Promise<ArtifactDestination> => {
+    const res = await fetch(
+      `/api/v1/admin/workflows/${encodeURIComponent(name)}/artifact_destination`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        credentials: 'include',
+      },
+    );
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`putWorkflowArtifactDestination: ${res.status} ${body}`);
+    }
+    return res.json();
+  },
+
+  deleteWorkflowArtifactDestination: async (name: string): Promise<void> => {
+    const res = await fetch(
+      `/api/v1/admin/workflows/${encodeURIComponent(name)}/artifact_destination`,
+      { method: 'DELETE', credentials: 'include' },
+    );
+    if (!res.ok && res.status !== 204) {
+      throw new Error(`deleteWorkflowArtifactDestination: ${res.status}`);
+    }
   },
 };

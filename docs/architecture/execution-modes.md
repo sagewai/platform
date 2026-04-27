@@ -355,7 +355,7 @@ Total: 1 customer LLM bill (Step 2), 0 customer credentials touched outside the 
 | Mode-aware runner refactor — run-level (shipped, PR #155) | All — first-classes the `execution_mode` field on workflow runs |
 | Mode-aware runner refactor — per-step (future) | All — moves `execution_mode` to the step level so a single run can mix modes |
 | Plan 1.5 (sandbox pooling) | Modes 1+ — pools the sandbox containers |
-| Plan ART (artifact destination) | Mode 3+ — formalises the artifact upload contract |
+| Plan ART (artifact destination, shipped) | Mode 3+ — formalises the artifact upload contract; ships GitHub / S3 / local uploaders + admin UI + audit pipeline. CLI-dispatch integration calls `sagewai.artifacts.runtime.apply_artifact_destination` once per-step Mode 3 dispatch lands. |
 | Sealed-iii.B (redaction) | Mode 1+ — scrubs RPC traffic and CLI stdout |
 | Sealed-iii.C (replay safety) | All — replay reproduces step + mode + identity at original-run time |
 | Sealed-iii.D (per-key ACL) | Mode 3+ — per-CLI tool secret allowlist |

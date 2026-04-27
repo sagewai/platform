@@ -1266,6 +1266,27 @@ export interface EffectiveProfile {
   cascade_origins: Record<string, string>;
 }
 
+// ── Plan ART — artifact destinations ──────────────────────────────────
+
+export type ArtifactDestinationType = 'github' | 's3' | 'local';
+
+export interface ArtifactDestination {
+  type: ArtifactDestinationType;
+  target: string;
+  env_keys: string[];
+  options: Record<string, string>;
+}
+
+export interface ArtifactUploadResult {
+  type: ArtifactDestinationType;
+  target: string;
+  bytes_uploaded: number;
+  duration_ms: number;
+  ref: string | null;
+  object_count: number | null;
+  warnings: string[];
+}
+
 // ── Sealed-iii.A — revocations ────────────────────────────────────────
 
 export interface Revocation {

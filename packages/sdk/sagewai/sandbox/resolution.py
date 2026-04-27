@@ -28,6 +28,11 @@ if TYPE_CHECKING:
     from sagewai.sealed.audit import AuditWriter
     from sagewai.sealed.resolution import CascadeLevel
 
+from sagewai.artifacts.models import ArtifactDestination
+from sagewai.artifacts.resolution import (
+    ArtifactDestinationLevels,
+    resolve_artifact_destination,
+)
 from sagewai.sandbox import image_manifest
 from sagewai.sandbox.models import (
     NetworkPolicy,
@@ -75,6 +80,8 @@ class SandboxRequirements:
     security_profile_ref: str | None = None
     effective_env_keys: tuple[str, ...] = ()
     effective_secret_keys: tuple[str, ...] = ()
+    # ── plan ART (artifact destination) — None unless cascade resolved ──
+    artifact_destination: ArtifactDestination | None = None
 
 
 class SandboxRequirementsError(RuntimeError):
@@ -95,6 +102,8 @@ async def resolve_requirements(
     audit_writer: AuditWriter | None = None,
     audit_context: dict | None = None,
     revocation_registry: Any | None = None,  # NEW in Sealed-iii.A
+    # NEW in Plan ART — optional; absent means no destination resolution
+    artifact_destination_levels: ArtifactDestinationLevels | None = None,
 ) -> SandboxRequirements | tuple[SandboxRequirements, dict[str, SandboxResolutionOrigin]]:
     """Resolve the cascade (explicit → agent → project → SDK default).
 
@@ -187,6 +196,15 @@ async def resolve_requirements(
         effective_env_keys_value = ()
         effective_secret_keys_value = ()
 
+    # Plan ART cascade resolution (optional, runs after Sealed cascade)
+    if artifact_destination_levels is not None:
+        artifact_destination_value = resolve_artifact_destination(
+            artifact_destination_levels,
+            effective_secret_keys_value,
+        )
+    else:
+        artifact_destination_value = None
+
     resolved = SandboxRequirements(
         sandbox_mode=mode,
         image=image,
@@ -195,6 +213,7 @@ async def resolve_requirements(
         security_profile_ref=security_profile_ref_value,
         effective_env_keys=effective_env_keys_value,
         effective_secret_keys=effective_secret_keys_value,
+        artifact_destination=artifact_destination_value,
     )
 
     if with_origins:
