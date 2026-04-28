@@ -19,9 +19,9 @@ function lives. It is selected per worker (each worker advertises its
 sandbox backend via fleet capability labels; the autopilot routes runs
 to capable workers).
 
-Today, `NullBackend` and `DockerBackend` are shipped. `KubernetesBackend`
-(planned) and `LambdaBackend` (planned) are designed against the same
-`SandboxBackend` Protocol and slot in additively — workflows that run on
+Today, `NullBackend`, `DockerBackend`, and `KubernetesBackend` are shipped.
+`LambdaBackend` (planned) is designed against the same
+`SandboxBackend` Protocol and slots in additively — workflows that run on
 Docker today route to a Kubernetes worker tomorrow without code changes.
 Firecracker and gVisor backends are tracked as future work.
 
@@ -31,7 +31,7 @@ Firecracker and gVisor backends are tracked as future work.
 |---|---|---|---|---|---|
 | `NullBackend` | Mode 0 only — no actual sandbox | 0 | n/a | n/a | shipped |
 | `DockerBackend` | local dev, single-VM ops, simple production | 0, 1, 2, 3, 3b | 2-8s | warm container pool (the sandbox warm-pool) | shipped |
-| `KubernetesBackend` (planned) | production at scale, multi-tenant clusters | 0, 1, 2, 3, 3b | 5-15s | Deployment with min-replicas | (planned) |
+| `KubernetesBackend` | production at scale, multi-tenant clusters | 0, 1, 2, 3, 3b | 5-15s | Deployment with min-replicas | shipped |
 | `LambdaBackend` (planned) | event-driven, scale-to-zero, short tools | 0, 1, 2 only | ~ms (warm), ~1-3s (cold); provisioned concurrency for hot paths | provisioned concurrency | (planned) |
 | `FirecrackerBackend` (future) | ultra-isolated tenants on shared hosts | 0, 1, 2, 3, 3b | &lt;1s | warm microVM pool | not planned |
 | `gVisorBackend` (future) | enhanced isolation over Docker | 0, 1, 2, 3, 3b | similar to Docker | similar to Docker | not planned |
@@ -78,7 +78,7 @@ Each backend translates the abstract sandbox primitives to its native API:
 | `NetworkPolicy.EGRESS_ONLY` | bridge network, no inbound | NetworkPolicy egress to allowed CIDRs | VPC with NAT gateway, no inbound |
 | `NetworkPolicy.FULL` | host network or default bridge | default networking | normal Lambda networking |
 | Pool reuse (Plan 1.5) | warm container pool, reset env between runs | warm pod pool via Deployment with min-replicas, reset env | provisioned concurrency (limited reuse model) |
-| `cleanup_run` (Sealed-iii.A) | `docker exec` to unset env vars | `kubectl exec` to unset env vars | n/a (every invoke is fresh; nothing to scrub) |
+| `cleanup_run` (Sealed-iii.A) | in-memory `set_env({})` (Plan 1.5: per-exec env model) | in-memory `set_env({})` (Plan 1.5: per-exec env model) | n/a (every invoke is fresh; nothing to scrub) |
 | Resource limits | `--memory --cpus` | `resources.limits.memory/cpu` | function memory configuration (CPU is a function of memory) |
 | Workdir mount | `--mount` bind to host path or named volume | `volumeMounts` + `volumes` (PVC, emptyDir, hostPath) | `/tmp` (ephemeral 10 GB max) |
 | Image digest pinning | `image@sha256:...` | same | container image URI with digest |

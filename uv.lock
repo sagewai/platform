@@ -1992,6 +1992,23 @@ wheels = [
 ]
 
 [[package]]
+name = "kubernetes-asyncio"
+version = "32.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "certifi" },
+    { name = "python-dateutil" },
+    { name = "pyyaml" },
+    { name = "six" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c5/5f/b90d537f7f7f05bd2038a3084f63148748b176d93e20abdef987d0025f16/kubernetes_asyncio-32.0.0.tar.gz", hash = "sha256:77f28a026aff8a40fd34a7ebad9f3813dcb7e549c7240275fc4bfbff0a6b49d0", size = 1025641, upload-time = "2024-12-17T20:19:25.727Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d6/d0/046ab1a8edad497d134432565fc7710fc3134eeb2f08ec147a08d1509f06/kubernetes_asyncio-32.0.0-py3-none-any.whl", hash = "sha256:f9baa8f73c182948e063bb9448d8e614f73df4aae52d28f173a3a1c2b77fbfb4", size = 1972671, upload-time = "2024-12-17T20:19:24.075Z" },
+]
+
+[[package]]
 name = "latex2mathml"
 version = "3.79.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4645,6 +4662,9 @@ intelligence-full = [
 keychain = [
     { name = "keyring" },
 ]
+kubernetes = [
+    { name = "kubernetes-asyncio" },
+]
 memory = [
     { name = "docling" },
     { name = "nebula3-python" },
@@ -4680,6 +4700,7 @@ test = [
     { name = "fastapi" },
     { name = "google-cloud-storage" },
     { name = "httpx" },
+    { name = "kubernetes-asyncio" },
     { name = "prometheus-client" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -4705,6 +4726,7 @@ requires-dist = [
     { name = "google-genai", specifier = "==1.72.0" },
     { name = "httpx", specifier = "==0.28.1" },
     { name = "keyring", marker = "extra == 'keychain'", specifier = "==25.7.0" },
+    { name = "kubernetes-asyncio", marker = "extra == 'kubernetes'", specifier = "==32.0.0" },
     { name = "lingua-language-detector", marker = "extra == 'intelligence'", specifier = "==2.1.1" },
     { name = "litellm", specifier = "==1.83.14" },
     { name = "mnemonic", specifier = "==0.21" },
@@ -4731,7 +4753,7 @@ requires-dist = [
     { name = "tree-sitter-languages", marker = "extra == 'memory'", specifier = "==1.10.2" },
     { name = "uvicorn", marker = "extra == 'fastapi'", specifier = "==0.44.0" },
 ]
-provides-extras = ["memory", "fastapi", "postgres", "prometheus", "storage", "intelligence", "multimodal", "intelligence-full", "all", "sandbox", "keychain"]
+provides-extras = ["memory", "fastapi", "postgres", "prometheus", "storage", "intelligence", "multimodal", "intelligence-full", "all", "sandbox", "kubernetes", "keychain"]
 
 [package.metadata.requires-dev]
 test = [
@@ -4741,6 +4763,7 @@ test = [
     { name = "fastapi", specifier = ">=0.100.0" },
     { name = "google-cloud-storage", specifier = ">=2.10.0" },
     { name = "httpx", specifier = ">=0.25.0" },
+    { name = "kubernetes-asyncio", specifier = "==32.0.0" },
     { name = "prometheus-client", specifier = ">=0.20.0" },
     { name = "pytest", specifier = ">=7.0.0" },
     { name = "pytest-asyncio", specifier = ">=0.23.0" },

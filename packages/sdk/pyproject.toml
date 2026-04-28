@@ -105,6 +105,9 @@ all = [
 sandbox = [
     "aiodocker==0.9.0",
 ]
+kubernetes = [
+    "kubernetes_asyncio==32.0.0",
+]
 keychain = [
     "keyring==25.7.0",
 ]
@@ -124,6 +127,7 @@ test = [
     "prometheus_client>=0.20.0",
     "boto3>=1.28.0",
     "google-cloud-storage>=2.10.0",
+    "kubernetes-asyncio==32.0.0",
 ]
 
 [project.scripts]

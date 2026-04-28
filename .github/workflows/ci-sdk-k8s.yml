@@ -1,0 +1,57 @@
+name: ci-sdk-k8s
+
+# Optional kind-based K8s integration tests. Gated on the `kubernetes-tests`
+# PR label or a nightly schedule — does not run on every PR.
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+  schedule:
+    - cron: "0 6 * * *"   # 06:00 UTC daily
+
+permissions:
+  contents: read
+
+jobs:
+  k8s-tests:
+    if: github.event_name == 'schedule' || contains(github.event.pull_request.labels.*.name, 'kubernetes-tests')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+
+      # NOTE: helm/kind-action SHA needs verification before merge — pin to a
+      # specific release SHA. Use:
+      #   gh api repos/helm/kind-action/git/refs/tags/v1.10.0 | jq -r .object.sha
+      - uses: helm/kind-action@0025e74a8c7512023d06dc019c617aa3cf561fde # v1.10.0
+        with:
+          version: v0.23.0
+          cluster_name: sagewai-test
+          kubectl_version: v1.30.0
+
+      - name: Install SDK with kubernetes extra
+        working-directory: packages/sdk
+        run: uv sync --extra kubernetes --group test
+
+      - name: Build sandbox-base image
+        working-directory: packages/sdk
+        run: |
+          docker build -t ghcr.io/sagewai/sandbox-base:dev \
+            -f docker/sandbox-base.Dockerfile .
+
+      - name: Load image into kind
+        run: kind load docker-image ghcr.io/sagewai/sandbox-base:dev --name sagewai-test
+
+      - name: Export kubeconfig
+        run: kind get kubeconfig --name sagewai-test > /tmp/kubeconfig
+
+      - name: Run K8s tests
+        working-directory: packages/sdk
+        env:
+          SAGEWAI_K8S_TEST_KUBECONFIG: /tmp/kubeconfig
+          SAGEWAI_K8S_TEST_NAMESPACE: default
+        run: |
+          uv run pytest tests/sandbox/test_kubernetes_backend.py \
+                        tests/sandbox/test_backend_conformance.py -v --tb=short

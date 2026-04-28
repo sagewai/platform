@@ -124,6 +124,37 @@ class AdminStateFile:
             state["sandbox_pool"] = dict(cfg)
         self._mutate(_apply)
 
+    def get_kubernetes_backend_config(self) -> dict[str, Any]:
+        """Return sandbox_backends.kubernetes sub-tree with safe defaults."""
+        state = self._read()
+        sb = state.get("sandbox_backends") or {}
+        k = sb.get("kubernetes") or {}
+        return {
+            "kubeconfig_path": k.get("kubeconfig_path"),
+            "namespace": k.get("namespace", "sagewai"),
+            "egress_allowlist": list(k.get("egress_allowlist", [])),
+            "use_in_cluster": bool(k.get("use_in_cluster", True)),
+        }
+
+    def set_kubernetes_backend_config(
+        self,
+        *,
+        kubeconfig_path: str | None,
+        namespace: str,
+        egress_allowlist: list[str],
+        use_in_cluster: bool,
+    ) -> None:
+        """Replace the sandbox_backends.kubernetes block."""
+        def _apply(state: dict[str, Any]) -> None:
+            sb = state.setdefault("sandbox_backends", {})
+            sb["kubernetes"] = {
+                "kubeconfig_path": kubeconfig_path,
+                "namespace": namespace,
+                "egress_allowlist": list(egress_allowlist),
+                "use_in_cluster": use_in_cluster,
+            }
+        self._mutate(_apply)
+
     def get_workflow_sealed_config(self, workflow_name: str) -> dict[str, Any] | None:
         """Return workflow-level sealed config from admin-state.workflows[name].
 

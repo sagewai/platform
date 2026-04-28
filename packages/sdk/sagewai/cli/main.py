@@ -541,6 +541,24 @@ def register_commands(
                 image_variants=parsed_variants,
             )
 
+            # Wire kubernetes-backend config from admin state (Plan SBX-K8S, T31)
+            sandbox_kubernetes_config: dict | None = None
+            if sandbox_backend == "kubernetes":
+                import os as _os
+                from pathlib import Path as _Path
+
+                from sagewai.admin.state_file import AdminStateFile
+
+                _state_path = _Path(
+                    _os.environ.get("SAGEWAI_ADMIN_STATE")
+                    or _os.environ.get("SAGEWAI_ADMIN_STATE_FILE")
+                    or (_Path.home() / ".sagewai" / "admin-state.json")
+                )
+                if _state_path.exists():
+                    sandbox_kubernetes_config = AdminStateFile(
+                        path=_state_path,
+                    ).get_kubernetes_backend_config()
+
             w = WorkflowWorker(
                 store=store,
                 workflow_registry={},
@@ -551,6 +569,7 @@ def register_commands(
                 labels=parsed_labels,
                 credentials=creds,
                 sandbox_config=sbox_config,
+                sandbox_kubernetes_config=sandbox_kubernetes_config,
                 project_environment=project_environment,
             )
             click.echo(

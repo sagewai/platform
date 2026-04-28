@@ -164,6 +164,36 @@ async def _check_run_revocation_and_abort(
     return True
 
 
+def _select_backend(
+    config: SandboxConfig,
+    *,
+    mode: SandboxMode,
+    override: Any | None,
+    kubernetes_config: dict | None,
+) -> SandboxBackend:
+    """Resolve the SandboxBackend instance from config."""
+    if mode is SandboxMode.NONE:
+        return NullBackend()
+    if override is not None:
+        return override
+    name = config.backend
+    if name == "docker":
+        from sagewai.sandbox.docker_backend import DockerBackend  # lazy
+        return DockerBackend()
+    if name == "kubernetes":
+        from sagewai.sandbox.kubernetes_backend import KubernetesBackend  # lazy
+        kc = kubernetes_config or {}
+        return KubernetesBackend(
+            kubeconfig_path=kc.get("kubeconfig_path") or config.kubernetes_kubeconfig_path,
+            use_in_cluster=kc.get("use_in_cluster", config.kubernetes_use_in_cluster),
+            namespace=kc.get("namespace") or config.kubernetes_namespace,
+            egress_allowlist=kc.get("egress_allowlist") or list(config.network_egress_allowlist),
+        )
+    if name == "null":
+        return NullBackend()
+    raise ValueError(f"unknown sandbox backend: {name!r}")
+
+
 def _build_pool(
     *,
     backend,
@@ -193,8 +223,18 @@ def _build_pool(
             sealed_secret_provider=sealed_secret_provider,
             audit_writer=audit_writer,
         )
+    if strategy == PoolStrategy.EXTERNAL_MIN_REPLICAS:
+        from sagewai.sandbox.external_pool import ExternalMinReplicasSandboxPool
+        return ExternalMinReplicasSandboxPool(
+            backend=backend,
+            config=config,
+            worker_id=worker_id,
+            scratch_root=scratch_root,
+            sealed_secret_provider=sealed_secret_provider,
+            audit_writer=audit_writer,
+        )
     raise NotImplementedError(
-        f"Pool strategy {strategy} not yet implemented (Threads 3 + 4)"
+        f"Pool strategy {strategy} not yet implemented (Thread 4 / Lambda)"
     )
 
 
@@ -261,6 +301,7 @@ class WorkflowWorker:
         sandbox_backend: SandboxBackend | None = None,
         sandbox_config: SandboxConfig | None = None,
         sandbox_scratch_root: Path | None = None,
+        sandbox_kubernetes_config: dict | None = None,
         project_environment: str | None = None,
     ) -> None:
         self._store = store
@@ -287,6 +328,7 @@ class WorkflowWorker:
         self._sandbox_scratch_root = (
             sandbox_scratch_root or Path.home() / ".sagewai" / "workers"
         )
+        self._kubernetes_config = sandbox_kubernetes_config
         self._project_environment = project_environment
         self._sandbox_pool: SandboxPool | None = None
 
@@ -304,14 +346,13 @@ class WorkflowWorker:
             project_environment=self._project_environment,
         )
 
-        # Select backend
-        if effective is SandboxMode.NONE:
-            backend: SandboxBackend = NullBackend()
-        elif self._sandbox_backend_override is not None:
-            backend = self._sandbox_backend_override
-        else:
-            from sagewai.sandbox.docker_backend import DockerBackend  # lazy
-            backend = DockerBackend()
+        # Select backend (delegated for testability)
+        backend = _select_backend(
+            self._sandbox_config,
+            mode=effective,
+            override=self._sandbox_backend_override,
+            kubernetes_config=self._kubernetes_config,
+        )
 
         # Health check + fallback
         health = await backend.health_check()

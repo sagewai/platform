@@ -97,3 +97,36 @@ def test_sandbox_image_variant_rejects_unknown():
 
     with pytest.raises(ValueError):
         SandboxImageVariant("bogus-variant")
+
+
+def test_sandbox_config_kubernetes_defaults():
+    cfg = SandboxConfig()
+    assert cfg.kubernetes_namespace == "sagewai"
+    assert cfg.kubernetes_kubeconfig_path is None
+    assert cfg.kubernetes_use_in_cluster is True
+    assert cfg.network_egress_allowlist == []
+    assert cfg.kubernetes_image_pull_policy is None
+    assert cfg.pool_max_distinct_keys == 32
+    assert cfg.pool_kubernetes_keep_deployments_on_stop is True
+    assert cfg.pool_kubernetes_pod_ready_timeout_s == 90
+
+
+def test_sandbox_config_kubernetes_explicit():
+    cfg = SandboxConfig(
+        kubernetes_namespace="acme",
+        kubernetes_kubeconfig_path="/etc/kubeconfig",
+        kubernetes_use_in_cluster=False,
+        network_egress_allowlist=["10.0.0.0/8"],
+        kubernetes_image_pull_policy="Always",
+        pool_max_distinct_keys=8,
+        pool_kubernetes_keep_deployments_on_stop=False,
+        pool_kubernetes_pod_ready_timeout_s=120,
+    )
+    assert cfg.kubernetes_namespace == "acme"
+    assert cfg.network_egress_allowlist == ["10.0.0.0/8"]
+    assert cfg.kubernetes_kubeconfig_path == "/etc/kubeconfig"
+    assert cfg.kubernetes_use_in_cluster is False
+    assert cfg.kubernetes_image_pull_policy == "Always"
+    assert cfg.pool_max_distinct_keys == 8
+    assert cfg.pool_kubernetes_keep_deployments_on_stop is False
+    assert cfg.pool_kubernetes_pod_ready_timeout_s == 120

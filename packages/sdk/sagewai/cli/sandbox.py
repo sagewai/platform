@@ -42,7 +42,105 @@ def sandbox_doctor() -> None:
         except Exception as exc:
             click.echo(f"docker: ok=False (import failed: {exc})")
 
+        # Kubernetes — Plan SBX-K8S
+        try:
+            import os
+            from pathlib import Path
+
+            from sagewai.admin.state_file import AdminStateFile
+
+            state_path = Path(
+                os.environ.get("SAGEWAI_ADMIN_STATE")
+                or os.environ.get("SAGEWAI_ADMIN_STATE_FILE")
+                or (Path.home() / ".sagewai" / "admin-state.json")
+            )
+            sf = AdminStateFile(path=state_path)
+            cfg = sf.get_kubernetes_backend_config()
+            from sagewai.sandbox.kubernetes_backend import KubernetesBackend
+
+            kb = KubernetesBackend(
+                kubeconfig_path=cfg["kubeconfig_path"],
+                use_in_cluster=cfg["use_in_cluster"],
+                namespace=cfg["namespace"],
+                egress_allowlist=cfg["egress_allowlist"],
+            )
+            kh = await kb.health_check()
+            click.echo(f"kubernetes: ok={kh.ok} {kh.detail}")
+            await kb.close()
+        except ImportError as exc:
+            click.echo(
+                f"kubernetes: ok=False (extra not installed: pip install sagewai[kubernetes]) — {exc}"
+            )
+        except Exception as exc:
+            click.echo(f"kubernetes: ok=False (probe failed: {exc})")
+
     asyncio.run(_run())
+
+
+@sandbox_cli.group("config")
+def sandbox_config_cli() -> None:
+    """Configure sandbox backends (kubernetes, etc.)."""
+
+
+@sandbox_config_cli.command("k8s")
+@click.option("--kubeconfig", "kubeconfig_path", default=None,
+              help="Explicit kubeconfig path (overrides default chain).")
+@click.option("--namespace", default="sagewai", show_default=True,
+              help="Kubernetes namespace for sandbox pods.")
+@click.option("--egress-allowlist", default="",
+              help="Comma-separated CIDRs for EGRESS_ALLOWLIST policy.")
+@click.option("--use-in-cluster/--no-use-in-cluster", default=True,
+              show_default=True,
+              help="Auto-detect in-cluster service account when /var/run/secrets exists.")
+@click.option("--verify", is_flag=True, default=False,
+              help="Run a health_check after writing config.")
+def sandbox_config_k8s(
+    kubeconfig_path: str | None,
+    namespace: str,
+    egress_allowlist: str,
+    use_in_cluster: bool,
+    verify: bool,
+) -> None:
+    """Write KubernetesBackend config to ~/.sagewai/admin-state.json."""
+    import os
+    from pathlib import Path
+
+    from sagewai.admin.state_file import AdminStateFile
+
+    state_path = Path(
+        os.environ.get("SAGEWAI_ADMIN_STATE")
+        or os.environ.get("SAGEWAI_ADMIN_STATE_FILE")
+        or (Path.home() / ".sagewai" / "admin-state.json")
+    )
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+
+    cidrs = [c.strip() for c in egress_allowlist.split(",") if c.strip()]
+    sf = AdminStateFile(path=state_path)
+    sf.set_kubernetes_backend_config(
+        kubeconfig_path=kubeconfig_path,
+        namespace=namespace,
+        egress_allowlist=cidrs,
+        use_in_cluster=use_in_cluster,
+    )
+    click.echo(f"wrote sandbox_backends.kubernetes to {state_path}")
+
+    if verify:
+        from sagewai.sandbox.kubernetes_backend import KubernetesBackend
+
+        async def _verify() -> None:
+            backend = KubernetesBackend(
+                kubeconfig_path=kubeconfig_path,
+                use_in_cluster=use_in_cluster,
+                namespace=namespace,
+                egress_allowlist=cidrs,
+            )
+            try:
+                health = await backend.health_check()
+                click.echo(f"health: ok={health.ok} {health.detail}")
+            finally:
+                await backend.close()
+
+        asyncio.run(_verify())
 
 
 @sandbox_cli.command("list")

@@ -80,6 +80,18 @@ class SandboxConfig(BaseModel):
     pool_reap_interval_s: int = Field(default=60, ge=1)
     pool_disable_warm_reuse: bool = False
 
+    # KubernetesBackend (Plan SBX-K8S)
+    kubernetes_namespace: str = "sagewai"
+    kubernetes_kubeconfig_path: str | None = None
+    kubernetes_use_in_cluster: bool = True
+    kubernetes_image_pull_policy: str | None = None  # None → IfNotPresent if digest else Always
+    network_egress_allowlist: list[str] = Field(default_factory=list)
+
+    # ExternalMinReplicasSandboxPool sizing
+    pool_max_distinct_keys: int = Field(default=32, ge=1)
+    pool_kubernetes_keep_deployments_on_stop: bool = True
+    pool_kubernetes_pod_ready_timeout_s: int = Field(default=90, ge=10)
+
 
 class ToolCall(BaseModel):
     """A single tool-call dispatched into a sandbox."""

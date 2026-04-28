@@ -52,7 +52,7 @@ A `SandboxHandle` is the interaction surface — `.exec(cmd, args)`, `.stop()`, 
 |---|---|---|---|---|---|
 | `NullBackend` | Mode 0 only — no actual sandbox | 0 | n/a | n/a | shipped |
 | `DockerBackend` | local dev, single-VM ops, simple production | 0, 1, 2, 3, 3b | 2-8s | warm container pool (Plan 1.5) | shipped |
-| `KubernetesBackend` (planned) | production at scale, multi-tenant clusters | 0, 1, 2, 3, 3b | 5-15s | Deployment with min-replicas | Plan SBX-K8S |
+| `KubernetesBackend` | production at scale, multi-tenant clusters | 0, 1, 2, 3, 3b | 5-15s | Deployment with min-replicas | shipped, [Plan SBX-K8S](../superpowers/specs/2026-04-27-sandbox-k8s-backend-design.md) |
 | `LambdaBackend` (planned) | event-driven, scale-to-zero, short tools | 0, 1, 2 only | ~ms (warm), ~1-3s (cold); provisioned concurrency for hot paths | provisioned concurrency | Plan SBX-LAMBDA |
 | `FirecrackerBackend` (future) | ultra-isolated tenants on shared hosts | 0, 1, 2, 3, 3b | <1s | warm microVM pool | not planned |
 | `gVisorBackend` (future) | enhanced isolation over Docker | 0, 1, 2, 3, 3b | similar to Docker | similar to Docker | not planned |
@@ -98,7 +98,7 @@ Each backend translates the abstract sandbox primitives to its native API:
 | `NetworkPolicy.EGRESS_ONLY` | bridge network, no inbound | NetworkPolicy egress to allowed CIDRs | VPC with NAT gateway, no inbound |
 | `NetworkPolicy.FULL` | host network or default bridge | default networking | normal Lambda networking |
 | Pool reuse (Plan 1.5) | warm container pool, reset env between runs | warm pod pool via Deployment with min-replicas, reset env | provisioned concurrency (limited reuse model) |
-| `cleanup_run` (Sealed-iii.A) | `docker exec` to unset env vars | `kubectl exec` to unset env vars | n/a (every invoke is fresh; nothing to scrub) |
+| `cleanup_run` (Sealed-iii.A) | in-memory `set_env({})` (Plan 1.5: per-exec env model) | in-memory `set_env({})` (Plan 1.5: per-exec env model) | n/a (every invoke is fresh; nothing to scrub) |
 | Resource limits | `--memory --cpus` | `resources.limits.memory/cpu` | function memory configuration (CPU is a function of memory) |
 | Workdir mount | `--mount` bind to host path or named volume | `volumeMounts` + `volumes` (PVC, emptyDir, hostPath) | `/tmp` (ephemeral 10 GB max) |
 | Image digest pinning | `image@sha256:...` | same | container image URI with digest |
@@ -262,7 +262,7 @@ For Identity backend selection, see the Sealed-ii decomposition spec when it exi
 | Plan | Depends on |
 |---|---|
 | Plan 1.5 sandbox pooling | DockerBackend (initial); abstract design over the Protocol so KubernetesBackend support is additive |
-| Plan SBX-K8S Kubernetes backend | This doc + execution-modes.md + the SandboxBackend Protocol |
+| [Plan SBX-K8S Kubernetes backend](../superpowers/specs/2026-04-27-sandbox-k8s-backend-design.md) — shipped | This doc + execution-modes.md + the SandboxBackend Protocol |
 | Plan SBX-LAMBDA Lambda backend | This doc + execution-modes.md (Mode 1/2 only) |
 | Sealed-ii (Vault, 1Password, AWS SM, SOPS, Bitwarden) | Sealed-i ProfileBackend Protocol (already shipped); decompose into per-backend sub-specs |
 | Sealed-iv (HITL + JIT) | Mode 3b — supported on Docker + K8s (not Lambda) |
