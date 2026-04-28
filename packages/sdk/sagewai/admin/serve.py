@@ -479,6 +479,18 @@ def create_admin_serve_app(
             await _revocation_store.initialize()
             revocation_routes.register(app, _revocation_store)
 
+        # Sealed-iii.C replay routes share the same Postgres store + the
+        # admin app's workflow_registry. Workflow registry is populated by
+        # the platform owner via app.state.workflow_registry; if absent,
+        # routes return 404 for replay attempts (preview/commit) but still
+        # register cleanly so the listing endpoint is callable.
+        from sagewai.admin import replay_routes  # noqa: E402
+
+        @app.on_event("startup")
+        async def _init_replay_routes() -> None:  # type: ignore[misc]
+            registry = getattr(app.state, "workflow_registry", {}) or {}
+            replay_routes.register(app, _revocation_store, registry)
+
     # Harness admin routes (LLM proxy: policies, keys, spend, audit, config).
     # Backend implementation lives in sagewai.harness; mounting its admin
     # router here makes apps/admin/app/harness/* pages functional. Uses

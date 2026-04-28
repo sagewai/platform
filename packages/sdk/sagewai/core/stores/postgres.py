@@ -95,10 +95,11 @@ class PostgresStore(WorkflowStore):
                 requires_network_policy,
                 security_profile_ref, effective_env_keys, effective_secret_keys,
                 revoked_at, revoke_reason,
-                artifact_destination
+                artifact_destination,
+                replay_of_run_id, replay_from_step, code_hash
             )
             VALUES ($1, $2, $3, $4, $5::jsonb, $6, NOW(), $7, $8, $9, $10, $11, $12, $13,
-                    $14, $15, $16, $17::jsonb)
+                    $14, $15, $16, $17::jsonb, $18, $19, $20)
             ON CONFLICT (id) DO UPDATE SET
                 status = EXCLUDED.status,
                 data = EXCLUDED.data,
@@ -114,7 +115,10 @@ class PostgresStore(WorkflowStore):
                 effective_secret_keys = EXCLUDED.effective_secret_keys,
                 revoked_at = EXCLUDED.revoked_at,
                 revoke_reason = EXCLUDED.revoke_reason,
-                artifact_destination = EXCLUDED.artifact_destination
+                artifact_destination = EXCLUDED.artifact_destination,
+                replay_of_run_id = EXCLUDED.replay_of_run_id,
+                replay_from_step = EXCLUDED.replay_from_step,
+                code_hash = EXCLUDED.code_hash
             """,
             key,
             run.workflow_name,
@@ -137,6 +141,9 @@ class PostgresStore(WorkflowStore):
                 if run.artifact_destination
                 else None
             ),
+            run.replay_of_run_id,
+            run.replay_from_step,
+            run.code_hash,
         )
 
     async def load_run(self, workflow_name: str, run_id: str) -> WorkflowRun | None:
@@ -173,6 +180,27 @@ class PostgresStore(WorkflowStore):
         rows = await self._pool.fetch(
             f"SELECT data FROM workflow_runs WHERE {where} ORDER BY created_at DESC",
             *params,
+        )
+        results = []
+        for row in rows:
+            data = row["data"]
+            if isinstance(data, str):
+                data = json.loads(data)
+            results.append(WorkflowRun.from_dict(data))
+        return results
+
+    async def list_replays_of(self, run_id: str) -> list[WorkflowRun]:
+        """Return all runs whose replay_of_run_id equals the given id.
+
+        Uses the idx_workflow_runs_replay_of partial index from migration 006.
+        """
+        rows = await self._pool.fetch(
+            """
+            SELECT data FROM workflow_runs
+            WHERE replay_of_run_id = $1
+            ORDER BY created_at ASC NULLS LAST
+            """,
+            run_id,
         )
         results = []
         for row in rows:

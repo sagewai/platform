@@ -87,3 +87,25 @@ class ProfileBackend(Protocol):
         Raises BackendUnsupportedOperationError if
         supports_master_key_rotation() returns False.
         """
+
+    async def supports_value_history(self) -> bool:
+        """True if get_secret_at_version() can return prior values.
+
+        Built-in returns False (rotation replaces in place). External
+        backends with retained version history (Vault, AWS SM, SOPS)
+        return True.
+        """
+        ...
+
+    async def get_secret_at_version(
+        self,
+        profile_id: str,
+        secret_key: str,
+        version_id: str,
+    ) -> str:
+        """Return the secret value at a backend-specific version.
+
+        Raises BackendUnsupportedOperationError when supports_value_history()
+        is False, when version_id is unknown, or when retention pruned it.
+        """
+        ...

@@ -577,6 +577,60 @@ export interface WorkflowRunDetail extends WorkflowRunSummary {
   data: Record<string, unknown>;
 }
 
+/* ─── Sealed-iii.C replay types ─── */
+
+export interface InjectionSnapshot {
+  effective_env_keys: string[];
+  effective_secret_keys: string[];
+  security_profile_ref: string | null;
+  secret_value_hashes: Record<string, string>;
+  secret_value_versions: Record<string, string | null>;
+  revocations_active_at_step: Record<string, number>;
+  captured_at: number;
+}
+
+export interface ReplayWarning {
+  type: 'key_now_revoked' | 'rotation_likely';
+  secret_key?: string;
+  revocation_id?: number;
+  backend_supports_history?: boolean;
+}
+
+export interface ReplayBlocker {
+  type:
+    | 'legacy_run_no_snapshot'
+    | 'workflow_version_mismatch'
+    | 'mode_not_replayable';
+  step_name?: string;
+  original_hash?: string;
+  current_hash?: string;
+  mode?: string;
+}
+
+export interface ReplayPreview {
+  original_run_id: string;
+  execution_mode: string;
+  security_profile_ref: string | null;
+  snapshot_keys_per_step: Record<
+    string,
+    { effective_env_keys: string[]; effective_secret_keys: string[] }
+  >;
+  warnings: ReplayWarning[];
+  blockers: ReplayBlocker[];
+}
+
+export interface ReplayInfo {
+  run_id: string;
+  replay_from_step: number;
+  started_at: number | null;
+  status: string;
+}
+
+export interface ReplayCommitResult {
+  new_run_id: string;
+  replay_of_run_id: string;
+}
+
 /* ─── Workflow Template types ─── */
 
 export interface WorkflowTemplate {

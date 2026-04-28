@@ -97,6 +97,10 @@ class SandboxPool(Protocol):
         effective_env_keys: list[str] | None = None,
         effective_secret_keys: list[str] | None = None,
         workflow_name: str | None = None,
+        # Sealed-iii.C: when present, the pool injects env from this
+        # snapshot via SealedSecretProvider.replay_env_for instead of
+        # re-resolving the cascade via env_for.
+        replay_snapshot: object | None = None,
     ) -> AbstractAsyncContextManager: ...
 
     async def stats_snapshot(self) -> PoolStatsSnapshot: ...

@@ -123,6 +123,7 @@ class LocalCacheSandboxPool:
         effective_env_keys: list[str] | None = None,
         effective_secret_keys: list[str] | None = None,
         workflow_name: str | None = None,
+        replay_snapshot: object | None = None,
     ) -> AsyncIterator[SandboxHandle]:
         key = PoolKey(
             image_digest=image_digest,
@@ -138,6 +139,7 @@ class LocalCacheSandboxPool:
             effective_env_keys=effective_env_keys,
             effective_secret_keys=effective_secret_keys,
             workflow_name=workflow_name,
+            replay_snapshot=replay_snapshot,
         )
         workdir = self._scratch_root / self._worker_id / "runs" / run_id
         workdir.mkdir(parents=True, exist_ok=True)
@@ -326,6 +328,19 @@ class LocalCacheSandboxPool:
     async def _build_env(self, **kwargs) -> dict[str, str]:
         if self._secret_provider is None:
             return {}
+
+        # Sealed-iii.C: replay path bypasses cascade re-resolution.
+        # Errors (e.g. RotationDriftError) deliberately propagate so the
+        # worker fails the replay run with a clear cause.
+        replay_snapshot = kwargs.get("replay_snapshot")
+        if replay_snapshot is not None:
+            return await self._secret_provider.replay_env_for(
+                project_id=kwargs["project_id"],
+                run_id=kwargs["run_id"],
+                agent_id=None,
+                snapshot=replay_snapshot,
+            )
+
         try:
             return await self._secret_provider.env_for(
                 project_id=kwargs["project_id"],

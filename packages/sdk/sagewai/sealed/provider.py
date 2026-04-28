@@ -146,3 +146,134 @@ class SealedSecretProvider:
             audit_emitted=emitted,
             had_active_revocations=had_active,
         )
+
+    async def replay_env_for(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        agent_id: str | None,
+        snapshot: Any,  # InjectionSnapshot — Any avoids circular import
+    ) -> dict[str, str]:
+        """Inject env from a snapshot, bypassing cascade re-resolution.
+
+        For each secret in the snapshot, validate the current backend
+        value's hash against the snapshot. On match, use the current
+        value. On mismatch, use ``get_secret_at_version`` if the backend
+        supports value history; else raise ``RotationDriftError``.
+
+        Emits ``replay.snapshot_loaded`` once at the start; per-secret
+        ``replay.rotation_detected``, ``replay.failed_rotation_drift``,
+        and ``replay.used_revoked_snapshot`` events as warranted.
+        """
+        from sagewai.sealed.refs import ProfileRef, resolve_backend
+        from sagewai.sealed.replay import (
+            RotationDriftError,
+            hash_secret_value,
+        )
+
+        await self._audit.emit(
+            event_type="replay.snapshot_loaded",
+            run_id=run_id,
+            project_id=project_id,
+            profile_id=snapshot.security_profile_ref,
+            details={
+                "effective_env_keys": list(snapshot.effective_env_keys),
+                "effective_secret_keys": list(snapshot.effective_secret_keys),
+                "snapshot_captured_at": snapshot.captured_at,
+            },
+        )
+
+        if not snapshot.security_profile_ref:
+            return {}
+
+        ref = ProfileRef.parse(snapshot.security_profile_ref)
+        backend = resolve_backend(ref)
+        profile = await backend.get_profile(ref.path)
+
+        env: dict[str, str] = {}
+        secret_keys = set(snapshot.effective_secret_keys)
+        for k in snapshot.effective_env_keys:
+            if k not in secret_keys:
+                # Plain env key — read from current profile.env.
+                env[k] = profile.env.get(k, "")
+                continue
+
+            # Secret key — verify hash, handle rotation, check revocation.
+            current_value = profile.secrets.get(k, "")
+            expected_hash = snapshot.secret_value_hashes.get(k)
+
+            if expected_hash and hash_secret_value(current_value) != expected_hash:
+                # Rotation detected — try to recover original value via
+                # the backend's value history.
+                version_id = snapshot.secret_value_versions.get(k)
+                supports_history = await backend.supports_value_history()
+                if version_id and supports_history:
+                    try:
+                        current_value = await backend.get_secret_at_version(
+                            ref.path, k, version_id,
+                        )
+                        await self._audit.emit(
+                            event_type="replay.rotation_detected",
+                            run_id=run_id,
+                            project_id=project_id,
+                            profile_id=snapshot.security_profile_ref,
+                            secret_key=k,
+                            details={
+                                "resolved_via": "version_history",
+                                "version_id": version_id,
+                            },
+                        )
+                    except Exception as exc:
+                        await self._audit.emit(
+                            event_type="replay.failed_rotation_drift",
+                            run_id=run_id,
+                            project_id=project_id,
+                            profile_id=snapshot.security_profile_ref,
+                            secret_key=k,
+                            details={"error": str(exc)},
+                        )
+                        raise RotationDriftError(ref.path, k) from exc
+                else:
+                    await self._audit.emit(
+                        event_type="replay.failed_rotation_drift",
+                        run_id=run_id,
+                        project_id=project_id,
+                        profile_id=snapshot.security_profile_ref,
+                        secret_key=k,
+                        details={
+                            "version_id": version_id,
+                            "supports_history": supports_history,
+                        },
+                    )
+                    raise RotationDriftError(ref.path, k)
+
+            # Revocation snapshot check — if the registry now reports an
+            # active revocation that wasn't in the snapshot, warn but
+            # proceed using the snapshot value.
+            if self._revocation_registry is not None:
+                try:
+                    actives = await self._revocation_registry.find_active_for_keys(
+                        profile_id=ref.path, secret_keys=[k],
+                    )
+                except Exception:
+                    actives = {}
+                current_rev = actives.get(k)
+                original_rev_id = snapshot.revocations_active_at_step.get(k)
+                if current_rev and current_rev.id != original_rev_id:
+                    await self._audit.emit(
+                        event_type="replay.used_revoked_snapshot",
+                        run_id=run_id,
+                        project_id=project_id,
+                        profile_id=snapshot.security_profile_ref,
+                        secret_key=k,
+                        details={
+                            "current_revocation_id": current_rev.id,
+                            "current_revocation_reason": current_rev.reason,
+                            "original_revocation_id": original_rev_id,
+                        },
+                    )
+
+            env[k] = current_value
+
+        return env

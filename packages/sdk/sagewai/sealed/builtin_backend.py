@@ -20,6 +20,7 @@ from typing import Any
 
 from sagewai.sealed.audit import AuditWriter
 from sagewai.sealed.backend import (
+    BackendUnsupportedOperationError,
     ProfileNotFoundError,
 )
 from sagewai.sealed.crypto import Crypto
@@ -177,6 +178,21 @@ class BuiltinAdminStoreBackend:
                 event_type="profile.deleted",
                 profile_id=profile_id,
             )
+
+    async def supports_value_history(self) -> bool:
+        return False
+
+    async def get_secret_at_version(
+        self,
+        profile_id: str,
+        secret_key: str,
+        version_id: str,
+    ) -> str:
+        raise BackendUnsupportedOperationError(
+            "Builtin backend has no value history; rotation replaces "
+            "the value in place. Use Vault/SOPS/AWS-SM via Sealed-ii "
+            "for replay-after-rotation support."
+        )
 
     async def supports_master_key_rotation(self) -> bool:
         return True

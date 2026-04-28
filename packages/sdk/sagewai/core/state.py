@@ -109,6 +109,9 @@ class StepRecord:
     attempts: int = 0
     started_at: float | None = None
     completed_at: float | None = None
+    # Sealed-iii.C: per-step injection state for replay safety.
+    # Captured at step completion; None for pre-iii.C runs and Mode 0 steps.
+    injection_snapshot: Any = None  # InjectionSnapshot | None — Any avoids import cycle
 
 
 @dataclass
@@ -154,6 +157,11 @@ class WorkflowRun:
     # None = no upload (also covers all Mode 0/1/2 runs).
     artifact_destination: ArtifactDestination | None = None
 
+    # ── sealed-iii.C replay (set when this run is a replay) ──
+    replay_of_run_id: str | None = None
+    replay_from_step: int | None = None
+    code_hash: str | None = None
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a dictionary."""
         return {
@@ -183,6 +191,9 @@ class WorkflowRun:
                 if self.artifact_destination
                 else None
             ),
+            "replay_of_run_id": self.replay_of_run_id,
+            "replay_from_step": self.replay_from_step,
+            "code_hash": self.code_hash,
             "steps": {
                 name: {
                     "status": rec.status.value,
@@ -191,6 +202,11 @@ class WorkflowRun:
                     "attempts": rec.attempts,
                     "started_at": rec.started_at,
                     "completed_at": rec.completed_at,
+                    "injection_snapshot": (
+                        rec.injection_snapshot.model_dump()
+                        if rec.injection_snapshot is not None
+                        else None
+                    ),
                 }
                 for name, rec in self.steps.items()
             },
@@ -199,8 +215,12 @@ class WorkflowRun:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> WorkflowRun:
         """Deserialize from a dictionary (inverse of to_dict)."""
+        from sagewai.sealed.replay import InjectionSnapshot
+
         steps = {}
         for name, s in data.get("steps", {}).items():
+            snap_dict = s.get("injection_snapshot")
+            snap = InjectionSnapshot.model_validate(snap_dict) if snap_dict else None
             steps[name] = StepRecord(
                 step_name=name,
                 status=StepStatus(s["status"]),
@@ -209,6 +229,7 @@ class WorkflowRun:
                 attempts=s.get("attempts", 0),
                 started_at=s.get("started_at"),
                 completed_at=s.get("completed_at"),
+                injection_snapshot=snap,
             )
         variant_val = data.get("requires_variant")
         return cls(
@@ -252,6 +273,9 @@ class WorkflowRun:
                 if data.get("artifact_destination")
                 else None
             ),
+            replay_of_run_id=data.get("replay_of_run_id"),
+            replay_from_step=data.get("replay_from_step"),
+            code_hash=data.get("code_hash"),
         )
 
 
@@ -358,6 +382,45 @@ def _build_revocation_registry(store: Any) -> Any | None:
         return None
 
 
+async def _snapshot_secret_provenance(
+    profile_id: str | None,
+    secret_keys: list[str],
+) -> tuple[dict[str, str], dict[str, str | None], dict[str, int]]:
+    """Return (hashes, version_ids, active_revocation_ids) for the given keys.
+
+    Best-effort: every failure path returns the still-usable empty/null
+    triple. Replay-time decisions handle the implications.
+    Module-level + async so tests can monkeypatch with an async replacement.
+    """
+    hashes: dict[str, str] = {}
+    versions: dict[str, str | None] = {}
+    revs: dict[str, int] = {}
+    if not profile_id or not secret_keys:
+        return hashes, versions, revs
+
+    try:
+        from sagewai.sealed.refs import ProfileRef, resolve_backend
+        from sagewai.sealed.replay import hash_secret_value
+
+        ref = ProfileRef.parse(profile_id)
+        backend = resolve_backend(ref)
+        profile = await backend.get_profile(ref.path)
+        for k in secret_keys:
+            v = profile.secrets.get(k)
+            if v is not None:
+                hashes[k] = hash_secret_value(v)
+            # Builtin: no version history (Task 6); future per-backend
+            # overrides can populate the version_id here.
+            versions[k] = None
+    except Exception:
+        logger.debug(
+            "snapshot provenance lookup skipped for profile=%s",
+            profile_id, exc_info=True,
+        )
+
+    return hashes, versions, revs
+
+
 class DurableWorkflow:
     """Durable workflow with step-level checkpointing and recovery.
 
@@ -430,11 +493,13 @@ class DurableWorkflow:
         # Try to resume from checkpoint
         wf_run = await self._store.load_run(self.name, run_id)
         if wf_run is None:
+            from sagewai.sealed.replay import compute_code_hash
             wf_run = WorkflowRun(
                 workflow_name=self.name,
                 run_id=run_id,
                 input_data=kwargs,
                 started_at=time.time(),
+                code_hash=compute_code_hash(self),
             )
 
         wf_run.status = StepStatus.RUNNING
@@ -460,9 +525,17 @@ class DurableWorkflow:
                     current_input = {list(kwargs.keys())[0]: last_output} if kwargs else {}
                 continue
 
-            # Mark RUNNING and save BEFORE execution
+            # Mark RUNNING and save BEFORE execution.
+            # Sealed-iii.C: preserve any seeded injection_snapshot from
+            # replay_from() so the sandbox-acquire path can use it.
+            seeded_snapshot = (
+                existing.injection_snapshot
+                if existing is not None
+                else None
+            )
             record = StepRecord(step_name=step_def.name, started_at=time.time())
             record.status = StepStatus.RUNNING
+            record.injection_snapshot = seeded_snapshot
             wf_run.steps[step_def.name] = record
             await self._store.save_run(wf_run)
 
@@ -505,6 +578,27 @@ class DurableWorkflow:
             wf_run.completed_at - (wf_run.started_at or wf_run.completed_at),
         )
 
+        # Sealed-iii.C: replay.completed audit on successful replay finish.
+        if wf_run.replay_of_run_id is not None:
+            try:
+                from sagewai.sealed.audit import AuditWriter
+                await AuditWriter(self._store).emit(
+                    event_type="replay.completed",
+                    run_id=wf_run.run_id,
+                    project_id=wf_run.project_id,
+                    profile_id=wf_run.security_profile_ref,
+                    details={
+                        "original_run_id": wf_run.replay_of_run_id,
+                        "from_step": wf_run.replay_from_step,
+                        "duration_seconds": (
+                            wf_run.completed_at
+                            - (wf_run.started_at or wf_run.completed_at)
+                        ),
+                    },
+                )
+            except Exception:
+                logger.debug("replay.completed audit emit skipped", exc_info=True)
+
         return last_output
 
     async def _execute_step(
@@ -530,6 +624,28 @@ class DurableWorkflow:
                 record.status = StepStatus.COMPLETED
                 record.result = result
                 record.completed_at = time.time()
+
+                # Sealed-iii.C: capture per-step injection snapshot.
+                # Skipped for Mode 0 steps (no Sealed scope on the run).
+                run = self._current_run
+                if run is not None and (
+                    run.effective_secret_keys or run.effective_env_keys
+                ):
+                    from sagewai.sealed.replay import InjectionSnapshot
+                    hashes, versions, revs = await _snapshot_secret_provenance(
+                        run.security_profile_ref,
+                        list(run.effective_secret_keys),
+                    )
+                    record.injection_snapshot = InjectionSnapshot(
+                        effective_env_keys=list(run.effective_env_keys),
+                        effective_secret_keys=list(run.effective_secret_keys),
+                        security_profile_ref=run.security_profile_ref,
+                        secret_value_hashes=hashes,
+                        secret_value_versions=versions,
+                        revocations_active_at_step=revs,
+                        captured_at=record.completed_at,
+                    )
+
                 logger.info(
                     "Step '%s' completed (attempt %d/%d)",
                     step_def.name,
@@ -587,6 +703,173 @@ class DurableWorkflow:
     def step_names(self) -> list[str]:
         """List registered step names in order."""
         return [s.name for s in self._steps]
+
+    async def _original_run_used_callbacks(self, original: WorkflowRun) -> bool:
+        """Check whether the original run had Mode-3b callback requests.
+
+        Test seam: production reads ``sealed_audit_events`` for
+        ``credential.requested`` rows tagged with run_id; tests inject
+        the ``signals['__test_callbacks_present__']`` sentinel.
+        """
+        if original.signals.get("__test_callbacks_present__"):
+            return True
+        try:
+            if hasattr(self._store, "_pool"):
+                row = await self._store._pool.fetchrow(
+                    "SELECT 1 FROM sealed_audit_events "
+                    "WHERE run_id = $1 AND event_type = 'credential.requested' "
+                    "LIMIT 1",
+                    original.run_id,
+                )
+                return row is not None
+        except Exception:
+            return False
+        return False
+
+    async def replay_from(
+        self,
+        original_run_id: str,
+        *,
+        from_step: int = 0,
+        actor_id: str | None = None,
+    ) -> str:
+        """Create a replay run starting from step index ``from_step``.
+
+        Steps 0..from_step-1 are copied from the original as COMPLETED.
+        Steps from_step..end are PENDING with seeded injection snapshots.
+
+        Raises:
+            ValueError: from_step out of range, or original_run_id not found.
+            LegacyRunNoSnapshotError: original predates Sealed-iii.C.
+            WorkflowVersionMismatchError: workflow code shape changed.
+            ModeNotReplayableError: mode can't be replayed (e.g., 3b w/ callback).
+        """
+        from sagewai.sealed.replay import (
+            LegacyRunNoSnapshotError,
+            ModeNotReplayableError,
+            WorkflowVersionMismatchError,
+            compute_code_hash,
+        )
+
+        original = await self._store.load_run(self.name, original_run_id)
+        if original is None:
+            raise ValueError(
+                f"Run {original_run_id!r} not found for workflow {self.name!r}"
+            )
+        if not (0 <= from_step < len(self._steps)):
+            raise ValueError(
+                f"from_step={from_step} out of range "
+                f"[0, {len(self._steps)}) for workflow {self.name!r}"
+            )
+
+        # Code-shape guard
+        current_hash = compute_code_hash(self)
+        if original.code_hash and original.code_hash != current_hash:
+            raise WorkflowVersionMismatchError(
+                run_id=original_run_id,
+                original_hash=original.code_hash,
+                current_hash=current_hash,
+            )
+
+        # Mode-3b callback guard
+        if original.execution_mode is ExecutionMode.FULL_JIT:
+            if await self._original_run_used_callbacks(original):
+                raise ModeNotReplayableError(
+                    run_id=original_run_id,
+                    mode="full_jit",
+                    reason=(
+                        "original run had JIT credential callbacks; "
+                        "Sealed-iv will add cached-callback replay"
+                    ),
+                )
+
+        new_steps: dict[str, StepRecord] = {}
+        for idx, step_def in enumerate(self._steps):
+            orig_rec = original.steps.get(step_def.name)
+            if idx < from_step:
+                # Pre-replay step: copy as completed.
+                # Legacy guard: a Sealed-using mode without a snapshot is
+                # unreplayable — re-enqueue is the only safe path.
+                if (
+                    original.execution_mode is not ExecutionMode.BARE
+                    and (orig_rec is None or orig_rec.injection_snapshot is None)
+                ):
+                    raise LegacyRunNoSnapshotError(
+                        run_id=original_run_id,
+                        step_name=step_def.name,
+                    )
+                new_steps[step_def.name] = StepRecord(
+                    step_name=step_def.name,
+                    status=StepStatus.COMPLETED,
+                    result=orig_rec.result if orig_rec else None,
+                    error=None,
+                    attempts=orig_rec.attempts if orig_rec else 0,
+                    started_at=orig_rec.started_at if orig_rec else None,
+                    completed_at=orig_rec.completed_at if orig_rec else None,
+                    injection_snapshot=(
+                        orig_rec.injection_snapshot if orig_rec else None
+                    ),
+                )
+            else:
+                # Pending; carry the snapshot forward for replay-injection
+                new_steps[step_def.name] = StepRecord(
+                    step_name=step_def.name,
+                    status=StepStatus.PENDING,
+                    injection_snapshot=(
+                        orig_rec.injection_snapshot if orig_rec else None
+                    ),
+                )
+
+        new_run_id = hashlib.sha256(
+            f"replay:{original_run_id}:{from_step}:{time.time_ns()}".encode()
+        ).hexdigest()[:16]
+
+        new_run = WorkflowRun(
+            workflow_name=self.name,
+            run_id=new_run_id,
+            steps=new_steps,
+            status=StepStatus.PENDING,
+            input_data=original.input_data,
+            started_at=time.time(),
+            project_id=original.project_id,
+            execution_mode=original.execution_mode,
+            requires_sandbox_mode=original.requires_sandbox_mode,
+            requires_image=original.requires_image,
+            requires_variant=original.requires_variant,
+            requires_network_policy=original.requires_network_policy,
+            security_profile_ref=original.security_profile_ref,
+            effective_env_keys=list(original.effective_env_keys),
+            effective_secret_keys=list(original.effective_secret_keys),
+            replay_of_run_id=original_run_id,
+            replay_from_step=from_step,
+            code_hash=current_hash,
+        )
+        await self._store.save_run(new_run)
+        logger.info(
+            "Workflow %s replay run %s of %s (from_step=%d, actor=%s)",
+            self.name, new_run_id, original_run_id, from_step, actor_id,
+        )
+
+        # Sealed-iii.C: replay.started audit (best-effort).
+        try:
+            from sagewai.sealed.audit import AuditWriter
+            await AuditWriter(self._store).emit(
+                event_type="replay.started",
+                run_id=new_run_id,
+                project_id=original.project_id,
+                profile_id=original.security_profile_ref,
+                details={
+                    "original_run_id": original_run_id,
+                    "from_step": from_step,
+                    "actor_id": actor_id,
+                    "mode": original.execution_mode.value,
+                    "code_hash": current_hash,
+                },
+            )
+        except Exception:
+            logger.debug("replay.started audit emit skipped", exc_info=True)
+
+        return new_run_id
 
     async def enqueue(
         self,
@@ -768,6 +1051,9 @@ class DurableWorkflow:
                 except Exception as exc:
                     logger.debug("artifact.mode_mismatch audit emit failed: %s", exc)
 
+        from sagewai.sealed.replay import compute_code_hash
+        code_hash_value = compute_code_hash(self)
+
         run_id = _generate_run_id(self.name, input_data or {})
         run = WorkflowRun(
             workflow_name=self.name,
@@ -783,6 +1069,7 @@ class DurableWorkflow:
             effective_env_keys=list(requirements.effective_env_keys),
             effective_secret_keys=list(requirements.effective_secret_keys),
             artifact_destination=requirements.artifact_destination,
+            code_hash=code_hash_value,
         )
         await self._store.save_run(run)
         logger.info(

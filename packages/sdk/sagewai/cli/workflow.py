@@ -150,3 +150,68 @@ def workflow_history(limit: int, as_json: bool) -> None:
         for r in data
     ]
     _cli._echo_table(rows, ["workflow", "run_id", "status", "created"])
+
+
+@workflow.command("replay")
+@click.argument("run_id")
+@click.option(
+    "--from-step", "from_step", type=int, default=0,
+    help="Step index (0-based) to replay from.",
+)
+@click.option(
+    "--yes", is_flag=True, help="Skip confirmation prompt.",
+)
+def workflow_replay(run_id: str, from_step: int, yes: bool) -> None:
+    """Replay a workflow run from a given step.
+
+    Steps before --from-step are reused from the original run.
+    Steps from --from-step onward re-execute against the original
+    Sealed-iii.C injection snapshot.
+    """
+    base = f"/api/v1/admin/workflows/runs/{run_id}/replay"
+
+    if not yes:
+        preview = _cli._api_post(f"{base}/preview", {"from_step": from_step})
+        blockers = preview.get("blockers") or []
+        warnings = preview.get("warnings") or []
+        if blockers:
+            click.echo("Cannot replay — blockers:")
+            for b in blockers:
+                click.echo(f"  • {b.get('type', 'unknown')}")
+            raise click.Abort()
+        if warnings:
+            click.echo("Warnings:")
+            for w in warnings:
+                key = w.get("secret_key")
+                tag = f": {key}" if key else ""
+                click.echo(f"  ⚠ {w.get('type', 'unknown')}{tag}")
+            click.confirm("Proceed?", abort=True)
+
+    body = _cli._api_post(
+        base, {"from_step": from_step, "confirm_warnings": True},
+    )
+    click.echo(f"✓ Created replay run {body['new_run_id']}")
+
+
+@workflow.command("replay-status")
+@click.argument("run_id")
+@click.option("--json", "as_json", is_flag=True, help="Output raw JSON.")
+def workflow_replay_status(run_id: str, as_json: bool) -> None:
+    """List replays of a run."""
+    body = _cli._api_get(f"/api/v1/admin/workflows/runs/{run_id}/replays")
+    if as_json:
+        _cli._echo_json(body)
+        return
+    rows = [
+        {
+            "run_id": r.get("run_id", "")[:16],
+            "from_step": r.get("replay_from_step"),
+            "status": r.get("status", ""),
+            "started_at": r.get("started_at", ""),
+        }
+        for r in body.get("replays", [])
+    ]
+    if not rows:
+        click.echo("No replays of this run.")
+        return
+    _cli._echo_table(rows, ["run_id", "from_step", "status", "started_at"])

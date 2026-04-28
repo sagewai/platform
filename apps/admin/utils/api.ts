@@ -113,6 +113,9 @@ import type {
   Revocation,
   PoolStatsSnapshot,
   ArtifactDestination,
+  ReplayPreview,
+  ReplayInfo,
+  ReplayCommitResult,
 } from './types';
 
 const BASE_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL ?? 'http://localhost:8000/admin';
@@ -1639,5 +1642,54 @@ export const adminApi = {
     if (!res.ok && res.status !== 204) {
       throw new Error(`deleteWorkflowArtifactDestination: ${res.status}`);
     }
+  },
+
+  /* ─── Sealed-iii.C replay ─── */
+
+  async previewReplay(runId: string, fromStep: number): Promise<ReplayPreview> {
+    const res = await fetch(
+      `/api/v1/admin/workflows/runs/${encodeURIComponent(runId)}/replay/preview`,
+      {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ from_step: fromStep }),
+      },
+    );
+    if (!res.ok) throw new Error(`previewReplay: ${res.status}`);
+    return res.json();
+  },
+
+  async commitReplay(
+    runId: string,
+    fromStep: number,
+    confirmWarnings = false,
+  ): Promise<ReplayCommitResult> {
+    const res = await fetch(
+      `/api/v1/admin/workflows/runs/${encodeURIComponent(runId)}/replay`,
+      {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          from_step: fromStep,
+          confirm_warnings: confirmWarnings,
+        }),
+      },
+    );
+    if (!res.ok) {
+      const detail = await res.text();
+      throw new Error(`commitReplay: ${res.status} ${detail}`);
+    }
+    return res.json();
+  },
+
+  async listReplaysOf(runId: string): Promise<{ replays: ReplayInfo[] }> {
+    const res = await fetch(
+      `/api/v1/admin/workflows/runs/${encodeURIComponent(runId)}/replays`,
+      { credentials: 'include' },
+    );
+    if (!res.ok) throw new Error(`listReplaysOf: ${res.status}`);
+    return res.json();
   },
 };
