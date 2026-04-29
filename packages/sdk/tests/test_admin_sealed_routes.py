@@ -8,6 +8,7 @@
 # This file is also available under a commercial license.
 # See COMMERCIAL_LICENSE.md for details.
 """Tests for /api/v1/admin/sealed/* routes."""
+
 import pytest
 from cryptography.fernet import Fernet
 from fastapi import FastAPI
@@ -29,6 +30,7 @@ def admin_client(tmp_path, monkeypatch):
     monkeypatch.setitem(_BACKENDS, "builtin", backend)
 
     from sagewai.admin import sealed_routes
+
     app = FastAPI()
     sealed_routes.register(app, store=None)
     return TestClient(app)
@@ -107,6 +109,7 @@ def test_delete_removes(admin_client):
 @pytest.fixture(autouse=True)
 def _reset_reveal_history():
     from sagewai.admin import sealed_routes
+
     sealed_routes._REVEAL_HISTORY.clear()
     yield
 
@@ -166,3 +169,80 @@ def test_preview_endpoint_resolves(admin_client, monkeypatch, tmp_path):
     body = res.json()
     assert body["env"]["E"] == "v"
     assert body["env"]["X"] == "1"
+
+
+def test_create_profile_with_acl_roundtrips(admin_client):
+    """Verify POST /profiles with acl returns acl in response (Sealed-iii.D)."""
+    acl = {"claude-code": ["K1"], "codex": ["K2"]}
+    res = admin_client.post(
+        "/api/v1/admin/sealed/profiles",
+        json={"id": "test-acl", "name": "Test ACL", "acl": acl},
+    )
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert body["acl"] == acl, f"Expected acl in response, got {body.get('acl')}"
+
+
+def test_get_profile_metadata_returns_acl(admin_client):
+    """Verify GET /profiles/{id} returns acl field (Sealed-iii.D)."""
+    acl = {"shell": ["S1", "S2"], "audit": ["A1"]}
+    admin_client.post(
+        "/api/v1/admin/sealed/profiles",
+        json={"id": "test-acl-get", "name": "Test ACL Get", "acl": acl},
+    )
+    res = admin_client.get("/api/v1/admin/sealed/profiles/test-acl-get")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["acl"] == acl, f"Expected acl in metadata, got {body.get('acl')}"
+
+
+def test_get_profile_full_returns_acl(admin_client):
+    """Verify GET /profiles/{id}/full includes acl (Sealed-iii.D)."""
+    acl = {"test": ["T1"]}
+    admin_client.post(
+        "/api/v1/admin/sealed/profiles",
+        json={"id": "test-acl-full", "name": "Test ACL Full", "acl": acl},
+    )
+    res = admin_client.get("/api/v1/admin/sealed/profiles/test-acl-full/full")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["acl"] == acl, f"Expected acl in full profile, got {body.get('acl')}"
+
+
+def test_update_profile_with_acl_roundtrips(admin_client):
+    """Verify PUT /profiles/{id} with acl returns updated acl (Sealed-iii.D)."""
+    # Create with initial ACL
+    admin_client.post(
+        "/api/v1/admin/sealed/profiles",
+        json={"id": "test-acl-update", "name": "Test ACL Update", "acl": {"v1": ["A"]}},
+    )
+    # Update with new ACL
+    new_acl = {"v2": ["B", "C"], "admin": ["ADM"]}
+    res = admin_client.put(
+        "/api/v1/admin/sealed/profiles/test-acl-update",
+        json={"name": "Test ACL Update", "acl": new_acl},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["acl"] == new_acl, f"Expected updated acl, got {body.get('acl')}"
+
+
+def test_update_profile_with_empty_acl_roundtrips(admin_client):
+    """Verify PUT /profiles/{id} with empty acl list preserves it (not coerced to missing)."""
+    # Create with initial ACL
+    admin_client.post(
+        "/api/v1/admin/sealed/profiles",
+        json={"id": "test-acl-empty", "name": "Test ACL Empty", "acl": {"v1": ["A"]}},
+    )
+    # Update with empty list for one key
+    new_acl = {"v1": [], "v2": ["X"]}
+    res = admin_client.put(
+        "/api/v1/admin/sealed/profiles/test-acl-empty",
+        json={"name": "Test ACL Empty", "acl": new_acl},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["acl"] == new_acl, f"Expected acl with empty list preserved, got {body.get('acl')}"
+    # Verify it persists on GET
+    res = admin_client.get("/api/v1/admin/sealed/profiles/test-acl-empty/full")
+    assert res.json()["acl"] == new_acl

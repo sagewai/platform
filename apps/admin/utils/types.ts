@@ -1265,10 +1265,12 @@ export interface ProfileMetadata {
   allowed_workflows: string[];
   env: Record<string, string>;
   secret_keys: string[];
+  acl?: Record<string, string[]>;
 }
 
 export interface Profile extends ProfileMetadata {
   secrets: Record<string, string>;
+  acl?: Record<string, string[]>;
 }
 
 export interface ProfileWritePayload {
@@ -1280,6 +1282,7 @@ export interface ProfileWritePayload {
   allowed_workflows?: string[];
   env?: Record<string, string>;
   secrets?: Record<string, string>;
+  acl?: Record<string, string[]>;
 }
 
 export interface SealedAuditEvent {
@@ -1331,6 +1334,7 @@ export interface EffectiveProfile {
   env: Record<string, string>;
   secret_keys: string[];
   cascade_origins: Record<string, string>;
+  acl?: Record<string, string[]>;
 }
 
 // ── Plan ART — artifact destinations ──────────────────────────────────

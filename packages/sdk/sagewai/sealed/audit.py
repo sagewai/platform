@@ -23,10 +23,17 @@ class AuditWriter:
         2. OTel structured log (streamable for Plan 3c Grafana row)
 
     One emit() call → both writes. Field names identical in both.
+
+    When ``default_redactor`` is provided, ``details`` and ``context``
+    payloads pass through ``Redactor.redact_dict()`` before write. This
+    is defense-in-depth — Sealed-i forbids putting secret values in
+    audit details, but this layer enforces the rule rather than trusting
+    every caller.
     """
 
-    def __init__(self, store: Any) -> None:
+    def __init__(self, store: Any, *, default_redactor: Any | None = None) -> None:
         self._store = store
+        self._redactor = default_redactor
 
     async def emit(
         self,
@@ -42,6 +49,8 @@ class AuditWriter:
         context: dict[str, Any] | None = None,
     ) -> None:
         merged_details = {**(context or {}), **(details or {})}
+        if self._redactor is not None and merged_details:
+            merged_details, _matched = self._redactor.redact_dict(merged_details)
 
         await self._store._pool.execute(
             """

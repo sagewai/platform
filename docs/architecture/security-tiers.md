@@ -108,6 +108,13 @@ Sagewai has two human roles in the credential model:
 
 1. **Tier-2 plaintext never crosses the worker host process boundary.** The `SecretProvider.env_for(...)` returns env that is set on container start by the sandbox backend's native env-injection primitive. It is never logged, never written to postgres in plaintext (even via Sealed-i's encrypted profile file, only the encrypted form is on disk).
 
+   Sealed-iii.B (PR pending) actively enforces this: the host-side
+   RPC seam runs every `ToolResult.stdout/stderr/error` through a
+   `Redactor` built from the run's resolved secret values; matches
+   fire `redaction.match` audit events. The
+   `tests/sealed/test_redaction_invariant.py` test guards against
+   regressions.
+
 2. **Every Tier-2 read is audited.** `secret.decrypted`, `profile.injected`, `profile.cascade.resolved` audit events name every key that was decrypted, on what run, by what actor — without naming the value.
 
 3. **Mid-run revocation works.** Sealed-iii.A: an operator can revoke a `(profile_id, secret_key)` pair; future enqueues fail-closed; in-flight runs that already injected the value get aborted (hard-revoke) or silently expire on next sandbox-start (soft-revoke).
@@ -171,6 +178,11 @@ The end-to-end path of a single Tier-2 secret (e.g. `OPENAI_API_KEY` in profile 
        K8s:     pod.spec.env or projected secret
        Lambda:  function configuration env
        Plaintext value lives ONLY here, only for the run's lifetime.
+
+   Sealed-iii.D additionally filters this env per-tool-call: when the
+   tool runner invokes a specific CLI agent (claude-code, codex, …),
+   only the ACL-allowed Tier-2 keys for that tool are passed through
+   via the `--env` flags. Behavior knobs (non-secret env) are not filtered.
        ↓
 7. CLI agent inside sandbox reads:
        claude-code CLI → reads os.environ["ANTHROPIC_API_KEY"]

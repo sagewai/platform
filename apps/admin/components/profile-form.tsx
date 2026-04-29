@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { adminApi } from "@/utils/api";
 import type { Profile, ProfileWritePayload } from "@/utils/types";
+import { AclMatrix } from "./acl-matrix";
 
 interface Props {
   initial?: Profile;          // null/undefined for create
@@ -23,6 +24,7 @@ export function ProfileForm({ initial, profileId, onSaved }: Props) {
   const [secretRows, setSecretRows] = useState<{ key: string; value: string }[]>(
     Object.entries(initial?.secrets ?? {}).map(([k, v]) => ({ key: k, value: v }))
   );
+  const [acl, setAcl] = useState(initial?.acl ?? {});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,6 +41,7 @@ export function ProfileForm({ initial, profileId, onSaved }: Props) {
         allowed_workflows: allowedCsv.split(",").map((s) => s.trim()).filter(Boolean),
         env: Object.fromEntries(envRows.filter((r) => r.key).map((r) => [r.key, r.value])),
         secrets: Object.fromEntries(secretRows.filter((r) => r.key).map((r) => [r.key, r.value])),
+        acl: Object.keys(acl).length > 0 ? acl : undefined,
       };
       const saved = initial?.id
         ? await adminApi.updateSealedProfile(initial.id, payload)
@@ -187,6 +190,14 @@ export function ProfileForm({ initial, profileId, onSaved }: Props) {
         >
           + Add secret
         </button>
+      </fieldset>
+
+      <fieldset className="space-y-2">
+        <AclMatrix
+          secretKeys={secretRows.filter((r) => r.key).map((r) => r.key)}
+          value={acl}
+          onChange={setAcl}
+        />
       </fieldset>
 
       {error && <div className="text-rose-600 text-sm">{error}</div>}

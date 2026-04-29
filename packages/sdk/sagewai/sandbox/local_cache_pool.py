@@ -123,6 +123,7 @@ class LocalCacheSandboxPool:
         effective_env_keys: list[str] | None = None,
         effective_secret_keys: list[str] | None = None,
         workflow_name: str | None = None,
+        acl: dict[str, list[str]] | None = None,
         replay_snapshot: object | None = None,
     ) -> AsyncIterator[SandboxHandle]:
         key = PoolKey(
@@ -178,6 +179,51 @@ class LocalCacheSandboxPool:
                     self._probed_digests.add(image_digest)
                 except Exception:
                     logger.debug("probe_runner failed", exc_info=True)
+
+        # Sealed-iii.B: wrap inner handle in RedactingSandboxHandle when
+        # secrets are present in the run's effective profile. Redactor reads
+        # the per-exec env dict (Plan 1.5 mechanic) — the same values the
+        # sandbox sees — as its forbidden-substring source-of-truth.
+        if effective_secret_keys and self._secret_provider is not None:
+            try:
+                secret_values = {k: env[k] for k in effective_secret_keys if k in env}
+                if secret_values:
+                    from sagewai.sandbox.redacting_handle import RedactingSandboxHandle
+                    from sagewai.sealed.redaction import Redactor
+
+                    redactor = Redactor(secret_values)
+                    audit_writer = getattr(self._secret_provider, "_audit", None) or self._audit
+                    if audit_writer is not None and redactor.value_count > 0:
+                        handle = RedactingSandboxHandle(
+                            handle,
+                            redactor=redactor,
+                            audit_writer=audit_writer,
+                            run_id=run_id,
+                            profile_id=security_profile_ref,
+                        )
+            except Exception:
+                logger.debug("redacting handle wrap failed", exc_info=True)
+                # Fail-open here: the inner handle is still usable.
+
+        # Sealed-iii.D: wrap in AclFilteringSandboxHandle as the outermost
+        # layer when ACL is configured. ACL filters env BEFORE inner exec;
+        # composition order matters (acl outside redactor).
+        if acl and effective_secret_keys:
+            try:
+                from sagewai.sandbox.acl_handle import AclFilteringSandboxHandle
+
+                audit_writer = getattr(self._secret_provider, "_audit", None) or self._audit
+                if audit_writer is not None:
+                    handle = AclFilteringSandboxHandle(
+                        handle,
+                        secret_keys=set(effective_secret_keys),
+                        acl=acl,
+                        audit_writer=audit_writer,
+                        run_id=run_id,
+                        profile_id=security_profile_ref,
+                    )
+            except Exception:
+                logger.debug("ACL handle wrap failed", exc_info=True)
 
         latency_ms = int((time.monotonic() - t0) * 1000)
         now = datetime.now(timezone.utc)

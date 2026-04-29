@@ -164,3 +164,54 @@ def profiles_reveal(profile_id: str, secret_key: str) -> None:
         click.echo(f"  ✗ Secret {secret_key!r} not in profile", err=True)
         sys.exit(1)
     click.echo(full.secrets[secret_key])
+
+
+@profiles_group.command("acl")
+@click.argument("profile_id")
+@click.argument("action", type=click.Choice(["show", "set", "remove"]))
+@click.argument("tool_name", required=False)
+@click.argument("keys", required=False)
+def profiles_acl(
+    profile_id: str, action: str, tool_name: str | None, keys: str | None
+) -> None:
+    """Show/edit per-CLI ACL on a profile.
+
+    sagewai admin sealed profiles acl <id> show
+    sagewai admin sealed profiles acl <id> set <tool> <key1,key2,...>
+    sagewai admin sealed profiles acl <id> remove <tool>
+    """
+    try:
+        profile = asyncio.run(_backend().get_profile(profile_id))
+    except ProfileNotFoundError:
+        click.echo(f"  ✗ Profile {profile_id!r} not found", err=True)
+        sys.exit(1)
+
+    new_acl = dict(profile.acl or {})
+
+    if action == "show":
+        click.echo(json.dumps(new_acl, indent=2))
+        return
+
+    if action in ("set", "remove") and tool_name is None:
+        click.echo("  ✗ tool_name required for set/remove", err=True)
+        sys.exit(2)
+
+    if action == "set":
+        new_keys = [k.strip() for k in (keys or "").split(",") if k.strip()] if keys else []
+        new_acl[tool_name] = new_keys
+    elif action == "remove":
+        new_acl.pop(tool_name, None)
+
+    payload = ProfileWritePayload(
+        id=profile.id,
+        name=profile.name,
+        description=profile.description,
+        owner=profile.owner,
+        tags=list(profile.tags),
+        allowed_workflows=list(profile.allowed_workflows),
+        env=dict(profile.env),
+        secrets=dict(profile.secrets),
+        acl=new_acl,
+    )
+    asyncio.run(_backend().save_profile(payload))
+    click.echo(json.dumps(new_acl, indent=2))

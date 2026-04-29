@@ -29,6 +29,7 @@ class ProfileMetadata(BaseModel):
     allowed_workflows: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
     secret_keys: list[str] = Field(default_factory=list)
+    acl: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class Profile(ProfileMetadata):
@@ -50,6 +51,7 @@ class ProfileWritePayload(BaseModel):
     allowed_workflows: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
     secrets: dict[str, str] = Field(default_factory=dict)
+    acl: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class EffectiveProfile(BaseModel):
@@ -60,3 +62,4 @@ class EffectiveProfile(BaseModel):
     env: dict[str, str]
     secret_keys: set[str]
     cascade_origins: dict[str, str]
+    acl: dict[str, list[str]] = Field(default_factory=dict)

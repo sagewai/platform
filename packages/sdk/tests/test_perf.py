@@ -251,3 +251,29 @@ async def test_perf_pool_warm_acquire(tmp_path):
     p95 = samples_ms[int(len(samples_ms) * 0.95)]
     assert p95 <= 200.0, f"warm acquire p95 = {p95:.1f}ms (budget 200ms)"
     await pool.stop()
+
+
+# ─── Sealed redaction ────────────────────────────────────────────────────────
+
+def test_redaction_perf_1mib_six_secrets() -> None:
+    """1 MiB of stdout + 6 secrets must redact in <5ms p99 over 100 iters."""
+    import os
+
+    from sagewai.sealed.redaction import RedactionConfig, Redactor
+
+    secrets = {f"KEY_{i}": os.urandom(16).hex() for i in range(6)}
+    payload = "x" * (1 * 1024 * 1024) + secrets["KEY_0"]
+    redactor = Redactor(secrets, config=RedactionConfig(max_input_bytes=2 * 1024 * 1024))
+
+    # Warm
+    redactor.redact(payload)
+
+    timings: list[float] = []
+    for _ in range(100):
+        t0 = time.perf_counter()
+        redactor.redact(payload)
+        timings.append(time.perf_counter() - t0)
+
+    timings.sort()
+    p99 = timings[int(len(timings) * 0.99) - 1]
+    assert p99 < 0.005, f"redaction p99 = {p99 * 1000:.2f}ms exceeds 5ms budget"

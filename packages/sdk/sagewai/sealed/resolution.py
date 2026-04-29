@@ -93,6 +93,20 @@ async def resolve_security_profile(
                     # inline overrides NOT auto-tagged as secret
                     secret_keys.discard(key)
 
+    # Sealed-iii.D: per-tool ACL cascade merge — later level wins per tool name.
+    acl_effective: dict[str, list[str]] = {}
+    for level in levels:
+        if not level.profile_ref:
+            continue
+        ref = ProfileRef.parse(level.profile_ref)
+        backend = resolve_backend(ref)
+        try:
+            level_profile = await backend.get_profile_metadata(ref.path)
+        except Exception:
+            continue
+        for tool_name, allowed in level_profile.acl.items():
+            acl_effective[tool_name] = list(allowed)
+
     # Sealed-iii.A: revocation check
     if revocation_registry is not None and secret_keys:
         from sagewai.sealed.revocation import SecretRevokedError
@@ -164,4 +178,5 @@ async def resolve_security_profile(
         env=effective,
         secret_keys=secret_keys,
         cascade_origins=cascade_origins,
+        acl=acl_effective,
     )

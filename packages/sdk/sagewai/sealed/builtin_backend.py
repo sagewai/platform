@@ -87,6 +87,7 @@ class BuiltinAdminStoreBackend:
             allowed_workflows=p.get("allowed_workflows", []),
             env=p.get("env", {}),
             secret_keys=sorted(p.get("secrets", {}).keys()),
+            acl=p.get("acl", {}),
         )
 
     async def list_profiles(self) -> list[ProfileMetadata]:
@@ -140,6 +141,7 @@ class BuiltinAdminStoreBackend:
                 "last_rotated_at": now,
                 "allowed_workflows": payload.allowed_workflows,
                 "env": payload.env,
+                "acl": payload.acl,
                 "secrets": {
                     k: self._get_crypto().encrypt(v)
                     for k, v in payload.secrets.items()
