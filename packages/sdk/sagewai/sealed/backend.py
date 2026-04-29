@@ -23,6 +23,29 @@ class BackendUnsupportedOperationError(NotImplementedError):
     """Raised when a backend doesn't implement an optional method."""
 
 
+class BackendTransportError(Exception):
+    """Backend operation failed at the transport layer (network, auth).
+
+    Base class for backend-specific transport errors (Vault, AWS SM, …).
+    Lets retry-policy code catch all transport failures uniformly.
+    Sealed-i's ProfileNotFoundError and BackendUnsupportedOperationError
+    deliberately do NOT inherit from this — those are domain errors,
+    not transport errors.
+    """
+
+
+class VaultUnreachableError(BackendTransportError):
+    """Vault address didn't respond or returned 5xx."""
+
+
+class VaultAuthError(BackendTransportError):
+    """Vault auth method failed (bad token, AppRole login rejected, …)."""
+
+
+class VaultConfigError(BackendTransportError):
+    """admin-state.sealed.vault config is malformed or missing required fields."""
+
+
 @runtime_checkable
 class ProfileBackend(Protocol):
     """Pluggable storage for security profiles.

@@ -1295,6 +1295,18 @@ export interface SealedAuditEvent {
   created_at: string;
 }
 
+export interface BackendStatus {
+  enabled: boolean;
+  healthy: boolean;
+  profile_count: number | null;
+  addr: string | null;
+  namespace: string | null;
+  auth_method: string | null;
+  mount: string | null;
+  last_authenticated_at: string | null;
+  tls_verify: boolean | null;
+}
+
 export interface SealedStatus {
   master_key_configured: boolean;
   master_key_source: 'env-var' | 'keychain' | 'file' | 'none';
@@ -1302,6 +1314,7 @@ export interface SealedStatus {
   audit_retention_days: number;
   reveal_rate_limit_per_admin_per_hour: number;
   backends_registered: string[];
+  backends: Record<string, BackendStatus>;
 }
 
 export interface SealedSystemConfig {

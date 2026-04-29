@@ -295,6 +295,33 @@ def _load_templates() -> list[dict[str, Any]]:
 # ── App factory ──────────────────────────────────────────────────────
 
 
+def _register_optional_backends(sf: AdminStateFile) -> None:
+    """Register Sealed-ii external Identity backends if configured.
+
+    Reads admin-state.sealed.vault.* and conditionally imports + registers
+    the VaultBackend. ImportError (hvac missing) becomes a clear startup
+    error with remediation. No-op when Vault is disabled or unset.
+    """
+    vault_cfg = sf.get_vault_config()
+    if not vault_cfg.get("enabled"):
+        return
+    try:
+        from sagewai.sealed.vault_backend import build_vault_backend_from_config
+    except ImportError as e:
+        raise RuntimeError(
+            "sealed.vault.enabled=true but hvac is not installed. "
+            "Run: pip install sagewai[vault]"
+        ) from e
+    backend = build_vault_backend_from_config(vault_cfg)
+    if backend is None:
+        return
+    from sagewai.sealed.refs import register_backend, set_default_scheme
+    register_backend(backend)
+    default_scheme = sf.get_sealed_config().get("default_scheme")
+    if default_scheme:
+        set_default_scheme(default_scheme)
+
+
 def create_admin_serve_app(
     sf: AdminStateFile,
     *,
@@ -329,6 +356,7 @@ def create_admin_serve_app(
 
     state = AdminState()
     analytics = AnalyticsStore()
+    _register_optional_backends(sf)
 
     # Override /admin/agents and /admin/runs BEFORE include_router so
     # these direct app routes match first (Starlette matches routes in

@@ -24,6 +24,18 @@ from sagewai.sealed.models import (
 )
 
 
+class BackendStatus(BaseModel):
+    enabled: bool
+    healthy: bool = True
+    profile_count: int | None = None
+    addr: str | None = None
+    namespace: str | None = None
+    auth_method: str | None = None
+    mount: str | None = None
+    last_authenticated_at: str | None = None
+    tls_verify: bool | None = None
+
+
 class SealedStatus(BaseModel):
     master_key_configured: bool
     master_key_source: str
@@ -31,6 +43,7 @@ class SealedStatus(BaseModel):
     audit_retention_days: int
     reveal_rate_limit_per_admin_per_hour: int
     backends_registered: list[str]
+    backends: dict[str, BackendStatus] = Field(default_factory=dict)
 
 
 class SealedSystemConfig(BaseModel):
@@ -309,7 +322,7 @@ async def list_audit(
 async def sealed_status() -> SealedStatus:
     from sagewai.admin.state_file import AdminStateFile
     from sagewai.sealed.master_key import MasterKeyMissing, resolve_master_key
-    from sagewai.sealed.refs import list_registered_schemes
+    from sagewai.sealed.refs import _BACKENDS, list_registered_schemes
 
     try:
         _, source = resolve_master_key()
@@ -317,12 +330,50 @@ async def sealed_status() -> SealedStatus:
     except MasterKeyMissing:
         configured = False
         source = "none"
-    cfg = AdminStateFile().get_sealed_config()
+    state = AdminStateFile()
+    cfg = state.get_sealed_config()
+    vault_cfg = state.get_vault_config()
+
+    schemes = list_registered_schemes()
+    backends: dict[str, BackendStatus] = {}
+    if "builtin" in schemes:
+        try:
+            metas = await _BACKENDS["builtin"].list_profiles()
+            count = len(metas)
+        except Exception:
+            count = None
+        backends["builtin"] = BackendStatus(
+            enabled=True, healthy=True, profile_count=count,
+        )
+    if "vault" in schemes:
+        try:
+            metas = await _BACKENDS["vault"].list_profiles()
+            count = len(metas)
+            healthy = True
+        except Exception:
+            count = None
+            healthy = False
+        backends["vault"] = BackendStatus(
+            enabled=True,
+            healthy=healthy,
+            profile_count=count,
+            addr=vault_cfg.get("addr"),
+            namespace=vault_cfg.get("namespace"),
+            auth_method=vault_cfg.get("auth_method"),
+            mount=vault_cfg.get("mount", "kv"),
+            tls_verify=vault_cfg.get("tls_verify", True),
+        )
+    elif vault_cfg.get("enabled") is False:
+        backends["vault"] = BackendStatus(enabled=False, healthy=False)
+
     return SealedStatus(
         master_key_configured=configured,
         master_key_source=source,
         master_key_last_rotated_at=cfg.get("master_key_last_rotated_at"),
         audit_retention_days=cfg.get("audit_retention_days", 365),
-        reveal_rate_limit_per_admin_per_hour=cfg.get("reveal_rate_limit_per_admin_per_hour", 30),
-        backends_registered=list_registered_schemes(),
+        reveal_rate_limit_per_admin_per_hour=cfg.get(
+            "reveal_rate_limit_per_admin_per_hour", 30
+        ),
+        backends_registered=schemes,
+        backends=backends,
     )

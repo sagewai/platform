@@ -19,6 +19,23 @@ _SCHEME_RE = re.compile(r"^([a-z][a-z0-9+\-.]*)://(.+)$")
 
 BUILTIN_SCHEME = "builtin"
 
+_DEFAULT_SCHEME = BUILTIN_SCHEME
+
+
+def set_default_scheme(scheme: str) -> None:
+    """Override the scheme used for bare-ID refs (no explicit `scheme://` prefix).
+
+    URI-form refs are never affected — `builtin://x` always means builtin
+    regardless of the default. Operators flip this to make `vault://` the
+    de-facto default for a Vault-backed deployment.
+    """
+    if not _SCHEME_RE.match(f"{scheme}://x"):
+        raise ValueError(
+            f"invalid scheme {scheme!r}: must match [a-z][a-z0-9+\\-.]*"
+        )
+    global _DEFAULT_SCHEME
+    _DEFAULT_SCHEME = scheme
+
 
 class UnknownBackendError(LookupError):
     """Raised when a profile reference uses an unregistered scheme."""
@@ -33,11 +50,11 @@ class ProfileRef:
 
     @classmethod
     def parse(cls, ref: str) -> ProfileRef:
-        """Parse 'scheme://path' or bare 'id' (defaults to builtin scheme)."""
+        """Parse 'scheme://path' or bare 'id' (defaults to set_default_scheme)."""
         match = _SCHEME_RE.match(ref)
         if match:
             return cls(scheme=match.group(1), path=match.group(2))
-        return cls(scheme=BUILTIN_SCHEME, path=ref)
+        return cls(scheme=_DEFAULT_SCHEME, path=ref)
 
     def __str__(self) -> str:
         """Return canonical URI form: 'scheme://path'.

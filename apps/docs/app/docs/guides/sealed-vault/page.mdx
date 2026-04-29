@@ -1,0 +1,110 @@
+export const metadata = {
+  title: "Vault backend",
+  description: "Use HashiCorp Vault as the value source for Sealed Identity profiles.",
+};
+
+# Vault backend
+
+Sagewai's Sealed Identity layer can store profiles in HashiCorp Vault instead of the built-in encrypted JSON file. Sagewai becomes a Vault consumer; Vault keeps its own audit, leasing, and rotation.
+
+## When to choose Vault
+
+- You already run Vault and don't want a second credential store.
+- Multi-host worker fleets need a consistent profile view.
+- You want Vault's lease, audit, and rotation primitives instead of Sagewai's.
+
+If none of these apply, the Builtin backend is fine.
+
+## Setup
+
+1. Install the optional dependency:
+
+   ```bash
+   pip install sagewai[vault]
+   ```
+
+2. Add the Vault block to `~/.sagewai/admin-state.json`:
+
+   ```json
+   {
+     "sealed": {
+       "vault": {
+         "enabled": true,
+         "addr": "https://vault.your-org.internal:8200",
+         "namespace": null,
+         "auth_method": "approle",
+         "auth_config": {
+           "role_id": "00000000-0000-0000-0000-000000000000",
+           "secret_id_env": "VAULT_APPROLE_SECRET_ID"
+         },
+         "mount": "kv",
+         "tls_verify": true,
+         "audit_request_id_capture": true
+       }
+     }
+   }
+   ```
+
+3. Set the auth secret in your worker environment:
+
+   ```bash
+   export VAULT_APPROLE_SECRET_ID=...
+   ```
+
+4. Restart the admin server. The status page at `/sealed/status` will show a Vault card.
+
+## Auth methods
+
+### Token
+
+Simplest. Set `auth_method: "token"` and either:
+
+- `auth_config.token`: literal token (NOT recommended &mdash; written to admin-state).
+- `auth_config.token_env`: env-var name (recommended).
+
+### AppRole
+
+Long-lived role_id + short-lived secret_id. Set `auth_method: "approle"`:
+
+- `auth_config.role_id`: literal.
+- `auth_config.secret_id_env`: env-var name. Sagewai never reads the secret_id from admin-state.
+
+### Kubernetes service account
+
+For workers running inside a Kubernetes cluster. Set `auth_method: "kubernetes"`:
+
+- `auth_config.role`: Vault role configured for the SA.
+- `auth_config.token_path`: path to the projected SA token (defaults to the standard injected location).
+
+## URI scheme
+
+Profile refs use `vault://`:
+
+- `vault://kv/sagewai/acme-prod` &mdash; explicit mount + path
+- `vault://secret/team-billing/staging` &mdash; different mount
+
+To make Vault the default for bare IDs, set `sealed.default_scheme: "vault"` in admin-state.
+
+## Migration from Builtin
+
+Manual one-time copy:
+
+```bash
+sagewai admin sealed profiles get acme-prod --full \
+  | jq '{name, description, owner, tags, env, secrets, allowed_workflows}' \
+  | jq -c \
+  | xargs -I {} vault kv put kv/sagewai/acme-prod {}
+```
+
+Then update cascade refs from `acme-prod` (builtin) to `vault://kv/sagewai/acme-prod`.
+
+## Troubleshooting
+
+- **403 Forbidden on read.** AppRole secret_id expired (24h default in Vault). Renew via your Vault rotation primitive.
+- **Connection refused.** Check `addr` matches what Vault is listening on. macOS: bind Vault to `0.0.0.0`, not `127.0.0.1`.
+- **Namespace not found.** Vault Enterprise only &mdash; verify `namespace` matches an existing namespace.
+- **Profiles list empty.** Check the configured `mount` and `path_prefix`. Vault returns empty when no items exist at the prefix.
+
+## Audit cross-walk
+
+Each `secret.decrypted` event records `details.vault_request_id`. Pivot to Vault's audit log to see the matching request &mdash; useful for compliance reviews. Disable via `sealed.vault.audit_request_id_capture: false` if you want minimal coupling.

@@ -113,6 +113,13 @@ class AdminStateFile:
         state = self._read()
         return state.get("sealed", {})
 
+    def get_vault_config(self) -> dict[str, Any]:
+        """Return sealed.vault.* sub-tree (addr, auth_method, …).
+
+        Returns empty dict if no Vault config is set.
+        """
+        return self.get_sealed_config().get("vault", {})
+
     def get_sandbox_pool_config(self) -> dict[str, Any]:
         """Return sandbox_pool.* sub-tree (pool sizing knobs from Plan 1.5)."""
         state = self._read()

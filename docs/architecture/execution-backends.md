@@ -171,7 +171,7 @@ A ProfileRef like `vault://kv/sagewai/acme-prod` parses to `(scheme="vault", pat
 | Backend | Scheme | Storage | Master key needed | Status |
 |---|---|---|---|---|
 | `BuiltinAdminStoreBackend` | `builtin` (default if no scheme) | `~/.sagewai/profiles.json`, encrypted at rest with Fernet | yes (Sealed-i master-key resolution chain) | shipped |
-| `VaultBackend` (planned) | `vault` | HashiCorp Vault KV v2 | n/a (Vault holds its own root key) | Sealed-ii |
+| `VaultBackend` | `vault` | HashiCorp Vault KV v2 | n/a (Vault holds its own root key) | shipped |
 | `OnePasswordBackend` (planned) | `onepassword` | 1Password Connect API | n/a | Sealed-ii |
 | `AWSSecretsManagerBackend` (planned) | `aws-sm` | AWS Secrets Manager | n/a (KMS-backed) | Sealed-ii |
 | `SOPSBackend` (planned) | `sops` | SOPS-encrypted YAML/JSON in git | yes (SOPS keys: PGP, age, KMS) | Sealed-ii |

@@ -1,0 +1,26 @@
+# Local Vault dev-mode fixture for Sealed-ii.Vault integration tests.
+# DO NOT use for production. Root token is well-known.
+#
+#   docker compose -f docker-compose.test-vault.yml up -d
+#   export VAULT_ADDR=http://localhost:8200
+#   export VAULT_TOKEN=test-root-token
+#   cd packages/sdk
+#   uv run pytest tests/integration/test_vault_backend_integration.py -v
+#   docker compose -f docker-compose.test-vault.yml down
+
+services:
+  vault:
+    image: hashicorp/vault:1.16
+    container_name: sagewai-test-vault
+    ports:
+      - "8200:8200"
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: test-root-token
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    cap_add:
+      - IPC_LOCK
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8200/v1/sys/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5

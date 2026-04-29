@@ -48,6 +48,70 @@ export default function SealedStatusPage() {
         <dd className="font-mono">{status.backends_registered.join(", ")}</dd>
       </dl>
 
+      <h2 className="text-xl font-semibold mt-lg mb-md">Backends</h2>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
+        {Object.entries(status.backends).map(([scheme, b]) => (
+          <div key={scheme} className="border rounded p-md">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-mono text-sm">{scheme}</h3>
+              {b.enabled ? (
+                b.healthy ? (
+                  <span className="text-xs text-green-700">Healthy</span>
+                ) : (
+                  <span className="text-xs text-rose-600">Unhealthy</span>
+                )
+              ) : (
+                <span className="text-xs text-neutral-500">Disabled</span>
+              )}
+            </div>
+            <dl className="grid grid-cols-2 gap-1 text-xs">
+              {b.profile_count !== null && (
+                <>
+                  <dt className="text-neutral-500">Profiles</dt>
+                  <dd>{b.profile_count}</dd>
+                </>
+              )}
+              {b.addr && (
+                <>
+                  <dt className="text-neutral-500">Address</dt>
+                  <dd className="font-mono break-all">{b.addr}</dd>
+                </>
+              )}
+              {b.namespace && (
+                <>
+                  <dt className="text-neutral-500">Namespace</dt>
+                  <dd className="font-mono">{b.namespace}</dd>
+                </>
+              )}
+              {b.auth_method && (
+                <>
+                  <dt className="text-neutral-500">Auth method</dt>
+                  <dd className="font-mono">{b.auth_method}</dd>
+                </>
+              )}
+              {b.mount && (
+                <>
+                  <dt className="text-neutral-500">Mount</dt>
+                  <dd className="font-mono">{b.mount}</dd>
+                </>
+              )}
+              {b.last_authenticated_at && (
+                <>
+                  <dt className="text-neutral-500">Last authenticated</dt>
+                  <dd>{new Date(b.last_authenticated_at).toLocaleString()}</dd>
+                </>
+              )}
+              {b.tls_verify === false && (
+                <>
+                  <dt className="text-neutral-500 text-rose-600">TLS verify</dt>
+                  <dd className="text-rose-600">disabled</dd>
+                </>
+              )}
+            </dl>
+          </div>
+        ))}
+      </div>
+
       <div className="mt-md">
         <button
           type="button"

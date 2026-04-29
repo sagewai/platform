@@ -111,6 +111,9 @@ kubernetes = [
 keychain = [
     "keyring==25.7.0",
 ]
+vault = [
+    "hvac==2.3.0",
+]
 
 [dependency-groups]
 test = [

@@ -135,3 +135,41 @@ def test_register_backend_rejects_scheme_collision():
     finally:
         from sagewai.sealed.refs import _BACKENDS
         _BACKENDS.pop("collide", None)
+
+
+class TestDefaultScheme:
+    def setup_method(self):
+        # Reset to canonical default before each case
+        from sagewai.sealed.refs import BUILTIN_SCHEME, set_default_scheme
+        set_default_scheme(BUILTIN_SCHEME)
+
+    def teardown_method(self):
+        from sagewai.sealed.refs import BUILTIN_SCHEME, set_default_scheme
+        set_default_scheme(BUILTIN_SCHEME)
+
+    def test_bare_id_defaults_to_builtin_by_default(self):
+        from sagewai.sealed.refs import ProfileRef
+        ref = ProfileRef.parse("acme-prod")
+        assert ref.scheme == "builtin"
+        assert ref.path == "acme-prod"
+
+    def test_set_default_scheme_changes_bare_id_dispatch(self):
+        from sagewai.sealed.refs import ProfileRef, set_default_scheme
+        set_default_scheme("vault")
+        ref = ProfileRef.parse("acme-prod")
+        assert ref.scheme == "vault"
+        assert ref.path == "acme-prod"
+
+    def test_uri_form_unaffected_by_default_scheme(self):
+        from sagewai.sealed.refs import ProfileRef, set_default_scheme
+        set_default_scheme("vault")
+        ref = ProfileRef.parse("builtin://acme-prod")
+        assert ref.scheme == "builtin"
+        assert ref.path == "acme-prod"
+
+    def test_set_default_scheme_validates_scheme_format(self):
+        from sagewai.sealed.refs import set_default_scheme
+        with pytest.raises(ValueError):
+            set_default_scheme("Invalid Scheme")
+        with pytest.raises(ValueError):
+            set_default_scheme("")

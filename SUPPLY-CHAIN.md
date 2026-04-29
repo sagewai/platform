@@ -49,6 +49,15 @@ documented in this file.
 |---------|---------|--------|
 | (none yet) | | |
 
+## Optional Dependency Inventory
+
+Extras (opt-in via `pip install sagewai[<extra>]`) documented below for
+review during dependency updates.
+
+| Package | Version | Licence | Extra | Role |
+|---------|---------|---------|-------|------|
+| hvac | 2.3.0 | MIT | vault | HashiCorp Vault community client |
+
 ## CI Security Gates
 
 Every PR runs these checks automatically:
