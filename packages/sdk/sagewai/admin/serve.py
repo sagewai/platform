@@ -1649,6 +1649,226 @@ def create_admin_serve_app(
         import secrets as _sec
         return JSONResponse({"run_id": f"wf-{_sec.token_hex(6)}", "is_new": True})
 
+    @app.post("/api/v1/workflows/enqueue", status_code=202)
+    async def workflows_enqueue(request: Request) -> JSONResponse:
+        """Canonical workflow-run enqueue endpoint matching architecture WorkflowRun shape.
+
+        Accepts the canonical body shape (workflow_name, input_data, execution_mode,
+        optional security_profile_ref, optional artifact_destination). Resolves the
+        Sealed cascade when security_profile_ref is set, derives requires_sandbox_mode
+        via sandbox_mode_for(), capability-checks against the fleet registry, persists
+        a WorkflowRun row, and returns 202 Accepted with resolved metadata.
+
+        Does NOT replace /workflows/run (YAML-shaped playground endpoint) or
+        /workflows/runs/{run_id} (status polling).
+        """
+        import secrets as _enq_sec
+
+        from fastapi import HTTPException as _HTTPException
+
+        from sagewai.artifacts.models import ArtifactDestination as _ArtifactDestination
+        from sagewai.core.state import ExecutionMode as _ExecutionMode, WorkflowRun as _WorkflowRun, sandbox_mode_for as _sandbox_mode_for
+        from sagewai.fleet.models import WorkerApprovalStatus as _WorkerApprovalStatus
+        from sagewai.sandbox.models import SandboxMode as _SandboxMode
+
+        body = await request.json()
+        pid = _project_id(request)
+
+        workflow_name = body.get("workflow_name")
+        if not workflow_name:
+            raise _HTTPException(status_code=400, detail="workflow_name is required")
+
+        input_data = body.get("input_data", {})
+        execution_mode_str = body.get("execution_mode", "full")
+        security_profile_ref = body.get("security_profile_ref")
+        artifact_destination_raw = body.get("artifact_destination")
+
+        # 1. Validate execution_mode
+        try:
+            execution_mode = _ExecutionMode(execution_mode_str)
+        except ValueError:
+            valid = [m.value for m in _ExecutionMode]
+            raise _HTTPException(
+                status_code=400,
+                detail=f"unknown execution_mode {execution_mode_str!r}; valid values: {valid}",
+            )
+
+        # 2. Derive sandbox mode requirement
+        requires_sandbox_mode = _sandbox_mode_for(execution_mode)
+
+        # 3. Capability check against fleet registry.
+        # For non-BARE runs (requires_sandbox_mode=PER_RUN) we verify that at
+        # least one APPROVED worker is registered. BARE runs execute inline and
+        # need no worker.
+        if requires_sandbox_mode != _SandboxMode.NONE:
+            approved_workers = await fleet_registry.list_workers(
+                org_id="default",
+                status=_WorkerApprovalStatus.APPROVED,
+            )
+            if not approved_workers:
+                raise _HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"execution_mode={execution_mode_str!r} requires "
+                        f"sandbox_mode={requires_sandbox_mode.value!r} but no approved "
+                        "worker is registered in the fleet. Register and approve a worker "
+                        "first, or use execution_mode='bare' for inline execution."
+                    ),
+                )
+
+        # 4. Resolve Sealed cascade when security_profile_ref is set.
+        # For execution_mode=FULL (Mode 3+) without a profile_ref, we also check
+        # for a system-level default; if none exists, reject with 400.
+        effective_env_keys: list[str] = []
+        effective_secret_keys: list[str] = []
+
+        if security_profile_ref:
+            from sagewai.sealed.resolution import CascadeLevel as _CascadeLevel, resolve_security_profile as _resolve_security_profile
+
+            sealed_cfg = sf.get_sealed_config()
+            workflow_sealed_cfg = sf.get_workflow_sealed_config(workflow_name) or {}
+
+            levels = [
+                _CascadeLevel(
+                    name="system",
+                    profile_ref=sealed_cfg.get("system_profile_ref"),
+                    overrides=sealed_cfg.get("system_overrides"),
+                ),
+                _CascadeLevel(
+                    name="workflow",
+                    profile_ref=workflow_sealed_cfg.get("profile_ref"),
+                    overrides=workflow_sealed_cfg.get("overrides"),
+                ),
+                _CascadeLevel(
+                    name="user",
+                    profile_ref=security_profile_ref,
+                    overrides=None,
+                ),
+            ]
+
+            try:
+                from sagewai.sealed.audit import AuditWriter as _AuditWriter
+                eff = await _resolve_security_profile(
+                    levels=levels,
+                    audit_writer=None,  # audit via OTel structured log below
+                    audit_context={
+                        "workflow_name": workflow_name,
+                        "project_id": pid,
+                        "run_type": "enqueue",
+                    },
+                )
+            except PermissionError as exc:
+                raise _HTTPException(status_code=403, detail=str(exc)) from exc
+            except Exception as exc:
+                raise _HTTPException(
+                    status_code=400,
+                    detail=f"cascade resolution failed: {exc}",
+                ) from exc
+
+            effective_env_keys = sorted(eff.env.keys())
+            effective_secret_keys = sorted(eff.secret_keys)
+
+            # Audit profile.cascade.resolved via structured log (OTel-visible in Grafana)
+            logger.info(
+                "profile.cascade.resolved at enqueue",
+                extra={
+                    "event": "profile.cascade.resolved",
+                    "workflow_name": workflow_name,
+                    "security_profile_ref": security_profile_ref,
+                    "effective_env_keys": effective_env_keys,
+                    "effective_secret_keys": effective_secret_keys,
+                    "project_id": pid or "global",
+                },
+            )
+
+        elif execution_mode in (_ExecutionMode.FULL, _ExecutionMode.FULL_JIT):
+            # Mode 3/3b without a user-supplied profile_ref — check for a
+            # system-level default. If none is configured, the run cannot
+            # safely be enqueued (it would have no identity at runtime).
+            sealed_cfg = sf.get_sealed_config()
+            system_profile_ref = sealed_cfg.get("system_profile_ref")
+            if not system_profile_ref:
+                raise _HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"execution_mode={execution_mode_str!r} requires a security_profile_ref "
+                        "or a system-level default profile (configure one via "
+                        "PUT /api/v1/admin/sealed/system)."
+                    ),
+                )
+            # System default exists — effective keys will be resolved at runtime
+            # by the worker; we leave them empty at enqueue time here.
+
+        # 5. Parse artifact_destination if provided
+        artifact_destination: _ArtifactDestination | None = None
+        if artifact_destination_raw is not None:
+            try:
+                artifact_destination = _ArtifactDestination.model_validate(
+                    artifact_destination_raw
+                )
+            except Exception as exc:
+                raise _HTTPException(
+                    status_code=400,
+                    detail=f"invalid artifact_destination: {exc}",
+                ) from exc
+
+        # 6. Persist WorkflowRun row matching the on-disk WorkflowRun shape
+        run_id = f"wf-{_enq_sec.token_hex(6)}"
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        run = _WorkflowRun(
+            workflow_name=workflow_name,
+            run_id=run_id,
+            execution_mode=execution_mode,
+            requires_sandbox_mode=requires_sandbox_mode,
+            security_profile_ref=security_profile_ref,
+            effective_env_keys=effective_env_keys,
+            effective_secret_keys=effective_secret_keys,
+            artifact_destination=artifact_destination,
+            input_data=input_data,
+            project_id=pid,
+        )
+
+        run_record = run.to_dict()
+        # Supplement with admin-UI fields expected by /workflows/history
+        run_record.update({
+            "started_at": now_iso,
+            "enqueued_at": now_iso,
+            "run_type": "enqueue",
+        })
+
+        data = sf._read()
+        data.setdefault("workflow_runs", []).insert(0, run_record)
+        data["workflow_runs"] = data["workflow_runs"][:100]
+        sf._write(data)
+
+        logger.info(
+            "Workflow run enqueued: %s workflow=%s mode=%s",
+            run_id, workflow_name, execution_mode_str,
+            extra={
+                "event": "workflow.run.enqueued",
+                "run_id": run_id,
+                "workflow_name": workflow_name,
+                "execution_mode": execution_mode_str,
+                "requires_sandbox_mode": requires_sandbox_mode.value,
+                "project_id": pid or "global",
+            },
+        )
+
+        # 7. Return 202 Accepted with resolved metadata
+        return JSONResponse(
+            {
+                "run_id": run_id,
+                "status": run.status.value,
+                "execution_mode": run.execution_mode.value,
+                "requires_sandbox_mode": run.requires_sandbox_mode.value,
+                "security_profile_ref": run.security_profile_ref,
+                "effective_env_keys": run.effective_env_keys,
+                "effective_secret_keys": run.effective_secret_keys,
+            },
+            status_code=202,
+        )
+
     @app.post("/workflows/validate")
     async def workflow_validate(request: Request) -> JSONResponse:
         """Validate workflow YAML and return parsed metadata."""
