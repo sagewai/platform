@@ -82,7 +82,7 @@ prometheus = [
     "prometheus_client==0.25.0",
 ]
 storage = [
-    "boto3==1.42.88",
+    "boto3==1.43.1",
     "google-cloud-storage==3.10.1",
 ]
 intelligence = [
@@ -128,7 +128,7 @@ test = [
     "sqlalchemy[asyncio]>=2.0.0",
     "alembic>=1.13.0",
     "prometheus_client>=0.20.0",
-    "boto3>=1.28.0",
+    "boto3>=1.43.1",
     "google-cloud-storage>=2.10.0",
     "kubernetes-asyncio==32.0.0",
     "hvac==2.3.0",
