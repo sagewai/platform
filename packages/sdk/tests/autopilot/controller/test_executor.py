@@ -298,3 +298,25 @@ async def test_context_accumulates_between_steps(monkeypatch):
     assert len(call_contexts) == 2
     # Second user message should contain the first step's output key
     assert "step_scout_output" in call_contexts[1]
+
+
+# ── ExecutorConfig — harness fields ──────────────────────────────────
+
+
+def test_executor_config_has_optional_harness_fields():
+    from sagewai.autopilot.controller.executor import ExecutorConfig
+
+    cfg = ExecutorConfig()
+    assert cfg.harness_proxy is None
+    assert cfg.harness_identity is None
+
+
+def test_executor_config_accepts_harness_proxy_and_identity():
+    from sagewai.autopilot.controller.executor import ExecutorConfig
+    from sagewai.harness.models import HarnessIdentity
+
+    sentinel_proxy = object()  # we don't test the proxy itself here
+    identity = HarnessIdentity(key_id="autopilot-default", user_id="autopilot")
+    cfg = ExecutorConfig(harness_proxy=sentinel_proxy, harness_identity=identity)
+    assert cfg.harness_proxy is sentinel_proxy
+    assert cfg.harness_identity is identity

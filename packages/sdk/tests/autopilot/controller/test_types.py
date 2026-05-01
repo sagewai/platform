@@ -12,8 +12,47 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
-from sagewai.autopilot.controller.types import MissionRunResult, StepResult
+from sagewai.autopilot.controller.types import MissionRunResult, StepResult, StepTelemetry
+
+# ── StepTelemetry ──────────────────────────────────────────────────
+
+
+def test_step_telemetry_construction():
+    t = StepTelemetry(
+        cost_usd=0.0042,
+        input_tokens=120,
+        output_tokens=80,
+        model_used="claude-haiku-4-5-20251001",
+        latency_ms=850.0,
+    )
+    assert t.cost_usd == 0.0042
+    assert t.input_tokens == 120
+    assert t.output_tokens == 80
+    assert t.model_used == "claude-haiku-4-5-20251001"
+    assert t.latency_ms == 850.0
+
+
+def test_step_telemetry_frozen():
+    t = StepTelemetry(
+        cost_usd=0.0,
+        input_tokens=0,
+        output_tokens=0,
+        model_used="x",
+        latency_ms=0.0,
+    )
+    with pytest.raises(ValidationError):
+        t.cost_usd = 1.0  # type: ignore[misc]
+
+
+def test_step_telemetry_defaults():
+    t = StepTelemetry(model_used="x")
+    assert t.cost_usd == 0.0
+    assert t.input_tokens == 0
+    assert t.output_tokens == 0
+    assert t.latency_ms == 0.0
+
 
 # ── StepResult ─────────────────────────────────────────────────────
 
@@ -120,3 +159,47 @@ def test_mission_run_result_json_round_trip():
     assert reloaded.mission_id == r.mission_id
     assert reloaded.status == r.status
     assert len(reloaded.steps) == len(r.steps)
+
+
+# ── Extended StepResult (with output, messages, telemetry) ──────────
+
+
+def test_step_result_new_fields_default_none():
+    s = StepResult(node_id="n1", status="completed")
+    assert s.output is None
+    assert s.messages is None
+    assert s.telemetry is None
+
+
+def test_step_result_with_full_output():
+    full_text = "A" * 5000  # well beyond the 200-char preview cap
+    s = StepResult(
+        node_id="n1",
+        status="completed",
+        output_preview=full_text[:200],
+        output=full_text,
+    )
+    assert s.output == full_text
+    assert s.output_preview == full_text[:200]
+
+
+def test_step_result_with_messages():
+    msgs = (
+        {"role": "system", "content": "you are an agent"},
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi"},
+    )
+    s = StepResult(node_id="n1", status="completed", messages=msgs)
+    assert s.messages == msgs
+
+
+def test_step_result_with_telemetry():
+    t = StepTelemetry(
+        model_used="claude-haiku-4-5-20251001",
+        input_tokens=10,
+        output_tokens=20,
+        cost_usd=0.001,
+    )
+    s = StepResult(node_id="n1", status="completed", telemetry=t)
+    assert s.telemetry is t
+    assert s.telemetry.input_tokens == 10

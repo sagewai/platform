@@ -258,6 +258,50 @@ sagewai autopilot goal "..."
 
 ---
 
+## Routing autopilot through the LLM Harness
+
+By default, `AgentExecutor` calls `litellm.acompletion` directly — convenient for development but bypassing the LLM Harness's budget enforcement, classification, routing, policy, audit, and cost tracking.
+
+To route autopilot through the harness, construct a `HarnessProxy` and pass it to `ExecutorConfig`:
+
+```python
+from sagewai.autopilot.controller.executor import ExecutorConfig
+from sagewai.autopilot.controller.driver import MissionDriver
+from sagewai.harness.proxy import HarnessProxy
+from sagewai.harness.models import HarnessIdentity, HarnessConfig
+from sagewai.harness.router import HarnessRouter
+from sagewai.harness.store import InMemoryHarnessStore
+from sagewai.harness.backend import AnthropicBackend
+
+store = InMemoryHarnessStore()
+router = HarnessRouter(...)  # configure with your tier/policy/budget setup
+proxy = HarnessProxy(
+    store=store,
+    router=router,
+    backends={"anthropic": AnthropicBackend(api_key="...")},
+    config=HarnessConfig(),
+)
+
+identity = HarnessIdentity(key_id="autopilot-default", user_id="autopilot")
+executor_cfg = ExecutorConfig(
+    harness_proxy=proxy,
+    harness_identity=identity,
+)
+
+driver = MissionDriver(executor_config=executor_cfg)
+result = await driver.execute(mission)
+```
+
+When the harness path is taken, every `StepResult` carries:
+
+- `output` — full LLM response content (not the 200-char preview)
+- `messages` — the full system + user + assistant conversation tuple
+- `telemetry` — `StepTelemetry` with `cost_usd`, `input_tokens`, `output_tokens`, `model_used`, `latency_ms`
+
+Curator uses `step.output` directly when available, producing real training samples instead of preview-derived ones. The `telemetry` block is what the v1.1 cost-down second-run claim measures against.
+
+---
+
 ## Need more?
 
 Contact [licensing@sagewai.ai](mailto:licensing@sagewai.ai) for custom rates.

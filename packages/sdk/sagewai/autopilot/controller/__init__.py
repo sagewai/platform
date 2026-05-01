@@ -13,6 +13,7 @@ Public API surface:
 
 - :class:`MissionRunResult` — frozen result of a completed or failed run.
 - :class:`StepResult` — per-node result inside a :class:`MissionRunResult`.
+- :class:`StepTelemetry` — per-step harness telemetry (cost, tokens, routing).
 - :class:`ControllerConfig` — injectable configuration for the controller.
 - :class:`AgentExecutor` — executes a single agent node via LiteLLM.
 - :class:`ExecutorConfig` — configuration for :class:`AgentExecutor`.
@@ -25,7 +26,7 @@ from .driver import MissionDriver
 from .executor import AgentExecutor, ExecutorConfig
 from .fleet_adapter import FleetMissionAdapter
 from .scheduler import CronParser, MissionScheduler, ScheduledMission
-from .types import ControllerConfig, MissionRunResult, StepResult
+from .types import ControllerConfig, MissionRunResult, StepResult, StepTelemetry
 
 __all__ = [
     "AutopilotController",
@@ -35,6 +36,7 @@ __all__ = [
     "ControllerConfig",
     "MissionRunResult",
     "StepResult",
+    "StepTelemetry",
     "FleetMissionAdapter",
     "MissionScheduler",
     "ScheduledMission",

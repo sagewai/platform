@@ -26,6 +26,7 @@ from .controller import (
     MissionDriver,
     MissionRunResult,
     StepResult,
+    StepTelemetry,
 )
 from .curator import (
     Curator,
@@ -134,6 +135,7 @@ __all__ = [
     "ControllerConfig",
     "MissionRunResult",
     "StepResult",
+    "StepTelemetry",
     # Curator (Layer 5 learning loop)
     "Curator",
     "CuratorConfig",

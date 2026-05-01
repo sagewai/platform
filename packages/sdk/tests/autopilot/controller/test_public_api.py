@@ -152,3 +152,11 @@ def test_mission_run_result_is_frozen():
     r = MissionRunResult(mission_id="ms-x", status="completed", steps=(), duration_seconds=0.1)
     with pytest.raises(Exception):
         r.status = "mutated"  # type: ignore[misc]
+
+
+def test_step_telemetry_exported_from_controller():
+    from sagewai.autopilot.controller import StepTelemetry  # noqa: F401
+
+
+def test_step_telemetry_exported_from_autopilot():
+    from sagewai.autopilot import StepTelemetry  # noqa: F401

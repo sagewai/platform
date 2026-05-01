@@ -150,14 +150,23 @@ class Curator:
     def _build_sample(result: MissionRunResult, fmt: DatasetFormat) -> dict[str, Any]:
         """Build a training sample dict from a run result.
 
-        The exact schema per format follows the conventions used by the
-        admin training export endpoint (see ``admin/serve.py``).
+        Prefers ``step.output`` (full LLM response) over
+        ``step.output_preview`` (truncated). Falls back to preview for
+        backward compatibility with steps emitted before the harness
+        wiring landed (and for steps that ran the direct-litellm
+        fallback path).
+
+        The exact schema per format follows the conventions used by
+        the admin training export endpoint (see ``admin/serve.py``).
         """
+        def step_text(s):
+            return s.output or s.output_preview or ""
+
         if fmt == "alpaca":
             return {
                 "instruction": result.mission_id,
                 "input": "",
-                "output": " | ".join(s.output_preview or "" for s in result.steps),
+                "output": " | ".join(step_text(s) for s in result.steps),
             }
         if fmt == "sharegpt":
             return {
@@ -165,7 +174,7 @@ class Curator:
                     {"from": "human", "value": result.mission_id},
                     {
                         "from": "gpt",
-                        "value": " | ".join(s.output_preview or "" for s in result.steps),
+                        "value": " | ".join(step_text(s) for s in result.steps),
                     },
                 ]
             }

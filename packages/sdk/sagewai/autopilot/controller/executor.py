@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import pathlib
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -39,13 +40,32 @@ _GENERIC_SYSTEM_PROMPT = (
 
 
 class ExecutorConfig(BaseModel):
-    """Injectable configuration for :class:`AgentExecutor`."""
+    """Injectable configuration for :class:`AgentExecutor`.
 
-    model_config = ConfigDict(frozen=True)
+    Attributes:
+        model: Default model name for the direct-litellm fallback
+            path (used when ``harness_proxy`` is ``None``).
+        max_tokens: Default ``max_tokens`` for the fallback path.
+        temperature: Default ``temperature`` for the fallback path.
+        harness_proxy: Optional :class:`~sagewai.harness.HarnessProxy`
+            instance. When set together with ``harness_identity``, the
+            executor routes LLM calls through the proxy and gains
+            budget enforcement, classification, routing, policy,
+            audit, and cost tracking. Defaults to ``None`` for
+            backward compatibility (direct-litellm path).
+        harness_identity: Optional
+            :class:`~sagewai.harness.HarnessIdentity` for the proxy
+            calls. Required if ``harness_proxy`` is set; ignored
+            otherwise. Defaults to ``None``.
+    """
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     model: str = "gpt-4o-mini"
     max_tokens: int = 2048
     temperature: float = 0.3
+    harness_proxy: Any | None = None
+    harness_identity: Any | None = None
 
 
 class AgentExecutor:
@@ -89,7 +109,110 @@ class AgentExecutor:
     # ── private ─────────────────────────────────────────────────────
 
     async def _run_llm(self, agent: Agent, context: dict) -> StepResult:
-        """Call litellm and return a StepResult.  Never raises."""
+        """Execute an LLM-kind agent node and return a StepResult.
+
+        Branches between two paths:
+
+        - **Harness path** — when ``ExecutorConfig.harness_proxy`` and
+          ``harness_identity`` are both set, calls
+          :meth:`~sagewai.harness.HarnessProxy.handle_request`. Full
+          output, conversation messages, and telemetry (cost, tokens,
+          model_used, latency) are captured on the returned
+          :class:`StepResult`.
+
+        - **Direct-litellm fallback path** — when either field is
+          ``None``, calls ``litellm.acompletion`` directly. Output is
+          truncated to 200 chars on ``output_preview``; new optional
+          fields (``output``, ``messages``, ``telemetry``) stay
+          ``None``.
+
+        Never raises — all errors are caught and reflected in
+        ``StepResult.status``.
+        """
+        if self._config.harness_proxy is not None and self._config.harness_identity is not None:
+            return await self._run_llm_harness(agent, context)
+        return await self._run_llm_direct(agent, context)
+
+    async def _run_llm_harness(self, agent: Agent, context: dict) -> StepResult:
+        """Harness-routed LLM path. See :meth:`_run_llm` for context."""
+        import time
+
+        from .types import StepTelemetry
+
+        system_prompt = self._load_prompt(agent.prompt_ref)
+        user_message = _build_user_message(context)
+        messages_list = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ]
+
+        proxy = self._config.harness_proxy
+        identity = self._config.harness_identity
+
+        try:
+            t0 = time.monotonic()
+            response = await proxy.handle_request(
+                identity=identity,
+                messages=messages_list,
+                model=self._config.model,
+                stream=False,
+            )
+            latency_ms = (time.monotonic() - t0) * 1000.0
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Agent %r harness call failed: %s", agent.id, exc)
+            return StepResult(
+                node_id=agent.id,
+                status="failed",
+                output_preview=str(exc)[:200],
+            )
+
+        # Extract content from OpenAI-compat response shape.
+        try:
+            text: str = response["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError):
+            text = ""
+
+        # Build assistant turn for messages tuple — what Curator
+        # consumes for ShareGPT-style multi-turn samples.
+        all_messages = (*messages_list, {"role": "assistant", "content": text})
+
+        # Extract telemetry from response. The harness attaches a
+        # ``_harness`` transparency block; usage tokens are at
+        # ``usage`` (OpenAI-compat). Both may be missing in tests
+        # using minimal mocks — defensive defaults below.
+        usage = response.get("usage", {}) if isinstance(response, dict) else {}
+        harness_meta = response.get("_harness", {}) if isinstance(response, dict) else {}
+        model_used = response.get("model") if isinstance(response, dict) else None
+        if not model_used:
+            model_used = self._config.model
+
+        telemetry = StepTelemetry(
+            cost_usd=float(harness_meta.get("cost_usd", 0.0)),
+            input_tokens=int(usage.get("prompt_tokens", 0)),
+            output_tokens=int(usage.get("completion_tokens", 0)),
+            model_used=str(model_used),
+            latency_ms=float(harness_meta.get("latency_ms", latency_ms)),
+        )
+
+        preview = text[:200]
+        logger.debug("Agent %r completed via harness (preview=%r)", agent.id, preview[:60])
+
+        return StepResult(
+            node_id=agent.id,
+            status="completed",
+            output_preview=preview,
+            output=text,
+            messages=all_messages,
+            telemetry=telemetry,
+        )
+
+    async def _run_llm_direct(self, agent: Agent, context: dict) -> StepResult:
+        """Direct-litellm fallback path. Renamed from _run_llm.
+
+        See :meth:`_run_llm` for context. New StepResult fields
+        (``output``, ``messages``, ``telemetry``) stay ``None`` on
+        this path.
+        """
         try:
             import litellm  # local import — optional dependency
         except ModuleNotFoundError:

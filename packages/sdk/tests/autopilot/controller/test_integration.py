@@ -21,10 +21,17 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from sagewai.autopilot._types import MissionState
+from sagewai.autopilot._types import AgentKind, MissionState, Mode
+from sagewai.autopilot.agent_graph import Agent, AgentGraph
+from sagewai.autopilot.blueprint import Blueprint
 from sagewai.autopilot.controller.controller import AutopilotController
+from sagewai.autopilot.controller.executor import ExecutorConfig
+from sagewai.autopilot.controller.driver import MissionDriver
 from sagewai.autopilot.controller.types import ControllerConfig, MissionRunResult
+from sagewai.autopilot.mission import Mission
+from sagewai.autopilot.models import EvalRef, Metric, ProviderRequirement
 from sagewai.autopilot.routing.types import AutoRouted, RankedBlueprint
+from sagewai.harness.models import HarnessIdentity
 from tests.autopilot.fixtures import (
     make_synthetic_batch_blueprint,
     make_synthetic_scheduled_blueprint,
@@ -208,3 +215,110 @@ async def test_two_sequential_missions_are_independent():
     assert res2.status == "completed"
     assert m1.state == MissionState.COMPLETED
     assert m2.state == MissionState.COMPLETED
+
+
+# ── harness path: full mission through HarnessProxy, telemetry end-to-end ──
+
+
+def _make_two_step_llm_blueprint() -> Blueprint:
+    """Minimal 2-node LLM-only blueprint for harness integration tests."""
+    return Blueprint(
+        id="SYNTHETIC_harness_test",
+        version="0.0.1",
+        title="SYNTHETIC harness test fixture",
+        description="Test fixture for harness path integration testing.",
+        category="test",
+        mode=Mode.SCHEDULED,
+        example_goals=("SYNTHETIC: harness integration test goal",),
+        required_slots={},
+        optional_slots={},
+        tools_required=(),
+        providers_required=(
+            ProviderRequirement(role="worker", capability="reasoning", tier="medium"),
+        ),
+        agent_graph=AgentGraph(
+            nodes=(
+                Agent(id="step1", kind=AgentKind.LLM, prompt_ref="p/test.md"),
+                Agent(id="step2", kind=AgentKind.LLM, prompt_ref="p/test.md"),
+            ),
+            edges=(("step1", "step2"),),
+            entry="step1",
+        ),
+        success_criteria=EvalRef(
+            dataset_id="SYNTHETIC_harness_test_eval",
+            metrics=(Metric(name="quality", op=">=", value=1.0),),
+        ),
+    )
+
+
+def _make_scheduled_mission(blueprint: Blueprint) -> Mission:
+    """Create a Mission in SCHEDULED state with the blueprint embedded in slots."""
+    bp_json = blueprint.model_dump_json()
+    mission = Mission(
+        mission_id="ms-harness-test-001",
+        project_id="integration-test",
+        blueprint_id=blueprint.id,
+        blueprint_version=blueprint.version,
+        slots={"__blueprint_json__": bp_json},
+    )
+    # Advance state: DRAFT → APPROVED → SCHEDULED
+    mission.transition_to(MissionState.APPROVED)
+    mission.transition_to(MissionState.SCHEDULED)
+    return mission
+
+
+@pytest.mark.asyncio
+async def test_mission_through_harness_populates_telemetry_end_to_end():
+    """2-step LLM mission through a mocked HarnessProxy populates all StepResult fields.
+
+    Verifies that:
+    - Both LLM steps complete (proxy called twice)
+    - Each StepResult.output matches the mocked content
+    - Each StepResult.messages has system + user + assistant (3 elements)
+    - Each StepResult.telemetry has correct token counts and model name
+    - MissionRunResult.status == "completed" with 2 steps
+    """
+    bp = _make_two_step_llm_blueprint()
+    mission = _make_scheduled_mission(bp)
+
+    # Build an OpenAI-compat dict response mirroring what the harness returns.
+    mock_response = {
+        "choices": [{"message": {"content": "STEP-OUTPUT"}}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        "model": "claude-haiku-4-5-20251001",
+        "_harness": {"cost_usd": 0.0001, "latency_ms": 100.0},
+    }
+
+    # Mock the HarnessProxy at handle_request level — no real proxy needed.
+    proxy = MagicMock()
+    proxy.handle_request = AsyncMock(return_value=mock_response)
+
+    identity = HarnessIdentity(key_id="autopilot-default", user_id="autopilot")
+    cfg = ExecutorConfig(harness_proxy=proxy, harness_identity=identity)
+    driver = MissionDriver(executor_config=cfg)
+
+    result = await driver.execute(mission)
+
+    # Top-level run result
+    assert result.status == "completed"
+    assert len(result.steps) == 2
+
+    # Per-step assertions
+    for step in result.steps:
+        assert step.status == "completed"
+        assert step.output == "STEP-OUTPUT"
+        assert step.messages is not None
+        assert len(step.messages) == 3  # system + user + assistant
+        assert step.messages[0]["role"] == "system"
+        assert step.messages[1]["role"] == "user"
+        assert step.messages[2]["role"] == "assistant"
+        assert step.messages[2]["content"] == "STEP-OUTPUT"
+        assert step.telemetry is not None
+        assert step.telemetry.model_used == "claude-haiku-4-5-20251001"
+        assert step.telemetry.input_tokens == 10
+        assert step.telemetry.output_tokens == 5
+        assert step.telemetry.cost_usd == pytest.approx(0.0001)
+        assert step.telemetry.latency_ms == pytest.approx(100.0)
+
+    # Proxy was called exactly once per LLM step
+    assert proxy.handle_request.await_count == 2

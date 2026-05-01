@@ -293,3 +293,77 @@ def test_curator_clear_pending_jobs_concurrent_no_duplicates():
     assert errors == []
     # After clearing the queue should be empty
     assert c.pending_jobs == []
+
+
+# ── _build_sample — output vs output_preview preference ─────────────────
+
+
+def test_curator_alpaca_uses_full_step_output_when_available():
+    """Curator.process emits Alpaca samples built from step.output, not the 200-char preview."""
+    from sagewai.autopilot.controller.types import StepResult, MissionRunResult
+    from sagewai.autopilot.curator.curator import Curator
+
+    full_text = "A" * 1000
+    steps = (
+        StepResult(
+            node_id="scout",
+            status="completed",
+            output_preview=full_text[:200],
+            output=full_text,
+        ),
+    )
+    result = MissionRunResult(
+        mission_id="m-1",
+        status="completed",
+        steps=steps,
+        duration_seconds=1.0,
+    )
+    sample = Curator._build_sample(result, "alpaca")
+    assert sample["output"] == full_text
+
+
+def test_curator_alpaca_falls_back_to_preview_when_no_full_output():
+    """Backward compat: when step.output is None, Curator uses output_preview."""
+    from sagewai.autopilot.controller.types import StepResult, MissionRunResult
+    from sagewai.autopilot.curator.curator import Curator
+
+    steps = (
+        StepResult(
+            node_id="scout",
+            status="completed",
+            output_preview="legacy preview",
+            output=None,
+        ),
+    )
+    result = MissionRunResult(
+        mission_id="m-1",
+        status="completed",
+        steps=steps,
+        duration_seconds=1.0,
+    )
+    sample = Curator._build_sample(result, "alpaca")
+    assert sample["output"] == "legacy preview"
+
+
+def test_curator_sharegpt_uses_full_step_output_when_available():
+    """ShareGPT format: gpt turn uses full output not preview."""
+    from sagewai.autopilot.controller.types import StepResult, MissionRunResult
+    from sagewai.autopilot.curator.curator import Curator
+
+    full_text = "B" * 800
+    steps = (
+        StepResult(
+            node_id="scout",
+            status="completed",
+            output_preview=full_text[:200],
+            output=full_text,
+        ),
+    )
+    result = MissionRunResult(
+        mission_id="m-1",
+        status="completed",
+        steps=steps,
+        duration_seconds=1.0,
+    )
+    sample = Curator._build_sample(result, "sharegpt")
+    assert sample["conversations"][1]["value"] == full_text
