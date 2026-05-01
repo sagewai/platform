@@ -1,24 +1,30 @@
 # Sagewai
 
-![PyPI](https://img.shields.io/pypi/v/sagewai)
-![License](https://img.shields.io/badge/license-AGPL--3.0-blue)
-![Python](https://img.shields.io/pypi/pyversions/sagewai)
+[![PyPI](https://img.shields.io/pypi/v/sagewai)](https://pypi.org/project/sagewai/)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](https://github.com/sagewai/platform/blob/main/LICENSE)
+[![Python](https://img.shields.io/pypi/pyversions/sagewai)](https://pypi.org/project/sagewai/)
 
-**Agent Infrastructure You Own**
+## The factory that runs itself.
 
-The open-source platform for AI agents that run, remember, and report. Build agents in Python. Operate them from a dashboard. Own everything.
+**Sagewai is the autonomous agent platform: describe the goal, we design the agents, run them in production, and fine-tune local models so every run gets cheaper.**
 
-## The 5 Pillars
+> *Five pillars hold up the platform; one spine runs through all of them — that's what makes the agent platform safe to give a credit card.*
 
-| Pillar | Description |
+## Five pillars
+
+| Pillar | What it does |
 |--------|-------------|
-| **SDK** | Build agents with multi-model support, tools, memory, guardrails, and durable workflows |
-| **Registry** | Store, version, discover, and govern AI agents across your organization |
-| **Harness** | Proxy, route, and budget-control all LLM access (Claude Code, Cursor, Codex) |
-| **Observatory** | Source of truth for all AI expenditure -- costs, tokens, audit trails, metrics |
-| **Training** | Fine-tune domain LLMs with Unsloth, serve locally at $0/token |
+| **SDK** | Python-native agent runtime — multi-model providers, tools via MCP gateway, typed memory with extraction strategies and per-mission branching and checkpoint save/restore, guardrails, and LLM proxy in one import |
+| **Autopilot** | State the goal in plain English. Autopilot designs the agent graph, extracts the slots, previews the plan, runs the mission, and heals on failure. The headline experience of the platform |
+| **Fleet** | Distributed workers with capability-based dispatch, project isolation, enrollment keys, and isolated execution sandboxes (image families, Kubernetes backend, AgentCore-runtime backend, pooling). Run agents on your hardware, in your network |
+| **Observatory** | OpenTelemetry tracing, VictoriaMetrics metrics, Grafana dashboards, cost tracking, audit trail. Your AI source of truth |
+| **Training Loop** | Curate production runs, export for Unsloth, fine-tune local models, promote the good ones. Agents that get cheaper with use |
 
-## Quick Start
+## One spine — Sealed
+
+Defense-in-depth security across all five pillars: per-CLI workload identity, externalised secret backends with JIT credentials, prompt + tool-output redaction at the RPC boundary, replay safety, per-CLI ACL, JIT-HITL callbacks, reactive directives. Five phases, twelve specs — the security model agent platforms have been ignoring.
+
+## Quick start
 
 ```bash
 pip install sagewai
@@ -32,9 +38,9 @@ agent = UniversalAgent(name="hello", model="gpt-4o-mini")
 print(asyncio.run(agent.chat("What is Sagewai?")))
 ```
 
-Three lines to create an agent. Works with GPT-4o, Claude, Gemini, Mistral, Ollama, and 100+ models via LiteLLM.
+Three lines to your first agent. Works with GPT-4o, Claude, Gemini, Mistral, Ollama, and 100+ models via LiteLLM.
 
-## Install Extras
+## Install extras
 
 | Extra | What it adds |
 |-------|-------------|
@@ -48,19 +54,13 @@ Three lines to create an agent. Works with GPT-4o, Claude, Gemini, Mistral, Olla
 
 ## Examples
 
-21 progressive examples organized by pillar:
+Examples organised under the five-pillar architecture (see [`sagewai/examples/`](sagewai/examples/)):
 
-**SDK** (01-08): Hello agent, tools, multi-model, memory, workflows, guardrails, MCP, directives
-
-**Harness** (09-13): Claude Code proxy, Cursor proxy, Codex proxy, budget enforcement, model routing
-
-**Registry** (14-16): Register agents, discover agents, agent governance
-
-**Training** (17-19): Unsloth fine-tune, local LLM routing, domain models
-
-**Enterprise** (20-21): Fleet workers, full stack setup
-
-See [`sagewai/examples/`](sagewai/examples/) for all examples.
+- **SDK** — `01_hello_agent.py` through `08_directives.py`: agents, tools, multi-model, memory strategies, workflows, guardrails, MCP, directives.
+- **Autopilot** — `09_*_autopilot.py` group: goal-driven missions, agent-graph design, slot extraction.
+- **Fleet** — `26_fleet_demo.py`: workers, capability dispatch, project scoping, sandbox execution.
+- **Observatory** — examples emit OTel spans and Prometheus metrics consumed by the local Grafana stack.
+- **Training Loop** — `25_training_pipeline.py`: collect, curate, export Alpaca/ShareGPT, fine-tune with Unsloth.
 
 ## CLI
 
@@ -68,21 +68,21 @@ See [`sagewai/examples/`](sagewai/examples/) for all examples.
 sagewai init my-project              # scaffold a new project
 sagewai doctor                       # check environment health
 sagewai agent run my_agent.yaml      # run an agent from config
-sagewai harness start                # start the LLM proxy
+sagewai admin serve --port 8000      # start the admin UI + API
 ```
 
 ## Documentation
 
-- [docs.sagewai.ai](https://docs.sagewai.ai) -- full documentation
-- [Getting Started](https://docs.sagewai.ai/docs/getting-started) -- quickstart guide
-- [LLM Harness Guide](https://docs.sagewai.ai/docs/guides/harness) -- govern AI coding tool costs
+- [docs.sagewai.ai](https://docs.sagewai.ai) — full documentation
+- [Getting Started](https://docs.sagewai.ai/docs/getting-started) — quickstart guide
+- [Architecture](https://docs.sagewai.ai/docs/architecture) — runtime topology, security tiers, execution modes, execution backends
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and PR process.
+See [CONTRIBUTING.md](https://github.com/sagewai/platform/blob/main/CONTRIBUTING.md) for development setup, code style, and PR process.
 
 ## License
 
-AGPL-3.0 -- see [LICENSE](LICENSE). Commercial licenses available for organizations that need an alternative to AGPL. See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) for details.
+AGPL-3.0-or-later — see [LICENSE](https://github.com/sagewai/platform/blob/main/LICENSE). Commercial licenses available for organisations that need an alternative to AGPL. See [COMMERCIAL_LICENSE.md](https://github.com/sagewai/platform/blob/main/COMMERCIAL_LICENSE.md) for details.
 
-Built by [Ali Arda Diri](https://sagecurator.com).
+Built by [Ali Arda Diri](https://github.com/sagewai).

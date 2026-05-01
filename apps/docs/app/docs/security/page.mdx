@@ -1,0 +1,53 @@
+# Security — five pillars hold up the platform, one spine runs through all of them
+
+> **Five pillars hold up the platform; one spine runs through all of them — that's what makes the agent platform safe to give a credit card.**
+
+This is the page security reviewers, CISOs, and compliance teams arrive at. Sagewai's security model is **Sealed** — a defense-in-depth architecture that runs across the five pillars (SDK, Autopilot, Fleet, Observatory, Training Loop). It is not a feature bolted onto one pillar; it is the spine.
+
+## The threat model
+
+Most agent platforms ignore the question their security review will eventually ask: *what happens when the model gets prompt-injected and tries to exfiltrate the customer's API keys?*
+
+Today's answer in most frameworks: it exfiltrates them. There is no boundary. The model has full read access to anything the agent process can reach, including environment variables, configuration files, and any secrets passed in via tool arguments.
+
+Sealed's answer:
+
+- **Per-CLI workload identity** (Sealed I) means each agent runs under a verifiable, scoped identity — not a shared `OPENAI_API_KEY` lifted from the parent process.
+- **Externalised secret backends with JIT credentials** (Sealed II) mean secrets resolve at the moment of need from HashiCorp Vault, AWS Secrets Manager, or AgentCore Identity — never sit in agent memory long.
+- **Prompt + tool-output redaction at the RPC boundary** (Sealed III-B) catches injection attempts before they land in the next LLM turn.
+- **Replay safety** (Sealed III-C) means the original prompt is preserved and re-injected on retries — the model cannot be tricked into a drift.
+- **Per-CLI secret allowlist / ACL** (Sealed III-D) means a tool that doesn't need a secret can't even ask for it.
+- **JIT-HITL** (Sealed IV) means high-privilege actions trigger a human-in-the-loop callback; credentials issued just-in-time per approval.
+- **Reactive directives** (Sealed V) catch behavioural drift at runtime — automatic mission abort on policy violation.
+
+## The phases
+
+| Phase | What it adds | v1.0 status |
+|---|---|---|
+| **I — Profile management** | Per-CLI workload identity. Each agent process has a verifiable, scoped identity. | merged |
+| **II — Vault** | Externalised secret backends — HashiCorp Vault, AWS Secrets Manager, AgentCore Identity. JIT credentials, never in memory long. | merged |
+| **III-A — Revocation** | Identity revocation, cascading where needed. | experimental in v1.0 |
+| **III-B — Redaction** | Prompt + tool-output redaction at the RPC boundary. | designed; ships in v1.2 |
+| **III-C — Replay safety** | Original-injection persistence + replay path. | designed; ships in v1.2 |
+| **III-D — ACL** | Per-CLI secret allowlist. | designed; ships in v1.2 |
+| **IV — JIT HITL** | Human-in-the-loop callback for high-privilege actions; JIT credentials per approval. | designed; ships in v1.2 |
+| **V — Reactive directives** | Runtime defense — drift detection, behavioural envelopes, automatic mission abort. | designed; ships in v1.3 |
+
+## Where the spine touches each pillar
+
+- **At the SDK** — agent code runs under a Sealed profile; secrets resolved via vault backends, never embedded.
+- **At the Fleet** — workers carry workload identity; dispatched secrets are JIT, scoped to the mission, revocable.
+- **At Autopilot** — JIT-HITL callbacks for actions above policy threshold; reactive directives can abort a mission mid-run.
+- **At the Observatory** — every credential access logged; replay safety means audit logs reproduce the exact original prompt.
+- **At the Training Loop** — Curator records redacted, ACL-gated retrieval over training data; fine-tunes never see what they shouldn't.
+
+## See also
+
+- [Architecture overview](/docs/architecture)
+- [Runtime topology](/docs/architecture/runtime-topology)
+- [Security tiers](/docs/architecture/security-tiers)
+- [Execution backends](/docs/architecture/execution-backends)
+
+---
+
+*Sagewai is licensed under AGPL-3.0-or-later, with commercial dual licensing for organisations that need an alternative to AGPL. Enterprise tier includes SOC 2 / ISO 27001 audit export and self-hosted Sagewai-LLM in customer VPC.*

@@ -2,13 +2,13 @@
 
 > **The factory that runs itself.**
 >
-> Sagewai is the autonomous agent platform. Describe the goal — we design the agents, run them in production, and fine-tune local models so every run gets cheaper.
+> **Sagewai is the autonomous agent platform: describe the goal, we design the agents, run them in production, and fine-tune local models so every run gets cheaper.**
 
 ---
 
 ## What it is
 
-Sagewai is the autonomous agent platform for developers. You describe the goal; we design the agents, run them in production, and fine-tune cheaper local models from the outcomes.
+Sagewai is the autonomous agent platform for developers, infra engineers, production teams, and vertical SaaS founders. You describe the goal; we design the agents, run them in production under per-CLI workload identity, and fine-tune cheaper local models from the outcomes.
 
 ## Why it exists
 
@@ -27,15 +27,25 @@ flowchart LR
     T -.local models get cheaper.-> F
 ```
 
-## What you get
+## What you get — five pillars and one spine
+
+**Autopilot is the north star.** *State the goal, get the agent.* Five pillars are the architectural surfaces that make autopilot real in production. Sealed is the spine that runs through all five.
+
+### The five pillars
 
 | Pillar | What it does |
 |---|---|
-| **SDK** | Python-native agent runtime — multi-model, tools via MCP, memory, guardrails, and LLM proxy in one import. |
-| **Autopilot** | State the goal. Autopilot designs the agent graph, extracts the slots, previews the plan, runs the mission, and heals on failure. |
-| **Fleet** | Distributed workers with capability-based dispatch, project isolation, and enrollment keys. Run agents on your hardware, in your network. |
+| **SDK** | Python-native agent runtime — multi-model providers, tools via MCP gateway, typed memory with extraction strategies and per-mission branching and checkpoint save/restore, guardrails, and LLM proxy in one import. |
+| **Autopilot** | State the goal in plain English. Autopilot designs the agent graph, extracts the slots, previews the plan, runs the mission, and heals on failure. The headline experience of the platform. |
+| **Fleet** | Distributed workers with capability-based dispatch, project isolation, enrollment keys, and isolated execution sandboxes (image families, Kubernetes backend, AgentCore-runtime backend, pooling). Run agents on your hardware, in your network. |
 | **Observatory** | OpenTelemetry tracing, VictoriaMetrics metrics, Grafana dashboards, cost tracking, audit trail. Your AI source of truth. |
 | **Training Loop** | Curate production runs, export for Unsloth, fine-tune local models, promote the good ones. Agents that get cheaper with use. |
+
+### The spine — Sealed
+
+> **Five pillars hold up the platform; one spine runs through all of them — that's what makes the agent platform safe to give a credit card.**
+
+A defense-in-depth security model that runs across all five pillars. Per-CLI workload identity at the SDK level, externalised secret backends and JIT credentials at the Fleet level, JIT-HITL callbacks at Autopilot, replay-safe audit at the Observatory, ACL-gated retrieval inside the Training Loop. Five phases, twelve specs — built for the threat model agent platforms have been ignoring.
 
 ## Versus the field
 
@@ -51,8 +61,9 @@ flowchart LR
 ## Who it's for
 
 - **Developer building an app.** State what the app should do, let autopilot design the agents, ship the result.
-- **Infra engineer deploying agent workloads.** Use the fleet to run agents on your own pods and hardware, with LLM-aware dispatch and zero-trust workers.
+- **Infra engineer deploying agent workloads.** Use the fleet to run agents on your own pods and hardware, with LLM-aware dispatch and Sealed zero-trust workers.
 - **Team operating agents in production.** Durable workflows survive crashes; the observatory answers "what did AI cost us this month?"; the training loop drives unit cost down over time.
+- **Vertical SaaS founder.** Build the product on Sagewai under the white-label tier — fleet, observatory, training loop and Sealed without building any of it.
 
 ## Try it
 

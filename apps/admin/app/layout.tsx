@@ -119,7 +119,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="apple-touch-icon" href="/brand/sagewai_icon.webp" />
         <meta name="application-name" content="Sagewai Admin" />
         <meta property="og:title" content="Sagewai Admin" />
-        <meta property="og:description" content="Agent Infrastructure You Own — manage agents, workflows, and AI infrastructure" />
+        <meta property="og:description" content="Sagewai is the autonomous agent platform: describe the goal, we design the agents, run them in production, and fine-tune local models so every run gets cheaper." />
         <meta property="og:image" content="/brand/sagewai_logo.webp" />
         {/* External script for CSP compliance — avoids unsafe-inline */}
         <script src="/theme-init.js" />

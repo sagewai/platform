@@ -5,6 +5,7 @@ import {
   Shield,
   BarChart3,
   GraduationCap,
+  Lock,
 } from 'lucide-react';
 import { FeatureCard } from '@/components/feature-card';
 import { CodeBlock } from '@/components/code-block';
@@ -16,7 +17,7 @@ const FEATURES = [
     icon: <Code2 size={28} />,
     title: 'SDK',
     description:
-      'Python-native agent runtime — multi-model, tools via MCP, memory, guardrails, and LLM proxy in one import. Three lines to your first agent, 100+ models via LiteLLM.',
+      'Python-native agent runtime — multi-model providers, tools via MCP gateway, typed memory with extraction strategies and per-mission branching and checkpoint save/restore, guardrails, and LLM proxy in one import. Three lines to your first agent, 100+ models via LiteLLM.',
   },
   {
     icon: <Database size={28} />,
@@ -28,7 +29,7 @@ const FEATURES = [
     icon: <Shield size={28} />,
     title: 'Fleet',
     description:
-      'Distributed workers with capability-based dispatch, project isolation, and enrollment keys. Run agents on your hardware, in your network — zero data egress.',
+      'Distributed workers with capability-based dispatch, project isolation, enrollment keys, and isolated execution sandboxes (image families, Kubernetes backend, AgentCore-runtime backend, pooling). Run agents on your hardware, in your network.',
   },
   {
     icon: <BarChart3 size={28} />,
@@ -43,6 +44,13 @@ const FEATURES = [
       'Curate production runs, export for Unsloth, fine-tune local models, promote the good ones. Agents that get cheaper with use — $0 per token at the limit.',
   },
 ];
+
+const SPINE = {
+  icon: <Lock size={28} />,
+  title: 'One spine — Sealed',
+  description:
+    'Defense-in-depth security across all five pillars: per-CLI workload identity, externalised secret backends with JIT credentials, redaction at the RPC boundary, replay safety, per-CLI ACL, JIT-HITL callbacks, reactive directives. Five phases, twelve specs — the security model agent platforms have been ignoring.',
+};
 
 const MODELS = [
   { name: 'GPT-4o', provider: 'OpenAI' },
@@ -176,9 +184,9 @@ export default function LandingPage() {
               that runs itself.
             </h1>
             <p className="text-xl text-text-secondary leading-relaxed mb-10 max-w-[42rem] mx-auto">
-              Sagewai is the autonomous agent platform. Describe the goal — we design
-              the agents, run them in production, and fine-tune local models so every
-              run gets cheaper.
+              Sagewai is the autonomous agent platform: describe the goal, we design the
+              agents, run them in production, and fine-tune local models so every run
+              gets cheaper.
             </p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
               <Link
@@ -209,8 +217,8 @@ export default function LandingPage() {
       <section className="max-w-6xl mx-auto px-6 py-20">
         <div className="text-center mb-12">
           <h2 className="text-3xl font-bold text-text-primary mb-3">What you get</h2>
-          <p className="text-text-secondary max-w-[42rem] mx-auto">
-            The five pillars of the autonomous agent platform — SDK, Autopilot, Fleet, Observatory, Training Loop.
+          <p className="text-text-secondary max-w-[42rem] mx-auto italic">
+            Five pillars hold up the platform; one spine runs through all of them — that&apos;s what makes the agent platform safe to give a credit card.
           </p>
         </div>
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -218,6 +226,15 @@ export default function LandingPage() {
             <FeatureCard key={f.title} icon={f.icon} title={f.title} description={f.description} />
           ))}
         </div>
+      </section>
+
+      {/* Sealed spine — visually distinct from the pillar grid */}
+      <section className="max-w-4xl mx-auto px-6 pb-20">
+        <FeatureCard
+          icon={SPINE.icon}
+          title={SPINE.title}
+          description={SPINE.description}
+        />
       </section>
 
       {/* Code Examples Section */}
@@ -287,20 +304,20 @@ export default function LandingPage() {
                 items: ['BaseAgent', 'Strategies', 'Workflows', 'Memory & RAG', 'Guardrails'],
               },
               {
-                label: 'Registry',
-                items: ['Agent Store', 'MCP Protocol', '40 Connectors', 'A2A Protocol'],
+                label: 'Autopilot',
+                items: ['Goal Router', 'Mission Driver', 'Slot Extraction', 'Plan Preview', 'Self-Healing'],
               },
               {
-                label: 'Harness',
-                items: ['LLM Proxy', 'Model Routing', 'Policy Engine', 'Budget Enforcement'],
+                label: 'Fleet',
+                items: ['Workers', 'Sandbox Backends', 'Capability Dispatch', 'Project Isolation', 'Image Families'],
               },
               {
                 label: 'Observatory',
                 items: ['Cost Tracking', 'Audit Logs', 'Prometheus Metrics', 'OpenTelemetry'],
               },
               {
-                label: 'Training',
-                items: ['Unsloth Integration', 'Local LLM Discovery', 'Fine-Tuning Pipeline', 'Domain Models'],
+                label: 'Training Loop',
+                items: ['Curator', 'Unsloth Integration', 'Promoter', 'Local LLM Discovery', 'Fine-Tuning Pipeline'],
               },
             ].map((col) => (
               <div key={col.label} className="bg-bg-page rounded-xl border border-border p-5">
@@ -364,7 +381,7 @@ export default function LandingPage() {
                 />
               </div>
               <p className="text-sm text-text-muted mt-2">
-                Agent infrastructure you own.
+                The factory that runs itself.
               </p>
             </div>
             <div>

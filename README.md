@@ -6,7 +6,9 @@
 
   <h3>The factory that runs itself.</h3>
 
-  <p><strong>Sagewai is the autonomous agent platform.</strong> Describe the goal — we design the agents, run them in production, and fine-tune local models so every run gets cheaper.</p>
+  <p><strong>Sagewai is the autonomous agent platform: describe the goal, we design the agents, run them in production, and fine-tune local models so every run gets cheaper.</strong></p>
+
+  <p><em>Five pillars hold up the platform; one spine runs through all of them — that's what makes the agent platform safe to give a credit card.</em></p>
 
   [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](./LICENSE)
   [![PyPI](https://img.shields.io/pypi/v/sagewai.svg)](https://pypi.org/project/sagewai/)
@@ -36,11 +38,13 @@ cheaper over time.
 
 Unlike frameworks that stop at `agent.run()`, Sagewai ships the whole loop:
 
-- **SDK** — Python-native runtime with multi-model, tools via MCP, memory, guardrails, and LLM proxy in one import
-- **Autopilot** — state the goal, autopilot designs and runs the agent graph
-- **Fleet** — distributed workers with capability dispatch and project isolation
+- **SDK** — Python-native runtime with multi-model providers, tools via MCP gateway, typed memory with extraction strategies and per-mission branching and checkpoint save/restore, guardrails, and LLM proxy in one import
+- **Autopilot** — state the goal in plain English; autopilot designs the agent graph, extracts the slots, previews the plan, runs the mission, and heals on failure
+- **Fleet** — distributed workers with capability-based dispatch, project isolation, enrollment keys, and isolated execution sandboxes (image families, Kubernetes backend, AgentCore-runtime backend, pooling)
 - **Observatory** — OpenTelemetry tracing, VictoriaMetrics metrics, Grafana dashboards, cost tracking, audit trail
 - **Training Loop** — curate runs, fine-tune local models with Unsloth, drive cost per run down over time
+
+**Plus one spine — Sealed.** A defense-in-depth security model that runs across all five pillars: per-CLI workload identity, externalised secret backends with JIT credentials, redaction at the RPC boundary, replay safety, per-CLI ACL, JIT-HITL callbacks, reactive directives. The security model agent platforms have been ignoring.
 
 All AGPL-3.0. All one `pip install` or `docker compose up`. All self-hostable on your own hardware, forever.
 

@@ -34,7 +34,14 @@ const SECTIONS: NavSection[] = [
       { label: 'Sandbox Backends', href: '/docs/architecture/sandbox-backends' },
     ],
   },
-  // ── Pillar: SDK ──────────────────────────────────────────────
+  // ── The spine: Sealed (cross-cutting; not a pillar) ──────────
+  {
+    title: 'Security',
+    items: [
+      { label: 'Sealed — five pillars, one spine', href: '/docs/security' },
+    ],
+  },
+  // ── Pillar 1: SDK ────────────────────────────────────────────
   {
     title: 'SDK',
     items: [
@@ -52,29 +59,23 @@ const SECTIONS: NavSection[] = [
       { label: 'Client Wrappers (17 Languages)', href: '/docs/guides/client-wrappers' },
     ],
   },
-  // ── Pillar: Registry ─────────────────────────────────────────
+  // ── Pillar 2: Autopilot ──────────────────────────────────────
   {
-    title: 'Registry',
+    title: 'Autopilot',
     items: [
-      { label: 'Tools & MCP', href: '/docs/api-reference/tools' },
-      { label: 'MCP Protocol', href: '/docs/api-reference/mcp' },
-      { label: 'MCP Server', href: '/docs/guides/mcp-server' },
-      { label: 'External Access', href: '/docs/guides/external-access' },
-      { label: 'Gateway Streaming', href: '/docs/guides/gateway-streaming' },
+      { label: 'Overview', href: '/docs/autopilot' },
     ],
   },
-  // ── Pillar: Harness ──────────────────────────────────────────
+  // ── Pillar 3: Fleet (promoted from Deployment) ───────────────
   {
-    title: 'Harness',
+    title: 'Fleet',
     items: [
-      { label: 'LLM Harness', href: '/docs/guides/harness' },
-      { label: 'Cost Management', href: '/docs/guides/cost-management' },
-      { label: 'PII Protection', href: '/docs/guides/pii-protection' },
-      { label: 'Local Inference', href: '/docs/guides/local-inference' },
-      { label: 'CI/CD Integration', href: '/docs/guides/ci-cd' },
+      { label: 'Fleet Architecture (Enterprise)', href: '/docs/guides/fleet-enterprise' },
+      { label: 'Fleet Deployment', href: '/docs/guides/fleet' },
+      { label: 'Fleet Deep Dive', href: '/docs/guides/fleet-architecture' },
     ],
   },
-  // ── Pillar: Observatory ──────────────────────────────────────
+  // ── Pillar 4: Observatory ────────────────────────────────────
   {
     title: 'Observatory',
     items: [
@@ -83,21 +84,39 @@ const SECTIONS: NavSection[] = [
       { label: 'REST API', href: '/docs/api-reference/rest-api' },
     ],
   },
-  // ── Pillar: Training ─────────────────────────────────────────
+  // ── Pillar 5: Training Loop ──────────────────────────────────
   {
-    title: 'Training',
+    title: 'Training Loop',
     items: [
       { label: 'Self-Learning Agents', href: '/docs/core-concepts/self-learning' },
       { label: 'Training & Fine-Tuning', href: '/docs/guides/training' },
+    ],
+  },
+  // ── Cross-cutting integration topics ─────────────────────────
+  {
+    title: 'Tools & MCP',
+    items: [
+      { label: 'Tools & MCP', href: '/docs/api-reference/tools' },
+      { label: 'MCP Protocol', href: '/docs/api-reference/mcp' },
+      { label: 'MCP Server', href: '/docs/guides/mcp-server' },
+      { label: 'External Access', href: '/docs/guides/external-access' },
+      { label: 'Gateway Streaming', href: '/docs/guides/gateway-streaming' },
+    ],
+  },
+  {
+    title: 'LLM Proxy',
+    items: [
+      { label: 'LLM Harness', href: '/docs/guides/harness' },
+      { label: 'Cost Management', href: '/docs/guides/cost-management' },
+      { label: 'PII Protection', href: '/docs/guides/pii-protection' },
+      { label: 'Local Inference', href: '/docs/guides/local-inference' },
+      { label: 'CI/CD Integration', href: '/docs/guides/ci-cd' },
     ],
   },
   // ── Deployment & Reference ───────────────────────────────────
   {
     title: 'Deployment',
     items: [
-      { label: 'Fleet Architecture (Enterprise)', href: '/docs/guides/fleet-enterprise' },
-      { label: 'Fleet Deployment', href: '/docs/guides/fleet' },
-      { label: 'Fleet Deep Dive', href: '/docs/guides/fleet-architecture' },
       { label: 'Self-Hosted Deployment', href: '/docs/guides/self-hosted' },
       { label: 'Hardware Requirements', href: '/docs/guides/hardware-requirements' },
       { label: 'Infrastructure Management', href: '/docs/guides/infrastructure' },

@@ -10,7 +10,8 @@ The following are trademarks of Ali Arda Diri:
 - **Sagewai** (name)
 - **Sagewai logo** (all variations)
 - **"Sage" prefix** when used in the context of AI agent software (e.g., Sagewai, Sagecurator)
-- **"Agent Infrastructure You Own"** (tagline)
+- **"The factory that runs itself."** (tagline; canonical from 2026-05-01)
+- **"Agent Infrastructure You Own"** (tagline; historical, retired from active use on 2026-05-01 but trademark protection retained)
 
 ## What You CAN Do
 
