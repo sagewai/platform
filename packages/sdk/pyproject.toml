@@ -158,6 +158,7 @@ asyncio_mode = "auto"
 markers = [
     "integration: tests that require external services (PostgreSQL)",
     "perf: performance micro-benchmarks with fixed time budgets",
+    "soak: long-running memory & RAG soak tests — not part of default suite",
 ]
 
 [tool.black]
