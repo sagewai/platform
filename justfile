@@ -116,7 +116,7 @@ test: sdk-test
 
 # Run SDK unit tests (full suite, ~17s) directly via pytest
 sdk-test:
-    uv run --package sagewai pytest packages/sdk/tests/ -m "not integration and not perf" -o "addopts="
+    uv run --package sagewai --group test pytest packages/sdk/tests/ -m "not integration and not perf" -o "addopts="
 
 # Run admin Playwright e2e tests (auto-starts backend + frontend)
 admin-e2e:
@@ -167,7 +167,7 @@ smoke: sdk-smoke
 
 # Run SDK smoke tests directly (35 tests, ~0.1s)
 sdk-smoke:
-    uv run --package sagewai pytest packages/sdk/tests/test_smoke.py -v -o "addopts="
+    uv run --package sagewai --group test pytest packages/sdk/tests/test_smoke.py -v -o "addopts="
 
 # ── Perf ───────────────────────────────────────────────────────────────────
 # Performance micro-benchmarks with fixed time budgets that fail CI on regression.
@@ -177,7 +177,7 @@ perf: sdk-perf
 
 # Run SDK performance micro-benchmarks
 sdk-perf:
-    uv run --package sagewai pytest packages/sdk/tests/test_perf.py -v -m perf -o "addopts="
+    uv run --package sagewai --group test pytest packages/sdk/tests/test_perf.py -v -m perf -o "addopts="
 
 # Run the Plan 1.5 sandbox pool warm-acquire benchmark
 bench-pool:
