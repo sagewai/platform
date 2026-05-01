@@ -51,6 +51,7 @@ class MemoryProvider(Protocol):
 
 
 from sagewai.memory.branch import MemoryBranch  # noqa: E402
+from sagewai.memory.global_memory import GlobalMemory  # noqa: E402
 from sagewai.memory.strategies import (  # noqa: E402
     ExtractedRecord,
     MemoryStrategy,
@@ -75,6 +76,7 @@ from sagewai.memory.vector import VectorMemory  # noqa: E402
 
 __all__ = [
     "ExtractedRecord",
+    "GlobalMemory",
     "GraphMemory",
     "MemoryBranch",
     "MemoryProvider",
