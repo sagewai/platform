@@ -303,6 +303,8 @@ class WorkflowWorker:
         sandbox_scratch_root: Path | None = None,
         sandbox_kubernetes_config: dict | None = None,
         project_environment: str | None = None,
+        # ── fleet registry (for pool_stats heartbeat forwarding) ──────
+        fleet_registry: Any | None = None,
     ) -> None:
         self._store = store
         self._registry = workflow_registry
@@ -331,6 +333,7 @@ class WorkflowWorker:
         self._kubernetes_config = sandbox_kubernetes_config
         self._project_environment = project_environment
         self._sandbox_pool: SandboxPool | None = None
+        self._fleet_registry = fleet_registry
 
     @property
     def worker_id(self) -> str:
@@ -446,21 +449,30 @@ class WorkflowWorker:
                     try:
                         await self._store.worker_heartbeat(self.worker_id)
                         _last_worker_heartbeat = now
-                        # TODO(pool-stats-heartbeat): emit pool_stats to fleet
-                        # registry alongside this store heartbeat.  The
-                        # InMemoryFleetRegistry.worker_heartbeat() already
-                        # accepts a `pool_stats` kwarg, but WorkflowWorker
-                        # currently holds no reference to a fleet registry —
-                        # it only has a postgres store.  Wiring requires
-                        # either injecting the fleet registry here or having
-                        # the store forward the snapshot.  Tracked in
-                        # https://github.com/sagewai/platform/issues — file
-                        # a follow-up issue to thread self._sandbox_pool
-                        # .stats_snapshot() through to the fleet registry.
                     except Exception:  # noqa: broad-exception-caught
                         logger.warning(
                             "Worker heartbeat failed for %s", self.worker_id
                         )
+
+                    # Forward pool stats to the fleet registry so the admin UI
+                    # `<PoolStatsPanel>` can render live data. Only when both
+                    # a fleet registry and a sandbox pool are configured.
+                    if (
+                        self._fleet_registry is not None
+                        and self._sandbox_pool is not None
+                    ):
+                        try:
+                            snap = await self._sandbox_pool.stats_snapshot()
+                            await self._fleet_registry.heartbeat(
+                                self.worker_id,
+                                pool_stats=snap.model_dump(mode="json"),
+                            )
+                        except Exception:  # noqa: broad-exception-caught
+                            logger.warning(
+                                "Pool-stats heartbeat to fleet registry failed for %s",
+                                self.worker_id,
+                                exc_info=True,
+                            )
 
                 # Wait for poll_interval or shutdown, whichever first
                 try:
