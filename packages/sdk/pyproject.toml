@@ -38,7 +38,7 @@ classifiers = [
 ]
 dependencies = [
     "litellm==1.83.14",
-    "google-genai==1.72.0",
+    "google-genai==1.73.1",
     "pydantic>=2.12.5",
     "python-dotenv==1.2.2",
     "httpx==0.28.1",
