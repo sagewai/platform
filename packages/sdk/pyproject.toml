@@ -70,7 +70,7 @@ memory = [
 ]
 fastapi = [
     "fastapi==0.136.1",
-    "sse-starlette==3.3.4",
+    "sse-starlette==3.4.1",
     "uvicorn==0.44.0",
 ]
 postgres = [
@@ -121,7 +121,7 @@ test = [
     "pytest-asyncio>=0.23.0",
     "pytest-httpx>=0.30.0",
     "fastapi>=0.136.1",
-    "sse-starlette>=1.6.0",
+    "sse-starlette>=3.4.1",
     "uvicorn>=0.23.0",
     "httpx>=0.25.0",
     "asyncpg>=0.29.0",
