@@ -214,7 +214,9 @@ When in doubt: leave it. The author can always add more in another PR.
 
 ---
 
-## Thread 2 — Plan 1.5 sandbox pooling (Docker first; backend-agnostic design)
+## Thread 2 — Plan 1.5 sandbox pooling (Docker first; backend-agnostic design)  ✅ SHIPPED (PR #169, 2026-04-27)
+
+**Status:** Warm pool + backend-agnostic Protocol shipped. SandboxPool is reused unchanged by future Kubernetes / Lambda backends (Thread 3 onward).
 
 **Goal:** pool sandboxes between runs so cold-start overhead is amortized; design over the SandboxBackend Protocol so KubernetesBackend and LambdaBackend (later threads) can plug in without changing the pooling logic.
 
@@ -339,7 +341,11 @@ Plan to: docs/superpowers/plans/YYYY-MM-DD-sandbox-k8s-backend.md
 
 ---
 
-## Thread 4 — Plan ART (artifact destination resolver)
+## Thread 4 — Plan ART (artifact destination resolver)  ✅ SHIPPED (PR #171, 2026-04-28)
+
+**Status:** Shipped: `sagewai.artifacts` package with `ArtifactDestination` model, three uploaders (GitHub / S3 / Local), single-level cascade (run > admin > code), `apply_artifact_destination` runtime hook, admin UI card on `/sealed/workflows`, audit pipeline events. Future per-step CLI-dispatch plan calls the runtime hook to integrate.
+
+**Follow-up:** [#187](https://github.com/sagewai/platform/issues/187) — `SandboxBackend.start()` needs a `host_mounts` kwarg so LocalUploader works on DockerBackend (open question §13.4 in the spec). NullBackend works today without remap.
 
 **Goal:** formalise where Mode 3 CLI agent outputs land (GitHub repo / S3 / mounted folder); inject the right credentials per workflow.
 

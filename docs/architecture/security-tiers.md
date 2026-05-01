@@ -108,7 +108,7 @@ Sagewai has two human roles in the credential model:
 
 1. **Tier-2 plaintext never crosses the worker host process boundary.** The `SecretProvider.env_for(...)` returns env that is set on container start by the sandbox backend's native env-injection primitive. It is never logged, never written to postgres in plaintext (even via Sealed-i's encrypted profile file, only the encrypted form is on disk).
 
-   Sealed-iii.B (PR pending) actively enforces this: the host-side
+   Sealed-iii.B ([#191](https://github.com/sagewai/platform/pull/191)) actively enforces this: the host-side
    RPC seam runs every `ToolResult.stdout/stderr/error` through a
    `Redactor` built from the run's resolved secret values; matches
    fire `redaction.match` audit events. The

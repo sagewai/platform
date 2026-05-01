@@ -356,8 +356,8 @@ Total: 1 customer LLM bill (Step 2), 0 customer credentials touched outside the 
 | Mode-aware runner refactor — per-step (future) | All — moves `execution_mode` to the step level so a single run can mix modes |
 | Plan 1.5 (sandbox pooling) | Modes 1+ — pools the sandbox containers |
 | Plan ART (artifact destination, shipped) | Mode 3+ — formalises the artifact upload contract; ships GitHub / S3 / local uploaders + admin UI + audit pipeline. CLI-dispatch integration calls `sagewai.artifacts.runtime.apply_artifact_destination` once per-step Mode 3 dispatch lands. |
-| Sealed-iii.B (redaction) | shipped (PR pending) — host-side `RedactingSandboxHandle` enforces the Tier-2 invariant |
+| Sealed-iii.B (redaction) | shipped ([#191](https://github.com/sagewai/platform/pull/191)) — host-side `RedactingSandboxHandle` enforces the Tier-2 invariant |
 | Sealed-iii.C (replay safety) | All — replay reproduces step + mode + identity at original-run time |
-| Sealed-iii.D (per-key ACL) | shipped (PR pending) — host-side `AclFilteringSandboxHandle` enforces per-CLI Tier-2 allowlist |
+| Sealed-iii.D (per-key ACL) | shipped ([#191](https://github.com/sagewai/platform/pull/191)) — host-side `AclFilteringSandboxHandle` enforces per-CLI Tier-2 allowlist |
 | Sealed-iv (HITL + JIT) | Mode 3b — implements the callback channel + policy engine |
 | Sealed-v (reactive directives) | All — autopilot can promote a step from Mode 1 → Mode 2 → Mode 3 based on runtime signals |

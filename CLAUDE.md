@@ -333,6 +333,74 @@ Rules:
    light-mode `@theme` block AND the `[data-theme="dark"]` block
    in `apps/admin/app/brand-tokens.css`.
 
+10. ~~`tests/sealed/test_vault_backend.py` errored in CI with
+    `ModuleNotFoundError: hvac`~~ **FIXED** in PR #196 — `hvac` moved
+    into the `[dependency-groups] test` section of
+    `packages/sdk/pyproject.toml` so CI's `uv sync --group test`
+    always pulls it. If you add a new backend that imports an
+    optional-extra dep at module load, add the dep to the test group
+    too (don't rely on the extra being explicitly installed in CI).
+
+11. ~~`test_build_pool_raises_for_unsupported_strategy` failed
+    `DID NOT RAISE NotImplementedError`~~ **FIXED** in PR #196 — the
+    test used `PoolStrategy.EXTERNAL_MIN_REPLICAS`, which the K8s
+    backend (PR #188) implemented; switched to `PROVIDER_MANAGED`
+    (Lambda — still unimplemented). When new pool strategies land,
+    this test must move to the next-still-unimplemented one.
+
+12. ~~`test_redaction_perf_1mib_six_secrets` p99 budget too tight~~
+    **FIXED** in PR #196 — bumped from 5ms to 30ms (CPython 3.10 on
+    GitHub-hosted runners hits ~19ms; 3.13 ~3ms). Perf tests catch
+    catastrophic regressions, not wall-clock SLAs on shared CPUs.
+    If you add a new perf test, calibrate the budget on the slowest
+    Python version × the `ubuntu-latest` runner, not on a fast laptop.
+
+## Memory subsystem (Plan 1 — landed in PR #196)
+
+`sagewai.memory` now exposes AgentCore-style extraction strategies and
+per-mission branching:
+
+- **`MemoryStrategy` Protocol** + three built-in strategies:
+  `SemanticFactStrategy`, `PreferenceStrategy`, `SummaryStrategy`. Each
+  takes a duck-typed LLM client (`acompletion(*, messages)`) and
+  returns `list[ExtractedRecord]` per session.
+- **`MemoryBranch(mission_id)`** — frozen+slots dataclass; `scoped(ns)`
+  returns `f"{mission_id}/{ns}"`. `MemoryBranch.global_root()` is the
+  `_global` sentinel.
+- **`RAGEngine.ingest_turns(turns)`** — runs configured strategies and
+  writes each `ExtractedRecord` to the vector store with branch-scoped
+  namespace metadata. Two new optional kwargs on `__init__`:
+  `strategies: list[MemoryStrategy] | None`, `branch: MemoryBranch | None`.
+- **`Mission(memory=...)`** — accepts an optional `RAGEngine`; constructor
+  stamps `memory._branch = MemoryBranch(mission_id=self.mission_id)`.
+  Refuses to silently re-stamp an engine already scoped to a different
+  mission (raises `ValueError`). Use one engine per mission.
+- **Public re-exports** — all of the above are importable as
+  `from sagewai.memory import MemoryBranch, SemanticFactStrategy, ...`.
+- **Example 29** (`packages/sdk/sagewai/examples/29_memory_strategies.py`)
+  illustrates the API surface (LLM client placeholders).
+- **Known gap (issue #195):** `RAGEngine.retrieve` does not yet filter
+  by branch — writes are namespaced, reads are not. Production
+  `VectorMemory` retrieve must honour the branch prefix; tracked
+  separately.
+
+## Plan docs landed but not yet implemented (PR #196)
+
+Five `docs/superpowers/plans/2026-04-30-*.md` from the AgentCore
+comparison. Plan 1 (memory strategies) shipped; the remaining four are
+ready to execute as separate PRs:
+
+- `2026-04-30-gateway-semantic-tool-search.md` — `Embedder` + `ToolIndex`
+  + `?q=&k=` on the discovery router.
+- `2026-04-30-agentcore-runtime-backend.md` — adds `boto3` extra; new
+  `SandboxBackend` impl alongside Docker/K8s.
+- `2026-04-30-gateway-agentcore-federation.md` — `GatewayUpstream`
+  protocol + `AgentCoreUpstream` (SigV4 transport stub; real wiring
+  tracked as a follow-up issue when implemented).
+- `2026-04-30-sealed-agentcore-identity-bridge.md` — `ProfileBackend`
+  for AWS Bedrock AgentCore Identity workload tokens; mirrors the
+  Vault backend pattern from PR #190.
+
 ## Governance
 
 - Branch protection on `main`: PR required, code-owner review, linear history, `enforce_admins: true`, no force push, no delete.
