@@ -1,22 +1,53 @@
 # CLAUDE.md — session context for sagewai/platform
 
+> ⚠️ **INTERNAL — current state.** This file references the private companion repo `sagewai/atelier` and contains strategic context that does not belong on a public surface. It is replaced with a public-only version (technical conventions only, no atelier reference) at the just-before-go-live cutover (tracker: issue #202 §1).
+
 This file gives Claude (and any other agent starting a fresh session in
 this checkout) the project context it needs to be useful on the first
 message, without having to re-read the whole repo.
 
 ## What this is
 
-`sagewai/platform` is a **private** monorepo containing the full Sagewai
+`sagewai/platform` is a **currently-private** monorepo containing the full Sagewai
 stack: SDK, admin UI, backend Docker shell, docs site, and VS Code
 extension. It is the primary development surface; the old `sagewai`,
 `admin`, `docs`, and `vscode` repos were merged here in April 2026 and
-archived.
+archived. **The repo flips PUBLIC at v1.0 launch (target 2026-05-29).**
 
-Companion projects live in separate repos:
+Companion repos:
+- `sagewai/atelier` — **PRIVATE** companion holding strategic, design, and planning content: vision, six-month roadmap, design specs (Sealed phases, autopilot, sandbox, plan ART), implementation plans, positioning canonical-lines meta-doc, monetization vignettes, moat audit. **Always check `sagewai/atelier` first when looking for strategic context.** See `## Repository split` below for path conventions.
 - `sagewai/web` — marketing site at sagewai.ai (Next.js + Cloudflare Workers)
 - `sagewai/sagewai-*` — 17 thin client wrappers (TS, Go, Rust, Java, etc.)
 - `sagewai/sagewai-llm` — **PRIVATE** proprietary hosted blueprint service (the autopilot brain). See below.
 - `sagewai/sagewai-enterprise` (future) — private cloud/SaaS management layer
+
+## Repository split (INTERNAL — until go-live cutover)
+
+This is a public-bound monorepo. **Strategic, design, and planning content lives in `sagewai/atelier`, NOT here.** Decision locked 2026-05-01. Tracker: issue #202.
+
+**Stays in `sagewai/platform` (this repo, going public):**
+- All code (`packages/sdk`, `apps/admin`, `apps/docs`, `apps/backend`, `apps/vscode-extension`)
+- `docs/architecture/*.md` — technical canonical contract (mirrored to public docs site)
+- `docs/positioning/one-pager.md` — public-facing one-pager
+- `docs/operations/`, `docs/runbooks/` — operational docs (audited under #202 §1)
+- Top-level: README, LICENSE, COMMERCIAL-LICENSE, LICENSE_FAQ, TRADEMARK, CONTRIBUTING, CODE_OF_CONDUCT, CLA, SECURITY, SUPPLY-CHAIN, DEVELOPMENT, CHANGELOG
+
+**Lives in `sagewai/atelier` (private companion):**
+- `docs/superpowers/specs/` — design specs (Sealed phases I-V, autopilot, sandbox, plan ART, launch coord, positioning evolution)
+- `docs/superpowers/plans/` — implementation plans (autopilot, sealed, AgentCore, surface propagation, item 1a, future items)
+- `docs/vision/` — six-month strategic vision, monetization vignettes, moat audit
+- `docs/v1.1-roadmap.md` — internal forward-looking roadmap
+- `docs/positioning/canonical-lines.md` — internal canonical-line meta-doc (the public one-pager itself stays in platform)
+- Future: launch blog post draft, memory soak report, launch-day runbook
+
+**Path conventions are preserved.** Files have the same paths in atelier as they had in platform pre-migration. To reference a strategic doc, prepend the repo name: e.g. `sagewai/atelier:docs/superpowers/specs/2026-05-01-sagewai-1.0-launch-coordination-design.md`.
+
+**Working rules:**
+- Before adding any strategic / branding / positioning / monetization / roadmap doc, decide which repo it belongs in. If it's not technical guidance for code in this repo, it goes to `sagewai/atelier`.
+- `.gitignore` rules in `sagewai/platform` block re-introduction of `docs/superpowers/`, `docs/vision/`, `docs/v1.1-roadmap.md`, `docs/positioning/canonical-lines.md`. If you hit a gitignore wall trying to land one of those paths, that's the safety net — the file belongs in atelier, not here.
+- Implementation plans (technical guidance) live in `sagewai/atelier:docs/superpowers/plans/` because they reference strategic context (launch coord spec, lane structure, internal sequencing). The implementation PRs themselves still target `sagewai/platform`.
+- When referencing strategic docs in commit messages or PR descriptions, prefer indirect references ("per the implementation plan in atelier") over direct path mentions. Casual readers of public commit history (post-go-live) shouldn't be tipped off about specific strategic content.
+- The history scrub via `git filter-repo --invert-paths` on `sagewai/platform` is deferred to just-before-go-live (per #202 §1). Until then, proprietary content remains in past-commit history of platform but is gone from `main` going forward, and the repo remains PRIVATE so the leak window is internal-only.
 
 ## Layout
 

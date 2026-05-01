@@ -51,3 +51,10 @@ TEST-SESSION-PROMPT.md
 
 # ── Cloudflare Pages / Wrangler ────────────────────────────────────────
 .wrangler/
+
+# Strategic / proprietary docs — moved to sagewai/atelier (private)
+# DO NOT re-introduce these paths to sagewai/platform.
+docs/superpowers/
+docs/vision/
+docs/v1.1-roadmap.md
+docs/positioning/canonical-lines.md
