@@ -494,6 +494,13 @@ def create_admin_serve_app(
 
     artifact_destination_routes.register(app)
 
+    # Sealed-v directive admin routes (in-memory; postgres-backed
+    # approvals/evaluations are wired alongside revocation_routes below
+    # when a database URL is configured)
+    from sagewai.admin import directive_routes  # noqa: E402
+
+    directive_routes.register(app, sf)
+
     # Sealed revocation routes (Sealed-iii.A) — requires Postgres
     _db_url = os.environ.get("SAGEWAI_DATABASE_URL")
     if _db_url:

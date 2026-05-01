@@ -162,6 +162,13 @@ class WorkflowRun:
     replay_from_step: int | None = None
     code_hash: str | None = None
 
+    # ── sealed-v reactive directives ──
+    directive_chain: list[Any] = field(default_factory=list)  # list[DirectiveChainEntry]
+    estimated_cost_usd: float | None = None
+    replay_re_evaluate_directives: bool = False
+    execution_mode_override: ExecutionMode | None = None
+    identity_from: str | None = None  # "original_injection" | "current_cascade" | None
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a dictionary."""
         return {
@@ -194,6 +201,17 @@ class WorkflowRun:
             "replay_of_run_id": self.replay_of_run_id,
             "replay_from_step": self.replay_from_step,
             "code_hash": self.code_hash,
+            "directive_chain": [
+                e.model_dump(mode="json") for e in self.directive_chain
+            ],
+            "estimated_cost_usd": self.estimated_cost_usd,
+            "replay_re_evaluate_directives": self.replay_re_evaluate_directives,
+            "execution_mode_override": (
+                self.execution_mode_override.value
+                if self.execution_mode_override
+                else None
+            ),
+            "identity_from": self.identity_from,
             "steps": {
                 name: {
                     "status": rec.status.value,
@@ -215,7 +233,16 @@ class WorkflowRun:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> WorkflowRun:
         """Deserialize from a dictionary (inverse of to_dict)."""
+        from sagewai.sealed.directives.models import DirectiveChainEntry
         from sagewai.sealed.replay import InjectionSnapshot
+
+        chain_raw = data.get("directive_chain", []) or []
+        directive_chain = [DirectiveChainEntry.model_validate(e) for e in chain_raw]
+
+        emo_raw = data.get("execution_mode_override")
+        execution_mode_override = (
+            ExecutionMode(emo_raw) if emo_raw else None
+        )
 
         steps = {}
         for name, s in data.get("steps", {}).items():
@@ -276,6 +303,13 @@ class WorkflowRun:
             replay_of_run_id=data.get("replay_of_run_id"),
             replay_from_step=data.get("replay_from_step"),
             code_hash=data.get("code_hash"),
+            directive_chain=directive_chain,
+            estimated_cost_usd=data.get("estimated_cost_usd"),
+            replay_re_evaluate_directives=bool(
+                data.get("replay_re_evaluate_directives", False)
+            ),
+            execution_mode_override=execution_mode_override,
+            identity_from=data.get("identity_from"),
         )
 
 

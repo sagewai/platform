@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from sagewai.artifacts.models import ArtifactDestination
+from sagewai.sealed.directives.policies import DirectivesConfig, seed_defaults_if_empty
 
 _DEFAULT_STATE_DIR = Path.home() / ".sagewai"
 _DEFAULT_STATE_FILE = _DEFAULT_STATE_DIR / "admin-state.json"
@@ -119,6 +120,26 @@ class AdminStateFile:
         Returns empty dict if no Vault config is set.
         """
         return self.get_sealed_config().get("vault", {})
+
+    def get_directives_config(self) -> DirectivesConfig:
+        """Return directives sub-tree parsed to DirectivesConfig.
+
+        Returns an empty-default DirectivesConfig when the key is absent
+        (backward-compatible with all existing admin-state.json files).
+        """
+        state = self._read()
+        raw = state.get("directives") or {}
+        config = DirectivesConfig.model_validate(raw) if raw else DirectivesConfig()
+        seeded = seed_defaults_if_empty(config)
+        if seeded is not config:
+            self.set_directives_config(seeded)
+        return seeded
+
+    def set_directives_config(self, config: DirectivesConfig) -> None:
+        """Persist the directives config back to state."""
+        def _apply(state: dict[str, Any]) -> None:
+            state["directives"] = config.model_dump(mode="json")
+        self._mutate(_apply)
 
     def get_sandbox_pool_config(self) -> dict[str, Any]:
         """Return sandbox_pool.* sub-tree (pool sizing knobs from Plan 1.5)."""

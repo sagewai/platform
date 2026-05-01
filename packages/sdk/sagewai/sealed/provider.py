@@ -154,18 +154,46 @@ class SealedSecretProvider:
         run_id: str,
         agent_id: str | None,
         snapshot: Any,  # InjectionSnapshot — Any avoids circular import
+        identity_from: str | None = None,
+        declared_scopes: list[str] | None = None,
+        sealed_levels: list[Any] | None = None,
     ) -> dict[str, str]:
-        """Inject env from a snapshot, bypassing cascade re-resolution.
+        """Inject env for a replay run.
 
-        For each secret in the snapshot, validate the current backend
-        value's hash against the snapshot. On match, use the current
-        value. On mismatch, use ``get_secret_at_version`` if the backend
-        supports value history; else raise ``RotationDriftError``.
+        When ``identity_from`` is ``"current_cascade"``, delegates to
+        :meth:`env_for` so the cascade is **re-resolved** fresh (e.g. for a
+        ``RestartWithFreshIdentity`` directive action).  All other values
+        (``"original_injection"``, ``None``) use the historical snapshot path,
+        which is the original Sealed-iii.C behaviour.
+
+        For each secret in the snapshot (default path), validates the current
+        backend value's hash against the snapshot. On match, uses the current
+        value. On mismatch, uses ``get_secret_at_version`` if the backend
+        supports value history; else raises ``RotationDriftError``.
 
         Emits ``replay.snapshot_loaded`` once at the start; per-secret
         ``replay.rotation_detected``, ``replay.failed_rotation_drift``,
         and ``replay.used_revoked_snapshot`` events as warranted.
         """
+        # NEW: fresh cascade re-resolution for identity_from="current_cascade".
+        if identity_from == "current_cascade":
+            return await self.env_for(
+                project_id=project_id,
+                run_id=run_id,
+                agent_id=agent_id,
+                declared_scopes=declared_scopes or [],
+                security_profile_ref=(
+                    snapshot.security_profile_ref if snapshot is not None else None
+                ),
+                effective_env_keys=(
+                    list(snapshot.effective_env_keys) if snapshot is not None else None
+                ),
+                effective_secret_keys=(
+                    list(snapshot.effective_secret_keys) if snapshot is not None else None
+                ),
+                sealed_levels=sealed_levels,
+            )
+
         from sagewai.sealed.refs import ProfileRef, resolve_backend
         from sagewai.sealed.replay import (
             RotationDriftError,

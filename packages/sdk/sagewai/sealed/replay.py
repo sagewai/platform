@@ -14,12 +14,13 @@ See docs/superpowers/specs/2026-04-27-sealed-iii-c-replay-design.md.
 from __future__ import annotations
 
 import hashlib
-from typing import TYPE_CHECKING
+import time
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 if TYPE_CHECKING:
-    from sagewai.core.state import DurableWorkflow
+    from sagewai.core.state import DurableWorkflow, ExecutionMode, WorkflowRun
 
 
 class ReplayError(RuntimeError):
@@ -96,3 +97,86 @@ def compute_code_hash(workflow: DurableWorkflow) -> str:
 def hash_secret_value(value: str) -> str:
     """SHA-256 of a secret value as hex. Used for rotation detection."""
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+async def enqueue_replay(
+    *,
+    store: Any,
+    original_run_id: str,
+    from_step: int = 0,
+    execution_mode_override: ExecutionMode | None = None,
+    identity_from: str | None = None,
+    security_profile_ref: str | None = None,
+    re_evaluate_directives: bool = False,
+) -> WorkflowRun:
+    """Low-level replay-enqueue used by directive actions (PromoteRunMode,
+    RestartWithFreshIdentity) that need to drive a replay at a different
+    execution mode or with a freshly-resolved identity cascade.
+
+    This is intentionally a thin wrapper: it loads the original run,
+    builds a minimal :class:`~sagewai.core.state.WorkflowRun` carrying the
+    two new override fields, persists it via ``store.save_run``, and returns
+    it.  Heavy step-copy logic (i.e. copying completed steps) lives in
+    :meth:`~sagewai.core.state.DurableWorkflow.replay_from`; callers that
+    want that full machinery should use that method directly.
+
+    The ``store`` object must expose:
+
+    * ``async load_run(run_id: str) -> WorkflowRun``
+    * ``async save_run(run: WorkflowRun) -> None``
+
+    Parameters
+    ----------
+    store:
+        Persistence backend (duck-typed).
+    original_run_id:
+        The run being replayed.
+    from_step:
+        First step index to re-execute (0-based).
+    execution_mode_override:
+        When set, the new run's ``execution_mode`` is this value; the field
+        ``execution_mode_override`` is also set for audit / directive tracking.
+        When ``None``, the original run's ``execution_mode`` is preserved.
+    identity_from:
+        ``"current_cascade"`` — ``SealedSecretProvider.replay_env_for`` will
+        re-resolve the cascade instead of reading the historical snapshot.
+        ``"original_injection"`` or ``None`` — default: read the snapshot.
+    security_profile_ref:
+        Override the security profile for the new run.  When ``None``, the
+        original run's ``security_profile_ref`` is inherited.
+    re_evaluate_directives:
+        Whether the replay executor should re-evaluate reactive directives for
+        completed steps (forwarded to ``replay_re_evaluate_directives``).
+    """
+    from sagewai.core.state import WorkflowRun
+
+    original: WorkflowRun = await store.load_run(original_run_id)
+
+    effective_mode = execution_mode_override if execution_mode_override is not None else original.execution_mode
+    effective_security_profile = (
+        security_profile_ref if security_profile_ref is not None
+        else original.security_profile_ref
+    )
+
+    new_run_id = hashlib.sha256(
+        f"replay:{original_run_id}:{from_step}:{time.time_ns()}".encode()
+    ).hexdigest()[:16]
+
+    new_run = WorkflowRun(
+        workflow_name=original.workflow_name,
+        run_id=new_run_id,
+        execution_mode=effective_mode,
+        execution_mode_override=execution_mode_override,
+        identity_from=identity_from,
+        security_profile_ref=effective_security_profile,
+        effective_env_keys=list(original.effective_env_keys),
+        effective_secret_keys=list(original.effective_secret_keys),
+        replay_of_run_id=original_run_id,
+        replay_from_step=from_step,
+        replay_re_evaluate_directives=re_evaluate_directives,
+        project_id=original.project_id,
+        input_data=original.input_data,
+        started_at=time.time(),
+    )
+    await store.save_run(new_run)
+    return new_run

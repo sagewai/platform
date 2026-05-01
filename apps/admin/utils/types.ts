@@ -1371,3 +1371,87 @@ export interface Revocation {
   lifted_at: string | null;
   lifted_by: string | null;
 }
+
+// ── Sealed-v — reactive directives ────────────────────────────────────
+
+export type DirectiveExecutionMode =
+  | 'bare'
+  | 'sandboxed'
+  | 'identity'
+  | 'full'
+  | 'full_jit';
+export type DirectiveSeverity = 'info' | 'warning' | 'critical';
+export type DirectiveActionKind =
+  | 'abort_run'
+  | 'promote_run_mode'
+  | 'restart_with_fresh_identity'
+  | 'alert_operator';
+
+export interface PolicyCondition {
+  signal_kind: string;
+  severity_at_least?: DirectiveSeverity | null;
+  evidence_match?: Record<string, unknown>;
+}
+
+export interface PolicyAction {
+  kind: DirectiveActionKind;
+  target_mode?: DirectiveExecutionMode | null;
+  suggested_profile_field?: string | null;
+  severity?: DirectiveSeverity;
+  message_template?: string | null;
+}
+
+export interface DirectivePolicy {
+  id: string;
+  name: string;
+  description?: string;
+  enabled: boolean;
+  condition: PolicyCondition;
+  action: PolicyAction;
+  requires_approval: boolean;
+  rate_limit_per_run: number;
+}
+
+export interface EvaluatorSettings {
+  max_signals_per_poll: number;
+  audit_retention_days: number;
+  approval_default_ttl_seconds: number;
+}
+
+export interface DirectivesConfig {
+  system_policies: DirectivePolicy[];
+  project_policies: Record<string, DirectivePolicy[]>;
+  workflow_policies: Record<string, DirectivePolicy[]>;
+  profile_suggestions: Record<string, string>;
+  evaluator_settings: EvaluatorSettings;
+}
+
+export interface DirectiveEvaluation {
+  id: number;
+  event_type: string;
+  decision_id: string | null;
+  run_id: string;
+  project_id: string | null;
+  workflow_name: string;
+  policy_id: string | null;
+  signal_kind: string | null;
+  severity: DirectiveSeverity | null;
+  details: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface PendingApproval {
+  decision_id: string;
+  run_id: string;
+  project_id: string | null;
+  workflow_name: string;
+  policy_id: string;
+  triggering_signal: Record<string, unknown>;
+  proposed_action: Record<string, unknown>;
+  requested_at: string;
+  status: 'pending' | 'approved' | 'denied' | 'expired' | 'consumed';
+  decided_at: string | null;
+  decided_by: string | null;
+  operator_note: string | null;
+  expires_at: string;
+}

@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useEffect, useState, useCallback, use } from 'react';
 import { Card, Badge, Button, Tabs, Skeleton, ConfirmDialog, useToast } from '@/components/ui/legacy';
 import { ShareButton } from '@/components/share-button';
+import { DirectiveChainPanel } from '@/components/directive-chain-panel';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -83,6 +84,7 @@ export default function RunDetailPage({ params }: Props) {
     { id: 'overview', label: 'Overview' },
     { id: 'steps', label: `Steps (${run.steps.length})` },
     { id: 'tools', label: `Tools (${run.tool_calls.length})` },
+    { id: 'directives', label: 'Directives' },
   ];
 
   return (
@@ -232,6 +234,12 @@ export default function RunDetailPage({ params }: Props) {
             <p className="text-sm text-text-muted text-center py-lg">No tool calls recorded.</p>
           )}
         </div>
+      )}
+
+      {activeTab === 'directives' && (
+        <Card className="!p-md">
+          <DirectiveChainPanel runId={run.run_id} />
+        </Card>
       )}
 
       <ConfirmDialog

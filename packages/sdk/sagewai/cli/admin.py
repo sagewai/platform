@@ -190,6 +190,10 @@ from sagewai.cli.profiles import profiles_group  # noqa: E402
 
 admin.add_command(profiles_group)
 
+from sagewai.cli.directives import directives_group  # noqa: E402
+
+admin.add_command(directives_group)
+
 
 @admin.command("health")
 @click.option("--json", "as_json", is_flag=True, help="Output raw JSON.")

@@ -277,3 +277,73 @@ def test_redaction_perf_1mib_six_secrets() -> None:
     timings.sort()
     p99 = timings[int(len(timings) * 0.99) - 1]
     assert p99 < 0.005, f"redaction p99 = {p99 * 1000:.2f}ms exceeds 5ms budget"
+
+
+# ─── Sealed-v signal collector ───────────────────────────────────────────────
+
+def test_signal_collector_p99_under_50ms() -> None:
+    """SignalCollector with 3 v1 sources must run p99 < 50ms over 200 iters."""
+    from dataclasses import dataclass, field
+
+    from sagewai.sealed.directives.signals import (
+        SignalCollector,
+        SignalContext,
+    )
+    from sagewai.sealed.directives.sources.capability_gap import (
+        CapabilityGapSource,
+    )
+    from sagewai.sealed.directives.sources.cost_overrun import CostOverrunSource
+    from sagewai.sealed.directives.sources.rotation_drift import (
+        RotationDriftSource,
+    )
+
+    class _Tracker:
+        def get_run_cost_usd(self, run_id: str) -> float | None:
+            return 0.5  # under threshold → no signal
+
+    class _AuditReader:
+        async def recent_events(self, *, event_type, run_id, since=None):
+            return []
+
+    class _StoreView:
+        def step_name_at_index(self, run, idx: int) -> str | None:
+            return None
+
+        def suggest_profile_for_key(self, key: str) -> str | None:
+            return None
+
+    @dataclass
+    class _Run:
+        run_id: str = "r-perf"
+        project_id: str | None = None
+        workflow_name: str = "wf"
+        estimated_cost_usd: float | None = 1.0
+        steps: dict = field(default_factory=dict)
+        signals: dict = field(default_factory=dict)
+        started_at: float | None = None
+
+    sources = [
+        CostOverrunSource(_Tracker()),
+        CapabilityGapSource(),
+        RotationDriftSource(),
+    ]
+    collector = SignalCollector(sources=sources)
+    ctx = SignalContext(audit_reader=_AuditReader(), store=_StoreView())
+
+    async def collect_once() -> None:
+        await collector.collect(run=_Run(), step_index=0, context=ctx)
+
+    # Warm
+    asyncio.run(collect_once())
+
+    timings: list[float] = []
+    for _ in range(200):
+        t0 = time.perf_counter()
+        asyncio.run(collect_once())
+        timings.append(time.perf_counter() - t0)
+
+    timings.sort()
+    p99 = timings[int(len(timings) * 0.99) - 1]
+    assert p99 < 0.050, (
+        f"SignalCollector p99 = {p99 * 1000:.2f}ms exceeds 50ms budget"
+    )

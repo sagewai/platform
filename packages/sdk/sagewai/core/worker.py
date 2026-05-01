@@ -613,6 +613,109 @@ class WorkflowWorker:
             input_data: dict[str, Any] = getattr(wf_run, "_input", {}) or {}
             result = await workflow.run(run_id=wf_run.run_id, **input_data)
 
+            # Sealed-v directive integration — fires once after the run finishes all
+            # steps (the DurableWorkflow step loop lives in state.py, not here, so
+            # per-step evaluation would require a step callback; this post-run poll
+            # handles approved decisions and end-of-run signal collection).
+            # Opt-in: only fires when the worker has the subsystem wired in.
+            # Existing tests construct WorkflowWorker without these attrs; they
+            # continue to behave exactly as before.
+            if getattr(self, "_signal_collector", None) is not None:
+                from sagewai.sealed.directives.actions import dispatch as directive_dispatch
+                from sagewai.sealed.directives.approvals import SuppressedAlreadyPendingError
+                from sagewai.sealed.directives.policies import resolve_directive_policies
+                from sagewai.sealed.directives.signals import SignalContext
+                from sagewai.core.worker_directives import (
+                    consume_approved_decisions,
+                    should_evaluate_directives,
+                )
+
+                # Step 1: collect signals (runs all registered sources)
+                ctx = SignalContext(
+                    cost_tracker=getattr(self, "_cost_tracker_view", None),
+                    audit_reader=getattr(self, "_audit_reader", None),
+                    store=getattr(self, "_store_view", None),
+                )
+                step_index = len(wf_run.steps)
+                signals = await self._signal_collector.collect(
+                    run=wf_run, step_index=step_index, context=ctx,
+                )
+
+                # Step 2: dispatch any approved-but-not-consumed HITL decisions,
+                # even on replay runs (HITL approval is an explicit operator action).
+                _approvals = getattr(self, "_approvals", None)
+                _directive_audit = getattr(self, "_directive_audit", None)
+                _notifications = getattr(self, "_notifications", None)
+                _store_for_dispatch = getattr(self, "_store_for_dispatch", None)
+
+                if _approvals is not None:
+                    await consume_approved_decisions(
+                        run=wf_run,
+                        registry=_approvals,
+                        dispatch_callable=lambda d: directive_dispatch(
+                            decision=d,
+                            store=_store_for_dispatch,
+                            audit=_directive_audit,
+                            notifications=_notifications,
+                        ),
+                    )
+
+                # Step 3: evaluate policies against collected signals, unless replay
+                # with re-evaluation disabled (observe-only mode logs signals only).
+                if not should_evaluate_directives(wf_run):
+                    if _directive_audit is not None:
+                        await _directive_audit.emit(
+                            event_type="directive.signals_collected_replay_observed_only",
+                            run_id=wf_run.run_id,
+                            project_id=wf_run.project_id,
+                            workflow_name=wf_run.workflow_name,
+                            policy_id=None,
+                            signal_kind=None,
+                            severity=None,
+                            details={"signal_count": len(signals)},
+                        )
+                elif getattr(self, "_evaluator", None) is not None:
+                    _directives_config = getattr(self, "_directives_config", None)
+                    config = _directives_config() if callable(_directives_config) else None
+                    if config is not None:
+                        policies = resolve_directive_policies(
+                            workflow_name=wf_run.workflow_name,
+                            project_id=wf_run.project_id,
+                            config=config,
+                        )
+                        decisions = self._evaluator.evaluate(
+                            signals=signals, policies=policies,
+                        )
+                        for decision in decisions:
+                            if _directive_audit is not None:
+                                await _directive_audit.emit(
+                                    event_type="directive.evaluated",
+                                    decision_id=decision.decision_id,
+                                    run_id=wf_run.run_id,
+                                    project_id=wf_run.project_id,
+                                    workflow_name=wf_run.workflow_name,
+                                    policy_id=decision.directive_policy_id,
+                                    signal_kind=decision.triggering_signal.kind,
+                                    severity=decision.triggering_signal.severity,
+                                    details={"action_kind": decision.action.kind},
+                                )
+                            if decision.requires_approval:
+                                if _approvals is not None:
+                                    try:
+                                        await _approvals.request(
+                                            decision=decision,
+                                            ttl_seconds=config.evaluator_settings.approval_default_ttl_seconds,
+                                        )
+                                    except SuppressedAlreadyPendingError:
+                                        pass
+                            else:
+                                await directive_dispatch(
+                                    decision=decision,
+                                    store=_store_for_dispatch,
+                                    audit=_directive_audit,
+                                    notifications=_notifications,
+                                )
+
             output: dict[str, Any] = result if isinstance(result, dict) else {"result": result}
             await self._store.complete_run(
                 wf_run.workflow_name,

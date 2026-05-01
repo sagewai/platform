@@ -96,10 +96,14 @@ class PostgresStore(WorkflowStore):
                 security_profile_ref, effective_env_keys, effective_secret_keys,
                 revoked_at, revoke_reason,
                 artifact_destination,
-                replay_of_run_id, replay_from_step, code_hash
+                replay_of_run_id, replay_from_step, code_hash,
+                directive_chain, estimated_cost_usd,
+                replay_re_evaluate_directives, execution_mode_override,
+                identity_from
             )
             VALUES ($1, $2, $3, $4, $5::jsonb, $6, NOW(), $7, $8, $9, $10, $11, $12, $13,
-                    $14, $15, $16, $17::jsonb, $18, $19, $20)
+                    $14, $15, $16, $17::jsonb, $18, $19, $20,
+                    $21::jsonb, $22, $23, $24, $25)
             ON CONFLICT (id) DO UPDATE SET
                 status = EXCLUDED.status,
                 data = EXCLUDED.data,
@@ -118,7 +122,12 @@ class PostgresStore(WorkflowStore):
                 artifact_destination = EXCLUDED.artifact_destination,
                 replay_of_run_id = EXCLUDED.replay_of_run_id,
                 replay_from_step = EXCLUDED.replay_from_step,
-                code_hash = EXCLUDED.code_hash
+                code_hash = EXCLUDED.code_hash,
+                directive_chain = EXCLUDED.directive_chain,
+                estimated_cost_usd = EXCLUDED.estimated_cost_usd,
+                replay_re_evaluate_directives = EXCLUDED.replay_re_evaluate_directives,
+                execution_mode_override = EXCLUDED.execution_mode_override,
+                identity_from = EXCLUDED.identity_from
             """,
             key,
             run.workflow_name,
@@ -144,6 +153,14 @@ class PostgresStore(WorkflowStore):
             run.replay_of_run_id,
             run.replay_from_step,
             run.code_hash,
+            json.dumps(
+                [e.model_dump(mode="json") for e in run.directive_chain],
+                default=str,
+            ),
+            run.estimated_cost_usd,
+            run.replay_re_evaluate_directives,
+            run.execution_mode_override.value if run.execution_mode_override else None,
+            run.identity_from,
         )
 
     async def load_run(self, workflow_name: str, run_id: str) -> WorkflowRun | None:

@@ -116,6 +116,10 @@ import type {
   ReplayPreview,
   ReplayInfo,
   ReplayCommitResult,
+  DirectivesConfig,
+  DirectivePolicy,
+  DirectiveEvaluation,
+  PendingApproval,
 } from './types';
 
 const BASE_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL ?? 'http://localhost:8000/admin';
@@ -1690,6 +1694,125 @@ export const adminApi = {
       { credentials: 'include' },
     );
     if (!res.ok) throw new Error(`listReplaysOf: ${res.status}`);
+    return res.json();
+  },
+
+  /* ─── Sealed-v — reactive directives ─── */
+
+  async getDirectivePolicies(): Promise<DirectivesConfig> {
+    const res = await fetch('/api/v1/admin/directives/policies', {
+      credentials: 'include',
+    });
+    if (!res.ok) throw new Error(`getDirectivePolicies: ${res.status}`);
+    return res.json();
+  },
+
+  async putDirectivePolicies(cfg: DirectivesConfig): Promise<{ ok: boolean }> {
+    const res = await fetch('/api/v1/admin/directives/policies', {
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(cfg),
+    });
+    if (!res.ok) {
+      const detail = await res.text();
+      throw new Error(`putDirectivePolicies: ${res.status} ${detail}`);
+    }
+    return res.json();
+  },
+
+  async previewDirectivesForWorkflow(
+    workflow: string,
+    projectId?: string,
+  ): Promise<{ active_policies: DirectivePolicy[] }> {
+    const sp = new URLSearchParams({ workflow });
+    if (projectId) sp.set('project_id', projectId);
+    const res = await fetch(
+      `/api/v1/admin/directives/preview?${sp.toString()}`,
+      { credentials: 'include' },
+    );
+    if (!res.ok) throw new Error(`previewDirectivesForWorkflow: ${res.status}`);
+    return res.json();
+  },
+
+  async listDirectiveEvaluations(params: {
+    run_id?: string;
+    policy_id?: string;
+    event_type?: string;
+    limit?: number;
+  }): Promise<{ events: DirectiveEvaluation[] }> {
+    const sp = new URLSearchParams();
+    if (params.run_id) sp.set('run_id', params.run_id);
+    if (params.policy_id) sp.set('policy_id', params.policy_id);
+    if (params.event_type) sp.set('event_type', params.event_type);
+    if (params.limit) sp.set('limit', String(params.limit));
+    const qs = sp.toString();
+    const res = await fetch(
+      `/api/v1/admin/directives/evaluations${qs ? `?${qs}` : ''}`,
+      { credentials: 'include' },
+    );
+    if (!res.ok) throw new Error(`listDirectiveEvaluations: ${res.status}`);
+    return res.json();
+  },
+
+  async listDirectiveApprovals(): Promise<{ pending: PendingApproval[] }> {
+    const res = await fetch('/api/v1/admin/directives/approvals', {
+      credentials: 'include',
+    });
+    if (!res.ok) throw new Error(`listDirectiveApprovals: ${res.status}`);
+    return res.json();
+  },
+
+  async approveDirective(
+    decisionId: string,
+    actor: string,
+    note: string,
+  ): Promise<unknown> {
+    const res = await fetch(
+      `/api/v1/admin/directives/approvals/${encodeURIComponent(decisionId)}/approve`,
+      {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ actor, note }),
+      },
+    );
+    if (!res.ok) {
+      const detail = await res.text();
+      throw new Error(`approveDirective: ${res.status} ${detail}`);
+    }
+    return res.json();
+  },
+
+  async denyDirective(
+    decisionId: string,
+    actor: string,
+    note: string,
+  ): Promise<unknown> {
+    const res = await fetch(
+      `/api/v1/admin/directives/approvals/${encodeURIComponent(decisionId)}/deny`,
+      {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ actor, note }),
+      },
+    );
+    if (!res.ok) {
+      const detail = await res.text();
+      throw new Error(`denyDirective: ${res.status} ${detail}`);
+    }
+    return res.json();
+  },
+
+  async getRunDirectiveSummary(
+    runId: string,
+  ): Promise<{ events: DirectiveEvaluation[] }> {
+    const res = await fetch(
+      `/api/v1/admin/directives/runs/${encodeURIComponent(runId)}`,
+      { credentials: 'include' },
+    );
+    if (!res.ok) throw new Error(`getRunDirectiveSummary: ${res.status}`);
     return res.json();
   },
 };
