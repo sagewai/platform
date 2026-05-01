@@ -2231,17 +2231,29 @@ def create_admin_serve_app(
 
     @app.post("/api/v1/fleet/workers/{worker_id}/approve")
     async def approve_fleet_worker(worker_id: str) -> JSONResponse:
-        w = await fleet_registry.approve_worker(worker_id, approved_by="admin")
+        from fastapi import HTTPException
+        try:
+            w = await fleet_registry.approve_worker(worker_id, approved_by="admin")
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse({"status": w.approval_status.value, "worker_id": w.id})
 
     @app.post("/api/v1/fleet/workers/{worker_id}/reject")
     async def reject_fleet_worker(worker_id: str) -> JSONResponse:
-        w = await fleet_registry.reject_worker(worker_id)
+        from fastapi import HTTPException
+        try:
+            w = await fleet_registry.reject_worker(worker_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse({"status": w.approval_status.value, "worker_id": w.id})
 
     @app.post("/api/v1/fleet/workers/{worker_id}/revoke")
     async def revoke_fleet_worker(worker_id: str) -> JSONResponse:
-        w = await fleet_registry.revoke_worker(worker_id)
+        from fastapi import HTTPException
+        try:
+            w = await fleet_registry.revoke_worker(worker_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse({"status": w.approval_status.value, "worker_id": w.id})
 
     @app.get("/api/v1/admin/fleet/workers/{worker_id}/pool-stats")
@@ -2288,7 +2300,11 @@ def create_admin_serve_app(
 
     @app.delete("/api/v1/fleet/enrollment-keys/{key_id}")
     async def revoke_fleet_enrollment_key(key_id: str) -> JSONResponse:
-        await fleet_registry.revoke_enrollment_key(key_id)
+        from fastapi import HTTPException
+        try:
+            await fleet_registry.revoke_enrollment_key(key_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse({"status": "ok"})
 
     @app.get("/api/v1/fleet/audit")
