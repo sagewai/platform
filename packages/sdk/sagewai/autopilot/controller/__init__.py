@@ -25,6 +25,7 @@ from .controller import AutopilotController
 from .driver import MissionDriver
 from .executor import AgentExecutor, ExecutorConfig
 from .fleet_adapter import FleetMissionAdapter
+from .runner import SchedulerRunner
 from .scheduler import CronParser, MissionScheduler, ScheduledMission
 from .types import ControllerConfig, MissionRunResult, StepResult, StepTelemetry
 
@@ -41,4 +42,5 @@ __all__ = [
     "MissionScheduler",
     "ScheduledMission",
     "CronParser",
+    "SchedulerRunner",
 ]

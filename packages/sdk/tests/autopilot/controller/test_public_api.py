@@ -160,3 +160,8 @@ def test_step_telemetry_exported_from_controller():
 
 def test_step_telemetry_exported_from_autopilot():
     from sagewai.autopilot import StepTelemetry  # noqa: F401
+
+
+
+def test_scheduler_runner_exported_from_controller():
+    from sagewai.autopilot.controller import SchedulerRunner  # noqa: F401

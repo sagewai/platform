@@ -24,6 +24,7 @@ import datetime
 import json
 import logging
 import os
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -342,8 +343,31 @@ def create_admin_serve_app(
         create_analytics_router,
     )
     from sagewai.admin.state import AdminState
+    from sagewai.autopilot.controller.driver import MissionDriver
+    from sagewai.autopilot.controller.runner import SchedulerRunner
+    from sagewai.autopilot.controller.scheduler import MissionScheduler
 
-    app = FastAPI(title="Sagewai Admin", version=version)
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """Start and stop the autopilot scheduler runner alongside the app."""
+        scheduler = MissionScheduler()
+        driver = MissionDriver(scheduler=scheduler)
+        runner_interval = float(os.getenv("SAGEWAI_SCHEDULER_INTERVAL_SECONDS", "60"))
+        runner = SchedulerRunner(
+            scheduler=scheduler,
+            driver=driver,
+            interval_seconds=runner_interval,
+        )
+        app.state.scheduler = scheduler
+        app.state.scheduler_driver = driver
+        app.state.scheduler_runner = runner
+        await runner.start()
+        try:
+            yield
+        finally:
+            await runner.stop()
+
+    app = FastAPI(title="Sagewai Admin", version=version, lifespan=lifespan)
 
     # CORS — allow admin dev server
     app.add_middleware(
