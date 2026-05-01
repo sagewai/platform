@@ -17,6 +17,8 @@ Public API surface:
 - :class:`ControllerConfig` — injectable configuration for the controller.
 - :class:`AgentExecutor` — executes a single agent node via LiteLLM.
 - :class:`ExecutorConfig` — configuration for :class:`AgentExecutor`.
+- :class:`ToolRegistry` — in-memory map of tool names to callables + specs.
+- :class:`ToolSpec` — descriptor for one tool passed to the LLM API.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from .executor import AgentExecutor, ExecutorConfig
 from .fleet_adapter import FleetMissionAdapter
 from .runner import SchedulerRunner
 from .scheduler import CronParser, MissionScheduler, ScheduledMission
+from .tool_registry import ToolRegistry, ToolSpec
 from .types import ControllerConfig, MissionRunResult, StepResult, StepTelemetry
 
 __all__ = [
@@ -43,4 +46,6 @@ __all__ = [
     "ScheduledMission",
     "CronParser",
     "SchedulerRunner",
+    "ToolRegistry",
+    "ToolSpec",
 ]

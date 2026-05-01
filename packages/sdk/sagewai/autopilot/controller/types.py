@@ -77,11 +77,16 @@ class StepResult(BaseModel):
             Curator builds training samples from this field when
             available, falling back to ``output_preview``.
         messages: Full conversation messages (system + user +
-            assistant) for this step. ``None`` outside the harness
-            path. ShareGPT-format training samples use this for
-            multi-turn conversations.
+            assistant + tool turns) for this step. ``None`` outside
+            the harness path. ShareGPT-format training samples use
+            this for multi-turn conversations.
         telemetry: Per-step harness telemetry (cost, tokens, model
             used, latency). ``None`` outside the harness path.
+        tool_calls: Names of tools actually invoked during this step,
+            in call order. ``None`` when no tool calls were made.
+            Populated by the tool-call loop in ``AgentExecutor`` when
+            the agent has ``tools`` configured. Useful for telemetry
+            and Curator training-data labelling.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -92,6 +97,7 @@ class StepResult(BaseModel):
     output: str | None = None
     messages: tuple[dict, ...] | None = None
     telemetry: StepTelemetry | None = None
+    tool_calls: tuple[str, ...] | None = None
 
 
 class MissionRunResult(BaseModel):
