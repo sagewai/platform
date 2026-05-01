@@ -117,7 +117,7 @@ vault = [
 
 [dependency-groups]
 test = [
-    "pytest>=7.0.0",
+    "pytest>=9.0.3",
     "pytest-asyncio>=0.23.0",
     "pytest-httpx>=0.36.2",
     "fastapi>=0.136.1",
