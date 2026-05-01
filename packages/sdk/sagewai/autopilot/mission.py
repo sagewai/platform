@@ -54,12 +54,15 @@ graph below:
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ._types import MissionState
 from .blueprint import Blueprint
 from .errors import MissionLifecycleError
 from .validators import ValidatorRegistry
+
+if TYPE_CHECKING:
+    from sagewai.memory.rag import RAGEngine
 
 # Explicit transition table. Terminal states (COMPLETED, FAILED) map
 # to the empty set.
@@ -87,6 +90,7 @@ class Mission:
         "blueprint_version",
         "slots",
         "_state",
+        "memory",
     )
 
     def __init__(
@@ -97,6 +101,7 @@ class Mission:
         blueprint_id: str,
         blueprint_version: str,
         slots: dict[str, Any],
+        memory: RAGEngine | None = None,
     ) -> None:
         self.mission_id = mission_id
         self.project_id = project_id
@@ -104,6 +109,26 @@ class Mission:
         self.blueprint_version = blueprint_version
         self.slots = slots
         self._state: MissionState = MissionState.DRAFT
+        self.memory = memory
+
+        # Scope RAG memory to this mission so per-mission branches isolate state.
+        if memory is not None:
+            from sagewai.memory.branch import MemoryBranch
+            from sagewai.memory.rag import RAGEngine as _RAGEngine
+
+            if isinstance(memory, _RAGEngine):
+                new_branch = MemoryBranch(mission_id=self.mission_id)
+                # Refuse to silently steal a RAGEngine that's already scoped to a
+                # different mission — a shared engine across missions would overwrite
+                # branches in last-writer-wins fashion. Callers that need a shared
+                # engine must use one mission per engine, or wait for issue #195.
+                if memory._branch != MemoryBranch.global_root() and memory._branch != new_branch:
+                    raise ValueError(
+                        f"RAGEngine is already scoped to {memory._branch.mission_id!r}; "
+                        f"refusing to re-stamp for mission {self.mission_id!r}. "
+                        "Construct a separate RAGEngine per Mission."
+                    )
+                memory._branch = new_branch
 
     @property
     def state(self) -> MissionState:

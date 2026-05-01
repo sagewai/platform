@@ -50,6 +50,15 @@ class MemoryProvider(Protocol):
         ...
 
 
+from sagewai.memory.branch import MemoryBranch  # noqa: E402
+from sagewai.memory.strategies import (  # noqa: E402
+    ExtractedRecord,
+    MemoryStrategy,
+    TurnEvent,
+)
+from sagewai.memory.strategies.preference import PreferenceStrategy  # noqa: E402
+from sagewai.memory.strategies.semantic import SemanticFactStrategy  # noqa: E402
+from sagewai.memory.strategies.summary import SummaryStrategy  # noqa: E402
 from sagewai.memory.graph import GraphMemory  # noqa: E402
 
 try:
@@ -65,13 +74,20 @@ from sagewai.memory.rag import RAGEngine, RetrievalStrategy  # noqa: E402
 from sagewai.memory.vector import VectorMemory  # noqa: E402
 
 __all__ = [
+    "ExtractedRecord",
     "GraphMemory",
+    "MemoryBranch",
     "MemoryProvider",
+    "MemoryStrategy",
     "MilvusVectorMemory",
     "NebulaGraphMemory",
+    "PreferenceStrategy",
     "QueryIntent",
     "QueryRouter",
     "RAGEngine",
     "RetrievalStrategy",
+    "SemanticFactStrategy",
+    "SummaryStrategy",
+    "TurnEvent",
     "VectorMemory",
 ]

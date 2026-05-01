@@ -36,7 +36,9 @@ import logging
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from sagewai.memory.branch import MemoryBranch
 from sagewai.memory.graph import GraphMemory
+from sagewai.memory.strategies.base import MemoryStrategy, TurnEvent
 from sagewai.memory.vector import VectorMemory
 
 if TYPE_CHECKING:
@@ -69,6 +71,10 @@ class RAGEngine:
         query_router: Custom QueryRouter for AUTO mode. Auto-created if None.
         project_id: Explicit project scope passed to sub-stores when they are
             auto-created.  ``None`` → sub-stores resolve from contextvar.
+        strategies: Optional list of MemoryStrategy instances. When provided,
+            ``ingest_turns()`` runs each strategy and persists extracted records.
+        branch: Optional MemoryBranch for per-mission namespace isolation.
+            Defaults to ``MemoryBranch.global_root()`` (``_global`` prefix).
     """
 
     def __init__(
@@ -81,12 +87,16 @@ class RAGEngine:
         graph_weight: float = 0.4,
         query_router: QueryRouter | None = None,
         project_id: str | None = None,
+        strategies: list[MemoryStrategy] | None = None,
+        branch: MemoryBranch | None = None,
     ) -> None:
         self.vector = vector or VectorMemory(project_id=project_id)
         self.graph = graph or GraphMemory(project_id=project_id)
         self.strategy = strategy
         self.vector_weight = vector_weight
         self.graph_weight = graph_weight
+        self._strategies: list[MemoryStrategy] = strategies or []
+        self._branch: MemoryBranch = branch or MemoryBranch.global_root()
 
         if query_router is not None:
             self._router = query_router
@@ -139,6 +149,37 @@ class RAGEngine:
                 merged.append(item)
 
         return merged[:top_k]
+
+    async def ingest_turns(self, turns: list[TurnEvent]) -> None:
+        """Run all configured strategies over ``turns`` and persist extracted records.
+
+        Note: records are written to the vector store only. Graph ingestion is
+        intentionally out of scope for strategies (they emit unstructured text
+        records); use ``store_relation()`` for graph writes.
+
+        Each strategy's ``extract()`` is called with the full turn list. The
+        resulting records are stored in the vector store under a namespace
+        scoped to the engine's branch: ``{mission_id}/{strategy.namespace}``.
+
+        If no strategies are configured this is a no-op.
+
+        Args:
+            turns: Ordered list of conversation turns to process.
+        """
+        if not self._strategies:
+            return
+        for strat in self._strategies:
+            records = await strat.extract(turns)
+            for rec in records:
+                ns = self._branch.scoped(rec.namespace)
+                md: dict[str, Any] = {
+                    "namespace": ns,
+                    "strategy": rec.strategy,
+                    "session_id": rec.source_session,
+                }
+                md.update(rec.metadata)
+                if self.vector is not None:
+                    await self.vector.store(rec.content, metadata=md)
 
     async def store(self, content: str, metadata: dict[str, Any] | None = None) -> None:
         """Store content in both vector and graph stores.

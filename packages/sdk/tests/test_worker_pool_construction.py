@@ -25,14 +25,14 @@ def test_build_pool_returns_local_cache_pool_for_local_cache_strategy(tmp_path):
 
 
 def test_build_pool_raises_for_unsupported_strategy(tmp_path):
-    """Unknown pool strategies (K8s, Lambda — Threads 3+4) aren't built yet."""
+    """Unknown pool strategies (Lambda PROVIDER_MANAGED — Thread 4) aren't built yet."""
     from sagewai.core.worker import _build_pool
     from sagewai.sandbox.null_backend import NullBackend
     from sagewai.sandbox.models import SandboxConfig, SandboxMode
     from sagewai.sandbox.pool_protocol import PoolStrategy
 
     backend = NullBackend()
-    backend.pool_strategy = PoolStrategy.EXTERNAL_MIN_REPLICAS  # type: ignore[misc]
+    backend.pool_strategy = PoolStrategy.PROVIDER_MANAGED  # type: ignore[misc]
 
     with pytest.raises(NotImplementedError):
         _build_pool(
