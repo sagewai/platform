@@ -172,9 +172,10 @@ def _make_dataset() -> TrainingDataset:
 
 
 def test_executor_returns_skipped_when_unsloth_missing(monkeypatch: pytest.MonkeyPatch):
-    """Unsloth not installed → status='skipped' with informative reason."""
-    # Remove unsloth from sys.modules so import raises ImportError
+    """No backend installed → status='skipped' with informative reason."""
+    # Block both backends so import raises ImportError on each.
     monkeypatch.setitem(sys.modules, "unsloth", None)  # type: ignore[arg-type]
+    monkeypatch.setitem(sys.modules, "mlx_tune", None)  # type: ignore[arg-type]
     executor = FineTuneExecutor()
     result = executor.execute(_make_job(), _make_dataset())
     assert result.status == "skipped"
@@ -184,6 +185,7 @@ def test_executor_returns_skipped_when_unsloth_missing(monkeypatch: pytest.Monke
 
 def test_executor_skipped_result_has_no_model_path(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setitem(sys.modules, "unsloth", None)  # type: ignore[arg-type]
+    monkeypatch.setitem(sys.modules, "mlx_tune", None)  # type: ignore[arg-type]
     result = FineTuneExecutor().execute(_make_job(), _make_dataset())
     assert result.model_path is None
     assert result.metrics == {}
@@ -306,6 +308,7 @@ def test_curator_with_executor_updates_job_status_to_skipped(
     from sagewai.autopilot.curator.types import CuratorConfig
 
     monkeypatch.setitem(sys.modules, "unsloth", None)  # type: ignore[arg-type]
+    monkeypatch.setitem(sys.modules, "mlx_tune", None)  # type: ignore[arg-type]
     cfg = CuratorConfig(deduplicate_by_mission_id=False)
     executor = FineTuneExecutor()
     c = Curator(config=cfg, executor=executor)
@@ -316,6 +319,98 @@ def test_curator_with_executor_updates_job_status_to_skipped(
     jobs = c.clear_pending_jobs()
     assert len(jobs) == 1
     assert jobs[0].status == "skipped"
+
+
+# ── Backend dispatch (auto / unsloth / mlx_tune) ──────────────────
+
+
+def test_config_default_backend_is_auto():
+    cfg = FineTuneConfig()
+    assert cfg.backend == "auto"
+
+
+def test_select_backend_prefers_unsloth_on_auto(monkeypatch: pytest.MonkeyPatch):
+    """auto → if unsloth installed, pick unsloth even when mlx_tune is too."""
+    mock_unsloth = MagicMock()
+    mock_unsloth.FastLanguageModel = MagicMock(name="unsloth.FastLanguageModel")
+    mock_mlx = MagicMock()
+    mock_mlx.FastLanguageModel = MagicMock(name="mlx_tune.FastLanguageModel")
+    monkeypatch.setitem(sys.modules, "unsloth", mock_unsloth)
+    monkeypatch.setitem(sys.modules, "mlx_tune", mock_mlx)
+
+    backend, flm = FineTuneExecutor()._select_backend()
+    assert backend == "unsloth"
+    assert flm is mock_unsloth.FastLanguageModel
+
+
+def test_select_backend_falls_back_to_mlx_tune(monkeypatch: pytest.MonkeyPatch):
+    """auto → unsloth missing, mlx_tune present → use mlx_tune."""
+    monkeypatch.setitem(sys.modules, "unsloth", None)  # type: ignore[arg-type]
+    mock_mlx = MagicMock()
+    mock_mlx.FastLanguageModel = MagicMock(name="mlx_tune.FastLanguageModel")
+    monkeypatch.setitem(sys.modules, "mlx_tune", mock_mlx)
+
+    backend, flm = FineTuneExecutor()._select_backend()
+    assert backend == "mlx_tune"
+    assert flm is mock_mlx.FastLanguageModel
+
+
+def test_select_backend_explicit_unsloth_does_not_fall_back(monkeypatch: pytest.MonkeyPatch):
+    """backend='unsloth' must NOT silently fall through to mlx_tune."""
+    monkeypatch.setitem(sys.modules, "unsloth", None)  # type: ignore[arg-type]
+    mock_mlx = MagicMock()
+    mock_mlx.FastLanguageModel = MagicMock()
+    monkeypatch.setitem(sys.modules, "mlx_tune", mock_mlx)
+
+    cfg = FineTuneConfig(backend="unsloth")
+    backend, flm = FineTuneExecutor(config=cfg)._select_backend()
+    assert backend is None
+    assert flm is None
+
+
+def test_select_backend_explicit_mlx_tune_skips_unsloth(monkeypatch: pytest.MonkeyPatch):
+    """backend='mlx_tune' must use mlx-tune even if Unsloth is also installed."""
+    mock_unsloth = MagicMock()
+    mock_unsloth.FastLanguageModel = MagicMock()
+    monkeypatch.setitem(sys.modules, "unsloth", mock_unsloth)
+    mock_mlx = MagicMock()
+    mock_mlx.FastLanguageModel = MagicMock(name="mlx_tune.FastLanguageModel")
+    monkeypatch.setitem(sys.modules, "mlx_tune", mock_mlx)
+
+    cfg = FineTuneConfig(backend="mlx_tune")
+    backend, flm = FineTuneExecutor(config=cfg)._select_backend()
+    assert backend == "mlx_tune"
+    assert flm is mock_mlx.FastLanguageModel
+
+
+def test_executor_runs_mlx_tune_path_when_selected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+):
+    """When mlx_tune is the selected backend, _run_with_backend('mlx_tune', ...) runs."""
+    monkeypatch.setitem(sys.modules, "unsloth", None)  # type: ignore[arg-type]
+    mock_mlx = MagicMock()
+    mock_mlx.FastLanguageModel = MagicMock()
+    monkeypatch.setitem(sys.modules, "mlx_tune", mock_mlx)
+
+    seen: list[str] = []
+
+    def fake_run(self, backend, job, dataset, flm):  # noqa: ARG001
+        seen.append(backend)
+        return FineTuneResult(
+            status="completed",
+            model_path=str(tmp_path / job.job_id),
+            metrics={"backend": backend, "sample_count": 1},
+        )
+
+    monkeypatch.setattr(FineTuneExecutor, "_run_with_backend", fake_run)
+
+    result = FineTuneExecutor(
+        config=FineTuneConfig(output_dir=str(tmp_path)),
+    ).execute(_make_job(), _make_dataset())
+
+    assert result.status == "completed"
+    assert result.metrics["backend"] == "mlx_tune"
+    assert seen == ["mlx_tune"]
 
 
 # ── Public API surface ─────────────────────────────────────────────

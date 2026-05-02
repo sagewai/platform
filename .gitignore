@@ -61,3 +61,8 @@ docs/positioning/canonical-lines.md
 
 # Superpowers brainstorm/skill local state
 .superpowers/
+
+# Fine-tune intermediates (mlx-tune / mlx_lm drop fused_model/ next to cwd
+# as a side-effect of save_pretrained_gguf; multi-GB safetensors blobs).
+fused_model/
+**/fused_model/

@@ -582,3 +582,57 @@ def test_smoke_example_28_autopilot_quickstart_main():
 
     mod = importlib.import_module("sagewai.examples.28_autopilot_quickstart")
     mod.main()
+
+
+# ── Example 38 smoke ──────────────────────────────────────────────
+
+
+def test_smoke_example_38_unsloth_finetune_importable():
+    """Example 38 must import cleanly and expose a main() callable."""
+    import importlib
+
+    mod = importlib.import_module("sagewai.examples.38_unsloth_finetune")
+    assert callable(getattr(mod, "main", None))
+
+
+def test_smoke_example_38_unsloth_finetune_main(monkeypatch):
+    """Example 38 main() must complete cleanly on a CPU/no-GPU runner.
+
+    Forces SAGEWAI_FT_BACKEND=unsloth so the example takes the recipe-
+    fallback path (no CUDA on CI). On a developer Mac with mlx-tune
+    installed, this stops the smoke test from triggering a real
+    minute-long training run on every invocation.
+    """
+    import asyncio
+    import importlib
+
+    monkeypatch.setenv("SAGEWAI_FT_BACKEND", "unsloth")
+    mod = importlib.import_module("sagewai.examples.38_unsloth_finetune")
+    asyncio.run(mod.main())
+
+
+# ── Example 38a smoke ─────────────────────────────────────────────
+
+
+def test_smoke_example_38a_mlx_lm_server_deploy_importable():
+    """Example 38a must import cleanly and expose a main() callable."""
+    import importlib
+
+    mod = importlib.import_module("sagewai.examples.38a_mlx_lm_server_deploy")
+    assert callable(getattr(mod, "main", None))
+
+
+def test_smoke_example_38a_mlx_lm_server_deploy_main(monkeypatch):
+    """Example 38a main() must complete on a CPU/no-GPU runner.
+
+    Same trick as Example 38: force SAGEWAI_FT_BACKEND=unsloth so
+    the example takes the recipe path on a Mac that has mlx-tune
+    installed locally. CI without any backend hits the same path
+    and just prints the recipe.
+    """
+    import asyncio
+    import importlib
+
+    monkeypatch.setenv("SAGEWAI_FT_BACKEND", "unsloth")
+    mod = importlib.import_module("sagewai.examples.38a_mlx_lm_server_deploy")
+    asyncio.run(mod.main())
