@@ -30,7 +30,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from starlette.responses import StreamingResponse
+from starlette.responses import Response, StreamingResponse
 
 from sagewai.admin.state_file import AdminStateFile
 
@@ -2169,7 +2169,9 @@ def create_admin_serve_app(
         )
         if task:
             return JSONResponse(task)
-        return JSONResponse(None, status_code=204)
+        # 204 must have no body; JSONResponse(None, ...) writes "null" and
+        # crashes the h11 writer with "Too much data for declared Content-Length".
+        return Response(status_code=204)
 
     @app.post("/api/v1/fleet/report")
     async def fleet_report(request: Request) -> JSONResponse:

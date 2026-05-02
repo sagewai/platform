@@ -79,6 +79,7 @@ const SECTIONS: NavSection[] = [
   {
     title: 'Observatory',
     items: [
+      { label: 'Overview', href: '/docs/observatory' },
       { label: 'Admin Panel', href: '/docs/guides/admin-panel' },
       { label: 'Notifications', href: '/docs/api-reference/notifications' },
       { label: 'REST API', href: '/docs/api-reference/rest-api' },
