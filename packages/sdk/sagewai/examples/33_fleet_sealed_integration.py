@@ -61,12 +61,13 @@ from cryptography.fernet import Fernet
 from sagewai.fleet.dispatcher import FleetDispatcher, InMemoryTaskStore
 from sagewai.fleet.models import WorkerCapabilities
 from sagewai.fleet.registry import InMemoryFleetRegistry
+from sagewai.sandbox import image_manifest
+from sagewai.sandbox.models import NetworkPolicy, SandboxMode
 from sagewai.sealed.builtin_backend import BuiltinAdminStoreBackend
 from sagewai.sealed.crypto import Crypto
 from sagewai.sealed.models import ProfileWritePayload
 from sagewai.sealed.refs import _BACKENDS
 from sagewai.sealed.resolution import CascadeLevel, resolve_security_profile
-
 
 ORG_ID = "acme-corp"
 
@@ -260,6 +261,16 @@ async def main() -> None:
             "pool": "default",
             "labels": _task_labels(t),
             "payload": f"task for {t['for']}",
+            # Sealed-pillar requirement: every dispatched task declares
+            # the sandbox profile it needs so the runtime can isolate
+            # the worker. This example uses the general-purpose image
+            # with no outbound network — fleet/sealed isolation is what
+            # we're demonstrating, not third-party calls.
+            "requires_sandbox_mode": SandboxMode.PER_RUN,
+            "requires_image": (
+                f"ghcr.io/sagewai/sandbox-general:{image_manifest.SDK_VERSION}"
+            ),
+            "requires_network_policy": NetworkPolicy.NONE,
         })
         print(f"    {t['run_id']:<20} project={scope:<14} model={t['model']:<20}")
     print()

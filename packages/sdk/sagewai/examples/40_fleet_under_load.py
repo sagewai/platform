@@ -70,6 +70,8 @@ from dataclasses import dataclass, field
 from sagewai.fleet.dispatcher import FleetDispatcher, InMemoryTaskStore
 from sagewai.fleet.models import WorkerCapabilities
 from sagewai.fleet.registry import InMemoryFleetRegistry
+from sagewai.sandbox import image_manifest
+from sagewai.sandbox.models import NetworkPolicy, SandboxMode
 
 ORG_ID = "acme-corp"
 
@@ -323,6 +325,15 @@ async def main() -> None:
             "pool": t["pool"],
             "labels": {"project_id": t["project_id"]},
             "payload": f"work for {t['project_id']}",
+            # Sealed-pillar requirement: every dispatched task declares
+            # the sandbox it needs. This example is a load demo against
+            # the general-purpose image with no outbound network — the
+            # focus is dispatcher throughput, not third-party calls.
+            "requires_sandbox_mode": SandboxMode.PER_RUN,
+            "requires_image": (
+                f"ghcr.io/sagewai/sandbox-general:{image_manifest.SDK_VERSION}"
+            ),
+            "requires_network_policy": NetworkPolicy.NONE,
         })
 
     _line(" Tasks enqueued ")
