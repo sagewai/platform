@@ -5,23 +5,33 @@
 # demo instance.
 #
 # Usage:
-#   docker compose up -d          # start
-#   docker compose logs -f        # tail
-#   docker compose down           # stop
-#   docker compose down -v        # stop + wipe volumes (destructive)
+#   docker compose up -d                      # start the default stack
+#   docker compose logs -f                    # tail
+#   docker compose down                       # stop
+#   docker compose down -v                    # stop + wipe volumes (destructive)
+#   docker compose --profile nebula up -d     # also bring up NebulaGraph
 #
 # URLs:
 #   http://localhost:3008         # admin UI
 #   http://localhost:8000/docs    # backend OpenAPI explorer
+#   http://localhost:9669         # NebulaGraph graphd (when profile=nebula)
+#
+# Per-service control via justfile recipes:
+#   just deps-up          # postgres + redis + nebula (data deps only)
+#   just nebula-up        # bring up the 3-node NebulaGraph cluster
+#   just pg-up / redis-up # individual data deps
 #
 # Data persistence:
 #   postgres data lives in the `sagewai-pg-data` named volume. Safe across
 #   `docker compose down` unless you pass `-v`.
+#   NebulaGraph data lives in `nebula-meta-data`, `nebula-storage-data`.
 #
 # Image sources:
 #   ghcr.io/sagewai/backend:latest — built from apps/backend/
 #   ghcr.io/sagewai/admin:latest   — built from apps/admin/
-#   Both are published on every v*.*.* tag via .github/workflows/release-*.yml
+#   vesoft/nebula-*:v3.8.0         — pinned to match nebula3-python==3.8.3
+#   Backend + admin are published on every v*.*.* tag via
+#   .github/workflows/release-*.yml.
 
 services:
   postgres:
@@ -80,5 +90,136 @@ services:
     ports:
       - "3008:3008"
 
+  # ── NebulaGraph cluster (profile: nebula) ─────────────────────────────
+  # Pinned to v3.8.0 to match nebula3-python==3.8.3 in pyproject.toml.
+  # Three required services + a one-shot console init that registers
+  # the storage host with the metad layer (vesoft's recommended bootstrap
+  # for a fresh cluster). All four sit behind `profiles: [nebula]` so
+  # `docker compose up -d` keeps its existing default-stack behaviour.
+
+  nebula-metad:
+    image: vesoft/nebula-metad:v3.8.0
+    profiles: [nebula]
+    restart: unless-stopped
+    environment:
+      USER: root
+      TZ: "${TZ:-UTC}"
+    command:
+      - --meta_server_addrs=nebula-metad:9559
+      - --local_ip=nebula-metad
+      - --ws_ip=nebula-metad
+      - --port=9559
+      - --ws_http_port=19559
+      - --data_path=/data/meta
+      - --log_dir=/logs
+      - --v=0
+      - --minloglevel=0
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:19559/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    ports:
+      - "9559:9559"
+      - "19559:19559"
+    volumes:
+      - nebula-meta-data:/data/meta
+      - nebula-meta-logs:/logs
+
+  nebula-storaged:
+    image: vesoft/nebula-storaged:v3.8.0
+    profiles: [nebula]
+    restart: unless-stopped
+    depends_on:
+      nebula-metad:
+        condition: service_healthy
+    environment:
+      USER: root
+      TZ: "${TZ:-UTC}"
+    command:
+      - --meta_server_addrs=nebula-metad:9559
+      - --local_ip=nebula-storaged
+      - --ws_ip=nebula-storaged
+      - --port=9779
+      - --ws_http_port=19779
+      - --data_path=/data/storage
+      - --log_dir=/logs
+      - --v=0
+      - --minloglevel=0
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:19779/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    ports:
+      - "9779:9779"
+      - "19779:19779"
+    volumes:
+      - nebula-storage-data:/data/storage
+      - nebula-storage-logs:/logs
+
+  nebula-graphd:
+    image: vesoft/nebula-graphd:v3.8.0
+    profiles: [nebula]
+    restart: unless-stopped
+    depends_on:
+      nebula-metad:
+        condition: service_healthy
+      nebula-storaged:
+        condition: service_healthy
+    environment:
+      USER: root
+      TZ: "${TZ:-UTC}"
+    command:
+      - --meta_server_addrs=nebula-metad:9559
+      - --port=9669
+      - --ws_ip=nebula-graphd
+      - --ws_http_port=19669
+      - --log_dir=/logs
+      - --v=0
+      - --minloglevel=0
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:19669/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    ports:
+      - "9669:9669"
+      - "19669:19669"
+    volumes:
+      - nebula-graph-logs:/logs
+
+  # One-shot init that registers nebula-storaged with the metad layer.
+  # Without this, queries succeed against graphd but writes return
+  # `Storage Error: part not found`. Re-running is safe (ADD HOSTS is
+  # idempotent at the host level).
+  nebula-console:
+    image: vesoft/nebula-console:v3.8.0
+    profiles: [nebula]
+    restart: "no"
+    depends_on:
+      nebula-graphd:
+        condition: service_healthy
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        for i in $$(seq 1 30); do
+          /usr/local/bin/nebula-console -addr nebula-graphd -port 9669 \
+            -u root -p nebula \
+            -e 'ADD HOSTS "nebula-storaged":9779' && exit 0
+          echo "waiting for graphd…"
+          sleep 2
+        done
+        echo "failed to register storaged with metad" >&2
+        exit 1
+
 volumes:
   sagewai-pg-data:
+  nebula-meta-data:
+  nebula-meta-logs:
+  nebula-storage-data:
+  nebula-storage-logs:
+  nebula-graph-logs:

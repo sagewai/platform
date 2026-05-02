@@ -100,6 +100,45 @@ compose-up:
 compose-down:
     docker compose down
 
+# ── Dependencies (data services only — no app containers) ─────────────────
+# Per-service control over the data dependencies the SDK touches. Useful
+# when you want, e.g. just NebulaGraph for Example 41, without spinning
+# up the backend + admin containers. Each `*-up` target is idempotent
+# (re-running brings up the service if it's stopped).
+
+# Bring up ALL data dependencies (postgres + redis + nebula cluster)
+deps-up:
+    docker compose --profile nebula up -d postgres redis nebula-metad nebula-storaged nebula-graphd nebula-console
+
+# Stop ALL data dependencies (does not touch backend/admin)
+deps-down:
+    docker compose --profile nebula stop postgres redis nebula-metad nebula-storaged nebula-graphd nebula-console
+
+# Bring up postgres only
+pg-up:
+    docker compose up -d postgres
+
+# Stop postgres
+pg-down:
+    docker compose stop postgres
+
+# Bring up redis only
+redis-up:
+    docker compose up -d redis
+
+# Stop redis
+redis-down:
+    docker compose stop redis
+
+# Bring up the NebulaGraph cluster (3 services + 1-shot console init)
+# Connect from Example 41 with: SAGEWAI_GRAPH_BACKEND=nebula python …
+nebula-up:
+    docker compose --profile nebula up -d nebula-metad nebula-storaged nebula-graphd nebula-console
+
+# Stop the NebulaGraph cluster
+nebula-down:
+    docker compose --profile nebula stop nebula-metad nebula-storaged nebula-graphd nebula-console
+
 # Run sagewai SDK installation health check
 doctor:
     uv run --package sagewai sagewai doctor
