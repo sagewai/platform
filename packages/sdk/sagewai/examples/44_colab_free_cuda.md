@@ -218,53 +218,42 @@ python 44_colab_free_cuda.py --live --poll-timeout-minutes 60
 ## Real-world use cases
 
 The pattern in this example — *Drive as the bidirectional channel +
-one Colab notebook + one browser click* — fits any workload where
-the operator wants to verify a fine-tune end-to-end before spending
-real money. Five concrete domains, all the audience pin's "people
-who do not want to put a GPU on a corporate card without proof":
+one Colab notebook + one browser click* — fits any operator who needs
+to verify a fine-tune end-to-end before putting a GPU on a corporate
+card. Four people who'd run this in a Saturday afternoon:
 
-### 1. Hobbyist research / weekend curiosity
+### 1. Senior platform engineer at a 200-person fintech SaaS — verify the cost-down pitch before procurement
 
-A senior engineer at a small SaaS reads the Sagewai launch and
-wants to verify the cost-down claim before pitching it internally.
-They have a Google account and a few hours on Saturday.
+Your CTO read the Sagewai launch and asked you to "see if the
+$25-and-a-weekend cost-down story is real" before approving a RunPod
+account through procurement. You have a Google account and one
+afternoon.
 
 | Concern | How this pattern solves it |
 |---|---|
 | I don't want to spend anything just to verify the pitch | $0 — Colab free tier. Notebook + orchestrator do all the work. |
-| I want to see real numbers, not synthetic ones | The notebook reports actual training wall-clock + held-out eval accuracy. Numbers go straight onto the README. |
+| I want to see real numbers, not synthetic ones | The notebook reports actual training wall-clock + held-out eval accuracy. Numbers go straight onto the internal-pitch deck. |
 | If Sagewai disappears, I keep the artifact | The LoRA lives on your Drive AND in the local download dir. No vendor dependency. |
 
-### 2. Indie developer fine-tunes for a side project
+### 2. ML engineer at a 75-person AI-features-of-something startup — private dataset, no managed-service exposure
 
-You're a solo dev shipping a Twitter-bio summariser, recipe
-classifier, or some other niche thing. Cloud Haiku at scale would
-eat your hobby budget; you'd rather have a fine-tuned 3B for free.
+You own the AI feature for your company's product. The training
+dataset is customer-derived; legal will not let it touch a managed
+fine-tuning service. You also retrain every two weeks as the dataset
+grows, so the iteration cost has to be $0.
 
 | Concern | How this pattern solves it |
 |---|---|
-| The dataset is yours; you don't want to upload it to a managed fine-tune service | Data goes through *your* Drive only. The notebook reads it on a Colab T4 you control. No third-party data plane. |
-| Iteration cycles need to be cheap — you'll re-train weekly | Re-run the orchestrator → new run folder → new LoRA. Each iteration costs $0. |
+| The dataset is yours; you can't upload it to a managed fine-tune service | Data goes through *your* Drive only. The notebook reads it on a Colab T4 you control. No third-party data plane. |
+| Iteration cycles need to be cheap — you'll re-train every fortnight | Re-run the orchestrator → new run folder → new LoRA. Each iteration costs $0. |
 | The result needs to deploy somewhere | LoRA tarball downloads to local disk; Example 38 (`38_unsloth_finetune.py`) takes it from there to Ollama. |
 
-### 3. Students learning ML — first hands-on fine-tune
+### 3. Engineering lead at a 100-person devtools company — building the procurement business case
 
-You're a CS undergrad reading the Sagewai docs as your intro to
-production ML. You want to *do* a fine-tune, not just read about
-one. You don't have a GPU and don't have a budget.
-
-| Concern | How this pattern solves it |
-|---|---|
-| The setup needs to be 10 minutes, not 10 hours of CUDA driver YAML | OAuth client + `pip install pydrive2` is the entire setup. The notebook runs Unsloth on Colab's pre-baked stack. |
-| I want to see the whole pipeline — capture, train, deploy — not just one step | This example is one node in a five-step graph: Curator (Ex 36) → Drive-sync (Ex 44) → LoRA → Ollama (Ex 38) → Observatory (Ex 34). The READMEs link to each next step. |
-| The notebook should explain what it's doing | Every cell has a markdown header. The notebook reads top-to-bottom as a tutorial. |
-
-### 4. Small teams without GPU budget evaluating a vendor switch
-
-Your team is on an enterprise plan with a cloud LLM that just
-raised prices. The CTO asks the team to evaluate cheaper paths.
-You can't get a corporate card for RunPod through procurement; you
-can run a quick proof on Colab tonight.
+Your team is on an enterprise plan with a cloud LLM that just raised
+prices. The CTO asked the team to evaluate cheaper paths. You can't
+get a corporate card for RunPod through procurement without a business
+case; you can run a quick proof on Colab tonight.
 
 | Concern | How this pattern solves it |
 |---|---|
@@ -272,16 +261,19 @@ can run a quick proof on Colab tonight.
 | The proof needs to be reproducible by anyone on the team | Re-run the orchestrator with the same data; everyone gets the same LoRA. Same Drive folder is shareable. |
 | The result needs to compare apples-to-apples with the cloud baseline | The cost-down section uses `calculate_cost` against the same Haiku price the team is currently paying. Real numbers, same source-of-truth. |
 
-### 5. Anyone who wants to verify the cost-down claim before committing real spend
+### 4. Backend engineer at a 60-person healthcare SaaS — sanity-check the inference spectrum end-to-end
 
-The marketing site says *"a person with $25 and one weekend can
-train and deploy their own SLM with Sagewai."* You want to verify
-the $25 before believing it. This example is the $0 proof step.
+You're the on-call AI-feature owner. Before you commit to Examples
+47 and 48 (RunPod fine-tune + Modal serverless deploy), you want
+proof that the full spectrum hangs together at $0 first. If 44
+doesn't produce a deployable LoRA, 47 and 48 are not going to save
+you on the day.
 
 | Concern | How this pattern solves it |
 |---|---|
 | I'd rather not trust marketing — I want to run it myself | Stub mode shows you the integration; live mode runs it for $0. The whole pitch is verifiable in one afternoon. |
 | If the free tier doesn't work, the rest of the spectrum probably doesn't either | If Example 44 produces a deployable LoRA at $0, Example 47 (~$0.35) and Example 48 (~$0.002) become much easier to trust. |
+| Whatever I prove on Colab has to deploy on the team's actual stack | The exported LoRA is plain `safetensors` + adapter config; it loads in vLLM, Ollama, and Modal without modification. |
 
 ## What you can change
 

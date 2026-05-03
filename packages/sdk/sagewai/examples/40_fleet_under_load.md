@@ -138,55 +138,37 @@ The "the proof" block is a single JSON object with all the headline numbers. Cop
 
 ## Real-life use cases
 
-The shape demonstrated here — many workers, tenant-scoped routing, capability matching — maps to a long list of real workloads. If your problem looks like one of these, swap the simulated work in `_worker_loop` for your actual call and you have a starting point.
+The shape demonstrated here — many workers, tenant-scoped routing, capability matching — maps to a long list of real workloads. Five people who'd swap the simulated work in `_worker_loop` for their own call this quarter:
 
-### 1. Multi-tenant customer support triage
+### 1. Senior platform engineer at a 250-person multi-tenant B2B SaaS — support-tooling fan-out
 
-You run support tooling for 50 SaaS tenants. Every morning, 5,000 emails land. Each tenant has its own LLM key, system prompt, and tone of voice. A misrouted reply that uses tenant A's data while answering tenant B's customer is a contract-breaching incident.
+Your platform serves 50 SaaS tenants. Every morning, 5,000 support emails land. Each tenant has its own LLM key, system prompt, and tone of voice. A misrouted reply that uses tenant A's data while answering tenant B's customer is a contract-breaching incident your security team will not forgive.
 
 **Mapping:** `project_id = tenant_id`. One worker pool per tenant, sized to that tenant's plan. The isolation invariant in this example is exactly what your security team wants to see in writing.
 
-### 2. Document processing pipelines (invoices · contracts · PDFs)
+### 2. Senior backend engineer at a 200-person legaltech SaaS — document-pipeline burst handling
 
-Customers upload batches of 200-500 documents at unpredictable times. Each document triggers OCR → classification → structured extraction → quality check.
+Customers upload batches of 200-500 PDFs (contracts, invoices, due-diligence packs) at unpredictable times. Each document triggers OCR → classification → structured extraction → quality check; on a Friday before close-of-quarter that pipeline doubles.
 
 **Mapping:** workers in the `extraction` pool, tasks tagged by customer + stage. Burst-scale by adding workers to that pool only — the rest of the fleet is unaffected.
 
-### 3. Content moderation across user-generated content
+### 3. Infrastructure engineer at a 150-person AI-feature SaaS — GPU vs CPU pool routing
 
-Millions of posts/day across hundreds of subcommunities. Each subcommunity has its own moderation policy and threshold settings.
-
-**Mapping:** `project_id = community_id`. Workers carry the community's policy in their config; tasks (posts) carry the community as a label. The dispatch *is* the policy enforcement boundary — there's no path for a community A task to reach a community B worker.
-
-### 4. GPU vs CPU pool routing
-
-Heavy workloads (Whisper transcription, Stable Diffusion, LLaVA captioning) belong on GPU workers. Light workloads (sentiment, classification, entity tagging) belong on CPU workers, which are 10× cheaper.
+Half your AI workload is heavy (Whisper transcription, Stable Diffusion, LLaVA captioning); the other half is light (sentiment, classification, entity tagging). The CFO has flagged that you're burning GPU-hours on 50-token classifications and asked you to fix it before next quarter.
 
 **Mapping:** `pool = "gpu" | "cpu"`. Tasks tagged by their resource needs. The two pools scale independently, and you never accidentally burn a GPU on a 50-token classification.
 
-### 5. Multi-region compliance (data residency)
+### 4. Senior backend engineer at a 500-person e-commerce SaaS — multi-region data residency
 
-EU customer data must never leave EU infrastructure. US workloads run on US workers. Same code, same dispatch logic, different compliance domain.
+Your DPO has signed off on adding AI features only if EU customer data never leaves EU infrastructure. US workloads run on US workers, EU on EU workers; same code, same dispatch logic, different compliance domain — and you need defensible evidence both halves are isolated.
 
 **Mapping:** workers labelled with `region: eu-west-1` (etc.), tasks carry the customer's region. The same isolation invariant proven in this example, applied to a different label key, is what your DPO will ask you to demonstrate.
 
-### 6. A/B model evaluation
+### 5. Senior platform engineer at a 400-person two-sided marketplace — background labelling at peak load
 
-You're testing whether `gpt-4o-mini` can replace `claude-haiku-4-5` for a workflow at half the cost. Run both for a week, compare per-cohort cost + quality.
-
-**Mapping:** workers run cohort A or cohort B (different `models_supported`). Tasks split by `user_hash % 2 → cohort`, tagged with the cohort label. Per-cohort throughput, latency, and downstream quality numbers fall out of the dispatch pipeline for free.
-
-### 7. Background ML labeling for a marketplace
-
-Every new listing on your marketplace needs: category classification, harmful-content check, image OCR, location extraction, price reasonableness check. Each is a small (~100ms) agent call. On Black Friday, listing volume 10×s.
+Every new listing on your marketplace needs: category classification, harmful-content check, image OCR, location extraction, price reasonableness check. Each is a small (~100ms) agent call. On Black Friday, listing volume 10×s and pipeline backpressure becomes the on-call story.
 
 **Mapping:** one task per stage, chained by `run_id`. Workers handle whichever stage matches their pool. The fleet absorbs spikes by adding workers; you don't redesign the pipeline.
-
-### 8. Per-customer rate-limiting + fairness
-
-Two of your customers are sending 10× the load of everyone else, starving the rest of the fleet. You want to bound how much queue a single customer can occupy.
-
-**Mapping:** dedicated worker pool per priority tier (`tier: enterprise | pro | free`), capped headcount per tier. The dispatch refuses to overspend a tier even if there's other-tier work pending. (The example here doesn't model this directly, but it's a one-line label addition.)
 
 ---
 

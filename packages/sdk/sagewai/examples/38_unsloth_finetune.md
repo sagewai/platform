@@ -532,18 +532,28 @@ What stays identical:
 - The Modelfile template (Llama-3 chat format)
 - The cost-down math (`$/1k calls` delta)
 
-### Concrete domain adaptations a senior SaaS engineer can ship this quarter
+### Real-world use cases — five people who'd ship this fine-tune this quarter
 
-| Domain | Labels (output schema) | Why local fine-tune wins |
+Each row pairs a named operator with the labels their domain
+needs and the reason a $0/call local model wins over a paid frontier
+LLM at their volume.
+
+| Who | What they're shipping | Labels (output schema) | Why local fine-tune wins |
+|---|---|---|---|
+| **Senior platform engineer at a 200-person fintech SaaS** | Customer-support email triage on Zendesk (200 emails/day) | `{low, medium, high}` urgency + reason | The example's own use case. Cuts cloud bill by ~$30/month at 200 emails/day; fine-tune pays back in week one |
+| **RevOps engineer at a 100-person vertical-SaaS startup** | Sales lead scoring from contact-form + CRM history | `{hot, warm, cold}` + signal | Fine-tune on your CRM's labelled history; eliminates per-lead cloud spend at the volume your AEs touch daily |
+| **Internal-IT lead at a 400-person e-commerce SaaS** | Helpdesk ticket routing for password / software / network requests | `{network, identity, software, hardware, other}` | High-volume, repetitive — perfect for a 3B local model. Compliance also bans third-party LLMs for HR data |
+| **Senior eng-platform engineer at a 300-person devtools company** | Code-review priority on every PR diff | `{security, perf, style, tests-missing, lgtm}` | Run on every PR diff (~200/day); cloud cost would balloon, local is free; corpus is private git history |
+| **Senior backend engineer at a 250-person legaltech SaaS** | Legal-contract clause flagging during pre-redline | `{termination, indemnity, IP-assignment, non-standard, standard}` | Every clause gets classified pre-redline; price-prohibitive on cloud at the document volume per customer |
+
+Three more drop-in adaptations with the same orchestration shape (a
+senior eng at a 50-500-person SaaS swaps the labels and the JSONL):
+
+| Domain | Labels | Why local fine-tune wins |
 |---|---|---|
-| **Customer-support email triage** | `{low, medium, high}` urgency + reason | The example's own use case. Cuts cloud bill by ~$30/month at 200 emails/day |
-| **Sales lead scoring** | `{hot, warm, cold}` + signal | Fine-tune on your CRM's labelled history; eliminates per-lead cloud spend |
-| **Internal IT ticket routing** | `{network, identity, software, hardware, other}` | High-volume, repetitive — perfect for a 3B local model |
-| **Code review priority** | `{security, perf, style, tests-missing, lgtm}` | Run on every PR diff; cloud cost would balloon, local is free |
-| **Legal contract clause flagging** | `{termination, indemnity, IP-assignment, non-standard, standard}` | Every clause gets classified pre-redline; price-prohibitive on cloud |
-| **Content moderation tier** | `{auto-approve, human-review, auto-reject}` + reason | Latency-sensitive — local inference is faster than the cloud round-trip |
-| **Compliance log review** | `{benign, suspicious, violation}` + signal | Privacy: log content never leaves your network |
-| **Survey free-text classification** | `{feature-request, complaint, praise, churn-risk}` | Long tail — fine-tune captures your customers' specific phrasing |
+| **Content moderation tier** (community-platform SaaS) | `{auto-approve, human-review, auto-reject}` + reason | Latency-sensitive — local inference is faster than the cloud round-trip |
+| **Compliance log review** (regulated-industries SaaS) | `{benign, suspicious, violation}` + signal | Privacy: log content never leaves your network |
+| **Survey free-text classification** (any B2B SaaS PM team) | `{feature-request, complaint, praise, churn-risk}` | Long tail — fine-tune captures your customers' specific phrasing |
 
 ### Cost-down math, scaled
 

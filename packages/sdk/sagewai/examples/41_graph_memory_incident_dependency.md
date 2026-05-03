@@ -214,13 +214,14 @@ graph fixes.
 The pattern in this example — *one graph of business entities + a
 parallel application metadata index + custom multi-hop traversals* —
 fits any domain where structural questions matter more than
-text-similarity questions. Four concrete domains where the
-audience-pin person can drop this in this quarter:
+text-similarity questions. Four people who would drop this in this
+quarter:
 
-### 1. SRE / on-call automation
+### 1. Senior SRE at a 200-person fintech SaaS — on-call triage learns from history
 
-Your on-call team uses PagerDuty + Datadog. You want the LLM-driven
-triage agent (Example 30) to learn from history.
+Your on-call rotation uses PagerDuty + Datadog. You're building the
+LLM-driven triage agent (Example 30) and you want the next page to
+benefit from the last six months of post-mortems, not start from zero.
 
 | Concern | How this pattern solves it |
 |---|---|
@@ -228,10 +229,11 @@ triage agent (Example 30) to learn from history.
 | Auditor asks "what's the dependency closure of the database we're about to deprecate?" | Constraint propagation across `affects_service` ⊕ `depends_on` returns exactly the preventable-incident set (Q4) |
 | LLM context is expensive — passing 50 incident summaries to Opus on every page costs real money | Graph returns 11x fewer tokens on average than vector, while answering the question structurally instead of approximately |
 
-### 2. Customer success at a multi-tenant SaaS
+### 2. Engineering manager on the customer-success platform team at a 300-person B2B SaaS
 
-You have customers, contracts, complaints, feature requests, support
-tickets. CS agents ask cross-entity questions every day.
+You own the internal CS-tooling stack. AEs and CSMs ask cross-entity
+questions every day; today they grep Salesforce, Linear, and Zendesk
+by hand and a CS analyst spends Friday afternoons reconciling.
 
 | Concern | How this pattern solves it |
 |---|---|
@@ -239,10 +241,11 @@ tickets. CS agents ask cross-entity questions every day.
 | "Of the customers up for renewal in 30 days, which ones share a decision-maker with churned accounts?" | Multi-hop with temporal filter — exactly Q3 + Q2 combined |
 | "If we deprecate this feature, which renewing accounts get hit?" | Constraint propagation — exactly Q4, with `feature -> used_by -> account -> renews_in` |
 
-### 3. Code-dependency / production-change blast-radius analysis
+### 3. Senior platform engineer at a 150-person devtools company — change blast-radius
 
-You ship to production hourly. Your on-call team wants "if I revert
-this commit, what breaks?" answered in 5 seconds, not 5 minutes.
+Your team ships to production hourly. The CTO has asked you for a
+"what breaks if I revert this commit?" answer in five seconds, not
+five minutes, before approving the next on-call rotation policy.
 
 | Concern | How this pattern solves it |
 |---|---|
@@ -250,11 +253,12 @@ this commit, what breaks?" answered in 5 seconds, not 5 minutes.
 | "If this API is rolled back, which downstream services need a heads-up?" | Constraint propagation, exactly Q4 with `service -> depends_on -> api` |
 | Auditor wants the dependency closure for SOC 2 evidence | The graph IS the evidence — export the connected subgraph, ship it |
 
-### 4. Sales pipeline / account-relationship reasoning
+### 4. RevOps lead at a 100-person vertical-SaaS startup — pipeline reasoning
 
-Your CRM has leads, accounts, opportunities, decision-makers,
+Your CRM has leads, accounts, opportunities, decision-makers, and
 introductions. AEs want graph reasoning about the network, not a
-list of similar deals.
+list of text-similar deals; you've been told to "add AI to the CRM"
+before the next board meeting.
 
 | Concern | How this pattern solves it |
 |---|---|

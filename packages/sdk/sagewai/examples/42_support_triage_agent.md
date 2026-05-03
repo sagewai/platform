@@ -186,11 +186,14 @@ The pattern in this script — *one prompt template + directive
 preprocessing + LiteLLM-backed swap + tier-driven router* — is what a
 senior engineer at a 50-500-person SaaS will reach for once they
 decide to ship an LLM-powered feature without locking in a single
-provider. Four domains where they'll drop it in this quarter:
+provider. Four people who'd drop it in this quarter:
 
-### 1. Customer-support inbox (Zendesk / Intercom / Front / Help Scout)
+### 1. Senior platform engineer at a 200-person fintech SaaS — Zendesk inbox triage
 
-You read 200 tickets a day. Half of them are the same five questions.
+You read 200 customer-support tickets a day on Zendesk. Half of them
+are the same five questions ("how do I rotate my API key?", "why
+didn't my webhook fire?"). Your VP-Eng has asked you to triage them
+without expanding the on-call rotation.
 
 | Concern | How this pattern solves it |
 |---|---|
@@ -198,10 +201,12 @@ You read 200 tickets a day. Half of them are the same five questions.
 | Auto-responding to a P0 by accident is the worst-case outcome | The router never auto-responds to P0/P1. Tier semantics are pinned in `SYSTEM_PROMPT`; flipping any tier to escalate-by-default is a one-line change |
 | You want to start cheap and only escalate to a paid LLM if quality slips | Run Ollama as primary; the soak in `_soaks/directives_soak.py` tells you exactly where the local quality gap shows up (boundary tiers); promote to Haiku only for those cases |
 
-### 2. GitHub-issue triage on an open-source repo
+### 2. Engineering manager at a 50-person devtools company — GitHub-issue triage on the OSS repo
 
-You maintain an OSS project with 10-50 incoming issues a week. Most
-are duplicates, doc questions, or feature requests.
+Your company's open-source repo gets 10-50 issues a week. Most are
+duplicates, doc questions, or feature requests. You've told the team
+"no AI replies to OSS users" because the community would notice — but
+you want the boring sorting work done before standup.
 
 | Concern | How this pattern solves it |
 |---|---|
@@ -209,11 +214,12 @@ are duplicates, doc questions, or feature requests.
 | You want to keep the "no AI in OSS" crowd happy by keeping the human in the loop on judgment calls | P0/P1 always escalate — your eyes review every "production blocker" and "critical bug" issue. The agent does the boring 80% |
 | You don't want to pay anything for OSS tooling | Default Ollama path is $0/month and runs on the same machine as your dev environment |
 
-### 3. Internal IT helpdesk for a mid-size SaaS
+### 3. Internal IT lead at a 400-person e-commerce SaaS — helpdesk auto-drafts
 
-Your "submit a ticket" portal at HQ gets 30-60 tickets a day from
-sales, finance, and ops asking for password resets, software access,
-and "it's slow."
+Your `it@company.com` inbox gets 30-60 tickets a day from sales,
+finance, and ops asking for password resets, software access, and
+"my laptop is slow." Your three L1s spend half their day on the
+repetitive 80%; compliance has banned third-party LLMs for HR data.
 
 | Concern | How this pattern solves it |
 |---|---|
@@ -221,10 +227,12 @@ and "it's slow."
 | Compliance won't let employee data go to a third-party LLM | Pin `--primary ollama/llama3.2:latest` and the data never leaves the machine; the swap-proof line in the output confirms the same code works on local LLMs |
 | You need an audit trail of every triage decision | Every triage result has a `reason` string; log it next to the email ID and the tier — that's your audit |
 
-### 4. Sales-lead qualification from a contact-form
+### 4. Founder-engineer at a 30-person vertical-SaaS startup — contact-form lead qualification
 
-Your marketing site's "contact sales" form fires off 100-300
-submissions a week, mostly junk plus a few real deals.
+Your `/contact-sales` form fires off 100-300 submissions a week,
+mostly junk plus a few real deals. Your two AEs are senior, the
+business needs them on real opportunities, and you'd rather not
+spend their morning on filtering before pipeline.
 
 | Concern | How this pattern solves it |
 |---|---|

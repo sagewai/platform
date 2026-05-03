@@ -48,6 +48,28 @@ Requirements::
 Usage::
 
     python 33_fleet_sealed_integration.py
+
+Real-world use cases:
+
+- Senior platform engineer at a 250-person multi-tenant B2B SaaS —
+  you run agents on behalf of 50+ paying customers. Each customer's
+  data must not bleed into another's worker. The Sealed-+-Fleet
+  combination is what your security team will sign off on.
+- Senior backend engineer at a 300-person healthcare SaaS — your
+  customers store PHI; fleet workers must each carry one customer's
+  scoped credentials and never see the others'. SOC 2 needs evidence
+  the cross-tenant boundary holds at the dispatch layer, not just at
+  the application layer.
+- Founder-engineer at a 50-person LLM-gateway startup — your product
+  is "bring your own keys, we run the agent." You can't put 50
+  customer Anthropic keys in one worker process; one Sealed profile
+  per customer per worker is the only shape that survives a security
+  review.
+- Senior infra engineer at a 400-person fintech SaaS — the audit team
+  asks "if a worker is compromised, what's the blast radius?" Your
+  answer needs to be "exactly one customer's data, because the worker
+  only ever loads one customer's profile." This example proves that
+  invariant in 30 seconds.
 """
 
 from __future__ import annotations

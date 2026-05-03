@@ -147,13 +147,14 @@ one: `Backend used: live docker`.
 
 The pattern in this example — *one Sealed profile per tenant + one
 sandbox per run + redaction on the host log surface* — fits a wide
-range of multi-tenant SaaS workloads. Four concrete domains where the
-audience-pin person can drop this in this quarter:
+range of multi-tenant SaaS workloads. Four people who'd drop this
+pattern in this quarter:
 
-### 1. Customer-support email triage on per-customer Zendesk / Intercom
+### 1. Senior platform engineer at a 250-person multi-tenant B2B SaaS — per-customer Zendesk triage
 
 Your support tooling reads each customer's Zendesk via the customer's
-own Zendesk API key. You add an LLM-powered triage agent.
+own Zendesk API key. You're adding an LLM-powered triage agent and
+the security review will not approve cross-tenant credential reuse.
 
 | Concern | How this pattern solves it |
 |---|---|
@@ -161,10 +162,12 @@ own Zendesk API key. You add an LLM-powered triage agent.
 | If a prompt-injection in customer A's tickets tricks the agent into asking for "all keys", the blast radius is one container with one key | `--cap-drop=ALL --read-only` plus the per-tenant Sealed profile means it can only ever see A's key |
 | Support managers can audit "what did the agent do for customer A?" | Same workflow + same input → byte-identical network calls (the determinism check) |
 
-### 2. Internal-tools agent at a 50-500-person SaaS
+### 2. Senior internal-platform engineer at a 350-person SaaS — internal "ask the platform" agent
 
-Your internal "ask the platform" bot calls Jira, GitHub, your CRM, and
-your billing system on behalf of whichever employee is asking.
+Your internal Slack bot calls Jira, GitHub, your CRM, and your
+billing system on behalf of whichever employee is asking. Compliance
+has flagged that one employee's bug in a tool prompt must not be able
+to reveal another employee's tokens.
 
 | Concern | How this pattern solves it |
 |---|---|
@@ -172,11 +175,12 @@ your billing system on behalf of whichever employee is asking.
 | One employee's bug in a tool prompt can't reveal another employee's tokens | One Sealed profile per employee; one sandbox per request |
 | Compliance/security review can verify the redaction works without reading code | `<redacted:JIRA_TOKEN>` placeholders in the log surface are visually obvious; the Redactor's audit trail records every match |
 
-### 3. Multi-tenant LLM gateway you sell to other companies
+### 3. Founder-engineer at a 40-person LLM-gateway startup — multi-tenant key-bring-your-own routing
 
 Your product is "LLM router as a service" — companies bring their own
-Anthropic / OpenAI / local-Ollama keys. You run the LLM call on their
-behalf.
+Anthropic / OpenAI / local-Ollama keys; you run the LLM call on their
+behalf. A single cross-customer key leak is the existential incident
+the company would not survive.
 
 | Concern | How this pattern solves it |
 |---|---|
@@ -184,11 +188,12 @@ behalf.
 | If a customer compromises your service (worst case), the impact must be bounded to *that customer's* keys | One sandbox per customer per run; cross-tenant boundary verified in this example's output |
 | You publish a status page that includes recent error samples | Errors flow through the same Redactor pipeline before they reach the status page; live keys don't escape |
 
-### 4. "Run AI on your own data" feature in a B2B SaaS
+### 4. Senior backend engineer at a 300-person healthcare/HR-tech SaaS — "agent on your own data" feature
 
 You sell a product to customers who store sensitive data with you (HR
-records, financial data, healthcare). You're adding an "agent on your
-data" feature.
+records, financial data, healthcare PHI). You're adding an "agent on
+your data" feature; SOC 2 / HIPAA / ISO 27001 will require evidence
+that compute is isolated and credentials are scoped.
 
 | Concern | How this pattern solves it |
 |---|---|

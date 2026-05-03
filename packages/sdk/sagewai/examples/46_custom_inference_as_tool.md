@@ -153,14 +153,15 @@ process is squatting on them.
 
 The pattern in this example — *one `api_base` swap for the LLM, one
 `@tool` for non-OpenAI inference* — fits any operator who already runs
-inference somewhere Sagewai doesn't ship a vendor for. Three concrete
-domains:
+inference somewhere Sagewai doesn't ship a vendor for. Three people
+who'd drop it in this quarter:
 
-### 1. Self-hosted vLLM cluster on GKE / EKS / AKS
+### 1. Senior platform engineer at a 300-person healthcare SaaS — call the in-VPC vLLM cluster
 
-You already run vLLM on a Kubernetes cluster behind your VPC. Your
-SREs are not going to put a Modal account on the corporate card. You
-want Sagewai to call your existing endpoint.
+Your SRE team already runs vLLM on a Kubernetes cluster behind your
+VPC because compliance won't let patient data touch Anthropic or
+OpenAI. You're being asked to ship the AI feature without standing up
+a second managed service.
 
 | Concern | How this pattern solves it |
 |---|---|
@@ -168,11 +169,12 @@ want Sagewai to call your existing endpoint.
 | Engineering already standardised on the model name `my-finetune` | LiteLLM accepts any model name with `openai/<name>` prefix; the agent passes it straight through. |
 | The vLLM cluster is the cost story; we don't want a second managed service | This integration is one kwarg. There is no managed-service surface area to add. |
 
-### 2. HuggingFace TGI Inference Endpoint with a domain classifier
+### 2. Senior backend engineer at a 200-person legaltech SaaS — TGI + a fine-tuned PII classifier
 
 You serve your main reasoning LLM on TGI (HuggingFace Endpoints,
-OpenAI-compatible API), and you have a separate fine-tuned BERT-style
-classifier for PII detection that returns structured JSON.
+OpenAI-compatible API), and you've got a fine-tuned BERT-style PII
+classifier the security team requires on every legal document. The
+classifier costs roughly $0.01/call so you can't blanket-run it.
 
 | Concern | How this pattern solves it |
 |---|---|
@@ -180,11 +182,12 @@ classifier for PII detection that returns structured JSON.
 | The classifier costs ~$0.01/call; we shouldn't run it on every prompt | Tools are called only when the LLM decides to. The reasoning model gates the expensive classifier. |
 | HuggingFace requires a Bearer token | TGI's OpenAI-compat path takes the bearer via `api_key`. One kwarg, one secret, no SDK shimming. |
 
-### 3. AWS Bedrock (OpenAI-compatible mode) + a Lambda-hosted SLM
+### 3. Cloud platform engineer at a 500-person regulated-industries SaaS — AWS-only Bedrock + Lambda-SLM
 
-You're a regulated SaaS shop on AWS. You front Bedrock with the
-OpenAI-compat shim. You also have a Lambda function that calls a
-Bedrock-hosted custom embedding model and returns float vectors.
+Your shop is AWS-only by procurement policy: Bedrock for the LLM
+(OpenAI-compat shim), Lambda for the custom embedding model. You
+have to ship the AI feature without a non-AWS vendor on the bill,
+and CloudWatch is the existing observability surface.
 
 | Concern | How this pattern solves it |
 |---|---|

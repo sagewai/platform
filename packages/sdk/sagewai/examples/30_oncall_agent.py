@@ -47,6 +47,28 @@ Usage::
 
 To run end-to-end without an LLM key, the example detects no key set
 and prints what would happen, including the resolved tool calls.
+
+Real-world use cases:
+
+- Senior SRE at a 200-person fintech SaaS — your three-person on-call
+  rotation is paged at 02:47am for an api-gateway 5xx spike. You want
+  the agent to pull the 15-minute metric window, run ``ps``/``top`` in
+  a sandbox, and post the first-pass diagnosis to #incidents before
+  the human eyes finish typing in their password.
+- Engineering manager at a 150-person devtools company — your team
+  rotates on-call across six engineers. Half of them are uncomfortable
+  triaging the database tier. The agent's drafted response keeps the
+  page actionable for the on-call engineer who didn't write the
+  service.
+- Platform-team lead at a 400-person e-commerce SaaS — Black Friday
+  is six weeks away. You're staffing the war-room rotation and want
+  every page to land with metrics already pulled, runbook already
+  attempted, and a one-paragraph summary in Slack. Agent runs first,
+  human runs second.
+- Senior backend engineer at a 100-person AI-feature startup —
+  founders' rule is "engineers triage their own services". The agent
+  is the first review of the page so engineers get an evidence packet
+  before they answer. Cuts mean-time-to-acknowledge by half.
 """
 
 from __future__ import annotations

@@ -45,6 +45,28 @@ Requirements::
 Usage::
 
     python 34_observatory_cost_tracking.py
+
+Real-world use cases:
+
+- Senior platform engineer at a 200-person fintech SaaS — your CFO
+  asked "why did the LLM bill quadruple last month?" before the next
+  budget review. You need a per-project, per-model, per-agent
+  breakdown you can paste into a slide, plus the counterfactual
+  "what would this cost on cloud-only routing?" so the cost-down
+  pitch has a number behind it.
+- Engineering manager at a 350-person multi-tenant B2B SaaS — your
+  finance team wants per-customer cost attribution before the next
+  pricing review. Tagging every LLM call with ``project_id`` is what
+  lets the next QBR include the per-tenant cost-of-goods row.
+- FinOps engineer at a 500-person e-commerce SaaS — you own the cloud
+  cost dashboard. AI features now spend like a small Postgres tier;
+  leadership wants per-feature accountability with the same
+  granularity as RDS spend.
+- Senior backend engineer at a 100-person AI-features-of-something
+  startup — the CTO has approved "experiment with three frontier
+  models in parallel" for the search feature. The team needs
+  per-model spend visibility to decide which pin survives the next
+  sprint.
 """
 
 from __future__ import annotations

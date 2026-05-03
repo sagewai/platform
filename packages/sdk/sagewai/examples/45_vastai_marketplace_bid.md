@@ -248,16 +248,15 @@ and can decide whether to retry or pivot.
 The pattern in this example — *one orchestration script + one budget
 cap + one reliability filter + one cleanup contract* — fits the
 **batch-friendly, latency-tolerant, reliability-aware** end of the
-fine-tune spectrum. Three concrete domains where a senior engineer at
-a 50-500-person SaaS would drop this in this quarter:
+fine-tune spectrum. Four people who'd drop it in this quarter:
 
-### 1. Overnight fine-tunes (host downtime risk mitigated by reliability filter)
+### 1. Senior backend engineer at a 250-person fintech SaaS — overnight fine-tunes
 
 Your fine-tuning workflow runs at 22:00 UTC after the day's training
-data is curated. You go to bed; the LoRA is waiting in the morning.
-The cheapest hosts on Vast.ai are also the most likely to disappear
-mid-run; the reliability filter is what makes overnight runs viable
-on the marketplace.
+data is curated. You'd like to go to bed; the LoRA should be waiting
+in the morning. The cheapest hosts on Vast.ai are also the most
+likely to disappear mid-run; the reliability filter is what makes
+overnight runs viable on the marketplace.
 
 | Concern | How this pattern solves it |
 |---|---|
@@ -265,11 +264,12 @@ on the marketplace.
 | The CFO will see the line item; the GPU rental needs to be capped | `--budget-usd 3.00` + the watchdog. Instance destroyed before the cap, period. |
 | If the orchestrator crashes overnight, the instance must not silently keep accruing | Cleanup runs in `try/finally`, `atexit`, AND `SIGTERM` handlers — three independent paths. |
 
-### 2. Week-long soaks (operators want cheap *and* dependable)
+### 2. Senior research engineer at a 150-person developer-platform startup — week-long evaluation soaks
 
-You're building Sagewai's directive-library soak (or any equivalent
-multi-day evaluation). Cost matters: a 7-day RunPod RTX 5090 run is
-$116; a Vast.ai RTX 3090 run on the same workload is $40-50.
+You're running a directive-library soak (or any equivalent multi-day
+evaluation). Cost matters: a 7-day RunPod RTX 5090 run is $116; a
+Vast.ai RTX 3090 run on the same workload is $40-50. Procurement
+asked you to bring the second number, not the first.
 
 | Concern | How this pattern solves it |
 |---|---|
@@ -277,11 +277,13 @@ $116; a Vast.ai RTX 3090 run on the same workload is $40-50.
 | The host's reputation needs to hold for 7 days, not 30 minutes | `dlperf` + `reliability` together filter for hosts that have served thousands of hours of training jobs before yours. |
 | If the soak finds a regression, I need the LoRA + logs back instantly | `vastai copy` is just `scp` over the marketplace's wireguard tunnel; the artefact lands locally before teardown destroys the instance. |
 
-### 3. Model-comparison sweeps (running same training across N base models)
+### 3. ML engineer at a 100-person AI-feature-driven SaaS — model-comparison sweep before quarterly model-pin
 
-You want to see how Llama-3.2-3B vs. Qwen-2.5-3B vs. Gemma-2-2B fare on
-your dataset. Five base models × the same recipe = 5× the budget. Even
-at $1/run, that's $5; on Vast.ai's $0.24/hr floor it's $1.50.
+Your CTO asked the team to settle the "which 3B base do we ship
+on?" question this quarter. You want to see how Llama-3.2-3B vs.
+Qwen-2.5-3B vs. Gemma-2-2B fare on your dataset. Five base models ×
+the same recipe = 5× the budget — at Vast.ai's $0.24/hr floor that's
+$1.50, not $5.
 
 | Concern | How this pattern solves it |
 |---|---|
@@ -289,15 +291,12 @@ at $1/run, that's $5; on Vast.ai's $0.24/hr floor it's $1.50.
 | Different bases need different VRAM | Swap `--gpu-name RTX_3090` (24GB) for `--gpu-name A100_80GB` per base; same script, same budget contract. |
 | One run failing must not cascade | `try/finally` cleanup is per-process; one bid that goes south destroys its own instance and reports the failure. The other four keep running. |
 
-### 4. Anyone running 100+ training jobs/month
+### 4. Platform-team lead at a 400-person multi-tenant B2B SaaS — 100+ fine-tunes/month at marketplace floor
 
-The break-even tilts dramatically once you're past 50-100 fine-tunes
-per month. RunPod's reliability is worth paying for at low volume
-where every minute of provisioning matters; at high volume, the
-marketplace's per-hour floor dominates. A 100-fine-tune month at
-$0.24/hr × 1h = $24 vs. RunPod $0.69/hr × 0.5h = $34.50 — and that's
-*before* the option-pricing benefit of running on a GPU that costs
-0% to abandon if the experiment doesn't work.
+You sell a "fine-tune for me" feature to your customers. Each customer
+gets their own LoRA off their own dataset. Volume is past the
+break-even point where RunPod's reliability premium stops paying for
+itself; marketplace floor pricing dominates the bill.
 
 | Concern | How this pattern solves it |
 |---|---|

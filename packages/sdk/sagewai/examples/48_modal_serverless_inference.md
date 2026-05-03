@@ -221,14 +221,14 @@ budget cap, which is itself well under the issue's $1 ceiling).
 The pattern in this example — *one decorator + one budget cap + one
 LiteLLM-shaped client* — fits any production AI workload where peak
 load is bursty, average load is low, and the team doesn't have a
-GPU-platform engineer. Three concrete domains:
+GPU-platform engineer. Five people who'd drop it in this quarter:
 
-### 1. Internal-feature LLM (the audience-pin's first deploy)
+### 1. Senior platform engineer at a 200-person fintech SaaS — serve the support-classifier you just fine-tuned
 
 Your support tooling runs 200 ticket classifications/day. You burned
-through your Anthropic Haiku trial on Q1; the CFO asks you to cap it.
-You fine-tuned a Llama-3.2-3B on RunPod for $0.35 (Example 47); now
-where do you serve it?
+through your Anthropic Haiku trial in Q1; the CFO asked you to cap
+it. You fine-tuned a Llama-3.2-3B on RunPod for $0.35 (Example 47);
+now you need somewhere to serve it that won't quietly cost $400/mo.
 
 | Concern | How this pattern solves it |
 |---|---|
@@ -236,10 +236,12 @@ where do you serve it?
 | The feature gets bursts of 50 calls in 10 seconds, then nothing for an hour | `scaledown_window=300` keeps a warm replica through bursts; idle >5min and the function scales to zero. No wasted GPU-hours. |
 | If the LLM goes down, the support team blocks. Reliability matters | Modal is a managed control plane — replicas are reaped + recreated by their infrastructure, not by your on-call. |
 
-### 2. Per-customer model serving (multi-tenant SaaS)
+### 2. Senior platform engineer at a 250-person multi-tenant document-Q&A SaaS — per-customer LoRA serving
 
 You sell document-Q&A; each customer gets a LoRA fine-tuned on their
-docs. You have 30 customers. You can't spin up 30 dedicated GPU pods.
+docs. You have 30 customers. Spinning up 30 always-on GPU pods would
+cost $12K/month before serving anyone — that line item won't survive
+the next budget review.
 
 | Concern | How this pattern solves it |
 |---|---|
@@ -247,10 +249,12 @@ docs. You have 30 customers. You can't spin up 30 dedicated GPU pods.
 | Tenant isolation — Customer A can't see Customer B's LoRA | Each customer maps to a separate `modal.App` with its own LoRA Volume; control-plane-level isolation. |
 | Scaling a single hot customer can't starve the others | Modal's autoscale grants concurrency per function; one customer's burst gets its own container without crowding others. |
 
-### 3. Spiky public API endpoint
+### 3. Founder-engineer at a 60-person developer-tools startup — spiky public API
 
 You ship a free-tier `/summarize` endpoint that gets nothing for 22
-hours and 50K requests in the other 2 (HN front page).
+hours and 50K requests in the other 2 (HN front page, Product Hunt
+launch). Your team is small; "page the engineer when traffic spikes"
+is not a strategy.
 
 | Concern | How this pattern solves it |
 |---|---|
@@ -258,10 +262,12 @@ hours and 50K requests in the other 2 (HN front page).
 | The HN spike happens in 90 seconds; you can't react with a manual scale-up | Modal's autoscale is sub-second per replica; no human in the loop. |
 | The marketing team can't be the SRE for this | The decorator IS the deploy. No `kubectl`, no Helm, no oncall page during the spike. |
 
-### 4. A/B testing model variants (research → production bridge)
+### 4. ML engineer at a 150-person AI-feature SaaS — A/B-test three fine-tunes against the baseline
 
-You have three candidate fine-tunes. You want to A/B them against your
-existing baseline before committing to one for production.
+Your CTO has approved an A/B test: three candidate fine-tunes vs.
+the existing baseline. You need four parallel inference endpoints
+running for two weeks; standing up four dedicated GPU pods is
+cost-prohibitive for an experiment.
 
 | Concern | How this pattern solves it |
 |---|---|
@@ -269,9 +275,12 @@ existing baseline before committing to one for production.
 | Routing test traffic between variants needs a load-balancer | The agent's `ModalLLMClient` instance picks the variant per-request via standard Python; no LB to configure. |
 | Tearing down the losing variants after the experiment | Delete the function from your Modal dashboard, or just stop calling it — no cleanup billing. |
 
-### 5. Embedding / re-ranking sidecar to a managed retrieval system
+### 5. Senior search engineer at a 350-person e-commerce SaaS — self-hosted re-ranker sidecar to managed retrieval
 
-You use a managed vector DB but want a self-hosted re-ranker.
+Your retrieval stack runs on a managed vector DB. The search-quality
+team trained a re-ranker that has to live on your side of the wire
+(privacy + IP). You need to serve it next to the existing retrieval
+path without standing up a dedicated GPU box for a 50ms call.
 
 | Concern | How this pattern solves it |
 |---|---|

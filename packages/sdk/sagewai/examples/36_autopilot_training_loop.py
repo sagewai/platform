@@ -49,6 +49,29 @@ Requirements::
 Usage::
 
     python 36_autopilot_training_loop.py
+
+Real-world use cases:
+
+- Senior platform engineer at a 200-person fintech SaaS — you shipped
+  the support-ticket triage agent on Haiku in Q1. The CFO asked you
+  to bring the cost down by 50% in Q3. The Curator's training-data
+  hooks accumulate every accepted triage decision automatically; once
+  there are 500 accepted samples a fine-tune job triggers and the
+  cheaper local model lands in the routing tier.
+- ML engineer at a 100-person AI-feature SaaS — you run agents in
+  production. Your CTO has asked "can we get cheaper, faster,
+  more-specialised models from our own usage?" without manually
+  labelling anything. This is the closes-the-loop story.
+- Senior backend engineer at a 250-person legaltech SaaS — every
+  human override on the contract-clause classifier should improve the
+  next model version. The training loop turns operator behaviour into
+  the next training set; you stop paying frontier-model rates for the
+  routine 80% of clauses.
+- Engineering manager at a 350-person devtools company — your support
+  team rates AI replies 1-5 daily. The training loop turns those
+  ratings into the quality filter (``user_rating >= 4``) that decides
+  what's worth fine-tuning on. The team's daily QA work is the
+  training corpus.
 """
 
 from __future__ import annotations

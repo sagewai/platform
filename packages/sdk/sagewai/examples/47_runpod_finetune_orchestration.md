@@ -183,13 +183,14 @@ python 47_runpod_finetune_orchestration.py --live --budget-usd 1.00
 The pattern in this example — *one orchestration script + one budget
 cap + one cleanup contract* — fits any workload where a senior SaaS
 engineer needs to fine-tune a small model on a GPU they don't own.
-Three concrete domains:
+Three people who'd drop it in this quarter:
 
-### 1. Customer-support ticket classifier (the audience-pin's first task)
+### 1. Senior platform engineer at a 200-person fintech SaaS — fine-tune the support-ticket classifier
 
 Your support tooling runs 200 tickets/day through an LLM that
 classifies urgency, drafts replies, and escalates the hard ones.
-Cloud Haiku costs ~$30/month; you'd like that to be $0.
+Cloud Haiku is $30/month and growing; the CFO has asked you to bring
+that to $0 next quarter.
 
 | Concern | How this pattern solves it |
 |---|---|
@@ -197,11 +198,12 @@ Cloud Haiku costs ~$30/month; you'd like that to be $0.
 | If the CI agent that runs the fine-tune crashes, the pod must not silently keep accruing | Cleanup runs in `try/finally`, `atexit`, AND `SIGTERM` handlers — three independent paths. |
 | The LoRA must deploy somewhere — not be a "ran once on Colab" artifact | `runpodctl receive` pulls the safetensors to local disk; Example 38's Ollama deploy step runs against it verbatim. |
 
-### 2. Internal-doc Q&A bot at a 50-500-person SaaS
+### 2. Senior infra engineer at a 300-person devtools company — internal-doc Q&A on private runbooks
 
 Your engineers ask "how does the billing service handle proration?"
-twenty times a day. You'd rather have a 3B fine-tuned on your runbooks
-answer than burn Sonnet tokens.
+twenty times a day on Slack. You'd rather have a 3B model fine-tuned
+on your runbooks answer than burn Sonnet tokens — and the corpus
+can't go to a managed fine-tuning vendor.
 
 | Concern | How this pattern solves it |
 |---|---|
@@ -209,11 +211,12 @@ answer than burn Sonnet tokens.
 | We don't have a "GPU person"; whoever runs this must be ops-able by a generalist engineer | One Python command, one budget cap, one cleanup contract. The README is what they read. |
 | The fine-tune is going to take a few iterations — recipe + dataset will change | The recipe lives inline in `REMOTE_FINETUNE_SCRIPT`; swap the JSONL or the LoRA hyper-params and re-run. Same budget contract holds. |
 
-### 3. Code-review summariser for a busy engineering org
+### 3. Engineering manager at a 400-person e-commerce SaaS — code-review summariser
 
 PRs land at 200/day. You want a summariser that drafts the "what
-changed and why" paragraph for each. Burning Opus is expensive; a
-fine-tune on your repo's history is cheap and private.
+changed and why" paragraph for each, kept up to date as the codebase
+drifts. Burning Opus across that many diffs is the wrong cost story;
+a fine-tune on your repo's history is cheap and private.
 
 | Concern | How this pattern solves it |
 |---|---|

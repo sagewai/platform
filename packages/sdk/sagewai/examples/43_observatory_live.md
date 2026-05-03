@@ -184,16 +184,58 @@ event stream still tick, which is what the dashboards consume.
 ## Real-world use cases
 
 The pattern this example demonstrates — a small, multi-tenant HTTP
-load driver against an instrumented backend — is what an SRE drops
-in for any of these:
+load driver against an instrumented backend — is what these people
+drop in this quarter:
 
-| Domain | Concern | How the pattern solves it |
-|---|---|---|
-| **Pre-launch dashboard verification** | "We added five new panels — do they actually populate?" | Run this driver before opening Grafana; the panels either move or they don't. |
-| **Multi-tenant isolation soak** | "If tenant A's load spikes, do tenant B's panels stay clean?" | Single tenant's `task_interval_s` lowered → watch the per-route panels split by `project_id`. |
-| **OTel pipeline regression test** | "Did the collector upgrade silently drop a metric class?" | Compare `Spans Processed` and `Log Records Sent` panels before/after the upgrade. |
-| **HUD demo prep** | "I'm presenting in 30 minutes — make the dashboards look alive." | Run with `--duration 300` and the HUD is populated when the laptop hits the projector. |
-| **Cost-attribution sanity check** | "Are runs being correctly tagged to the right project?" | Each tenant's runs are scoped via `X-Project-ID`; filter the logs panel by `project_id` to verify. |
+### 1. Senior SRE at a 250-person fintech SaaS — pre-launch dashboard verification
+
+You added five new Grafana panels for the AI-feature dashboard the
+CFO will look at on Monday. You need to know they actually populate
+before that meeting, not during it.
+
+| Concern | How the pattern solves it |
+|---|---|
+| "We added five new panels — do they actually populate?" | Run this driver before opening Grafana; the panels either move or they don't. |
+
+### 2. Senior platform engineer at a 150-person multi-tenant B2B SaaS — isolation soak
+
+Your product gives every customer their own project_id. You're
+shipping a new fan-in route and need to prove that one customer's
+load doesn't bleed into another customer's dashboards.
+
+| Concern | How the pattern solves it |
+|---|---|
+| "If tenant A's load spikes, do tenant B's panels stay clean?" | Single tenant's `task_interval_s` lowered → watch the per-route panels split by `project_id`. |
+
+### 3. Observability engineer at a 400-person e-commerce SaaS — collector regression test
+
+You upgraded the OTel collector last sprint. Today's standup brought
+up "are we sure histograms still flow?" and you'd rather have a
+synthetic load that proves it than guess from the dashboard.
+
+| Concern | How the pattern solves it |
+|---|---|
+| "Did the collector upgrade silently drop a metric class?" | Compare `Spans Processed` and `Log Records Sent` panels before/after the upgrade. |
+
+### 4. Founding engineer at a 40-person devtools startup — HUD demo prep
+
+You're presenting the AI feature to the board in 30 minutes and the
+laptop is about to hit a projector. The dashboards are quiet because
+nothing's happened in the last hour. You need them alive.
+
+| Concern | How the pattern solves it |
+|---|---|
+| "I'm presenting in 30 minutes — make the dashboards look alive." | Run with `--duration 300` and the HUD is populated when the laptop hits the projector. |
+
+### 5. FinOps engineer at a 500-person SaaS — cost-attribution sanity check
+
+You're rolling out per-customer cost dashboards and need to verify
+that runs are tagged to the right project before the AE team starts
+quoting numbers from them in QBRs.
+
+| Concern | How the pattern solves it |
+|---|---|
+| "Are runs being correctly tagged to the right project?" | Each tenant's runs are scoped via `X-Project-ID`; filter the logs panel by `project_id` to verify. |
 
 ---
 

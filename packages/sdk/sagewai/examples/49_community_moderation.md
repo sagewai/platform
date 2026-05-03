@@ -158,11 +158,16 @@ cost, and the budget-cap headroom across all five moderations.
 
 ## Real-world use cases
 
-Every domain here pairs with a concrete *concern → how this pattern
-solves it* table. The same code shape ships with a different
-ensemble.
+Five people who'd ship this pattern in this quarter. Each one swaps
+the ensemble for the labels their domain needs; the orchestration
+code is unchanged.
 
-**Community blog moderation.**
+### 1. Senior platform engineer at a 100-person community-blogging SaaS — comment moderation
+
+Your product is a Substack-shaped community platform. User comments
+land faster than your two moderators can read; engagement dies if
+sarcasm gets nuked, but a slur that survived ten minutes lands on
+Twitter as a screenshot.
 
 | Concern | How the pattern solves it |
 |---|---|
@@ -170,7 +175,12 @@ ensemble.
 | False positives kill engagement | The LLM judge overrides classifier majority on context (sarcasm, reclaimed language) before the post is hidden |
 | Mods need to defend a flag in front of the user | The audit trail names which models triggered, what tokens fired, what context the LLM considered |
 
-**Support-ticket triage** (sister pattern to Example 42).
+### 2. Senior support engineer at a 200-person regulated-industries SaaS — sentiment + urgency triage
+
+Your support team is bucketing 500 tickets/day by sentiment and
+urgency by hand. The privacy team has rejected shipping ticket text
+to a third-party LLM, so the sister pattern from Example 42 needs to
+run on a sealed-sandbox endpoint with the same orchestration shape.
 
 | Concern | How the pattern solves it |
 |---|---|
@@ -178,21 +188,35 @@ ensemble.
 | LLM bills creep up at scale | The classifier ensemble does 95% of the bucketing; the LLM only costs a tenth of a cent per ticket |
 | Privacy team rejects shipping ticket text to a third party | All three classifiers run inside the operator's own sealed sandbox-ml endpoint or remote GPU |
 
-**Internal-doc compliance check.**
+### 3. Internal-platform engineer at a 400-person devtools company — PII scrub before the wiki goes public
+
+Engineering wants to publish the internal wiki as customer-facing
+docs next quarter. Legal needs auditable evidence that every page
+was PII-screened, with a reasoning trail per flag.
 
 | Concern | How the pattern solves it |
 |---|---|
 | Engineering wiki must be PII-free before it goes public | Swap the ensemble for a PII-detection set (Presidio + a bespoke regex tool + a transformers PII model) |
 | Legal needs an auditable reasoning trail | Every `flag` outcome carries the LLM's one-sentence justification + the per-tool verdicts that informed it |
 
-**Marketplace listing review.**
+### 4. Trust-and-safety engineer at a 150-person two-sided-marketplace SaaS — listing review
+
+Sellers post listings 24/7. Humans can't review every one, but bad
+listings (weapons, drugs, counterfeits) sneaking through cost you
+your payment processor relationship. Sellers also expect to appeal
+takedowns, so decisions need defensible evidence.
 
 | Concern | How the pattern solves it |
 |---|---|
 | Sellers post listings 24/7; humans can't review every one | The ensemble catches the obvious-prohibited cases (weapons, drugs, counterfeits); the LLM looks at the harder edge cases |
 | Decisions need to survive an appeal | The audit trail is the appeal evidence — sellers see exactly which models flagged what tokens |
 
-**Comment moderation under a news article.**
+### 5. Senior platform engineer at a 250-person digital-news SaaS — comment moderation under articles
+
+Your editorial team has a strict house style for which comments stay
+up; trolls weaponise reclaimed-slur edge cases to make the rule book
+look inconsistent. You need the rules implemented in the prompt, not
+the classifier weights.
 
 | Concern | How the pattern solves it |
 |---|---|

@@ -65,6 +65,27 @@ Requirements::
 Usage::
 
     python 37_semantic_checkpoint_recall.py
+
+Real-world use cases:
+
+- Senior platform engineer at a 200-person fintech SaaS — your
+  AI-feature is a multi-turn agent that holds conversations across
+  many topics for the same user. Cloud Sonnet at 200K context costs
+  more per call than the feature can earn back. Surface only the
+  relevant slice and a cheap local 7B model holds the thread.
+- Senior backend engineer at a 150-person legaltech SaaS — your
+  contract-review assistant has 50 turns of back-and-forth on a
+  single deal. When the user says "back to clause 4", you need the
+  five turns about clause 4, not the whole transcript. Token spend
+  drops by an order of magnitude on the same answer quality.
+- Engineering manager at a 300-person customer-support SaaS — your
+  support-rep co-pilot stays open across multi-day customer threads.
+  The whole thread won't fit in a small-context model; the focused
+  slice does, and the rep gets the same answer at 1/10th the spend.
+- ML engineer at a 100-person AI-feature startup — you're evaluating
+  whether a 7B Ollama-served model can hold a 14-turn conversation
+  as well as Opus. The token-budget proof in this example is what
+  lets you make that swap defensibly.
 """
 
 from __future__ import annotations
