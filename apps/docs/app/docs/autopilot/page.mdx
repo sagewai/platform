@@ -1,3 +1,26 @@
+import { TechArticleJsonLd, SoftwareApplicationJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Autopilot — describe the goal, ship the agent',
+  description:
+    'State the goal in plain English. Autopilot designs the agent graph, extracts slots, schedules a mission, drives execution, and self-heals on failure.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/autopilot' },
+  openGraph: {
+    title: 'Sagewai Autopilot — describe-the-goal agent automation',
+    description:
+      'Plain-English goal in, blueprint out, mission running. Hosted blueprint service that learns; private fine-tuning at any time.',
+    url: 'https://docs.sagewai.ai/docs/autopilot',
+  },
+};
+
+<TechArticleJsonLd
+  name="Autopilot — describe the goal, ship the agent"
+  description="Sagewai Autopilot lets you state a goal in plain English and have the platform design, provision, run, and improve the agents that deliver it."
+  path="/docs/autopilot"
+  articleSection="Autopilot"
+/>
+<SoftwareApplicationJsonLd />
+
 # Autopilot
 
 Sagewai Autopilot lets you state a goal in plain English and have the platform design, provision, run, and continuously improve the agents that deliver it. Instead of writing agent code, you describe the outcome you want and Autopilot handles the rest — routing your goal to the best matching blueprint, extracting slot values, scheduling a mission, and driving execution through the agent graph.

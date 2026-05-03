@@ -1,3 +1,19 @@
+import { TechArticleJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Directives — harness any LLM, even small local ones',
+  description:
+    'Prompt-side resolution that lets weak LLMs (no native tool calls) use Sagewai memory, MCP tools, and delegation. The any-LLM moat.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/core-concepts/directives' },
+};
+
+<TechArticleJsonLd
+  name="Sagewai Directives"
+  description="The directive engine: a prompt preprocessor that lets any LLM — including small, local models without native tool calling — use the full Sagewai stack."
+  path="/docs/core-concepts/directives"
+  articleSection="Core concepts"
+/>
+
 # Directives
 
 The Directive Engine is a prompt preprocessor that resolves special syntax into enriched context before the LLM sees the prompt. It enables any model — including small, local LLMs without native tool-calling support — to leverage Sagewai's full infrastructure: Context Engine, Memory, Tools, MCP connectors, and cross-agent delegation.

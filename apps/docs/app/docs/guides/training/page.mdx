@@ -1,3 +1,26 @@
+import { TechArticleJsonLd, SoftwareApplicationJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Train your own model in a weekend — Sagewai training loop',
+  description:
+    'Capture production runs with the Curator, fine-tune via Unsloth on Colab/RunPod/Vast.ai, deploy via Ollama. End-to-end fine-tuning under $5.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/guides/training' },
+  openGraph: {
+    title: 'Sagewai training loop — fine-tune local LLMs in a weekend',
+    description:
+      'Capture, train, deploy, cost-down. The training loop that takes Opus traffic to a local model you own.',
+    url: 'https://docs.sagewai.ai/docs/guides/training',
+  },
+};
+
+<TechArticleJsonLd
+  name="Sagewai training & fine-tuning"
+  description="The Sagewai training loop: Curator captures production runs, Unsloth fine-tunes, Promoter promotes, Ollama deploys. Cost-down to zero per token."
+  path="/docs/guides/training"
+  articleSection="Training Loop"
+/>
+<SoftwareApplicationJsonLd />
+
 # Training & Fine-Tuning
 
 Build domain-specific LLMs from your agent conversations. Sagewai captures every agent run as structured training data, then uses Unsloth to fine-tune open-source models on your corporate data — entirely within your infrastructure.

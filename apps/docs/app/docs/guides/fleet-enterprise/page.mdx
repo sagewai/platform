@@ -1,3 +1,20 @@
+import { TechArticleJsonLd, SoftwareApplicationJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Multi-tenant production with isolated tenants — Sagewai Fleet',
+  description:
+    'One server, many workers, hard tenant isolation. Per-project budgets, capability dispatch, on-prem GPU + cloud CPU. The enterprise deployment story.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/guides/fleet-enterprise' },
+};
+
+<TechArticleJsonLd
+  name="Sagewai Fleet enterprise deployment"
+  description="Server + worker architecture for multi-tenant AI agent deployments. Per-project isolation, on-prem GPU + cloud CPU, capability-based dispatch."
+  path="/docs/guides/fleet-enterprise"
+  articleSection="Fleet"
+/>
+<SoftwareApplicationJsonLd />
+
 # Fleet Architecture & Enterprise Deployment
 
 Sagewai's server + worker architecture is its biggest differentiator. One server manages all projects, budgets, and routing. Workers execute agentic workloads wherever you need them — on-prem GPU boxes, cloud VMs, Kubernetes pods, or edge devices.

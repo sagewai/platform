@@ -1,3 +1,19 @@
+import { TechArticleJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Safety & guardrails — production-grade AI agent safety',
+  description:
+    'Layered safety for Sagewai agents: input/output guardrails, budget enforcement, audit logging. Multi-layer defense against runaway costs and bad outputs.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/core-concepts/safety' },
+};
+
+<TechArticleJsonLd
+  name="Sagewai Safety & Guardrails"
+  description="Production-grade safety for AI agents — guardrails, budget enforcement, audit logging, compliance posture."
+  path="/docs/core-concepts/safety"
+  articleSection="Core concepts"
+/>
+
 # Safety & Guardrails
 
 Sagewai provides multiple layers of safety: input/output guardrails that run automatically on every agent call, budget enforcement that prevents runaway costs, and audit logging for compliance.

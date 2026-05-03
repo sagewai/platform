@@ -1,3 +1,19 @@
+import { TechArticleJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Fleet architecture — distributed AI agent workers',
+  description:
+    'Sagewai Fleet: enrollment flow, capability-based dispatch, heartbeats, security layers. The distributed-execution architecture for production AI agents.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/guides/fleet-architecture' },
+};
+
+<TechArticleJsonLd
+  name="Sagewai Fleet architecture"
+  description="Distributed AI agent worker fleet: enrollment, dispatch, heartbeat, security layers, capability matching, project isolation."
+  path="/docs/guides/fleet-architecture"
+  articleSection="Fleet"
+/>
+
 # Fleet Architecture
 
 A deep-dive into how the Sagewai Enterprise Fleet system is designed — enrollment flow, task dispatch, heartbeat management, and security layers.

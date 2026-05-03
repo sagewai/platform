@@ -1,3 +1,19 @@
+import { TechArticleJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Runtime topology — how a Sagewai workflow run executes',
+  description:
+    'Control plane plans, dispatches, persists. Worker fleet executes. Per-step routing, claim-and-report task lifecycle, project-scoped multi-tenancy.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/architecture/runtime-topology' },
+};
+
+<TechArticleJsonLd
+  name="Sagewai runtime topology"
+  description="End-to-end execution model — control plane and worker fleet — for every Sagewai workflow run."
+  path="/docs/architecture/runtime-topology"
+  articleSection="Architecture"
+/>
+
 # Runtime topology
 
 How a workflow run actually executes end-to-end. Sagewai is a control

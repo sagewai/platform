@@ -1,3 +1,10 @@
+export const metadata = {
+  title: 'Directives API — prompt preprocessor for any LLM',
+  description:
+    '@context, @memory, @agent, /tool, /mcp, #meta directive resolution. Lets small/local LLMs use the full Sagewai stack without native tool calling.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/api-reference/directives' },
+};
+
 # Directives
 
 The Directive Engine preprocesses prompts before the LLM call, resolving `@context`, `@memory`, `@agent`, `/tool`, `/mcp`, and `#meta` directives into enriched context. This enables small and local models to leverage the full Sagewai infrastructure without native tool-calling support.

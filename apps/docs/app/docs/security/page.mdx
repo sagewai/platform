@@ -1,3 +1,26 @@
+import { TechArticleJsonLd, SoftwareApplicationJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Sealed — defense-in-depth security for AI agents',
+  description:
+    'Per-CLI workload identity, JIT secrets, prompt redaction, replay safety, per-CLI ACL, JIT-HITL — the security model agent platforms have been ignoring.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/security' },
+  openGraph: {
+    title: 'Sagewai Sealed — five pillars, one spine',
+    description:
+      'Defense-in-depth for AI agents: per-CLI identity, externalised secret backends, redaction at the RPC boundary, replay safety, JIT-HITL.',
+    url: 'https://docs.sagewai.ai/docs/security',
+  },
+};
+
+<TechArticleJsonLd
+  name="Sealed — defense-in-depth security for Sagewai AI agents"
+  description="The Sealed security spine — workload identity, externalised secrets, redaction, replay safety, ACLs, and JIT-HITL — across all five Sagewai pillars."
+  path="/docs/security"
+  articleSection="Security"
+/>
+<SoftwareApplicationJsonLd />
+
 # Security — five pillars hold up the platform, one spine runs through all of them
 
 > **Five pillars hold up the platform; one spine runs through all of them — that's what makes the agent platform safe to give a credit card.**

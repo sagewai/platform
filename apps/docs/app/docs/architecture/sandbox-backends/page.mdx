@@ -1,3 +1,19 @@
+import { TechArticleJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Sandbox backends — Docker, Podman, Kubernetes, AgentCore',
+  description:
+    'Pluggable sandbox backends for Sagewai workers. Operator decision guide: pick the backend that matches your security and scale posture.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/architecture/sandbox-backends' },
+};
+
+<TechArticleJsonLd
+  name="Sagewai sandbox backends"
+  description="Pluggable sandbox backends for Sagewai — Docker, Podman, Kubernetes, AgentCore — with the operator decision guide."
+  path="/docs/architecture/sandbox-backends"
+  articleSection="Architecture"
+/>
+
 # Sandbox backends
 
 Sagewai supports pluggable sandbox backends, and this page is the

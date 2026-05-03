@@ -1,3 +1,20 @@
+import { TechArticleJsonLd, SoftwareApplicationJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Memory & RAG — long context for any LLM',
+  description:
+    'Layered memory: conversation history, vector + graph stores, hybrid RAG, semantic checkpoint recall. Make 7B local models hold the thread like Opus.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/core-concepts/memory' },
+};
+
+<TechArticleJsonLd
+  name="Sagewai Memory & RAG"
+  description="Layered memory architecture for AI agents — conversation history, vector + graph long-term stores, hybrid RAG, semantic checkpoint recall."
+  path="/docs/core-concepts/memory"
+  articleSection="Core concepts"
+/>
+<SoftwareApplicationJsonLd />
+
 # Memory & RAG
 
 Sagewai provides a layered memory architecture: conversation history for short-term context, vector and graph stores for long-term retrieval, a hybrid RAG engine for combining both, and the Context Engine for production-grade document management with scoped access.

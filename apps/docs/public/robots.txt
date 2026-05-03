@@ -1,4 +1,23 @@
+# Sagewai docs — robots.txt
+# AI crawlers welcome; see llms.txt for the structured map.
+
 User-agent: *
+Allow: /
+
+# Explicit allow-list for AI search crawlers
+User-agent: GPTBot
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: Applebot-Extended
 Allow: /
 
 Sitemap: https://docs.sagewai.ai/sitemap.xml

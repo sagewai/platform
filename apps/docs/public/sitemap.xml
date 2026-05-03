@@ -2,308 +2,380 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://docs.sagewai.ai/</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/getting-started</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.95</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/getting-started/minimal-setup</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.85</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/architecture</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/architecture/runtime-topology</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.85</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/architecture/security-tiers</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.85</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/architecture/execution-modes</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.85</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/architecture/sandbox-backends</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.85</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/security</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/observatory</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/autopilot</loc>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/api-reference/python-sdk</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>weekly</changefreq>
-    <priority>0.8</priority>
+    <priority>0.85</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/api-reference/rest-api</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>weekly</changefreq>
-    <priority>0.8</priority>
+    <priority>0.85</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/api-reference/agents</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/api-reference/tools</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/api-reference/memory</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/api-reference/mcp</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/api-reference/safety</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/api-reference/strategies</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/api-reference/workflows</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/api-reference/directives</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/api-reference/notifications</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/api-reference/project</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
+    <priority>0.75</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/api-reference/self-learning</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
+    <priority>0.75</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/core-concepts/agents</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
+    <priority>0.85</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/core-concepts/memory</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
+    <priority>0.85</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/core-concepts/guardrails</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
+    <priority>0.8</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/core-concepts/strategies</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
+    <priority>0.8</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/core-concepts/workflows</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
+    <priority>0.8</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/core-concepts/directives</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
+    <priority>0.8</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/core-concepts/safety</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
+    <priority>0.8</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/core-concepts/context-engine</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
+    <priority>0.8</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/core-concepts/self-learning</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
+    <priority>0.8</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/guides/first-agent</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
+    <priority>0.85</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/guides/tutorials</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://docs.sagewai.ai/docs/guides/self-hosted</loc>
-    <lastmod>2026-04-12</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://docs.sagewai.ai/docs/guides/admin-panel</loc>
-    <lastmod>2026-04-12</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://docs.sagewai.ai/docs/guides/fleet-architecture</loc>
-    <lastmod>2026-04-12</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://docs.sagewai.ai/docs/guides/client-wrappers</loc>
-    <lastmod>2026-04-12</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://docs.sagewai.ai/docs/guides/local-inference</loc>
-    <lastmod>2026-04-12</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://docs.sagewai.ai/docs/guides/cost-management</loc>
-    <lastmod>2026-04-12</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://docs.sagewai.ai/docs/guides/pii-protection</loc>
-    <lastmod>2026-04-12</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://docs.sagewai.ai/docs/guides/multi-agent</loc>
-    <lastmod>2026-04-12</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://docs.sagewai.ai/docs/guides/fleet</loc>
-    <lastmod>2026-04-12</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://docs.sagewai.ai/docs/guides/fleet-enterprise</loc>
-    <lastmod>2026-04-12</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://docs.sagewai.ai/docs/guides/harness</loc>
-    <lastmod>2026-04-12</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://docs.sagewai.ai/docs/guides/infrastructure</loc>
-    <lastmod>2026-04-12</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://docs.sagewai.ai/docs/guides/mcp-server</loc>
-    <lastmod>2026-04-12</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://docs.sagewai.ai/docs/guides/patterns</loc>
-    <lastmod>2026-04-12</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
+    <priority>0.8</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/guides/training</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.85</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/guides/local-inference</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/guides/cost-management</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/guides/pii-protection</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.75</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/guides/sandboxing</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/guides/sandboxing/custom-images</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/guides/sealed-vault</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/guides/self-hosted</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/guides/admin-panel</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.75</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/guides/fleet</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/guides/fleet-architecture</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/guides/fleet-enterprise</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.85</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/guides/client-wrappers</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.75</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/guides/multi-agent</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/guides/patterns</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/guides/mcp-server</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/guides/external-access</loc>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/guides/gateway-streaming</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
+    <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://docs.sagewai.ai/docs/guides/hardware-requirements</loc>
-    <lastmod>2026-04-12</lastmod>
+    <loc>https://docs.sagewai.ai/docs/guides/harness</loc>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
+    <priority>0.75</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/guides/litellm-integration</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
+    <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://docs.sagewai.ai/docs/guides/external-access</loc>
-    <lastmod>2026-04-12</lastmod>
+    <loc>https://docs.sagewai.ai/docs/guides/hardware-requirements</loc>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://docs.sagewai.ai/docs/guides/infrastructure</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/guides/ci-cd</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
+    <priority>0.7</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/guides/vscode-extension</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
+    <priority>0.7</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/guides/video-tutorials</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
+    <priority>0.7</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/guides/vs-alternatives</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
+    <priority>0.85</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/guides/vs-minimax</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
+    <priority>0.7</priority>
   </url>
   <url>
     <loc>https://docs.sagewai.ai/docs/blog/introducing-sagewai</loc>
-    <lastmod>2026-04-12</lastmod>
+    <lastmod>2026-05-03</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.5</priority>
+    <priority>0.6</priority>
   </url>
 </urlset>

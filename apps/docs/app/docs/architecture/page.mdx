@@ -1,3 +1,26 @@
+import { TechArticleJsonLd, SoftwareApplicationJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Sagewai architecture — control plane plus worker fleet',
+  description:
+    'Three invariants explain how Sagewai keeps planning, execution, and security separable: the worker is the only executor, modes are per-step, the sandbox is the trust boundary.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/architecture' },
+  openGraph: {
+    title: 'Sagewai Architecture overview',
+    description:
+      'Control plane plans and dispatches; worker fleet executes. Per-step execution mode, sandbox-as-trust-boundary, three security tiers.',
+    url: 'https://docs.sagewai.ai/docs/architecture',
+  },
+};
+
+<TechArticleJsonLd
+  name="Sagewai architecture: control plane plus worker fleet"
+  description="The architectural model behind Sagewai — three invariants that govern planning, execution, and trust boundaries across every workflow run."
+  path="/docs/architecture"
+  articleSection="Architecture"
+/>
+<SoftwareApplicationJsonLd />
+
 # Architecture
 
 Sagewai is a control plane plus a worker fleet. The control plane

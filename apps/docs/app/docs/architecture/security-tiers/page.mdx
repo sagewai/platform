@@ -1,3 +1,19 @@
+import { TechArticleJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Security tiers — Tier-1 orchestration vs Tier-2 customer credentials',
+  description:
+    'Two distinct LLM-key surfaces, two trust boundaries, two lifetimes. The credential model that keeps a customer-key leak from compromising the platform.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/architecture/security-tiers' },
+};
+
+<TechArticleJsonLd
+  name="Sagewai security tiers"
+  description="Tier-1 (orchestration) vs Tier-2 (customer-scoped) credential surfaces in Sagewai — two trust boundaries, two lifetimes."
+  path="/docs/architecture/security-tiers"
+  articleSection="Architecture"
+/>
+
 # Security tiers
 
 Sagewai has two distinct LLM-key surfaces with different lifetimes,

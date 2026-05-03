@@ -1,3 +1,19 @@
+import { TechArticleJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Execution strategies — ReAct, plan-and-execute, reflection',
+  description:
+    'Pluggable reasoning strategies for Sagewai agents. ReAct by default; plan-and-execute, reflection, and self-correction available for complex tasks.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/core-concepts/strategies' },
+};
+
+<TechArticleJsonLd
+  name="Sagewai execution strategies"
+  description="Pluggable reasoning strategies for AI agents — ReAct, plan-and-execute, reflection, self-correction."
+  path="/docs/core-concepts/strategies"
+  articleSection="Core concepts"
+/>
+
 # Execution Strategies
 
 Strategies control how an agent reasons and makes decisions. The default `ReActStrategy` handles most use cases, but Sagewai provides advanced strategies for complex reasoning tasks.

@@ -1,3 +1,27 @@
+import { HowToJsonLd, SoftwareApplicationJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Your first AI agent — research assistant tutorial',
+  description:
+    'Build a research assistant agent that searches the web, summarises findings, and answers follow-ups with memory. End-to-end Sagewai SDK tutorial.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/guides/first-agent' },
+};
+
+<HowToJsonLd
+  name="Build your first AI agent with Sagewai"
+  description="A step-by-step tutorial: scaffold a research assistant agent that searches the web, summarises findings, and answers follow-up questions with conversation memory."
+  path="/docs/guides/first-agent"
+  totalTime="PT30M"
+  steps={[
+    { name: 'Install', text: 'pip install sagewai' },
+    { name: 'Define a tool', text: 'Decorate a Python function with @tool to expose web search to the agent.' },
+    { name: 'Create the agent', text: 'Instantiate UniversalAgent with a model and the tool list.' },
+    { name: 'Add memory', text: 'Attach ConversationMemory so the agent recalls previous turns.' },
+    { name: 'Run it', text: 'await agent.chat(...) — the agent searches, summarises, and answers.' },
+  ]}
+/>
+<SoftwareApplicationJsonLd />
+
 # Your First Agent — Step by Step
 
 This tutorial walks you through building a real-world AI agent from scratch: a **Research Assistant** that can search the web, summarize findings, and answer follow-up questions using conversation memory.

@@ -1,3 +1,19 @@
+import { TechArticleJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Execution modes — bare, sandboxed, identity, full CLI agent',
+  description:
+    'Five execution modes per workflow step. Pick bare for cheap planning, sandboxed for tool calls, identity for customer secrets, full CLI for Claude Code.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/architecture/execution-modes' },
+};
+
+<TechArticleJsonLd
+  name="Sagewai execution modes"
+  description="Five execution modes (bare, sandboxed, identity, full CLI agent) selectable per workflow step in Sagewai."
+  path="/docs/architecture/execution-modes"
+  articleSection="Architecture"
+/>
+
 # Execution modes
 
 Sagewai workflow steps run in one of five execution modes. Picking the

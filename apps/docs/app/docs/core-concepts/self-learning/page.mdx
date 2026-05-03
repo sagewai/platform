@@ -1,3 +1,20 @@
+import { TechArticleJsonLd, SoftwareApplicationJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Self-learning agents — capture, train, deploy local',
+  description:
+    'Sagewai agents learn from every interaction. Curator captures production runs; Promoter triggers fine-tunes; deploy via Ollama. The cost-down loop.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/core-concepts/self-learning' },
+};
+
+<TechArticleJsonLd
+  name="Sagewai self-learning agents"
+  description="The training loop: agents learn from production runs. Curator captures, Promoter promotes, Ollama deploys. Cost-down to zero per token."
+  path="/docs/core-concepts/self-learning"
+  articleSection="Training Loop"
+/>
+<SoftwareApplicationJsonLd />
+
 # Self-Learning Agents
 
 Sagewai agents don't just respond --- they **learn from every interaction**. The SDK provides

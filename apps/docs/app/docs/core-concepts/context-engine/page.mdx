@@ -1,3 +1,19 @@
+import { TechArticleJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Context Engine — production-grade RAG with scoped access',
+  description:
+    'Document ingestion, chunking, embedding, vector + graph storage, multi-strategy retrieval. The full lifecycle of knowledge for production agents.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/core-concepts/context-engine' },
+};
+
+<TechArticleJsonLd
+  name="Sagewai Context Engine"
+  description="Production-grade memory: document ingestion, vector + graph storage, multi-strategy retrieval, scoped access for multi-tenant Sagewai agents."
+  path="/docs/core-concepts/context-engine"
+  articleSection="Core concepts"
+/>
+
 # Context Engine
 
 The Context Engine is Sagewai's production-grade memory system. It handles the full lifecycle of knowledge: ingesting documents, chunking and embedding them, storing chunks in vector and graph databases, and retrieving relevant context using multi-strategy search.

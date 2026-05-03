@@ -1,3 +1,45 @@
+import { HowToJsonLd, SoftwareApplicationJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Show your CFO where the AI money goes — Observatory',
+  description:
+    'Track AI agent costs, latency, and runs in real time with OpenTelemetry, VictoriaMetrics, Grafana, and the Iron Man HUD. Self-hosted, no Sagewai-tier needed.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/observatory' },
+  openGraph: {
+    title: 'Sagewai Observatory — cost dashboards and real telemetry',
+    description:
+      'Two surfaces, one OTel pipeline. Iron Man HUD for demos, Grafana for SRE work. Reproduce every screenshot in three minutes.',
+    url: 'https://docs.sagewai.ai/docs/observatory',
+    images: ['/observatory/hud-overview.png'],
+  },
+};
+
+<HowToJsonLd
+  name="Show your CFO where the AI money goes with Sagewai Observatory"
+  description="Bring up an OpenTelemetry + VictoriaMetrics + Grafana stack and an Iron Man HUD to track agent cost, latency, and runs in three minutes."
+  path="/docs/observatory"
+  totalTime="PT3M"
+  steps={[
+    {
+      name: 'Start the observability stack',
+      text: 'docker compose -f docker-compose.observability.yml up -d brings up OTel collector, VictoriaMetrics, VictoriaLogs, and Grafana.',
+    },
+    {
+      name: 'Run an instrumented admin backend',
+      text: 'sagewai admin serve --host 127.0.0.1 --port 8000 emits OTLP to the collector on every HTTP request and business event.',
+    },
+    {
+      name: 'Drive realistic load',
+      text: 'python packages/sdk/sagewai/examples/43_observatory_live.py runs a mixed-tenant workload that fills every dashboard panel.',
+    },
+    {
+      name: 'Read the dashboards',
+      text: 'Open http://localhost:3000 for Grafana, /hud-ironman in the admin frontend for the Iron Man HUD. Both read the same telemetry stream.',
+    },
+  ]}
+/>
+<SoftwareApplicationJsonLd />
+
 # Observatory
 
 Sagewai ships with two dashboards because two different people will ask
@@ -222,6 +264,15 @@ leaves your infrastructure unless you explicitly route it somewhere.
 4. **Using `prometheusremotewrite` to ship to VictoriaMetrics.** Known footgun — silently drops histograms and counters. The shipped pipeline uses the Prometheus exporter on `:8889` + VM scraping, not remote-write. Don't change this without reading the comment in `observability/otel-collector/config.yaml`.
 
 ## Cross-references
+
+**On this docs site (Observatory pillar siblings + foundation):**
+
+- [Cost management guide](/docs/guides/cost-management) — Foundation. How budget caps, cost meters, and per-team attribution are wired in the SDK.
+- [Sagewai vs LangChain vs LlamaIndex](/docs/guides/vs-alternatives) — How Sagewai's observability surface compares to the alternatives.
+- [Fleet enterprise architecture](/docs/guides/fleet-enterprise) — Fleet pillar lighthouse. The multi-tenant story the dashboards are scoped to.
+- [Architecture overview](/docs/architecture) — The control-plane / fleet split that produces the telemetry stream this page renders.
+
+**Runnable lighthouse examples on GitHub:**
 
 - [Example 43 — Observatory live](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/43_observatory_live.py) — the load driver that produced every screenshot on this page.
 - [Example 34 — Observatory cost tracking](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/34_observatory_cost_tracking.py) — the cost story this dashboard surfaces.

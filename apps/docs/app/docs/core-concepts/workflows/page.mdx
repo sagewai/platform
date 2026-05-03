@@ -1,3 +1,19 @@
+import { TechArticleJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Workflows — sequential, parallel, conditional, iterative',
+  description:
+    'Compose agents into deterministic patterns. Each sub-agent uses its own LLM; the workflow controls orchestration and state hand-off.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/core-concepts/workflows' },
+};
+
+<TechArticleJsonLd
+  name="Sagewai Workflows"
+  description="Multi-agent orchestration patterns: sequential, parallel, conditional, iterative. Each sub-agent uses its own LLM."
+  path="/docs/core-concepts/workflows"
+  articleSection="Core concepts"
+/>
+
 # Workflows
 
 Workflows compose multiple agents into deterministic execution patterns. Unlike a single agent that decides what to do via LLM, workflow agents follow a fixed structure — sequential, parallel, conditional, or iterative — while each sub-agent within the workflow uses its own LLM.

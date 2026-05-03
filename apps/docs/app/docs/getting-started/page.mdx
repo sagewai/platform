@@ -1,3 +1,44 @@
+import { HowToJsonLd, SoftwareApplicationJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Quickstart — build an agent in 15 minutes',
+  description:
+    'Install the Sagewai SDK, create a Sealed Identity, and run a Claude Code agent inside an isolated sandbox. End-to-end production-shape quickstart.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/getting-started' },
+  openGraph: {
+    title: 'Sagewai Quickstart — production-shape agents in 15 minutes',
+    description:
+      'Pip-install, scaffold an admin server, store credentials in a Sealed Identity, and dispatch Claude Code into an isolated sandbox.',
+    url: 'https://docs.sagewai.ai/docs/getting-started',
+  },
+};
+
+<HowToJsonLd
+  name="Build a production-shape Sagewai agent in 15 minutes"
+  description="Install the SDK, create a Sealed Identity, define a workflow that runs Claude Code inside an isolated Docker sandbox, and ship the artifact to GitHub."
+  path="/docs/getting-started"
+  totalTime="PT15M"
+  steps={[
+    {
+      name: 'Install the SDK and bring up an admin server',
+      text: 'pip install sagewai[fastapi] then run sagewai admin serve to start the local control plane on http://localhost:8000.',
+    },
+    {
+      name: 'Create a Sealed Identity for your customer',
+      text: 'Use the admin UI or sagewai sealed create to store an Anthropic API key and a GitHub personal access token under a single isolated identity.',
+    },
+    {
+      name: 'Define a workflow with a Claude Code step',
+      text: 'Write a Python module that registers a workflow with one execution-mode-3 step pointing at your portfolio repo as the artifact target.',
+    },
+    {
+      name: 'Trigger the workflow and watch the artifact land',
+      text: 'Run sagewai run portfolio-site. The worker dispatches Claude Code inside an isolated sandbox; credentials inject from Sealed; the result is committed back to GitHub.',
+    },
+  ]}
+/>
+<SoftwareApplicationJsonLd />
+
 # Quickstart — Build a portfolio site with Claude Code
 
 This is the canonical Sagewai quickstart. In about 15 minutes you'll:

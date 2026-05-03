@@ -1,3 +1,20 @@
+import { TechArticleJsonLd, SoftwareApplicationJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Agents — the core Sagewai building block',
+  description:
+    'Agents wrap any LLM with a tool-calling loop, typed memory, MCP integration, and guardrails. Build production agents in 10 lines of Python.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/core-concepts/agents' },
+};
+
+<TechArticleJsonLd
+  name="Sagewai Agents — production agents with any LLM"
+  description="The core Sagewai building block: an agent wraps any LLM with tool calls, memory, MCP, and guardrails. Multi-model swap with one parameter."
+  path="/docs/core-concepts/agents"
+  articleSection="Core concepts"
+/>
+<SoftwareApplicationJsonLd />
+
 # Agents
 
 Agents are the core building block of Sagewai. An agent wraps an LLM with a tool-calling loop: send a message, the LLM responds (possibly requesting tool calls), tools are executed, and the loop continues until the LLM produces a final text response.

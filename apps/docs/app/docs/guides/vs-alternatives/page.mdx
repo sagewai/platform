@@ -1,31 +1,59 @@
+import { TechArticleJsonLd, SoftwareApplicationJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Sagewai vs LangChain vs LlamaIndex vs CrewAI — agent platform comparison',
+  description:
+    'Side-by-side comparison: Sagewai is the only open-source platform combining any-LLM SDK, Fleet, Observatory, Sealed security, and an end-to-end training loop.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/guides/vs-alternatives' },
+  openGraph: {
+    title: 'Sagewai vs LangChain vs LlamaIndex',
+    description:
+      'Open-source agent platform comparison: SDK, observability, multi-tenancy, fine-tuning, and security across the major frameworks.',
+    url: 'https://docs.sagewai.ai/docs/guides/vs-alternatives',
+  },
+};
+
+<TechArticleJsonLd
+  name="Sagewai vs LangChain vs LlamaIndex vs CrewAI vs AutoGen"
+  description="Feature-by-feature comparison of open-source AI agent platforms with focus on production deployment, cost governance, and security posture."
+  path="/docs/guides/vs-alternatives"
+  articleSection="Comparisons"
+/>
+<SoftwareApplicationJsonLd />
+
 # Sagewai vs. Alternatives
 
-How Sagewai compares to other agent frameworks. Sagewai is not just an SDK — it is a complete platform with deployment infrastructure, cost governance, and enterprise-grade fleet management.
+How Sagewai compares to other agent frameworks. Sagewai is not just an SDK — it is a complete platform with deployment infrastructure, cost governance, and enterprise-grade fleet management. The short version: **LangChain and LlamaIndex are excellent SDKs; Sagewai is the platform you ship into production.** LangChain ships building blocks; LlamaIndex specialises in retrieval; Sagewai stitches the SDK to a worker fleet, an observability stack, a security spine, and a training loop that takes your Opus traffic to a local model you own.
+
+If you only need a script that calls an LLM with a tool, LangChain or LlamaIndex's quickstarts are faster to copy-paste. If you need an agent in production this quarter — with cost dashboards, multi-tenant isolation, audit trail, and a credible answer for the Q3 *"why did the API bill quadruple"* meeting — that is Sagewai's territory.
 
 ## Feature Comparison
 
-| Feature | Sagewai | LangChain | CrewAI | AutoGen | Semantic Kernel |
-|---------|---------|-----------|--------|---------|----------------|
-| **Model Support** | 100+ via LiteLLM | 50+ via integrations | 10+ | 10+ | 20+ via connectors |
-| **Local Inference** | Built-in (Ollama, vLLM, LM Studio, llama.cpp) | Via adapters | Limited | Via config | Via connectors |
-| **Cost Governance** | Harness proxy + per-project budgets | None built-in | None | None | None |
-| **Agent Registry** | Built-in (store, version, discover, govern) | None | None | None | None |
-| **MCP Protocol** | Native client + server | Community plugin | None | None | None |
-| **Durable Workflows** | Built-in (PostgreSQL-backed checkpointing) | Via LangGraph (separate) | None | None | None |
-| **Knowledge Graph** | NebulaGraph integration | None built-in | None | None | None |
-| **Vector Memory** | Milvus integration | Via vectorstores | Via embedchain | None | Via memory connectors |
-| **Fine-Tuning** | Unsloth pipeline (train, serve, $0/token) | None | None | None | None |
-| **Self-Hosted** | Full stack (server + workers + observability) | Partial (LangServe) | No | No | No |
-| **Fleet Workers** | Distributed execution with pool/label routing | None | None | None | None |
-| **Multi-Tenant** | Per-project isolation, quotas, encryption | None | None | None | None |
-| **Cost Tracking** | Per-token, per-model, per-project spend | None built-in | None | None | None |
-| **Guardrails** | PII, hallucination, budget, schema, content | Via guardrails integration | None | None | Via filters |
-| **Prompt Preprocessing** | Directive engine (@context, @memory, @agent) | None | None | None | None |
-| **Context Engine** | Document ingestion, 2-scope access, RAG | Via retrievers | Via embedchain | None | Via memory |
-| **Client Libraries** | 17 languages (TS, Go, Rust, Java, C#, + 12 more) | Python, JS | Python | Python, .NET | Python, .NET, Java |
-| **CI/CD Integration** | GitHub Actions (run-agent, run-evals, deploy-worker) | None | None | None | None |
-| **Admin Console** | Built-in web dashboard | Via LangSmith (paid) | None | Via AutoGen Studio | None |
-| **License** | AGPL-3.0 (free) + commercial | MIT | MIT | CC-BY-4.0 | MIT |
+| Feature | Sagewai | LangChain | LlamaIndex | CrewAI | AutoGen | Semantic Kernel |
+|---------|---------|-----------|-----------|--------|---------|----------------|
+| **Model Support** | 100+ via LiteLLM | 50+ via integrations | 30+ via integrations | 10+ | 10+ | 20+ via connectors |
+| **Local Inference** | Built-in (Ollama, vLLM, LM Studio, llama.cpp) | Via adapters | Via adapters | Limited | Via config | Via connectors |
+| **Cost Governance** | Harness proxy + per-project budgets | None built-in | None | None | None | None |
+| **Agent Registry** | Built-in (store, version, discover, govern) | None | None | None | None | None |
+| **MCP Protocol** | Native client + server | Community plugin | None | None | None | None |
+| **Durable Workflows** | Built-in (PostgreSQL-backed checkpointing) | Via LangGraph (separate) | Via Workflows (in-memory) | None | None | None |
+| **Knowledge Graph** | NebulaGraph integration | None built-in | KnowledgeGraphIndex | None | None | None |
+| **Vector Memory** | Milvus integration | Via vectorstores | First-class indices | Via embedchain | None | Via memory connectors |
+| **Fine-Tuning** | Unsloth pipeline (capture → train → deploy → cost-down) | None | Limited (data prep only) | None | None | None |
+| **Self-Hosted** | Full stack (server + workers + observability + Sealed) | Partial (LangServe) | Partial (LlamaIndex serve) | No | No | No |
+| **Fleet Workers** | Distributed execution with pool/label routing | None | None | None | None | None |
+| **Multi-Tenant** | Per-project isolation, quotas, encryption | None | None | None | None | None |
+| **Cost Tracking** | Per-token, per-model, per-project spend | None built-in | None | None | None | None |
+| **OpenTelemetry** | Native (admin + worker + agent + LLM call) | Via callbacks | Via callbacks | None | None | None |
+| **Guardrails** | PII, hallucination, budget, schema, content | Via guardrails integration | None | None | None | Via filters |
+| **Prompt Preprocessing** | Directive engine (@context, @memory, @agent) | None | None | None | None | None |
+| **Context Engine** | Document ingestion, 2-scope access, RAG | Via retrievers | First-class indices + query engine | Via embedchain | None | Via memory |
+| **Workload Identity** | Sealed (per-CLI workload identity, JIT secrets) | None | None | None | None | None |
+| **Sandbox Isolation** | Docker / Podman / Kubernetes / AgentCore | None | None | None | None | None |
+| **Client Libraries** | 17 languages (TS, Go, Rust, Java, C#, + 12 more) | Python, JS | Python, TS | Python | Python, .NET | Python, .NET, Java |
+| **CI/CD Integration** | GitHub Actions (run-agent, run-evals, deploy-worker) | None | None | None | None | None |
+| **Admin Console** | Built-in web dashboard + Iron Man HUD | Via LangSmith (paid) | None | None | Via AutoGen Studio | None |
+| **License** | AGPL-3.0 (free) + commercial | MIT | MIT | MIT | CC-BY-4.0 | MIT |
 
 ## When to Choose Sagewai
 
@@ -65,6 +93,19 @@ Key conceptual mapping:
 | `LangGraph` | `DurableWorkflow` |
 | `LangServe` | `sagewai admin serve` or Fleet Gateway |
 | `LangSmith` | Admin Console (self-hosted, free) |
+
+## Migration from LlamaIndex
+
+| LlamaIndex | Sagewai |
+|-----------|---------|
+| `VectorStoreIndex.from_documents(...)` | `ContextEngine.ingest_documents(...)` |
+| `index.as_query_engine()` | `ContextEngine.query(...)` or `MemoryAdapter` on an agent |
+| `KnowledgeGraphIndex` | NebulaGraph integration in `sagewai.memory.graph` |
+| `ReActAgent.from_tools(...)` | `UniversalAgent(tools=[...])` (ReAct is the default strategy) |
+| `Workflow` class | `SequentialAgent` / `DurableWorkflow` |
+| `IngestionPipeline` | `ContextEngine` ingestion + chunking pipeline |
+
+LlamaIndex is excellent for retrieval-heavy use cases. Sagewai's Context Engine gives you the same indices wired into a multi-tenant platform with audit, cost tracking, and worker dispatch.
 
 ## Migration from CrewAI
 

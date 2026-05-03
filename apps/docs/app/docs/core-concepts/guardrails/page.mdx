@@ -1,3 +1,19 @@
+import { TechArticleJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Guardrails — input and output safety boundaries',
+  description:
+    'PII detection, hallucination guards, content filters, token budgets. Run automatically before messages reach the LLM and before responses reach the user.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/core-concepts/guardrails' },
+};
+
+<TechArticleJsonLd
+  name="Sagewai Guardrails"
+  description="Input and output guardrails for AI agents — PII redaction, hallucination detection, content filters, token budgets."
+  path="/docs/core-concepts/guardrails"
+  articleSection="Core concepts"
+/>
+
 # Guardrails
 
 Guardrails protect your agents at the input and output boundaries. They run automatically before messages reach the LLM (input guardrails) and before responses reach the user (output guardrails).
