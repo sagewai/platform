@@ -518,6 +518,11 @@ def create_admin_serve_app(
 
     artifact_destination_routes.register(app)
 
+    # Inference-providers credential vault (Gap #10)
+    from sagewai.admin import inference_provider_routes  # noqa: E402
+
+    inference_provider_routes.register(app)
+
     # Sealed-v directive admin routes (in-memory; postgres-backed
     # approvals/evaluations are wired alongside revocation_routes below
     # when a database URL is configured)

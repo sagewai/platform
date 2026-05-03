@@ -128,6 +128,7 @@ export const ALL_GROUPS: NavGroup[] = [
     items: [
       { href: '/fleet', label: 'Fleet Workers' },
       { href: '/fleet/enrollment-keys', label: 'Enrollment Keys' },
+      { href: '/inference-providers', label: 'Inference Providers' },
       { href: '/workflows/dispatch', label: 'Dispatch' },
       { href: '/workflows/approvals', label: 'Approvals' },
       { href: '/workflows/dlq', label: 'Failed Workflows' },

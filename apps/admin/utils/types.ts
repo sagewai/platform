@@ -1455,3 +1455,53 @@ export interface PendingApproval {
   operator_note: string | null;
   expires_at: string;
 }
+
+// ── Inference providers (Gap #10) ────────────────────────────────────
+
+export type InferenceProviderKey =
+  | 'runpod' | 'modal' | 'vastai' | 'colab' | 'custom';
+
+export type CustomAuthShape = 'none' | 'bearer' | 'basic' | 'sigv4';
+
+export interface InferenceProviderCatalogEntry {
+  provider: InferenceProviderKey;
+  label: string;
+  tagline: string;
+  secret_keys: string[];
+  env_keys: string[];
+  example: string | null;
+}
+
+export interface InferenceProviderCatalog {
+  providers: InferenceProviderCatalogEntry[];
+  auth_shapes: CustomAuthShape[];
+}
+
+export interface InferenceProviderMetadata {
+  provider: InferenceProviderKey;
+  label: string;
+  tagline: string;
+  project_id: string | null;
+  configured: boolean;
+  last_updated_at: string | null;
+  last_tested_at: string | null;
+  last_test_ok: boolean | null;
+  last_test_detail: string | null;
+  secret_keys: string[];
+  env: Record<string, string>;
+  example_pointer: string | null;
+  docs_pointer: string;
+}
+
+export interface InferenceProviderWritePayload {
+  secrets?: Record<string, string>;
+  env?: Record<string, string>;
+  auth_shape?: CustomAuthShape;
+}
+
+export interface InferenceProviderTestResult {
+  ok: boolean;
+  detail: string;
+  provider: InferenceProviderKey;
+  tested_at: string;
+}

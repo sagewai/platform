@@ -120,6 +120,11 @@ import type {
   DirectivePolicy,
   DirectiveEvaluation,
   PendingApproval,
+  InferenceProviderCatalog,
+  InferenceProviderMetadata,
+  InferenceProviderWritePayload,
+  InferenceProviderTestResult,
+  InferenceProviderKey,
 } from './types';
 
 const BASE_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL ?? 'http://localhost:8000/admin';
@@ -1815,4 +1820,40 @@ export const adminApi = {
     if (!res.ok) throw new Error(`getRunDirectiveSummary: ${res.status}`);
     return res.json();
   },
+
+  /* ─── Inference providers (Gap #10) ─── */
+  getInferenceProviderCatalog: () =>
+    analyticsClient.get<InferenceProviderCatalog>(
+      '/api/v1/admin/inference-providers/catalog',
+    ),
+
+  listInferenceProviders: () =>
+    analyticsClient.get<InferenceProviderMetadata[]>(
+      '/api/v1/admin/inference-providers',
+    ),
+
+  getInferenceProvider: (provider: InferenceProviderKey) =>
+    analyticsClient.get<InferenceProviderMetadata>(
+      `/api/v1/admin/inference-providers/${encodeURIComponent(provider)}`,
+    ),
+
+  upsertInferenceProvider: (
+    provider: InferenceProviderKey,
+    payload: InferenceProviderWritePayload,
+  ) =>
+    analyticsClient.put<InferenceProviderMetadata>(
+      `/api/v1/admin/inference-providers/${encodeURIComponent(provider)}`,
+      payload,
+    ),
+
+  deleteInferenceProvider: (provider: InferenceProviderKey) =>
+    analyticsClient.delete<void>(
+      `/api/v1/admin/inference-providers/${encodeURIComponent(provider)}`,
+    ),
+
+  testInferenceProvider: (provider: InferenceProviderKey) =>
+    analyticsClient.post<InferenceProviderTestResult>(
+      `/api/v1/admin/inference-providers/${encodeURIComponent(provider)}/test`,
+      {},
+    ),
 };
