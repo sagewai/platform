@@ -1,0 +1,42 @@
+# Pillar — Observatory
+
+> **Two surfaces, one telemetry stream. The CFO dashboard and the SRE dashboard never disagree.**
+
+The Observatory pillar is Sagewai's *show-your-CFO-where-the-money-goes* surface. Two dashboards (Iron Man HUD + Grafana board) read the same OpenTelemetry stream so neither lies. Per-project tagging gives finance the per-tenant breakdown without manual reconciliation.
+
+## What the pillar does
+
+- **OpenTelemetry pipeline** — admin backend emits OTLP; OTel collector receives + scrapes; VictoriaMetrics stores metrics; VictoriaLogs stores logs; Grafana visualises both.
+- **`prometheus` exporter + VM scraping** — not `prometheusremotewrite` (which silently drops histograms and counters; see [Issue #66](https://github.com/sagewai/platform/issues/66)).
+- **Per-project tagging** — every span is tagged with `sagewai.project_id`; per-tenant rollups drop out of the dashboard.
+- **Iron Man HUD** — agents on a graph, missions in flight, fleet posture across the top. The mission-control surface.
+- **Grafana board** — *Sagewai Admin* board with 5 rows and 14 panels covering health, HTTP, status codes, OTel pipeline, logs.
+- **Audit trail** — structured business events (`setup.completed`, `auth.login.*`, `agent.created`, `agent.run.*`, `provider.test.*`) land in VictoriaLogs.
+
+## What proves it works
+
+### Primary lighthouse
+
+[**Observability and cost**](/docs/lighthouse/observability-and-cost) — Example 43 fires a mixed-tenant workload at the admin backend (real HTTP traffic, real OTel spans), and within three minutes both dashboards show real numbers. The page renders the dashboards from a real run, not pre-canned.
+
+### Sibling lighthouses
+
+- [**Production multitenancy**](/docs/lighthouse/production-multitenancy) — the per-tenant tagging that makes per-project cost rollups possible.
+- [**Train your own model**](/docs/lighthouse/train-your-own-model) — once the cost line is on the dashboard, the cost-down target is concrete.
+
+### Pattern examples
+
+- [**Example 34 — `observatory_cost_tracking`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/34_observatory_cost_tracking.py) — per-tenant cost tracking, the CFO line.
+- [**Example 40 — `fleet_under_load`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/40_fleet_under_load.py) — 20+ workers, Iron Man HUD live state.
+- [**Example 12 — `budget_enforcement`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/12_budget_enforcement.py) — per-user/team/project budget caps. The foundation companion.
+
+## Where to go to ship it
+
+- **[Observatory overview](/docs/observatory)** — Iron Man HUD + Grafana, in detail.
+- **[Admin Panel](/docs/guides/admin-panel)** — the surface where Audit, Runs, Profiles, and dashboards live.
+
+## Related
+
+- **[Fleet pillar](/docs/pillars/fleet)** — the per-worker telemetry that the Observatory aggregates.
+- **[Sealed spine](/docs/security)** — the redaction layer that makes telemetry safe to export.
+- **[Pillars overview](/docs/pillars)** — the other four pillars.

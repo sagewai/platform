@@ -13,17 +13,79 @@ interface NavSection {
   items: NavItem[];
 }
 
+// Sidebar order is by INTENT, not by file number.
+// See: sagewai/atelier:docs/v1.0/example-catalogue-and-positioning.md
+//      (Information architecture section).
+//
+// Quickstart -> Lighthouse -> Foundation -> Patterns -> Integrations ->
+// Pillars -> Sealed spine -> Architecture -> Inference -> Concepts -> Guides -> Reference
+//
+// This flips the previous chronological-by-file-number listing that
+// buried Tier-5 lighthouse work behind 32 entry-level demos.
 const SECTIONS: NavSection[] = [
+  // -- Tier 1 -- Quickstart -------------------------------------
   {
-    title: 'Getting Started',
+    title: 'Quickstart',
     items: [
-      { label: 'Introduction & Quickstart', href: '/docs/getting-started' },
-      { label: 'Minimal Setup (No sandbox)', href: '/docs/getting-started/minimal-setup' },
-      { label: 'Tutorials', href: '/docs/guides/tutorials' },
-      { label: 'Video Tutorials', href: '/docs/guides/video-tutorials' },
+      { label: 'Hello agent in 60 seconds', href: '/docs/quickstart' },
+      { label: 'Full quickstart (Claude Code in a sandbox)', href: '/docs/getting-started' },
+      { label: 'Minimal setup (no sandbox)', href: '/docs/getting-started/minimal-setup' },
     ],
   },
-  // ── Architecture ──────────────────────────────────────────────
+  // -- Tier 5 -- Lighthouse (the differentiators) ---------------
+  {
+    title: 'Lighthouse',
+    items: [
+      { label: 'Overview', href: '/docs/lighthouse' },
+      { label: 'Train your own model', href: '/docs/lighthouse/train-your-own-model' },
+      { label: 'Moderation and classification', href: '/docs/lighthouse/moderation-and-classification' },
+      { label: 'Memory and retrieval', href: '/docs/lighthouse/memory-and-retrieval' },
+      { label: 'Production multitenancy', href: '/docs/lighthouse/production-multitenancy' },
+      { label: 'Observability and cost', href: '/docs/lighthouse/observability-and-cost' },
+      { label: 'Inference deployment', href: '/docs/lighthouse/inference-deployment' },
+    ],
+  },
+  // -- Tier 2 -- Foundation (SDK basics) ------------------------
+  {
+    title: 'Foundation',
+    items: [
+      { label: 'Overview', href: '/docs/foundation' },
+    ],
+  },
+  // -- Tier 4 -- Patterns (production reference) ----------------
+  {
+    title: 'Patterns',
+    items: [
+      { label: 'Overview', href: '/docs/patterns' },
+    ],
+  },
+  // -- Tier 3 -- Integrations -----------------------------------
+  {
+    title: 'Integrations',
+    items: [
+      { label: 'Overview', href: '/docs/integrations' },
+    ],
+  },
+  // -- Pillars (capability deep-dives) --------------------------
+  {
+    title: 'Pillars',
+    items: [
+      { label: 'Overview', href: '/docs/pillars' },
+      { label: 'SDK', href: '/docs/pillars/sdk' },
+      { label: 'Autopilot', href: '/docs/pillars/autopilot' },
+      { label: 'Fleet', href: '/docs/pillars/fleet' },
+      { label: 'Observatory', href: '/docs/pillars/observatory' },
+      { label: 'Training Loop', href: '/docs/pillars/training-loop' },
+    ],
+  },
+  // -- Sealed spine (cross-cutting security) --------------------
+  {
+    title: 'Sealed spine',
+    items: [
+      { label: 'Five pillars, one spine', href: '/docs/security' },
+    ],
+  },
+  // -- Architecture (canonical contract) ------------------------
   {
     title: 'Architecture',
     items: [
@@ -34,18 +96,29 @@ const SECTIONS: NavSection[] = [
       { label: 'Sandbox Backends', href: '/docs/architecture/sandbox-backends' },
     ],
   },
-  // ── The spine: Sealed (cross-cutting; not a pillar) ──────────
+  // -- Inference education (Gap #9) -----------------------------
   {
-    title: 'Security',
+    title: 'Inference',
     items: [
-      { label: 'Sealed — five pillars, one spine', href: '/docs/security' },
+      { label: 'Overview', href: '/docs/inference' },
+      { label: 'Start with juggernauts', href: '/docs/inference/start-with-juggernauts' },
+      { label: 'Free CUDA via Colab', href: '/docs/inference/free-cuda-via-colab' },
+      { label: 'Rent when you grow', href: '/docs/inference/rent-when-you-grow' },
+      { label: 'Deploy locally', href: '/docs/inference/deploy-locally' },
     ],
   },
-  // ── Pillar 1: SDK ────────────────────────────────────────────
+  // -- Concept overviews (existing top-level concept pages) -----
   {
-    title: 'SDK',
+    title: 'Concept overviews',
     items: [
-      { label: 'Your First Agent', href: '/docs/guides/first-agent' },
+      { label: 'Observatory dashboards', href: '/docs/observatory' },
+      { label: 'Autopilot overview', href: '/docs/autopilot' },
+    ],
+  },
+  // -- Core concepts --------------------------------------------
+  {
+    title: 'Core concepts',
+    items: [
       { label: 'Agents', href: '/docs/core-concepts/agents' },
       { label: 'Strategies', href: '/docs/core-concepts/strategies' },
       { label: 'Memory & RAG', href: '/docs/core-concepts/memory' },
@@ -53,99 +126,57 @@ const SECTIONS: NavSection[] = [
       { label: 'Context Engine', href: '/docs/core-concepts/context-engine' },
       { label: 'Directives', href: '/docs/core-concepts/directives' },
       { label: 'Safety & Guardrails', href: '/docs/core-concepts/safety' },
+      { label: 'Self-Learning Agents', href: '/docs/core-concepts/self-learning' },
+    ],
+  },
+  // -- Guides ---------------------------------------------------
+  {
+    title: 'Guides',
+    items: [
+      { label: 'Your First Agent', href: '/docs/guides/first-agent' },
+      { label: 'Tutorials', href: '/docs/guides/tutorials' },
+      { label: 'Video Tutorials', href: '/docs/guides/video-tutorials' },
       { label: 'Multi-Agent Workflows', href: '/docs/guides/multi-agent' },
       { label: 'Agent Patterns', href: '/docs/guides/patterns' },
-      { label: 'VS Code Extension', href: '/docs/guides/vscode-extension' },
-      { label: 'Client Wrappers (17 Languages)', href: '/docs/guides/client-wrappers' },
-    ],
-  },
-  // ── Pillar 2: Autopilot ──────────────────────────────────────
-  {
-    title: 'Autopilot',
-    items: [
-      { label: 'Overview', href: '/docs/autopilot' },
-    ],
-  },
-  // ── Pillar 3: Fleet (promoted from Deployment) ───────────────
-  {
-    title: 'Fleet',
-    items: [
-      { label: 'Fleet Architecture (Enterprise)', href: '/docs/guides/fleet-enterprise' },
+      { label: 'Training & Fine-Tuning', href: '/docs/guides/training' },
+      { label: 'Admin Panel', href: '/docs/guides/admin-panel' },
+      { label: 'Fleet Architecture', href: '/docs/guides/fleet-enterprise' },
       { label: 'Fleet Deployment', href: '/docs/guides/fleet' },
       { label: 'Fleet Deep Dive', href: '/docs/guides/fleet-architecture' },
-    ],
-  },
-  // ── Pillar 4: Observatory ────────────────────────────────────
-  {
-    title: 'Observatory',
-    items: [
-      { label: 'Overview', href: '/docs/observatory' },
-      { label: 'Admin Panel', href: '/docs/guides/admin-panel' },
-      { label: 'Notifications', href: '/docs/api-reference/notifications' },
-      { label: 'REST API', href: '/docs/api-reference/rest-api' },
-    ],
-  },
-  // ── Pillar 5: Training Loop ──────────────────────────────────
-  {
-    title: 'Training Loop',
-    items: [
-      { label: 'Self-Learning Agents', href: '/docs/core-concepts/self-learning' },
-      { label: 'Training & Fine-Tuning', href: '/docs/guides/training' },
-      { label: 'Inference — overview', href: '/docs/inference' },
-      { label: 'Inference — start with juggernauts', href: '/docs/inference/start-with-juggernauts' },
-      { label: 'Inference — free CUDA via Colab', href: '/docs/inference/free-cuda-via-colab' },
-      { label: 'Inference — rent when you grow', href: '/docs/inference/rent-when-you-grow' },
-      { label: 'Inference — deploy locally', href: '/docs/inference/deploy-locally' },
-    ],
-  },
-  // ── Cross-cutting integration topics ─────────────────────────
-  {
-    title: 'Tools & MCP',
-    items: [
-      { label: 'Tools & MCP', href: '/docs/api-reference/tools' },
-      { label: 'MCP Protocol', href: '/docs/api-reference/mcp' },
+      { label: 'Self-Hosted Deployment', href: '/docs/guides/self-hosted' },
+      { label: 'Hardware Requirements', href: '/docs/guides/hardware-requirements' },
+      { label: 'Infrastructure Management', href: '/docs/guides/infrastructure' },
       { label: 'MCP Server', href: '/docs/guides/mcp-server' },
       { label: 'External Access', href: '/docs/guides/external-access' },
       { label: 'Gateway Streaming', href: '/docs/guides/gateway-streaming' },
-    ],
-  },
-  {
-    title: 'LLM Proxy',
-    items: [
       { label: 'LLM Harness', href: '/docs/guides/harness' },
       { label: 'Cost Management', href: '/docs/guides/cost-management' },
       { label: 'PII Protection', href: '/docs/guides/pii-protection' },
       { label: 'Local Inference', href: '/docs/guides/local-inference' },
       { label: 'CI/CD Integration', href: '/docs/guides/ci-cd' },
-    ],
-  },
-  // ── Deployment & Reference ───────────────────────────────────
-  {
-    title: 'Deployment',
-    items: [
-      { label: 'Self-Hosted Deployment', href: '/docs/guides/self-hosted' },
-      { label: 'Hardware Requirements', href: '/docs/guides/hardware-requirements' },
-      { label: 'Infrastructure Management', href: '/docs/guides/infrastructure' },
-    ],
-  },
-  {
-    title: 'API Reference',
-    items: [
-      { label: 'Agents', href: '/docs/api-reference/agents' },
-      { label: 'Strategies', href: '/docs/api-reference/strategies' },
-      { label: 'Memory & Context', href: '/docs/api-reference/memory' },
-      { label: 'Workflows', href: '/docs/api-reference/workflows' },
-      { label: 'Safety & Guardrails', href: '/docs/api-reference/safety' },
-      { label: 'Directives', href: '/docs/api-reference/directives' },
-      { label: 'Self-Learning', href: '/docs/api-reference/self-learning' },
-      { label: 'Project & Errors', href: '/docs/api-reference/project' },
-    ],
-  },
-  {
-    title: 'Comparisons',
-    items: [
+      { label: 'VS Code Extension', href: '/docs/guides/vscode-extension' },
+      { label: 'Client Wrappers (17 Languages)', href: '/docs/guides/client-wrappers' },
       { label: 'vs. Alternatives', href: '/docs/guides/vs-alternatives' },
       { label: 'vs. MiniMax', href: '/docs/guides/vs-minimax' },
+    ],
+  },
+  // -- Reference (numbered file list, NOT primary discovery) ----
+  {
+    title: 'Reference',
+    items: [
+      { label: 'Examples (numbered file list)', href: '/docs/reference/examples' },
+      { label: 'API — Agents', href: '/docs/api-reference/agents' },
+      { label: 'API — Strategies', href: '/docs/api-reference/strategies' },
+      { label: 'API — Memory & Context', href: '/docs/api-reference/memory' },
+      { label: 'API — Workflows', href: '/docs/api-reference/workflows' },
+      { label: 'API — Safety & Guardrails', href: '/docs/api-reference/safety' },
+      { label: 'API — Directives', href: '/docs/api-reference/directives' },
+      { label: 'API — Self-Learning', href: '/docs/api-reference/self-learning' },
+      { label: 'API — Project & Errors', href: '/docs/api-reference/project' },
+      { label: 'API — Tools & MCP', href: '/docs/api-reference/tools' },
+      { label: 'API — MCP Protocol', href: '/docs/api-reference/mcp' },
+      { label: 'API — Notifications', href: '/docs/api-reference/notifications' },
+      { label: 'API — REST', href: '/docs/api-reference/rest-api' },
     ],
   },
 ];

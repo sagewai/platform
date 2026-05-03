@@ -1,0 +1,94 @@
+# Reference — examples by number
+
+This page is the **completeness surface** — every shipped example listed by number, with a one-line summary. It exists so a reader who knows the file number can find it. It is **not** the primary discovery surface; for that, go to [Lighthouse](/docs/lighthouse) or [Foundation](/docs/foundation).
+
+> **There are 47 shipped examples.** The first 32 are entry-level demonstrations of single SDK capabilities. The last 15 are lighthouse-grade walkthroughs with sibling READMEs. The [example catalogue and positioning doc](https://github.com/sagewai/atelier/blob/main/docs/v1.0/example-catalogue-and-positioning.md) is the canonical contract.
+
+---
+
+## Tier 1 — Quickstart
+
+| # | Example | Tier |
+|---|---|---|
+| 01 | [hello_agent](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/01_hello_agent.py) — `pip install && python` → working agent | 1 (Quickstart) |
+
+## Tier 2 — Foundation
+
+| # | Example | Capability |
+|---|---|---|
+| 02 | [tool_agent](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/02_tool_agent.py) | Tool calling |
+| 03 | [multi_model](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/03_multi_model.py) | Anthropic ↔ OpenAI swap |
+| 04 | [memory_agent](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/04_memory_agent.py) | Memory basics |
+| 05 | [workflow](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/05_workflow.py) | Multi-step workflows |
+| 06 | [guardrails](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/06_guardrails.py) | Safety filters |
+| 07 | [mcp_tools](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/07_mcp_tools.py) | MCP integration |
+| 08 | [directives](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/08_directives.py) | Directive library |
+| 13 | [model_routing](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/13_model_routing.py) | Routing rules |
+| 18 | [local_llm_routing](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/18_local_llm_routing.py) | Ollama / LM Studio |
+| 27 | [app_factory](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/27_app_factory.py) | App-factory pattern |
+
+## Tier 3 — Integrations
+
+| # | Example | Tool |
+|---|---|---|
+| 09 | [proxy_claude_code](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/09_proxy_claude_code.py) | Claude Code CLI |
+| 10 | [proxy_cursor](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/10_proxy_cursor.py) | Cursor IDE |
+| 11 | [proxy_codex](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/11_proxy_codex.py) | OpenAI Codex |
+| 14 | [register_agent](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/14_register_agent.py) | Registry — publish |
+| 15 | [discover_agents](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/15_discover_agents.py) | Registry — consume |
+| 23 | [harness_proxy](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/23_harness_proxy.py) | Harness proxy primitives |
+| 24 | [harness_agent](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/24_harness_agent.py) | Harness agent integration |
+
+## Tier 4 — Production patterns
+
+| # | Example | Problem solved |
+|---|---|---|
+| 12 | [budget_enforcement](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/12_budget_enforcement.py) | Per-user/team/project budget caps |
+| 16 | [agent_governance](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/16_agent_governance.py) | Approval flows + audit |
+| 19 | [domain_model](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/19_domain_model.py) | Domain-modelled agent state |
+| 20 | [fleet_workers](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/20_fleet_workers.py) | Distributed worker registration |
+| 21 | [full_stack](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/21_full_stack.py) | End-to-end SDK + workflow + fleet |
+| 22 | [memory_holds_across_llms](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/22_memory_holds_across_llms.py) | Memory portability across LLMs |
+| 25 | [training_data_pipeline](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/25_training_data_pipeline.py) | Curator-style data capture |
+| 26 | [fleet_scoped_dispatch](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/26_fleet_scoped_dispatch.py) | Capability-based dispatch |
+| 28 | [autopilot_quickstart](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/28_autopilot_quickstart.py) | Autopilot without an LLM key |
+| 29 | [memory_strategies](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/29_memory_strategies.py) | Strategy-based memory extraction |
+| 31 | [grounded_multi_model](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/31_grounded_multi_model.py) | Multi-LLM grounded retrieval |
+| 32 | [global_shared_memory](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/32_global_shared_memory.py) | Cross-agent shared knowledge |
+| 35 | [autopilot_hosted_service](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/35_autopilot_hosted_service.py) | Autopilot via hosted blueprint service |
+
+## Tier 5 — Lighthouse
+
+| # | Example | Real-world problem | Lighthouse page |
+|---|---|---|---|
+| 30 | [oncall_agent](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/30_oncall_agent.py) | The v1.0 lighthouse — incident response | (cross-cutting) |
+| 33 | [fleet_sealed_integration](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/33_fleet_sealed_integration.py) | Multi-tenant production with isolated tenants | [Production multitenancy](/docs/lighthouse/production-multitenancy) |
+| 34 | [observatory_cost_tracking](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/34_observatory_cost_tracking.py) | Show my CFO where the AI money goes | [Observability and cost](/docs/lighthouse/observability-and-cost) |
+| 36 | [autopilot_training_loop](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/36_autopilot_training_loop.py) | Capture → fine-tune trigger | [Train your own model](/docs/lighthouse/train-your-own-model) |
+| 37 | [semantic_checkpoint_recall](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/37_semantic_checkpoint_recall.py) | Weak LLMs feel like Opus on long context | [Memory and retrieval](/docs/lighthouse/memory-and-retrieval) |
+| 38 | [unsloth_finetune](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/38_unsloth_finetune.py) | Real LoRA fine-tune, dual-backend | [Train your own model](/docs/lighthouse/train-your-own-model) |
+| 38a | [mlx_lm_server_deploy](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/38a_mlx_lm_server_deploy.py) | Apple Silicon deploy via `mlx_lm.server` | [Inference deployment](/docs/lighthouse/inference-deployment) |
+| 39 | [sandbox_scoped_credentials](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/39_sandbox_scoped_credentials.py) | Sandbox + scoped credentials | [Production multitenancy](/docs/lighthouse/production-multitenancy) |
+| 40 | [fleet_under_load](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/40_fleet_under_load.py) | 20+ workers, Iron Man HUD live state | [Observability and cost](/docs/lighthouse/observability-and-cost) |
+| 41 | [graph_memory_incident_dependency](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/41_graph_memory_incident_dependency.py) | Graph beats vector for multi-hop | [Memory and retrieval](/docs/lighthouse/memory-and-retrieval) |
+| 42 | [support_triage_agent](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/42_support_triage_agent.py) | Drop-in customer-support triage | [Moderation and classification](/docs/lighthouse/moderation-and-classification) |
+| 43 | [observatory_live](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/43_observatory_live.py) | Real telemetry → live dashboards | [Observability and cost](/docs/lighthouse/observability-and-cost) |
+| 44 | [colab_free_cuda](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/44_colab_free_cuda.py) | Free Tesla T4 via Drive-sync | [Inference deployment](/docs/lighthouse/inference-deployment) |
+| 45 | [vastai_marketplace_bid](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/45_vastai_marketplace_bid.py) | Bid-cheapest with reliability scoring | [Inference deployment](/docs/lighthouse/inference-deployment) |
+| 46 | [custom_inference_as_tool](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/46_custom_inference_as_tool.py) | Bring-your-own endpoint | [Inference deployment](/docs/lighthouse/inference-deployment) |
+| 47 | [runpod_finetune_orchestration](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/47_runpod_finetune_orchestration.py) | RunPod reliable rental | [Inference deployment](/docs/lighthouse/inference-deployment) |
+| 48 | [modal_serverless_inference](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/48_modal_serverless_inference.py) | Per-second serverless | [Inference deployment](/docs/lighthouse/inference-deployment) |
+| 49 | [community_moderation](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/49_community_moderation.py) | Three classifiers + LLM judge | [Moderation and classification](/docs/lighthouse/moderation-and-classification) |
+
+## Notes
+
+- **Example 17 — `unsloth_finetune` (legacy stub):** superseded by Example 38 (real fine-tune). Marked deprecated in its docstring; left in place for backward compatibility.
+- **No example numbered `02-08` in the `_factory`, `_perf_*`, `_soaks`, or `notebooks` subdirectories** — those are dev tools, not user-facing examples.
+- **Numbering gaps and sibling-suffixes (e.g. `38a`)** follow the [example-build-conventions](https://github.com/sagewai/atelier/blob/main/docs/v1.0/example-build-conventions.md) — when two PRs collide on a number, the later one gets a lowercase-letter sibling suffix to preserve numeric reservations.
+
+## What to read next
+
+- **[Lighthouse](/docs/lighthouse)** — the production-grade examples organised by intent.
+- **[Foundation](/docs/foundation)** — the SDK basics organised by capability.
+- **[Patterns](/docs/patterns)** — Tier 4 reference examples organised by pillar.
+- **[Integrations](/docs/integrations)** — Tier 3 examples organised by tool.

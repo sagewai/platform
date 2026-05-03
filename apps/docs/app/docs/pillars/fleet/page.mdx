@@ -1,0 +1,43 @@
+# Pillar — Fleet
+
+> **Distributed workers. Capability matching. Scoped dispatch. Cross-tenant isolation enforced at the dispatch boundary.**
+
+The Fleet pillar is Sagewai's horizontal-scale story. Workers register with capability labels (model support, pool, project_id); the dispatcher matches tasks to workers by label intersection; the Sealed spine ensures cross-tenant credentials never leak. The result: a multi-tenant agent platform where a healthcare worker physically cannot see finance tasks.
+
+## What the pillar does
+
+- **`InMemoryFleetRegistry`** — worker registration, approval, heartbeat, enrollment keys for bulk onboarding.
+- **`FleetDispatcher`, `InMemoryTaskStore`** — task claim/report with capability matching.
+- **`WorkerCapabilities`** — `models_supported`, `pool`, `labels` (including `project_id`).
+- **Cross-project isolation** — labels intersect at dispatch time; mismatched labels mean unreachable.
+- **Enrollment keys** — bulk onboarding with pool/model restrictions baked in.
+- **Heartbeat + revocation** — workers go offline cleanly; tasks reroute.
+
+The Fleet pillar lives at `sagewai/fleet/*` in the SDK.
+
+## What proves it works
+
+### Primary lighthouse
+
+[**Production multitenancy**](/docs/lighthouse/production-multitenancy) — Example 33 ships the full multi-tenant fleet integration: two tenants, four workers, mixed-tenant tasks, dispatcher refuses cross-tenant claims. Output prints the cross-tenant attempt being rejected at the dispatch boundary.
+
+### Sibling lighthouse
+
+[**Observability and cost**](/docs/lighthouse/observability-and-cost) — Example 40 runs 20+ workers under mixed load with the Iron Man HUD streaming live state. The fleet pillar's stress-test surface.
+
+### Pattern examples
+
+- [**Example 26 — `fleet_scoped_dispatch`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/26_fleet_scoped_dispatch.py) — capability-based dispatch, project-scoped routing.
+- [**Example 20 — `fleet_workers`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/20_fleet_workers.py) — distributed worker registration.
+
+## Where to go to ship it
+
+- **[Fleet Architecture (Enterprise)](/docs/guides/fleet-enterprise)** — multi-worker topology.
+- **[Fleet Deployment](/docs/guides/fleet)** — operator-level deployment.
+- **[Fleet Deep Dive](/docs/guides/fleet-architecture)** — the dispatch internals.
+
+## Related
+
+- **[Sealed spine](/docs/security)** — the security architecture that makes Fleet safe for multi-tenant production.
+- **[Observatory pillar](/docs/pillars/observatory)** — the cost and per-tenant rollup surface that pairs with Fleet.
+- **[Pillars overview](/docs/pillars)** — the other four pillars.

@@ -1,0 +1,61 @@
+# Pillar — SDK
+
+> **The Python library that makes adding AI to your product feel like a normal pull request.**
+
+The SDK pillar is the pip-installable surface — `pip install sagewai` and you have `UniversalAgent`, tool calling, memory, workflows, directives, MCP, sandbox, and model-swap. No admin server required. No other Sagewai pillar required. The platform layers on top when you need them; the SDK is useful on its own.
+
+## What the pillar does
+
+- **`UniversalAgent`** — the core agent class. Single-turn or multi-turn, tool-calling or pure chat, any LLM via LiteLLM.
+- **Tools and MCP** — Python tools registered with the agent, and MCP-compliant tool servers (Anthropic's open standard) attached transparently.
+- **Memory and RAG** — vector memory, graph memory (`GraphMemory`, `NebulaGraphMemory`), strategy-based extraction, semantic-checkpoint recall.
+- **Workflows** — `DurableWorkflow` for multi-step agent compositions with persistence.
+- **Directives** — `@datetime`, `@context`, `@memory`, `/tool.name` directives that expand at prompt-resolution time. The *harness any LLM* moat.
+- **Sandbox** — agents running inside isolated containers with scoped credentials. The Sealed-spine integration for the SDK.
+- **Model swap** — same code, any LLM. Anthropic, OpenAI, Ollama, LM Studio, Modal, Vast.ai endpoints — all behind the same `UniversalAgent` constructor.
+
+## What proves it works
+
+### Primary lighthouse
+
+[**Moderation and classification**](/docs/lighthouse/moderation-and-classification) — the cleanest single proof of *ML and LLM both first-class*. Three HuggingFace classifiers in a sealed sandbox-ml container, judged by a Haiku-class LLM, audit per call.
+
+### Sibling lighthouses
+
+- [**Memory and retrieval**](/docs/lighthouse/memory-and-retrieval) — semantic checkpoint recall (Example 37) and graph-beats-vector for incident response (Example 41).
+
+### Foundation examples
+
+The SDK pillar's foundation surface is most of the [Foundation](/docs/foundation) section. Pick the ones that match what you're shipping:
+
+- [02 — tool_agent](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/02_tool_agent.py) — tool calling
+- [04 — memory_agent](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/04_memory_agent.py) — memory basics
+- [05 — workflow](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/05_workflow.py) — multi-step workflows
+- [06 — guardrails](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/06_guardrails.py) — safety filters
+- [07 — mcp_tools](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/07_mcp_tools.py) — MCP integration
+- [08 — directives](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/08_directives.py) — directive library
+- [03 — multi_model](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/03_multi_model.py), [13 — model_routing](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/13_model_routing.py), [18 — local_llm_routing](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/18_local_llm_routing.py) — model swap
+
+### Pattern examples
+
+- [19 — domain_model](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/19_domain_model.py)
+- [21 — full_stack](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/21_full_stack.py)
+- [27 — app_factory](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/27_app_factory.py)
+- [29 — memory_strategies](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/29_memory_strategies.py)
+- [31 — grounded_multi_model](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/31_grounded_multi_model.py)
+- [32 — global_shared_memory](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/32_global_shared_memory.py)
+
+## Where to go to ship it
+
+- **[Quickstart](/docs/quickstart)** — the 60-second hello-world.
+- **[Getting started](/docs/getting-started)** — the longer "build a portfolio site with Claude Code" tour.
+- **[Core concepts: Agents](/docs/core-concepts/agents)** — `UniversalAgent`, composition patterns.
+- **[Core concepts: Memory & RAG](/docs/core-concepts/memory)** — the memory subsystem.
+- **[Core concepts: Workflows](/docs/core-concepts/workflows)** — `DurableWorkflow`, approval gates.
+- **[Core concepts: Directives](/docs/core-concepts/directives)** — directive-library deep dive.
+- **[API reference: Agents](/docs/api-reference/agents)** — the full agent API.
+
+## Related
+
+- **[Sealed spine](/docs/security)** — the security architecture that makes the SDK safe to point at production.
+- **[Pillars overview](/docs/pillars)** — the other four pillars and how they compose with the SDK.

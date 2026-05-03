@@ -1,0 +1,63 @@
+# Pillars — capability deep-dives
+
+> **Five pillars hold up the platform; one spine runs through all of them — that's what makes the agent platform safe to give a credit card.**
+
+Sagewai is organised around five capability pillars and one cross-cutting security spine. The pillars are *what the platform does*; the spine is *what makes it safe*. This section is the deep-dive for each pillar, with links into the foundation, patterns, and lighthouse examples that exercise it.
+
+---
+
+## The five pillars
+
+### [SDK](/docs/pillars/sdk)
+
+`UniversalAgent`, tools, MCP, memory, workflows, directives, sandbox, model swap. The Python library you `pip install`. Works without any other Sagewai surface.
+
+**Primary lighthouse:** [Moderation and classification](/docs/lighthouse/moderation-and-classification) (Examples 49 + 42).
+
+### [Autopilot](/docs/pillars/autopilot)
+
+Goal in plain English → blueprint → mission lifecycle. The hosted blueprint service is the proprietary half; the local controller and missions are open source.
+
+**Primary lighthouse:** [Train your own model](/docs/lighthouse/train-your-own-model) (Examples 35 + 36).
+
+### [Fleet](/docs/pillars/fleet)
+
+Distributed workers, capability matching, scoped dispatch, heartbeat. The horizontal-scale story.
+
+**Primary lighthouse:** [Production multitenancy](/docs/lighthouse/production-multitenancy) (Example 33) and [Observability and cost](/docs/lighthouse/observability-and-cost) (Example 40).
+
+### [Observatory](/docs/pillars/observatory)
+
+Cost tracking, OpenTelemetry pipeline, Iron Man HUD, Grafana board, audit. The two surfaces that read the same telemetry stream.
+
+**Primary lighthouse:** [Observability and cost](/docs/lighthouse/observability-and-cost) (Example 43).
+
+### [Training Loop](/docs/pillars/training-loop)
+
+Curator → JSONL → Unsloth → Ollama → cost-down. The capture-fine-tune-deploy arc that the company exists for.
+
+**Primary lighthouse:** [Train your own model](/docs/lighthouse/train-your-own-model) (Example 38) and [Inference deployment](/docs/lighthouse/inference-deployment) (Examples 44-48).
+
+---
+
+## The spine
+
+### [Sealed — five pillars, one spine](/docs/security)
+
+Per-CLI workload identity, externalised secret backends with JIT credentials, prompt + tool-output redaction at the RPC boundary, replay safety, per-CLI secret allowlists, JIT-HITL on high-privilege actions, reactive directives.
+
+Sealed is a defense-in-depth architecture that runs across the five pillars. It is not a feature bolted onto one pillar; it is the spine that makes the platform safe to give a credit card.
+
+**Primary lighthouse:** [Production multitenancy](/docs/lighthouse/production-multitenancy) (Examples 33 + 39).
+
+---
+
+## How to navigate
+
+Each pillar page below answers three questions:
+
+1. **What does this pillar do?** The capability summary in plain English.
+2. **What proves it works?** The lighthouse and pattern examples that exercise the pillar end-to-end.
+3. **Where do I go to ship it?** Links to foundation examples, concept pages, and API reference.
+
+If you came here looking for the *"how do I add AI to my product this quarter?"* story, you probably want [Lighthouse](/docs/lighthouse), not the pillar pages. The pillars are the *capability* axis; the lighthouses are the *intent* axis.
