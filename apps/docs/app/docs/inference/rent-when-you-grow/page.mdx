@@ -1,0 +1,175 @@
+# Rent when you grow
+
+Free Colab is the right starting point and the wrong end-state.
+T4 memory caps the model size at ~7B. Sessions disconnect after
+~12 hours. The lab vibe is fine for a first fine-tune; production
+fine-tunes graduate off Colab the moment any of those constraints
+bite.
+
+This page is the graduation guide. Three rented-GPU tiers, three
+shapes, prices that fit a $500/month budget. Pick the one that
+matches your job, not the one with the prettiest landing page.
+
+## What's the situation?
+
+You have run your first fine-tune on Colab. It worked. Now you
+want one of these:
+
+- A bigger model (13B, 32B, 70B) — Colab's 16GB will not hold it
+- A longer training run (24 hours, multi-day soak) — Colab will disconnect
+- A reproducible, scheduled fine-tune in CI — Colab is interactive
+- A production inference endpoint with autoscaling — Colab is not a server
+
+Three vendors cover this realistic spread of jobs. Two are
+provisioning-style (you rent a machine; you pay by the hour); the
+third is serverless (you decorate a Python function; you pay by
+the second).
+
+## What's the recommended path?
+
+| Situation | Pick | Why |
+|---|---|---|
+| Default *"I want a fine-tune that just works"* | **RunPod** | Most-mature CLI, root access, predictable per-hour pricing |
+| *"I have a 24-hour batch fine-tune and I want it cheap"* | **Vast.ai** | Marketplace pricing on RTX 3090s/4090s, per-host reliability scoring |
+| *"I trained the model; now I need to serve it"* | **Modal** | Per-second billing, sub-second autoscaling, no idle GPU spend |
+
+## RunPod — the default tier
+
+RunPod's Community Cloud is the *"this just works"* option. RTX
+4090 (24GB) at ~$0.34/hr, RTX 5090 (32GB) at ~$0.69/hr. Bare-metal
+access, root permission. The `runpodctl` CLI is the most polished
+of the three.
+
+```bash
+runpodctl create pod \
+    --imageName unsloth/unsloth:latest \
+    --gpuType "NVIDIA RTX 5090" \
+    --gpuCount 1 \
+    --containerDiskInGb 20
+```
+
+Sagewai's [Example 47](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/47_runpod_finetune_orchestration.py)
+wraps this end-to-end: provision the pod, upload the Curator's
+JSONL, run the Unsloth fine-tune, download the LoRA, tear the pod
+down. Cleanup-on-failure is included so a stuck pod does not
+silently drain your budget.
+
+A typical 4-hour fine-tune on a 4090 costs **$1.36**. That is the
+canonical "first production fine-tune" line we cite.
+
+## Vast.ai — the budget aggregator
+
+Vast.ai is a marketplace where independent hosts list their GPUs.
+Around since 2018, the `vastai` Python CLI is mature, and every
+host carries a reliability score: `max_perf`, `dlperf`,
+`internet_speed`, downtime history. You can query offers, sort
+by cost-per-hour, and filter to hosts above a reliability
+threshold before renting.
+
+- **24GB GPUs:** $0.20-$0.45/hr (RTX 3090 / 4090)
+- **A100 80GB:** $0.80-$1.60/hr
+
+Sagewai's [Example 45](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/45_vastai_marketplace_bid.py)
+wraps `vastai` for batch fine-tunes where price-per-hour matters
+more than provisioning latency. The example sets a budget cap and
+filters by reliability score so a flaky host does not eat your
+training data.
+
+```bash
+vastai search offers \
+    'gpu_name=RTX_3090 reliability>0.95 dph<0.30' \
+    --order dph
+```
+
+A typical 8-hour batch fine-tune on a 3090 costs **$1.60-$3.20**,
+typically lower than RunPod for the same work — at the cost of
+longer provisioning and a slightly higher rate of host issues.
+
+## Modal — serverless inference
+
+Modal is the production-inference tier. You do not provision a
+server — you decorate a Python function and Modal provisions on
+demand:
+
+```python
+import modal
+
+app = modal.App("my-fine-tuned-model")
+image = modal.Image.debian_slim(python_version="3.11").pip_install("vllm")
+
+@app.function(gpu="A10G", image=image, serialized=True)
+def serve(prompt: str) -> str:
+    # vLLM serves the LoRA loaded at startup
+    return llm.generate(prompt)
+```
+
+Per-second billing on an A10G is ~$0.0006/sec when warm. Cold-starts
+are 8-10 seconds (debian_slim image; bigger images cost more on
+the cold path). Sagewai's [Example 48](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/48_modal_serverless_inference.py)
+takes the LoRA produced by Example 47's RunPod fine-tune and wraps
+it in a Modal serverless function. The full lifecycle: train on
+RunPod, serve on Modal, integrate into the agent loop.
+
+A serving endpoint that handles ~10K inferences/month typically
+costs **$5-15** in Modal compute, which compares favourably to a
+dedicated bare-metal rental sitting idle 90% of the time.
+
+## What it costs
+
+| Tier | Best for | 24GB GPU price | Example |
+|---|---|---|---|
+| **RunPod** | Reliable fine-tunes, default tier | $0.34-$0.70/hr | [Ex 47](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/47_runpod_finetune_orchestration.py) |
+| **Vast.ai** | Cheapest sustained cost | $0.20-$0.45/hr | [Ex 45](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/45_vastai_marketplace_bid.py) |
+| **Modal** | Production inference | per-second (~$0.0006/s A10G) | [Ex 48](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/48_modal_serverless_inference.py) |
+
+## Show me a runnable thing
+
+The RunPod path, end-to-end:
+
+```bash
+# 1. Set RUNPOD_API_KEY in ~/.sagewai/.env
+echo "RUNPOD_API_KEY=your_key_here" >> ~/.sagewai/.env
+
+# 2. Run the example
+pip install sagewai python-dotenv
+python packages/sdk/sagewai/examples/47_runpod_finetune_orchestration.py
+```
+
+The example provisions, trains, downloads the LoRA, and tears the
+pod down. Stub mode (no API key) prints the orchestration plan
+without provisioning anything, so you can sanity-check the flow.
+
+## What would I do next?
+
+1. Pick the tier that matches your job (default: RunPod for fine-tunes, Modal for serving).
+2. Add the vendor key to `~/.sagewai/.env`.
+3. Run the example's stub mode to verify the wiring.
+4. Run live. Watch the [Observatory cost dashboard](/docs/observatory) to verify the spend matches the estimate.
+5. Once the LoRA is good, deploy locally — see [Deploy locally](/docs/inference/deploy-locally).
+
+## Anti-patterns
+
+1. **Renting a Modal A10G for a 12-hour batch fine-tune.** Per-second
+   billing on a long batch job is the worst of both worlds — you pay
+   serverless premium for non-serverless usage. Use RunPod or Vast.ai
+   for training; reserve Modal for serving.
+
+2. **Using Vast.ai without a reliability filter.** The marketplace
+   includes hosts with months of uptime and hosts that disappear
+   mid-job. Always filter `reliability>0.9` (or higher) before
+   renting.
+
+3. **Skipping the cleanup hook.** A stuck pod on RunPod or Vast.ai
+   bills until you notice. Sagewai's example wrappers include
+   cleanup-on-failure for exactly this reason — do not strip it.
+
+4. **Picking by landing-page polish.** All three vendors have
+   product debt. The right pick is the one that matches your
+   workload shape, not the one with the prettiest dashboard.
+
+## Cross-references
+
+- [Example 45 — Vast.ai marketplace bidding](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/45_vastai_marketplace_bid.py)
+- [Example 47 — RunPod fine-tune orchestration](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/47_runpod_finetune_orchestration.py)
+- [Example 48 — Modal serverless inference](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/48_modal_serverless_inference.py)
+- [Deploy locally](/docs/inference/deploy-locally) — the cost-down endpoint

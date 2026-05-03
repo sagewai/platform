@@ -91,6 +91,11 @@ const SECTIONS: NavSection[] = [
     items: [
       { label: 'Self-Learning Agents', href: '/docs/core-concepts/self-learning' },
       { label: 'Training & Fine-Tuning', href: '/docs/guides/training' },
+      { label: 'Inference — overview', href: '/docs/inference' },
+      { label: 'Inference — start with juggernauts', href: '/docs/inference/start-with-juggernauts' },
+      { label: 'Inference — free CUDA via Colab', href: '/docs/inference/free-cuda-via-colab' },
+      { label: 'Inference — rent when you grow', href: '/docs/inference/rent-when-you-grow' },
+      { label: 'Inference — deploy locally', href: '/docs/inference/deploy-locally' },
     ],
   },
   // ── Cross-cutting integration topics ─────────────────────────
