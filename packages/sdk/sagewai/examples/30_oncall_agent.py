@@ -10,6 +10,14 @@
 # See COMMERCIAL_LICENSE.md for details.
 """Example 30 — On-call agent: the v1.0 lighthouse demo.
 
+**Freemium boundary:** running this lighthouse against a real on-call
+goal in production goes through the hosted ``sagewai-llm`` service
+(default: ``api.sagewai.ai``) or a local copy of the
+``sagewai/sagewai-llm`` repo on ``127.0.0.1:8100`` for blueprint
+generation. The example as written drives a hand-built blueprint with
+mocked tools so you can run it offline. The other 32 examples in this
+directory run with no hosted service — pure OSS path.
+
 The autopilot's lighthouse use case. A synthetic PagerDuty alert fires;
 an autopilot mission triages it by:
 

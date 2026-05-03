@@ -10,6 +10,14 @@
 # See COMMERCIAL_LICENSE.md for details.
 """Example 36 — The autopilot training loop closes.
 
+**Freemium boundary:** the production autopilot loop that this example
+illustrates uses the hosted ``sagewai-llm`` service (default:
+``api.sagewai.ai``) or a local copy of the ``sagewai/sagewai-llm`` repo
+running on ``127.0.0.1:8100`` for blueprint generation. The simulation
+below is offline — synthetic mission runs feed the Curator so you can
+inspect the captured-data surface without a service. The other 32
+examples in this directory run with no hosted service — pure OSS path.
+
 The closes-the-loop story for the Five Pillars: every mission run becomes
 training data for the next model. Operators get cheaper, faster, more
 specialised models without manually labelling anything.

@@ -10,6 +10,15 @@
 
 > *Five pillars hold up the platform; one spine runs through all of them — that's what makes the agent platform safe to give a credit card.*
 
+## Built for the senior engineer who has one quarter to ship AI
+
+A SaaS engineer told to "add AI this quarter" with a tight budget and a CFO three months out. The platform walks them through the whole arc:
+
+- **Q1: ship the AI feature** — SDK, tools, memory, workflows. Deadline met.
+- **Q2: explain the cost** — Observatory breaks the bill down by model, team, and feature.
+- **Q3: cost-down** — Training loop captures successful runs, fine-tunes a local SLM, deploys via Ollama. End-to-end under $5.
+- **Q4: the strategic question** — "If Anthropic raised prices 10×, how badly would we hurt?" Answer: "We'd be fine, we already have our own model."
+
 ## Five pillars
 
 | Pillar | What it does |
@@ -18,7 +27,7 @@
 | **Autopilot** | State the goal in plain English. Autopilot designs the agent graph, extracts the slots, previews the plan, runs the mission, and heals on failure. The headline experience of the platform |
 | **Fleet** | Distributed workers with capability-based dispatch, project isolation, enrollment keys, and isolated execution sandboxes (image families, Kubernetes backend, AgentCore-runtime backend, pooling). Run agents on your hardware, in your network |
 | **Observatory** | OpenTelemetry tracing, VictoriaMetrics metrics, Grafana dashboards, cost tracking, audit trail. Your AI source of truth |
-| **Training Loop** | Curate production runs, export for Unsloth, fine-tune local models, promote the good ones. Agents that get cheaper with use |
+| **Training Loop — from juggernauts to your own model.** | Start with Opus or GPT-5. Capture their answers as training data via the Curator. Fine-tune your own SLM on free Colab CUDA, on $0.30/hr Spheron bare-metal, on serverless Modal, or on whatever GPU you can rent. Deploy locally via Ollama. Cost-down isn't an optimisation — it's an exit clause. |
 
 ## One spine — Sealed
 

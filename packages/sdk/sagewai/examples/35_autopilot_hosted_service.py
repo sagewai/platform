@@ -10,6 +10,11 @@
 # See COMMERCIAL_LICENSE.md for details.
 """Example 35 — Autopilot end-to-end with the hosted blueprint service.
 
+**Freemium boundary:** this example requires the hosted ``sagewai-llm``
+service (default: ``api.sagewai.ai``) or a local copy of the
+``sagewai/sagewai-llm`` repo running on ``127.0.0.1:8100``. The other 32
+examples in this directory run with no hosted service — pure OSS path.
+
 The fullest autopilot demo: state a goal in plain English, the hosted
 service generates a blueprint for it, the OSS framework parses + runs
 it. This is the loop your operators see when they hit the autopilot

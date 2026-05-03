@@ -33,8 +33,17 @@
 
 **Sagewai is the autonomous agent platform for developers.** You describe the
 goal; autopilot designs the agent graph, the fleet runs it in production,
-and the learning loop fine-tunes local models from the outcomes so runs get
+and the training loop fine-tunes local models from the outcomes so runs get
 cheaper over time.
+
+We built it for one specific person: a senior engineer at a 50-500 person SaaS who's been told to "add AI to the product" this quarter, has a budget under $500/month, and a CFO who's going to ask hard questions in three months. The platform walks them through the whole arc:
+
+| Quarter | What they need | What Sagewai ships |
+|---|---|---|
+| **Q1: ship the AI feature** | Working agent on Opus or GPT-5; deadline met | SDK + tools + memory + workflows |
+| **Q2: explain the cost** | "Why did the API bill quadruple?" | Observatory — per-model, per-team, per-feature breakdown |
+| **Q3: cost-down** | "Cut it 50% without an ML PhD" | Training loop — Curator captures runs, fine-tune on free Colab or rented GPU, deploy via Ollama. End-to-end under $5 |
+| **Q4: the strategic question** | "If Anthropic raised prices 10×, how badly would we hurt?" | "We'd be fine, we already have our own model" |
 
 Unlike frameworks that stop at `agent.run()`, Sagewai ships the whole loop:
 
@@ -42,7 +51,7 @@ Unlike frameworks that stop at `agent.run()`, Sagewai ships the whole loop:
 - **Autopilot** — state the goal in plain English; autopilot designs the agent graph, extracts the slots, previews the plan, runs the mission, and heals on failure
 - **Fleet** — distributed workers with capability-based dispatch, project isolation, enrollment keys, and isolated execution sandboxes (image families, Kubernetes backend, AgentCore-runtime backend, pooling)
 - **Observatory** — OpenTelemetry tracing, VictoriaMetrics metrics, Grafana dashboards, cost tracking, audit trail
-- **Training Loop** — curate runs, fine-tune local models with Unsloth, drive cost per run down over time
+- **Training Loop — from juggernauts to your own model.** Start with Opus or GPT-5. Capture their answers as training data via the Curator. Fine-tune your own SLM on free Colab CUDA, on $0.30/hr Spheron bare-metal, on serverless Modal, or on whatever GPU you can rent. Deploy locally via Ollama. Cost-down isn't an optimisation — it's an exit clause.
 
 **Plus one spine — Sealed.** A defense-in-depth security model that runs across all five pillars: per-CLI workload identity, externalised secret backends with JIT credentials, redaction at the RPC boundary, replay safety, per-CLI ACL, JIT-HITL callbacks, reactive directives. The security model agent platforms have been ignoring.
 

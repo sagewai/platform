@@ -10,6 +10,14 @@
 # See COMMERCIAL_LICENSE.md for details.
 """Example 28 — Autopilot quickstart.
 
+**Freemium boundary:** the autopilot path that ships an end-to-end mission
+in production needs the hosted ``sagewai-llm`` service (default:
+``api.sagewai.ai``) or a local copy of the ``sagewai/sagewai-llm`` repo
+running on ``127.0.0.1:8100``. *This* example is the offline preview —
+it stubs the client out so you can see the routing surfaces without a
+service. The other 32 examples in this directory run with no hosted
+service — pure OSS path.
+
 Demonstrates the end-to-end autopilot flow without any external services:
 
 1. Build a :class:`GoalRouter` backed by a mock :class:`SagewaiLLMClient`.
