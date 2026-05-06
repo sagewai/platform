@@ -40,13 +40,12 @@ What the example exercises:
 3. ``SagewaiLLMClient.generate_blueprint(goal=...)`` — the round-trip
 4. ``Blueprint.model_validate_json()`` — schema validation on the
    server's response
-5. (Optional) ``MissionDriver`` — runs the returned blueprint as a
-   mission. Skipped when the server returned the placeholder stub
-   so we don't pretend the stub is solving anything real.
+5. ``MissionDriver`` — runs each generated blueprint as a mission and
+   prints real ``MissionRunResult`` numbers (status, steps, wall ms,
+   cost USD). Every blueprint runs — there is no stub-skip branch.
 
 This is the autopilot story end-to-end: HTTP, auth, cache,
-schema, execution. Stub-blueprint responses are normal in dev — the
-real generation pipeline lives behind feature flags on the server.
+schema, execution.
 
 Requirements::
 
@@ -68,7 +67,11 @@ import tempfile
 import time
 from pathlib import Path
 
+from sagewai.autopilot._types import MissionState
 from sagewai.autopilot.blueprint import Blueprint
+from sagewai.autopilot.controller.driver import MissionDriver
+from sagewai.autopilot.controller.executor import ExecutorConfig
+from sagewai.autopilot.mission import Mission
 from sagewai.autopilot.sagewai_llm.cache import BlueprintCache
 from sagewai.autopilot.sagewai_llm.client import SagewaiLLMClient
 from sagewai.autopilot.sagewai_llm.errors import (
@@ -79,10 +82,12 @@ from sagewai.autopilot.sagewai_llm.errors import (
 from sagewai.autopilot.sagewai_llm.identity import InstanceIdentity
 
 
+# Three goals matching Plan C mock-LLM fixtures so the example runs
+# end-to-end against the local dev stack without real API keys.
 GOALS = [
-    "Page on-call when the API error rate exceeds 5% for more than 2 minutes",
-    "Triage incoming customer-support emails and tag them by urgency",
-    "Run a nightly invoice reconciliation job against the finance database",
+    "track competitor pricing daily",
+    "triage incoming support tickets",
+    "extract data from PDFs",
 ]
 
 
@@ -194,32 +199,62 @@ async def main() -> None:
                 print(f"  quota endpoint:          {quota.endpoint}")
                 print()
 
-            # 6. Show the first blueprint's structure (for the curious)
-            if ok:
-                first_bp = ok[0][1]
-                assert first_bp is not None
-                print("─" * 72)
-                print(f" First blueprint structure: {first_bp.id!r}")
-                print("─" * 72)
-                print()
-                summary = {
-                    "id": first_bp.id,
-                    "version": first_bp.version,
-                    "title": first_bp.title,
-                    "category": first_bp.category,
-                    "mode": first_bp.mode,
-                    "node_count": len(first_bp.agent_graph.nodes),
-                    "tools_required": list(first_bp.tools_required),
-                    "providers_required": list(first_bp.providers_required),
-                }
-                print(json.dumps(summary, indent=2))
-                print()
+            # 6. Run each generated blueprint as a mission; print real numbers.
+            print("─" * 72)
+            print(" Mission runs — real MissionRunResult per goal")
+            print("─" * 72)
+            print()
 
-                if first_bp.id == "stub-generated":
-                    print("  Note: server returned the placeholder stub blueprint.")
-                    print("        The real generation pipeline (Opus/GPT) is gated")
-                    print("        behind feature flags on the server. Stub responses")
-                    print("        prove the round-trip but skip the mission run.")
+            mission_results: list[tuple[str, str, float]] = []
+            for goal, bp, gen_ms, status in results:
+                if bp is None:
+                    continue
+                mission = Mission(
+                    mission_id=f"ms-35-{bp.id[:8]}",
+                    project_id="example-35",
+                    blueprint_id=bp.id,
+                    blueprint_version=bp.version,
+                    slots={"__blueprint_json__": bp.model_dump_json()},
+                )
+                mission.transition_to(MissionState.APPROVED)
+                mission.transition_to(MissionState.SCHEDULED)
+                cfg = ExecutorConfig(
+                    model=(
+                        "gpt-4o-mini"
+                        if os.environ.get("OPENAI_API_KEY")
+                        else "claude-haiku-4-5-20251001"
+                    ),
+                    max_tool_iterations=3,
+                )
+                driver = MissionDriver(executor_config=cfg)
+                print(f'  goal: "{goal}"')
+                print(f"  blueprint: {bp.id} v{bp.version}")
+                started = time.perf_counter()
+                run = await driver.execute(mission)
+                elapsed_ms = (time.perf_counter() - started) * 1000
+                print(
+                    f"  Mission status: {run.status} "
+                    f"steps={len(run.steps)} "
+                    f"mission_duration={run.duration_seconds:.3f}s "
+                    f"wall={elapsed_ms:>6.1f}ms"
+                )
+                cost = sum(
+                    (s.telemetry.cost_usd if s.telemetry else 0.0) for s in run.steps
+                )
+                print(f"  cost_usd: ${cost:.6f}")
+                print()
+                mission_results.append((goal, run.status, elapsed_ms))
+
+            # 7. Honest performance summary
+            print("─" * 72)
+            print(" Performance summary")
+            print("─" * 72)
+            print()
+            print(f"  {'goal':<40} {'status':<10} {'wall_ms':>10}")
+            print(f"  {'-'*40} {'-'*10} {'-'*10}")
+            for goal, status_str, ms in mission_results:
+                print(f"  {goal[:40]:<40} {status_str:<10} {ms:>10.1f}")
+            print()
 
 
 if __name__ == "__main__":

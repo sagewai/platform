@@ -78,6 +78,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import platform
+import sys
 import tempfile
 from pathlib import Path
 
@@ -247,6 +250,171 @@ SYNTHETIC_RUNS: list[tuple[MissionRunResult, dict]] = [
 ]
 
 
+# ── cycle-2 helpers ────────────────────────────────────────────────
+
+
+def _find_latest_instance_dir(root: Path) -> Path | None:
+    if not root.exists():
+        return None
+    candidates = [d for d in root.iterdir() if d.is_dir()]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda d: d.stat().st_mtime)
+
+
+def _load_captured_runs(instance_dir: Path) -> list[tuple[MissionRunResult, dict]]:
+    """Load JSONL captures from a training_runs instance directory."""
+    runs: list[tuple[MissionRunResult, dict]] = []
+    if not instance_dir.exists():
+        return runs
+    for path in sorted(instance_dir.glob("*.jsonl")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            sample = json.loads(line)
+            run = MissionRunResult(
+                mission_id=sample["mission_id"],
+                status=sample.get("status", "completed"),
+                steps=(
+                    StepResult(
+                        node_id="classifier",
+                        status=sample.get("status", "completed"),
+                        output=sample.get("completion"),
+                        output_preview=(sample.get("completion") or "")[:200],
+                        model_used=sample.get("model_used"),
+                    ),
+                ),
+                duration_seconds=float(sample.get("duration_seconds", 1.0)),
+            )
+            ctx = {
+                "project_id": sample.get("project_id", "captured"),
+                "user_rating": sample.get("user_rating", 5),
+                "human_override": sample.get("human_override", False),
+            }
+            runs.append((run, ctx))
+    return runs
+
+
+def _synthetic_runs_seed_b() -> list[tuple[MissionRunResult, dict]]:
+    """Second synthetic seed — used when no captured runs exist for cycle-2."""
+    return [
+        (
+            _synthetic_run(
+                mission_id="m-b01",
+                output='{"urgency": "high", "reason": "db connection pool exhausted"}',
+            ),
+            {"project_id": "acme-prod", "user_rating": 5, "human_override": False},
+        ),
+        (
+            _synthetic_run(
+                mission_id="m-b02",
+                output='{"urgency": "medium", "reason": "deployment question"}',
+            ),
+            {"project_id": "acme-prod", "user_rating": 4, "human_override": False},
+        ),
+        (
+            _synthetic_run(
+                mission_id="m-b03",
+                output='{"urgency": "low", "reason": "documentation request"}',
+            ),
+            {"project_id": "acme-prod", "user_rating": 5, "human_override": False},
+        ),
+        (
+            _synthetic_run(
+                mission_id="m-b04",
+                output='{"urgency": "high", "reason": "data pipeline backlog"}',
+            ),
+            {"project_id": "acme-prod", "user_rating": 5, "human_override": False},
+        ),
+        (
+            # FILTERED OUT — human override
+            _synthetic_run(
+                mission_id="m-b05",
+                output='{"urgency": "medium", "reason": "test alert"}',
+            ),
+            {"project_id": "acme-prod", "user_rating": 2, "human_override": True},
+        ),
+    ]
+
+
+def _run_cycle(
+    label: str,
+    blueprint: Blueprint,
+    runs: list[tuple[MissionRunResult, dict]],
+    curator: Curator,
+) -> None:
+    """Feed runs through the curator and print the per-run outcome table."""
+    print(f"  {'mission':<12} {'rating':>6} {'override':>8}  outcome")
+    print(f"  {'-'*12} {'-'*6} {'-'*8}  {'-'*40}")
+    for run, ctx in runs:
+        added = curator.process(run, blueprint, ctx)
+        rating = ctx.get("user_rating", "—")
+        override = ctx.get("human_override", "—")
+        outcome = f"accepted into {added[0]}" if added else "filtered (quality_filter)"
+        print(f"  {run.mission_id:<12} {rating:>6} {str(override):>8}  {outcome}")
+    print()
+
+
+def _run_live_fine_tune(curator: Curator, instance_id: str) -> Path | None:
+    """Run mlx_lm.lora on the cycle-2 dataset. Returns adapter path or None.
+
+    Per training-loop-deploy-strategy.md: 100-iter pass on Apple Silicon,
+    base model llama3.2:3b-instruct (small + permissive), adapter output
+    under ~/.sagewai/adapters/{instance_id}-cycle-2/.
+    """
+    if platform.system() != "Darwin" or platform.machine() != "arm64":
+        print("  not Apple Silicon — skipping live fine-tune.")
+        return None
+    try:
+        import mlx_tune  # noqa: F401
+    except ImportError:
+        try:
+            import mlx_lm  # noqa: F401
+        except ImportError:
+            print(
+                "  skipping live fine-tune — "
+                "install mlx-lm[lora] (or mlx-tune) to enable."
+            )
+            return None
+
+    out_dir = Path.home() / ".sagewai" / "adapters" / f"{instance_id}-cycle-2"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write the dataset in the format mlx_lm.lora expects.
+    dataset_path = out_dir / "train.jsonl"
+    samples = []
+    for ds in curator.datasets.values():
+        samples.extend(ds.samples)
+    if not samples:
+        print("  no samples — skipping live fine-tune.")
+        return None
+    dataset_path.write_text(
+        "\n".join(json.dumps(s) for s in samples) + "\n",
+        encoding="utf-8",
+    )
+
+    cmd = [
+        sys.executable, "-m", "mlx_lm.lora",
+        "--model", "mlx-community/Llama-3.2-3B-Instruct-4bit",
+        "--data", str(out_dir),
+        "--adapter-path", str(out_dir / "adapter"),
+        "--iters", "100",
+        "--batch-size", "1",
+        "--train",
+    ]
+    print(f"  launching: {' '.join(cmd)}")
+    import subprocess
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired:
+        print("  fine-tune exceeded 10-min timeout — aborting.")
+        return None
+    if proc.returncode != 0:
+        print(f"  fine-tune failed: {proc.stderr[:200]}")
+        return None
+    return out_dir / "adapter"
+
+
 # ── main ───────────────────────────────────────────────────────────
 
 
@@ -267,95 +435,83 @@ async def main() -> None:
     print(f"  Method: {target.fine_tune_method} → {target.deploy_as}")
     print()
 
-    # 2. Curator processes runs against the blueprint
     curator = Curator(config=CuratorConfig())
 
+    # ── Cycle 1 — synthetic seed ────────────────────────────────────
     print("─" * 72)
-    print(" Mission run-by-run")
+    print(" Cycle 1 — synthetic seed")
     print("─" * 72)
     print()
-    print(f"  {'mission':<8} {'rating':>6} {'override':>8}  outcome")
-    print(f"  {'-'*8} {'-'*6} {'-'*8}  {'-'*40}")
+    _run_cycle("cycle-1", blueprint, SYNTHETIC_RUNS, curator)
 
-    for run, ctx in SYNTHETIC_RUNS:
-        added = curator.process(run, blueprint, ctx)
-        rating = ctx.get("user_rating", "—")
-        override = ctx.get("human_override", "—")
-        if added:
-            outcome = f"accepted into {added[0]}"
-        else:
-            outcome = "filtered (failed quality_filter)"
-        print(
-            f"  {run.mission_id:<8} {rating:>6} {str(override):>8}  {outcome}"
-        )
-    print()
-
-    # 3. Show the dataset state
-    print("─" * 72)
-    print(" Training dataset state")
-    print("─" * 72)
-    print()
-    for ds_id, ds in curator.datasets.items():
-        print(f"  dataset_id   = {ds_id}")
-        print(f"  project_id   = {ds.project_id}")
-        print(f"  format       = {ds.format}")
-        print(f"  sample_count = {ds.sample_count}")
-        print()
-
-    # 4. Show the fine-tune job that triggered
-    pending = curator.clear_pending_jobs()
-    print("─" * 72)
-    print(" Fine-tune jobs")
-    print("─" * 72)
-    print()
-    if not pending:
-        print("  No fine-tune jobs triggered (sample threshold not met).")
+    cycle_1_jobs = curator.clear_pending_jobs()
+    if cycle_1_jobs:
+        for job in cycle_1_jobs:
+            print(f"  cycle-1 job_id={job.job_id} dataset={job.dataset_id}")
     else:
-        for job in pending:
-            print(f"  job_id          = {job.job_id}")
-            print(f"  dataset_id      = {job.dataset_id}")
-            print(f"  project_id      = {job.project_id}")
-            print(f"  base_model      = {job.base_model}")
-            print(f"  method          = {job.method}")
-            print(f"  deploy_as       = {job.deploy_as}")
-            print(f"  status          = {job.status}")
-            print()
+        print("  No cycle-1 fine-tune jobs triggered.")
+    print()
 
-    # 5. Export as Alpaca JSONL — ready for Unsloth fine-tuning
+    # ── Cycle 2 — captured runs (or fallback synthetic seed-B) ─────
     print("─" * 72)
-    print(" Export — Alpaca JSONL (Unsloth-ready)")
+    print(" Cycle 2 — captured runs from ~/.sagewai/training_runs/")
     print("─" * 72)
     print()
-    with tempfile.TemporaryDirectory(prefix="sagewai-train-") as tmp:
-        for ds_id, ds in curator.datasets.items():
-            jsonl_path = Path(tmp) / f"{ds_id}.jsonl"
-            jsonl_path.write_text(
-                "\n".join(json.dumps(s) for s in ds.samples) + "\n",
-                encoding="utf-8",
-            )
-            print(f"  wrote {jsonl_path}")
-            print(f"  size  {jsonl_path.stat().st_size} bytes")
-            print()
-            print("  First sample:")
-            print(f"    {ds.samples[0]}")
-            print()
-            print("  Last sample:")
-            print(f"    {ds.samples[-1]}")
-            print()
+    runs_root = Path.home() / ".sagewai" / "training_runs"
+    instance_dir = _find_latest_instance_dir(runs_root)
+    if instance_dir is None:
+        print(f"  no captured runs found under {runs_root} — using seed-B fallback.")
+        cycle_2_runs = _synthetic_runs_seed_b()
+        instance_id_for_ft = "synthetic-cycle-2"
+    else:
+        cycle_2_runs = _load_captured_runs(instance_dir)
+        instance_id_for_ft = instance_dir.name
+        print(f"  captured runs loaded from {instance_dir} ({len(cycle_2_runs)} runs)")
+    if not cycle_2_runs:
+        print("  fallback: synthetic seed-B")
+        cycle_2_runs = _synthetic_runs_seed_b()
+    _run_cycle("cycle-2", blueprint, cycle_2_runs, curator)
 
-    # 6. The closing-the-loop summary
+    cycle_2_jobs = curator.clear_pending_jobs()
+    if cycle_2_jobs:
+        for job in cycle_2_jobs:
+            print(f"  cycle-2 job_id={job.job_id} dataset={job.dataset_id}")
+    else:
+        print("  No cycle-2 fine-tune jobs triggered (sample threshold not met).")
+    print()
+
+    # ── Live fine-tune (gated by SAGEWAI_FT_LIVE) ─────────────────
+    print("─" * 72)
+    print(" Live fine-tune")
+    print("─" * 72)
+    print()
+    if os.environ.get("SAGEWAI_FT_LIVE", "") not in ("1", "true", "yes"):
+        print("  (SAGEWAI_FT_LIVE not set — printing FineTuneJob payload only.)")
+        all_jobs = cycle_1_jobs + cycle_2_jobs
+        for job in all_jobs:
+            print(f"  would run: base={job.base_model} method={job.method}")
+        if not all_jobs:
+            print("  (no jobs queued — sample threshold not met in either cycle)")
+    else:
+        adapter_path = _run_live_fine_tune(curator, instance_id_for_ft)
+        if adapter_path:
+            print(f"  adapter saved to: {adapter_path}")
+    print()
+
+    # ── The loop closes ────────────────────────────────────────────
     print("─" * 72)
     print(" The loop closes")
     print("─" * 72)
     print()
-    print("  Operators ran 8 missions on cloud Haiku — paid Anthropic per call.")
-    print(f"  {sum(d.sample_count for d in curator.datasets.values())} runs passed the quality filter and became training samples.")
-    print(f"  {len(pending)} fine-tune job(s) ready to dispatch to Unsloth.")
-    print(f"  Once trained, future missions route to ollama/llama3:8b — $0/token.")
-    print()
-    print("  This is the cost-down story in numbers: same workload, every")
-    print("  iteration cheaper. Sagewai owns the labelled data; you keep")
-    print("  the model.")
+    total_samples = sum(d.sample_count for d in curator.datasets.values())
+    print(f"  cycle-1 + cycle-2 produced {total_samples} accepted samples.")
+    print(
+        f"  cycle-1 jobs: {len(cycle_1_jobs)}; cycle-2 jobs: {len(cycle_2_jobs)}."
+    )
+    print(
+        "  Run example 30 first to seed real triage runs into "
+        "~/.sagewai/training_runs/."
+    )
 
 
 if __name__ == "__main__":

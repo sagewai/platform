@@ -76,8 +76,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from sagewai.autopilot._types import AgentKind, MissionState, Mode
@@ -87,7 +89,12 @@ from sagewai.autopilot.controller.driver import MissionDriver
 from sagewai.autopilot.controller.executor import ExecutorConfig
 from sagewai.autopilot.controller.tool_registry import ToolRegistry
 from sagewai.autopilot.mission import Mission
-from sagewai.autopilot.models import EvalRef, Metric, ProviderRequirement
+from sagewai.autopilot.models import EvalRef, Metric, ProviderRequirement, TrainingHook
+
+
+# ── module-level constants ─────────────────────────────────────────
+
+_DEFAULT_BASE_URL = os.environ.get("SAGEWAI_LLM_BASE_URL", "")
 
 
 # ── synthetic incident data ─────────────────────────────────────────
@@ -269,6 +276,123 @@ def _build_tool_registry() -> ToolRegistry:
     return registry
 
 
+# ── blueprint retrieval ────────────────────────────────────────────
+
+
+async def _retrieve_or_build_blueprint(
+    incident: SyntheticIncident,
+    cache_dir: Path,
+) -> tuple[Blueprint, str, str]:
+    """Try the live server first; fall back to hand-built offline.
+
+    Returns (blueprint, source, routing_kind).
+    """
+    from sagewai.autopilot import (
+        AutoRouted,
+        ConfidenceConfig,
+        GoalRouter,
+        PickerNeeded,
+        SynthesisNeeded,
+    )
+    from sagewai.autopilot.sagewai_llm.cache import BlueprintCache
+    from sagewai.autopilot.sagewai_llm.client import SagewaiLLMClient
+    from sagewai.autopilot.sagewai_llm.errors import ClientUnreachable
+    from sagewai.autopilot.sagewai_llm.identity import InstanceIdentity
+
+    goal = (
+        f"triage the incident: {incident.summary} "
+        f"(service={incident.service}, severity={incident.severity})"
+    )
+
+    if not _DEFAULT_BASE_URL:
+        return _build_oncall_blueprint(), "offline", "n/a"
+
+    identity = InstanceIdentity.generate()
+    cache = BlueprintCache(cache_dir / "bp_cache", ttl_seconds=300)
+    try:
+        async with SagewaiLLMClient(
+            base_url=_DEFAULT_BASE_URL,
+            identity=identity,
+            cache=cache,
+        ) as client:
+            router = GoalRouter(client=client, config=ConfidenceConfig())
+            result = await router.route(goal)
+            print(f"  routing result: {result.kind}")
+            if isinstance(result, AutoRouted):
+                bp = Blueprint.model_validate_json(result.ranked.blueprint_json)
+                print(
+                    f"  retrieved blueprint id={bp.id!r} v{bp.version} "
+                    f"score={result.ranked.score:.3f}"
+                )
+                return bp, "server", result.kind
+            if isinstance(result, PickerNeeded) and result.candidates:
+                bp = Blueprint.model_validate_json(result.candidates[0].blueprint_json)
+                print(
+                    f"  picker: choosing top candidate "
+                    f"id={bp.id!r} score={result.candidates[0].score:.3f}"
+                )
+                return bp, "server", result.kind
+            print("  no near match — falling back to offline blueprint")
+            return _build_oncall_blueprint(), "offline", result.kind
+    except ClientUnreachable as exc:
+        print(f"  server unreachable ({exc}) — using offline blueprint")
+        return _build_oncall_blueprint(), "offline", "n/a"
+
+
+def _augment_training_hooks(blueprint: Blueprint) -> Blueprint:
+    """Ensure the blueprint emits triage runs for example 36 cycle-2."""
+    hooks = list(blueprint.training_data_hooks or ())
+    if not any(h.event == "triage.completed" for h in hooks):
+        hooks.append(
+            TrainingHook(
+                event="triage.completed",
+                dataset="oncall-triage-{project_id}",
+                format="alpaca",
+                quality_filter="status == 'completed'",
+            )
+        )
+    return blueprint.model_copy(update={"training_data_hooks": tuple(hooks)})
+
+
+def _capture_training_run(
+    *,
+    instance_id: str,
+    mission_id: str,
+    blueprint: Blueprint,
+    incident: SyntheticIncident,
+    result,
+) -> Path:
+    """Append one JSONL line under ~/.sagewai/training_runs/{instance_id}/."""
+    runs_dir = Path.home() / ".sagewai" / "training_runs" / instance_id
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    out_path = runs_dir / f"oncall-{mission_id}.jsonl"
+    sample = {
+        "mission_id": mission_id,
+        "project_id": "oncall-demo",
+        "blueprint_id": blueprint.id,
+        "blueprint_version": blueprint.version,
+        "status": result.status,
+        "duration_seconds": result.duration_seconds,
+        "prompt": (
+            f"Triage this incident: {incident.summary} "
+            f"(service={incident.service}, severity={incident.severity})"
+        ),
+        "completion": (
+            result.steps[-1].output_preview
+            if result.steps and result.steps[-1].output_preview
+            else "(no output)"
+        ),
+        "model_used": (
+            result.steps[-1].telemetry.model_used
+            if result.steps and result.steps[-1].telemetry
+            else None
+        ),
+    }
+    with out_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(sample) + "\n")
+    return out_path
+
+
 # ── mission construction ──────────────────────────────────────────
 
 
@@ -365,7 +489,23 @@ async def main() -> None:
         )
 
     registry = _build_tool_registry()
-    blueprint = _build_oncall_blueprint()
+
+    print("─" * 72)
+    print(" Routing decision")
+    print("─" * 72)
+    print()
+    with tempfile.TemporaryDirectory(prefix="sagewai-bp-") as tmp:
+        blueprint, source, routing_kind = await _retrieve_or_build_blueprint(
+            _INCIDENT, Path(tmp),
+        )
+    print(f"  blueprint source: {source}")
+    print()
+
+    blueprint = _augment_training_hooks(blueprint)
+
+    from sagewai.autopilot.sagewai_llm.identity import InstanceIdentity
+    identity = InstanceIdentity.generate()
+
     mission = _build_mission(blueprint, _INCIDENT)
 
     cfg = ExecutorConfig(
@@ -378,7 +518,15 @@ async def main() -> None:
     print("  Triage mission running…\n")
     result = await driver.execute(mission)
 
+    out_path = _capture_training_run(
+        instance_id=identity.instance_id,
+        mission_id=mission.mission_id,
+        blueprint=blueprint,
+        incident=_INCIDENT,
+        result=result,
+    )
     print(f"  ✓ Mission status: {result.status}  ({result.duration_seconds:.2f}s)")
+    print(f"  training run captured: {out_path}")
     print()
     for step in result.steps:
         print(f"  Step {step.node_id}:  status={step.status}")
@@ -400,9 +548,8 @@ async def main() -> None:
 
     print("─" * 72)
     print(
-        "  In v1.1: a second incident fires next week. Curator has fine-tuned a\n"
-        "  triage model from this run; the second mission runs against the\n"
-        "  Curator-promoted local model and costs measurably less.\n"
+        "  Captured triage written to ~/.sagewai/training_runs/. Run example 36\n"
+        "  next — its cycle-2 will pick up this run as real training data.\n"
     )
 
 

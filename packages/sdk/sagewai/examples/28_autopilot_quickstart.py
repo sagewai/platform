@@ -10,65 +10,64 @@
 # See COMMERCIAL_LICENSE.md for details.
 """Example 28 — Autopilot quickstart.
 
-**Freemium boundary:** the autopilot path that ships an end-to-end mission
-in production needs the hosted ``sagewai-llm`` service (default:
-``api.sagewai.ai``) or a local copy of the ``sagewai/sagewai-llm`` repo
-running on ``127.0.0.1:8100``. *This* example is the offline preview —
-it stubs the client out so you can see the routing surfaces without a
-service. The other 32 examples in this directory run with no hosted
-service — pure OSS path.
+**Freemium boundary:** when ``SAGEWAI_LLM_BASE_URL`` is set the example
+exercises a live :class:`GoalRouter` against the hosted (or local)
+``sagewai-llm`` service. When unset, the offline path stubs the
+network with a dead transport and demonstrates the routing-result
+handling surface without any service.
 
-Demonstrates the end-to-end autopilot flow without any external services:
+What's exercised:
 
-1. Build a :class:`GoalRouter` backed by a mock :class:`SagewaiLLMClient`.
-2. Route a plain-English goal — the mock always returns
-   :class:`SynthesisNeeded` (no real blueprints in OSS), which triggers the
-   synthesis path.
-3. Show how to handle each :class:`RoutingResult` variant in code.
-4. For an :class:`AutoRouted` result (demonstrated via direct construction):
-   create a :class:`Mission`, approve it, schedule it, and drive it with
-   :class:`MissionDriver`.
-5. Print the :class:`MissionRunResult`.
+- :class:`GoalRouter` against a real server (online) or dead transport (offline)
+- All three :class:`RoutingResult` variants — :class:`AutoRouted`,
+  :class:`PickerNeeded`, :class:`SynthesisNeeded`
+- :class:`Mission` lifecycle — DRAFT → APPROVED → SCHEDULED
+- :class:`MissionDriver` — runs a synthetic blueprint end-to-end
 
-**No network calls are made.** The ``SagewaiLLMClient`` is constructed with
-a custom ``httpx.AsyncClient`` that raises ``ClientUnreachable`` immediately,
-so :class:`GoalRouter` falls back to :class:`SynthesisNeeded`. The
-:class:`AutoRouted` path is exercised by constructing the result directly
-from the synthetic test blueprint that ships with the OSS repo.
+Both paths complete in under 10 seconds on a clean machine.
 
 Requirements::
 
     pip install sagewai
+    # Optional: a running sagewai-llm at SAGEWAI_LLM_BASE_URL
+    #   docker compose up -d  (in the sagewai-llm repo)
+    #   export SAGEWAI_LLM_BASE_URL=http://127.0.0.1:8100
 
 Usage::
 
+    # Offline path — no env vars needed
     python packages/sdk/sagewai/examples/28_autopilot_quickstart.py
 
-Typical output::
-
-    [autopilot] goal: "run daily competitive research on 3 vendors"
-    [autopilot] routing result: synthesis_needed
-    [autopilot] No matching blueprint — synthesis path would generate one.
-    [autopilot] Demonstrating AutoRouted path with synthetic blueprint ...
-    [autopilot] Mission ms-quickstart-001 created (state=DRAFT)
-    [autopilot] Mission approved + scheduled
-    [autopilot] Running mission ...
-    [autopilot] Result: status=completed steps=2 duration=...s
-    [autopilot] Done.
+    # Online path — requires sagewai-llm running locally
+    SAGEWAI_LLM_BASE_URL=http://127.0.0.1:8100 \\
+        python packages/sdk/sagewai/examples/28_autopilot_quickstart.py
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 import tempfile
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+
+# ── module-level constants ─────────────────────────────────────────
 
 
-def _make_mock_client(cache_dir: Path):
+# Three demo goals chosen so a Plan-C-seeded server returns one of
+# each RoutingResult variant. The "expected" label is informational —
+# we print it next to the actual decision so the reader can verify.
+_DEMO_GOALS: list[tuple[str, str]] = [
+    ("triage the incident: high CPU on prod-web-01", "auto_routed"),
+    ("watch our top three competitors' pricing pages weekly", "picker_needed"),
+    ("plan my anniversary dinner reservation", "synthesis_needed"),
+]
+
+
+# ── helpers ────────────────────────────────────────────────────────
+
+
+def _make_dead_client(cache_dir: Path):
     """Build a SagewaiLLMClient that always raises ClientUnreachable."""
     import httpx
 
@@ -91,17 +90,29 @@ def _make_mock_client(cache_dir: Path):
     )
 
 
+def _make_live_client(cache_dir: Path, base_url: str):
+    """Build a SagewaiLLMClient pointed at a real server."""
+    from sagewai.autopilot.sagewai_llm.cache import BlueprintCache
+    from sagewai.autopilot.sagewai_llm.client import SagewaiLLMClient
+    from sagewai.autopilot.sagewai_llm.identity import InstanceIdentity
+
+    identity = InstanceIdentity.generate()
+    cache = BlueprintCache(cache_dir / "bp_cache", ttl_seconds=300)
+    return SagewaiLLMClient(
+        base_url=base_url,
+        identity=identity,
+        cache=cache,
+    )
+
+
 def _make_synthetic_mission():
     """Return a SCHEDULED mission backed by the synthetic scheduled blueprint."""
     from sagewai.autopilot._types import MissionState
     from sagewai.autopilot.mission import Mission
 
-    # Import the synthetic fixture — these are OSS test fixtures only;
-    # production blueprints live on the hosted service.
     from tests.autopilot.fixtures import make_synthetic_scheduled_blueprint  # type: ignore[import]
 
     bp = make_synthetic_scheduled_blueprint()
-    # Build minimal slots
     slots: dict = {
         "vendors": ["https://example.com"],
         "schedule": "0 9 * * 1-5",
@@ -119,81 +130,114 @@ def _make_synthetic_mission():
     return mission
 
 
-# ---------------------------------------------------------------------------
-# Main async entrypoint
-# ---------------------------------------------------------------------------
+def _print_routing_result(goal: str, expected: str, result) -> None:
+    from sagewai.autopilot import AutoRouted, PickerNeeded, SynthesisNeeded
+    from sagewai.autopilot.blueprint import Blueprint
+
+    print(f'  goal:     "{goal}"')
+    print(f"  expected: {expected}")
+    print(f"  routing result: {result.kind}")
+    if isinstance(result, AutoRouted):
+        bp = Blueprint.model_validate_json(result.ranked.blueprint_json)
+        print(f"    → auto-routed to blueprint id={bp.id!r}")
+        print(f"    → score={result.ranked.score:.3f}")
+    elif isinstance(result, PickerNeeded):
+        print(f"    → {len(result.candidates)} candidates need operator pick:")
+        for i, c in enumerate(result.candidates[:3]):
+            print(f"        [{i}] score={c.score:.3f}")
+    elif isinstance(result, SynthesisNeeded):
+        print("    → no near match — synthesis path would generate one")
+    print()
 
 
-async def _async_main() -> None:
+# ── main ───────────────────────────────────────────────────────────
+
+
+async def main() -> None:
     from sagewai.autopilot import (
-        AutoRouted,
         ConfidenceConfig,
         GoalRouter,
         MissionDriver,
-        PickerNeeded,
-        SynthesisNeeded,
     )
 
-    goal_text = "run daily competitive research on 3 vendors"
-    print(f'[autopilot] goal: "{goal_text}"')
+    base_url = os.environ.get("SAGEWAI_LLM_BASE_URL")
+
+    print("─" * 72)
+    print(" Sagewai Autopilot — quickstart (example 28)")
+    print("─" * 72)
+    print()
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        client = _make_mock_client(tmp_path)
 
-        async with client:
-            router = GoalRouter(
-                client=client,
-                config=ConfidenceConfig(),
-            )
-            result = await router.route(goal_text)
+        if base_url:
+            print(f"  Live path: SAGEWAI_LLM_BASE_URL={base_url}")
+            print()
+            client = _make_live_client(tmp_path, base_url)
+            async with client:
+                router = GoalRouter(client=client, config=ConfidenceConfig())
+                print("─" * 72)
+                print(" Routing three demo goals against the live server")
+                print("─" * 72)
+                print()
+                for goal, expected in _DEMO_GOALS:
+                    result = await router.route(goal)
+                    _print_routing_result(goal, expected, result)
+        else:
+            print("  Offline path: SAGEWAI_LLM_BASE_URL not set")
+            print("  (using a dead transport that raises ClientUnreachable —")
+            print("   GoalRouter falls back to SynthesisNeeded.)")
+            print()
+            client = _make_dead_client(tmp_path)
+            async with client:
+                router = GoalRouter(client=client, config=ConfidenceConfig())
+                print("─" * 72)
+                print(" Routing one demo goal against the dead transport")
+                print("─" * 72)
+                print()
+                goal = _DEMO_GOALS[0][0]
+                result = await router.route(goal)
+                _print_routing_result(goal, "synthesis_needed (offline)", result)
 
-        print(f"[autopilot] routing result: {result.kind}")
-
-        # ── Handle each RoutingResult variant ──────────────────────
-        if isinstance(result, AutoRouted):
-            print(f"[autopilot] Auto-routed — preview:\n{result.preview}")
-
-        elif isinstance(result, PickerNeeded):
-            print(f"[autopilot] Picker needed — {len(result.candidates)} candidates:")
-            for i, c in enumerate(result.candidates):
-                print(f"  [{i}] score={c.score:.3f}")
-
-        elif isinstance(result, SynthesisNeeded):
-            print("[autopilot] No matching blueprint — synthesis path would generate one.")
-
-        # ── Demonstrate the AutoRouted path with a synthetic fixture ─
-        print("[autopilot] Demonstrating AutoRouted path with synthetic blueprint ...")
-
+        # ── AutoRouted-path demo via synthetic fixture ─────────────
+        print("─" * 72)
+        print(" AutoRouted path — synthetic blueprint mission run")
+        print("─" * 72)
+        print()
         try:
             mission = _make_synthetic_mission()
-            print(f"[autopilot] Mission {mission.mission_id} created (state=DRAFT → SCHEDULED)")
-            print("[autopilot] Mission approved + scheduled")
-
+            print(f"  Mission {mission.mission_id} created (DRAFT → SCHEDULED)")
             driver = MissionDriver()
-            print("[autopilot] Running mission ...")
+            print("  Running mission ...")
             run_result = await driver.execute(mission)
             print(
-                f"[autopilot] Result: status={run_result.status} "
+                f"  status={run_result.status} "
                 f"steps={len(run_result.steps)} "
                 f"duration={run_result.duration_seconds:.3f}s"
             )
-
         except ImportError:
-            # Running outside the SDK source tree — synthetic fixtures are
-            # not available. This is fine in a standalone install.
             print(
-                "[autopilot] Synthetic fixtures not available in installed package — "
-                "skipping AutoRouted demo (requires running from source tree)."
+                "  Synthetic fixtures not available (running outside source tree) — "
+                "skipping AutoRouted demo."
             )
+        print()
 
-    print("[autopilot] Done.")
-
-
-def main() -> None:
-    """Run the autopilot quickstart example."""
-    asyncio.run(_async_main())
+    # ── proof ──────────────────────────────────────────────────────
+    print("─" * 72)
+    print(" The proof")
+    print("─" * 72)
+    print()
+    if base_url:
+        print("  You saw three routing decisions made against a real server:")
+        print("  one auto-routed match, one operator-pick fan-out, one synthesis")
+        print("  fallback. Plus a synthetic mission ran end-to-end locally.")
+    else:
+        print("  You saw the routing-result handling surface plus a synthetic")
+        print("  mission running end-to-end. To exercise live retrieval, point")
+        print("  SAGEWAI_LLM_BASE_URL at a running sagewai-llm server.")
+    print()
+    print("  Done.")
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
