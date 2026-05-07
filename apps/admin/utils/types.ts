@@ -1152,6 +1152,27 @@ export interface BillingInvoice {
   pdf_url: string;
 }
 
+/* ─── Blueprint Composition (Phase 2A orchestration view) ─── */
+
+export interface BlueprintCompositionStep {
+  /** The pattern name (e.g. "lighthouse", "watchdog"). */
+  pattern: string;
+  /** Slot inputs for this pattern step. */
+  inputs: Record<string, unknown>;
+  /** If this step wraps another pattern, this is the wrapped pattern name. */
+  wraps?: string;
+}
+
+export type BlueprintComposition = BlueprintCompositionStep[];
+
+export interface BlueprintExplainRequest {
+  blueprint_json: object;
+}
+
+export interface BlueprintExplainResponse {
+  markdown: string;
+}
+
 /* ─── Autopilot ─── */
 
 export type AutopilotTier = 'anonymous' | 'free' | 'custom';

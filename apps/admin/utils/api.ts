@@ -99,6 +99,7 @@ import type {
   AutopilotStatus,
   AutopilotGoalResponse,
   AutopilotMissionsResponse,
+  BlueprintExplainResponse,
   SandboxRequirementsPayload,
   SandboxRequirementsResponse,
   SandboxResolutionPreview,
@@ -1312,6 +1313,9 @@ export const adminApi = {
     const qs = limit ? `?limit=${limit}` : '';
     return analyticsClient.get<AutopilotMissionsResponse>(`/api/v1/autopilot/missions${qs}`);
   },
+
+  explainBlueprint: (blueprint_json: object) =>
+    analyticsClient.post<BlueprintExplainResponse>('/v1/blueprints/explain', { blueprint_json }),
 
   /* ─── Sandbox config endpoints (Plan 3b-i) ─── */
   getProjectSandboxDefaults: async (slug: string): Promise<SandboxRequirementsResponse | null> => {
