@@ -109,6 +109,8 @@ class SyntheticIncident:
     summary: str = "5xx error rate spiked to 12% over the last 5 min"
     severity: str = "high"
     fired_at: str = "2026-05-01T02:47:00Z"
+    environment: str = "production"
+    runbook_url: str = "https://runbooks.internal/api-gateway#5xx-spike"
 
 
 _INCIDENT = SyntheticIncident()
@@ -149,6 +151,10 @@ async def run_runbook_command(command: str) -> dict:
             "app   8422 12.8 14.1 node /app/worker.js\n"
             "app   8423  4.1  2.3 nginx: master process"
         ),
+        "kubectl get pods -n production --field-selector=status.phase!=Running": (
+            "NAME                           READY   STATUS      RESTARTS   AGE\n"
+            "api-gateway-7d4b9f8c6-xk2qp   0/1     OOMKilled   3          2m"
+        ),
     }
     return {
         "command": command,
@@ -164,6 +170,7 @@ async def post_to_slack(channel: str, message: str) -> dict:
     return {
         "channel": channel,
         "posted_at": datetime.now(tz=timezone.utc).isoformat(),
+        "message_ts": "1714528020.123456",
         "ok": True,
     }
 
@@ -174,6 +181,7 @@ async def acknowledge_pagerduty(incident_id: str, note: str) -> dict:
         "incident_id": incident_id,
         "acknowledged_at": datetime.now(tz=timezone.utc).isoformat(),
         "note": note,
+        "acknowledger": "sagewai-autopilot",
     }
 
 
@@ -320,9 +328,10 @@ async def _retrieve_or_build_blueprint(
             print(f"  routing result: {result.kind}")
             if isinstance(result, AutoRouted):
                 bp = Blueprint.model_validate_json(result.ranked.blueprint_json)
+                tier = getattr(result.ranked, "quality_tier", None) or "—"
                 print(
                     f"  retrieved blueprint id={bp.id!r} v{bp.version} "
-                    f"score={result.ranked.score:.3f}"
+                    f"score={result.ranked.score:.3f}  tier={tier}"
                 )
                 return bp, "server", result.kind
             if isinstance(result, PickerNeeded) and result.candidates:
@@ -452,6 +461,8 @@ def _build_mission(blueprint: Blueprint, incident: SyntheticIncident) -> Mission
             "summary": incident.summary,
             "severity": incident.severity,
             "fired_at": incident.fired_at,
+            "environment": incident.environment,
+            "runbook_url": incident.runbook_url,
             "__blueprint_json__": blueprint.model_dump_json(),
         },
     )
@@ -470,11 +481,13 @@ async def main() -> None:
     print("─" * 72)
     print()
     print(f"  Synthetic incident received:")
-    print(f"    id:       {_INCIDENT.incident_id}")
-    print(f"    service:  {_INCIDENT.service}")
-    print(f"    summary:  {_INCIDENT.summary}")
-    print(f"    severity: {_INCIDENT.severity}")
-    print(f"    fired:    {_INCIDENT.fired_at}")
+    print(f"    id:          {_INCIDENT.incident_id}")
+    print(f"    service:     {_INCIDENT.service}")
+    print(f"    summary:     {_INCIDENT.summary}")
+    print(f"    severity:    {_INCIDENT.severity}")
+    print(f"    fired:       {_INCIDENT.fired_at}")
+    print(f"    environment: {_INCIDENT.environment}")
+    print(f"    runbook:     {_INCIDENT.runbook_url}")
     print()
 
     has_llm_key = bool(
@@ -499,6 +512,8 @@ async def main() -> None:
             _INCIDENT, Path(tmp),
         )
     print(f"  blueprint source: {source}")
+    if source == "offline":
+        print(f"  quality_tier:     gold  (offline — known seed blueprint)")
     print()
 
     blueprint = _augment_training_hooks(blueprint)

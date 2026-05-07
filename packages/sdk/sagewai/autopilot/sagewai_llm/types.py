@@ -19,7 +19,7 @@ framework types.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -42,6 +42,8 @@ class GenerateBlueprintResponse(BaseModel):
 
     blueprint_json: str = Field(min_length=1)
     confidence: float = Field(ge=0.0, le=1.0)
+    quality_tier: Optional[str] = None
+    latency_ms: Optional[float] = None
 
 
 # ── Retrieve ──────────────────────────────────────────────────────

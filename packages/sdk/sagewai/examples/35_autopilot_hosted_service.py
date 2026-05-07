@@ -33,6 +33,13 @@ Then run this example with::
     SAGEWAI_LLM_BASE_URL=http://127.0.0.1:8100 \\
         python 35_autopilot_hosted_service.py
 
+Optional env vars:
+
+- ``SAGEWAI_LLM_BASE_URL`` — required; URL of the hosted service.
+- ``SAGEWAI_LIVE_SYNTHESIS=1`` — after the deterministic round-trips,
+  also send an off-corpus goal to exercise the synthesis pathway and
+  print the side-by-side path comparison.
+
 What the example exercises:
 
 1. ``InstanceIdentity`` — auto-generated HMAC identity for this client
@@ -55,6 +62,10 @@ Requirements::
 Usage::
 
     SAGEWAI_LLM_BASE_URL=http://127.0.0.1:8100 \\
+        python 35_autopilot_hosted_service.py
+
+    # To also exercise the synthesis pathway:
+    SAGEWAI_LIVE_SYNTHESIS=1 SAGEWAI_LLM_BASE_URL=http://127.0.0.1:8100 \\
         python 35_autopilot_hosted_service.py
 """
 
@@ -255,6 +266,48 @@ async def main() -> None:
             for goal, status_str, ms in mission_results:
                 print(f"  {goal[:40]:<40} {status_str:<10} {ms:>10.1f}")
             print()
+
+            # 8. Live-synthesis opt-in — demonstrates both pathways in one run.
+            if os.environ.get("SAGEWAI_LIVE_SYNTHESIS") == "1":
+                off_corpus_goal = (
+                    "design a custom CRM workflow for a 50-person legal firm"
+                )
+                print()
+                print("─" * 72)
+                print(" Synthesis path (off-corpus goal)")
+                print("─" * 72)
+                print()
+                print(f"  goal: {off_corpus_goal!r}")
+                print()
+                async with SagewaiLLMClient(
+                    base_url=base_url,
+                    identity=identity,
+                    cache=cache,
+                ) as synth_client:
+                    try:
+                        synth_resp = await synth_client.generate_blueprint(
+                            goal=off_corpus_goal,
+                        )
+                        bp = Blueprint.model_validate_json(synth_resp.blueprint_json)
+                        print(f"  blueprint.id:    {bp.id}")
+                        tier = getattr(synth_resp, "quality_tier", None) or "—"
+                        lat = getattr(synth_resp, "latency_ms", None)
+                        print(f"  quality_tier:    {tier}")
+                        print(f"  confidence:      {synth_resp.confidence:.3f}")
+                        if lat is not None:
+                            print(f"  latency:         {lat:.1f}ms")
+                        print()
+                        print(
+                            "  ─── deterministic path ───"
+                            "  (goals above, retrieved from corpus)"
+                        )
+                        print(
+                            "  ─── synthesis path       ───"
+                            "  (goal above, generated on the fly)"
+                        )
+                    except (ClientUnreachable, ServiceError, QuotaExceeded) as exc:
+                        print(f"  synthesis unavailable: {exc}")
+                print()
 
 
 if __name__ == "__main__":

@@ -139,12 +139,14 @@ def _print_routing_result(goal: str, expected: str, result) -> None:
     print(f"  routing result: {result.kind}")
     if isinstance(result, AutoRouted):
         bp = Blueprint.model_validate_json(result.ranked.blueprint_json)
+        tier = getattr(result.ranked, "quality_tier", None) or "—"
         print(f"    → auto-routed to blueprint id={bp.id!r}")
-        print(f"    → score={result.ranked.score:.3f}")
+        print(f"    → score={result.ranked.score:.3f}  tier={tier}")
     elif isinstance(result, PickerNeeded):
         print(f"    → {len(result.candidates)} candidates need operator pick:")
         for i, c in enumerate(result.candidates[:3]):
-            print(f"        [{i}] score={c.score:.3f}")
+            tier = getattr(c, "quality_tier", None) or "—"
+            print(f"        [{i}] score={c.score:.3f}  tier={tier}")
     elif isinstance(result, SynthesisNeeded):
         print("    → no near match — synthesis path would generate one")
     print()

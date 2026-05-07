@@ -32,7 +32,7 @@ Three possible outcomes from :class:`sagewai.autopilot.routing.GoalRouter`:
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -44,6 +44,7 @@ class RankedBlueprint(BaseModel):
 
     blueprint_json: str = Field(min_length=1)
     score: float = Field(ge=0.0, le=1.0)
+    quality_tier: Optional[str] = None
 
 
 class AutoRouted(BaseModel):
