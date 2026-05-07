@@ -54,6 +54,7 @@ class RetrieveCandidate(BaseModel):
 
     blueprint_json: str = Field(min_length=1)
     score: float = Field(ge=0.0, le=1.0)
+    quality_tier: Optional[str] = None
 
 
 class RetrieveBlueprintsRequest(BaseModel):
@@ -71,6 +72,7 @@ class RetrieveBlueprintsResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     candidates: tuple[RetrieveCandidate, ...]
+    routing_decision: Optional[dict[str, Any]] = None
 
 
 # ── Publish ───────────────────────────────────────────────────────
@@ -142,6 +144,7 @@ class RunEvalResponse(BaseModel):
     eval_id: str
     metrics: dict[str, float]
     passed: bool
+    tier_metrics: Optional[dict[str, Any]] = None
 
 
 # ── Quota ─────────────────────────────────────────────────────────
