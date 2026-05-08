@@ -113,13 +113,14 @@ autopilot-demo SAGEWAI_LLM_BASE_URL='http://localhost:8100':
       exit 1
     fi
     echo "✓ sagewai-llm healthy"
+    echo "→ bootstrapping admin (idempotent: user, token, autopilot config, env)..."
+    SAGEWAI_LLM_BASE_URL={{SAGEWAI_LLM_BASE_URL}} \
+      uv run --package sagewai python scripts/dev-bootstrap-admin.py
     echo "→ starting admin backend on :8000..."
     SAGEWAI_LLM_BASE_URL={{SAGEWAI_LLM_BASE_URL}} \
       uv run --package sagewai sagewai admin serve --host 0.0.0.0 --port 8000 &
-    BACKEND_PID=$!
     echo "→ starting admin UI on :3008..."
     pnpm --filter @sagewai/admin dev &
-    UI_PID=$!
     echo "→ waiting for admin backend to come up..."
     for i in $(seq 1 30); do
       if curl -sf http://localhost:8000/openapi.json >/dev/null 2>&1; then
@@ -128,12 +129,6 @@ autopilot-demo SAGEWAI_LLM_BASE_URL='http://localhost:8100':
       fi
       sleep 1
     done
-    echo "→ enabling autopilot (anonymous tier)..."
-    curl -sf -X POST http://localhost:8000/api/v1/autopilot/enable \
-      -H 'Content-Type: application/json' \
-      -d '{"tier":"anonymous"}' >/dev/null \
-      && echo "✓ autopilot enabled" \
-      || echo "⚠ autopilot enable returned non-2xx; the UI will still let you enable it manually"
     echo ""
     echo "─────────────────────────────────────────────────────"
     echo " Open: http://localhost:3008/autopilot"
