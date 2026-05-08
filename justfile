@@ -13,6 +13,12 @@
 
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
+# Podman-on-Mac compatibility: when Docker Desktop isn't running but a
+# podman machine is, point DOCKER_HOST at podman's socket so docker
+# compose / docker buildx work transparently. No-op when DOCKER_HOST is
+# already set or when Docker Desktop is the active backend.
+export DOCKER_HOST := env_var_or_default('DOCKER_HOST', shell('podman machine inspect --format "unix://{{.ConnectionInfo.PodmanSocket.Path}}" 2>/dev/null || echo ""'))
+
 # Show all available recipes
 default:
     @just --list
@@ -83,6 +89,65 @@ dev-all:
 # Start admin Next.js dev server on :3008
 admin-dev:
     pnpm --filter @sagewai/admin dev
+
+# ──────────────────────────────────────────────────────────────────────
+# Autopilot end-to-end demo (admin backend + admin UI + autopilot enabled)
+# ──────────────────────────────────────────────────────────────────────
+# Prereq: sagewai-llm must be running on :8100. From sister repo, run:
+#     cd ../sagewai-llm && just llm-up
+#
+# This recipe:
+#   1. Confirms sagewai-llm is reachable.
+#   2. Starts admin backend on :8000 with SAGEWAI_LLM_BASE_URL pointing at it.
+#   3. Starts admin Next.js dev server on :3008.
+#   4. After both come up, posts /api/v1/autopilot/enable so the goal route works.
+#   5. Prints the demo URL.
+autopilot-demo SAGEWAI_LLM_BASE_URL='http://localhost:8100':
+    #!/usr/bin/env bash
+    set -e
+    trap 'kill 0 2>/dev/null' EXIT
+    echo "→ checking sagewai-llm at {{SAGEWAI_LLM_BASE_URL}}..."
+    if ! curl -sf {{SAGEWAI_LLM_BASE_URL}}/health >/dev/null; then
+      echo "✗ sagewai-llm not reachable at {{SAGEWAI_LLM_BASE_URL}}"
+      echo "  run: cd ../sagewai-llm && just llm-up"
+      exit 1
+    fi
+    echo "✓ sagewai-llm healthy"
+    echo "→ starting admin backend on :8000..."
+    SAGEWAI_LLM_BASE_URL={{SAGEWAI_LLM_BASE_URL}} \
+      uv run --package sagewai sagewai admin serve --host 0.0.0.0 --port 8000 &
+    BACKEND_PID=$!
+    echo "→ starting admin UI on :3008..."
+    pnpm --filter @sagewai/admin dev &
+    UI_PID=$!
+    echo "→ waiting for admin backend to come up..."
+    for i in $(seq 1 30); do
+      if curl -sf http://localhost:8000/openapi.json >/dev/null 2>&1; then
+        echo "✓ backend ready"
+        break
+      fi
+      sleep 1
+    done
+    echo "→ enabling autopilot (anonymous tier)..."
+    curl -sf -X POST http://localhost:8000/api/v1/autopilot/enable \
+      -H 'Content-Type: application/json' \
+      -d '{"tier":"anonymous"}' >/dev/null \
+      && echo "✓ autopilot enabled" \
+      || echo "⚠ autopilot enable returned non-2xx; the UI will still let you enable it manually"
+    echo ""
+    echo "─────────────────────────────────────────────────────"
+    echo " Open: http://localhost:3008/autopilot"
+    echo " Try goal: 'track competitor pricing daily'"
+    echo " Expected: auto_route → competitive-research-daily ~0.92"
+    echo "─────────────────────────────────────────────────────"
+    echo " (Ctrl-C to stop both processes.)"
+    wait
+
+# Stop the autopilot-demo backend + UI by killing the dev ports.
+autopilot-demo-down:
+    -lsof -ti :8000 | xargs -r kill 2>/dev/null
+    -lsof -ti :3008 | xargs -r kill 2>/dev/null
+    @echo "✓ stopped admin processes on :8000 and :3008"
 
 # Start backend + admin via Docker (scripts/admin-up.sh)
 admin-up:
