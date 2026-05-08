@@ -53,14 +53,15 @@ This is a public-bound monorepo. **Strategic, design, and planning content lives
 
 ```
 packages/sdk/                    Python SDK (sagewai on PyPI)
-  sagewai/                       → cli, mcp, admin, gateway, fleet subpackages
+  sagewai/                       → cli, mcp, admin, gateway, fleet, sandbox, sealed, harness subpackages
   sagewai/autopilot/             → Autopilot framework (Plans 1-8, see below)
+  sagewai/harness/               → LLM Harness — smart proxy for AI coding tools (see below)
   tests/                         → pytest suite (~3600 tests)
   tests/autopilot/               → 663 autopilot framework tests
   tests/test_smoke.py            → 33 smoke tests (no services)
   tests/test_perf.py             → 4 perf micro-benchmarks (no services)
   tests/test_admin_autopilot.py  → 40 admin autopilot route tests
-  sagewai/examples/              → 23 runnable examples (01_hello_agent.py → 24_harness_agent.py)
+  sagewai/examples/              → 28 runnable examples (01_hello_agent.py → 28_autopilot_quickstart.py)
 apps/admin/                      Next.js admin UI
 apps/docs/                       Next.js docs site
 apps/backend/                    Dockerfile wrapping packages/sdk
@@ -153,6 +154,46 @@ apps/admin/app/autopilot/        Frontend: goal input, plan preview, missions (P
 
 **Test counts:** ~663 autopilot tests + 60 private server tests = 723 total
 
+## LLM Harness (smart proxy for AI coding tools)
+
+The harness is a separate product surface from agent orchestration: a
+smart proxy that sits between AI coding tools (Claude Code, Cursor,
+Copilot) and upstream LLM providers, classifying each request's
+complexity and routing it to the cheapest model that can handle the
+task — Opus → Haiku for simple edits, Opus → Sonnet for medium work,
+Opus → Opus only when complexity warrants it. Per-team policies cap
+spend; per-customer keys gate access; audit captures every decision.
+
+**Architecture (`sagewai.harness.*`):**
+```
+sagewai/harness/classifier.py       Heuristic complexity scorer (token counts, keywords, code blocks)
+sagewai/harness/router.py           Tier → model resolution
+sagewai/harness/policy.py           Per-org/per-user routing rules
+sagewai/harness/budget.py           Spend caps + downgrade/block on exceed
+sagewai/harness/proxy.py            FastAPI proxy app (Anthropic + OpenAI compatible endpoints)
+sagewai/harness/store.py            InMemoryHarnessStore (dev / single-process)
+sagewai/harness/postgres_store.py   PostgresHarnessStore (production)
+sagewai/harness/admin_api.py        REST CRUD for policies, keys, spend, audit, config
+sagewai/harness/agent.py            HarnessingAgent integration for sagewai agents
+sagewai/harness/middleware.py       harness_wrap() for adding tier-aware routing to existing agents
+sagewai/harness/discovery.py        Auto-discovery of local backends (Ollama, LM Studio, vLLM)
+apps/admin/app/harness/             Admin frontend: Dashboard, Policies, Keys, Analytics
+```
+
+**How it's wired into the admin:**
+- `serve.py` mounts `create_harness_admin_router(...)` at `/api/v1/harness`
+- 13 routes: `/policies` (CRUD), `/keys` (list/create/revoke), `/spend`, `/spend/breakdown`, `/audit`, `/config` (GET/PUT), `/test-classify`
+- Uses `InMemoryHarnessStore` by default; swap to `PostgresHarnessStore` for multi-process production deployments (mirror the Sealed-iii.A pattern in serve.py — conditional on `SAGEWAI_DATABASE_URL`)
+- See Examples 23 (`23_harness_proxy.py`) and 24 (`24_harness_agent.py`) for end-to-end demos
+
+**Use it standalone:**
+```bash
+# Run as a proxy that Claude Code can call:
+export ANTHROPIC_BASE_URL=http://localhost:8100/v1
+export ANTHROPIC_API_KEY=sk-harness-<your-key>
+python packages/sdk/sagewai/examples/23_harness_proxy.py
+```
+
 ## Deployment model
 
 - **PyPI** (`sagewai`) — `release-sdk.yml` on tag push
@@ -188,7 +229,7 @@ Without the first 4 links, nothing downstream works.
 **Architecture:**
 - `admin/state_file.py` — file-backed config store (`~/.sagewai/admin-state.json`)
 - `admin/provider_probes.py` — async LLM provider detection (Ollama, LM Studio, cloud)
-- `admin/serve.py` — complete FastAPI app factory with ALL routes (144 endpoints)
+- `admin/serve.py` — complete FastAPI app factory; canonical registration point for ~160 admin endpoints across the core router plus mounted sub-routers (autopilot, sandbox, sealed, sealed-revocation, harness)
 - `cli/admin.py` — thin wrapper: creates AdminStateFile + calls serve.py
 
 **Project scoping (multi-tenancy):**
