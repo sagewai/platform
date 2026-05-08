@@ -7,9 +7,11 @@ Run from anywhere; produces ``~/.sagewai/admin-state.json`` with:
   * an active token
   * autopilot enabled and pointing at the local sagewai-llm
 
-…and writes the token to ``apps/admin/.env.local`` as
-``NEXT_PUBLIC_ADMIN_DEV_TOKEN`` so the Next.js app picks it up at
-startup and skips the login flow.
+The Next.js admin obtains its token automatically: the just recipe
+runs the backend with ``SAGEWAI_DEV_TRUST_LOCAL=1``, and the browser's
+silent-refresh call to ``/api/v1/auth/refresh`` returns a token without
+needing a session cookie when the request comes from localhost. No env
+file edits, no operator action.
 
 Re-running is safe: existing user / token / autopilot config are
 preserved unless ``--reset`` is passed.
@@ -36,8 +38,6 @@ DEFAULT_LLM_BASE_URL = os.environ.get(
 )
 
 STATE_PATH = Path.home() / ".sagewai" / "admin-state.json"
-REPO_ROOT = Path(__file__).resolve().parent.parent
-ADMIN_ENV_PATH = REPO_ROOT / "apps" / "admin" / ".env.local"
 
 
 def _now_iso() -> str:
@@ -88,7 +88,6 @@ def _ensure_token(state: dict, *, reset: bool) -> tuple[str, bool]:
     """Ensure at least one active token exists. Returns (token, minted_new)."""
     tokens = state.get("active_tokens") or []
     if not reset and tokens:
-        # active_tokens may be a list of strings or list of dicts.
         first = tokens[0]
         token = first if isinstance(first, str) else first.get("token", "")
         if token:
@@ -116,22 +115,6 @@ def _ensure_autopilot(state: dict) -> bool:
     return changed
 
 
-def _write_env_file(token: str) -> None:
-    ADMIN_ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
-    existing = (
-        ADMIN_ENV_PATH.read_text().splitlines()
-        if ADMIN_ENV_PATH.exists()
-        else []
-    )
-    keep = [
-        line
-        for line in existing
-        if not line.startswith("NEXT_PUBLIC_ADMIN_DEV_TOKEN=")
-    ]
-    keep.append(f"NEXT_PUBLIC_ADMIN_DEV_TOKEN={token}")
-    ADMIN_ENV_PATH.write_text("\n".join(keep) + "\n")
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -144,10 +127,9 @@ def main(argv: list[str] | None = None) -> int:
 
     state = _load_state()
     email, password, admin_new = _ensure_admin(state, reset=args.reset)
-    token, token_new = _ensure_token(state, reset=args.reset)
+    _, token_new = _ensure_token(state, reset=args.reset)
     autopilot_changed = _ensure_autopilot(state)
     _save_state(state)
-    _write_env_file(token)
 
     print("─── sagewai admin dev-bootstrap ───")
     print(f"  state file:    {STATE_PATH}")
@@ -157,13 +139,12 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  active token:  {'NEW' if token_new else 'unchanged'}")
     print(f"  autopilot:     {'updated' if autopilot_changed else 'unchanged'}"
           f" (base_url={DEFAULT_LLM_BASE_URL})")
-    print(f"  env written:   {ADMIN_ENV_PATH}")
     print()
+    print("  → The browser obtains its token via /api/v1/auth/refresh")
+    print("    automatically when SAGEWAI_DEV_TRUST_LOCAL=1 is set on the")
+    print("    backend (the just recipe sets it). No env file edits.")
     if admin_new:
-        print(f"  → Login at http://localhost:3008/login if needed:")
-        print(f"      {email} / {password}")
-    print(f"  → Token is auto-injected via NEXT_PUBLIC_ADMIN_DEV_TOKEN; the")
-    print(f"    UI will skip the login flow for local development.")
+        print(f"  → If you ever need a real login: {email} / {password}")
     return 0
 
 

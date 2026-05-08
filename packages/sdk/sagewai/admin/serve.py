@@ -644,11 +644,44 @@ def create_admin_serve_app(
     @app.post("/api/v1/auth/refresh")
     async def auth_refresh(request: Request) -> JSONResponse:
         cookie = request.cookies.get("sagewai_auth")
-        if not cookie:
-            return JSONResponse({"detail": "No session"}, status_code=401)
-        result = sf.refresh_token(cookie)
+        result = sf.refresh_token(cookie) if cookie else None
         if not result:
-            return JSONResponse({"detail": "Invalid session"}, status_code=401)
+            # Dev-mode bootstrap: when running locally with
+            # SAGEWAI_DEV_TRUST_LOCAL=1 (set by the just autopilot-demo
+            # recipe) and an admin user is provisioned, mint a fresh
+            # session for the localhost browser. This removes the
+            # manual login step from the local-dev demo flow. The env
+            # var is never set in production, and the host check rejects
+            # non-localhost callers, so this is not a prod backdoor.
+            client_host = request.client.host if request.client else ""
+            dev_trust = os.environ.get("SAGEWAI_DEV_TRUST_LOCAL", "").lower() in {"1", "true"}
+            if dev_trust and client_host in {"127.0.0.1", "::1", "localhost"}:
+                state = sf._read()
+                admin = state.get("admin")
+                if admin:
+                    tokens = state.get("active_tokens") or []
+                    new_token = None
+                    if tokens:
+                        first = tokens[0]
+                        new_token = first if isinstance(first, str) else first.get("token")
+                    if not new_token:
+                        from sagewai.admin.state_file import _make_token  # type: ignore[attr-defined]
+                        new_token = _make_token()
+                        state["active_tokens"] = [new_token]
+                        sf._write(state)
+                    result = {
+                        "access_token": new_token,
+                        "token_type": "bearer",
+                        "user": {
+                            "id": admin.get("id", ""),
+                            "email": admin.get("email", ""),
+                            "display_name": admin.get("name", ""),
+                            "avatar_url": None,
+                            "role": admin.get("role", "admin"),
+                        },
+                    }
+        if not result:
+            return JSONResponse({"detail": "No session"}, status_code=401)
         resp = JSONResponse(result)
         resp.set_cookie(
             key="sagewai_auth", value=result["access_token"],
