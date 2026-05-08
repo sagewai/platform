@@ -219,7 +219,12 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
         router_obj = GoalRouter(client=client, config=routing_config)
 
         result: RoutingResult = await router_obj.route(goal)
-        return JSONResponse(result.model_dump())
+        # Frontend expects `routing_result` as the discriminator field name;
+        # the Pydantic models emit `kind`. Translate at the boundary.
+        payload = result.model_dump()
+        if "kind" in payload and "routing_result" not in payload:
+            payload["routing_result"] = payload.pop("kind")
+        return JSONResponse(payload)
 
     # ── POST /autopilot/approve ───────────────────────────────────────
 
