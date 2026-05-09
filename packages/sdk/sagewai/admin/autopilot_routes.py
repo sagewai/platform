@@ -95,6 +95,8 @@ from sse_starlette.sse import EventSourceResponse
 
 from sagewai.admin.autopilot_explain import render_brief
 from sagewai.autopilot.tool_risk_profile import SandboxTier, get_tier, is_downgrade, tier_for_tools
+from sagewai.autopilot.sealed_matcher import ProfileRecord, match_profile
+from sagewai.autopilot.tool_scopes import scopes_for_tools
 from sagewai.admin.autopilot_lifecycle import (
     IllegalTransition,
     MissionStatus,
@@ -206,6 +208,38 @@ class CancelBody(BaseModel):
 class SandboxOverrideBody(BaseModel):
     step_id: str
     tier: str  # "TRUSTED" | "SANDBOXED" | "UNTRUSTED"
+
+
+class SealedOverrideBody(BaseModel):
+    step_id: str
+    profile_id: str
+
+
+async def _get_sealed_profiles_snapshot() -> list[ProfileRecord]:
+    """Return the current Sealed profile pool as ProfileRecord objects.
+
+    Tests patch this at the module level to inject controlled profile lists
+    without requiring a live Sealed backend.
+    """
+    try:
+        from sagewai.sealed.refs import ProfileRef, resolve_backend
+        backend = resolve_backend(ProfileRef(scheme="builtin", path=""))
+        metas = await backend.list_profiles()
+    except Exception:  # noqa: BLE001 — degrade gracefully if no backend
+        return []
+
+    from datetime import timezone
+
+    return [
+        ProfileRecord(
+            id=m.id,
+            name=m.name,
+            # Sealed profile tags carry granted scope strings for autopilot matching.
+            granted_scopes=frozenset(m.tags),
+            last_used_at=m.last_rotated_at or datetime.datetime(1970, 1, 1, tzinfo=timezone.utc),
+        )
+        for m in metas
+    ]
 
 
 class AutopilotMissionDetail(BaseModel):
@@ -967,6 +1001,82 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
             "tier": proposed.name,
             "previous_tier": current_tier.name,
         })
+
+    # ── GET /autopilot/missions/{mission_id}/sealed-allocation ────────
+
+    @router.get("/autopilot/missions/{mission_id}/sealed-allocation")
+    async def autopilot_sealed_allocation(mission_id: str, request: Request) -> JSONResponse:
+        """Return Sealed profile match per agent step."""
+        err = _require_auth(request, sf)
+        if err is not None:
+            return err
+
+        record = get_mission(sf, mission_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail=f"Mission '{mission_id}' not found")
+
+        sealed_overrides: dict[str, str] = record.get("sealed_overrides") or {}
+
+        bp_raw = record.get("blueprint_json") or "{}"
+        try:
+            bp_data = json.loads(bp_raw)
+            nodes = bp_data.get("agent_graph", {}).get("nodes", [])
+        except (json.JSONDecodeError, AttributeError):
+            nodes = []
+
+        profiles = await _get_sealed_profiles_snapshot()
+
+        result = []
+        for node in nodes:
+            step_id = node.get("id", "")
+            tools: list[str] = node.get("tools") or []
+            required = scopes_for_tools(tools)
+            overridden = step_id in sealed_overrides
+
+            if overridden:
+                matched_profile_id: str | None = sealed_overrides[step_id]
+            else:
+                matched = match_profile(required, profiles)
+                matched_profile_id = matched.id if matched else None
+
+            jit_hitl = matched_profile_id is None and bool(required)
+
+            result.append({
+                "step_id": step_id,
+                "role": node.get("role"),
+                "tools": tools,
+                "required_scopes": sorted(required),
+                "matched_profile_id": matched_profile_id,
+                "overridden": overridden,
+                "jit_hitl": jit_hitl,
+            })
+
+        return JSONResponse(result)
+
+    # ── POST /autopilot/missions/{mission_id}/sealed-override ─────────
+
+    @router.post("/autopilot/missions/{mission_id}/sealed-override")
+    async def autopilot_sealed_override(
+        mission_id: str, body: SealedOverrideBody, request: Request
+    ) -> JSONResponse:
+        """Manually assign a Sealed profile to one agent step."""
+        err = _require_auth(request, sf)
+        if err is not None:
+            return err
+
+        record = get_mission(sf, mission_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail=f"Mission '{mission_id}' not found")
+
+        overrides: dict[str, str] = dict(record.get("sealed_overrides") or {})
+        overrides[body.step_id] = body.profile_id
+
+        def _apply(rec: dict[str, Any]) -> None:
+            rec["sealed_overrides"] = overrides
+
+        update_mission(sf, mission_id, _apply)
+
+        return JSONResponse({"step_id": body.step_id, "profile_id": body.profile_id})
 
     # ── GET /autopilot/missions/{mission_id}/fleet-allocation ─────────
 

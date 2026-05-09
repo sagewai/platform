@@ -9,6 +9,7 @@ import { AutopilotMissionLiveTrace } from './autopilot-mission-live-trace';
 import { AutopilotMissionOutput } from './autopilot-mission-output';
 import { AutopilotSandboxPanel } from './autopilot-sandbox-panel';
 import { AutopilotFleetPanel } from './autopilot-fleet-panel';
+import { AutopilotSealedPanel } from './autopilot-sealed-panel';
 
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 const ACTIVE_STATUSES = new Set(['running', 'completed', 'failed', 'cancelled']);
@@ -74,6 +75,7 @@ export function MissionDetailView({
         missionStatus={mission.status}
         liveEventsByStep={liveEventsByStep}
       />
+      <AutopilotSealedPanel missionId={mission.id} />
       {isCompleted && traceOutput != null && (
         <AutopilotMissionOutput output={traceOutput} />
       )}
