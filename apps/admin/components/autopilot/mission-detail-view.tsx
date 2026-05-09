@@ -1,5 +1,8 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Ali Arda Diri
 'use client';
 
+import { useState } from 'react';
 import type { AutopilotMissionDetail, MissionRunEvent } from '@/utils/types';
 import { AutopilotMissionHeader } from './autopilot-mission-header';
 import { AutopilotAgentGraph } from './autopilot-agent-graph';
@@ -11,6 +14,9 @@ import { AutopilotMissionOutput } from './autopilot-mission-output';
 import { AutopilotSandboxPanel } from './autopilot-sandbox-panel';
 import { AutopilotFleetPanel } from './autopilot-fleet-panel';
 import { AutopilotSealedPanel } from './autopilot-sealed-panel';
+import { MissionTimelineScrubber } from './mission-timeline-scrubber';
+import { StepSnapshotPanel } from './step-snapshot-panel';
+import { useTraceReplay } from '@/hooks/use-trace-replay';
 
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 const ACTIVE_STATUSES = new Set(['running', 'completed', 'failed', 'cancelled']);
@@ -31,6 +37,10 @@ export function MissionDetailView({
   const isTerminal = TERMINAL_STATUSES.has(mission.status);
   const showLiveScene = mission.status === 'running' || isTerminal;
   const capUsd = mission.estimated_cost?.amount ?? null;
+
+  const replay = useTraceReplay(traceEvents);
+  // scrubIndex tracks which event the user last dragged to (for snapshot panel).
+  const [scrubIndex, setScrubIndex] = useState(0);
 
   const liveEventsByStep = Object.fromEntries(
     traceEvents
@@ -58,6 +68,7 @@ export function MissionDetailView({
               capUsd={capUsd}
               status={mission.status}
               replayEvents={isTerminal ? traceEvents : []}
+              replaySpeed={replay.speed}
             />
           ) : (
             <div className="rounded-lg border border-border bg-bg-surface p-4">
@@ -69,6 +80,24 @@ export function MissionDetailView({
           <AutopilotResourcePanels mission={mission} />
         </div>
       </div>
+
+      {/* Timeline scrubber — terminal missions only */}
+      {isTerminal && traceEvents.length > 0 && (
+        <MissionTimelineScrubber
+          missionStatus={mission.status}
+          events={traceEvents}
+          replay={replay}
+          onScrub={setScrubIndex}
+        />
+      )}
+
+      {/* Step snapshot panel — shows details for whichever event the scrubber is on */}
+      {isTerminal && traceEvents.length > 0 && (
+        <StepSnapshotPanel
+          event={traceEvents[scrubIndex] ?? traceEvents[replay.currentIndex] ?? null}
+        />
+      )}
+
       <div className="rounded-lg border border-border bg-bg-surface p-4">
         {isActive ? (
           <AutopilotMissionLiveTrace

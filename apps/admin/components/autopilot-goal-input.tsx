@@ -9,10 +9,12 @@ import { AutopilotPlanPreview } from './autopilot-plan-preview';
 
 interface AutopilotGoalInputProps {
   onMissionApproved?: () => void;
+  /** Pre-fill the goal text (e.g. from a sample-goal pill click). */
+  initialGoal?: string;
 }
 
-export function AutopilotGoalInput({ onMissionApproved }: AutopilotGoalInputProps) {
-  const [goal, setGoal] = useState('');
+export function AutopilotGoalInput({ onMissionApproved, initialGoal }: AutopilotGoalInputProps) {
+  const [goal, setGoal] = useState(initialGoal ?? '');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AutopilotGoalResponse | null>(null);

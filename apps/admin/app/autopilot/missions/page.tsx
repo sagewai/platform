@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Ali Arda Diri
 'use client';
 
 import { useCallback, useEffect, useReducer, useState } from 'react';
@@ -6,6 +8,7 @@ import { adminApi } from '@/utils/api';
 import type { AutopilotMission, AutopilotMissionStatus } from '@/utils/types';
 import { AutopilotMissionList } from '@/components/autopilot-mission-list';
 import { useMissionEvents, type MissionStatusEvent } from '@/lib/autopilot/use-mission-events';
+import { EmptyMissionsPage } from '@/components/autopilot/empty-missions-page';
 
 type LiveStatuses = Record<string, string>;
 
@@ -117,6 +120,8 @@ export default function MissionsPage() {
             <div key={i} className="h-12 bg-bg-subtle rounded-lg" />
           ))}
         </div>
+      ) : filtered.length === 0 && missions.length === 0 ? (
+        <EmptyMissionsPage />
       ) : (
         <AutopilotMissionList
           missions={filtered}

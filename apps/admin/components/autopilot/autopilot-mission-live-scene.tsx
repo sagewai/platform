@@ -19,12 +19,16 @@ export function AutopilotMissionLiveScene({
   capUsd,
   status,
   replayEvents,
+  replaySpeed,
 }: {
   missionId: string;
   graph: AutopilotAgentGraphJSON;
   capUsd: number | null | undefined;
   status: string;
   replayEvents?: readonly MissionRunEvent[];
+  /** Replay speed multiplier — default 4. Scrubber lifts this so speed buttons
+   *  affect both the graph animation and the snapshot panel. */
+  replaySpeed?: number;
 }) {
   const isTerminal = TERMINAL_STATUSES.has(status);
   const [scheduler, setScheduler] = useState<ReplayScheduler>(null);
@@ -45,6 +49,7 @@ export function AutopilotMissionLiveScene({
       missionId={missionId}
       liveStream={!isTerminal}
       replayEvents={effectiveReplay}
+      replaySpeed={replaySpeed}
       onReplayScheduler={handleScheduler}
     >
       <div className="flex flex-col gap-4" data-testid="mission-live-scene">

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Ali Arda Diri
 'use client';
 
 import Link from 'next/link';
@@ -7,6 +9,8 @@ import { adminApi } from '@/utils/api';
 import type { AutopilotMission, AutopilotStatus, AutopilotTier } from '@/utils/types';
 import { AutopilotGoalInput } from '@/components/autopilot-goal-input';
 import { AutopilotMissionList } from '@/components/autopilot-mission-list';
+import { EmptyAutopilotPage } from '@/components/autopilot/empty-autopilot-page';
+import { OnboardingNudge } from '@/components/autopilot/onboarding-nudge';
 
 const TIER_OPTIONS: { tier: AutopilotTier; label: string; description: string }[] = [
   {
@@ -53,6 +57,8 @@ export default function AutopilotPage() {
   const [disabling, setDisabling] = useState(false);
   const [selectedTier, setSelectedTier] = useState<AutopilotTier>('anonymous');
   const [actionError, setActionError] = useState<string | null>(null);
+  /** Pre-fills goal input when a sample-goal pill is clicked. */
+  const [sampleGoal, setSampleGoal] = useState<string | undefined>(undefined);
 
   const fetchStatus = useCallback(async () => {
     setLoadingStatus(true);
@@ -260,14 +266,28 @@ export default function AutopilotPage() {
         </div>
       )}
 
+      {/* Onboarding nudge — only when enabled, dismissable */}
+      {status?.enabled && <OnboardingNudge />}
+
       {/* Goal input — only when enabled */}
       {status?.enabled && (
         <div className="bg-bg-surface border border-border rounded-xl px-5 py-4 space-y-3">
           <h2 className="text-base font-semibold text-text-primary m-0 font-[family-name:var(--font-heading)]">
             New goal
           </h2>
-          <AutopilotGoalInput onMissionApproved={fetchRecentMissions} />
+          <AutopilotGoalInput
+            onMissionApproved={() => {
+              setSampleGoal(undefined);
+              fetchRecentMissions();
+            }}
+            initialGoal={sampleGoal}
+          />
         </div>
+      )}
+
+      {/* Empty state hero — when enabled but no missions yet */}
+      {status?.enabled && recentMissions.length === 0 && (
+        <EmptyAutopilotPage onPickGoal={(g) => setSampleGoal(g)} />
       )}
 
       {/* Recent missions preview */}
