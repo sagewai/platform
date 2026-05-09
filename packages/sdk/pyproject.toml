@@ -103,7 +103,7 @@ all = [
     "sagewai[memory,fastapi,postgres,prometheus,storage,intelligence,multimodal]",
 ]
 sandbox = [
-    "aiodocker==0.9.0",
+    "aiodocker==0.26.0",
 ]
 kubernetes = [
     "kubernetes_asyncio==32.0.0",
