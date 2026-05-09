@@ -1,7 +1,9 @@
 'use client';
 
+import { useState } from 'react';
 import type { AutopilotMissionDetail } from '@/utils/types';
 import { AutopilotStatusBadge } from '@/components/autopilot-status-badge';
+import { adminApi } from '@/utils/api';
 
 function formatCost(c: AutopilotMissionDetail['estimated_cost']): string | null {
   if (!c) return null;
@@ -12,9 +14,63 @@ function formatCost(c: AutopilotMissionDetail['estimated_cost']): string | null 
   return sym ? `~${sym}${amt}` : `~${amt} ${c.currency}`;
 }
 
-export function AutopilotMissionHeader({ mission }: { mission: AutopilotMissionDetail }) {
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+
+export function AutopilotMissionHeader({
+  mission,
+  onRunStarted,
+}: {
+  mission: AutopilotMissionDetail;
+  onRunStarted?: () => void;
+}) {
+  const [starting, setStarting] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
+
   const title = mission.goal_text || mission.id;
   const costLabel = formatCost(mission.estimated_cost);
+
+  async function handleRun() {
+    setStarting(true);
+    setRunError(null);
+    try {
+      await adminApi.runAutopilotMission(mission.id);
+      onRunStarted?.();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to start mission';
+      setRunError(msg);
+      setStarting(false);
+    }
+  }
+
+  // Build the run button element based on status.
+  let runButton: React.ReactNode = null;
+  if (mission.status === 'pending') {
+    runButton = (
+      <button
+        type="button"
+        disabled={starting}
+        aria-label="Run mission"
+        data-testid="run-mission-button"
+        onClick={handleRun}
+        className="rounded-md bg-primary text-white text-sm px-3 py-1.5 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {starting ? 'Starting…' : 'Run mission'}
+      </button>
+    );
+  } else if (mission.status === 'running') {
+    runButton = (
+      <button
+        type="button"
+        disabled
+        aria-label="Mission running"
+        data-testid="run-mission-button-running"
+        className="rounded-md bg-primary text-white text-sm px-3 py-1.5 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        Running…
+      </button>
+    );
+  }
+  // Terminal statuses: no button rendered.
 
   return (
     <header
@@ -44,15 +100,15 @@ export function AutopilotMissionHeader({ mission }: { mission: AutopilotMissionD
             licensing@sagewai.ai
           </a>
         )}
-        <button
-          type="button"
-          disabled
-          title="Implemented in Plan H"
-          aria-label="Run mission"
-          className="rounded-md bg-primary text-white text-sm px-3 py-1.5 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          Run mission
-        </button>
+        {runButton}
+        {runError && (
+          <span
+            className="text-sm text-red-600 dark:text-red-400"
+            data-testid="run-error"
+          >
+            {runError}
+          </span>
+        )}
       </div>
     </header>
   );

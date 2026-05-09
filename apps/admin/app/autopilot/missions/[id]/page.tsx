@@ -2,35 +2,82 @@
 
 import { use, useEffect, useState } from 'react';
 import { adminApi } from '@/utils/api';
-import type { AutopilotMissionDetail } from '@/utils/types';
+import type {
+  AutopilotMissionDetail,
+  AutopilotMissionTrace,
+  MissionRunEvent,
+} from '@/utils/types';
 import { MissionDetailView } from '@/components/autopilot/mission-detail-view';
 import { AutopilotBreadcrumbs } from '@/components/autopilot-nav';
 
 type PageProps = { params: Promise<{ id: string }> };
 
+const NEEDS_TRACE_STATUSES = new Set([
+  'running',
+  'completed',
+  'failed',
+  'cancelled',
+]);
+
 export default function AutopilotMissionDetailPage({ params }: PageProps) {
   const { id } = use(params);
   const [mission, setMission] = useState<AutopilotMissionDetail | null>(null);
+  const [trace, setTrace] = useState<AutopilotMissionTrace | null>(null);
   const [error, setError] = useState<'not_found' | 'failed' | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setMission(null);
+    setTrace(null);
     setError(null);
+
     adminApi
       .getAutopilotMission(id)
       .then((m) => {
-        if (!cancelled) setMission(m);
+        if (cancelled) return;
+        setMission(m);
+        // Fetch trace for active/terminal missions so reload-during-run works.
+        if (NEEDS_TRACE_STATUSES.has(m.status)) {
+          adminApi
+            .getAutopilotMissionTrace(id)
+            .then((t) => {
+              if (!cancelled) setTrace(t);
+            })
+            .catch(() => {
+              // Trace fetch failure is non-fatal — the SSE stream will fill in.
+            });
+        }
       })
       .catch((err: unknown) => {
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : String(err);
         setError(/404|not found/i.test(msg) ? 'not_found' : 'failed');
       });
+
     return () => {
       cancelled = true;
     };
   }, [id]);
+
+  const traceEvents: MissionRunEvent[] = trace?.events ?? [];
+  const traceOutput: unknown = trace?.output ?? null;
+
+  function handleRunStarted() {
+    // Refetch mission + trace so the UI transitions from directions → live trace.
+    adminApi.getAutopilotMission(id).then((m) => {
+      setMission(m);
+      if (NEEDS_TRACE_STATUSES.has(m.status)) {
+        adminApi
+          .getAutopilotMissionTrace(id)
+          .then((t) => setTrace(t))
+          .catch(() => {
+            // Non-fatal — SSE stream will fill in.
+          });
+      }
+    }).catch(() => {
+      // Non-fatal — the button already transitioned the run; leave existing state.
+    });
+  }
 
   return (
     <div>
@@ -48,7 +95,14 @@ export default function AutopilotMissionDetailPage({ params }: PageProps) {
         </p>
       )}
       {!error && !mission && <MissionDetailSkeleton />}
-      {!error && mission && <MissionDetailView mission={mission} />}
+      {!error && mission && (
+        <MissionDetailView
+          mission={mission}
+          traceEvents={traceEvents}
+          traceOutput={traceOutput}
+          onRunStarted={handleRunStarted}
+        />
+      )}
     </div>
   );
 }

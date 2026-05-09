@@ -128,6 +128,8 @@ import type {
   InferenceProviderKey,
   AutopilotMissionDetail,
   AutopilotMissionExplain,
+  AutopilotMissionTrace,
+  MissionRunEvent,
 } from './types';
 
 const BASE_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL ?? 'http://localhost:8000/admin';
@@ -1879,5 +1881,17 @@ export const adminApi = {
     analyticsClient.post<AutopilotMissionExplain>(
       `/api/v1/autopilot/missions/${encodeURIComponent(id)}/explain`,
       {},
+    ),
+
+  runAutopilotMission: (id: string) =>
+    analyticsClient.post<{ run_id: string; started_at: string }>(
+      `/api/v1/autopilot/missions/${encodeURIComponent(id)}/run`,
+      {},
+    ),
+
+  /* ─── Autopilot mission trace (Plan H) ─── */
+  getAutopilotMissionTrace: (id: string) =>
+    analyticsClient.get<AutopilotMissionTrace>(
+      `/api/v1/autopilot/missions/${encodeURIComponent(id)}/trace`,
     ),
 };

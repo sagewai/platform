@@ -63,6 +63,12 @@ Routes
     four fixed sections: "What this will do", "Resources allocated",
     "How to run", "How to debug".
 
+``POST /api/v1/autopilot/missions/{mission_id}/run``
+    Spawns the background mission driver for a PENDING mission.
+    Returns ``{"run_id": "...", "started_at": "..."}`` with HTTP 202.
+    Execution proceeds in a detached task; progress streams via the
+    SSE trace endpoint and is persisted into the mission's ``trace``.
+
 ``POST /api/v1/autopilot/missions/{mission_id}/cancel``
     Body: ``{"reason": "<string>"}``
     Cancels a RUNNING mission with cooperative cancellation.
@@ -73,7 +79,9 @@ the ``Authorization`` header).  Missing / invalid auth returns 401.
 
 from __future__ import annotations
 
+import asyncio
 import datetime
+import json
 import logging
 import os
 import secrets
@@ -92,6 +100,8 @@ from sagewai.admin.autopilot_lifecycle import (
     transition_mission,
 )
 from sagewai.admin.autopilot_lifecycle_bus import MissionStatusChanged, get_lifecycle_bus
+from sagewai.admin.autopilot_run_bus import get_run_bus
+from sagewai.admin.autopilot_run_observer import run_mission_with_observer
 from sagewai.admin.autopilot_state import (
     AdminStateIdentityStore,
     get_autopilot_config,
@@ -100,10 +110,14 @@ from sagewai.admin.autopilot_state import (
     list_missions,
     save_mission,
     set_autopilot_config,
+    update_mission,
 )
 from sagewai.admin.serve import _extract_token, _project_id
 from sagewai.admin.state_file import AdminStateFile
+from sagewai.autopilot._types import MissionState
 from sagewai.autopilot.blueprint import Blueprint
+from sagewai.autopilot.controller.driver import MissionDriver
+from sagewai.autopilot.mission import Mission
 from sagewai.autopilot.routing import ConfidenceConfig, GoalRouter, RoutingResult
 from sagewai.autopilot.sagewai_llm import BlueprintCache, SagewaiLLMClient
 from sagewai.autopilot.sagewai_llm.identity import ensure_identity
@@ -285,6 +299,212 @@ def _translate_mission_detail(mission: dict[str, Any]) -> AutopilotMissionDetail
         training_data_hooks=training_data_hooks,
         estimated_cost=None,  # Plan H surfaces real cost.
     )
+
+
+def _build_mission_driver(record: dict[str, Any], blueprint: Blueprint) -> Any:
+    """Construct the :class:`MissionDriver` used to execute a mission run.
+
+    Tests monkey-patch this factory to inject a fake driver
+    (``monkeypatch.setattr(autopilot_routes, "_build_mission_driver", ...)``)
+    without having to mock LLM provider wiring.
+    """
+    return MissionDriver()
+
+
+async def _persist_loop(
+    sf: AdminStateFile, mission_id: str, q: asyncio.Queue[dict[str, Any]]
+) -> None:
+    """Drain *q* and persist every event into the mission's stored trace.
+
+    Walks the bus subscriber queue forever, applying each event into the
+    mission record under ``trace`` and updating cost / step counters.
+    Returns once a ``mission.finished`` event has been persisted, or on
+    cancellation.
+
+    Cost is summed from ``agent.llm_call.cost_usd`` only — the SDK's
+    ``agent.tool_result`` events do not yet carry cost.  This mirrors
+    the observer's bookkeeping in
+    :func:`sagewai.admin.autopilot_run_observer.run_mission_with_observer`.
+    """
+    try:
+        while True:
+            ev = await q.get()
+
+            def _apply(rec: dict[str, Any], _ev: dict[str, Any] = ev) -> None:
+                trace = rec.setdefault("trace", [])
+                trace.append(_ev)
+                rec["last_event_at"] = _ev.get("ts") or _now_iso()
+                kind = _ev.get("kind")
+                if kind == "agent.llm_call":
+                    rec["total_cost_usd"] = round(
+                        (rec.get("total_cost_usd") or 0.0)
+                        + float(_ev.get("cost_usd") or 0.0),
+                        6,
+                    )
+                if kind == "agent.finished":
+                    rec["step_count"] = (rec.get("step_count") or 0) + 1
+                if kind == "mission.finished":
+                    rec["finished_at"] = _now_iso()
+
+            try:
+                update_mission(sf, mission_id, _apply)
+            except KeyError:
+                # Mission was deleted underneath us — nothing more to persist.
+                return
+
+            if ev.get("kind") == "mission.finished":
+                return
+    except asyncio.CancelledError:
+        return
+
+
+async def _execute_mission_run(
+    sf: AdminStateFile, mission_id: str, run_id: str
+) -> None:
+    """Background task body — drives a mission to completion or failure.
+
+    This is the load-bearing seam wired up by ``POST /missions/{id}/run``.
+    It must never raise — every failure path emits a terminal lifecycle
+    transition so the org-wide bus (Plan M) sees a coherent status.
+    """
+    bus = get_run_bus()
+    persist_task: asyncio.Task[None] | None = None
+    sink_q: asyncio.Queue[dict[str, Any]] | None = None
+    final_status: MissionStatus = MissionStatus.FAILED
+    final_reason: str | None = None
+    final_summary: dict[str, Any] | None = None
+
+    try:
+        record = get_mission(sf, mission_id)
+        if record is None:
+            logger.warning("mission %s vanished before execution started", mission_id)
+            return
+
+        try:
+            blueprint = Blueprint.model_validate_json(record["blueprint_json"])
+        except Exception as exc:  # noqa: BLE001 — surface invalid blueprint as failed run
+            final_reason = f"invalid blueprint: {exc}"
+            logger.exception("failed to parse blueprint for mission %s", mission_id)
+            return
+
+        slots = dict(record.get("slots") or {})
+        slots["__blueprint_json__"] = record["blueprint_json"]
+        try:
+            mission = Mission(
+                mission_id=record["mission_id"],
+                project_id=record.get("project_id") or "default",
+                blueprint_id=blueprint.id,
+                blueprint_version=blueprint.version,
+                slots=slots,
+            )
+            mission.transition_to(MissionState.APPROVED)
+            mission.transition_to(MissionState.SCHEDULED)
+        except Exception as exc:  # noqa: BLE001
+            final_reason = f"mission setup failed: {exc}"
+            logger.exception("mission %s setup failed", mission_id)
+            return
+
+        try:
+            driver = _build_mission_driver(record, blueprint)
+        except Exception as exc:  # noqa: BLE001
+            final_reason = f"driver construction failed: {exc}"
+            logger.exception("driver construction for mission %s failed", mission_id)
+            return
+
+        # Subscribe the persist sink BEFORE the observer publishes
+        # mission.started so no events are missed.  Replay would catch
+        # them anyway, but a hot subscriber halves event-to-disk latency.
+        sink_q = bus.subscribe(mission_id)
+        persist_task = asyncio.create_task(_persist_loop(sf, mission_id, sink_q))
+
+        try:
+            summary = await run_mission_with_observer(
+                bus=bus,
+                mission_id=mission_id,
+                run_id=run_id,
+                blueprint=blueprint,
+                mission=mission,
+                driver=driver,
+            )
+        except BaseException as exc:  # noqa: BLE001
+            final_reason = f"{type(exc).__name__}: {exc}"
+            logger.exception("observer raised for mission %s", mission_id)
+            return
+
+        final_summary = summary
+        observer_status = (summary.get("status") or "").lower()
+        if observer_status == "completed":
+            final_status = MissionStatus.COMPLETED
+            final_reason = None
+        else:
+            final_status = MissionStatus.FAILED
+            final_reason = summary.get("error") or f"mission ended with status '{observer_status}'"
+    finally:
+        # Wait briefly for the persist sink to drain — the observer's
+        # mission.finished event is the loop's exit signal.  Cancel if
+        # the queue stalls so we never leak the task.
+        if persist_task is not None:
+            try:
+                await asyncio.wait_for(persist_task, timeout=2.0)
+            except asyncio.TimeoutError:
+                persist_task.cancel()
+                try:
+                    await persist_task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
+            except Exception:  # noqa: BLE001
+                # Persist sink errors are non-fatal — the lifecycle
+                # transition still has to land.
+                logger.exception("persist sink for mission %s raised", mission_id)
+        if sink_q is not None:
+            bus.unsubscribe(mission_id, sink_q)
+
+        # Persist final summary fields (cost / step / output / error)
+        # before the terminal transition so the lifecycle event the
+        # frontend reacts to sees a coherent record.
+        if final_summary is not None:
+            def _stamp_summary(
+                rec: dict[str, Any], _summary: dict[str, Any] = final_summary
+            ) -> None:
+                if _summary.get("total_cost_usd") is not None:
+                    rec["total_cost_usd"] = round(float(_summary["total_cost_usd"]), 6)
+                if _summary.get("step_count") is not None:
+                    rec["step_count"] = int(_summary["step_count"])
+                rec["output"] = _summary.get("output")
+                rec["error"] = _summary.get("error")
+                rec["finished_at"] = rec.get("finished_at") or _now_iso()
+
+            try:
+                update_mission(sf, mission_id, _stamp_summary)
+            except KeyError:
+                pass
+        else:
+            # No summary → something blew up before the observer
+            # produced one.  Persist the error string so the UI can
+            # show why the run died.
+            def _stamp_error(
+                rec: dict[str, Any], _reason: str | None = final_reason
+            ) -> None:
+                rec["error"] = _reason
+                rec["finished_at"] = rec.get("finished_at") or _now_iso()
+
+            try:
+                update_mission(sf, mission_id, _stamp_error)
+            except KeyError:
+                pass
+
+        # Terminal lifecycle transition — must always run so the
+        # org-wide bus (Plan M) sees the mission close.
+        try:
+            current = get_mission(sf, mission_id)
+            if current and current.get("status") == MissionStatus.RUNNING.value:
+                await _transition_and_publish(
+                    sf, mission_id, final_status, reason=final_reason
+                )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "failed to apply terminal transition for mission %s", mission_id
+            )
 
 
 def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
@@ -504,6 +724,80 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
 
         return EventSourceResponse(_gen())
 
+    # ── GET /autopilot/missions/{mission_id}/events ───────────────────
+
+    @router.get("/autopilot/missions/{mission_id}/events")
+    async def autopilot_mission_run_events(mission_id: str, request: Request):
+        """SSE stream of run-events for a single mission_id.
+
+        Subscribes to :class:`MissionRunBus` and yields each event as a
+        typed SSE message (``event: <kind>``). Heartbeat every
+        ``AUTOPILOT_SSE_HEARTBEAT`` seconds (default 15) so reverse proxies
+        don't time the connection out. Closes on ``mission.finished``.
+        """
+        err = _require_auth(request, sf)
+        if err is not None:
+            return err
+
+        bus = get_run_bus()
+        q = bus.subscribe(mission_id)
+
+        heartbeat_seconds = float(os.environ.get("AUTOPILOT_SSE_HEARTBEAT", "15"))
+
+        async def _gen():
+            # ``EventSourceResponse`` cancels this generator on client
+            # disconnect, so we don't poll ``request.is_disconnected``
+            # ourselves — that call blocks under httpx ASGITransport
+            # when no body chunks are pending and would deadlock the
+            # heartbeat loop in tests.
+            try:
+                while True:
+                    try:
+                        ev = await asyncio.wait_for(q.get(), timeout=heartbeat_seconds)
+                    except asyncio.TimeoutError:
+                        yield {"event": "heartbeat", "data": "{}"}
+                        continue
+                    yield {"event": ev.get("kind") or "message", "data": json.dumps(ev)}
+                    if ev.get("kind") == "mission.finished":
+                        return
+            finally:
+                bus.unsubscribe(mission_id, q)
+
+        return EventSourceResponse(_gen())
+
+    # ── GET /autopilot/missions/{mission_id}/trace ────────────────────
+
+    @router.get("/autopilot/missions/{mission_id}/trace")
+    async def autopilot_mission_trace(mission_id: str, request: Request) -> JSONResponse:
+        """Return the persisted run trace + summary for *mission_id*.
+
+        Used by the frontend to replay the live trace on page reload —
+        the response shape mirrors what was streamed on
+        ``/autopilot/missions/{id}/events`` but is delivered as a single
+        JSON object (no SSE).
+        """
+        err = _require_auth(request, sf)
+        if err is not None:
+            return err
+
+        mission = get_mission(sf, mission_id)
+        if mission is None:
+            raise HTTPException(status_code=404, detail=f"Mission '{mission_id}' not found")
+
+        return JSONResponse({
+            "mission_id": mission.get("mission_id"),
+            "run_id": mission.get("run_id"),
+            "status": mission.get("status"),
+            "started_at": mission.get("started_at"),
+            "finished_at": mission.get("finished_at"),
+            "last_event_at": mission.get("last_event_at"),
+            "total_cost_usd": float(mission.get("total_cost_usd") or 0.0),
+            "step_count": int(mission.get("step_count") or 0),
+            "events": list(mission.get("trace") or []),
+            "output": mission.get("output"),
+            "error": mission.get("error"),
+        })
+
     # ── GET /autopilot/missions/{mission_id} ──────────────────────────
 
     @router.get("/autopilot/missions/{mission_id}")
@@ -533,6 +827,76 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
             raise HTTPException(status_code=404, detail=f"Mission '{mission_id}' not found")
         detail = _translate_mission_detail(mission).model_dump()
         return JSONResponse(render_brief(detail))
+
+    # ── POST /autopilot/missions/{mission_id}/run ─────────────────────
+
+    @router.post("/autopilot/missions/{mission_id}/run", status_code=202)
+    async def autopilot_run_mission(mission_id: str, request: Request) -> JSONResponse:
+        """Spawn the background mission driver for a pending mission.
+
+        Returns ``202 Accepted`` immediately — execution proceeds in a
+        detached :func:`asyncio.create_task`.  Per-event progress is
+        published to :class:`MissionRunBus` and persisted into the
+        mission record's ``trace`` field.  The terminal lifecycle
+        transition (``running → completed/failed``) is published to the
+        org-wide lifecycle bus by the background task.
+        """
+        err = _require_auth(request, sf)
+        if err is not None:
+            return err
+
+        record = get_mission(sf, mission_id)
+        if record is None:
+            raise HTTPException(
+                status_code=404, detail=f"Mission '{mission_id}' not found"
+            )
+
+        current_status = record.get("status")
+        if current_status == MissionStatus.RUNNING.value:
+            raise HTTPException(status_code=409, detail="mission already running")
+        if current_status != MissionStatus.PENDING.value:
+            raise HTTPException(
+                status_code=409,
+                detail=f"cannot run mission in status '{current_status}'",
+            )
+
+        run_id = f"run_{secrets.token_hex(6)}"
+
+        # Reset trace + cost on a fresh run.  Re-runs aren't allowed at
+        # v1.0 (the state machine forbids the transition) but the schema
+        # supports them; clear stale state defensively so that a future
+        # re-run path doesn't surface a half-overwritten record.
+        # ``started_at`` is stamped by ``transition_mission`` on the
+        # PENDING → RUNNING transition; we read it back below so the
+        # value returned to the caller matches what's in the file.
+        def _start(rec: dict[str, Any]) -> None:
+            rec["run_id"] = run_id
+            rec["finished_at"] = None
+            rec["total_cost_usd"] = 0.0
+            rec["step_count"] = 0
+            rec["last_event_at"] = None
+            rec["trace"] = []
+            rec["error"] = None
+
+        update_mission(sf, mission_id, _start)
+
+        try:
+            updated = await _transition_and_publish(
+                sf, mission_id, MissionStatus.RUNNING
+            )
+        except IllegalTransition as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        started_at = updated.get("started_at") or _now_iso()
+
+        # Detached background task — must NOT be awaited here.  The
+        # request thread returns 202 within milliseconds.
+        asyncio.create_task(_execute_mission_run(sf, mission_id, run_id))
+
+        logger.info("Mission run started (id=%s, run_id=%s)", mission_id, run_id)
+        return JSONResponse(
+            {"run_id": run_id, "started_at": started_at}, status_code=202
+        )
 
     # ── POST /autopilot/missions/{mission_id}/cancel ──────────────────
 

@@ -25,7 +25,7 @@ This module provides:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from sagewai.autopilot.sagewai_llm.identity import InstanceIdentity
 
@@ -142,26 +142,63 @@ def set_autopilot_identity(sf: AdminStateFile, identity: InstanceIdentity) -> No
 
 # ── Mission helpers ───────────────────────────────────────────────────
 
+#: Default values for the Plan-H execution-trace fields.  Keys absent in
+#: a legacy mission record are filled with these values by
+#: :func:`migrate_mission_record`.
+MISSION_NEW_FIELDS: dict[str, Any] = {
+    "run_id": None,
+    "started_at": None,
+    "finished_at": None,
+    "total_cost_usd": 0.0,
+    "step_count": 0,
+    "last_event_at": None,
+    "trace": [],
+    "error": None,
+}
+
+
+def migrate_mission_record(raw: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of *raw* with Plan-H execution-trace fields filled in.
+
+    Existing values are never overwritten.  The input dict is not mutated.
+    Calling this function multiple times on the same dict is idempotent.
+    """
+    result = dict(raw)
+    for key, default in MISSION_NEW_FIELDS.items():
+        if key not in result:
+            # Use a fresh list for each record so callers can't share state.
+            result[key] = [] if isinstance(default, list) else default
+    return result
+
 
 def list_missions(
     sf: AdminStateFile,
     *,
     project_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Return stored autopilot missions, optionally filtered by project."""
+    """Return stored autopilot missions, optionally filtered by project.
+
+    Each returned record is passed through :func:`migrate_mission_record`
+    so callers always see the full Plan-H schema regardless of when the
+    record was originally created.
+    """
     data = sf._read()
     missions: list[dict[str, Any]] = data.get("autopilot_missions", [])
     if project_id is not None:
         missions = [m for m in missions if m.get("project_id") == project_id]
-    return list(missions)
+    return [migrate_mission_record(m) for m in missions]
 
 
 def get_mission(sf: AdminStateFile, mission_id: str) -> dict[str, Any] | None:
-    """Return the mission record for *mission_id*, or ``None`` if not found."""
+    """Return the mission record for *mission_id*, or ``None`` if not found.
+
+    The returned record is passed through :func:`migrate_mission_record`
+    so callers always see the full Plan-H schema.
+    """
     data = sf._read()
     for m in data.get("autopilot_missions", []):
         if m.get("mission_id") == mission_id:
-            return dict(m)
+            return migrate_mission_record(m)
     return None
 
 
@@ -174,3 +211,42 @@ def save_mission(sf: AdminStateFile, mission: dict[str, Any]) -> dict[str, Any]:
         return mission
 
     return sf._mutate(_mutate)
+
+
+def update_mission(
+    sf: AdminStateFile,
+    mission_id: str,
+    mutator: Callable[[dict[str, Any]], None],
+) -> dict[str, Any]:
+    """Find a mission by *mission_id*, apply *mutator* in place, persist, return it.
+
+    Parameters
+    ----------
+    sf:
+        The admin state file store.
+    mission_id:
+        The mission to update.
+    mutator:
+        A callable that receives the mission dict and mutates it in place.
+        The return value of *mutator* is ignored.
+
+    Returns
+    -------
+    dict
+        The updated (and migrated) mission record.
+
+    Raises
+    ------
+    KeyError
+        If no mission with *mission_id* exists.
+    """
+
+    def _inner(data: dict[str, Any]) -> dict[str, Any]:
+        missions: list[dict[str, Any]] = data.get("autopilot_missions", [])
+        for mission in missions:
+            if mission.get("mission_id") == mission_id:
+                mutator(mission)
+                return dict(mission)
+        raise KeyError(f"mission '{mission_id}' not found")
+
+    return sf._mutate(_inner)

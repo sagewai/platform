@@ -1601,3 +1601,45 @@ export interface AutopilotMissionExplain {
   markdown: string;
   sections: Record<string, string>;
 }
+
+// ── Autopilot mission live trace (Plan H) ────────────────────────────────────
+
+export interface MissionRunEvent {
+  event_id: string;
+  ts: string;
+  mission_id: string;
+  run_id?: string;
+  /** mission.started | agent.started | agent.tool_call | agent.tool_result | agent.tool_failed | agent.llm_call | agent.finished | mission.finished */
+  kind: string;
+  node_id?: string;
+  /** older event payloads — included for forward-compat */
+  agent_id?: string;
+  tool?: string;
+  status?: string;
+  model?: string;
+  cost_usd?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  latency_ms?: number;
+  output_preview?: string;
+  output?: string | null;
+  error?: string | null;
+  blueprint_id?: string;
+  blueprint_name?: string;
+  total_cost_usd?: number;
+  total_duration_ms?: number;
+}
+
+export interface AutopilotMissionTrace {
+  mission_id: string;
+  run_id: string | null;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  last_event_at: string | null;
+  total_cost_usd: number;
+  step_count: number;
+  events: MissionRunEvent[];
+  output: unknown;
+  error: string | null;
+}
