@@ -18,6 +18,10 @@
 FROM node:24-alpine@sha256:01743339035a5c3c11a373cd7c83aeab6ed1457b55da6a69e014a95ac4e4700b AS deps
 WORKDIR /app
 
+# CI=true tells pnpm 11 not to prompt for `node_modules` purges on TTY-less
+# builds (otherwise: ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY).
+ENV CI=true
+
 # Install pnpm via corepack and fetch dependencies.
 # In a monorepo the root lockfile doesn't match standalone context,
 # so we install without --frozen-lockfile here. Lockfile integrity
@@ -34,6 +38,7 @@ COPY . .
 
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
+ENV CI=true
 
 RUN corepack enable pnpm && pnpm build
 

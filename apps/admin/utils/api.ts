@@ -126,6 +126,8 @@ import type {
   InferenceProviderWritePayload,
   InferenceProviderTestResult,
   InferenceProviderKey,
+  AutopilotMissionDetail,
+  AutopilotMissionExplain,
 } from './types';
 
 const BASE_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL ?? 'http://localhost:8000/admin';
@@ -1864,6 +1866,18 @@ export const adminApi = {
   testInferenceProvider: (provider: InferenceProviderKey) =>
     analyticsClient.post<InferenceProviderTestResult>(
       `/api/v1/admin/inference-providers/${encodeURIComponent(provider)}/test`,
+      {},
+    ),
+
+  /* ─── Autopilot mission detail (Plan G) ─── */
+  getAutopilotMission: (id: string) =>
+    analyticsClient.get<AutopilotMissionDetail>(
+      `/api/v1/autopilot/missions/${encodeURIComponent(id)}`,
+    ),
+
+  explainAutopilotMission: (id: string) =>
+    analyticsClient.post<AutopilotMissionExplain>(
+      `/api/v1/autopilot/missions/${encodeURIComponent(id)}/explain`,
       {},
     ),
 };

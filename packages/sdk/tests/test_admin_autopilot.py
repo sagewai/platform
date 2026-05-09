@@ -30,6 +30,10 @@ from sagewai.admin.autopilot_state import (
     set_autopilot_identity,
 )
 from sagewai.admin.state_file import AdminStateFile
+from sagewai.autopilot._types import AgentKind
+from sagewai.autopilot.agent_graph import Agent, AgentGraph
+from sagewai.autopilot.blueprint import Blueprint
+from sagewai.autopilot.models import EvalRef, Metric, ProviderRequirement, TrainingHook
 from sagewai.autopilot.sagewai_llm.identity import InstanceIdentity
 
 # ---------------------------------------------------------------------------
@@ -314,15 +318,16 @@ class TestAutopilotGoal:
         resp = tc.post("/api/v1/autopilot/goal", json={"goal": "summarise the quarterly report"})
         assert resp.status_code == 200
         data = resp.json()
-        # GoalRouter with no real service returns SynthesisNeeded
-        assert data["kind"] == "synthesis_needed"
+        # GoalRouter with no real service returns SynthesisNeeded.
+        # Field name is `routing_result` (renamed from `kind` in PR #263).
+        assert data["routing_result"] == "synthesis_needed"
         assert "goal" in data
 
-    def test_goal_response_has_kind_field(self, auth_client):
+    def test_goal_response_has_routing_result_field(self, auth_client):
         tc, _ = auth_client
         resp = tc.post("/api/v1/autopilot/goal", json={"goal": "build a dashboard"})
         assert resp.status_code == 200
-        assert "kind" in resp.json()
+        assert "routing_result" in resp.json()
 
 
 # ---------------------------------------------------------------------------
@@ -444,3 +449,223 @@ class TestAutopilotMissions:
         resp = tc.get("/api/v1/autopilot/missions")
         assert resp.status_code == 200
         assert resp.json()["count"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Helpers for blueprint-enriched tests
+# ---------------------------------------------------------------------------
+
+
+def _sample_blueprint() -> Blueprint:
+    """Build a minimal but structurally valid Blueprint for test seeding."""
+    graph = AgentGraph(
+        nodes=(
+            Agent(
+                id="planner",
+                kind=AgentKind.LLM,
+                role="planner",
+                prompt_ref="prompts/planner.md",
+                tools=("web_search",),
+            ),
+            Agent(
+                id="writer",
+                kind=AgentKind.LLM,
+                role="writer",
+                prompt_ref="prompts/writer.md",
+            ),
+        ),
+        edges=(("planner", "writer"),),
+        entry="planner",
+    )
+    return Blueprint(
+        id="sample-bp",
+        version="1.0",
+        title="Sample",
+        description="A sample blueprint for tests.",
+        agent_graph=graph,
+        tools_required=("web_search",),
+        providers_required=(
+            ProviderRequirement(role="primary", capability="reasoning", tier="medium"),
+        ),
+        training_data_hooks=(
+            TrainingHook(event="writer.completed", dataset="train/sample"),
+        ),
+        success_criteria=EvalRef(
+            dataset_id="ds-1",
+            metrics=(Metric(name="accuracy", value=0.9),),
+        ),
+    )
+
+
+def _seed_mission(
+    sf,
+    *,
+    mission_id: str = "test-mission-001",
+    blueprint: Blueprint | None = None,
+    extra: dict | None = None,
+) -> dict:
+    """Persist a mission dict into the state file and return it."""
+    mission: dict = {
+        "mission_id": mission_id,
+        "project_id": "proj-a",
+        "status": "pending",
+        "created_at": "2026-05-09T10:00:00+00:00",
+        "goal_preview": "Summarise the weekly sales data.",
+        "slots": {"topic": "sales", "__blueprint_json__": "should-be-filtered"},
+        "blueprint_json": blueprint.model_dump_json() if blueprint is not None else "",
+        "score": 0.93,
+    }
+    if extra:
+        mission.update(extra)
+    return save_mission(sf, mission)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/autopilot/missions/{mission_id}
+# ---------------------------------------------------------------------------
+
+
+class TestGetMissionDetail:
+    def test_get_mission_detail_returns_full_blueprint_metadata(self, auth_client):
+        """Happy-path: detail endpoint exposes all blueprint fields."""
+        tc, sf = auth_client
+        bp = _sample_blueprint()
+        _seed_mission(sf, blueprint=bp)
+
+        resp = tc.get("/api/v1/autopilot/missions/test-mission-001")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        # Core identity fields.
+        assert data["id"] == "test-mission-001"
+        assert data["status"] == "pending"
+        assert data["goal_text"] == "Summarise the weekly sales data."
+        assert data["project_id"] == "proj-a"
+        assert data["created_at"] == "2026-05-09T10:00:00+00:00"
+        # updated_at falls back to created_at when absent.
+        assert data["updated_at"] == "2026-05-09T10:00:00+00:00"
+
+        # Blueprint metadata.
+        assert data["blueprint_id"] == "sample-bp"
+        assert data["description"] == "A sample blueprint for tests."
+
+        # Agent graph — 2 nodes, 1 edge.
+        graph = data["agent_graph_json"]
+        assert len(graph["nodes"]) == 2
+        node_ids = {n["id"] for n in graph["nodes"]}
+        assert "planner" in node_ids
+        assert "writer" in node_ids
+        planner = next(n for n in graph["nodes"] if n["id"] == "planner")
+        assert planner["kind"] == "llm"
+        assert planner["role"] == "planner"
+        assert "web_search" in planner["tools"]
+
+        assert len(graph["edges"]) == 1
+        assert graph["edges"][0] == {"from": "planner", "to": "writer"}
+
+        # Tools required.
+        assert data["tools_required"] == [{"name": "web_search"}]
+
+        # Providers required.
+        assert len(data["providers_required"]) == 1
+        prov = data["providers_required"][0]
+        assert prov["role"] == "primary"
+        assert prov["capability"] == "reasoning"
+        assert prov["tier"] == "medium"
+        assert prov["name"] == "primary"
+
+        # Success criteria.
+        assert len(data["success_criteria"]) == 1
+        crit = data["success_criteria"][0]
+        assert crit["metric"] == "accuracy"
+        assert crit["op"] == ">="
+        assert crit["target"] == pytest.approx(0.9)
+
+        # Training hooks.
+        assert len(data["training_data_hooks"]) == 1
+        hook = data["training_data_hooks"][0]
+        assert hook["event"] == "writer.completed"
+        assert hook["dataset"] == "train/sample"
+        assert hook["format"] == "alpaca"
+
+        # Slots — internal __ keys must be filtered out.
+        assert "topic" in data["slots"]
+        assert data["slots"]["topic"] == "sales"
+        assert "__blueprint_json__" not in data["slots"]
+
+        # estimated_cost is None for v1.0.
+        assert data["estimated_cost"] is None
+
+    def test_get_mission_detail_404_for_unknown_id(self, auth_client):
+        """Non-existent mission IDs return 404."""
+        tc, _ = auth_client
+        resp = tc.get("/api/v1/autopilot/missions/does-not-exist")
+        assert resp.status_code == 404
+
+    def test_get_mission_detail_unauthenticated_returns_401(self, client):
+        """Unauthenticated requests are rejected with 401."""
+        resp = client.get("/api/v1/autopilot/missions/any-id")
+        assert resp.status_code == 401
+
+    def test_get_mission_detail_empty_blueprint_returns_safe_defaults(self, auth_client):
+        """A mission with no blueprint JSON returns empty defaults, not an error."""
+        tc, sf = auth_client
+        _seed_mission(sf, blueprint=None)
+
+        resp = tc.get("/api/v1/autopilot/missions/test-mission-001")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["blueprint_id"] is None
+        assert data["description"] == ""
+        assert data["agent_graph_json"] == {"nodes": [], "edges": []}
+        assert data["tools_required"] == []
+        assert data["providers_required"] == []
+        assert data["success_criteria"] == []
+        assert data["training_data_hooks"] == []
+        assert data["estimated_cost"] is None
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/autopilot/missions — blueprint metadata enrichment
+# ---------------------------------------------------------------------------
+
+
+class TestListMissionsBlueprintMetadata:
+    def test_list_missions_includes_blueprint_metadata_summary(self, auth_client):
+        """Each item in the list response carries blueprint metadata fields."""
+        tc, sf = auth_client
+        bp = _sample_blueprint()
+        _seed_mission(sf, mission_id="m-enriched", blueprint=bp)
+
+        resp = tc.get("/api/v1/autopilot/missions")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["count"] == 1
+
+        item = data["missions"][0]
+        # Must have all enriched fields, not just the raw mission keys.
+        assert item["id"] == "m-enriched"
+        assert "tools_required" in item
+        assert item["tools_required"] == [{"name": "web_search"}]
+        assert "agent_graph_json" in item
+        assert len(item["agent_graph_json"]["nodes"]) == 2
+        assert "providers_required" in item
+        assert len(item["providers_required"]) == 1
+        assert "success_criteria" in item
+        assert len(item["success_criteria"]) == 1
+        assert "training_data_hooks" in item
+        assert len(item["training_data_hooks"]) == 1
+
+    def test_list_missions_outer_shape_preserved(self, auth_client):
+        """Enriching items must not break the outer {missions, count} shape."""
+        tc, sf = auth_client
+        _seed_mission(sf, mission_id="m1")
+        _seed_mission(sf, mission_id="m2", extra={"mission_id": "m2", "project_id": "proj-a"})
+
+        resp = tc.get("/api/v1/autopilot/missions")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "missions" in data
+        assert "count" in data
+        assert data["count"] == 2
+        assert len(data["missions"]) == 2

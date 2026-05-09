@@ -43,12 +43,25 @@ Routes
 
 ``GET  /api/v1/autopilot/missions``
     Returns the list of stored mission records, project-scoped via the
-    ``X-Project-ID`` header.
+    ``X-Project-ID`` header.  Each item is enriched with full blueprint
+    metadata (same shape as the detail endpoint) so the list can render
+    a preview without a second fetch.
+
+``GET  /api/v1/autopilot/missions/{mission_id}``
+    Returns the full mission record enriched with blueprint metadata:
+    agent graph, tools, providers, slots, success criteria, training
+    hooks, description, and estimated_cost.
 
 ``GET  /api/v1/autopilot/missions/events``
     Server-sent events stream.  Emits ``mission.status_changed`` events
     whenever a mission status changes.  Clients receive all events for
     the current org regardless of project scope.
+
+``POST /api/v1/autopilot/missions/{mission_id}/explain``
+    Returns a templated markdown brief built from the mission's blueprint
+    metadata.  v1.0 is pure templating — no LLM calls.  The brief has
+    four fixed sections: "What this will do", "Resources allocated",
+    "How to run", "How to debug".
 
 ``POST /api/v1/autopilot/missions/{mission_id}/cancel``
     Body: ``{"reason": "<string>"}``
@@ -72,6 +85,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from sagewai.admin.autopilot_explain import render_brief
 from sagewai.admin.autopilot_lifecycle import (
     IllegalTransition,
     MissionStatus,
@@ -89,6 +103,7 @@ from sagewai.admin.autopilot_state import (
 )
 from sagewai.admin.serve import _extract_token, _project_id
 from sagewai.admin.state_file import AdminStateFile
+from sagewai.autopilot.blueprint import Blueprint
 from sagewai.autopilot.routing import ConfidenceConfig, GoalRouter, RoutingResult
 from sagewai.autopilot.sagewai_llm import BlueprintCache, SagewaiLLMClient
 from sagewai.autopilot.sagewai_llm.identity import ensure_identity
@@ -146,6 +161,130 @@ async def _transition_and_publish(
 
 class CancelBody(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
+
+
+class AutopilotMissionDetail(BaseModel):
+    """Mission record enriched with blueprint metadata for the detail page."""
+
+    id: str
+    mission_id: str  # Mirrors ``id`` — kept for backward-compat with existing API consumers.
+    status: str
+    goal_text: str
+    created_at: str
+    updated_at: str
+    project_id: str | None = None
+    blueprint_id: str | None = None
+    description: str = ""
+    agent_graph_json: dict[str, Any] = Field(default_factory=lambda: {"nodes": [], "edges": []})
+    tools_required: list[dict[str, Any]] = Field(default_factory=list)
+    providers_required: list[dict[str, Any]] = Field(default_factory=list)
+    slots: dict[str, Any] = Field(default_factory=dict)
+    success_criteria: list[dict[str, Any]] = Field(default_factory=list)
+    training_data_hooks: list[dict[str, Any]] = Field(default_factory=list)
+    estimated_cost: dict[str, Any] | None = None
+
+
+def _translate_mission_detail(mission: dict[str, Any]) -> AutopilotMissionDetail:
+    """Translate a raw mission dict into an enriched :class:`AutopilotMissionDetail`.
+
+    Parses ``blueprint_json`` from the mission record into typed
+    :class:`~sagewai.autopilot.blueprint.Blueprint` fields.  Falls back
+    to empty defaults on missing or invalid blueprint JSON.
+    """
+    blueprint_json = mission.get("blueprint_json") or ""
+
+    # Default / empty values used when blueprint is absent or unparseable.
+    blueprint_id: str | None = None
+    description: str = ""
+    agent_graph_json: dict[str, Any] = {"nodes": [], "edges": []}
+    tools_required: list[dict[str, Any]] = []
+    providers_required: list[dict[str, Any]] = []
+    success_criteria: list[dict[str, Any]] = []
+    training_data_hooks: list[dict[str, Any]] = []
+
+    if blueprint_json:
+        try:
+            bp = Blueprint.model_validate_json(blueprint_json)
+            blueprint_id = bp.id
+            description = bp.description
+
+            # Agent graph — nodes and edges.
+            if bp.agent_graph is not None:
+                nodes = [
+                    {
+                        "id": agent.id,
+                        "role": agent.role or agent.id,
+                        "kind": agent.kind.value if hasattr(agent.kind, "value") else str(agent.kind),
+                        "tools": list(agent.tools),
+                        "prompt_ref": agent.prompt_ref,
+                    }
+                    for agent in bp.agent_graph.nodes
+                ]
+                edges = [
+                    {"from": src, "to": dst}
+                    for src, dst in bp.agent_graph.edges
+                ]
+                agent_graph_json = {"nodes": nodes, "edges": edges}
+
+            # Tools required.
+            tools_required = [{"name": s} for s in bp.tools_required]
+
+            # Providers required.
+            providers_required = [
+                {
+                    "role": p.role,
+                    "capability": p.capability,
+                    "tier": p.tier,
+                    "name": p.role,
+                }
+                for p in bp.providers_required
+            ]
+
+            # Success criteria — flatten EvalRef metrics.
+            success_criteria = [
+                {
+                    "metric": m.name,
+                    "op": m.op.value if hasattr(m.op, "value") else str(m.op),
+                    "target": m.value,
+                }
+                for m in bp.success_criteria.metrics
+            ]
+
+            # Training hooks.
+            training_data_hooks = [
+                {"event": h.event, "dataset": h.dataset, "format": h.format}
+                for h in bp.training_data_hooks
+            ]
+        except Exception:
+            # Validation error or malformed JSON — return empty defaults.
+            logger.debug("Failed to parse blueprint_json for mission %s", mission.get("mission_id"))
+
+    # Filter out internal keys injected by the controller (e.g. __blueprint_json__).
+    raw_slots: dict[str, Any] = mission.get("slots") or {}
+    slots = {k: v for k, v in raw_slots.items() if not k.startswith("__")}
+
+    created_at = mission.get("created_at", "")
+    updated_at = mission.get("updated_at") or created_at
+
+    mid = mission.get("mission_id", "")
+    return AutopilotMissionDetail(
+        id=mid,
+        mission_id=mid,  # backward-compat alias
+        status=mission.get("status", ""),
+        goal_text=mission.get("goal_preview", ""),
+        created_at=created_at,
+        updated_at=updated_at,
+        project_id=mission.get("project_id"),
+        blueprint_id=blueprint_id,
+        description=description,
+        agent_graph_json=agent_graph_json,
+        tools_required=tools_required,
+        providers_required=providers_required,
+        slots=slots,
+        success_criteria=success_criteria,
+        training_data_hooks=training_data_hooks,
+        estimated_cost=None,  # Plan H surfaces real cost.
+    )
 
 
 def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
@@ -327,14 +466,19 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
 
     @router.get("/autopilot/missions")
     async def autopilot_missions(request: Request) -> JSONResponse:
-        """List stored autopilot missions, optionally scoped to a project."""
+        """List stored autopilot missions, optionally scoped to a project.
+
+        Each item is enriched with full blueprint metadata so the list
+        view can render a preview without a separate detail fetch.
+        """
         err = _require_auth(request, sf)
         if err is not None:
             return err
 
         pid = _project_id(request)
         missions = list_missions(sf, project_id=pid)
-        return JSONResponse({"missions": missions, "count": len(missions)})
+        enriched = [_translate_mission_detail(m).model_dump() for m in missions]
+        return JSONResponse({"missions": enriched, "count": len(enriched)})
 
     # ── GET /autopilot/missions/events ────────────────────────────────
 
@@ -359,6 +503,36 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
                 yield {"event": "mission.status_changed", "data": evt.model_dump_json()}
 
         return EventSourceResponse(_gen())
+
+    # ── GET /autopilot/missions/{mission_id} ──────────────────────────
+
+    @router.get("/autopilot/missions/{mission_id}")
+    async def autopilot_get_mission(mission_id: str, request: Request) -> JSONResponse:
+        """Return a single mission enriched with full blueprint metadata."""
+        err = _require_auth(request, sf)
+        if err is not None:
+            return err
+
+        mission = get_mission(sf, mission_id)
+        if mission is None:
+            raise HTTPException(status_code=404, detail=f"Mission '{mission_id}' not found")
+
+        detail = _translate_mission_detail(mission)
+        return JSONResponse(detail.model_dump())
+
+    # ── POST /autopilot/missions/{mission_id}/explain ─────────────────
+
+    @router.post("/autopilot/missions/{mission_id}/explain")
+    async def autopilot_explain_mission(mission_id: str, request: Request) -> JSONResponse:
+        """Return a templated markdown brief for the mission detail page."""
+        err = _require_auth(request, sf)
+        if err is not None:
+            return err
+        mission = get_mission(sf, mission_id)
+        if mission is None:
+            raise HTTPException(status_code=404, detail=f"Mission '{mission_id}' not found")
+        detail = _translate_mission_detail(mission).model_dump()
+        return JSONResponse(render_brief(detail))
 
     # ── POST /autopilot/missions/{mission_id}/cancel ──────────────────
 

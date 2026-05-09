@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import type { AutopilotMission } from '@/utils/types';
 import { AutopilotStatusBadge } from '@/components/autopilot-status-badge';
@@ -45,15 +46,27 @@ function MissionRow({
 }) {
   const [expanded, setExpanded] = useState(false);
   const status = liveStatus ?? mission.status;
+  const router = useRouter();
 
   return (
     <>
       <tr
         className="border-b border-border hover:bg-bg-subtle transition-colors cursor-pointer"
-        onClick={() => setExpanded((v) => !v)}
+        data-testid={`mission-row-${mission.id}`}
+        onClick={() => router.push(`/autopilot/missions/${encodeURIComponent(mission.id)}`)}
       >
         <td className="py-3 px-4">
-          <div className="flex items-center gap-2">
+          <button
+            type="button"
+            data-testid={`mission-row-chevron-${mission.id}`}
+            aria-label={expanded ? 'Collapse row details' : 'Expand row details'}
+            aria-expanded={expanded}
+            onClick={(e) => {
+              e.stopPropagation();
+              setExpanded((v) => !v);
+            }}
+            className="flex items-center gap-2 cursor-pointer rounded hover:bg-bg-subtle/60 p-1 -m-1"
+          >
             {expanded ? (
               <ChevronDown size={13} className="text-text-muted shrink-0" />
             ) : (
@@ -62,7 +75,7 @@ function MissionRow({
             <span className="font-[family-name:var(--font-mono)] text-xs text-text-muted">
               {mission.id.slice(0, 8)}
             </span>
-          </div>
+          </button>
         </td>
         <td className="py-3 px-4">
           <span className="text-sm font-medium text-text-primary">{mission.blueprint_title}</span>

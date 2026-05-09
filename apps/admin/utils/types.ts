@@ -1528,3 +1528,76 @@ export interface InferenceProviderTestResult {
   provider: InferenceProviderKey;
   tested_at: string;
 }
+
+// ── Autopilot mission detail (Plan G) ────────────────────────────────
+
+export interface AutopilotAgentGraphNode {
+  id: string;
+  role: string;
+  kind: 'llm' | 'deterministic';
+  tools: string[];
+  prompt_ref: string | null;
+}
+
+export interface AutopilotAgentGraphEdge {
+  from: string;
+  to: string;
+  label?: string;
+}
+
+export interface AutopilotAgentGraphJSON {
+  nodes: AutopilotAgentGraphNode[];
+  edges: AutopilotAgentGraphEdge[];
+}
+
+export interface AutopilotToolRequirement {
+  name: string;
+  description?: string;
+}
+
+export interface AutopilotProviderRequirement {
+  name: string;
+  role?: string;
+  capability?: string;
+  tier?: string;
+}
+
+export interface AutopilotSuccessCriterion {
+  metric: string;
+  op?: string;
+  target: number | string;
+}
+
+export interface AutopilotTrainingHook {
+  event: string;
+  dataset: string;
+  format?: string;
+}
+
+export interface AutopilotEstimatedCost {
+  currency: string;
+  amount: number;
+}
+
+export interface AutopilotMissionDetail {
+  id: string;
+  status: AutopilotMissionStatus;
+  goal_text: string;
+  created_at: string;
+  updated_at: string;
+  project_id: string | null;
+  blueprint_id: string | null;
+  description: string;
+  agent_graph_json: AutopilotAgentGraphJSON;
+  tools_required: AutopilotToolRequirement[];
+  providers_required: AutopilotProviderRequirement[];
+  slots: Record<string, unknown>;
+  success_criteria: AutopilotSuccessCriterion[];
+  training_data_hooks: AutopilotTrainingHook[];
+  estimated_cost: AutopilotEstimatedCost | null;
+}
+
+export interface AutopilotMissionExplain {
+  markdown: string;
+  sections: Record<string, string>;
+}
