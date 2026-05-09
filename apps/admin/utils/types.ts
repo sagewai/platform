@@ -1177,12 +1177,14 @@ export interface BlueprintExplainResponse {
 
 export type AutopilotTier = 'anonymous' | 'free' | 'custom';
 export type AutopilotMissionStatus =
+  | 'pending'
   | 'draft'
   | 'approved'
   | 'scheduled'
   | 'running'
   | 'completed'
-  | 'failed';
+  | 'failed'
+  | 'cancelled';
 export type AutopilotMode = 'scheduled' | 'event_driven' | 'batch';
 export type AutopilotRoutingResult = 'auto_routed' | 'picker_needed' | 'synthesis_needed';
 

@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { Zap, ZapOff, AlertTriangle, RefreshCw } from 'lucide-react';
 import { adminApi } from '@/utils/api';
@@ -45,9 +46,8 @@ function QuotaBar({ used, limit }: { used: number; limit: number | null }) {
 
 export default function AutopilotPage() {
   const [status, setStatus] = useState<AutopilotStatus | null>(null);
-  const [missions, setMissions] = useState<AutopilotMission[]>([]);
+  const [recentMissions, setRecentMissions] = useState<AutopilotMission[]>([]);
   const [loadingStatus, setLoadingStatus] = useState(true);
-  const [loadingMissions, setLoadingMissions] = useState(false);
   const [apiError, setApiError] = useState(false);
   const [enabling, setEnabling] = useState(false);
   const [disabling, setDisabling] = useState(false);
@@ -67,15 +67,12 @@ export default function AutopilotPage() {
     }
   }, []);
 
-  const fetchMissions = useCallback(async () => {
-    setLoadingMissions(true);
+  const fetchRecentMissions = useCallback(async () => {
     try {
-      const res = await adminApi.listAutopilotMissions(50);
-      setMissions(res.missions);
+      const res = await adminApi.listAutopilotMissions(3);
+      setRecentMissions(res.missions.slice(0, 3));
     } catch {
-      // Non-fatal — missions list may be empty or unavailable
-    } finally {
-      setLoadingMissions(false);
+      // non-fatal
     }
   }, []);
 
@@ -84,8 +81,8 @@ export default function AutopilotPage() {
   }, [fetchStatus]);
 
   useEffect(() => {
-    if (status?.enabled) fetchMissions();
-  }, [status?.enabled, fetchMissions]);
+    if (status?.enabled) fetchRecentMissions();
+  }, [status?.enabled, fetchRecentMissions]);
 
   async function handleEnable() {
     setEnabling(true);
@@ -93,7 +90,7 @@ export default function AutopilotPage() {
     try {
       const s = await adminApi.enableAutopilot(selectedTier);
       setStatus(s);
-      fetchMissions();
+      fetchRecentMissions();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Failed to enable autopilot.');
     } finally {
@@ -118,8 +115,8 @@ export default function AutopilotPage() {
   /* ── Loading ── */
   if (loadingStatus) {
     return (
-      <div className="max-w-4xl mx-auto">
-        <h1 className="mt-0 mb-2 text-2xl font-bold font-[family-name:var(--font-heading)]">Autopilot</h1>
+      <div>
+        <h1 className="mt-0 mb-2 text-2xl font-bold font-[family-name:var(--font-heading)]">Goals</h1>
         <div className="animate-pulse space-y-4 mt-6">
           <div className="h-32 bg-bg-subtle rounded-xl" />
           <div className="h-48 bg-bg-subtle rounded-xl" />
@@ -131,8 +128,8 @@ export default function AutopilotPage() {
   /* ── API error ── */
   if (apiError) {
     return (
-      <div className="max-w-4xl mx-auto">
-        <h1 className="mt-0 mb-2 text-2xl font-bold font-[family-name:var(--font-heading)]">Autopilot</h1>
+      <div>
+        <h1 className="mt-0 mb-2 text-2xl font-bold font-[family-name:var(--font-heading)]">Goals</h1>
         <div className="flex items-center gap-3 bg-error/5 border border-error/20 rounded-lg px-4 py-3 mt-6">
           <AlertTriangle className="w-4 h-4 text-error shrink-0" />
           <div className="flex-1">
@@ -155,11 +152,11 @@ export default function AutopilotPage() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
+    <div className="space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="mt-0 mb-1 text-2xl font-bold font-[family-name:var(--font-heading)]">Autopilot</h1>
+          <h1 className="mt-0 mb-1 text-2xl font-bold font-[family-name:var(--font-heading)]">Goals</h1>
           <p className="mt-0 text-sm text-text-secondary">
             Describe goals in plain English — Autopilot routes them to the right blueprint and runs them for you.
           </p>
@@ -263,42 +260,32 @@ export default function AutopilotPage() {
         </div>
       )}
 
-      {/* Goal input + missions — only when enabled */}
+      {/* Goal input — only when enabled */}
       {status?.enabled && (
-        <>
-          <div className="bg-bg-surface border border-border rounded-xl px-5 py-4 space-y-3">
-            <h2 className="text-base font-semibold text-text-primary m-0 font-[family-name:var(--font-heading)]">
-              New goal
-            </h2>
-            <AutopilotGoalInput onMissionApproved={fetchMissions} />
-          </div>
+        <div className="bg-bg-surface border border-border rounded-xl px-5 py-4 space-y-3">
+          <h2 className="text-base font-semibold text-text-primary m-0 font-[family-name:var(--font-heading)]">
+            New goal
+          </h2>
+          <AutopilotGoalInput onMissionApproved={fetchRecentMissions} />
+        </div>
+      )}
 
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-base font-semibold text-text-primary m-0 font-[family-name:var(--font-heading)]">
-                Missions
-              </h2>
-              <button
-                type="button"
-                onClick={fetchMissions}
-                disabled={loadingMissions}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border border-border bg-transparent cursor-pointer hover:bg-bg-subtle text-text-secondary transition-colors disabled:opacity-50"
-              >
-                <RefreshCw size={11} className={loadingMissions ? 'animate-spin' : ''} />
-                Refresh
-              </button>
-            </div>
-            {loadingMissions ? (
-              <div className="animate-pulse space-y-2">
-                {[1, 2, 3].map((i) => (
-                  <div key={i} className="h-12 bg-bg-subtle rounded-lg" />
-                ))}
-              </div>
-            ) : (
-              <AutopilotMissionList missions={missions} />
-            )}
+      {/* Recent missions preview */}
+      {status?.enabled && recentMissions.length > 0 && (
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-base font-semibold text-text-primary m-0 font-[family-name:var(--font-heading)]">
+              Recent missions
+            </h2>
+            <Link
+              href="/autopilot/missions"
+              className="text-xs text-primary hover:underline underline-offset-2"
+            >
+              View all →
+            </Link>
           </div>
-        </>
+          <AutopilotMissionList missions={recentMissions} />
+        </div>
       )}
     </div>
   );

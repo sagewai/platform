@@ -156,6 +156,15 @@ def list_missions(
     return list(missions)
 
 
+def get_mission(sf: AdminStateFile, mission_id: str) -> dict[str, Any] | None:
+    """Return the mission record for *mission_id*, or ``None`` if not found."""
+    data = sf._read()
+    for m in data.get("autopilot_missions", []):
+        if m.get("mission_id") == mission_id:
+            return dict(m)
+    return None
+
+
 def save_mission(sf: AdminStateFile, mission: dict[str, Any]) -> dict[str, Any]:
     """Append *mission* to the stored missions list and persist."""
 

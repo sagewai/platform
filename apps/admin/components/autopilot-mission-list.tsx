@@ -2,16 +2,8 @@
 
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import type { AutopilotMission, AutopilotMissionStatus } from '@/utils/types';
-
-const STATUS_STYLES: Record<AutopilotMissionStatus, string> = {
-  draft: 'bg-bg-subtle text-text-muted',
-  approved: 'bg-primary/10 text-primary',
-  scheduled: 'bg-secondary/10 text-secondary',
-  running: 'bg-info/10 text-info',
-  completed: 'bg-success/10 text-success',
-  failed: 'bg-error/10 text-error',
-};
+import type { AutopilotMission } from '@/utils/types';
+import { AutopilotStatusBadge } from '@/components/autopilot-status-badge';
 
 const MODE_LABELS: Record<string, string> = {
   scheduled: 'Scheduled',
@@ -42,8 +34,17 @@ function formatDate(iso: string | null): string {
   });
 }
 
-function MissionRow({ mission }: { mission: AutopilotMission }) {
+function MissionRow({
+  mission,
+  liveStatus,
+  onCancel,
+}: {
+  mission: AutopilotMission;
+  liveStatus?: string;
+  onCancel?: (id: string) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
+  const status = liveStatus ?? mission.status;
 
   return (
     <>
@@ -68,11 +69,7 @@ function MissionRow({ mission }: { mission: AutopilotMission }) {
           <span className="ml-2 text-[10px] text-text-muted">{mission.blueprint_category}</span>
         </td>
         <td className="py-3 px-4">
-          <span
-            className={`inline-block text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full ${STATUS_STYLES[mission.status]}`}
-          >
-            {mission.status}
-          </span>
+          <AutopilotStatusBadge status={status} />
         </td>
         <td className="py-3 px-4 hidden sm:table-cell">
           <span className="text-[11px] bg-bg-subtle px-2 py-0.5 rounded text-text-secondary">
@@ -88,27 +85,30 @@ function MissionRow({ mission }: { mission: AutopilotMission }) {
         <td className="py-3 px-4 hidden lg:table-cell text-sm text-text-secondary">
           {mission.project_id ?? <span className="text-text-muted italic">global</span>}
         </td>
+        {onCancel && (
+          <td className="py-3 px-4" onClick={(e) => e.stopPropagation()}>
+            {status === 'running' && (
+              <button
+                type="button"
+                onClick={() => onCancel(mission.id)}
+                className="text-xs px-2 py-1 rounded border border-error/40 text-error hover:bg-error/10 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+            )}
+          </td>
+        )}
       </tr>
       {expanded && (
         <tr className="border-b border-border bg-bg-subtle/50">
-          <td colSpan={7} className="px-4 py-3">
+          <td colSpan={onCancel ? 8 : 7} className="px-4 py-3">
             {mission.steps.length === 0 ? (
               <p className="text-xs text-text-muted italic m-0">No step results yet.</p>
             ) : (
               <ul className="m-0 p-0 list-none space-y-2">
                 {mission.steps.map((step, i) => (
                   <li key={i} className="flex items-start gap-3">
-                    <span
-                      className={`shrink-0 mt-0.5 text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full ${
-                        step.status === 'completed'
-                          ? 'bg-success/10 text-success'
-                          : step.status === 'failed'
-                          ? 'bg-error/10 text-error'
-                          : 'bg-bg-subtle text-text-muted'
-                      }`}
-                    >
-                      {step.status}
-                    </span>
+                    <AutopilotStatusBadge status={step.status} />
                     <div>
                       <span className="text-xs font-medium text-text-primary">{step.step}</span>
                       {step.output && (
@@ -130,9 +130,16 @@ function MissionRow({ mission }: { mission: AutopilotMission }) {
 
 interface AutopilotMissionListProps {
   missions: AutopilotMission[];
+  /** Live status overrides from SSE — maps mission_id → current status */
+  liveStatuses?: Record<string, string>;
+  onCancel?: (id: string) => void;
 }
 
-export function AutopilotMissionList({ missions }: AutopilotMissionListProps) {
+export function AutopilotMissionList({
+  missions,
+  liveStatuses,
+  onCancel,
+}: AutopilotMissionListProps) {
   if (missions.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -170,11 +177,17 @@ export function AutopilotMissionList({ missions }: AutopilotMissionListProps) {
             <th className="text-left py-3 px-4 text-xs font-semibold text-text-muted uppercase tracking-wide hidden lg:table-cell">
               Project
             </th>
+            {onCancel && <th className="py-3 px-4 w-20" />}
           </tr>
         </thead>
         <tbody>
           {missions.map((mission) => (
-            <MissionRow key={mission.id} mission={mission} />
+            <MissionRow
+              key={mission.id}
+              mission={mission}
+              liveStatus={liveStatuses?.[mission.id]}
+              onCancel={onCancel}
+            />
           ))}
         </tbody>
       </table>

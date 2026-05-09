@@ -45,6 +45,15 @@ Routes
     Returns the list of stored mission records, project-scoped via the
     ``X-Project-ID`` header.
 
+``GET  /api/v1/autopilot/missions/events``
+    Server-sent events stream.  Emits ``mission.status_changed`` events
+    whenever a mission status changes.  Clients receive all events for
+    the current org regardless of project scope.
+
+``POST /api/v1/autopilot/missions/{mission_id}/cancel``
+    Body: ``{"reason": "<string>"}``
+    Cancels a RUNNING mission with cooperative cancellation.
+
 All routes require a valid ``sagewai_auth`` cookie (or Bearer token in
 the ``Authorization`` header).  Missing / invalid auth returns 401.
 """
@@ -58,13 +67,22 @@ import secrets
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from sse_starlette.sse import EventSourceResponse
 
+from sagewai.admin.autopilot_lifecycle import (
+    IllegalTransition,
+    MissionStatus,
+    transition_mission,
+)
+from sagewai.admin.autopilot_lifecycle_bus import MissionStatusChanged, get_lifecycle_bus
 from sagewai.admin.autopilot_state import (
     AdminStateIdentityStore,
     get_autopilot_config,
     get_autopilot_identity,
+    get_mission,
     list_missions,
     save_mission,
     set_autopilot_config,
@@ -84,6 +102,12 @@ def _now_iso() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
+def _org_id(sf: AdminStateFile) -> str:
+    """Return the org slug used as the bus key (single-tenant admin panel)."""
+    data = sf._read()
+    return data.get("org_slug") or "default"
+
+
 def _require_auth(request: Request, sf: AdminStateFile) -> JSONResponse | None:
     """Return a 401 JSONResponse if the request is not authenticated, else None."""
     token = _extract_token(request)
@@ -93,6 +117,35 @@ def _require_auth(request: Request, sf: AdminStateFile) -> JSONResponse | None:
     if user is None:
         return JSONResponse({"error": "Invalid or expired token"}, status_code=401)
     return None
+
+
+async def _transition_and_publish(
+    sf: AdminStateFile,
+    mission_id: str,
+    new_status: MissionStatus,
+    *,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """Apply a lifecycle transition and publish the event to the bus."""
+    current = get_mission(sf, mission_id)
+    old_status = current["status"] if current else "unknown"
+    result = transition_mission(sf, mission_id, new_status, reason=reason)
+    bus = get_lifecycle_bus()
+    org = _org_id(sf)
+    await bus.publish(
+        org,
+        MissionStatusChanged(
+            mission_id=mission_id,
+            old_status=old_status,
+            new_status=new_status.value,
+            ts=datetime.datetime.now(datetime.timezone.utc),
+        ),
+    )
+    return result
+
+
+class CancelBody(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
 
 
 def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
@@ -282,5 +335,56 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
         pid = _project_id(request)
         missions = list_missions(sf, project_id=pid)
         return JSONResponse({"missions": missions, "count": len(missions)})
+
+    # ── GET /autopilot/missions/events ────────────────────────────────
+
+    @router.get("/autopilot/missions/events")
+    async def autopilot_mission_events(request: Request):
+        """SSE stream of mission status-change events for the current org.
+
+        One ``EventSource`` covers all missions in the org.  Per-mission
+        execution trace events are a separate concern (Plan H).
+        """
+        err = _require_auth(request, sf)
+        if err is not None:
+            return err
+
+        org = _org_id(sf)
+        bus = get_lifecycle_bus()
+
+        async def _gen():
+            async for evt in bus.subscribe(org):
+                if await request.is_disconnected():
+                    break
+                yield {"event": "mission.status_changed", "data": evt.model_dump_json()}
+
+        return EventSourceResponse(_gen())
+
+    # ── POST /autopilot/missions/{mission_id}/cancel ──────────────────
+
+    @router.post("/autopilot/missions/{mission_id}/cancel", status_code=202)
+    async def autopilot_cancel_mission(
+        mission_id: str, body: CancelBody, request: Request
+    ) -> JSONResponse:
+        """Cancel a running mission with a required reason string."""
+        err = _require_auth(request, sf)
+        if err is not None:
+            return err
+
+        record = get_mission(sf, mission_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail=f"Mission '{mission_id}' not found")
+
+        if record.get("status") != MissionStatus.RUNNING.value:
+            raise HTTPException(
+                status_code=409,
+                detail=f"cannot cancel mission in status '{record.get('status')}'",
+            )
+
+        await _transition_and_publish(
+            sf, mission_id, MissionStatus.CANCELLED, reason=body.reason
+        )
+        logger.info("Mission cancelled (id=%s, reason=%s)", mission_id, body.reason)
+        return JSONResponse({"mission_id": mission_id, "status": "cancelled"}, status_code=202)
 
     return router

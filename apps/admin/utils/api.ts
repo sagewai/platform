@@ -1314,6 +1314,12 @@ export const adminApi = {
     return analyticsClient.get<AutopilotMissionsResponse>(`/api/v1/autopilot/missions${qs}`);
   },
 
+  cancelAutopilotMission: (missionId: string, reason: string) =>
+    analyticsClient.post<{ mission_id: string; status: string }>(
+      `/api/v1/autopilot/missions/${encodeURIComponent(missionId)}/cancel`,
+      { reason },
+    ),
+
   explainBlueprint: (blueprint_json: object) =>
     analyticsClient.post<BlueprintExplainResponse>('/v1/blueprints/explain', { blueprint_json }),
 
