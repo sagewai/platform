@@ -94,6 +94,7 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from sagewai.admin.autopilot_explain import render_brief
+from sagewai.autopilot.tool_risk_profile import SandboxTier, get_tier, is_downgrade, tier_for_tools
 from sagewai.admin.autopilot_lifecycle import (
     IllegalTransition,
     MissionStatus,
@@ -175,6 +176,11 @@ async def _transition_and_publish(
 
 class CancelBody(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
+
+
+class SandboxOverrideBody(BaseModel):
+    step_id: str
+    tier: str  # "TRUSTED" | "SANDBOXED" | "UNTRUSTED"
 
 
 class AutopilotMissionDetail(BaseModel):
@@ -796,6 +802,109 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
             "events": list(mission.get("trace") or []),
             "output": mission.get("output"),
             "error": mission.get("error"),
+        })
+
+    # ── GET /autopilot/missions/{mission_id}/sandbox-allocation ──────
+
+    @router.get("/autopilot/missions/{mission_id}/sandbox-allocation")
+    async def autopilot_sandbox_allocation(mission_id: str, request: Request) -> JSONResponse:
+        """Return sandbox tier for each agent step in the mission blueprint."""
+        err = _require_auth(request, sf)
+        if err is not None:
+            return err
+
+        record = get_mission(sf, mission_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail=f"Mission '{mission_id}' not found")
+
+        overrides: dict[str, str] = record.get("sandbox_overrides") or {}
+
+        bp_raw = record.get("blueprint_json") or "{}"
+        try:
+            bp_data = json.loads(bp_raw)
+            nodes = bp_data.get("agent_graph", {}).get("nodes", [])
+        except (json.JSONDecodeError, AttributeError):
+            nodes = []
+
+        result = []
+        for node in nodes:
+            step_id = node.get("id", "")
+            tools: list[str] = node.get("tools") or []
+            base_tier = tier_for_tools(tools)
+            if step_id in overrides:
+                effective_tier = SandboxTier[overrides[step_id]]
+                overridden = True
+            else:
+                effective_tier = base_tier
+                overridden = False
+            result.append({
+                "step_id": step_id,
+                "role": node.get("role"),
+                "tools": tools,
+                "tier": effective_tier.name,
+                "base_tier": base_tier.name,
+                "overridden": overridden,
+            })
+
+        return JSONResponse(result)
+
+    # ── POST /autopilot/missions/{mission_id}/sandbox-override ────────
+
+    @router.post("/autopilot/missions/{mission_id}/sandbox-override")
+    async def autopilot_sandbox_override(
+        mission_id: str, body: SandboxOverrideBody, request: Request
+    ) -> JSONResponse:
+        """Apply a downgrade-only sandbox tier override for one step."""
+        err = _require_auth(request, sf)
+        if err is not None:
+            return err
+
+        record = get_mission(sf, mission_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail=f"Mission '{mission_id}' not found")
+
+        try:
+            proposed = SandboxTier[body.tier]
+        except KeyError:
+            raise HTTPException(status_code=422, detail=f"Unknown tier: {body.tier!r}")
+
+        bp_raw = record.get("blueprint_json") or "{}"
+        try:
+            bp_data = json.loads(bp_raw)
+            nodes = bp_data.get("agent_graph", {}).get("nodes", [])
+        except (json.JSONDecodeError, AttributeError):
+            nodes = []
+
+        node = next((n for n in nodes if n.get("id") == body.step_id), None)
+        if node is None:
+            raise HTTPException(status_code=404, detail=f"Step '{body.step_id}' not found")
+
+        overrides: dict[str, str] = dict(record.get("sandbox_overrides") or {})
+        tools: list[str] = node.get("tools") or []
+        current_tier_name = overrides.get(body.step_id) or tier_for_tools(tools).name
+        current_tier = SandboxTier[current_tier_name]
+
+        if not is_downgrade(proposed, current_tier):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Override rejected: {proposed.name!r} is not a downgrade of "
+                    f"{current_tier.name!r}. Only downgrades (to a less trusted tier) "
+                    "are accepted."
+                ),
+            )
+
+        overrides[body.step_id] = proposed.name
+
+        def _apply(rec: dict[str, Any]) -> None:
+            rec["sandbox_overrides"] = overrides
+
+        update_mission(sf, mission_id, _apply)
+
+        return JSONResponse({
+            "step_id": body.step_id,
+            "tier": proposed.name,
+            "previous_tier": current_tier.name,
         })
 
     # ── GET /autopilot/missions/{mission_id} ──────────────────────────

@@ -7,6 +7,7 @@ import { AutopilotResourcePanels } from './autopilot-resource-panels';
 import { AutopilotDirections } from './autopilot-directions';
 import { AutopilotMissionLiveTrace } from './autopilot-mission-live-trace';
 import { AutopilotMissionOutput } from './autopilot-mission-output';
+import { AutopilotSandboxPanel } from './autopilot-sandbox-panel';
 
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 const ACTIVE_STATUSES = new Set(['running', 'completed', 'failed', 'cancelled']);
@@ -52,6 +53,7 @@ export function MissionDetailView({
           <AutopilotDirections missionId={mission.id} />
         )}
       </div>
+      <AutopilotSandboxPanel missionId={mission.id} />
       {isCompleted && traceOutput != null && (
         <AutopilotMissionOutput output={traceOutput} />
       )}
