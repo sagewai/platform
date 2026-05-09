@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Loader2, Send } from 'lucide-react';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { adminApi } from '@/utils/api';
 import type { AutopilotGoalResponse } from '@/utils/types';
 import { AutopilotPlanPreview } from './autopilot-plan-preview';
@@ -17,6 +18,15 @@ export function AutopilotGoalInput({ onMissionApproved }: AutopilotGoalInputProp
   const [result, setResult] = useState<AutopilotGoalResponse | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
+  const reduced = useReducedMotion();
+  const tx = reduced
+    ? {}
+    : {
+        initial: { opacity: 0, y: 8 },
+        animate: { opacity: 1, y: 0 },
+        exit: { opacity: 0, y: -8 },
+        transition: { duration: 0.18 },
+      };
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -86,17 +96,20 @@ export function AutopilotGoalInput({ onMissionApproved }: AutopilotGoalInputProp
         </div>
       )}
 
-      {result && result.routing_result === 'auto_routed' && result.blueprint && result.mission_id && (
-        <AutopilotPlanPreview
-          blueprint={result.blueprint}
-          missionId={result.mission_id}
-          onApproved={handleApproved}
-          onCancel={handleCancel}
-        />
-      )}
+      <AnimatePresence mode="popLayout" initial={false}>
+        {result && result.routing_result === 'auto_routed' && result.blueprint && result.mission_id && (
+          <motion.div key="auto-routed" data-testid="routing-preview" {...tx}>
+            <AutopilotPlanPreview
+              blueprint={result.blueprint}
+              missionId={result.mission_id}
+              onApproved={handleApproved}
+              onCancel={handleCancel}
+            />
+          </motion.div>
+        )}
 
-      {result && result.routing_result === 'picker_needed' && (
-        <div className="space-y-3">
+        {result && result.routing_result === 'picker_needed' && (
+          <motion.div key="picker" data-testid="routing-picker" {...tx} className="space-y-3">
           <p className="text-sm text-text-secondary m-0">
             Multiple blueprints could match your goal. Select the best fit:
           </p>
@@ -128,29 +141,35 @@ export function AutopilotGoalInput({ onMissionApproved }: AutopilotGoalInputProp
               onCancel={handleCancel}
             />
           )}
-        </div>
-      )}
+          </motion.div>
+        )}
 
-      {result && result.routing_result === 'synthesis_needed' && (
-        <div className="flex items-start gap-4 bg-bg-subtle border border-border rounded-lg px-4 py-4">
-          <div className="flex-1">
-            <p className="text-sm font-medium text-text-primary m-0 mb-1">
-              No matching blueprint found
-            </p>
-            <p className="text-sm text-text-secondary m-0">
-              The service will generate a custom blueprint — this may take a moment.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={handleRetry}
-            disabled={retrying}
-            className="shrink-0 px-3 py-2 text-sm font-medium rounded-lg border border-border bg-bg-surface cursor-pointer hover:bg-bg-subtle transition-colors disabled:opacity-50"
+        {result && result.routing_result === 'synthesis_needed' && (
+          <motion.div
+            key="synthesis-needed"
+            data-testid="routing-synthesis"
+            {...tx}
+            className="flex items-start gap-4 bg-bg-subtle border border-border rounded-lg px-4 py-4"
           >
-            {retrying ? 'Checking…' : 'Retry'}
-          </button>
-        </div>
-      )}
+            <div className="flex-1">
+              <p className="text-sm font-medium text-text-primary m-0 mb-1">
+                No matching blueprint found
+              </p>
+              <p className="text-sm text-text-secondary m-0">
+                The service will generate a custom blueprint — this may take a moment.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleRetry}
+              disabled={retrying}
+              className="shrink-0 px-3 py-2 text-sm font-medium rounded-lg border border-border bg-bg-surface cursor-pointer hover:bg-bg-subtle transition-colors disabled:opacity-50"
+            >
+              {retrying ? 'Checking…' : 'Retry'}
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
