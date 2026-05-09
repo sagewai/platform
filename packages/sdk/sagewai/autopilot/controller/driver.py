@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Callable, Optional
 
 from sagewai.autopilot._types import MissionState
 from sagewai.autopilot.errors import MissionLifecycleError
@@ -48,9 +49,19 @@ class MissionDriver:
     node, and finally transitions to COMPLETED or FAILED before
     returning a :class:`MissionRunResult`.
 
+    v1.1 compositional blueprints carry a ``composition`` list instead of
+    a concrete ``agent_graph``.  Pass ``resolver`` so the driver can
+    materialise the composition before walking the graph.  The resolver
+    signature is ``(composition: list) -> AgentGraph | dict``; returning a
+    plain dict is accepted and automatically wrapped in an AgentGraph.
+
     Args:
         executor_config: Optional :class:`ExecutorConfig` forwarded to
-            the :class:`AgentExecutor`.  Defaults are used if not given.
+            :class:`AgentExecutor`.  Defaults are used if not given.
+        blueprint: Optional pre-loaded blueprint (for preview/test contexts
+            that call :meth:`_materialise_if_needed` directly).
+        resolver: Optional callable that materialises a composition list
+            into an agent graph.  Required for v1.1 blueprints.
     """
 
     def __init__(
@@ -58,10 +69,49 @@ class MissionDriver:
         executor_config: ExecutorConfig | None = None,
         fleet_adapter: object | None = None,
         scheduler: object | None = None,
+        blueprint: Optional[object] = None,
+        resolver: Optional[Callable] = None,
     ) -> None:
         self._executor = AgentExecutor(executor_config)
         self._fleet_adapter = fleet_adapter
         self._scheduler = scheduler
+        self.blueprint = blueprint
+        self.resolver = resolver
+
+    def _materialise_if_needed(self, bp: Optional[object] = None) -> object:
+        """Materialise a compositional blueprint's ``composition`` into ``agent_graph``.
+
+        If *bp* is given, operates on it; otherwise falls back to
+        ``self.blueprint``.  For v1 blueprints (``agent_graph`` already set)
+        this is a no-op.  Updates ``self.blueprint`` in-place (via
+        :meth:`~pydantic.BaseModel.model_copy`) when the stored blueprint is
+        used.
+
+        Returns the (possibly updated) blueprint.
+        """
+        from sagewai.autopilot.agent_graph import AgentGraph
+        from sagewai.autopilot.blueprint import Blueprint
+
+        target: Optional[Blueprint] = bp if bp is not None else self.blueprint  # type: ignore[assignment]
+        if target is None:
+            raise RuntimeError("No blueprint available for materialisation.")
+        if target.agent_graph is not None:
+            return target
+        if not target.composition:
+            raise RuntimeError(
+                "Blueprint has neither agent_graph nor composition (validator should have caught this)."
+            )
+        if self.resolver is None:
+            raise RuntimeError(
+                "Compositional blueprint requires a resolver; pass MissionDriver(resolver=...)."
+            )
+        resolved = self.resolver(target.composition)
+        if isinstance(resolved, dict):
+            resolved = AgentGraph.model_validate(resolved)
+        new_bp = target.model_copy(update={"agent_graph": resolved})
+        if bp is None:
+            self.blueprint = new_bp
+        return new_bp
 
     async def execute(self, mission: Mission) -> MissionRunResult:
         """Execute *mission* and return a :class:`MissionRunResult`.
@@ -89,7 +139,7 @@ class MissionDriver:
             from sagewai.autopilot.blueprint import Blueprint
 
             bp = Blueprint.model_validate_json(mission.slots.get("__blueprint_json__", "{}"))
-            if bp.mode.value == "scheduled" and hasattr(self._scheduler, "schedule"):
+            if bp.mode is not None and bp.mode.value == "scheduled" and hasattr(self._scheduler, "schedule"):
                 self._scheduler.schedule(mission)
                 logger.info(
                     "Mission %s deferred to scheduler (mode=scheduled)",
@@ -159,6 +209,7 @@ class MissionDriver:
         from sagewai.autopilot.blueprint import Blueprint
 
         bp = Blueprint.model_validate_json(mission.slots["__blueprint_json__"])
+        bp = self._materialise_if_needed(bp)  # no-op for v1; resolves composition for v1.1
         graph = bp.agent_graph
 
         # Build a mutable context from mission slots (excluding internals)

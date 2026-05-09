@@ -38,7 +38,14 @@ CondEval = Callable[[str, dict[str, object]], bool]
 
 
 class Agent(BaseModel):
-    """A node in an :class:`AgentGraph`."""
+    """A node in an :class:`AgentGraph`.
+
+    LLM nodes must supply either ``prompt_ref`` (a path to a static
+    prompt template in the blueprint package) or ``model_ref`` (a model
+    identifier resolved at run-time by the compositional resolver).
+    Exactly one is required for ``kind=llm``; deterministic nodes need
+    neither.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -46,6 +53,8 @@ class Agent(BaseModel):
     kind: AgentKind
     role: str | None = None
     prompt_ref: str | None = None
+    model_ref: str | None = None  # used by compositional resolver; alternative to prompt_ref
+    action: str | None = None  # deterministic action identifier (from pattern library)
     tools: tuple[str, ...] = ()
     output_schema_ref: str | None = None
     max_steps: int = Field(default=1, ge=1)
@@ -53,8 +62,8 @@ class Agent(BaseModel):
 
     @model_validator(mode="after")
     def _llm_needs_prompt_ref(self) -> Agent:
-        if self.kind is AgentKind.LLM and self.prompt_ref is None:
-            raise ValueError("LLM agents must set prompt_ref")
+        if self.kind is AgentKind.LLM and self.prompt_ref is None and self.model_ref is None:
+            raise ValueError("LLM agents must set prompt_ref (or model_ref for compositional nodes)")
         return self
 
 

@@ -18,11 +18,16 @@ configuration.
 Blueprints are deliberately *declarative* — they contain no Python
 callables and no runtime state. A blueprint plus concrete slot values
 becomes a :class:`sagewai.autopilot.mission.Mission`.
+
+v1 blueprints carry a concrete ``agent_graph``.  v1.1 blueprints carry
+a ``composition`` list (pattern references) that a resolver materialises
+into an ``agent_graph`` at retrieve/run time.  Exactly one of the two
+must be present.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -40,6 +45,19 @@ from .models import (
 from .slots import SlotSpec
 from .validators import ValidatorRegistry
 
+QualityTier = Literal["gold", "curated", "provisional"]
+
+
+class CompositionStep(BaseModel):
+    """A single pattern reference in a v1.1 compositional blueprint."""
+
+    model_config = ConfigDict(frozen=True)
+
+    pattern: str
+    inputs: dict = Field(default_factory=dict)
+    wraps: Optional[str] = None
+    binds_to: Optional[str] = None
+
 
 class Blueprint(BaseModel):
     """An autopilot blueprint — the declarative contract for one mission shape."""
@@ -49,15 +67,24 @@ class Blueprint(BaseModel):
     id: str = Field(min_length=1)
     version: str = Field(min_length=1)
     title: str = Field(min_length=1)
-    description: str
-    category: str
-    mode: Mode
-    example_goals: tuple[str, ...] = Field(min_length=1)
-    required_slots: dict[str, SlotSpec]
-    optional_slots: dict[str, SlotSpec]
+    description: str = ""
+    quality_tier: QualityTier = "curated"
+
+    # v1: concrete graph; v1.1: None until resolved by MissionDriver.
+    agent_graph: Optional[AgentGraph] = None
+
+    # v1.1: pattern-composition list; None for v1.
+    composition: Optional[list[CompositionStep]] = None
+
+    # v1 fields — optional so v1.1 blueprints can omit them (resolver fills at run-time).
+    category: str = ""
+    mode: Optional[Mode] = None
+    providers_required: tuple[ProviderRequirement, ...] = ()
+
+    example_goals: tuple[str, ...] = Field(default=(), min_length=0)
+    required_slots: dict[str, SlotSpec] = Field(default_factory=dict)
+    optional_slots: dict[str, SlotSpec] = Field(default_factory=dict)
     tools_required: tuple[str, ...] = ()
-    providers_required: tuple[ProviderRequirement, ...]
-    agent_graph: AgentGraph
     success_criteria: EvalRef
     training_data_hooks: tuple[TrainingHook, ...] = ()
     learning_loop_target: LearningLoopConfig | None = None
@@ -68,6 +95,17 @@ class Blueprint(BaseModel):
             "Falls back through agent → project → SDK default if None."
         ),
     )
+
+    @model_validator(mode="after")
+    def _exactly_one_shape(self) -> Blueprint:
+        has_graph = self.agent_graph is not None
+        has_composition = bool(self.composition)
+        if has_graph == has_composition:
+            raise ValueError(
+                "Blueprint must have exactly one of `agent_graph` (v1) or "
+                "`composition` (v1.1), not both and not neither."
+            )
+        return self
 
     @model_validator(mode="after")
     def _required_and_optional_slots_disjoint(self) -> Blueprint:

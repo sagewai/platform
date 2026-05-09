@@ -16,7 +16,7 @@ These are deliberately small: the "interesting" logic lives in
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ._types import Operator
 
@@ -33,33 +33,73 @@ class ProviderRequirement(BaseModel):
 
 
 class Metric(BaseModel):
-    """A single numeric success-criterion check."""
+    """A single numeric success-criterion check.
+
+    Accepts both v1 shape ``{name, op, value}`` and v1.1 shape
+    ``{name, target}`` (normalised to op=">=", value=target).
+    """
 
     model_config = ConfigDict(frozen=True)
 
     name: str
-    op: Operator
+    op: Operator = Operator.GE
     value: float
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalise_v1_1_shape(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        # v1.1 shape: {name, target} → {name, op=">=", value=target}
+        if "value" not in data and "target" in data:
+            data = {**data, "value": data["target"], "op": data.get("op", ">=")}
+        return data
 
 
 class EvalRef(BaseModel):
-    """Points a blueprint at a managed eval dataset + metric gates."""
+    """Points a blueprint at a managed eval dataset + metric gates.
+
+    ``dataset_id`` is optional for v1.1 compositional blueprints that
+    inherit the eval dataset from the resolved pattern.
+    """
 
     model_config = ConfigDict(frozen=True)
 
-    dataset_id: str
+    dataset_id: str = ""
     metrics: tuple[Metric, ...]
 
 
 class TrainingHook(BaseModel):
-    """Captures runs into a training dataset under a quality filter."""
+    """Captures runs into a training dataset under a quality filter.
+
+    Accepts both v1 shape ``{event, dataset, format}`` and v1.1 shape
+    ``{hook, target, filter, destination}`` (normalised to v1 fields).
+    """
 
     model_config = ConfigDict(frozen=True)
 
     event: str  # e.g. "summarizer.completed"
     dataset: str  # may contain {project_id}, {document_type}
-    format: str  # "alpaca", "sharegpt", "classification"
+    format: str = "alpaca"  # "alpaca", "sharegpt", "classification"
     quality_filter: str | None = None  # e.g. "user_rating >= 4"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalise_v1_1_shape(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        out = dict(data)
+        # v1.1 field aliases: hook→event, target/destination→dataset, filter→quality_filter
+        if "event" not in out and "hook" in out:
+            out["event"] = out["hook"]
+        if "dataset" not in out:
+            if "destination" in out:
+                out["dataset"] = out["destination"]
+            elif "target" in out:
+                out["dataset"] = out["target"]
+        if "quality_filter" not in out and "filter" in out:
+            out["quality_filter"] = out["filter"]
+        return out
 
 
 class LearningLoopConfig(BaseModel):
