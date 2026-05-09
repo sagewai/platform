@@ -34,11 +34,13 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from sagewai.fleet.dispatcher import FleetDispatcher, InMemoryTaskStore
+from sagewai.fleet.models import WorkerRecord
 from sagewai.fleet.registry import InMemoryFleetRegistry
 
 from .types import StepResult
@@ -46,6 +48,9 @@ from .types import StepResult
 if TYPE_CHECKING:
     from sagewai.autopilot.agent_graph import Agent
     from sagewai.autopilot.mission import Mission
+
+# Optional type alias for the SSE event emitter injected by the admin run loop.
+EventEmitter = Callable[[str, dict[str, Any]], Awaitable[None] | None]
 
 logger = logging.getLogger(__name__)
 
@@ -85,10 +90,12 @@ class FleetMissionAdapter:
         dispatcher: FleetDispatcher,
         registry: InMemoryFleetRegistry,
         poll_timeout: float = 5.0,
+        event_emitter: EventEmitter | None = None,
     ) -> None:
         self._dispatcher = dispatcher
         self._registry = registry
         self._poll_timeout = poll_timeout
+        self._event_emitter = event_emitter
 
     # ------------------------------------------------------------------
     # Public interface
@@ -116,8 +123,54 @@ class FleetMissionAdapter:
             A :class:`StepResult` with ``status="completed"`` on success
             or ``status="skipped"`` when no worker is available.
         """
-        run_id = str(uuid.uuid4())
+        from sagewai.autopilot.errors import NoWorkerAvailableError
+        from sagewai.autopilot.controller.fleet_match import match_workers
+        from sagewai.fleet.normalizer import ModelNormalizer
 
+        run_id = str(uuid.uuid4())
+        # Use mission.run_id as the Fleet job_id so post-mortem traces key off the same id.
+        job_id = getattr(mission, "run_id", None) or run_id
+
+        # ── Capability pre-check ─────────────────────────────────────
+        # Only fail-fast when the pool has workers and none match.
+        # An empty pool (e.g. single-tenant dev with no workers) falls
+        # through to the claim loop (timeout → "skipped").
+        pool_snapshot: list[WorkerRecord] = await self._snapshot_pool(mission)
+        matched = match_workers(agent, pool_snapshot)
+
+        if pool_snapshot and not matched:
+            # Compute unmet capabilities for the diagnostic event.
+            all_labels: set[str] = set()
+            all_models: set[str] = set()
+            for w in pool_snapshot:
+                all_labels |= set(w.capabilities.labels.keys())
+                all_models |= set(w.capabilities.models_canonical)
+
+            required_tools = set(agent.tools) if agent.tools else set()
+            raw_providers = [
+                p.name if hasattr(p, "name") else p
+                for p in (getattr(agent, "providers_required", None) or [])
+            ]
+            required_models = set(ModelNormalizer.canonical_list(raw_providers))
+
+            unmet_labels = sorted(required_tools - all_labels)
+            unmet_models = sorted(required_models - all_models)
+
+            unmet_caps = {"labels": unmet_labels, "models_canonical": unmet_models}
+            await self._emit("agent.no_worker_available", {
+                "step_id": agent.id,
+                "unmet_capabilities": unmet_caps,
+            })
+
+            raise NoWorkerAvailableError(
+                agent.id,
+                unmet_labels=unmet_labels,
+                unmet_models=unmet_models,
+            )
+
+        eligible_ids = [w.id for w in matched]
+
+        # ── Derive model tier from blueprint ─────────────────────────
         # Derive model tier from blueprint providers_required (first entry).
         model_tier = self._extract_model_tier(mission)
 
@@ -133,6 +186,7 @@ class FleetMissionAdapter:
 
         task: dict = {
             "run_id": run_id,
+            "job_id": job_id,
             "model": model_tier,
             "pool": mission.project_id,
             "labels": {
@@ -152,6 +206,13 @@ class FleetMissionAdapter:
 
         # Enqueue the task into the store so the dispatcher can see it.
         self._enqueue(task)
+
+        await self._emit("agent.dispatched_to_worker", {
+            "step_id": agent.id,
+            "task_id": run_id,
+            "queue_position": 0,
+            "eligible_worker_ids": eligible_ids,
+        })
 
         logger.debug(
             "FleetMissionAdapter: dispatching node %r for mission %s (pool=%s, model=%s)",
@@ -186,6 +247,13 @@ class FleetMissionAdapter:
                 output_preview="No fleet worker available",
             )
 
+        await self._emit("agent.worker_claimed", {
+            "step_id": agent.id,
+            "task_id": run_id,
+            "worker_id": "autopilot-internal",
+            "worker_name": "autopilot-internal",
+        })
+
         # Simulate worker completing the task.
         output_preview = f"[fleet] {agent.id} completed by worker on pool={mission.project_id}"
         await self._dispatcher.report(
@@ -210,6 +278,28 @@ class FleetMissionAdapter:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    async def _emit(self, event_name: str, payload: dict[str, Any]) -> None:
+        """Call the injected event emitter if one was provided."""
+        if self._event_emitter is None:
+            return
+        result = self._event_emitter(event_name, payload)
+        if asyncio.iscoroutine(result):
+            await result
+
+    async def _snapshot_pool(self, mission: Mission) -> list[WorkerRecord]:
+        """Return the current worker pool for capability pre-check.
+
+        Uses the injected :class:`InMemoryFleetRegistry` to list workers.
+        Falls back to an empty list on any error so the caller can surface
+        a ``NoWorkerAvailableError`` with an empty ``matched`` list.
+        """
+        try:
+            org_id = getattr(mission, "project_id", "default") or "default"
+            return await self._registry.list_workers(org_id=org_id)
+        except Exception:
+            logger.debug("FleetMissionAdapter: could not snapshot worker pool")
+            return []
 
     def _extract_model_tier(self, mission: Mission) -> str:
         """Derive a model tier string from the blueprint's first provider requirement.

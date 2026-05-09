@@ -1628,6 +1628,12 @@ export interface MissionRunEvent {
   blueprint_name?: string;
   total_cost_usd?: number;
   total_duration_ms?: number;
+  /** fleet dispatch events */
+  step_id?: string;
+  worker_id?: string;
+  worker_name?: string;
+  queue_position?: number;
+  eligible_worker_ids?: string[];
 }
 
 export interface AutopilotMissionTrace {

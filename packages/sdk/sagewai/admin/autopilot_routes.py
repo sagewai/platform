@@ -127,6 +127,31 @@ logger = logging.getLogger("sagewai.admin.autopilot")
 
 _VALID_TIERS = frozenset({"anonymous", "free", "premium", "skip"})
 
+# Module-level fleet registry singleton (one per process).  Tests can patch
+# _get_fleet_registry_snapshot to inject a fake snapshot.
+_fleet_registry: object | None = None
+
+
+async def _get_fleet_registry_snapshot() -> list:
+    """Return the list of WorkerRecord objects from the global fleet registry.
+
+    In production, this returns the workers registered with the admin's
+    in-process :class:`~sagewai.fleet.registry.InMemoryFleetRegistry`.
+    Tests override this function via ``unittest.mock.patch``.
+    """
+    from sagewai.fleet.registry import InMemoryFleetRegistry
+
+    global _fleet_registry  # noqa: PLW0603
+    if _fleet_registry is None:
+        _fleet_registry = InMemoryFleetRegistry()
+    registry = _fleet_registry
+    # InMemoryFleetRegistry.list_workers requires org_id; use "default" for the
+    # single-tenant admin.
+    try:
+        return await registry.list_workers(org_id="default")
+    except Exception:
+        return []
+
 
 def _now_iso() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -804,6 +829,42 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
             "error": mission.get("error"),
         })
 
+    # ── GET /autopilot/fleet/workers ──────────────────────────────────
+
+    @router.get("/autopilot/fleet/workers")
+    async def autopilot_fleet_workers(request: Request) -> JSONResponse:
+        """Return a snapshot of fleet workers visible to this admin instance.
+
+        Used by the Fleet panel header to display the worker pool summary.
+        In the single-tenant admin (file-backed state), there is no live
+        worker registry — this endpoint exposes the same InMemoryFleetRegistry
+        used by the autopilot runner.  The registry is injected via
+        :func:`_get_fleet_registry_snapshot` so tests can patch it.
+        """
+        err = _require_auth(request, sf)
+        if err is not None:
+            return err
+
+        workers = await _get_fleet_registry_snapshot()
+        out = [
+            {
+                "id": w.id,
+                "name": w.name,
+                "models_canonical": w.capabilities.models_canonical,
+                "pool": w.capabilities.pool,
+                "labels": w.capabilities.labels,
+                "probe_status": w.probe_status,
+                "approval_status": w.approval_status.value
+                if hasattr(w.approval_status, "value")
+                else str(w.approval_status),
+                "last_heartbeat": w.last_heartbeat.isoformat()
+                if w.last_heartbeat
+                else None,
+            }
+            for w in workers
+        ]
+        return JSONResponse(out)
+
     # ── GET /autopilot/missions/{mission_id}/sandbox-allocation ──────
 
     @router.get("/autopilot/missions/{mission_id}/sandbox-allocation")
@@ -906,6 +967,77 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
             "tier": proposed.name,
             "previous_tier": current_tier.name,
         })
+
+    # ── GET /autopilot/missions/{mission_id}/fleet-allocation ─────────
+
+    @router.get("/autopilot/missions/{mission_id}/fleet-allocation")
+    async def autopilot_fleet_allocation(
+        mission_id: str, request: Request
+    ) -> JSONResponse:
+        """Return per-step worker allocation for a mission.
+
+        Pre-run: returns top-5 eligible workers per agent step based on
+        live pool snapshot.  Running/finished: includes the ``claimed_worker_id``
+        captured in the mission trace when a worker claimed the task.
+        """
+        err = _require_auth(request, sf)
+        if err is not None:
+            return err
+
+        mission = get_mission(sf, mission_id)
+        if mission is None:
+            raise HTTPException(
+                status_code=404, detail=f"Mission '{mission_id}' not found"
+            )
+
+        blueprint_json = mission.get("blueprint_json") or ""
+        if not blueprint_json:
+            return JSONResponse([])
+
+        try:
+            bp = Blueprint.model_validate_json(blueprint_json)
+        except Exception:
+            return JSONResponse([])
+
+        ag = bp.agent_graph
+        if ag is None:
+            return JSONResponse([])
+
+        from sagewai.autopilot.controller.fleet_match import match_workers
+
+        pool = await _get_fleet_registry_snapshot()
+
+        # Build claimed_worker_id lookup from trace events.
+        trace: list[dict] = mission.get("trace") or []
+        claimed: dict[str, str] = {}
+        for ev in trace:
+            if ev.get("kind") == "agent.worker_claimed":
+                step_id = ev.get("step_id")
+                worker_id = ev.get("worker_id")
+                if step_id and worker_id:
+                    claimed[step_id] = worker_id
+
+        rows = []
+        for node in ag.nodes:
+            matched = match_workers(node, pool)[:5]
+            rows.append(
+                {
+                    "step_id": node.id,
+                    "agent_id": node.id,
+                    "role": node.role,
+                    "tools": list(node.tools),
+                    "matched_workers": [
+                        {
+                            "worker_id": w.id,
+                            "worker_name": w.name,
+                            "probe_status": w.probe_status,
+                        }
+                        for w in matched
+                    ],
+                    "claimed_worker_id": claimed.get(node.id),
+                }
+            )
+        return JSONResponse(rows)
 
     # ── GET /autopilot/missions/{mission_id} ──────────────────────────
 

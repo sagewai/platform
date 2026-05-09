@@ -8,6 +8,7 @@ import { AutopilotDirections } from './autopilot-directions';
 import { AutopilotMissionLiveTrace } from './autopilot-mission-live-trace';
 import { AutopilotMissionOutput } from './autopilot-mission-output';
 import { AutopilotSandboxPanel } from './autopilot-sandbox-panel';
+import { AutopilotFleetPanel } from './autopilot-fleet-panel';
 
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 const ACTIVE_STATUSES = new Set(['running', 'completed', 'failed', 'cancelled']);
@@ -25,6 +26,20 @@ export function MissionDetailView({
 }) {
   const isActive = ACTIVE_STATUSES.has(mission.status);
   const isCompleted = mission.status === 'completed';
+
+  const liveEventsByStep = Object.fromEntries(
+    traceEvents
+      .filter((e) =>
+        e.kind === 'agent.dispatched_to_worker' ||
+        e.kind === 'agent.worker_claimed' ||
+        e.kind === 'agent.no_worker_available'
+      )
+      .reduce((map, e) => {
+        const key = e.step_id ?? e.node_id;
+        if (key) map.set(key, e);
+        return map;
+      }, new Map<string, MissionRunEvent>())
+  ) as Record<string, { kind: string; worker_id?: string; worker_name?: string; queue_position?: number }>;
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -54,6 +69,11 @@ export function MissionDetailView({
         )}
       </div>
       <AutopilotSandboxPanel missionId={mission.id} />
+      <AutopilotFleetPanel
+        missionId={mission.id}
+        missionStatus={mission.status}
+        liveEventsByStep={liveEventsByStep}
+      />
       {isCompleted && traceOutput != null && (
         <AutopilotMissionOutput output={traceOutput} />
       )}

@@ -69,3 +69,28 @@ class MissionLifecycleError(AutopilotError):
         self.from_state = from_state
         self.to_state = to_state
         super().__init__(f"illegal mission transition: {from_state!r} -> {to_state!r}")
+
+
+class NoWorkerAvailableError(AutopilotError):
+    """Raised when no fleet worker satisfies an agent step's capability requirements.
+
+    Attributes:
+        agent_id: The agent node id that could not be matched.
+        unmet_labels: Tool labels not covered by any worker.
+        unmet_models: Canonical model names not covered by any worker.
+    """
+
+    def __init__(
+        self,
+        agent_id: str,
+        *,
+        unmet_labels: list[str] | None = None,
+        unmet_models: list[str] | None = None,
+    ) -> None:
+        self.agent_id = agent_id
+        self.unmet_labels = unmet_labels or []
+        self.unmet_models = unmet_models or []
+        super().__init__(
+            f"no fleet worker available for agent {agent_id!r}: "
+            f"unmet_labels={self.unmet_labels}, unmet_models={self.unmet_models}"
+        )
