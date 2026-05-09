@@ -116,7 +116,7 @@ If you are asked to add copyright headers or licensing language to new
 files, use the exact phrasing from an existing file — do not invent new
 variants.
 
-## Autopilot system (Plans 1-8, PRs #97-#106)
+## Autopilot system (Plans 1-8 + I/J/K, PRs #97-#106 + #268-#271)
 
 The autopilot lets operators state a goal in plain English and have the
 platform design, provision, run, and improve the agents that deliver it.
@@ -132,7 +132,41 @@ sagewai/autopilot/eval_harness/  EvalHarness, 52 golden goals (Plan 6)
 sagewai/autopilot/healing/       HealthMonitor, HealingEngine (Plan 8)
 sagewai/admin/autopilot_*.py     6 admin API routes (Plan 7)
 apps/admin/app/autopilot/        Frontend: goal input, plan preview, missions (Phase 2)
+
+-- Tier 3 integrations (Plans I/J/K — PRs #268/#270/#271) --
+sagewai/autopilot/controller/fleet_match.py    match_workers() — capability matcher (Plan I)
+sagewai/autopilot/controller/fleet_adapter.py  FleetMissionAdapter — fleet dispatch integration (Plan I)
+sagewai/autopilot/tool_risk_profile.py         SandboxTier IntEnum, get_tier(), is_downgrade() (Plan J)
+sagewai/autopilot/controller/tool_runner.py    ToolRunner — sandbox-aware execution (Plan J)
+sagewai/autopilot/tool_scopes.py               Tool→scope registry, scopes_for_tools() (Plan K)
+sagewai/autopilot/sealed_matcher.py            ProfileRecord, match_profile() — LRU tie-break (Plan K)
+sagewai/autopilot/controller/sealed_runner.py  SealedToolRunner, JitHitlPendingError (Plan K)
+sagewai/autopilot/errors.py                    NoWorkerAvailableError (Plan I)
+apps/admin/components/autopilot/
+  autopilot-fleet-panel.tsx     Fleet worker pool + per-step allocation (Plan I)
+  autopilot-sandbox-panel.tsx   SandboxTier rows + override modal (Plan J)
+  autopilot-sealed-panel.tsx    Sealed profile rows + JIT-HITL pill (Plan K)
+  tier-badge.tsx                TierBadge component (Plan J)
 ```
+
+**Admin routes added in Tier 3 (all under `/api/v1`):**
+```
+GET  /autopilot/fleet/workers                            Pool snapshot
+GET  /autopilot/missions/{id}/fleet-allocation          Per-step matched workers
+GET  /autopilot/missions/{id}/sandbox-allocation        Per-step SandboxTier
+POST /autopilot/missions/{id}/sandbox-override          Downgrade-only tier override
+GET  /autopilot/missions/{id}/sealed-allocation         Per-step Sealed profile match
+POST /autopilot/missions/{id}/sealed-override           Manual Sealed profile assignment
+```
+
+**Tier 3 key invariants:**
+- `FleetMissionAdapter.dispatch_step()` fails fast via `NoWorkerAvailableError` only when
+  the pool has registered workers but none match; empty pool falls through to claim/timeout.
+- `SandboxTier`: TRUSTED=0 < SANDBOXED=1 < UNTRUSTED=2. `is_downgrade(proposed, current)`
+  returns True when `proposed > current` (more restrictive). Only downgrades accepted via admin.
+- `SealedToolRunner`: raises `JitHitlPendingError` when tool requires scopes but no profile bound.
+- `match_profile()` requires strict superset of scopes; LRU (least recently used) as tie-break.
+- All three panels render in `MissionDetailView` below the trace, in order: Sandbox → Fleet → Sealed.
 
 **Private server (`sagewai/sagewai-llm` — PROPRIETARY):**
 - All production blueprints live there, NEVER in this OSS repo
@@ -152,7 +186,8 @@ apps/admin/app/autopilot/        Frontend: goal input, plan preview, missions (P
 - Autopilot admin routes require `sagewai_auth` cookie, missions are
   project-scoped via `X-Project-ID` header.
 
-**Test counts:** ~663 autopilot tests + 60 private server tests = 723 total
+**Test counts:** ~757 autopilot tests + 60 private server tests = 817 total
+(94 new tests from Plans I/J/K: 37 fleet + 20 sandbox + 37 sealed)
 
 ## LLM Harness (smart proxy for AI coding tools)
 
