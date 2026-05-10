@@ -7,21 +7,25 @@ export const metadata = {
 
 # Introducing Sagewai
 
-*April 2026 — historical announcement. Current positioning is documented at [`/docs/security`](/docs/security) and on the [marketing site](https://sagewai.ai). The 2026-05-01 review evolved the canonical from "Agent Infrastructure You Own" to "The factory that runs itself."*
+Sagewai is an open-source platform for building, running, and governing AI agents on your own infrastructure. It gives you a Python SDK for building agents, a control plane for managing them, cost-aware routing across LLM providers, and full observability — all under AGPL-3.0, with no feature gates.
 
-Today we're open-sourcing **Sagewai** — the platform for AI agents that run, remember, and report.
+This post is the April 2026 launch announcement. If you're new to Sagewai, the [Quickstart](/docs/getting-started) is the fastest way in.
 
-## Why We Built This
+## The problem
 
-Every company using AI coding tools like Claude Code, Cursor, or Codex faces the same problem: no visibility into what they spend, no control over which models handle which tasks, and no governance over the agents they build.
+If your team uses AI coding tools — Claude Code, Cursor, Codex — or builds agents into your product, three problems show up fast:
 
-We built Sagewai to solve this with five integrated pillars.
+- **No visibility into spend.** Token bills arrive at the end of the month with no breakdown by team, project, or task.
+- **No control over routing.** Every request hits whatever model the tool defaults to, even when a cheaper model would do the job.
+- **No governance.** Agents get built ad-hoc, scattered across notebooks and scripts, with no shared registry, audit trail, or approval flow.
 
-## The 5 Pillars
+Sagewai is a single platform that addresses all three.
 
-### SDK -- Build Agents
+## What you get
 
-Build production-grade agents in Python with three lines of code. Multi-model support (100+ models via LiteLLM), custom tools, persistent memory, guardrails, and durable workflows.
+### A Python SDK for building agents
+
+Build agents in a few lines, with support for 100+ models, custom tools, persistent memory, guardrails, and durable workflows.
 
 ```python
 import asyncio
@@ -31,51 +35,64 @@ agent = UniversalAgent(name="assistant", model="gpt-4o")
 print(asyncio.run(agent.chat("Analyze our Q1 results")))
 ```
 
-### Registry -- Govern Agents
+See the [SDK quickstart](/docs/getting-started/minimal-setup) for the full hello-world flow.
 
-Store, version, discover, and govern agents across your organization. Approval workflows, audit trails, and lifecycle management.
+### A control plane for governing agents
 
-### Harness -- Control LLM Access
+Store, version, and discover agents across your organization. Add approval workflows, audit trails, and lifecycle management. Multi-tenant from day one — every resource is project-scoped.
 
-Point Claude Code, Cursor, or Codex at the Sagewai Harness. Every request is classified by complexity and routed to the cheapest model that can handle it -- automatically.
+### Cost-aware LLM routing
 
-- Simple tasks (typos, imports) go to Haiku
-- Medium tasks (refactoring) go to Sonnet
-- Complex tasks (architecture) go to Opus
+Point Claude Code, Cursor, or Codex at the Sagewai proxy. Each request is classified by complexity and routed to the cheapest model that can handle it:
 
-Developers don't change their workflow. The organization saves money.
+- Simple edits (typos, imports) go to a small model like Haiku
+- Medium tasks (refactoring) go to a mid-tier model like Sonnet
+- Complex work (architecture, multi-file changes) goes to Opus
 
-### Observatory -- Track Everything
+Developers don't change their workflow. The org saves money on every request.
 
-Source of truth for all AI expenditure. Cost per model, per user, per team. OpenTelemetry tracing, Prometheus metrics, and audit logs for compliance.
+### Observability built in
 
-### Training -- Build Domain Models
+Cost per model, per user, per team. OpenTelemetry traces, Prometheus metrics, and an audit log for every agent run. Plug it into Grafana or your existing observability stack.
 
-Fine-tune domain-specific LLMs with Unsloth. Use Sagewai agents to collect training data, fine-tune locally, then serve through the Harness at $0 per token.
+### Local fine-tuning
 
-## Open Source, Not Open Core
+Use your agents to collect training data, fine-tune a domain-specific model with Unsloth, then serve it locally through the same proxy. Pay $0 per token for the workloads you've made cheap enough to bring in-house.
 
-Everything is free under AGPL-3.0. All five pillars, all 40 connectors, the full admin dashboard. No feature gates, no artificial limits.
+## How Sagewai handles credentials
 
-Premium tiers exist for organizations that want managed hosting (Cloud), compliance features (Enterprise), or a commercial license alternative to AGPL.
+Agents need API keys — for LLM providers, for the tools they call, sometimes for downstream customer systems. Sagewai keeps these out of agent process memory:
 
-## Get Started
+- **Customer credentials live in encrypted profiles.** They're decrypted only when a sandbox starts, injected as environment variables for that run, and scrubbed when the sandbox is released.
+- **Operator credentials (the keys you pay with) stay on the worker host.** They're never visible to agent code or to customer-tier sandboxes.
+
+You're responsible for the master encryption key (back it up, rotate it on a schedule that fits your compliance posture) and for choosing which credentials belong in which tier. The [Security guide](/docs/security) walks through the setup.
+
+## Open source, no feature gates
+
+Everything in this post is free under AGPL-3.0 — the SDK, the control plane, the proxy, the observability stack, all 40+ tool connectors, the full admin dashboard. No "open core" carve-outs.
+
+Paid tiers exist for organizations that want managed hosting, additional compliance features, or a commercial license alternative to AGPL. The OSS build is the same code, with no artificial limits.
+
+## Get started
 
 ```bash
 pip install sagewai
 ```
 
-- [Documentation](https://docs.sagewai.ai)
-- [GitHub](https://github.com/sagewai/platform)
-- [21 Examples](https://github.com/sagewai/platform/tree/main/packages/sdk/sagewai/examples)
+Three good entry points, depending on what you want first:
 
-## What's Next
+- **[Quickstart (15 min)](/docs/getting-started)** — install the SDK, create an encrypted credential profile, and run an agent inside an isolated sandbox.
+- **[Minimal setup](/docs/getting-started/minimal-setup)** — a hello-world agent with no sandbox, no profile, no admin server.
+- **[Examples](https://github.com/sagewai/platform/tree/main/packages/sdk/sagewai/examples)** — runnable demos covering memory, fleet workers, fine-tuning, and the routing proxy.
 
-- PyPI package (v0.1.0)
+## What's next
+
+- PyPI release (`v0.1.0`)
 - VS Code extension on the Marketplace
-- Official client wrappers in 14 languages (TypeScript, Go, Rust, and more)
+- Official client wrappers for TypeScript, Go, Rust, and 14 other languages
 - Community Discord
 
-We built Sagewai because we believe agent infrastructure should be owned, not rented. Try it and let us know what you think.
+We built Sagewai because agent infrastructure should be owned, not rented. Try it and tell us what breaks.
 
--- The Sagecurator Team
+— The Sagewai team

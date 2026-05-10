@@ -1,74 +1,87 @@
-# Lighthouse — production-grade examples that prove the claims
+# End-to-end examples
 
-This is the **primary discovery surface** for Sagewai. Six use-case pages, each backed by one or more shipped examples that walk through a real-world problem the audience-pin person — a senior engineer at a 50-500-person SaaS who got the *"add AI to the product this quarter"* email — actually has.
+This section is for developers who want a complete, runnable example that mirrors a real production scenario — not a single feature in isolation. Each page below walks through one use case end-to-end: the architecture, the code, the cost story, and the personas that recognise it as their own job. Pick the page closest to what you're building and clone the example tonight.
 
-> **Why this section exists:** the SDK has 47 examples. The first ~30 are entry-level demonstrations of individual features. The last 15 are *lighthouses* — production-grade walkthroughs with mermaid architecture diagrams, real numbers, and a CFO-readable cost story. Listing everything chronologically buries the lighthouse work behind 32 thin examples; this section flips the discovery order.
-
-Each lighthouse page below has a runnable proof you can clone tonight and a *Real-world use cases* section that names the persona, the industry, and the concrete win.
+If you'd rather start with the SDK basics, head to [Foundation](/docs/foundation). If you want production patterns shorter than a full end-to-end walkthrough, see [Patterns](/docs/patterns).
 
 ---
 
-## The six lighthouse use cases
+## Pick the example closest to your job
+
+Each entry links to a walkthrough page and the runnable example numbers from the SDK's `examples/` directory. The "covered by" column names the SageWai capability the example exercises, so you can also browse the topic in its own right.
 
 ### [Train your own model](/docs/lighthouse/train-your-own-model)
 
-> *"Anthropic's pricing changed. Here's how we never had to flinch."*
+Capture training data from a frontier LLM, fine-tune a 3B-parameter model on a free Colab T4 (or a $0.34/hr RunPod A10G), deploy it via Ollama, and serve real traffic at zero per-token cost. The full path from "Anthropic raised prices" to "we own the model" — end-to-end in a weekend for under $5.
 
-Capture training data from Opus, fine-tune a 3B model on a free Colab T4 or a $0.34/hr RunPod A10G, deploy it via Ollama, and serve real traffic at zero per-token cost. The full Q3-cost-down arc from the [audience pin](/), end-to-end in a weekend for under $5.
-
-**Examples:** [38, 38a, 44, 45, 47, 48, 36, 25](#) · **Pillar:** [Training Loop](/docs/pillars/training-loop)
+- **Examples:** 25, 36, 38, 38a, 44, 45, 47, 48
+- **Covered by:** [Training Loop](/docs/pillars/training-loop)
 
 ### [Moderation and classification](/docs/lighthouse/moderation-and-classification)
 
-> *"Three HuggingFace classifiers carry the deterministic half. A cheap LLM judges the boundary cases. ML and LLM are both first-class."*
+Community moderation, support-ticket triage, and sales-lead qualification with the same shape: a deterministic classifier ensemble inside an isolated sandbox, surfaced as MCP tools, with a cheap LLM judging the boundary cases. Full audit trail per decision.
 
-Community moderation, support-ticket triage, sales-lead qualification — pattern: classifier ensemble inside a sealed sandbox, surfaced as MCP tools, judged by a Haiku-class LLM. Full audit trail per decision.
-
-**Examples:** [49, 42](#) · **Pillar:** [SDK](/docs/pillars/sdk)
+- **Examples:** 42, 49
+- **Covered by:** [SDK](/docs/pillars/sdk)
 
 ### [Memory and retrieval](/docs/lighthouse/memory-and-retrieval)
 
-> *"Weak LLMs feel like Opus when you only feed them the relevant slice of history."*
+Two patterns developers ask for by name. First, semantic checkpoint recall — vague references like *"back to that earlier point"* resolve into the right slice of prior context, even on a 7B Ollama model. Second, graph-backed retrieval for multi-hop reasoning across incident dependencies, where vector chunking falls short.
 
-Two patterns: **semantic checkpoint recall** (vague references like *"back to that earlier point"* resolve into the right slice of prior context, even on a 7B Ollama model) and **graph beats vector** (multi-hop reasoning across incident dependencies, where vector chunking loses).
-
-**Examples:** [37, 41, 04, 29, 32](#) · **Pillar:** [SDK](/docs/pillars/sdk)
+- **Examples:** 04, 29, 32, 37, 41
+- **Covered by:** [SDK](/docs/pillars/sdk)
 
 ### [Production multitenancy](/docs/lighthouse/production-multitenancy)
 
-> *"Healthcare worker can't claim finance tasks. Sandbox credentials never touch the worker host."*
+A walkthrough of running one platform for many customers without leaking credentials or work between them: per-CLI workload identity, scoped credentials injected into a containerised agent, cross-tenant isolation enforced by the dispatcher, and an audit trail across every boundary. The example a security reviewer reads end-to-end.
 
-The full Sealed-spine story: per-CLI workload identity, scoped credentials provided to a containerised agent, cross-tenant isolation enforced by the Fleet dispatcher, audit trail across the boundary. The example a security reviewer reads.
-
-**Examples:** [33, 39, 16](#) · **Pillar:** [Fleet](/docs/pillars/fleet) + [Sealed spine](/docs/security)
+- **Examples:** 16, 33, 39
+- **Covered by:** [Fleet](/docs/pillars/fleet) and [Security](/docs/security)
 
 ### [Observability and cost](/docs/lighthouse/observability-and-cost)
 
-> *"AI infrastructure spending without a dashboard is finance malpractice. Here's what good looks like."*
+Real telemetry into Grafana, a live dashboard with active agents on the graph, per-tenant cost tracking, and an OpenTelemetry pipeline you can swap into your existing stack. Five rows, fourteen panels, all driven by an actual run of the example — no canned data.
 
-Real telemetry into Grafana, Iron Man HUD with live agents on the graph, per-tenant cost tracking, OpenTelemetry pipeline. Five rows, fourteen panels, all from a real run of the example — no canned data.
-
-**Examples:** [34, 43, 40, 12](#) · **Pillar:** [Observatory](/docs/pillars/observatory)
+- **Examples:** 12, 34, 40, 43
+- **Covered by:** [Observatory](/docs/pillars/observatory)
 
 ### [Inference deployment](/docs/lighthouse/inference-deployment)
 
-> *"Bring your own GPU, your own endpoint, your own model. We provide the wiring."*
+Five inference paths (free Colab T4, Vast.ai bid market, RunPod reliable rental, Modal serverless, bring-your-own endpoint) plus the small-model deployment story (mlx-lm on Apple Silicon, Ollama everywhere else). Includes a decision table for picking the right path and snippets for plugging each into SageWai.
 
-The five inference tiers (free Colab T4, Vast.ai bid market, RunPod reliable rental, Modal serverless, bring-your-own endpoint) plus the SLM-deployment story (mlx-lm on Apple Silicon, Ollama everywhere else). When to pick which tier and how each plugs into Sagewai.
-
-**Examples:** [44, 45, 46, 47, 48, 38, 38a, 18](#) · **Pillar:** [Training Loop](/docs/pillars/training-loop)
+- **Examples:** 18, 38, 38a, 44, 45, 46, 47, 48
+- **Covered by:** [Training Loop](/docs/pillars/training-loop)
 
 ---
 
-## How the lighthouse pages are structured
+## What every walkthrough page contains
 
-Each page below follows the same shape so you can scan the one closest to your job:
+Every page in this section uses the same shape so you can scan the one closest to your job:
 
-1. **What this proves** — one paragraph, no hype, the invariants the example demonstrates.
-2. **Architecture** — a mermaid flowchart of the moving parts.
-3. **Run it** — clean-machine 60-second path and full live path.
-4. **Real-world use cases** — three to five concrete persona + industry callouts. The bar is *"I recognise one of these as my own job."*
-5. **Companion examples** — links to the shipped examples that back the page, with sibling READMEs on PyPI and GitHub.
-6. **What to read next** — sibling lighthouses, prerequisite foundation, primary pillar.
+1. **What you'll build** — one paragraph naming the scenario and the outcome.
+2. **Architecture** — a Mermaid diagram of the moving parts.
+3. **Run it** — a 60-second clean-machine path and a full live path.
+4. **Where this shows up in the wild** — three to five concrete persona-and-industry callouts. The bar is *"I recognise one of these as my own job."*
+5. **Companion examples** — links to the runnable SDK examples that back the page, with READMEs on PyPI and GitHub.
+6. **See also** — sibling walkthroughs, prerequisite reading, and the SageWai capability the example exercises.
 
-If you'd rather see the SDK basics before reading lighthouse work, [Foundation](/docs/foundation) is the right starting point. If you came here for production patterns shorter than a lighthouse but longer than a foundation example, [Patterns](/docs/patterns) is the middle layer.
+---
+
+## Before you start
+
+The walkthroughs assume you have:
+
+- Python 3.10 or later
+- Docker installed and running (most pages use the Docker sandbox)
+- The SageWai SDK installed: `pip install 'sagewai[fastapi]'`
+- A working admin server — see [Quickstart](/docs/getting-started)
+
+Some pages need additional accounts (a HuggingFace token, a RunPod or Modal account, a Grafana endpoint). Each page lists its own prerequisites.
+
+---
+
+## See also
+
+- [Foundation](/docs/foundation) — short examples that introduce a single SDK feature at a time.
+- [Patterns](/docs/patterns) — production-shape patterns that sit between a one-feature example and a full walkthrough.
+- [Quickstart](/docs/getting-started) — install the SDK and run your first agent in 15 minutes.

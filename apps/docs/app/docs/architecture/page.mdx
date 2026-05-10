@@ -3,19 +3,19 @@ import { TechArticleJsonLd, SoftwareApplicationJsonLd } from '@/components/struc
 export const metadata = {
   title: 'Sagewai architecture — control plane plus worker fleet',
   description:
-    'Three invariants explain how Sagewai keeps planning, execution, and security separable: the worker is the only executor, modes are per-step, the sandbox is the trust boundary.',
+    'Understand how Sagewai splits planning from execution so you can pick the right sandbox backend, choose an execution mode per workflow step, and reason about credential isolation.',
   alternates: { canonical: 'https://docs.sagewai.ai/docs/architecture' },
   openGraph: {
-    title: 'Sagewai Architecture overview',
+    title: 'Sagewai architecture — control plane plus worker fleet',
     description:
-      'Control plane plans and dispatches; worker fleet executes. Per-step execution mode, sandbox-as-trust-boundary, three security tiers.',
+      'How Sagewai splits planning from execution: per-step execution modes, sandbox-as-trust-boundary, three security tiers.',
     url: 'https://docs.sagewai.ai/docs/architecture',
   },
 };
 
 <TechArticleJsonLd
   name="Sagewai architecture: control plane plus worker fleet"
-  description="The architectural model behind Sagewai — three invariants that govern planning, execution, and trust boundaries across every workflow run."
+  description="How Sagewai separates planning, execution, and trust boundaries — and how to use that separation when you deploy."
   path="/docs/architecture"
   articleSection="Architecture"
 />
@@ -23,85 +23,68 @@ export const metadata = {
 
 # Architecture
 
-Sagewai is a control plane plus a worker fleet. The control plane
-plans, persists, and dispatches work; the worker fleet executes it.
-Every workflow run flows through this split. This page introduces
-the model. The four chapters that follow ([Runtime
-topology](/docs/architecture/runtime-topology),
-[Security tiers](/docs/architecture/security-tiers),
-[Execution modes](/docs/architecture/execution-modes),
-[Sandbox backends](/docs/architecture/sandbox-backends)) drill in.
+This page gives you the mental model you need to deploy Sagewai with confidence: how planning and execution split across processes, where credentials live, and which knobs you turn per workflow step. After reading, you'll know which of the four chapters that follow you actually need.
 
-## Three invariants
+If you just want to ship your first agent, start with the [Quickstart](/docs/getting-started). The architecture here is what's underneath — you don't need to internalise it to begin building.
 
-Three statements that the entire platform is structured to keep true:
+## The split: control plane and worker fleet
 
-### 1. The worker is the only executor
+Sagewai runs as two cooperating processes:
 
-The control plane (admin server, CLI, autopilot) plans and dispatches
-— it never runs a workflow step. Workers consume work; they do not
-allocate it. This means you can scale execution capacity (workers)
-independently from planning capacity (control plane), and a saturated
-fleet does not stall planning.
+- **The control plane** (the admin server, the CLI, autopilot) plans, persists, and dispatches work. It never runs a workflow step itself.
+- **The worker fleet** claims work from the control plane and executes it. Workers don't allocate work to themselves — they pull what's available.
 
-### 2. The execution mode is per-step, not per-deployment
+You scale the two independently. Add workers when execution capacity is tight; the control plane keeps planning regardless of how busy the fleet is. A saturated fleet does not stall planning, and a slow planning step does not block other workers.
 
-A single workflow run can plan in [Mode 0](/docs/architecture/execution-modes#mode-0--bare)
-on the worker, run an isolated tool call in [Mode 1](/docs/architecture/execution-modes#mode-1--sandboxed-no-identity),
-hit a customer database in [Mode 2](/docs/architecture/execution-modes#mode-2--identity-no-cli-agent),
-and dispatch a CLI agent like Claude Code in [Mode 3](/docs/architecture/execution-modes#mode-3--full-cli-agent)
-— each step picks its own mode. You don't pay sandbox cost for cheap
-planning steps and you don't lose isolation for sensitive ones.
+## How a workflow step actually runs
 
-### 3. The sandbox is the trust boundary (when present)
+Three behaviors govern every run. They're worth knowing before you deploy, because each one maps to a configuration choice.
 
-When a step runs in Mode 1+, the sandbox container is the security
-boundary. Customer secrets exist inside it, env-injected from the
-[Sealed Identity](/docs/architecture/security-tiers) backend. The
-worker host knows secret KEY NAMES but never holds plaintext values.
-The control plane sees neither.
+### Each step picks its own execution mode
 
-## Two backend surfaces
+A workflow run is not pinned to one mode. A single run can:
 
-Sagewai has two pluggable backend types. They are independent — choose
-each to fit your infrastructure:
+- Plan in [Bare mode](/docs/architecture/execution-modes#mode-0--bare) on the worker (cheap, no sandbox).
+- Run an isolated tool call in a [sandboxed step with no identity](/docs/architecture/execution-modes#mode-1--sandboxed-no-identity).
+- Hit a customer database in a [sandboxed step with customer credentials injected](/docs/architecture/execution-modes#mode-2--identity-no-cli-agent).
+- Dispatch a CLI agent like Claude Code in a [full sandboxed step](/docs/architecture/execution-modes#mode-3--full-cli-agent).
+
+You don't pay sandbox startup cost for cheap planning steps, and you don't lose isolation for sensitive ones. See [Execution modes](/docs/architecture/execution-modes) for the per-step decorator API and a worked example.
+
+### The sandbox is the trust boundary when present
+
+When a step runs in any sandboxed mode, the sandbox container is the security boundary. Customer secrets exist inside it; they're injected from your chosen identity backend at sandbox-start time and scrubbed on release.
+
+The worker host knows the names of secret keys (so it can dispatch the right step) but never holds plaintext values. The control plane sees neither names nor values. If you need to defend a per-customer credential, the sandbox is what's defending it.
+
+### Workers advertise what they can run
+
+When a worker starts, it registers with the control plane and advertises capability labels (which sandbox backend it has, which sandbox images it can pull, which models it supports). The control plane uses those labels to match runs to workers. You can run heterogeneous fleets — a Docker pool for general work, a Kubernetes pool for high-throughput, a GPU-equipped pool for inference — and let workflow steps target whichever pool fits.
+
+## Two backend choices to make
+
+Sagewai has two pluggable backend types. They're independent — choose each one to fit your existing infrastructure.
 
 | Backend type | What it picks | Examples |
 |---|---|---|
-| **Sandbox backend** | where the sandbox container, pod, or function lives | Docker, Kubernetes, Lambda |
-| **Identity backend** | where Sealed Identity values come from | Builtin (file-based), Vault, 1Password, AWS Secrets Manager, SOPS, Bitwarden |
+| **Sandbox backend** | Where the sandbox container, pod, or function lives | Docker, Kubernetes, Lambda |
+| **Identity backend** | Where customer credentials come from at sandbox-start time | Built-in (file-based), Vault, 1Password, AWS Secrets Manager, SOPS, Bitwarden |
 
-A single deployment can mix: Kubernetes sandbox + Vault identity, or
-Docker sandbox + Builtin identity, or anything else. See
-[Sandbox backends](/docs/architecture/sandbox-backends) for the
-sandbox decision guide. Identity backend selection is covered in the
-Sealed-ii decomposition (link forthcoming as that ships).
+A single deployment can mix freely: Kubernetes sandbox + Vault identity, Docker sandbox + built-in identity, and so on. See [Sandbox backends](/docs/architecture/sandbox-backends) for the sandbox decision guide. Identity backend selection is covered in the [Sealed Identity guide](/docs/guides/sealed-vault).
 
-## When you need this section
+## Which chapter you need
 
-Read this section if you want to:
+Pick based on what you're trying to do.
 
-- Understand how a workflow run actually executes
-- Decide which sandbox backend to deploy on
-- Pick the right execution mode for a workflow step
-- Reason about credential isolation and audit
-- Evaluate Sagewai for a security-sensitive deployment
+| If you want to... | Read |
+|---|---|
+| Trace a workflow run from enqueue to completion | [Runtime topology](/docs/architecture/runtime-topology) |
+| Reason about credential isolation, audit, and what's exposed where | [Security tiers](/docs/architecture/security-tiers) |
+| Pick the right execution mode for each step in a workflow | [Execution modes](/docs/architecture/execution-modes) |
+| Decide between Docker, Kubernetes, or a serverless sandbox backend | [Sandbox backends](/docs/architecture/sandbox-backends) |
 
-If you just want to write your first agent, jump to the
-[Quickstart](/docs/getting-started). The architecture is consistent
-underneath, but you do not need to internalise it to start building.
+## Next steps
 
-## Canonical reference
-
-These four user-facing pages mirror the four authoritative
-architecture documents in the platform repo:
-
-- [`docs/architecture/runtime-topology.md`](https://github.com/sagewai/platform/blob/main/docs/architecture/runtime-topology.md)
-- [`docs/architecture/security-tiers.md`](https://github.com/sagewai/platform/blob/main/docs/architecture/security-tiers.md)
-- [`docs/architecture/execution-modes.md`](https://github.com/sagewai/platform/blob/main/docs/architecture/execution-modes.md)
-- [`docs/architecture/execution-backends.md`](https://github.com/sagewai/platform/blob/main/docs/architecture/execution-backends.md)
-
-Those internal docs are the contract between implementation threads;
-this section is the user-facing render. They stay in sync via the
-`docs(architecture)` PR-title convention — when an internal doc
-changes, the corresponding page here is updated in the same PR.
+- [Quickstart](/docs/getting-started) — install the SDK and run a real workflow end-to-end.
+- [Runtime topology](/docs/architecture/runtime-topology) — the full life of a workflow run.
+- [Security tiers](/docs/architecture/security-tiers) — how Sagewai keeps customer credentials off the worker host.
