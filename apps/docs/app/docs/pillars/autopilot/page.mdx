@@ -1,41 +1,38 @@
-# Pillar — Autopilot
+# Autopilot
 
-> **State a goal in plain English. Sagewai designs, provisions, runs, and improves the agents that deliver it.**
+State a goal in plain English; Sagewai designs the agent graph, instantiates the mission, and runs it. As missions complete, the Curator captures successful answers as training data — closing the loop with the [Training Loop](/docs/pillars/training-loop) product when the dataset crosses a threshold and the local model takes over.
 
-The Autopilot pillar lets operators state a goal — *"triage support tickets, escalate the hard ones, draft replies for the easy ones"* — and have Sagewai design the blueprint, instantiate the agent graph, and run the mission. The hosted blueprint service (`sagewai-llm`) is the proprietary half; the local controller, missions, and curator are open source.
+The hosted blueprint service (`sagewai-llm`) handles goal-to-blueprint translation; the local controller, missions, and Curator are open-source and ship in the SDK. Autopilot still works manually without the hosted service — the loop just doesn't auto-close.
 
-## What the pillar does
+## What you can do with it
 
-- **`SagewaiLLMClient`** — the bridge to the hosted blueprint service. The platform works manually without it; the autopilot loop closes when it's available.
-- **`Blueprint`, `SlotSpec`, `AgentGraph`, `Mission`** — the data shapes the autopilot reasons over.
-- **`GoalRouter`, `SlotExtractor`, `ConfidenceConfig`** — turning a plain-English goal into a slotted plan.
-- **`AutopilotController`, `MissionDriver`** — the loop that drives a mission from goal to delivery.
-- **`Curator`, `Promoter`, `TrainingDataset`** — capture every answer; promote good ones to training data; close the loop.
-- **`HealthMonitor`, `HealingEngine`** — automatic mission-level healing.
+- **Hand it a goal** like *"triage support tickets, escalate the hard ones, draft replies for the easy ones"* and get back a runnable mission.
+- **Run a long-lived mission** that decomposes into steps, picks tools, captures the trace, and reports progress.
+- **Capture every answer** as JSONL training data automatically — no manual instrumentation.
+- **Heal automatically** when a mission step fails: the controller detects, isolates, and retries with adjusted parameters.
+- **Trigger a fine-tune** when the captured corpus crosses a configurable size threshold.
 
-The Autopilot pillar lives at `sagewai/autopilot/*` in the SDK. See the autopilot architecture page in user memory or the [Autopilot overview](/docs/autopilot) for the full module map.
+## See it in action
 
-## What proves it works
+### Primary example — closing the loop
 
-### Primary lighthouse
+[**Train your own model**](/docs/lighthouse/train-your-own-model) walks through the full autopilot loop closing: state a goal, run missions, the Curator captures the answers, the dataset crosses the threshold, a fine-tune kicks off, the LoRA deploys, and subsequent missions re-route to the local model. End-to-end, real numbers, real cost-down.
 
-[**Train your own model**](/docs/lighthouse/train-your-own-model) — the autopilot training loop closes (Example 36): the Curator captures every agent answer, the dataset crosses the threshold, a `FineTuneJob` triggers, the LoRA deploys, and the mission re-routes to the local model. The full closed loop end-to-end.
+### Hosted-service round trip
 
-### Sibling pattern
+[**Example 35 — `autopilot_hosted_service`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/35_autopilot_hosted_service.py) — state a goal, get a blueprint back, instantiate the mission, run it.
 
-[**Example 35 — `autopilot_hosted_service`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/35_autopilot_hosted_service.py) — the hosted-service round-trip. State a goal, get a blueprint, instantiate the mission, run it.
+### Without an LLM key
 
-### Foundation companion
-
-[**Example 28 — `autopilot_quickstart`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/28_autopilot_quickstart.py) — autopilot without an LLM key. The cheapest demonstration of the framework.
+[**Example 28 — `autopilot_quickstart`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/28_autopilot_quickstart.py) — the cheapest demonstration of the framework. Useful for reading through the autopilot lifecycle without paying for a single token.
 
 ## Where to go to ship it
 
-- **[Autopilot overview](/docs/autopilot)** — the user-facing introduction.
-- **[Admin Panel](/docs/guides/admin-panel)** — the operator surface where missions, blueprints, and goals live.
+- **[Autopilot overview](/docs/autopilot)** — the user-facing introduction to the SDK surface.
+- **[Admin Panel guide](/docs/guides/admin-panel)** — the operator surface where missions, blueprints, and goals live.
 
-## Related
+## See also
 
-- **[Training Loop pillar](/docs/pillars/training-loop)** — the loop the autopilot closes when it captures, fine-tunes, and re-routes.
-- **[Sealed spine](/docs/security)** — the security architecture that makes autopilot safe to give access to vendor credentials.
-- **[Pillars overview](/docs/pillars)** — the other four pillars.
+- **[Training Loop](/docs/pillars/training-loop)** — the loop Autopilot closes when the captured corpus crosses the threshold.
+- **[Security overview](/docs/security)** — the credential model that lets Autopilot run with vendor keys safely.
+- **[All products](/docs/pillars)** — the other four.

@@ -1,20 +1,16 @@
-# Production multitenancy — Sealed-spine, isolated workers, no cross-tenant leak
+# Production multitenancy
 
-> *"Healthcare worker can't claim finance tasks. Sandbox credentials never touch the worker host. Audit trail across the boundary."*
+This walkthrough proves what you ship when you put Sagewai in front of multiple tenants' credentials: a healthcare worker physically cannot see finance tasks, vendor credentials are injected into a containerised agent at sandbox-start and scrubbed on release, and every credential resolution and pool reset is recorded in the audit log.
 
-This is the page a security reviewer reads. The full Sealed-spine story: per-CLI workload identity (Sealed I), externalised secret backends with JIT credentials (Sealed II), per-CLI secret allowlist (Sealed III-D), audit trail at the boundary. Plus the Fleet enforcement: workers are scoped by `project_id` and `pool` labels; the dispatcher refuses cross-tenant claims.
+If you're a security reviewer evaluating Sagewai for production, or an engineer building the first multi-tenant feature on top of it, this is the page that maps the feature set to the controls your security team will ask about.
 
-What you ship: a multi-tenant agent platform where a "healthcare" worker physically cannot see "finance" tasks; vendor credentials are injected into a containerised agent at sandbox-start time and scrubbed on release; every credential resolution and pool reset is in the audit log.
+## Five guarantees this walkthrough exercises
 
-## What this proves
-
-Five invariants the audience-pin person needs before they trust this in front of customer credentials:
-
-1. **The boundary is real, not policy.** Tenant credentials live in the Sealed profile store, encrypted at rest with Fernet. They're injected into the sandbox env at sandbox-start and scrubbed on release. The worker host process never sees them.
-2. **Fleet dispatch enforces scope.** Workers register with `project_id` in their capability labels; the dispatcher matches tasks against capability labels, not just model and pool. A healthcare worker is unreachable from a finance task. Example 26 ships the dispatch matcher; Example 33 ships the full integration.
-3. **Per-CLI workload identity is shipped.** Each agent run has a verifiable, scoped identity — not a shared `OPENAI_API_KEY` lifted from the parent process. Sealed Phase I has been merged into v1.0.
-4. **JIT credentials work with HashiCorp Vault, AWS Secrets Manager, AgentCore Identity.** Externalised secret backends mean credentials resolve at the moment of need, not at process start. Sealed Phase II has been merged into v1.0.
-5. **Every secret-injection event is in the audit log.** The admin **Audit** view records cascade resolutions, identity revocations, and pool resets. The compliance team can read the trail.
+1. **The boundary is real, not policy.** Tenant credentials live in encrypted Sealed profiles. They're injected into the sandbox env at sandbox-start and scrubbed on release. The worker host process never sees them.
+2. **Fleet dispatch enforces scope at the boundary.** Workers register with `project_id` in their capability labels; the dispatcher matches tasks against capability labels. A healthcare worker is unreachable from a finance task. Example 26 ships the dispatch matcher; Example 33 ships the full integration.
+3. **Per-CLI workload identity.** Each agent run has a verifiable, scoped identity — not a shared `OPENAI_API_KEY` lifted from the parent process.
+4. **Vault-backed credentials.** Sagewai resolves secrets from HashiCorp Vault, AWS Secrets Manager, AgentCore Identity, or the encrypted built-in store — at the moment of need, not at process start.
+5. **Every secret-injection event is in the audit log.** The admin **Audit** view records cascade resolutions, identity revocations, and pool resets. Compliance reads the trail directly.
 
 ## Architecture
 
@@ -35,7 +31,7 @@ flowchart LR
         W4["Worker 4<br/>labels: project_id=fin-prod"]
     end
 
-    Disp{"FleetDispatcher<br/>capability match"}
+    Disp{"Fleet dispatcher<br/>capability match"}
 
     subgraph Sandbox1["Docker sandbox<br/>(healthcare task)"]
         Agent1["Agent + tools"]
@@ -77,7 +73,7 @@ pip install sagewai
 python 33_fleet_sealed_integration.py
 ```
 
-The script seeds two tenants (healthcare, finance), registers four workers (two per tenant) with scoped capability labels, enqueues mixed-tenant tasks, and proves the dispatcher refuses cross-tenant claims. Output prints the cross-tenant attempt being rejected at the dispatch boundary.
+The script seeds two tenants (healthcare, finance), registers four workers (two per tenant) with scoped capability labels, enqueues mixed-tenant tasks, and proves the dispatcher refuses cross-tenant claims. The output prints the cross-tenant attempt being rejected at the dispatch boundary.
 
 ### Sandbox + scoped credentials
 
@@ -85,9 +81,9 @@ The script seeds two tenants (healthcare, finance), registers four workers (two 
 python 39_sandbox_scoped_credentials.py
 ```
 
-The script runs an agent inside a sandbox container with credentials provided by Sealed, calls a third-party API, and proves the credential bytes are unreachable from the worker host. The `_smoke_test_credential_leak` block confirms the scrub.
+Runs an agent inside a sandbox container with credentials provided by the Sealed Identity layer, calls a third-party API, and proves the credential bytes are unreachable from the worker host. The `_smoke_test_credential_leak` block confirms the scrub.
 
-### Agent governance (approval flows + audit)
+### Agent governance (approval flow + audit)
 
 ```bash
 python 16_agent_governance.py
@@ -97,7 +93,7 @@ Foundation-level companion: agent approval flow with audit trail before exposing
 
 ## Real-world use cases
 
-The pattern in this lighthouse — *Sealed profiles per tenant, capability-scoped Fleet workers, sandbox credential injection at run time, audit at the boundary* — is what a senior engineer at a 50-500-person SaaS reaches for when their first multi-tenant feature lands and the security review starts. Five domains:
+The pattern in this walkthrough — *Sealed profiles per tenant, capability-scoped Fleet workers, sandbox credential injection at run time, audit at the boundary* — is what a senior engineer at a 50-500-person SaaS reaches for when their first multi-tenant feature lands and the security review starts. Five domains:
 
 ### 1. Healthcare SaaS with HIPAA-bound customers
 
@@ -116,8 +112,8 @@ Your AI feature runs across 50 finance customers. Each customer's Stripe and QB 
 | Concern | How this pattern solves it |
 |---|---|
 | PCI scope expands if any non-payment process can read the Stripe key | Stripe key lives in the customer's Sealed profile, injected only into their sandbox; non-finance workers can't see it |
-| You need to revoke a customer's keys instantly when they cancel | Sealed Phase III-A (revocation, cascading where needed) ships in v1.0 as experimental |
-| Auditor asks "show me the path of this credential from your secret store to the customer's running agent" | The architecture page on Security tiers documents the path; the Audit view records each step |
+| You need to revoke a customer's keys instantly when they cancel | Sealed has a revocation API; future enqueues fail closed and in-flight runs abort or expire |
+| Auditor asks "show me the path of this credential from your secret store to the customer's running agent" | The [Security tiers](/docs/architecture/security-tiers) page documents the path; the Audit view records each step |
 
 ### 3. Enterprise SaaS with customer-specific Anthropic keys
 
@@ -129,7 +125,7 @@ Your customer wants to bring their own Anthropic key (cost attribution, vendor r
 | Customer wants their bill to come from their account, not yours | The Anthropic call uses customer A's key; the bill goes there |
 | Cross-customer pollution would be career-ending | Capability labels enforce per-customer worker pools; the dispatcher refuses cross-customer claims |
 
-### 4. SaaS-with-on-prem-customers ("hybrid SaaS")
+### 4. Hybrid SaaS with on-prem customers
 
 Some of your customers run agents on their own VPC. Their credentials never leave their network.
 
@@ -139,14 +135,14 @@ Some of your customers run agents on their own VPC. Their credentials never leav
 | Centralised observability without centralising secrets | The control plane sees telemetry events; redacted; secrets stay in the customer profile |
 | Onboarding a new on-prem customer must not require code changes | Drop in a new Sealed profile; register a worker with the right capability labels; you're done |
 
-### 5. Internal multi-team platform at a 500-person SaaS
+### 5. Internal multi-team platform
 
 Your platform team runs a shared agent platform for engineering, customer success, and sales. Each team has different vendor accounts.
 
 | Concern | How this pattern solves it |
 |---|---|
 | Engineering's GitHub token must not be reachable from a customer-success agent | Per-team profile; per-team worker pool with capability labels; cross-team claim refused |
-| You want one shared cost dashboard with per-team rollups | Observatory pillar tags every span with `sagewai.project_id`; the Grafana board has per-project rollups |
+| You want one shared cost dashboard with per-team rollups | Observatory tags every span with `sagewai.project_id`; the Grafana board has per-project rollups |
 | Audit committee wants to see who used what when | The Audit view records resolution, identity, run ID, timestamp — the per-team usage report drops out |
 
 ## Companion examples
@@ -159,11 +155,11 @@ Your platform team runs a shared agent platform for engineering, customer succes
 | 26 | [fleet_scoped_dispatch](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/26_fleet_scoped_dispatch.py) | Capability-based dispatch, project-scoped routing |
 | 20 | [fleet_workers](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/20_fleet_workers.py) | Foundation — distributed worker registration |
 
-## What to read next
+## See also
 
-- **Primary pillar:** [Fleet](/docs/pillars/fleet) — workers, dispatch, scoped routing.
-- **Sealed spine:** [Security — five pillars, one spine](/docs/security) — the cross-cutting Sealed architecture.
+- **Primary product:** [Fleet](/docs/pillars/fleet) — workers, dispatch, scoped routing.
+- **Security model:** [Security overview](/docs/security) — the cross-cutting credential, redaction, replay, and audit story.
 - **Sibling lighthouse:** [Observability and cost](/docs/lighthouse/observability-and-cost) — the audit and per-tenant cost rollup that pairs with this story.
-- **Sibling lighthouse:** [Moderation and classification](/docs/lighthouse/moderation-and-classification) — the sealed sandbox-ml pattern, same boundary, different workload.
+- **Sibling lighthouse:** [Moderation and classification](/docs/lighthouse/moderation-and-classification) — the same boundary applied to a different workload.
 - **Prerequisite foundation:** [Example 20 — fleet_workers](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/20_fleet_workers.py).
 - **Architecture pages:** [Security tiers](/docs/architecture/security-tiers), [Sandbox backends](/docs/architecture/sandbox-backends), [Execution modes](/docs/architecture/execution-modes).

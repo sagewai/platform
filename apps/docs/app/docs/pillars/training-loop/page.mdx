@@ -1,50 +1,48 @@
-# Pillar — Training Loop
+# Training Loop
 
-> **Bootstrap with the juggernauts. Capture their answers. Train your own model. Deploy locally. Never pay per-token again.**
+Bootstrap on a frontier model (Opus, GPT-5). Capture every successful agent answer through the Curator. Fine-tune a small open-weight model on commodity GPUs. Deploy via Ollama or `mlx_lm.server`. Subsequent traffic runs at near-zero per-token cost.
 
-The Training Loop pillar is the company's reason to be in one sentence. It's the answer to the [audience pin](/)'s Q3 question — *"the CFO is asking why the API bill quadrupled; cut it 50% in 10 weeks without an ML PhD."* Capture every Opus answer through the Curator, fine-tune a 3B base model on a free Colab T4, deploy via Ollama, serve real traffic at zero per-token cost.
+End-to-end, the loop is achievable in a weekend for under $5 of compute. Once your fine-tuned model handles the bulk of traffic, the frontier provider becomes a fallback for the long tail — and your AI bill stops being a function of your usage.
 
-End-to-end the loop costs under $5 and a weekend.
+## What you can do with it
 
-## What the pillar does
+- **Capture every answer automatically.** The Curator instruments agent runs and writes successful responses to JSONL at `~/.sagewai/training/`. No manual capture code.
+- **Promote training-grade samples.** Filter, dedupe, and promote the captured corpus into a dataset ready for fine-tuning.
+- **Trigger fine-tunes on a threshold.** When the dataset crosses a configured size, Sagewai kicks off a fine-tune job — manually or via the autopilot loop.
+- **Fine-tune small models on cheap GPUs.** Unsloth integration runs real LoRA fine-tunes of 3-7B base models on a free Colab T4 or a $0.30/hr Spheron GPU.
+- **Deploy locally.** Ship the LoRA via Ollama on your laptop, `mlx_lm.server` on Apple Silicon, or any OpenAI-compatible endpoint.
+- **Measure cost-down end-to-end.** Each fine-tune example reports $/call before and after, against the cloud baseline.
 
-- **Curator** — captures every agent answer to JSONL at `~/.sagewai/training/`. Auto-instrumented; you don't write capture code.
-- **`TrainingDataset`, `Promoter`** — promote captured samples to a training-grade dataset.
-- **`FineTuneJob`** — kicks off a fine-tune when the dataset crosses a threshold.
-- **Unsloth integration** — real LoRA fine-tunes of small (3-7B) base models on commodity GPUs.
-- **Inference spectrum** — five GPU-provisioning tiers, plus Ollama and `mlx_lm.server` for local deploy. See [Inference deployment](/docs/lighthouse/inference-deployment).
-- **Cost-down measurement** — every fine-tune example reports $/call vs the cloud baseline.
+## See it in action
 
-## What proves it works
+### Primary example — the loop end-to-end
 
-### Primary lighthouse
+[**Train your own model**](/docs/lighthouse/train-your-own-model) walks the full capture → fine-tune → deploy arc. Real numbers, real LoRA, real cost-down.
 
-[**Train your own model**](/docs/lighthouse/train-your-own-model) — the loop end-to-end. Examples 25, 36, 38, 38a, 44-48 compose into the full capture → fine-tune → deploy arc. Real numbers, real LoRA, real cost-down.
+### Sibling lighthouse — the deploy half
 
-### Sibling lighthouse
+[**Inference deployment**](/docs/lighthouse/inference-deployment) covers the deploy half in detail: five GPU-provisioning tiers, two local-deploy paths, one SDK surface.
 
-[**Inference deployment**](/docs/lighthouse/inference-deployment) — the *deploy* half in detail. Five GPU tiers, two local-deploy paths, one SDK surface.
+### Pattern + foundation examples
 
-### Pattern + foundation
-
-- [**Example 25 — `training_data_pipeline`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/25_training_data_pipeline.py) — Curator capture surface.
-- [**Example 36 — `autopilot_training_loop`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/36_autopilot_training_loop.py) — the loop closes.
-- [**Example 38 — `unsloth_finetune`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/38_unsloth_finetune.py) — real Unsloth fine-tune.
+- [**Example 25 — `training_data_pipeline`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/25_training_data_pipeline.py) — the Curator capture surface.
+- [**Example 36 — `autopilot_training_loop`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/36_autopilot_training_loop.py) — the autopilot closes the loop automatically.
+- [**Example 38 — `unsloth_finetune`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/38_unsloth_finetune.py) — real Unsloth LoRA fine-tune.
 - [**Example 38a — `mlx_lm_server_deploy`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/38a_mlx_lm_server_deploy.py) — Apple Silicon deploy.
 - [**Example 18 — `local_llm_routing`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/18_local_llm_routing.py) — Ollama / LM Studio swap.
 
 ## Where to go to ship it
 
-- **[Self-Learning Agents](/docs/core-concepts/self-learning)** — the SDK concept page for the loop.
-- **[Training & Fine-Tuning](/docs/guides/training)** — operator-level guide to running a fine-tune.
-- **[Inference — overview](/docs/inference)** — the five-tier comparison.
-- **[Inference — start with juggernauts](/docs/inference/start-with-juggernauts)** — why Opus and GPT-5 are the right starting point in Q1.
-- **[Inference — free CUDA via Colab](/docs/inference/free-cuda-via-colab)** — the democratisation tutorial.
+- **[Self-learning agents](/docs/core-concepts/self-learning)** — the SDK concept page for the loop.
+- **[Training & fine-tuning guide](/docs/guides/training)** — operator-level guide to running a fine-tune.
+- **[Inference overview](/docs/inference)** — the five-tier comparison.
+- **[Inference — start with juggernauts](/docs/inference/start-with-juggernauts)** — why a frontier model is the right starting point.
+- **[Inference — free CUDA via Colab](/docs/inference/free-cuda-via-colab)** — the cheapest fine-tune path.
 - **[Inference — rent when you grow](/docs/inference/rent-when-you-grow)** — RunPod, Vast.ai, Modal — when to pick which.
-- **[Inference — deploy locally](/docs/inference/deploy-locally)** — Ollama and LiteLLM, *"never pay per-token again"* explained.
+- **[Inference — deploy locally](/docs/inference/deploy-locally)** — Ollama and LiteLLM for the cost-down deploy.
 
-## Related
+## See also
 
-- **[Autopilot pillar](/docs/pillars/autopilot)** — the autopilot closes the loop by triggering `FineTuneJob` when the dataset crosses the threshold.
-- **[Observatory pillar](/docs/pillars/observatory)** — the cost-down measurement surface.
-- **[Pillars overview](/docs/pillars)** — the other four pillars.
+- **[Autopilot](/docs/pillars/autopilot)** — the loop closes automatically when Autopilot triggers a fine-tune as the corpus crosses the threshold.
+- **[Observatory](/docs/pillars/observatory)** — the cost-down measurement surface.
+- **[All products](/docs/pillars)** — the other four.
