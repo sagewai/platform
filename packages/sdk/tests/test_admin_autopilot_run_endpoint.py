@@ -247,7 +247,7 @@ async def test_run_returns_202_with_run_id(
     monkeypatch.setattr(
         autopilot_routes,
         "_build_mission_driver",
-        lambda r, b: FakeDriver(result=_completed_result(), sleep=0.5),
+        lambda r, b, **kw: FakeDriver(result=_completed_result(), sleep=0.5),
     )
 
     transport = ASGITransport(app=app)
@@ -283,7 +283,7 @@ async def test_run_kicks_background_task_that_drives_mission(
     monkeypatch.setattr(
         autopilot_routes,
         "_build_mission_driver",
-        lambda r, b: FakeDriver(result=_completed_result(cost_usd=0.005)),
+        lambda r, b, **kw: FakeDriver(result=_completed_result(cost_usd=0.005)),
     )
 
     transport = ASGITransport(app=app)
@@ -356,7 +356,7 @@ async def test_run_handles_driver_exception(
     monkeypatch.setattr(
         autopilot_routes,
         "_build_mission_driver",
-        lambda r, b: FakeDriver(exc=RuntimeError("boom")),
+        lambda r, b, **kw: FakeDriver(exc=RuntimeError("boom")),
     )
 
     transport = ASGITransport(app=app)
@@ -393,7 +393,7 @@ async def test_run_persists_trace_to_state_file(
     monkeypatch.setattr(
         autopilot_routes,
         "_build_mission_driver",
-        lambda r, b: FakeDriver(result=_completed_result()),
+        lambda r, b, **kw: FakeDriver(result=_completed_result()),
     )
 
     transport = ASGITransport(app=app)
@@ -425,7 +425,7 @@ async def test_run_unblocks_immediately_does_not_await_execution(
     monkeypatch.setattr(
         autopilot_routes,
         "_build_mission_driver",
-        lambda r, b: FakeDriver(result=_completed_result(), sleep=0.5),
+        lambda r, b, **kw: FakeDriver(result=_completed_result(), sleep=0.5),
     )
 
     transport = ASGITransport(app=app)

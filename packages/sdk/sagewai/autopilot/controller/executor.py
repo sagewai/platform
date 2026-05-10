@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import pathlib
+import re
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -161,7 +162,7 @@ class AgentExecutor:
         from .types import StepTelemetry
 
         system_prompt = self._load_prompt(agent.prompt_ref)
-        user_message = _build_user_message(context)
+        user_message = _build_user_message(context, agent=agent)
         messages_list: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
@@ -214,8 +215,42 @@ class AgentExecutor:
 
                 messages_list.append(assistant_msg)
 
-                # If no valid tool_calls list, this is the final turn.
                 raw_tool_calls = assistant_msg.get("tool_calls")
+                # Directive-mode fallback: when the model didn't emit
+                # native tool_calls but wrote ``/tool.NAME(args)``
+                # directives in its prose, parse them out and re-shape
+                # them as if they were native tool_calls so the same
+                # execution code below handles either path.
+                if (
+                    not (isinstance(raw_tool_calls, list) and raw_tool_calls)
+                    and assistant_msg.get("content")
+                    and agent.tools
+                    and self._config.tool_registry is not None
+                ):
+                    directives = _parse_directive_tool_calls(
+                        assistant_msg["content"], allowed=tuple(agent.tools)
+                    )
+                    if directives:
+                        raw_tool_calls = [
+                            {
+                                "id": d["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": d["name"],
+                                    "arguments": json.dumps(d["args"]),
+                                },
+                            }
+                            for d in directives
+                        ]
+                        # Persist on the message so the trace records the
+                        # synthesised tool_calls just like native ones.
+                        assistant_msg["tool_calls"] = raw_tool_calls
+                        logger.debug(
+                            "Agent %r: parsed %d directive tool calls from prose",
+                            agent.id, len(raw_tool_calls),
+                        )
+
+                # If no tool_calls (native or directive), this is the final turn.
                 if not isinstance(raw_tool_calls, list) or not raw_tool_calls:
                     break
 
@@ -233,7 +268,24 @@ class AgentExecutor:
                         args = raw_args or {}
 
                     if registry is not None:
-                        tool_result = await registry.execute(tool_name, args)
+                        try:
+                            tool_result = await registry.execute(tool_name, args)
+                        except KeyError:
+                            # Small models occasionally emit placeholder
+                            # names like 'function_name' or invent tools
+                            # outside the agent's declared list. Surface
+                            # the unknown-tool error back to the model as
+                            # a tool result so it can self-correct on the
+                            # next iteration instead of failing the step.
+                            available = ", ".join(agent.tools or ())
+                            tool_result = (
+                                f"[unknown tool {tool_name!r}; valid tools "
+                                f"for this agent: {available or '(none)'}. "
+                                "Reply directly with the deliverable, or "
+                                "call one of the valid tools by name.]"
+                            )
+                        except Exception as tool_exc:  # noqa: BLE001
+                            tool_result = f"[tool error: {type(tool_exc).__name__}: {tool_exc}]"
                     else:
                         tool_result = f"[Tool {tool_name!r} unavailable: no registry configured]"
 
@@ -312,7 +364,7 @@ class AgentExecutor:
             )
 
         system_prompt = self._load_prompt(agent.prompt_ref)
-        user_message = _build_user_message(context)
+        user_message = _build_user_message(context, agent=agent)
         messages_list: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
@@ -364,6 +416,39 @@ class AgentExecutor:
 
                 messages_list.append(assistant_msg)
 
+                # Directive-mode fallback (mirror of harness path): if the
+                # model didn't emit native tool_calls but wrote
+                # ``/tool.NAME(args)`` directives in prose, parse and
+                # promote them into ``tool_calls`` shape so the existing
+                # execution loop runs unchanged.
+                if (
+                    not (isinstance(raw_tool_calls, list) and raw_tool_calls)
+                    and assistant_msg.get("content")
+                    and agent.tools
+                    and self._config.tool_registry is not None
+                ):
+                    directives = _parse_directive_tool_calls(
+                        assistant_msg["content"], allowed=tuple(agent.tools)
+                    )
+                    if directives:
+                        synth = [
+                            {
+                                "id": d["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": d["name"],
+                                    "arguments": json.dumps(d["args"]),
+                                },
+                            }
+                            for d in directives
+                        ]
+                        assistant_msg["tool_calls"] = synth
+                        raw_tool_calls = synth
+                        logger.debug(
+                            "Agent %r: parsed %d directive tool calls from prose",
+                            agent.id, len(synth),
+                        )
+
                 if not isinstance(raw_tool_calls, list) or not raw_tool_calls:
                     break  # final response (no tool calls)
 
@@ -381,7 +466,24 @@ class AgentExecutor:
                         args = raw_args or {}
 
                     if registry is not None:
-                        tool_result = await registry.execute(tool_name, args)
+                        try:
+                            tool_result = await registry.execute(tool_name, args)
+                        except KeyError:
+                            # Small models occasionally emit placeholder
+                            # names like 'function_name' or invent tools
+                            # outside the agent's declared list. Surface
+                            # the unknown-tool error back to the model as
+                            # a tool result so it can self-correct on the
+                            # next iteration instead of failing the step.
+                            available = ", ".join(agent.tools or ())
+                            tool_result = (
+                                f"[unknown tool {tool_name!r}; valid tools "
+                                f"for this agent: {available or '(none)'}. "
+                                "Reply directly with the deliverable, or "
+                                "call one of the valid tools by name.]"
+                            )
+                        except Exception as tool_exc:  # noqa: BLE001
+                            tool_result = f"[tool error: {type(tool_exc).__name__}: {tool_exc}]"
                     else:
                         tool_result = f"[Tool {tool_name!r} unavailable: no registry configured]"
 
@@ -433,13 +535,129 @@ class AgentExecutor:
         return _GENERIC_SYSTEM_PROMPT
 
 
-def _build_user_message(context: dict) -> str:
-    """Serialise the context dict into a human-readable user message."""
-    if not context:
+# Sagewai-directive tool-call grammar: ``/tool.NAME(key='val', ...)``.
+# Mirrors :mod:`sagewai.directives.tokenizer` so the same syntax users
+# write at the playground also lands here when an LLM emits it in prose.
+_DIRECTIVE_TOOL_CALL_RE = re.compile(
+    r"/tool\.(?P<name>\w[\w.\-]*)\((?P<args>[^)]*)\)",
+    re.DOTALL,
+)
+# `key='val'` or `key="val"` — accepts both quote styles.
+_DIRECTIVE_KWARG_RE = re.compile(
+    r"""(?P<key>\w+)\s*=\s*(?P<val>'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")""",
+    re.DOTALL,
+)
+# Bare quoted string as the only argument: `/tool.fetch_url('https://…')`.
+_DIRECTIVE_BARE_RE = re.compile(
+    r"""^\s*(?P<val>'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")\s*$""",
+    re.DOTALL,
+)
+
+
+def _parse_directive_tool_calls(
+    text: str,
+    *,
+    allowed: tuple[str, ...] | None = None,
+) -> list[dict[str, Any]]:
+    """Extract ``/tool.NAME(args)`` directives from *text*.
+
+    Returns a list of ``{"id", "name", "args"}`` dicts in the same shape
+    the executor's tool-call loop already consumes from native
+    ``tool_calls``. ``allowed`` (when provided) gates which tool names
+    pass — directives referring to anything else are dropped silently
+    so a model hallucinating tool names can't crash the step.
+
+    Argument parsing accepts two forms:
+
+    * keyword args — ``/tool.fetch_url(url='https://…')``
+    * a single bare quoted string mapped to the first declared parameter
+      of the tool, or to ``query`` for ``web_search`` and ``url`` for
+      ``fetch_url`` (the two we ship by default)
+    """
+    out: list[dict[str, Any]] = []
+    if not text:
+        return out
+    for idx, m in enumerate(_DIRECTIVE_TOOL_CALL_RE.finditer(text)):
+        name = m.group("name")
+        if allowed is not None and name not in allowed:
+            continue
+        args_raw = m.group("args") or ""
+        args: dict[str, Any] = {}
+        # Try keyword args first.
+        for kw in _DIRECTIVE_KWARG_RE.finditer(args_raw):
+            args[kw.group("key")] = _strip_quotes(kw.group("val"))
+        if not args:
+            bare = _DIRECTIVE_BARE_RE.match(args_raw)
+            if bare:
+                value = _strip_quotes(bare.group("val"))
+                # Map the bare positional to a sensible kwarg by tool name.
+                bare_kw = "url" if name == "fetch_url" else "query"
+                args[bare_kw] = value
+        out.append({"id": f"directive-{idx}", "name": name, "args": args, "raw": m.group(0)})
+    return out
+
+
+def _strip_quotes(s: str) -> str:
+    if len(s) >= 2 and s[0] in "'\"" and s[-1] == s[0]:
+        return s[1:-1].encode("utf-8").decode("unicode_escape", errors="replace")
+    return s
+
+
+def _build_user_message(context: dict, agent: Agent | None = None) -> str:
+    """Serialise the context dict into a directive briefing for the LLM agent.
+
+    The agent is told (in this order) what role it has, which tools it
+    may call, what the goal is, and what's expected of it. The "act,
+    don't describe" guardrail is critical — without it, smaller local
+    models reliably output a description of the workflow instead of
+    actually executing the step.
+    """
+    goal = (context or {}).get("goal", "")
+    other_slots = {
+        k: v for k, v in (context or {}).items() if k != "goal" and not k.startswith("__")
+    }
+
+    lines: list[str] = []
+    if agent is not None:
+        agent_id = agent.id
+        agent_role = (agent.role or agent.id) if hasattr(agent, "role") else agent_id
+        lines.append(f"You are agent '{agent_id}' (role: {agent_role}) in a Sagewai mission.")
+        if getattr(agent, "tools", None):
+            lines.append(f"Tools you can call: {', '.join(agent.tools)}")
+            lines.append(
+                "Prefer the native function-calling interface when your model "
+                "supports it. If your model does not, you can call tools by "
+                "writing a Sagewai directive on its own line:"
+            )
+            lines.append("    /tool.NAME(arg1='value', arg2='value')")
+            lines.append(
+                "For example: /tool.fetch_url(url='https://example.com'). "
+                "The platform parses the directive, runs the tool, and feeds "
+                "the result back as your next input. Use either mechanism — "
+                "but actually call tools, do NOT describe what you would do. "
+                "Your final assistant message must contain the deliverable "
+                "(article, summary, decision, etc.), not a workflow plan."
+            )
+        else:
+            lines.append(
+                "You have no tools available. Produce the answer directly from the "
+                "input below — do not describe what you would do, write the actual "
+                "deliverable."
+            )
+
+    if goal:
+        lines.append("")
+        lines.append(f"Mission goal: {goal}")
+
+    if other_slots:
+        lines.append("")
+        lines.append("Inputs from upstream agents and slot values:")
+        for key, value in other_slots.items():
+            preview = str(value)
+            if len(preview) > 1500:
+                preview = preview[:1500] + "…"
+            lines.append(f"  {key}: {preview}")
+
+    if not lines:
         return "No additional context provided. Proceed with the task."
-    lines = ["Current mission context:"]
-    for key, value in context.items():
-        if key.startswith("__"):
-            continue  # skip internal slots like __blueprint_json__
-        lines.append(f"  {key}: {value}")
     return "\n".join(lines)

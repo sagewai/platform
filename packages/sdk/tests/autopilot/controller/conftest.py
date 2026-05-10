@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from sagewai.autopilot._types import AgentKind, Mode
@@ -109,6 +111,40 @@ def branched_mission() -> Mission:
     """A DRAFT mission backed by the batch blueprint (which has branches)."""
     bp = make_synthetic_batch_blueprint()
     return _make_mission_from_blueprint(bp, mission_id="ms-branched-001")
+
+
+@pytest.fixture(autouse=True)
+def _stub_litellm_acompletion(monkeypatch):
+    """Make ``litellm.acompletion`` return a successful stub response by default.
+
+    Without this, every LLM-kind agent step would surface as ``skipped``
+    (no API key is configured in CI). The driver promotes "all skipped"
+    to FAILED so the operator sees the missing-provider reason — which
+    is correct in production but inverts the lifecycle-success path
+    these tests pin.
+
+    Tests that explicitly verify the no-provider / error paths
+    (``test_executor.py`` etc.) override this with their own
+    ``monkeypatch.setattr("litellm.acompletion", _raise)`` — the local
+    patch wins because monkeypatch fixture ordering applies the test's
+    setup last.
+    """
+
+    async def _stub_acompletion(**kwargs):
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content="stub-llm-output",
+                        tool_calls=None,
+                    )
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=0, completion_tokens=0),
+            model=kwargs.get("model", "stub"),
+        )
+
+    monkeypatch.setattr("litellm.acompletion", _stub_acompletion)
 
 
 @pytest.fixture()

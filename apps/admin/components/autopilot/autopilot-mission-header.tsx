@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import type { AutopilotMissionDetail } from '@/utils/types';
 import { AutopilotStatusBadge } from '@/components/autopilot-status-badge';
 import { adminApi } from '@/utils/api';
@@ -23,7 +24,9 @@ export function AutopilotMissionHeader({
   mission: AutopilotMissionDetail;
   onRunStarted?: () => void;
 }) {
+  const router = useRouter();
   const [starting, setStarting] = useState(false);
+  const [rerunning, setRerunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
 
   const title = mission.goal_text || mission.id;
@@ -39,6 +42,19 @@ export function AutopilotMissionHeader({
       const msg = err instanceof Error ? err.message : 'Failed to start mission';
       setRunError(msg);
       setStarting(false);
+    }
+  }
+
+  async function handleRerun() {
+    setRerunning(true);
+    setRunError(null);
+    try {
+      const res = await adminApi.rerunAutopilotMission(mission.id);
+      router.push(`/autopilot/missions/${encodeURIComponent(res.mission_id)}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to re-run mission';
+      setRunError(msg);
+      setRerunning(false);
     }
   }
 
@@ -69,8 +85,20 @@ export function AutopilotMissionHeader({
         Running…
       </button>
     );
+  } else if (TERMINAL_STATUSES.has(mission.status)) {
+    runButton = (
+      <button
+        type="button"
+        disabled={rerunning}
+        aria-label="Re-run mission"
+        data-testid="rerun-mission-button"
+        onClick={handleRerun}
+        className="rounded-md border border-border bg-bg-surface text-sm px-3 py-1.5 font-medium text-text-secondary hover:bg-bg-subtle disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+      >
+        {rerunning ? 'Cloning…' : 'Re-run'}
+      </button>
+    );
   }
-  // Terminal statuses: no button rendered.
 
   return (
     <header

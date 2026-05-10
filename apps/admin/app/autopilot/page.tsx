@@ -11,6 +11,7 @@ import { AutopilotGoalInput } from '@/components/autopilot-goal-input';
 import { AutopilotMissionList } from '@/components/autopilot-mission-list';
 import { EmptyAutopilotPage } from '@/components/autopilot/empty-autopilot-page';
 import { OnboardingNudge } from '@/components/autopilot/onboarding-nudge';
+import { SystemReadinessBanner } from '@/components/autopilot/system-readiness-banner';
 
 const TIER_OPTIONS: { tier: AutopilotTier; label: string; description: string }[] = [
   {
@@ -31,7 +32,7 @@ const TIER_OPTIONS: { tier: AutopilotTier; label: string; description: string }[
 ];
 
 function QuotaBar({ used, limit }: { used: number; limit: number | null }) {
-  if (limit === null) return null;
+  if (limit == null || used == null) return null;
   const pct = Math.min(100, Math.round((used / limit) * 100));
   const colour =
     pct >= 90 ? 'bg-error' : pct >= 70 ? 'bg-warning' : 'bg-success';
@@ -186,6 +187,10 @@ export default function AutopilotPage() {
           <p className="text-sm text-error m-0">{actionError}</p>
         </div>
       )}
+
+      {/* First-run readiness — shows missing-config warnings the user is
+          most likely to miss (no LLM provider, no search API key). */}
+      <SystemReadinessBanner />
 
       {/* Status card */}
       {status?.enabled ? (

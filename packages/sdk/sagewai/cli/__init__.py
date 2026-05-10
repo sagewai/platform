@@ -161,6 +161,7 @@ from sagewai.cli.status import (  # noqa: E402, F401
     _check_tcp_connection,
     _resolve_host_port,
 )
+from sagewai.cli.provider import provider  # noqa: E402
 from sagewai.cli.strategy import strategy  # noqa: E402
 from sagewai.cli.token import token  # noqa: E402
 from sagewai.cli.workflow import workflow  # noqa: E402
@@ -169,6 +170,7 @@ cli.add_command(agent)
 cli.add_command(workflow)
 cli.add_command(mcp)
 cli.add_command(model)
+cli.add_command(provider)
 cli.add_command(prompt)
 cli.add_command(token)
 cli.add_command(status)

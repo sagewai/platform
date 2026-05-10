@@ -65,7 +65,7 @@ export default function AutopilotSettingsPage() {
               </span>
             </div>
           )}
-          {status?.enabled && status.quota_limit !== null && (
+          {status?.enabled && status.quota_limit != null && status.quota_used != null && (
             <div className="px-5 py-4">
               <p className="text-xs uppercase tracking-wide text-text-muted font-medium mb-2">
                 Quota

@@ -1304,8 +1304,28 @@ export const adminApi = {
   disableAutopilot: () =>
     analyticsClient.post<{ status: string }>('/api/v1/autopilot/disable', {}),
 
+  getAutopilotSystemReadiness: () =>
+    analyticsClient.get<{
+      providers: Array<{
+        id: string;
+        provider_name: string;
+        display_name: string;
+        default: boolean;
+        model: string | null;
+        type: string;
+      }>;
+      default_provider: { id: string; provider_name: string; model: string | null } | null;
+      search_keys_set: { serper: boolean; tavily: boolean; brave: boolean };
+      active_search_backend: string;
+      warnings: Array<{ code: string; severity: 'error' | 'warning' | 'info'; message: string; fix: string }>;
+      ready: boolean;
+    }>('/api/v1/autopilot/system-readiness'),
+
   submitAutopilotGoal: (goal: string) =>
     analyticsClient.post<AutopilotGoalResponse>('/api/v1/autopilot/goal', { goal }),
+
+  synthesizeAutopilotBlueprint: (goal: string) =>
+    analyticsClient.post<AutopilotGoalResponse>('/api/v1/autopilot/synthesize', { goal }),
 
   approveAutopilotMission: (missionId: string, blueprintId?: string) =>
     analyticsClient.post<{ status: string; mission_id: string }>(
@@ -1313,10 +1333,29 @@ export const adminApi = {
       { mission_id: missionId, blueprint_id: blueprintId ?? null },
     ),
 
-  listAutopilotMissions: (limit?: number) => {
-    const qs = limit ? `?limit=${limit}` : '';
-    return analyticsClient.get<AutopilotMissionsResponse>(`/api/v1/autopilot/missions${qs}`);
+  listAutopilotMissions: (
+    limitOrOpts?: number | { limit?: number; offset?: number; q?: string; status?: string },
+  ) => {
+    const opts =
+      typeof limitOrOpts === "number"
+        ? { limit: limitOrOpts }
+        : limitOrOpts ?? {};
+    const params = new URLSearchParams();
+    if (opts.limit !== undefined) params.set("limit", String(opts.limit));
+    if (opts.offset !== undefined) params.set("offset", String(opts.offset));
+    if (opts.q) params.set("q", opts.q);
+    if (opts.status) params.set("status", opts.status);
+    const qs = params.toString() ? `?${params.toString()}` : "";
+    return analyticsClient.get<AutopilotMissionsResponse>(
+      `/api/v1/autopilot/missions${qs}`,
+    );
   },
+
+  rerunAutopilotMission: (missionId: string) =>
+    analyticsClient.post<{ mission_id: string; source_mission_id: string; status: string }>(
+      `/api/v1/autopilot/missions/${encodeURIComponent(missionId)}/rerun`,
+      {},
+    ),
 
   cancelAutopilotMission: (missionId: string, reason: string) =>
     analyticsClient.post<{ mission_id: string; status: string }>(

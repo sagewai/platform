@@ -673,6 +673,17 @@ class AdminStateFile:
         provider.setdefault("env_var_key", env_map.get(pname, ""))
         provider.setdefault("status", "configured")
         provider.setdefault("env_var_set", False)
+        provider.setdefault("default", False)
+        # If this provider is being upserted as the default, clear the
+        # flag on all other providers in the same project scope so there
+        # is at most one default per scope at any time.
+        if provider.get("default"):
+            scope = provider.get("project_id")
+            for other in providers:
+                if other.get("provider_name") == pname:
+                    continue
+                if other.get("project_id") == scope:
+                    other["default"] = False
         # Upsert by provider_name
         for i, existing in enumerate(providers):
             if existing.get("provider_name") == pname:
@@ -682,6 +693,37 @@ class AdminStateFile:
         providers.append(provider)
         self._write(data)
         return provider
+
+    def set_default_provider(
+        self,
+        provider_id: str,
+        project_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Mark *provider_id* as the default (one default per project scope).
+
+        Looks the provider up by ``id`` first, then by ``provider_name``,
+        within the given *project_id* scope. Returns the updated record,
+        or ``None`` if no matching provider exists.
+        """
+        data = self._read()
+        self._migrate(data)
+        providers = data.get("providers", [])
+        target = next(
+            (
+                p
+                for p in providers
+                if (p.get("id") == provider_id or p.get("provider_name") == provider_id)
+                and p.get("project_id") == project_id
+            ),
+            None,
+        )
+        if target is None:
+            return None
+        for p in providers:
+            if p.get("project_id") == project_id:
+                p["default"] = (p is target)
+        self._write(data)
+        return target
 
     def delete_provider(self, provider_id: str) -> bool:
         data = self._read()

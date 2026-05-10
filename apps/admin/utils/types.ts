@@ -1241,6 +1241,10 @@ export interface AutopilotMission {
 export interface AutopilotMissionsResponse {
   missions: AutopilotMission[];
   total: number;
+  count?: number;
+  offset?: number;
+  limit?: number;
+  has_more?: boolean;
 }
 
 // ── sandbox config (Plan 3b-i) ──────────────────────────────────────

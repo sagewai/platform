@@ -50,10 +50,18 @@ export function AutopilotGoalInput({ onMissionApproved, initialGoal }: Autopilot
     }
   }
 
-  function handleRetry() {
+  async function handleRetry() {
+    if (!goal.trim() || retrying) return;
     setRetrying(true);
-    setResult(null);
-    setRetrying(false);
+    setError(null);
+    try {
+      const response = await adminApi.synthesizeAutopilotBlueprint(goal.trim());
+      setResult(response);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Blueprint synthesis failed.');
+    } finally {
+      setRetrying(false);
+    }
   }
 
   function handleCancel() {
@@ -161,16 +169,16 @@ export function AutopilotGoalInput({ onMissionApproved, initialGoal }: Autopilot
                 No matching blueprint found
               </p>
               <p className="text-sm text-text-secondary m-0">
-                The service will generate a custom blueprint — this may take a moment.
+                Click Generate to have the service synthesize a custom blueprint for this goal.
               </p>
             </div>
             <button
               type="button"
               onClick={handleRetry}
               disabled={retrying}
-              className="shrink-0 px-3 py-2 text-sm font-medium rounded-lg border border-border bg-bg-surface cursor-pointer hover:bg-bg-subtle transition-colors disabled:opacity-50"
+              className="shrink-0 px-3 py-2 text-sm font-medium rounded-lg border border-primary bg-primary text-white cursor-pointer hover:bg-primary/90 transition-colors disabled:opacity-50"
             >
-              {retrying ? 'Checking…' : 'Retry'}
+              {retrying ? 'Generating…' : 'Generate'}
             </button>
           </motion.div>
         )}

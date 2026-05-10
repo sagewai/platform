@@ -95,11 +95,11 @@ export const ALL_GROUPS: NavGroup[] = [
   /* ── AUTOPILOT ── */
   {
     id: 'autopilot',
-    label: 'Autopilot',
+    label: 'Autopilot (beta)',
     icon: Zap,
     defaultHref: '/autopilot',
     items: [
-      { href: '/autopilot', label: 'Autopilot' },
+      { href: '/autopilot', label: 'Autopilot (beta)' },
     ],
   },
 

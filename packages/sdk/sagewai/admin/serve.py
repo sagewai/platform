@@ -811,6 +811,26 @@ def create_admin_serve_app(
             return JSONResponse({"status": "ok"})
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
+    @app.post("/api/v1/providers/{provider_id}/default")
+    async def set_default_provider(provider_id: str, request: Request) -> JSONResponse:
+        """Mark *provider_id* as the default LLM provider for the project scope.
+
+        At most one provider can be the default per project (or org-global
+        when no ``X-Project-ID`` header is present). The autopilot mission
+        driver will pick this provider's credentials before any other.
+        """
+        pid = _project_id(request)
+        result = sf.set_default_provider(provider_id, project_id=pid)
+        if result is None:
+            return JSONResponse({"detail": "Provider not found"}, status_code=404)
+        logger.info(
+            "Provider set default: %s (project=%s)",
+            result.get("provider_name", ""),
+            pid,
+            extra={"event": "provider.default", "provider": result.get("provider_name", "")},
+        )
+        return JSONResponse({"status": "ok", "id": result.get("id"), "default": True})
+
     @app.get("/api/v1/providers/ollama/models")
     async def ollama_models() -> JSONResponse:
         from sagewai.admin.provider_probes import detect_ollama

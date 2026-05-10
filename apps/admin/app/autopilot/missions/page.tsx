@@ -3,7 +3,7 @@
 'use client';
 
 import { useCallback, useEffect, useReducer, useState } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, Search } from 'lucide-react';
 import { adminApi } from '@/utils/api';
 import type { AutopilotMission, AutopilotMissionStatus } from '@/utils/types';
 import { AutopilotMissionList } from '@/components/autopilot-mission-list';
@@ -28,29 +28,57 @@ const STATUS_FILTERS: { value: AutopilotMissionStatus | 'all'; label: string }[]
   { value: 'cancelled', label: 'Cancelled' },
 ];
 
+const PAGE_SIZE = 25;
+
 export default function MissionsPage() {
   const [missions, setMissions] = useState<AutopilotMission[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [statusFilter, setStatusFilter] = useState<AutopilotMissionStatus | 'all'>('all');
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
   const [cancelModal, setCancelModal] = useState<{ id: string } | null>(null);
   const [cancelReason, setCancelReason] = useState('');
   const [cancelling, setCancelling] = useState(false);
   const [liveStatuses, dispatch] = useReducer(liveStatusReducer, {});
 
-  const fetchMissions = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await adminApi.listAutopilotMissions(200);
-      setMissions(res.missions);
-    } catch {
-      // non-fatal
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
+  // Debounce the search input so we don't fire a request per keystroke.
   useEffect(() => {
-    fetchMissions();
+    const id = setTimeout(() => setDebouncedSearch(search.trim()), 250);
+    return () => clearTimeout(id);
+  }, [search]);
+
+  const fetchMissions = useCallback(
+    async (opts?: { offset?: number; append?: boolean }) => {
+      const offset = opts?.offset ?? 0;
+      const append = opts?.append ?? false;
+      if (append) setLoadingMore(true);
+      else setLoading(true);
+      try {
+        const res = await adminApi.listAutopilotMissions({
+          limit: PAGE_SIZE,
+          offset,
+          q: debouncedSearch || undefined,
+          status: statusFilter === 'all' ? undefined : statusFilter,
+        });
+        setTotal(res.total ?? res.missions.length);
+        setHasMore(Boolean(res.has_more));
+        setMissions((prev) => (append ? [...prev, ...res.missions] : res.missions));
+      } catch {
+        // non-fatal
+      } finally {
+        if (append) setLoadingMore(false);
+        else setLoading(false);
+      }
+    },
+    [debouncedSearch, statusFilter],
+  );
+
+  // Refetch from the top whenever the search query or status filter changes.
+  useEffect(() => {
+    fetchMissions({ offset: 0, append: false });
   }, [fetchMissions]);
 
   const handleEvent = useCallback((e: MissionStatusEvent) => {
@@ -73,12 +101,6 @@ export default function MissionsPage() {
     }
   }
 
-  const effectiveStatuses = { ...liveStatuses };
-  const filtered = missions.filter((m) => {
-    const s = effectiveStatuses[m.id] ?? m.status;
-    return statusFilter === 'all' || s === statusFilter;
-  });
-
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -87,13 +109,28 @@ export default function MissionsPage() {
         </h1>
         <button
           type="button"
-          onClick={fetchMissions}
+          onClick={() => fetchMissions({ offset: 0, append: false })}
           disabled={loading}
           className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border border-border bg-transparent cursor-pointer hover:bg-bg-subtle text-text-secondary transition-colors disabled:opacity-50"
         >
           <RefreshCw size={11} className={loading ? 'animate-spin' : ''} />
           Refresh
         </button>
+      </div>
+
+      {/* Search */}
+      <div className="relative">
+        <Search
+          size={14}
+          className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none"
+        />
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search by goal, blueprint, category, or mission id…"
+          className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-border bg-bg-surface text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent transition-colors"
+        />
       </div>
 
       {/* Status filter chips */}
@@ -120,17 +157,40 @@ export default function MissionsPage() {
             <div key={i} className="h-12 bg-bg-subtle rounded-lg" />
           ))}
         </div>
-      ) : filtered.length === 0 && missions.length === 0 ? (
-        <EmptyMissionsPage />
+      ) : missions.length === 0 ? (
+        debouncedSearch || statusFilter !== 'all' ? (
+          <p className="text-sm text-text-muted py-8 text-center m-0">
+            No missions match these filters.
+          </p>
+        ) : (
+          <EmptyMissionsPage />
+        )
       ) : (
-        <AutopilotMissionList
-          missions={filtered}
-          liveStatuses={liveStatuses}
-          onCancel={(id) => {
-            setCancelModal({ id });
-            setCancelReason('');
-          }}
-        />
+        <>
+          <AutopilotMissionList
+            missions={missions}
+            liveStatuses={liveStatuses}
+            onCancel={(id) => {
+              setCancelModal({ id });
+              setCancelReason('');
+            }}
+          />
+          <div className="flex items-center justify-between text-xs text-text-muted">
+            <span>
+              Showing {missions.length} of {total}
+            </span>
+            {hasMore && (
+              <button
+                type="button"
+                onClick={() => fetchMissions({ offset: missions.length, append: true })}
+                disabled={loadingMore}
+                className="px-3 py-1.5 rounded-md border border-border bg-bg-surface cursor-pointer hover:bg-bg-subtle text-text-secondary transition-colors disabled:opacity-50"
+              >
+                {loadingMore ? 'Loading…' : 'Load more'}
+              </button>
+            )}
+          </div>
+        </>
       )}
 
       {/* Cancel confirmation modal */}

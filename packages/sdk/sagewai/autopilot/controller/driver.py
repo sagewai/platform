@@ -176,6 +176,30 @@ class MissionDriver:
             )
 
         duration = time.monotonic() - t0
+
+        # When every step skipped (e.g. no LLM provider configured, or all
+        # nodes hit a graceful-degrade path) the mission did no real work —
+        # surface that as a failure rather than a misleading success so the
+        # operator sees the underlying reason in the UI.
+        if steps and all(s.status == "skipped" for s in steps):
+            error_msg = steps[0].output_preview or (
+                "All agent steps were skipped (no provider configured?)"
+            )
+            mission.transition_to(MissionState.FAILED)
+            logger.warning(
+                "Mission %s failed: all %d steps skipped (%s)",
+                mission.mission_id,
+                len(steps),
+                error_msg,
+            )
+            return MissionRunResult(
+                mission_id=mission.mission_id,
+                status="failed",
+                steps=tuple(steps),
+                duration_seconds=duration,
+                error=error_msg,
+            )
+
         mission.transition_to(MissionState.COMPLETED)
         logger.info(
             "Mission %s completed in %.3fs (%d steps)",
