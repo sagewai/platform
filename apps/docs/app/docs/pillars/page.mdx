@@ -1,10 +1,10 @@
 # What's in the platform
 
-Sagewai is a Python SDK and a runtime, organised around five products. Each ships independently and works on its own; together they form the agent platform you can run end-to-end. This section is the deep-dive page per product.
+Sagewai is a Python SDK and a runtime, organised around six products. Each ships independently and works on its own; together they form the agent platform you can run end-to-end. This section is the deep-dive page per product.
 
 If you're new to Sagewai, the [getting-started guide](/docs/getting-started) is the right place to begin. If you're choosing what to adopt first, this page gives a one-line summary of each product and links to the deep-dive.
 
-## The five products
+## The six products
 
 ### [SDK](/docs/pillars/sdk)
 
@@ -18,6 +18,10 @@ State a goal in plain English; Sagewai designs the agent graph, instantiates a m
 
 Distributed workers with capability matching and project-scoped dispatch. The horizontal-scale story for production. A worker tagged `project_id=health-prod` cannot claim a task tagged `project_id=fin-prod`; cross-tenant leakage is enforced at the dispatch boundary, not at policy.
 
+### [Sealed](/docs/security)
+
+Per-CLI workload identity, vault-backed secrets with just-in-time resolution, prompt and tool-output redaction at the host RPC seam, replay-safe audit, per-key access control, just-in-time human-in-the-loop on high-privilege actions. Customer credentials live in the sandbox only — encrypted at rest, scrubbed on release. The control surface a security review signs.
+
 ### [Observatory](/docs/pillars/observatory)
 
 Cost tracking, OpenTelemetry pipeline, mission-control HUD, Grafana board, audit log. Two surfaces (HUD for live operations, Grafana for analytics and finance) read the same telemetry stream so they can't disagree. Per-project tagging gives finance the per-tenant cost breakdown without manual reconciliation.
@@ -25,12 +29,6 @@ Cost tracking, OpenTelemetry pipeline, mission-control HUD, Grafana board, audit
 ### [Training Loop](/docs/pillars/training-loop)
 
 Bootstrap on Opus or GPT-5, capture the answers via the Curator, fine-tune a small open-weight model on commodity GPUs, deploy via Ollama or `mlx_lm.server`. Marginal cost falls toward zero once your fine-tuned model handles most traffic.
-
-## Security
-
-Across all five products, Sagewai layers a defense-in-depth security model: per-CLI workload identity, vault-backed secrets with just-in-time resolution, prompt and tool-output redaction at the host RPC seam, replay-safe audit, per-key access control, just-in-time human-in-the-loop on high-privilege actions.
-
-See the [security overview](/docs/security) for the full model.
 
 ## How to read each product page
 
