@@ -1,88 +1,82 @@
 import { TechArticleJsonLd } from '@/components/structured-data';
 
 export const metadata = {
-  title: 'Sandbox backends — Docker, Podman, Kubernetes, AgentCore',
+  title: 'Sandbox backends — Docker, Kubernetes, Lambda',
   description:
-    'Pluggable sandbox backends for Sagewai workers. Operator decision guide: pick the backend that matches your security and scale posture.',
+    'Pick a sandbox backend for your Sagewai workers. Decision guide across Docker, Kubernetes, and Lambda — with the mode/backend compatibility matrix, primitive translations, and heterogeneous-fleet patterns.',
   alternates: { canonical: 'https://docs.sagewai.ai/docs/architecture/sandbox-backends' },
 };
 
 <TechArticleJsonLd
   name="Sagewai sandbox backends"
-  description="Pluggable sandbox backends for Sagewai — Docker, Podman, Kubernetes, AgentCore — with the operator decision guide."
+  description="Pluggable sandbox backends for Sagewai — Docker, Kubernetes, Lambda — with decision guide and primitive translations."
   path="/docs/architecture/sandbox-backends"
   articleSection="Architecture"
 />
 
 # Sandbox backends
 
-Sagewai supports pluggable sandbox backends, and this page is the
-operator decision guide for picking one. Two distinct backend types
-exist in the platform — **sandbox backends** (where the sandbox runs)
-and **identity backends** (where Sealed credentials come from). The
-two are orthogonal and can be mixed in a single deployment: a
-Kubernetes sandbox backend can run alongside a Vault identity backend,
-or Docker sandboxes alongside the builtin file-based identity store.
-This page focuses on the sandbox decision — Docker, Kubernetes, or
-Lambda — and treats identity backends only briefly. Cross-link to the
-[Security tiers](/docs/architecture/security-tiers) page for where
-Sealed identities fit in the broader credential model.
+This page is the decision guide for picking the sandbox backend that runs your Sagewai workers' isolation containers. If you're deploying Sagewai and need to choose between Docker, Kubernetes, or Lambda — or work out whether a heterogeneous fleet makes sense — start here.
 
-## Sandbox backends overview
+## Before you start
 
-The sandbox backend determines *where* the sandbox container, pod, or
-function lives. It is selected per worker (each worker advertises its
-sandbox backend via fleet capability labels; the autopilot routes runs
-to capable workers).
+Useful background:
 
-Today, `NullBackend`, `DockerBackend`, and `KubernetesBackend` are shipped.
-`LambdaBackend` (planned) is designed against the same
-`SandboxBackend` Protocol and slots in additively — workflows that run on
-Docker today route to a Kubernetes worker tomorrow without code changes.
-Firecracker and gVisor backends are tracked as future work.
+- The [runtime topology](/docs/architecture/runtime-topology) — control plane, workers, and sandboxes.
+- The [execution modes](/docs/architecture/execution-modes) — bare, sandboxed, identity, full CLI agent.
 
-## Implementations
+## Two kinds of "backend"
+
+Sagewai has two pluggable backend types and they're independent. Always say which one you mean.
+
+- **Sandbox backend** — where the sandbox container, pod, or function lives. Docker, Kubernetes, Lambda, Null. This page is about this one.
+- **Identity backend** — where Sealed credentials are sourced from. Builtin file store, HashiCorp Vault, 1Password, AWS Secrets Manager, SOPS, Bitwarden. See [Vault backend](/docs/guides/sealed-vault).
+
+The two are orthogonal. A Kubernetes sandbox backend can run alongside a Vault identity backend. Docker sandboxes can run alongside the builtin file store. A single deployment can mix freely.
+
+## Available backends
+
+Sagewai ships `Null`, `Docker`, and `Kubernetes` today. `Lambda` is on the roadmap for event-driven workloads. `Firecracker` and `gVisor` are tracked as future work for ultra-isolated tenants.
 
 | Backend | Used for | Modes supported | Cold-start | Pool support | Status |
 |---|---|---|---|---|---|
-| `NullBackend` | Mode 0 only — no actual sandbox | 0 | n/a | n/a | shipped |
-| `DockerBackend` | local dev, single-VM ops, simple production | 0, 1, 2, 3, 3b | 2-8s | warm container pool (the sandbox warm-pool) | shipped |
-| `KubernetesBackend` | production at scale, multi-tenant clusters | 0, 1, 2, 3, 3b | 5-15s | Deployment with min-replicas | shipped |
-| `LambdaBackend` (planned) | event-driven, scale-to-zero, short tools | 0, 1, 2 only | ~ms (warm), ~1-3s (cold); provisioned concurrency for hot paths | provisioned concurrency | (planned) |
-| `FirecrackerBackend` (future) | ultra-isolated tenants on shared hosts | 0, 1, 2, 3, 3b | &lt;1s | warm microVM pool | not planned |
-| `gVisorBackend` (future) | enhanced isolation over Docker | 0, 1, 2, 3, 3b | similar to Docker | similar to Docker | not planned |
+| Null | bare mode only — no actual sandbox | bare | n/a | n/a | shipped |
+| Docker | local dev, single-VM ops, simple production | all modes | 2-8s | warm container pool | shipped |
+| Kubernetes | production at scale, multi-tenant clusters | all modes | 5-15s | Deployment with min-replicas | shipped |
+| Lambda | event-driven, scale-to-zero, short tools | bare, sandboxed, identity (no CLI agent) | ~ms warm / 1-3s cold; provisioned concurrency for hot paths | provisioned concurrency | roadmap |
+| Firecracker | ultra-isolated tenants on shared hosts | all modes | &lt;1s | warm microVM pool | future |
+| gVisor | enhanced isolation over Docker | all modes | similar to Docker | similar to Docker | future |
 
-## Mode × Backend compatibility matrix
+## Mode × backend compatibility
 
-Every workflow's `requires_sandbox_mode` must be supported by at least
-one available worker's backend.
+Every workflow's `requires_sandbox_mode` must be supported by at least one available worker's backend.
 
 | Mode | Null | Docker | Kubernetes | Lambda |
 |---|:---:|:---:|:---:|:---:|
-| **0 — Bare** | ✓ | ✓ | ✓ | ✓ |
-| **1 — Sandboxed (no identity)** | ✗ | ✓ | ✓ | ✓ |
-| **2 — Identity** | ✗ | ✓ | ✓ | ✓ |
-| **3 — Full (CLI agent)** | ✗ | ✓ | ✓ | ✗ |
-| **3b — Full + JIT callback** | ✗ | ✓ | ✓ | ✗ |
+| Bare | ✓ | ✓ | ✓ | ✓ |
+| Sandboxed (no identity) | ✗ | ✓ | ✓ | ✓ |
+| Identity | ✗ | ✓ | ✓ | ✓ |
+| Full CLI agent | ✗ | ✓ | ✓ | ✗ |
+| Full CLI agent + JIT callback | ✗ | ✓ | ✓ | ✗ |
 
-## Why Lambda doesn't support Mode 3
+### Why Lambda doesn't run full CLI agent mode
 
 - 15-minute hard execution timeout — too short for typical CLI agent sessions (Claude Code can run 30+ minutes on complex prompts).
 - No persistent filesystem (10 GB ephemeral, gone at function end) — multi-step CLI sessions can't accumulate work.
-- No interactive shell, no long-lived RPC daemon — the bidirectional callback channel (Mode 3b) is awkward to maintain over Lambda's request-response model.
+- No interactive shell, no long-lived RPC daemon — the bidirectional callback channel is awkward to maintain over Lambda's request-response model.
 - Each invocation is a fresh container — the pool reset model is "the runtime always discards"; provisioned concurrency mitigates cold-start cost but doesn't change the model.
 
-## Why Kubernetes supports all modes
+### Why Kubernetes runs every mode
 
-- Pods can run for hours (matches Mode 3 CLI agent durations).
+- Pods can run for hours (matches CLI agent durations).
 - Multi-container pod pattern (CLI agent + sidecar tool runner) is clean.
-- Native security primitives map cleanly: `NetworkPolicy` resource → our `NetworkPolicy` enum.
+- Kubernetes `NetworkPolicy` resources map cleanly to Sagewai's `NetworkPolicy` enum.
 - StatefulSet supports persistence-across-runs if a workflow benefits from it.
 - Cluster autoscaler handles capacity for pool scaling.
 
-## Per-backend primitive translations
+## How each backend implements the abstract primitives
 
-Each backend translates the abstract sandbox primitives to its native API:
+Sagewai expresses sandbox concepts (start, stop, env injection, network policy, pool reuse, cleanup) as a single interface; each backend translates them to its native API.
 
 | Primitive | Docker | Kubernetes | Lambda |
 |---|---|---|---|
@@ -93,17 +87,15 @@ Each backend translates the abstract sandbox primitives to its native API:
 | `NetworkPolicy.NONE` | iptables drop / no network | NetworkPolicy `egress: []`, `ingress: []` | VPC isolated subnet, no NAT gateway |
 | `NetworkPolicy.EGRESS_ONLY` | bridge network, no inbound | NetworkPolicy egress to allowed CIDRs | VPC with NAT gateway, no inbound |
 | `NetworkPolicy.FULL` | host network or default bridge | default networking | normal Lambda networking |
-| Pool reuse (Plan 1.5) | warm container pool, reset env between runs | warm pod pool via Deployment with min-replicas, reset env | provisioned concurrency (limited reuse model) |
-| `cleanup_run` (Sealed-iii.A) | in-memory `set_env({})` (Plan 1.5: per-exec env model) | in-memory `set_env({})` (Plan 1.5: per-exec env model) | n/a (every invoke is fresh; nothing to scrub) |
+| Pool reuse | warm container pool, reset env between runs | warm pod pool via Deployment with min-replicas, reset env | provisioned concurrency (limited reuse model) |
+| Per-run cleanup | per-exec env reset in-memory | per-exec env reset in-memory | n/a (every invoke is fresh; nothing to scrub) |
 | Resource limits | `--memory --cpus` | `resources.limits.memory/cpu` | function memory configuration (CPU is a function of memory) |
 | Workdir mount | `--mount` bind to host path or named volume | `volumeMounts` + `volumes` (PVC, emptyDir, hostPath) | `/tmp` (ephemeral 10 GB max) |
 | Image digest pinning | `image@sha256:...` | same | container image URI with digest |
 
 ## Heterogeneous fleets
 
-Sagewai supports a fleet where different workers run different sandbox
-backends. Each worker advertises its backend via
-`Worker.advertised_labels`:
+Sagewai supports a fleet where different workers run different sandbox backends. Each worker advertises its backend via capability labels:
 
 ```python
 {
@@ -114,75 +106,60 @@ backends. Each worker advertises its backend via
 }
 ```
 
-The fleet dispatcher matches a run's requirements against worker
-labels. A run that requires Mode 3 with the `claude-code` image variant
-won't route to a Lambda-backend worker; it will route to a Docker or
-k8s worker that advertises the variant.
+The fleet dispatcher matches a run's requirements against worker labels. A run that requires full-CLI-agent mode with the `claude-code` image variant won't route to a Lambda-backend worker; it will route to a Docker or Kubernetes worker that advertises the variant.
 
 This means a deployment can:
 
 - Use Docker workers for dev/CI (low overhead, shared tooling).
 - Use Kubernetes workers for production scale.
-- Use Lambda workers for sporadic Mode 1/2 jobs that benefit from scale-to-zero economics.
+- Use Lambda workers for sporadic short jobs that benefit from scale-to-zero economics.
 
 All in the same fleet, with workflows automatically routed appropriately.
 
-## Backend selection guidance
+## Picking a backend
 
-For most operators:
+Most operators land in one of these patterns:
 
 - **Single VM / dev laptop** → Docker.
 - **Self-managed production** → Docker (small) or Kubernetes (scale).
 - **Multi-tenant SaaS at scale** → Kubernetes. Per-namespace isolation, RBAC, NetworkPolicy.
-- **Sporadic batch workloads with cost sensitivity** → Lambda for the Mode 1/2 portion + Docker/K8s for the Mode 3 portion.
-- **Highest-isolation tenants** → wait for FirecrackerBackend or use a dedicated cluster per tenant on Kubernetes.
+- **Sporadic batch workloads with cost sensitivity** → Lambda for the short Sandboxed/Identity portion + Docker/Kubernetes for the full-CLI-agent portion.
+- **Highest-isolation tenants** → wait for Firecracker, or use a dedicated Kubernetes cluster per tenant.
 
-A single deployment can mix: most workers on Kubernetes, a few Lambda
-workers for cost-optimised small tasks.
+A single deployment can mix: most workers on Kubernetes, a few Lambda workers for cost-optimised small tasks.
 
-## Identity backends
-
-Sagewai also supports pluggable identity backends — where Sealed
-credentials originate. The default is the builtin file-based store
-(`~/.sagewai/profiles.json`, encrypted at rest). Vault, 1Password, AWS
-Secrets Manager, SOPS, and Bitwarden backends are planned in the
-Sealed-ii decomposition. The choice of identity backend is independent
-of the sandbox backend; a single deployment can mix Kubernetes
-sandboxes with a Vault identity backend, or Docker sandboxes with a
-builtin identity backend, etc. See [Security tiers](/docs/architecture/security-tiers)
-for how identities fit into the wider credential model.
-
-## Decision tree: which sandbox backend
+### Decision tree
 
 ```
 Are you on a single VM / laptop?
-  └── YES → DockerBackend.
+  └── YES → Docker.
 
 Do you have an existing Kubernetes cluster?
-  └── YES → KubernetesBackend (production scale + multi-tenant ready).
+  └── YES → Kubernetes (production scale + multi-tenant ready).
 
-Is your workload primarily short, sporadic Mode 1/2 jobs (event-driven)?
-  └── YES → LambdaBackend for those jobs (the Mode 3 portion still needs Docker/K8s).
+Is your workload primarily short, sporadic Sandboxed/Identity jobs (event-driven)?
+  └── YES → Lambda for those jobs (CLI-agent steps still need Docker/Kubernetes).
 
 Do you need workloads beyond OCI-container isolation?
-  └── YES → wait for FirecrackerBackend (or accept the gap; Docker + K8s are the supported defaults).
+  └── YES → wait for Firecracker, or accept the gap. Docker + Kubernetes are
+            the supported defaults today.
 ```
 
-## Anti-patterns
+## Common pitfalls
 
-1. **Conflating "backend" in conversation.** Always say "Sandbox backend" or "Identity backend" — never just "backend." The two are independent and confusion costs hours.
+1. **Conflating "backend" in conversation.** Always say "sandbox backend" or "identity backend" — never just "backend." The two are independent and the confusion costs hours.
 
-2. **Forcing one Sandbox backend across the fleet.** Heterogeneous fleets are supported; using only one backend everywhere because "that's how we started" leaves performance and cost wins on the table.
+2. **Forcing one sandbox backend across the fleet.** Heterogeneous fleets are supported; using only one backend everywhere because "that's how we started" leaves performance and cost wins on the table.
 
-3. **Building features that assume a specific Sandbox backend.** The sandbox warm-pool, per-run cleanup, and redaction all sit on the abstract Protocol. New features should specify behavior in terms of the Protocol, not in terms of `docker exec`.
+3. **Building features that assume a specific sandbox backend.** The warm-pool, per-run cleanup, and redaction all sit on the abstract sandbox interface. New features should specify behavior in terms of the interface, not in terms of `docker exec`.
 
-## Cross-references
+## See also
 
-This page picks the backend; the [sandboxing handbook](/docs/guides/sandboxing)
-configures the worker once chosen.
+This page picks the backend; the [sandboxing handbook](/docs/guides/sandboxing) walks through the worker-side configuration once you've chosen.
 
-- [Runtime topology](/docs/architecture/runtime-topology)
-- [Security tiers](/docs/architecture/security-tiers)
-- [Execution modes](/docs/architecture/execution-modes)
-- [Sandboxing handbook](/docs/guides/sandboxing) — operator-facing CLI flags and configuration
-- [`docs/architecture/execution-backends.md`](https://github.com/sagewai/platform/blob/main/docs/architecture/execution-backends.md) (canonical reference)
+- [Sandboxing handbook](/docs/guides/sandboxing) — operator-facing CLI flags and configuration.
+- [Self-hosted setup](/docs/guides/self-hosted) — deploying the control plane and a worker.
+- [Runtime topology](/docs/architecture/runtime-topology) — control plane, workers, sandboxes.
+- [Execution modes](/docs/architecture/execution-modes) — the per-mode walk-through.
+- [Security tiers](/docs/architecture/security-tiers) — credential model.
+- [Vault backend](/docs/guides/sealed-vault) — the parallel choice on the identity-backend side.
