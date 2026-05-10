@@ -1,0 +1,6 @@
+{
+  "enabled": true,
+  "tier": "anonymous",
+  "quota_used": 3,
+  "quota_limit": 10
+}

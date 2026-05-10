@@ -21,7 +21,7 @@ export function EmptyMissionsPage() {
         <Link
           href="/autopilot"
           data-testid="start-goal-link"
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-md border border-primary text-primary text-sm font-medium hover:bg-primary/10 transition-colors"
         >
           Start with a goal
         </Link>

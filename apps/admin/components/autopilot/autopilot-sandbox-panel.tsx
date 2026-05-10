@@ -62,7 +62,7 @@ function OverrideModal({
           </button>
           <button
             onClick={() => onConfirm(selected)}
-            className="px-3 py-1.5 text-xs rounded bg-primary text-white hover:bg-primary/90"
+            className="px-3 py-1.5 text-xs rounded bg-primary text-text-on-dark hover:bg-primary/90 motion-safe:active:scale-[0.98] transition-transform duration-75"
           >
             Apply override
           </button>
@@ -174,7 +174,7 @@ export function AutopilotSandboxPanel({ missionId }: { missionId: string }) {
       );
       if (resp.ok) {
         const data = (await resp.json()) as StepAllocation[];
-        setAllocation(data);
+        if (Array.isArray(data)) setAllocation(data);
       }
     } catch {
       // silent

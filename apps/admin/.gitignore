@@ -9,4 +9,5 @@ next-env.d.ts
 .auth/
 test-results/
 playwright-report/
+e2e/*.spec.ts-snapshots/
 pnpm-lock.yaml

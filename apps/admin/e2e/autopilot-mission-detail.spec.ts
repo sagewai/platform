@@ -44,8 +44,24 @@ async function mockMissionDetail(page: Page, opts: MockMissionOpts) {
     slots: { topic: 'fisheries' },
     success_criteria: [{ metric: 'accuracy', op: '>=', target: 0.9 }],
     training_data_hooks: [],
-    estimated_cost: opts.estimatedCost ?? { currency: 'USD', amount: 0.42 },
+    // Use !== undefined so explicit null is preserved (null → licensing link shown).
+    estimated_cost: opts.estimatedCost !== undefined ? opts.estimatedCost : { currency: 'USD', amount: 0.42 },
   };
+
+  // Register catch-all FIRST (lowest LIFO priority) so sandbox/fleet/sealed sub-routes
+  // return [] without crashing, and specific mocks registered after take precedence.
+  await page.route(
+    new RegExp(`/api/v1/autopilot/missions/${opts.missionId}/`),
+    (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([]),
+      }),
+  );
+  await page.route(/\/api\/v1\/autopilot\/fleet\/workers/, (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) }),
+  );
 
   await page.route(
     new RegExp(`/api/v1/autopilot/missions/${opts.missionId}$`),
@@ -151,13 +167,13 @@ test.describe('autopilot mission detail page', () => {
 
     await page.goto('/autopilot/missions/m-42');
 
-    // Header — goal + cost + Run-mission button (disabled)
+    // Header — goal + cost + Run-mission button (enabled — Plan H wired it up)
     await expect(
       page.getByRole('heading', { name: /summarize fisheries/i }),
     ).toBeVisible();
     await expect(
       page.getByRole('button', { name: /run mission/i }),
-    ).toBeDisabled();
+    ).toBeEnabled();
     await expect(page.getByText(/\$0\.42/)).toBeVisible();
 
     // Agent graph — 2 custom nodes, both labels visible

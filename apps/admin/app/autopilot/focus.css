@@ -1,0 +1,29 @@
+/* Autopilot-scoped focus ring. Applied to all :focus-visible within the autopilot layout. */
+.autopilot-root :focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Rounded-full elements need inset rings to avoid clipping */
+.autopilot-root [class*="rounded-full"]:focus-visible {
+  outline-offset: 0;
+  outline: 2px solid var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-bg-surface), 0 0 0 4px var(--color-primary);
+}
+
+/* CSS-based pulse glow for active agent nodes (theme-aware via CSS var) */
+@keyframes agent-node-pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-primary) 45%, transparent); }
+  50%       { box-shadow: 0 0 0 10px color-mix(in srgb, var(--color-primary) 0%, transparent); }
+}
+
+.agent-node-pulse {
+  animation: agent-node-pulse-glow 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-node-pulse {
+    animation: none;
+  }
+}

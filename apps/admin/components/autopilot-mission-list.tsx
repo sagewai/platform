@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import type { AutopilotMission } from '@/utils/types';
@@ -48,12 +48,25 @@ function MissionRow({
   const status = liveStatus ?? mission.status;
   const router = useRouter();
 
+  function navigate() {
+    router.push(`/autopilot/missions/${encodeURIComponent(mission.id)}`);
+  }
+
   return (
     <>
       <tr
-        className="border-b border-border hover:bg-bg-subtle transition-colors cursor-pointer"
+        className="border-b border-border hover:bg-bg-subtle transition-colors cursor-pointer focus-visible:bg-bg-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
         data-testid={`mission-row-${mission.id}`}
-        onClick={() => router.push(`/autopilot/missions/${encodeURIComponent(mission.id)}`)}
+        data-row
+        data-mission-id={mission.id}
+        tabIndex={0}
+        onClick={navigate}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            navigate();
+          }
+        }}
       >
         <td className="py-3 px-4">
           <button
@@ -61,6 +74,7 @@ function MissionRow({
             data-testid={`mission-row-chevron-${mission.id}`}
             aria-label={expanded ? 'Collapse row details' : 'Expand row details'}
             aria-expanded={expanded}
+            tabIndex={-1}
             onClick={(e) => {
               e.stopPropagation();
               setExpanded((v) => !v);
@@ -103,6 +117,7 @@ function MissionRow({
             {status === 'running' && (
               <button
                 type="button"
+                tabIndex={-1}
                 onClick={() => onCancel(mission.id)}
                 className="text-xs px-2 py-1 rounded border border-error/40 text-error hover:bg-error/10 transition-colors cursor-pointer"
               >
@@ -153,6 +168,31 @@ export function AutopilotMissionList({
   liveStatuses,
   onCancel,
 }: AutopilotMissionListProps) {
+  const router = useRouter();
+
+  const handleTableKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTableElement>) => {
+      if (!['ArrowUp', 'ArrowDown', 'Enter'].includes(e.key)) return;
+      const rows = Array.from(
+        e.currentTarget.querySelectorAll<HTMLTableRowElement>('tr[data-row]'),
+      );
+      if (rows.length === 0) return;
+      const idx = rows.findIndex((r) => r === document.activeElement);
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        rows[Math.min(idx + 1, rows.length - 1)]?.focus();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        rows[Math.max(idx - 1, 0)]?.focus();
+      } else if (e.key === 'Enter' && idx >= 0) {
+        e.preventDefault();
+        const id = rows[idx].dataset.missionId;
+        if (id) router.push(`/autopilot/missions/${encodeURIComponent(id)}`);
+      }
+    },
+    [router],
+  );
+
   if (missions.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -166,31 +206,36 @@ export function AutopilotMissionList({
 
   return (
     <div className="bg-bg-surface rounded-lg border border-border overflow-hidden">
-      <table className="w-full text-sm border-collapse">
+      <table
+        className="w-full text-sm border-collapse"
+        role="grid"
+        aria-label="Autopilot missions"
+        onKeyDown={handleTableKeyDown}
+      >
         <thead>
           <tr className="border-b border-border">
-            <th className="text-left py-3 px-4 text-xs font-semibold text-text-muted uppercase tracking-wide w-24">
+            <th scope="col" className="text-left py-3 px-4 text-xs font-semibold text-text-muted uppercase tracking-wide w-24">
               ID
             </th>
-            <th className="text-left py-3 px-4 text-xs font-semibold text-text-muted uppercase tracking-wide">
+            <th scope="col" className="text-left py-3 px-4 text-xs font-semibold text-text-muted uppercase tracking-wide">
               Blueprint
             </th>
-            <th className="text-left py-3 px-4 text-xs font-semibold text-text-muted uppercase tracking-wide">
+            <th scope="col" className="text-left py-3 px-4 text-xs font-semibold text-text-muted uppercase tracking-wide">
               Status
             </th>
-            <th className="text-left py-3 px-4 text-xs font-semibold text-text-muted uppercase tracking-wide hidden sm:table-cell">
+            <th scope="col" className="text-left py-3 px-4 text-xs font-semibold text-text-muted uppercase tracking-wide hidden sm:table-cell">
               Mode
             </th>
-            <th className="text-left py-3 px-4 text-xs font-semibold text-text-muted uppercase tracking-wide hidden md:table-cell">
+            <th scope="col" className="text-left py-3 px-4 text-xs font-semibold text-text-muted uppercase tracking-wide hidden md:table-cell">
               Started
             </th>
-            <th className="text-left py-3 px-4 text-xs font-semibold text-text-muted uppercase tracking-wide hidden md:table-cell">
+            <th scope="col" className="text-left py-3 px-4 text-xs font-semibold text-text-muted uppercase tracking-wide hidden md:table-cell">
               Duration
             </th>
-            <th className="text-left py-3 px-4 text-xs font-semibold text-text-muted uppercase tracking-wide hidden lg:table-cell">
+            <th scope="col" className="text-left py-3 px-4 text-xs font-semibold text-text-muted uppercase tracking-wide hidden lg:table-cell">
               Project
             </th>
-            {onCancel && <th className="py-3 px-4 w-20" />}
+            {onCancel && <th scope="col" className="py-3 px-4 w-20"><span className="sr-only">Actions</span></th>}
           </tr>
         </thead>
         <tbody>

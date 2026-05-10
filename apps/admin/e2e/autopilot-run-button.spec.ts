@@ -187,6 +187,18 @@ async function mockSseEndpoint(
   );
 }
 
+async function mockSubPanels(page: Page, missionId: string) {
+  // Register catch-all FIRST (lowest LIFO priority) so specific mocks registered
+  // after this take precedence over the catch-all for known sub-paths.
+  await page.route(
+    new RegExp(`/api/v1/autopilot/missions/${missionId}/`),
+    (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) }),
+  );
+  await page.route(/\/api\/v1\/autopilot\/fleet\/workers/, (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) }),
+  );
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 test.describe('autopilot run button', () => {
@@ -204,6 +216,7 @@ test.describe('autopilot run button', () => {
   test('Run button posts then swaps to live trace', async ({ page }) => {
     const mid = 'run-btn-swap';
 
+    await mockSubPanels(page, mid);
     // First call returns pending; subsequent calls return running.
     await mockMissionDetailSequence(page, mid, 'pending', 'running');
     await mockExplainEndpoint(page, mid);
@@ -243,6 +256,7 @@ test.describe('autopilot run button', () => {
   test('Run button hides for terminal mission', async ({ page }) => {
     const mid = 'run-btn-terminal';
 
+    await mockSubPanels(page, mid);
     await mockMissionDetailFixed(page, mid, 'completed');
     // Explain not needed for completed missions (directions panel hidden).
     // Trace endpoint needed since status is terminal.
@@ -271,6 +285,7 @@ test.describe('autopilot run button', () => {
   test('Run button surfaces error inline on failure', async ({ page }) => {
     const mid = 'run-btn-error';
 
+    await mockSubPanels(page, mid);
     await mockMissionDetailFixed(page, mid, 'pending');
     await mockExplainEndpoint(page, mid);
     await mockRunEndpoint(page, mid, 500);

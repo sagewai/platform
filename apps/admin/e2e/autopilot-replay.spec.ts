@@ -44,6 +44,10 @@ const TRACE_EVENTS: MissionRunEvent[] = [
 ];
 
 async function mockMission(page: Page) {
+  // NOTE: Playwright matches routes in LIFO order — last registered = highest priority.
+  // Register the catch-all FIRST so specific routes (trace, explain) registered after
+  // it take precedence.
+
   const detail = {
     id: 'fixture-completed',
     status: 'completed',
@@ -58,6 +62,10 @@ async function mockMission(page: Page) {
       edges: [],
     },
     slots: {},
+    tools_required: [],
+    providers_required: [],
+    success_criteria: [],
+    training_data_hooks: [],
     estimated_cost: { amount: 0.01, currency: 'USD' },
     started_at: '2026-05-09T10:00:00.000Z',
     finished_at: '2026-05-09T10:00:02.500Z',
@@ -79,16 +87,19 @@ async function mockMission(page: Page) {
     error: null,
   };
 
+  // 1st registered = lowest LIFO priority: catch-all for fleet/sandbox/sealed sub-routes.
+  await page.route('**/api/v1/autopilot/missions/fixture-completed/**', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) }),
+  );
+  // 2nd: exact mission detail (overrides catch-all for the root path).
   await page.route('**/api/v1/autopilot/missions/fixture-completed', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(detail) }),
   );
+  // 3rd: trace (higher priority than catch-all).
   await page.route('**/api/v1/autopilot/missions/fixture-completed/trace', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(trace) }),
   );
-  // Fleet / sandbox / sealed panel routes — return empty so panels don't error.
-  await page.route('**/api/v1/autopilot/missions/fixture-completed/**', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({}) }),
-  );
+  // 4th (highest): explain.
   await page.route('**/api/v1/autopilot/missions/fixture-completed/explain', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ brief: '' }) }),
   );
@@ -177,17 +188,22 @@ test.describe('Scrubber hidden for running missions', () => {
         edges: [],
       },
       slots: {},
+      tools_required: [],
+      providers_required: [],
+      success_criteria: [],
+      training_data_hooks: [],
       estimated_cost: null,
       started_at: new Date().toISOString(),
       finished_at: null,
       total_cost_usd: 0,
       step_count: 0,
     };
+    // Catch-all first (lowest LIFO priority) so the exact route registered after wins.
+    await page.route('**/api/v1/autopilot/missions/fixture-running/**', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) }),
+    );
     await page.route('**/api/v1/autopilot/missions/fixture-running', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(detail) }),
-    );
-    await page.route('**/api/v1/autopilot/missions/fixture-running/**', (route) =>
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({}) }),
     );
     await page.goto('/autopilot/missions/fixture-running');
     // Give the page time to settle then assert absent.

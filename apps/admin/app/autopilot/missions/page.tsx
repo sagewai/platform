@@ -105,7 +105,7 @@ export default function MissionsPage() {
             onClick={() => setStatusFilter(f.value)}
             className={`px-3 py-1 text-xs rounded-full border transition-colors cursor-pointer ${
               statusFilter === f.value
-                ? 'border-accent bg-accent/10 text-accent font-medium'
+                ? 'border-accent bg-accent/10 text-accent-foreground font-medium'
                 : 'border-border text-text-secondary hover:border-accent/40'
             }`}
           >
@@ -160,7 +160,7 @@ export default function MissionsPage() {
                 type="button"
                 onClick={handleCancel}
                 disabled={!cancelReason.trim() || cancelling}
-                className="px-4 py-2 text-sm rounded-lg bg-error text-white border-none cursor-pointer hover:bg-error/90 transition-colors disabled:opacity-50"
+                className="px-4 py-2 text-sm rounded-lg bg-error text-text-on-dark border-none cursor-pointer hover:bg-error/90 transition-colors disabled:opacity-50 motion-safe:active:scale-[0.98] duration-75"
               >
                 {cancelling ? 'Cancelling…' : 'Cancel mission'}
               </button>

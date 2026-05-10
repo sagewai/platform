@@ -52,7 +52,7 @@ export function AutopilotMissionHeader({
         aria-label="Run mission"
         data-testid="run-mission-button"
         onClick={handleRun}
-        className="rounded-md bg-primary text-white text-sm px-3 py-1.5 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+        className="rounded-md bg-primary text-text-on-dark text-sm px-3 py-1.5 font-medium disabled:opacity-50 disabled:cursor-not-allowed motion-safe:active:scale-[0.98] transition-transform duration-75"
       >
         {starting ? 'Starting…' : 'Run mission'}
       </button>
@@ -64,7 +64,7 @@ export function AutopilotMissionHeader({
         disabled
         aria-label="Mission running"
         data-testid="run-mission-button-running"
-        className="rounded-md bg-primary text-white text-sm px-3 py-1.5 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+        className="rounded-md bg-primary text-text-on-dark text-sm px-3 py-1.5 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
       >
         Running…
       </button>
@@ -103,7 +103,7 @@ export function AutopilotMissionHeader({
         {runButton}
         {runError && (
           <span
-            className="text-sm text-red-600 dark:text-red-400"
+            className="text-sm text-error"
             data-testid="run-error"
           >
             {runError}

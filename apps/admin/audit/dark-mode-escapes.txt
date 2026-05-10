@@ -1,0 +1,24 @@
+# Dark-mode color escape audit — Plan P
+# All items below have been resolved. Empty means no remaining escapes.
+
+# RESOLVED:
+# animated-agent-node.tsx:70-72 — rgba(14,116,144,...) in framer-motion boxShadow
+#   → Removed. Scale-only animation; CSS class handles glow via var(--color-primary).
+#   → Annotated: framer-motion cannot interpolate CSS vars in boxShadow keyframes.
+# autopilot-mission-header.tsx:55,67 — text-white on bg-primary buttons
+#   → Fixed to text-text-on-dark.
+# autopilot-mission-header.tsx:106 — text-red-600 dark:text-red-400
+#   → Fixed to text-error (semantic token, both themes).
+# autopilot/page.tsx:253 — text-white on bg-primary button
+#   → Fixed to text-text-on-dark.
+# autopilot/missions/page.tsx:158 — text-white on bg-error button
+#   → Fixed to text-text-on-dark.
+# autopilot-sealed-panel.tsx:103 — text-white on bg-primary button
+#   → Fixed to text-text-on-dark.
+# autopilot-sandbox-panel.tsx:65 — text-white on bg-primary button
+#   → Fixed to text-text-on-dark.
+
+# THEME-INVARIANT (intentional dark backdrop):
+# autopilot/missions/page.tsx:133 — bg-black/50 (modal backdrop overlay) // theme-invariant
+# autopilot-sealed-panel.tsx:76 — bg-black/40 (modal backdrop overlay) // theme-invariant
+# autopilot-sandbox-panel.tsx:32 — bg-black/40 (modal backdrop overlay) // theme-invariant

@@ -1,0 +1,21 @@
+{
+  "missions": [
+    {
+      "id": "mission-abc123",
+      "goal_text": "Summarize last week's pull requests",
+      "blueprint_title": "PR Summariser",
+      "blueprint_category": "dev-tools",
+      "status": "completed",
+      "mode": "scheduled",
+      "started_at": "2026-05-09T10:00:00Z",
+      "finished_at": "2026-05-09T10:01:23Z",
+      "project_id": null,
+      "estimated_cost": { "amount": 0.0042, "currency": "USD" },
+      "steps": [
+        { "step": "fetch_prs", "status": "completed", "output": "Found 7 PRs" },
+        { "step": "summarise", "status": "completed", "output": "Summary generated" }
+      ]
+    }
+  ],
+  "total": 1
+}

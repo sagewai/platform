@@ -100,7 +100,7 @@ function OverrideModal({
           <button
             onClick={apply}
             disabled={loading || !profileId.trim()}
-            className="px-3 py-1.5 text-xs rounded bg-primary text-white hover:bg-primary/90 disabled:opacity-50"
+            className="px-3 py-1.5 text-xs rounded bg-primary text-text-on-dark hover:bg-primary/90 disabled:opacity-50 motion-safe:active:scale-[0.98] transition-transform duration-75"
           >
             {loading ? 'Applying…' : 'Assign profile'}
           </button>
@@ -201,7 +201,7 @@ export function AutopilotSealedPanel({ missionId }: { missionId: string }) {
       );
       if (resp.ok) {
         const data = (await resp.json()) as StepAllocation[];
-        setAllocation(data);
+        if (Array.isArray(data)) setAllocation(data);
       }
     } catch {
       // silent

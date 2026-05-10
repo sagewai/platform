@@ -16,6 +16,10 @@ export default defineConfig({
   fullyParallel: false,  // Tests depend on shared backend state
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
+  // Skip snapshot comparisons in CI: baselines are platform-specific (darwin vs
+  // linux) and are not committed. Visual regression is caught during local review.
+  // See e2e/.gitignore — *.spec.ts-snapshots/ is excluded from the repo.
+  ignoreSnapshots: !!process.env.CI,
   workers: 1,  // Sequential — backend has single active token
   reporter: process.env.CI ? 'github' : 'list',
   timeout: 30_000,

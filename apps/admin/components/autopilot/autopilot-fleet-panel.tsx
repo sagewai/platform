@@ -46,7 +46,7 @@ function FleetPoolHeader({
       });
       if (resp.ok) {
         const data = (await resp.json()) as PoolWorker[];
-        setWorkers(data);
+        if (Array.isArray(data)) setWorkers(data);
       }
     } catch {
       // silent — pool header is non-critical
@@ -195,7 +195,7 @@ export function AutopilotFleetPanel({
     })
       .then((r) => (r.ok ? r.json() : []))
       .then((data: StepAllocation[]) => {
-        if (!cancelled) setAllocation(data);
+        if (!cancelled) setAllocation(Array.isArray(data) ? data : []);
       })
       .catch(() => {
         if (!cancelled) setAllocation([]);

@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { CheckCircle, X, Loader2 } from 'lucide-react';
+import { CheckCircle, X } from 'lucide-react';
+import { Spinner } from '@/components/ui/spinner';
 import { adminApi } from '@/utils/api';
 import type { AutopilotBlueprint } from '@/utils/types';
 
@@ -120,7 +121,7 @@ export function AutopilotPlanPreview({
           className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg bg-primary text-white border-none cursor-pointer hover:bg-primary/90 transition-colors disabled:opacity-50"
         >
           {approving ? (
-            <Loader2 size={14} className="animate-spin" />
+            <Spinner size={14} />
           ) : (
             <CheckCircle size={14} />
           )}

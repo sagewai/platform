@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Ali Arda Diri
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { AutopilotMissionDetail, MissionRunEvent } from '@/utils/types';
 import { AutopilotMissionHeader } from './autopilot-mission-header';
 import { AutopilotAgentGraph } from './autopilot-agent-graph';
@@ -17,6 +17,7 @@ import { AutopilotSealedPanel } from './autopilot-sealed-panel';
 import { MissionTimelineScrubber } from './mission-timeline-scrubber';
 import { StepSnapshotPanel } from './step-snapshot-panel';
 import { useTraceReplay } from '@/hooks/use-trace-replay';
+import { FirstSuccessCelebration } from './first-success-celebration';
 
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 const ACTIVE_STATUSES = new Set(['running', 'completed', 'failed', 'cancelled']);
@@ -37,6 +38,8 @@ export function MissionDetailView({
   const isTerminal = TERMINAL_STATUSES.has(mission.status);
   const showLiveScene = mission.status === 'running' || isTerminal;
   const capUsd = mission.estimated_cost?.amount ?? null;
+  // Confetti anchor — the mission header contains the Run/Running button.
+  const headerRef = useRef<HTMLDivElement>(null);
 
   const replay = useTraceReplay(traceEvents);
   // scrubIndex tracks which event the user last dragged to (for snapshot panel).
@@ -58,7 +61,10 @@ export function MissionDetailView({
 
   return (
     <div className="flex flex-col gap-6 p-6">
-      <AutopilotMissionHeader mission={mission} onRunStarted={onRunStarted} />
+      <FirstSuccessCelebration status={mission.status} anchorRef={headerRef} />
+      <div ref={headerRef}>
+        <AutopilotMissionHeader mission={mission} onRunStarted={onRunStarted} />
+      </div>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
           {showLiveScene ? (

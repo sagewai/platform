@@ -231,21 +231,9 @@ export default function AutopilotPage() {
                 >
                   <p className="text-sm font-semibold text-text-primary m-0 mb-1">{opt.label}</p>
                   <p className="text-xs text-text-muted m-0">
-                    {opt.tier === 'custom' ? (
-                      <>
-                        Contact{' '}
-                        <a
-                          href="mailto:licensing@sagewai.ai"
-                          className="text-primary underline underline-offset-2"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          licensing@sagewai.ai
-                        </a>{' '}
-                        for custom rates.
-                      </>
-                    ) : (
-                      opt.description
-                    )}
+                    {opt.tier === 'custom'
+                      ? 'Contact licensing@sagewai.ai for custom rates.'
+                      : opt.description}
                   </p>
                 </button>
               ))}
@@ -256,7 +244,7 @@ export default function AutopilotPage() {
                 type="button"
                 onClick={handleEnable}
                 disabled={enabling}
-                className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg bg-primary text-white border-none cursor-pointer hover:bg-primary/90 transition-colors disabled:opacity-50"
+                className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg bg-primary text-white dark:text-bg-page border-none cursor-pointer hover:bg-primary/90 transition-colors disabled:opacity-50 motion-safe:active:scale-[0.98] duration-75"
               >
                 <Zap size={14} />
                 {enabling ? 'Enabling…' : 'Enable Autopilot'}

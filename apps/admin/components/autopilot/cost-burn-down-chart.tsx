@@ -57,11 +57,13 @@ export function CostBurnDownChart({ capUsd }: { capUsd: number | null | undefine
   const cap = capUsd ?? 0;
 
   return (
-    <div
+    <figure
+      role="group"
+      aria-label="Cost burn-down"
       data-testid="cost-burn-down"
       data-band={band}
       data-total-usd={totalCost.toFixed(6)}
-      className="flex flex-col gap-2"
+      className="flex flex-col gap-2 m-0"
     >
       <div className="flex items-baseline justify-between text-xs text-text-secondary">
         <span className="font-medium uppercase tracking-wide">Cost burn-down</span>
@@ -72,7 +74,7 @@ export function CostBurnDownChart({ capUsd }: { capUsd: number | null | undefine
           )}
         </span>
       </div>
-      <div className="h-32 w-full">
+      <div className="h-32 w-full" aria-hidden="true">
         <ResponsiveContainer>
           <AreaChart
             data={data}
@@ -124,6 +126,37 @@ export function CostBurnDownChart({ capUsd }: { capUsd: number | null | undefine
           </AreaChart>
         </ResponsiveContainer>
       </div>
-    </div>
+      {/* Screen-reader fallback table */}
+      <table className="sr-only">
+        <caption>Cost burn-down data points</caption>
+        <thead>
+          <tr>
+            <th scope="col">Time (s)</th>
+            <th scope="col">Cumulative spend (USD)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((d) => (
+            <tr key={d.t}>
+              <td>{Math.round(d.t)}s</td>
+              <td>${d.cost.toFixed(4)}</td>
+            </tr>
+          ))}
+          {data.length === 0 && (
+            <tr>
+              <td colSpan={2}>No data yet.</td>
+            </tr>
+          )}
+        </tbody>
+        {cap > 0 && (
+          <tfoot>
+            <tr>
+              <td>Budget cap</td>
+              <td>${cap.toFixed(2)}</td>
+            </tr>
+          </tfoot>
+        )}
+      </table>
+    </figure>
   );
 }

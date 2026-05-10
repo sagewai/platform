@@ -71,7 +71,7 @@ export function GoalToBlueprintIllustration({ className }: { className?: string 
             </div>
             <div className="min-w-0">
               <p className="text-sm font-semibold text-text-primary m-0">{stage.label}</p>
-              <p className="text-xs text-text-muted m-0">{stage.desc}</p>
+              <p className="text-xs text-text-secondary m-0">{stage.desc}</p>
             </div>
           </div>
 

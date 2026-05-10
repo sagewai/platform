@@ -26,7 +26,7 @@ test.describe('Sealed cascade preview', () => {
     await expect(page.locator('body')).not.toContainText('Application error');
 
     // The Workflow Secrets heading (or sealed workflows heading) must be visible
-    await expect(page.getByRole('heading', { name: /workflow.*secret|sealed.*workflow/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /workflow.*secur|sealed.*workflow/i })).toBeVisible();
   });
 
   test('cascade resolver shows system → project → workflow order', async ({ page }) => {

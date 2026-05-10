@@ -102,11 +102,16 @@ export function AutopilotMissionLiveTrace({
         <CostTicker usd={state.costUsd} />
       </div>
 
-      {/* Per-node timelines */}
+      {/* Per-node timelines — aria-live so screen readers announce new entries */}
       {nodeIds.length === 0 ? (
-        <p className="text-sm text-text-secondary">Waiting for events…</p>
+        <p className="text-sm text-text-secondary" role="status">Waiting for events…</p>
       ) : (
-        <ol className="flex flex-col gap-4 list-none p-0 m-0">
+        <ol
+          aria-live="polite"
+          aria-atomic="false"
+          aria-label="Mission live trace"
+          className="flex flex-col gap-4 list-none p-0 m-0"
+        >
           {nodeIds.map((nodeId) => (
             <AgentTimelineRow
               key={nodeId}

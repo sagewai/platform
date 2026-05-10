@@ -39,7 +39,11 @@ function stringifySlotValue(v: unknown): string {
 }
 
 export function AutopilotResourcePanels({ mission }: { mission: AutopilotMissionDetail }) {
-  const slotEntries = Object.entries(mission.slots).filter(([k]) => !k.startsWith('__'));
+  const slotEntries = Object.entries(mission.slots ?? {}).filter(([k]) => !k.startsWith('__'));
+  const toolsRequired = mission.tools_required ?? [];
+  const providersRequired = mission.providers_required ?? [];
+  const successCriteria = mission.success_criteria ?? [];
+  const trainingHooks = mission.training_data_hooks ?? [];
 
   return (
     <>
@@ -65,11 +69,11 @@ export function AutopilotResourcePanels({ mission }: { mission: AutopilotMission
       </PanelCard>
 
       <PanelCard title="Tools required" testId="resource-panel-tools">
-        {mission.tools_required.length === 0 ? (
+        {toolsRequired.length === 0 ? (
           <EmptyHint>None.</EmptyHint>
         ) : (
           <div className="flex flex-wrap gap-2">
-            {mission.tools_required.map((t) => (
+            {toolsRequired.map((t) => (
               <span
                 key={t.name}
                 className="rounded-full border border-border bg-bg-subtle text-text-primary text-xs px-2 py-1 font-[family-name:var(--font-mono)]"
@@ -83,11 +87,11 @@ export function AutopilotResourcePanels({ mission }: { mission: AutopilotMission
       </PanelCard>
 
       <PanelCard title="Providers required" testId="resource-panel-providers">
-        {mission.providers_required.length === 0 ? (
+        {providersRequired.length === 0 ? (
           <EmptyHint>None.</EmptyHint>
         ) : (
           <div className="flex flex-wrap gap-2">
-            {mission.providers_required.map((p) => (
+            {providersRequired.map((p) => (
               <span
                 key={`${p.name}-${p.role ?? ''}`}
                 className="inline-flex items-center gap-1 rounded-full border border-border text-text-primary text-xs px-2 py-1"
@@ -105,11 +109,11 @@ export function AutopilotResourcePanels({ mission }: { mission: AutopilotMission
       </PanelCard>
 
       <PanelCard title="Success criteria" testId="resource-panel-success-criteria">
-        {mission.success_criteria.length === 0 ? (
+        {successCriteria.length === 0 ? (
           <EmptyHint>None declared.</EmptyHint>
         ) : (
           <ul className="text-sm space-y-1 m-0 list-none p-0">
-            {mission.success_criteria.map((c, i) => (
+            {successCriteria.map((c, i) => (
               <li key={`${c.metric}-${i}`} className="flex items-baseline gap-2">
                 <span className="font-[family-name:var(--font-mono)] text-text-secondary">
                   {c.metric}
@@ -125,11 +129,11 @@ export function AutopilotResourcePanels({ mission }: { mission: AutopilotMission
       </PanelCard>
 
       <PanelCard title="Training data hooks" testId="resource-panel-training-hooks">
-        {mission.training_data_hooks.length === 0 ? (
+        {trainingHooks.length === 0 ? (
           <EmptyHint>No training hooks.</EmptyHint>
         ) : (
           <ul className="text-sm space-y-1 m-0 list-none p-0">
-            {mission.training_data_hooks.map((h, i) => (
+            {trainingHooks.map((h, i) => (
               <li key={`${h.event}-${i}`} className="flex items-baseline gap-2">
                 <span className="font-[family-name:var(--font-mono)] text-text-secondary">
                   {h.event}

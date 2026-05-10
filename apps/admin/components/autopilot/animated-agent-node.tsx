@@ -1,9 +1,10 @@
 'use client';
 
-import { memo, useMemo } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { Check, AlertTriangle } from 'lucide-react';
+import { TooltipContent, TooltipProvider, TooltipTrigger, Tooltip } from '@/components/ui/tooltip';
 import { useMissionEventHistory } from '@/lib/mission-events/provider';
 import type { MissionRunEvent } from '@/utils/types';
 import type { AgentNodeData } from './agent-graph-layout';
@@ -63,80 +64,112 @@ function AnimatedAgentNodeComponent({ id, data }: AnimatedAgentNodeProps) {
     return deriveState(mine);
   }, [history, id]);
 
+  const [hovered, setHovered] = useState(false);
+
+  // Scale-pulse on active. Box-shadow glow handled by CSS to stay theme-aware
+  // (framer-motion can't interpolate CSS vars in boxShadow at animation time).
   const pulseAnim = !reduced && state === 'active'
-    ? {
-        scale: [1, 1.03, 1],
-        boxShadow: [
-          '0 0 0 0 rgba(14, 116, 144, 0.45)',
-          '0 0 0 10px rgba(14, 116, 144, 0)',
-          '0 0 0 0 rgba(14, 116, 144, 0)',
-        ],
-      }
+    ? { scale: [1, 1.03, 1] }
     : undefined;
+
+  // Base UI Tooltip uses `delay` on TooltipTrigger (per-trigger delay), not delayDuration.
+  const tooltipDelay = reduced ? 0 : 500;
 
   return (
     <>
       <Handle type="target" position={Position.Left} className="!bg-border !w-2 !h-2" />
-      <motion.div
-        data-state={state}
-        data-testid="agent-graph-node"
-        layoutId={`agent-${id}`}
-        animate={pulseAnim}
-        transition={{
-          duration: 1.6,
-          repeat: state === 'active' && !reduced ? Infinity : 0,
-          ease: 'easeInOut',
-        }}
-        className={`rounded-lg border bg-bg-surface px-3 py-2 shadow-sm min-w-[200px] transition-colors ${STATE_RING[state]}`}
-        title={data.promptRef ? `Prompt: ${data.promptRef}` : undefined}
-      >
-        <div className="flex items-center justify-between gap-2">
-          <span className="font-semibold text-sm text-text-primary truncate flex items-center gap-1.5">
-            {data.role}
-            {state === 'completed' && (
-              <motion.span
-                initial={reduced ? { opacity: 1 } : { scale: 0, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                transition={{ type: 'spring', stiffness: 280, damping: 14 }}
-                aria-hidden
+      <TooltipProvider delay={tooltipDelay}>
+        <Tooltip>
+          <TooltipTrigger
+            delay={tooltipDelay}
+            render={
+              <motion.div
+                data-state={state}
+                data-testid="agent-graph-node"
+                layoutId={`agent-${id}`}
+                animate={pulseAnim}
+                whileHover={reduced ? undefined : { y: -4 }}
+                onHoverStart={() => setHovered(true)}
+                onHoverEnd={() => setHovered(false)}
+                transition={{
+                  duration: 1.6,
+                  repeat: state === 'active' && !reduced ? Infinity : 0,
+                  ease: 'easeInOut',
+                  y: { type: 'spring', stiffness: 400, damping: 28 },
+                }}
+                role="button"
+                tabIndex={0}
+                aria-label={`${data.role} agent, status ${state}, ${data.tools.length} tool${data.tools.length !== 1 ? 's' : ''}`}
+                aria-describedby={`node-${id}-detail`}
+                onKeyDown={(e: React.KeyboardEvent) => {
+                  if (e.key === 'Enter' || e.key === ' ') setHovered((v) => !v);
+                }}
+                className={`rounded-lg border bg-bg-surface px-3 py-2 shadow-sm min-w-[200px] transition-colors hover:shadow-md ${STATE_RING[state]} ${state === 'active' && !reduced ? 'agent-node-pulse' : ''}`}
               >
-                <Check className="size-4 text-success" />
-              </motion.span>
-            )}
-            {state === 'failed' && (
-              <motion.span
-                animate={reduced ? {} : { x: [0, -3, 3, -2, 2, 0] }}
-                transition={{ duration: 0.4 }}
-                aria-hidden
-              >
-                <AlertTriangle className="size-4 text-error" />
-              </motion.span>
-            )}
-          </span>
-          <span
-            className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${KIND_BADGE[data.kind]}`}
-          >
-            {data.kind}
-          </span>
-        </div>
-        {data.tools.length > 0 && (
-          <div className="mt-1.5 flex flex-wrap gap-1">
-            {data.tools.map((t) => (
-              <span
-                key={t}
-                className="rounded bg-bg-subtle text-text-secondary text-[10px] px-1.5 py-0.5 font-[family-name:var(--font-mono)]"
-              >
-                {t}
-              </span>
-            ))}
-          </div>
-        )}
-        {data.promptRef && (
-          <div className="mt-1 text-[10px] text-text-muted font-[family-name:var(--font-mono)] truncate">
-            {data.promptRef}
-          </div>
-        )}
-      </motion.div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold text-sm text-text-primary truncate flex items-center gap-1.5">
+                    {data.role}
+                    {state === 'completed' && (
+                      <motion.span
+                        initial={reduced ? { opacity: 1 } : { scale: 0, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        transition={{ type: 'spring', stiffness: 280, damping: 14 }}
+                        aria-hidden
+                      >
+                        <Check className="size-4 text-success" />
+                      </motion.span>
+                    )}
+                    {state === 'failed' && (
+                      <motion.span
+                        animate={reduced ? {} : { x: [0, -3, 3, -2, 2, 0] }}
+                        transition={{ duration: 0.4 }}
+                        aria-hidden
+                      >
+                        <AlertTriangle className="size-4 text-error" />
+                      </motion.span>
+                    )}
+                  </span>
+                  <span
+                    className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${KIND_BADGE[data.kind]}`}
+                  >
+                    {data.kind}
+                  </span>
+                </div>
+                {data.tools.length > 0 && (
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {data.tools.map((t) => (
+                      <motion.span
+                        key={t}
+                        layout
+                        animate={{ maxWidth: hovered || !!reduced ? 200 : 8, opacity: hovered || !!reduced ? 1 : 0.4 }}
+                        transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+                        className="rounded bg-bg-subtle text-text-secondary text-[10px] px-1.5 py-0.5 font-[family-name:var(--font-mono)] overflow-hidden whitespace-nowrap"
+                      >
+                        {t}
+                      </motion.span>
+                    ))}
+                  </div>
+                )}
+                {data.promptRef && (
+                  <div className="mt-1 text-[10px] text-text-muted font-[family-name:var(--font-mono)] truncate">
+                    {data.promptRef}
+                  </div>
+                )}
+                <span id={`node-${id}-detail`} className="sr-only">
+                  Prompt reference: {data.promptRef ?? 'none'}.{' '}
+                  Tools: {data.tools.length > 0 ? data.tools.join(', ') : 'none'}.
+                </span>
+              </motion.div>
+            }
+          />
+          {data.promptRef && (
+            <TooltipContent side="top" className="max-w-sm">
+              <div className="text-xs opacity-70 mb-0.5">prompt_ref</div>
+              <code className="text-xs font-mono">{data.promptRef}</code>
+            </TooltipContent>
+          )}
+        </Tooltip>
+      </TooltipProvider>
       <Handle type="source" position={Position.Right} className="!bg-border !w-2 !h-2" />
     </>
   );

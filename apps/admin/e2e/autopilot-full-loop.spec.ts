@@ -317,7 +317,7 @@ test('goal → approve → run → live trace → output (deterministic mock)', 
 
   // ── Step 3: Approve the routing result ───────────────────────────────────
   // AutopilotPlanPreview renders the blueprint title and "Approve & Schedule" button.
-  await expect(page.getByText('URL Summariser')).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText('URL Summariser').first()).toBeVisible({ timeout: 10_000 });
   await page.getByRole('button', { name: /approve/i }).click();
 
   // After approval handleApproved() clears the form and fetchRecentMissions() fires.

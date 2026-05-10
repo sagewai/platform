@@ -1,7 +1,8 @@
 'use client';
 
-import { useState } from 'react';
-import { Loader2, Send } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Send } from 'lucide-react';
+import { Spinner } from '@/components/ui/spinner';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { adminApi } from '@/utils/api';
 import type { AutopilotGoalResponse } from '@/utils/types';
@@ -15,6 +16,8 @@ interface AutopilotGoalInputProps {
 
 export function AutopilotGoalInput({ onMissionApproved, initialGoal }: AutopilotGoalInputProps) {
   const [goal, setGoal] = useState(initialGoal ?? '');
+  // useState ignores prop changes after mount; sync when a pill click updates initialGoal.
+  useEffect(() => { if (initialGoal !== undefined) setGoal(initialGoal); }, [initialGoal]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AutopilotGoalResponse | null>(null);
@@ -84,7 +87,7 @@ export function AutopilotGoalInput({ onMissionApproved, initialGoal }: Autopilot
           className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-primary text-white text-sm font-semibold border-none cursor-pointer hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           {loading ? (
-            <Loader2 size={15} className="animate-spin" />
+            <Spinner size={15} />
           ) : (
             <Send size={15} />
           )}

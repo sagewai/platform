@@ -20,7 +20,7 @@ test.describe('Artifact destination card', () => {
     await expect(page.locator('body')).not.toContainText('Backend not reachable');
     await expect(page.locator('body')).not.toContainText('Application error');
     await expect(
-      page.getByRole('heading', { name: /workflow.*secret|sealed.*workflow/i }),
+      page.getByRole('heading', { name: /workflow.*secur|sealed.*workflow/i }),
     ).toBeVisible();
   });
 

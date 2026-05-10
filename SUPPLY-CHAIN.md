@@ -58,6 +58,14 @@ review during dependency updates.
 |---------|---------|---------|-------|------|
 | hvac | 2.3.0 | MIT | vault | HashiCorp Vault community client |
 
+## Admin UI New Dependencies (Plan P)
+
+| Package | Version | Licence | Type | Role |
+|---------|---------|---------|------|------|
+| canvas-confetti | 1.9.3 | MIT | prod | First-mission celebration burst |
+| @types/canvas-confetti | 1.9.0 | MIT | dev | TypeScript types for canvas-confetti |
+| @axe-core/playwright | 4.10.2 | MPL-2.0 | dev | Automated WCAG AA accessibility tests |
+
 ## CI Security Gates
 
 Every PR runs these checks automatically:

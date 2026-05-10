@@ -10,7 +10,7 @@ export default function ProfilesListPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    adminApi.listProfiles().then(setProfiles).finally(() => setLoading(false));
+    adminApi.listProfiles().then(setProfiles).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
   if (loading) return <div>Loading…</div>;
