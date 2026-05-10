@@ -41,26 +41,34 @@ function AppShell({ children }: { children: React.ReactNode }) {
       setAuthReady(true);
       return;
     }
-    if (isAuthenticated()) {
-      setAuthReady(true);
-      return;
-    }
     // Don't attempt auth refresh if backend is unreachable
     if (connState === 'disconnected') return;
 
+    // Always call silentRefresh on mount, even when an in-memory token
+    // is already present. The browser's session cookie may have expired
+    // or be missing (e.g. SAGEWAI_DEV_TRUST_LOCAL just restarted the
+    // backend), and analyticsClient relies on the cookie for the auth
+    // routes that don't read the in-memory Bearer token. Calling refresh
+    // unconditionally guarantees both surfaces stay synchronised.
     silentRefresh().then(async (token) => {
       if (token) {
         setAuthReady(true);
-      } else {
-        const base =
-          process.env.NEXT_PUBLIC_ADMIN_API_URL?.replace(/\/admin$/, '') ?? '';
-        if (base) {
-          await authFetch(`${base}/api/v1/auth/logout`, {
-            method: 'POST',
-          }).catch(() => {});
-        }
-        router.replace('/login');
+        return;
       }
+      // If we already had a stale in-memory token from a previous mount,
+      // keep rendering optimistically while the user re-authenticates.
+      if (isAuthenticated()) {
+        setAuthReady(true);
+        return;
+      }
+      const base =
+        process.env.NEXT_PUBLIC_ADMIN_API_URL?.replace(/\/admin$/, '') ?? '';
+      if (base) {
+        await authFetch(`${base}/api/v1/auth/logout`, {
+          method: 'POST',
+        }).catch(() => {});
+      }
+      router.replace('/login');
     });
   }, [pathname, isAuthPage, isFullscreen, router, connState]);
 

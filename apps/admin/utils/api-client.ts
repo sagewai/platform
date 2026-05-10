@@ -15,11 +15,34 @@ export function createFetchClient(
     if (token) headers['Authorization'] = `Bearer ${token}`;
     const projectId = opts?.getProjectId?.();
     if (projectId) headers['X-Project-ID'] = projectId;
+    // Strip caller-supplied auth controls; this client decides them centrally.
+    // Without explicit deletion, a stray `credentials: 'omit'` upstream — or
+    // an HMR'd module that captured an older signature — silently drops
+    // session cookies and produces 401s with no console error.
+    const safeInit: RequestInit = { ...(init ?? {}) };
+    delete (safeInit as { credentials?: RequestCredentials }).credentials;
+    delete (safeInit as { headers?: HeadersInit }).headers;
     const res = await fetch(`${baseUrl}${path}`, {
-      ...init,
+      ...safeInit,
       headers,
       credentials: 'include',
     });
+    // Dev-only diagnostic: surface the rare case where the request lands
+    // anonymous (no Bearer token, no cookie reached the server) so the
+    // failure is visible instead of presenting as a generic 401.
+    if (process.env.NODE_ENV !== 'production' && res.status === 401) {
+      const noAuthHeader = !token;
+      const noCookie = typeof document !== 'undefined'
+        && !document.cookie.includes('sagewai_auth=');
+      if (noAuthHeader && noCookie) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[api-client] ${path} returned 401 with no auth credentials. ` +
+          `Either silentRefresh() did not run, or the dev-trust cookie ` +
+          `was rejected. See apps/admin/utils/auth.ts.`,
+        );
+      }
+    }
     if (!res.ok) {
       let detail = `API ${res.status}: ${res.statusText}`;
       try {
