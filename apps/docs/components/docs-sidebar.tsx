@@ -74,15 +74,16 @@ const SECTIONS: NavSection[] = [
       { label: 'SDK', href: '/docs/pillars/sdk' },
       { label: 'Autopilot', href: '/docs/pillars/autopilot' },
       { label: 'Fleet', href: '/docs/pillars/fleet' },
+      { label: 'Sealed', href: '/docs/pillars/sealed' },
       { label: 'Observatory', href: '/docs/pillars/observatory' },
       { label: 'Training Loop', href: '/docs/pillars/training-loop' },
     ],
   },
-  // -- Sealed spine (cross-cutting security) --------------------
+  // -- Sealed spine (cross-cutting security deep dive) ----------
   {
     title: 'Sealed spine',
     items: [
-      { label: 'Five pillars, one spine', href: '/docs/security' },
+      { label: 'Security overview', href: '/docs/security' },
     ],
   },
   // -- Architecture (canonical contract) ------------------------

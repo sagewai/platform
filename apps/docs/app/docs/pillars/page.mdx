@@ -18,7 +18,7 @@ State a goal in plain English; Sagewai designs the agent graph, instantiates a m
 
 Distributed workers with capability matching and project-scoped dispatch. The horizontal-scale story for production. A worker tagged `project_id=health-prod` cannot claim a task tagged `project_id=fin-prod`; cross-tenant leakage is enforced at the dispatch boundary, not at policy.
 
-### [Sealed](/docs/security)
+### [Sealed](/docs/pillars/sealed)
 
 Per-CLI workload identity, vault-backed secrets with just-in-time resolution, prompt and tool-output redaction at the host RPC seam, replay-safe audit, per-key access control, just-in-time human-in-the-loop on high-privilege actions. Customer credentials live in the sandbox only — encrypted at rest, scrubbed on release. The control surface a security review signs.
 
