@@ -1,13 +1,13 @@
 export const metadata = {
   title: 'Local inference — Ollama, vLLM, LM Studio, llama.cpp',
   description:
-    'Run LLMs locally with Sagewai: zero API cost, your data stays in your network. Ollama, vLLM, LM Studio, and llama.cpp all wired up via LiteLLM.',
+    'Run LLMs locally with Sagewai: zero API cost, your data stays in your network. Ollama, vLLM, LM Studio, and llama.cpp all supported.',
   alternates: { canonical: 'https://docs.sagewai.ai/docs/guides/local-inference' },
 };
 
 # Local Inference & LLM Providers
 
-Sagewai supports 100+ LLM models through LiteLLM. Use cloud APIs, managed inference services, or run models locally with zero API costs.
+Sagewai supports 100+ LLM models and providers. Use cloud APIs, managed inference services, or run models locally with zero API costs.
 
 ## Cloud API Providers
 
@@ -180,7 +180,7 @@ The intelligence layer uses a tiered fallback system. Local models are tried fir
 
 | Capability | Local (Primary) | API (Fallback) | Hash (Final Fallback) |
 |-----------|-----------------|----------------|----------------------|
-| Embeddings | SentenceTransformer (`all-MiniLM-L6-v2`, 384-dim) | LiteLLM Embedder (API key required) | HashEmbedder (deterministic, always works) |
+| Embeddings | SentenceTransformer (`all-MiniLM-L6-v2`, 384-dim) | API Embedder (API key required) | HashEmbedder (deterministic, always works) |
 | Entity Extraction | GLiNER (`urchade/gliner_medium-v2.1`, ~50 MB) | LLM Extractor (any model) | — |
 | Transcription | faster-whisper (CTranslate2, ~150 MB) | OpenAI Whisper API | — |
 | Summarization | SemanticSummarizer (embedding-scored extractive) | BART abstractive | — |

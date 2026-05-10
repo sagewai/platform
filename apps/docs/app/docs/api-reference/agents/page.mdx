@@ -52,7 +52,7 @@ BaseAgent(
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `name` | `str` | required | Agent identifier used in logs, events, and admin |
-| `model` | `str` | `"gpt-4o"` | LLM model string (any LiteLLM-supported model) |
+| `model` | `str` | `"gpt-4o"` | LLM model string (any supported provider) |
 | `system_prompt` | `str` | `""` | System message prepended to all conversations |
 | `tools` | `list[ToolSpec] \| None` | `None` | Tools the agent can invoke |
 | `temperature` | `float` | `0.7` | LLM sampling temperature |
@@ -65,7 +65,7 @@ BaseAgent(
 | `rate_limiter` | `RateLimiter \| None` | `None` | Per-agent rate limiting |
 | `api_base` | `str \| None` | `None` | Override the LLM API base URL |
 | `api_key` | `str \| None` | `None` | Override the LLM API key |
-| `custom_llm_provider` | `str \| None` | `None` | Force a specific LiteLLM provider |
+| `custom_llm_provider` | `str \| None` | `None` | Force a specific LLM provider |
 | `directives` | `Any` | `None` | Enable directive preprocessing (`True`, `False`, or `DirectiveEngine` instance) |
 
 ### Methods
@@ -81,7 +81,7 @@ BaseAgent(
 
 ## UniversalAgent
 
-LiteLLM-based agent supporting 100+ LLM providers: OpenAI, Anthropic, Google, Mistral, Cohere, Azure, and more.
+A universal agent supporting 100+ LLM providers: OpenAI, Anthropic, Google, Mistral, Cohere, Azure, and more.
 
 ```python
 from sagewai import UniversalAgent
@@ -101,7 +101,7 @@ Inherits all `BaseAgent` constructor parameters. Same public API.
 
 ## GoogleNativeAgent
 
-Native Gemini agent using the `google-genai` SDK. Direct access to Gemini features without the LiteLLM proxy layer.
+Native Gemini agent using the `google-genai` SDK. Direct access to Gemini features without the standard provider routing layer.
 
 ```python
 from sagewai import GoogleNativeAgent
@@ -351,7 +351,7 @@ params = InferenceParams.from_preset(InferencePreset.CREATIVE)
 | `stop_sequences` | `list[str] \| None` | `None` | Stop sequences |
 | `api_base` | `str \| None` | `None` | Custom API base URL |
 | `api_key` | `str \| None` | `None` | Custom API key |
-| `custom_llm_provider` | `str \| None` | `None` | Force LiteLLM provider |
+| `custom_llm_provider` | `str \| None` | `None` | Force LLM provider |
 | `timeout` | `float \| None` | `120.0` | LLM call timeout in seconds |
 | `fallback_models` | `list[str]` | `[]` | Ordered fallback models on failure |
 

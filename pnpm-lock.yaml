@@ -195,6 +195,9 @@ importers:
       '@next/mdx':
         specifier: 16.2.4
         version: 16.2.4(@mdx-js/loader@3.1.1)(@mdx-js/react@3.0.0(@types/react@19.2.14)(react@19.2.5))
+      fuse.js:
+        specifier: 7.0.0
+        version: 7.0.0
       lucide-react:
         specifier: 1.14.0
         version: 1.14.0(react@19.2.5)
@@ -2296,6 +2299,10 @@ packages:
 
   function-bind@1.1.2:
     resolution: {integrity: sha512-7XHNxH7qX9xG5mIwxkhumTox/MIRNcOgDrxWsMt2pAr23WHp6MrRlN7FBSFpCpr+oVO0F744iUgR82nJMfG2SA==}
+
+  fuse.js@7.0.0:
+    resolution: {integrity: sha512-14F4hBIxqKvD4Zz/XjDc3y94mNZN6pRv3U13Udo0lNLCWRBUsrMv2xwcF/y/Z5sV6+FQW+/ow68cHpm4sunt8Q==}
+    engines: {node: '>=10'}
 
   fuzzysort@3.1.0:
     resolution: {integrity: sha512-sR9BNCjBg6LNgwvxlBd0sBABvQitkLzoVY9MYYROQVX/FvfJ4Mai9LsGhDgd8qYdds0bY77VzYd5iuB+v5rwQQ==}
@@ -5842,6 +5849,8 @@ snapshots:
     optional: true
 
   function-bind@1.1.2: {}
+
+  fuse.js@7.0.0: {}
 
   fuzzysort@3.1.0: {}
 

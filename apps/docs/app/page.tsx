@@ -17,7 +17,7 @@ const FEATURES = [
     icon: <Code2 size={28} />,
     title: 'SDK',
     description:
-      'Python-native agent runtime — multi-model providers, tools via MCP gateway, typed memory with extraction strategies and per-mission branching and checkpoint save/restore, guardrails, and LLM proxy in one import. Three lines to your first agent, 100+ models via LiteLLM.',
+      'Python-native agent runtime — multi-model providers, tools via MCP gateway, typed memory with extraction strategies and per-mission branching and checkpoint save/restore, guardrails, and LLM proxy in one import. Three lines to your first agent, 100+ models out of the box.',
   },
   {
     icon: <Database size={28} />,
@@ -273,7 +273,7 @@ export default function LandingPage() {
         <div className="text-center mb-12">
           <h2 className="text-3xl font-bold text-text-primary mb-3">100+ Supported Models</h2>
           <p className="text-text-secondary max-w-[42rem] mx-auto">
-            Powered by LiteLLM. Write your agent once, then swap models with a single parameter.
+            Write your agent once, then swap models with a single parameter.
             No code changes required.
           </p>
         </div>
@@ -283,8 +283,7 @@ export default function LandingPage() {
           ))}
         </div>
         <p className="text-center text-sm text-text-muted mt-6">
-          Plus Azure OpenAI, AWS Bedrock, Vertex AI, Together AI, Groq, Fireworks, and many more
-          via LiteLLM.
+          Plus Azure OpenAI, AWS Bedrock, Vertex AI, Together AI, Groq, Fireworks, and many more.
         </p>
       </section>
 

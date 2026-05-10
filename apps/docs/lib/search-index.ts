@@ -1,0 +1,583 @@
+export interface SearchEntry {
+  title: string;
+  href: string;
+  section: string;
+  description: string;
+  keywords: string;
+}
+
+export const SEARCH_INDEX: SearchEntry[] = [
+  // Quickstart
+  {
+    title: 'Hello agent in 60 seconds',
+    href: '/docs/quickstart',
+    section: 'Quickstart',
+    description: 'Five lines of Python. Your first Sagewai agent running against any LLM.',
+    keywords: 'quickstart hello world first agent UniversalAgent install pip',
+  },
+  {
+    title: 'Full quickstart — Claude Code in a sandbox',
+    href: '/docs/getting-started',
+    section: 'Quickstart',
+    description: 'End-to-end setup with sandbox, tools, and the admin panel.',
+    keywords: 'getting started setup sandbox claude code admin panel full quickstart',
+  },
+  {
+    title: 'Minimal setup — no sandbox',
+    href: '/docs/getting-started/minimal-setup',
+    section: 'Quickstart',
+    description: 'SDK only: no Docker, no admin server. Fastest path to a working agent.',
+    keywords: 'minimal setup no docker no sandbox lightweight install sdk only',
+  },
+
+  // Lighthouse
+  {
+    title: 'Lighthouse overview',
+    href: '/docs/lighthouse',
+    section: 'Lighthouse',
+    description: "Sagewai's differentiating capabilities: what sets it apart.",
+    keywords: 'lighthouse overview differentiators capabilities advanced',
+  },
+  {
+    title: 'Train your own model',
+    href: '/docs/lighthouse/train-your-own-model',
+    section: 'Lighthouse',
+    description: 'Curate runs, fine-tune with Unsloth, deploy with Ollama. Zero cost per token at the limit.',
+    keywords: 'train fine-tune unsloth ollama gguf training loop slm custom model',
+  },
+  {
+    title: 'Moderation and classification',
+    href: '/docs/lighthouse/moderation-and-classification',
+    section: 'Lighthouse',
+    description: 'Content moderation, PII detection, and multi-label classification with tool-calling agents.',
+    keywords: 'moderation classification pii content safety guardrails label',
+  },
+  {
+    title: 'Memory and retrieval',
+    href: '/docs/lighthouse/memory-and-retrieval',
+    section: 'Lighthouse',
+    description: 'RAG, vector memory, episodic memory, and extraction strategies.',
+    keywords: 'memory rag retrieval vector milvus episodic extraction strategies',
+  },
+  {
+    title: 'Production multitenancy',
+    href: '/docs/lighthouse/production-multitenancy',
+    section: 'Lighthouse',
+    description: 'Project isolation, fleet workers, enrollment keys, and cross-project governance.',
+    keywords: 'multitenancy projects isolation fleet workers enrollment keys governance',
+  },
+  {
+    title: 'Observability and cost',
+    href: '/docs/lighthouse/observability-and-cost',
+    section: 'Lighthouse',
+    description: 'OpenTelemetry, Grafana dashboards, per-project cost tracking, and audit logs.',
+    keywords: 'observability cost otel grafana prometheus metrics tracing audit logs',
+  },
+  {
+    title: 'Inference deployment',
+    href: '/docs/lighthouse/inference-deployment',
+    section: 'Lighthouse',
+    description: 'Deploy fine-tuned models to Ollama, vLLM, RunPod, Modal, and Vast.ai.',
+    keywords: 'inference deployment ollama vllm runpod modal vast gpu cloud local',
+  },
+
+  // Foundation
+  {
+    title: 'Foundation overview',
+    href: '/docs/foundation',
+    section: 'Foundation',
+    description: 'SDK basics: agents, tools, memory, strategies, and workflows.',
+    keywords: 'foundation overview sdk basics agents tools memory strategies workflows',
+  },
+
+  // Patterns
+  {
+    title: 'Patterns overview',
+    href: '/docs/patterns',
+    section: 'Patterns',
+    description: 'Production reference patterns for real-world agent deployments.',
+    keywords: 'patterns production reference real world deployment best practices',
+  },
+
+  // Integrations
+  {
+    title: 'Integrations overview',
+    href: '/docs/integrations',
+    section: 'Integrations',
+    description: 'Connect Sagewai to external systems, APIs, and tools.',
+    keywords: 'integrations external systems api tools connectors mcp',
+  },
+
+  // Pillars
+  {
+    title: 'Pillars overview',
+    href: '/docs/pillars',
+    section: 'Pillars',
+    description: 'The five pillars of the Sagewai platform.',
+    keywords: 'pillars platform overview sdk autopilot fleet observatory training loop',
+  },
+  {
+    title: 'SDK pillar',
+    href: '/docs/pillars/sdk',
+    section: 'Pillars',
+    description: 'Python-native agent runtime with 100+ LLM providers, MCP tools, and typed memory.',
+    keywords: 'sdk python agent runtime llm providers mcp tools memory guardrails',
+  },
+  {
+    title: 'Autopilot pillar',
+    href: '/docs/pillars/autopilot',
+    section: 'Pillars',
+    description: 'Goal-driven agent orchestration — state the goal, Autopilot runs the mission.',
+    keywords: 'autopilot goal mission orchestration blueprint slotspec agentgraph',
+  },
+  {
+    title: 'Fleet pillar',
+    href: '/docs/pillars/fleet',
+    section: 'Pillars',
+    description: 'Distributed workers with capability dispatch, enrollment keys, and sandbox isolation.',
+    keywords: 'fleet workers distributed dispatch enrollment keys sandbox capability',
+  },
+  {
+    title: 'Observatory pillar',
+    href: '/docs/pillars/observatory',
+    section: 'Pillars',
+    description: 'OpenTelemetry tracing, metrics, Grafana dashboards, and cost audit trail.',
+    keywords: 'observatory otel tracing metrics grafana dashboards cost audit',
+  },
+  {
+    title: 'Training Loop pillar',
+    href: '/docs/pillars/training-loop',
+    section: 'Pillars',
+    description: 'Curate → export → fine-tune → deploy. Agents that get cheaper with use.',
+    keywords: 'training loop fine-tune unsloth export alpaca curate cheaper cost',
+  },
+
+  // Sealed spine
+  {
+    title: 'Five pillars, one spine — Sealed',
+    href: '/docs/security',
+    section: 'Sealed spine',
+    description: 'Sealed: the cross-cutting security layer — profiles, JIT-HITL, tool scopes, sandbox tiers.',
+    keywords: 'sealed security profiles jit hitl tool scopes sandbox tiers spine',
+  },
+
+  // Architecture
+  {
+    title: 'Architecture overview',
+    href: '/docs/architecture',
+    section: 'Architecture',
+    description: 'Canonical runtime architecture: topology, security tiers, execution modes, backends.',
+    keywords: 'architecture overview runtime topology security tiers execution modes backends',
+  },
+  {
+    title: 'Runtime Topology',
+    href: '/docs/architecture/runtime-topology',
+    section: 'Architecture',
+    description: 'How SDK, gateway, fleet, and admin interconnect at runtime.',
+    keywords: 'runtime topology sdk gateway fleet admin interconnect diagram',
+  },
+  {
+    title: 'Security Tiers',
+    href: '/docs/architecture/security-tiers',
+    section: 'Architecture',
+    description: 'TRUSTED, SANDBOXED, UNTRUSTED tier model and what runs in each.',
+    keywords: 'security tiers trusted sandboxed untrusted tier model',
+  },
+  {
+    title: 'Execution Modes',
+    href: '/docs/architecture/execution-modes',
+    section: 'Architecture',
+    description: 'Direct, fleet, autopilot, and harness execution modes explained.',
+    keywords: 'execution modes direct fleet autopilot harness proxy',
+  },
+  {
+    title: 'Sandbox Backends',
+    href: '/docs/architecture/sandbox-backends',
+    section: 'Architecture',
+    description: 'Docker, Kubernetes, and AgentCore sandbox backend implementations.',
+    keywords: 'sandbox backends docker kubernetes agentcore k8s container isolation',
+  },
+
+  // Inference
+  {
+    title: 'Inference overview',
+    href: '/docs/inference',
+    section: 'Inference',
+    description: 'Choosing and deploying inference backends: cloud APIs, GPU cloud, local.',
+    keywords: 'inference overview cloud api gpu local ollama vllm runpod modal colab',
+  },
+  {
+    title: 'Start with juggernauts',
+    href: '/docs/inference/start-with-juggernauts',
+    section: 'Inference',
+    description: 'OpenAI, Anthropic, Google — use the big providers while prototyping.',
+    keywords: 'openai anthropic google gpt claude gemini cloud api inference juggernaut',
+  },
+  {
+    title: 'Free CUDA via Colab',
+    href: '/docs/inference/free-cuda-via-colab',
+    section: 'Inference',
+    description: 'Run GPU inference for free with Google Colab.',
+    keywords: 'free cuda colab google gpu inference vllm cheap cost',
+  },
+  {
+    title: 'Rent when you grow',
+    href: '/docs/inference/rent-when-you-grow',
+    section: 'Inference',
+    description: 'RunPod, Modal, and Vast.ai for scalable GPU inference.',
+    keywords: 'runpod modal vast ai gpu rent scale inference serverless',
+  },
+  {
+    title: 'Deploy locally',
+    href: '/docs/inference/deploy-locally',
+    section: 'Inference',
+    description: 'Ollama, vLLM, LM Studio, and llama.cpp on your own hardware.',
+    keywords: 'local deploy ollama vllm lm studio llama.cpp on-premise hardware',
+  },
+
+  // Concept overviews
+  {
+    title: 'Observatory dashboards',
+    href: '/docs/observatory',
+    section: 'Concept overviews',
+    description: 'Grafana dashboards, VictoriaMetrics, and real-time agent observability.',
+    keywords: 'observatory grafana victoriametrics prometheus dashboards metrics real-time',
+  },
+  {
+    title: 'Autopilot overview',
+    href: '/docs/autopilot',
+    section: 'Concept overviews',
+    description: 'How Autopilot turns a plain-English goal into a running mission.',
+    keywords: 'autopilot goal mission blueprint slots agent graph overview',
+  },
+
+  // Core concepts
+  {
+    title: 'Agents',
+    href: '/docs/core-concepts/agents',
+    section: 'Core concepts',
+    description: 'BaseAgent, UniversalAgent, GoogleNativeAgent — the agent hierarchy.',
+    keywords: 'agents baseagent universalagent googlenativeagent hierarchy events tools',
+  },
+  {
+    title: 'Strategies',
+    href: '/docs/core-concepts/strategies',
+    section: 'Core concepts',
+    description: 'ReAct, Chain-of-Thought, and custom execution strategies.',
+    keywords: 'strategies react chain of thought execution cot planning',
+  },
+  {
+    title: 'Memory & RAG',
+    href: '/docs/core-concepts/memory',
+    section: 'Core concepts',
+    description: 'Vector memory, episodic memory, RAG retrieval, and extraction strategies.',
+    keywords: 'memory rag vector episodic retrieval extraction milvus recall',
+  },
+  {
+    title: 'Workflows',
+    href: '/docs/core-concepts/workflows',
+    section: 'Core concepts',
+    description: 'YAML-defined multi-step workflows with branching and parallel execution.',
+    keywords: 'workflows yaml multi-step branching parallel sequential dag',
+  },
+  {
+    title: 'Context Engine',
+    href: '/docs/core-concepts/context-engine',
+    section: 'Core concepts',
+    description: 'Automatic context compaction, episode management, and sliding windows.',
+    keywords: 'context engine compaction episode management sliding window tokens',
+  },
+  {
+    title: 'Directives',
+    href: '/docs/core-concepts/directives',
+    section: 'Core concepts',
+    description: 'Structured behavioural constraints injected into every agent call.',
+    keywords: 'directives behavioural constraints inject structured rules persona',
+  },
+  {
+    title: 'Safety & Guardrails',
+    href: '/docs/core-concepts/safety',
+    section: 'Core concepts',
+    description: 'Input/output guardrails for PII, hallucination, and content safety.',
+    keywords: 'safety guardrails pii hallucination content moderation input output',
+  },
+  {
+    title: 'Self-Learning Agents',
+    href: '/docs/core-concepts/self-learning',
+    section: 'Core concepts',
+    description: 'Curator, preference learning, and training data collection from production.',
+    keywords: 'self-learning curator preference training data collection production',
+  },
+
+  // Guides
+  {
+    title: 'Your First Agent',
+    href: '/docs/guides/first-agent',
+    section: 'Guides',
+    description: 'Step-by-step guide to building and running your first Sagewai agent.',
+    keywords: 'first agent tutorial step by step build run getting started',
+  },
+  {
+    title: 'Tutorials',
+    href: '/docs/guides/tutorials',
+    section: 'Guides',
+    description: 'Hands-on tutorials for common agent patterns and use cases.',
+    keywords: 'tutorials hands-on patterns use cases examples walkthrough',
+  },
+  {
+    title: 'Multi-Agent Workflows',
+    href: '/docs/guides/multi-agent',
+    section: 'Guides',
+    description: 'Orchestrate multiple agents with delegation, pipelines, and parallel execution.',
+    keywords: 'multi-agent workflows orchestrate delegation pipeline parallel',
+  },
+  {
+    title: 'Agent Patterns',
+    href: '/docs/guides/patterns',
+    section: 'Guides',
+    description: 'Reusable patterns for common agent architectures.',
+    keywords: 'patterns reusable agent architecture common design',
+  },
+  {
+    title: 'Training & Fine-Tuning',
+    href: '/docs/guides/training',
+    section: 'Guides',
+    description: 'Collect training data, fine-tune a model, deploy it, run $0/token.',
+    keywords: 'training fine-tuning unsloth collect data export alpaca slm model',
+  },
+  {
+    title: 'Admin Panel',
+    href: '/docs/guides/admin-panel',
+    section: 'Guides',
+    description: 'Set up and use the Sagewai admin panel: orgs, projects, agents, observability.',
+    keywords: 'admin panel setup org project agents observability config ui dashboard',
+  },
+  {
+    title: 'Fleet Architecture',
+    href: '/docs/guides/fleet-enterprise',
+    section: 'Guides',
+    description: 'Enterprise fleet architecture: mTLS, anomaly detection, worker pools.',
+    keywords: 'fleet enterprise architecture mtls anomaly detection worker pool security',
+  },
+  {
+    title: 'Fleet Deployment',
+    href: '/docs/guides/fleet',
+    section: 'Guides',
+    description: 'Deploy and manage fleet workers at scale.',
+    keywords: 'fleet deployment workers scale dispatch capabilities labels',
+  },
+  {
+    title: 'Fleet Deep Dive',
+    href: '/docs/guides/fleet-architecture',
+    section: 'Guides',
+    description: 'In-depth technical guide to the fleet dispatch and isolation model.',
+    keywords: 'fleet deep dive dispatch isolation model technical workers',
+  },
+  {
+    title: 'Self-Hosted Deployment',
+    href: '/docs/guides/self-hosted',
+    section: 'Guides',
+    description: 'Run Sagewai on your own infrastructure with Docker and docker-compose.',
+    keywords: 'self-hosted deployment docker compose on-premise infrastructure production',
+  },
+  {
+    title: 'Hardware Requirements',
+    href: '/docs/guides/hardware-requirements',
+    section: 'Guides',
+    description: 'CPU, RAM, GPU, and storage requirements for different deployment configurations.',
+    keywords: 'hardware requirements cpu ram gpu storage disk deployment spec',
+  },
+  {
+    title: 'Infrastructure Management',
+    href: '/docs/guides/infrastructure',
+    section: 'Guides',
+    description: 'Manage LLM providers, proxy endpoints, and API keys via the admin panel.',
+    keywords: 'infrastructure management providers api keys proxy admin config',
+  },
+  {
+    title: 'MCP Server',
+    href: '/docs/guides/mcp-server',
+    section: 'Guides',
+    description: 'Expose tools via the Model Context Protocol (MCP) gateway.',
+    keywords: 'mcp server model context protocol gateway tools expose',
+  },
+  {
+    title: 'External Access',
+    href: '/docs/guides/external-access',
+    section: 'Guides',
+    description: 'Expose the admin API and MCP gateway to external clients.',
+    keywords: 'external access api gateway expose ngrok cloudflare tunnel',
+  },
+  {
+    title: 'Gateway Streaming',
+    href: '/docs/guides/gateway-streaming',
+    section: 'Guides',
+    description: 'Server-sent events (SSE) streaming through the gateway.',
+    keywords: 'gateway streaming sse server-sent events real-time stream',
+  },
+  {
+    title: 'LLM Harness',
+    href: '/docs/guides/harness',
+    section: 'Guides',
+    description: 'Smart proxy that routes LLM calls to the cheapest capable model per request.',
+    keywords: 'harness proxy llm routing cheapest model cost save haiku sonnet opus',
+  },
+  {
+    title: 'Cost Management',
+    href: '/docs/guides/cost-management',
+    section: 'Guides',
+    description: 'Per-project budgets, spend tracking, rate limits, and cost alerts.',
+    keywords: 'cost management budget spend tracking rate limit alert billing',
+  },
+  {
+    title: 'PII Protection',
+    href: '/docs/guides/pii-protection',
+    section: 'Guides',
+    description: 'Detect and redact PII before it reaches the LLM.',
+    keywords: 'pii protection detect redact personal data privacy guardrail',
+  },
+  {
+    title: 'Local Inference',
+    href: '/docs/guides/local-inference',
+    section: 'Guides',
+    description: 'Ollama, vLLM, LM Studio, and llama.cpp — zero API cost, data stays local.',
+    keywords: 'local inference ollama vllm lm studio llama.cpp zero cost data local',
+  },
+  {
+    title: 'CI/CD Integration',
+    href: '/docs/guides/ci-cd',
+    section: 'Guides',
+    description: 'Integrate Sagewai agents into your CI/CD pipeline.',
+    keywords: 'ci cd pipeline integration github actions devops deploy automation',
+  },
+  {
+    title: 'VS Code Extension',
+    href: '/docs/guides/vscode-extension',
+    section: 'Guides',
+    description: 'Use the Sagewai extension to manage agents from within VS Code.',
+    keywords: 'vscode extension visual studio code ide editor plugin',
+  },
+  {
+    title: 'Client Wrappers (17 Languages)',
+    href: '/docs/guides/client-wrappers',
+    section: 'Guides',
+    description: 'Official thin client wrappers: TypeScript, Go, Rust, Java, and 13 more.',
+    keywords: 'client wrappers typescript go rust java python languages sdk wrapper',
+  },
+  {
+    title: 'vs. Alternatives',
+    href: '/docs/guides/vs-alternatives',
+    section: 'Guides',
+    description: 'Sagewai compared to LangChain, LlamaIndex, CrewAI, AutoGen, and Semantic Kernel.',
+    keywords: 'comparison alternatives langchain llamaindex crewai autogen semantic kernel',
+  },
+  {
+    title: 'vs. MiniMax',
+    href: '/docs/guides/vs-minimax',
+    section: 'Guides',
+    description: 'Sagewai vs MiniMax: model support, fleet, memory, and training loop.',
+    keywords: 'minimax comparison model support fleet memory training loop',
+  },
+
+  // Reference
+  {
+    title: 'Examples (numbered file list)',
+    href: '/docs/reference/examples',
+    section: 'Reference',
+    description: 'All 50+ runnable example scripts, numbered by topic.',
+    keywords: 'examples numbered list runnable scripts demos',
+  },
+  {
+    title: 'API — Agents',
+    href: '/docs/api-reference/agents',
+    section: 'Reference',
+    description: 'BaseAgent, UniversalAgent, GoogleNativeAgent API reference.',
+    keywords: 'api reference agents baseagent universalagent googlenativeagent parameters',
+  },
+  {
+    title: 'API — Strategies',
+    href: '/docs/api-reference/strategies',
+    section: 'Reference',
+    description: 'Execution strategy API: ReAct, COT, and custom strategies.',
+    keywords: 'api strategies react cot chain of thought execution reference',
+  },
+  {
+    title: 'API — Memory & Context',
+    href: '/docs/api-reference/memory',
+    section: 'Reference',
+    description: 'ContextEngine, RAGEngine, MemoryBranch, and strategy classes.',
+    keywords: 'api memory context engine rag engine branch strategy classes',
+  },
+  {
+    title: 'API — Workflows',
+    href: '/docs/api-reference/workflows',
+    section: 'Reference',
+    description: 'YAML workflow builder, executor, and step types.',
+    keywords: 'api workflows yaml builder executor step types',
+  },
+  {
+    title: 'API — Safety & Guardrails',
+    href: '/docs/api-reference/safety',
+    section: 'Reference',
+    description: 'Guardrail classes for PII, hallucination, and content safety.',
+    keywords: 'api safety guardrails pii hallucination content',
+  },
+  {
+    title: 'API — Directives',
+    href: '/docs/api-reference/directives',
+    section: 'Reference',
+    description: 'DirectiveEngine and built-in directive types.',
+    keywords: 'api directives engine types behavioural constraints',
+  },
+  {
+    title: 'API — Self-Learning',
+    href: '/docs/api-reference/self-learning',
+    section: 'Reference',
+    description: 'Curator, TrainingDataset, and preference learning classes.',
+    keywords: 'api self-learning curator training dataset preference',
+  },
+  {
+    title: 'API — Project & Errors',
+    href: '/docs/api-reference/project',
+    section: 'Reference',
+    description: 'Project configuration, error types, and exception hierarchy.',
+    keywords: 'api project errors exceptions configuration hierarchy',
+  },
+  {
+    title: 'API — Tools & MCP',
+    href: '/docs/api-reference/tools',
+    section: 'Reference',
+    description: 'ToolSpec, @tool decorator, and MCP tool integration.',
+    keywords: 'api tools mcp toolspec decorator integration gateway',
+  },
+  {
+    title: 'API — MCP Protocol',
+    href: '/docs/api-reference/mcp',
+    section: 'Reference',
+    description: 'Model Context Protocol server and client API.',
+    keywords: 'api mcp model context protocol server client',
+  },
+  {
+    title: 'API — Notifications',
+    href: '/docs/api-reference/notifications',
+    section: 'Reference',
+    description: 'Email and webhook notification API.',
+    keywords: 'api notifications email webhook resend sendgrid postmark',
+  },
+  {
+    title: 'API — REST',
+    href: '/docs/api-reference/rest-api',
+    section: 'Reference',
+    description: 'Full REST API reference for the admin panel backend.',
+    keywords: 'api rest reference admin backend endpoints http',
+  },
+
+  // Blog
+  {
+    title: 'Introducing Sagewai',
+    href: '/docs/blog/introducing-sagewai',
+    section: 'Blog',
+    description: 'The announcement and vision behind the Sagewai platform.',
+    keywords: 'blog introducing sagewai announcement vision launch',
+  },
+];

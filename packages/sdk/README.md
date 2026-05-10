@@ -47,7 +47,7 @@ agent = UniversalAgent(name="hello", model="gpt-4o-mini")
 print(asyncio.run(agent.chat("What is Sagewai?")))
 ```
 
-Three lines to your first agent. Works with GPT-4o, Claude, Gemini, Mistral, Ollama, and 100+ models via LiteLLM.
+Three lines to your first agent. Works with GPT-4o, Claude, Gemini, Mistral, Ollama, and 100+ models.
 
 ## Install extras
 

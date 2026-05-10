@@ -125,7 +125,7 @@ Events emitted: `RUN_STARTED`, `RUN_FINISHED`, `RUN_ERROR`, `RUN_CANCELLED`, `ST
 
 ## UniversalAgent
 
-`UniversalAgent` is the primary concrete agent, backed by [LiteLLM](https://docs.litellm.ai/). It supports 100+ LLM providers through a unified interface.
+`UniversalAgent` is the primary concrete agent, supporting 100+ LLM providers through a unified interface.
 
 ```python
 from sagewai import UniversalAgent
@@ -142,7 +142,7 @@ response = await agent.chat("Hello!")
 
 ### Supported Models
 
-Any model that LiteLLM supports works out of the box:
+Sagewai supports 100+ models out of the box:
 
 | Provider | Model Examples | Prefix |
 |----------|---------------|--------|
@@ -170,7 +170,7 @@ async for chunk in agent.chat_stream("Explain relativity"):
 
 ## GoogleNativeAgent
 
-`GoogleNativeAgent` uses the `google.genai` SDK for native Gemini access, bypassing LiteLLM. This provides access to Gemini-specific features like native function calling.
+`GoogleNativeAgent` uses the `google.genai` SDK for native Gemini access, bypassing the standard provider routing. This provides access to Gemini-specific features like native function calling.
 
 ```python
 from sagewai import GoogleNativeAgent
@@ -189,7 +189,7 @@ Use `GoogleNativeAgent` when you need:
 - Direct access to Google GenAI SDK features
 - Vertex AI integration
 
-Use `UniversalAgent` with `model="gemini/..."` for general-purpose Gemini access via LiteLLM.
+Use `UniversalAgent` with `model="gemini/..."` for general-purpose Gemini access via the standard provider routing.
 
 ---
 

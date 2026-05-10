@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Menu, X } from 'lucide-react';
+import { Menu, X, Search } from 'lucide-react';
 import { DocsSidebar } from '@/components/docs-sidebar';
 import { DocsFooter } from '@/components/docs-footer';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { SearchModal } from '@/components/search-modal';
 
 /**
  * Client-side shell for /docs/* pages.
@@ -23,12 +24,26 @@ import { ThemeToggle } from '@/components/theme-toggle';
  */
 export function DocsShell({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const pathname = usePathname();
 
   // Close drawer on route change.
   useEffect(() => {
     setOpen(false);
   }, [pathname]);
+
+  // Cmd+K / Ctrl+K opens search.
+  const handleSearchKey = useCallback((e: KeyboardEvent) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      e.preventDefault();
+      setSearchOpen((v) => !v);
+    }
+  }, []);
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleSearchKey);
+    return () => window.removeEventListener('keydown', handleSearchKey);
+  }, [handleSearchKey]);
 
   // Lock body scroll while drawer is open.
   useEffect(() => {
@@ -42,6 +57,7 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-bg-page">
+      <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
       {/* Docs Navigation Bar */}
       <nav className="sticky top-0 z-50 bg-bg-page/80 backdrop-blur-md border-b border-border">
         <div className="max-w-[90rem] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
@@ -75,34 +91,50 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
             </Link>
           </div>
 
-          <div className="hidden md:flex items-center gap-6 lg:gap-8">
-            <Link
-              href="/docs/getting-started"
-              className="text-sm text-text-secondary hover:text-primary transition-colors"
+          <div className="flex items-center gap-2 sm:gap-4">
+            {/* Search button */}
+            <button
+              type="button"
+              onClick={() => setSearchOpen(true)}
+              aria-label="Search documentation"
+              className="flex items-center gap-2 text-sm text-text-muted bg-bg-subtle hover:bg-bg-subtle/80 border border-border rounded-lg px-3 py-1.5 transition-colors"
             >
-              Getting Started
-            </Link>
-            <Link
-              href="/docs/api-reference/python-sdk"
-              className="text-sm text-text-secondary hover:text-primary transition-colors"
-            >
-              API Reference
-            </Link>
-            <Link
-              href="/docs/guides/first-agent"
-              className="text-sm text-text-secondary hover:text-primary transition-colors"
-            >
-              Guides
-            </Link>
-            <a
-              href="https://github.com/sagewai/platform"
-              className="text-sm text-text-secondary hover:text-primary transition-colors"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              GitHub
-            </a>
-            <ThemeToggle />
+              <Search size={14} />
+              <span className="hidden sm:inline text-text-muted">Search…</span>
+              <kbd className="hidden md:inline-flex items-center gap-0.5 text-[11px] text-text-muted font-mono">
+                ⌘K
+              </kbd>
+            </button>
+
+            <div className="hidden md:flex items-center gap-6 lg:gap-8">
+              <Link
+                href="/docs/getting-started"
+                className="text-sm text-text-secondary hover:text-primary transition-colors"
+              >
+                Getting Started
+              </Link>
+              <Link
+                href="/docs/api-reference/python-sdk"
+                className="text-sm text-text-secondary hover:text-primary transition-colors"
+              >
+                API Reference
+              </Link>
+              <Link
+                href="/docs/guides/first-agent"
+                className="text-sm text-text-secondary hover:text-primary transition-colors"
+              >
+                Guides
+              </Link>
+              <a
+                href="https://github.com/sagewai/platform"
+                className="text-sm text-text-secondary hover:text-primary transition-colors"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                GitHub
+              </a>
+              <ThemeToggle />
+            </div>
           </div>
         </div>
       </nav>

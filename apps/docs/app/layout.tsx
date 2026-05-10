@@ -138,7 +138,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 author: { '@id': 'https://sagewai.ai/#organization' },
                 publisher: { '@id': 'https://sagewai.ai/#organization' },
                 featureList: [
-                  'Any LLM via LiteLLM (100+ models)',
+                  'Any LLM provider (100+ models)',
                   'MCP tool integration',
                   'Typed memory with extraction strategies',
                   'Guardrails (PII, hallucination, content)',
