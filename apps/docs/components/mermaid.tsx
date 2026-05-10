@@ -33,6 +33,13 @@ export function Mermaid({ chart }: { chart: string }) {
         startOnLoad: false,
         theme: theme,
         securityLevel: 'loose',
+        flowchart: { useMaxWidth: false, htmlLabels: true },
+        sequence: { useMaxWidth: false },
+        gantt: { useMaxWidth: false },
+        journey: { useMaxWidth: false },
+        class: { useMaxWidth: false },
+        state: { useMaxWidth: false },
+        er: { useMaxWidth: false },
         themeVariables: theme === 'dark' ? {
           primaryColor: '#1A2B4A',
           primaryTextColor: '#F0F4F8',
@@ -70,7 +77,7 @@ export function Mermaid({ chart }: { chart: string }) {
   return (
     <div
       ref={ref}
-      className="my-6 flex justify-center overflow-x-auto bg-bg-subtle/50 rounded-lg p-4"
+      className="my-6 overflow-x-auto bg-bg-subtle/50 rounded-lg p-4 text-center [&>svg]:inline-block"
       dangerouslySetInnerHTML={{ __html: svg }}
     />
   );
