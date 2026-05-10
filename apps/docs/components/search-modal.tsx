@@ -98,8 +98,8 @@ export function SearchModal({ open, onClose }: Props) {
         aria-hidden="true"
       />
 
-      {/* Panel */}
-      <div className="relative w-full max-w-xl bg-bg-surface border border-border rounded-xl shadow-2xl overflow-hidden">
+      {/* Panel — max-w-[36rem] avoids the @sagewai/tokens Tailwind 4 custom-property collision that breaks named sizes like max-w-xl */}
+      <div className="relative w-full max-w-[36rem] bg-bg-surface border border-border rounded-xl overflow-hidden" style={{ boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)' }}>
         {/* Input row */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
           <Search size={18} className="text-text-muted shrink-0" />
