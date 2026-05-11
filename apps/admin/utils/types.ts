@@ -1176,6 +1176,12 @@ export interface BlueprintExplainResponse {
 /* ─── Autopilot ─── */
 
 export type AutopilotTier = 'anonymous' | 'free' | 'custom';
+
+export const TIER_DISPLAY_LABELS: Record<AutopilotTier, string> = {
+  anonymous: 'Free (rate-limited)',
+  free: 'Free',
+  custom: 'Custom',
+};
 export type AutopilotMissionStatus =
   | 'pending'
   | 'draft'

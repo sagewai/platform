@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Zap, ZapOff, AlertTriangle, RefreshCw } from 'lucide-react';
 import { adminApi } from '@/utils/api';
 import type { AutopilotMission, AutopilotStatus, AutopilotTier } from '@/utils/types';
+import { TIER_DISPLAY_LABELS } from '@/utils/types';
 import { AutopilotGoalInput } from '@/components/autopilot-goal-input';
 import { AutopilotMissionList } from '@/components/autopilot-mission-list';
 import { EmptyAutopilotPage } from '@/components/autopilot/empty-autopilot-page';
@@ -16,18 +17,18 @@ import { SystemReadinessBanner } from '@/components/autopilot/system-readiness-b
 const TIER_OPTIONS: { tier: AutopilotTier; label: string; description: string }[] = [
   {
     tier: 'anonymous',
-    label: 'Try anonymously',
-    description: 'No signup needed. Rate-limited per install.',
+    label: 'Free (rate-limited)',
+    description: 'No signup required. Up to 10 missions/month.',
   },
   {
     tier: 'free',
-    label: 'Free account',
-    description: 'Higher limits. Email signup required.',
+    label: 'Free + email signup',
+    description: '50 missions/month, up to 10 concurrent.',
   },
   {
     tier: 'custom',
-    label: 'Custom',
-    description: 'Contact licensing@sagewai.ai for custom rates.',
+    label: 'Need higher limits?',
+    description: 'Contact licensing@sagewai.ai to raise your limits.',
   },
 ];
 
@@ -201,10 +202,21 @@ export default function AutopilotPage() {
               Autopilot enabled
             </span>
             <span className="ml-auto text-[11px] font-semibold uppercase tracking-wide bg-primary/10 text-primary px-2 py-0.5 rounded-full">
-              {status.tier}
+              {TIER_DISPLAY_LABELS[status.tier] ?? status.tier}
             </span>
           </div>
           <QuotaBar used={status.quota_used} limit={status.quota_limit} />
+          {status.quota_limit != null && (
+            <p className="text-xs text-text-muted m-0">
+              Need higher limits?{' '}
+              <a
+                href={`mailto:licensing@sagewai.ai?subject=Autopilot%20limit%20increase&body=Hi%2C%20I%27d%20like%20to%20raise%20my%20Autopilot%20limits.%20Current%20usage%3A%20${status.quota_used}%20%2F%20${status.quota_limit}%20missions.`}
+                className="text-primary hover:underline underline-offset-2"
+              >
+                Contact us to raise them.
+              </a>
+            </p>
+          )}
         </div>
       ) : (
         /* Enable card */
@@ -217,7 +229,7 @@ export default function AutopilotPage() {
               </h2>
             </div>
             <p className="text-sm text-text-secondary m-0">
-              Choose a tier to get started. You can upgrade any time.
+              Choose your usage limits. Contact us any time to raise them.
             </p>
           </div>
 
@@ -235,11 +247,7 @@ export default function AutopilotPage() {
                   }`}
                 >
                   <p className="text-sm font-semibold text-text-primary m-0 mb-1">{opt.label}</p>
-                  <p className="text-xs text-text-muted m-0">
-                    {opt.tier === 'custom'
-                      ? 'Contact licensing@sagewai.ai for custom rates.'
-                      : opt.description}
-                  </p>
+                  <p className="text-xs text-text-muted m-0">{opt.description}</p>
                 </button>
               ))}
             </div>
