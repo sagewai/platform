@@ -1,11 +1,17 @@
 version: 2
+
+# CI-cost note: schedule is monthly and each ecosystem groups its
+# minor/patch bumps into a single PR (majors still open individually,
+# so risky upgrades stay reviewable). This collapses what used to be
+# ~50 separate PRs/week — each triggering a full CI matrix — into a
+# handful of grouped PRs/month.
+
 updates:
   # Python SDK dependencies
   - package-ecosystem: "pip"
     directory: "/packages/sdk"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
     open-pull-requests-limit: 10
     reviewers:
       - "sagecurator"
@@ -14,25 +20,37 @@ updates:
       - "pillar:sdk"
     commit-message:
       prefix: "chore(sdk):"
+    groups:
+      sdk-dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
     open-pull-requests-limit: 5
     reviewers:
       - "sagecurator"
     commit-message:
       prefix: "chore(ci):"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   # Admin UI (npm)
   - package-ecosystem: "npm"
     directory: "/apps/admin"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
     open-pull-requests-limit: 10
     reviewers:
       - "sagecurator"
@@ -41,13 +59,19 @@ updates:
       - "pillar:admin"
     commit-message:
       prefix: "chore(admin):"
+    groups:
+      admin-npm:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   # Docs site (npm)
   - package-ecosystem: "npm"
     directory: "/apps/docs"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
     open-pull-requests-limit: 10
     reviewers:
       - "sagecurator"
@@ -56,13 +80,19 @@ updates:
       - "pillar:docs"
     commit-message:
       prefix: "chore(docs):"
+    groups:
+      docs-npm:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   # VS Code extension (npm)
   - package-ecosystem: "npm"
     directory: "/apps/vscode-extension"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
     open-pull-requests-limit: 10
     reviewers:
       - "sagecurator"
@@ -71,13 +101,19 @@ updates:
       - "pillar:vscode"
     commit-message:
       prefix: "chore(vscode):"
+    groups:
+      vscode-npm:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   # Backend Docker image
   - package-ecosystem: "docker"
     directory: "/apps/backend"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
     open-pull-requests-limit: 5
     reviewers:
       - "sagecurator"
@@ -86,13 +122,19 @@ updates:
       - "pillar:backend"
     commit-message:
       prefix: "chore(backend):"
+    groups:
+      backend-docker:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   # Admin Docker image
   - package-ecosystem: "docker"
     directory: "/apps/admin"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
     open-pull-requests-limit: 5
     reviewers:
       - "sagecurator"
@@ -101,3 +143,10 @@ updates:
       - "pillar:admin"
     commit-message:
       prefix: "chore(admin):"
+    groups:
+      admin-docker:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"

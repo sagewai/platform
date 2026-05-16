@@ -14,6 +14,13 @@ on:
       - 'packages/sdk/sagewai/admin/**'
       - 'pnpm-workspace.yaml'
       - '.github/workflows/ci-admin.yml'
+  schedule:
+    - cron: "0 5 * * *"   # 05:00 UTC nightly — full e2e + a11y
+
+# CI-cost note: build / e2e-regression / docker-build run on every PR
+# (the fast merge gate). The full Playwright e2e suite and the a11y
+# suite are heavier and run only on push-to-main and the nightly
+# schedule — see the `if:` guards on those jobs.
 
 concurrency:
   group: ci-admin-${{ github.ref }}
@@ -95,6 +102,8 @@ jobs:
           cache-to: type=gha,mode=max
 
   a11y:
+    # Heavy Playwright run — push-to-main and nightly only, not per-PR.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -128,6 +137,9 @@ jobs:
           retention-days: 7
 
   e2e:
+    # Full Playwright suite — push-to-main and nightly only, not per-PR.
+    # The fast e2e-regression spec is the per-PR gate.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6

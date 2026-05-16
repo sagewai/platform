@@ -30,6 +30,7 @@ jobs:
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           python-version: ${{ matrix.python-version }}
+          enable-cache: true
       - run: uv sync --all-packages --group test
       - run: uv run --package sagewai pytest packages/sdk/tests/ -m "not integration" -o "addopts="
 
@@ -38,6 +39,8 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
       - run: uv sync --all-packages
       - run: uv run --with ruff ruff check packages/sdk/sagewai/
         continue-on-error: true
@@ -49,6 +52,8 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
       - run: uv sync --all-packages
       - name: Vulnerability audit
         # CVE-2026-3219: pip 26.0.1; no fix version published yet.
@@ -66,6 +71,8 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
       - run: uv build --package sagewai --out-dir packages/sdk/dist
       - name: Verify wheel installs
         run: |
