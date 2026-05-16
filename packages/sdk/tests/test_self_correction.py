@@ -45,6 +45,11 @@ class TestValidateJson:
         with pytest.raises(ValueError, match="Invalid JSON"):
             validate_json_output(None)
 
+    def test_validate_json_output_with_prose_preamble(self):
+        """Validation must survive an SLM prose preamble before the fence."""
+        raw = 'Sure, here is the result:\n```json\n{"ok": true}\n```'
+        assert validate_json_output(raw) == {"ok": True}
+
 
 class TestValidateSchema:
     def test_all_fields_present(self):

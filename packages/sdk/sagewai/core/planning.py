@@ -15,6 +15,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, Literal
 
+from sagewai.core._strategy_utils import parse_json
 from sagewai.core.events import AgentEvent
 from sagewai.models.message import ChatMessage
 
@@ -149,18 +150,14 @@ class PlanningStrategy:
 
     @staticmethod
     def _parse_plan(text: str) -> list[dict[str, Any]]:
-        """Parse a JSON plan from LLM output, tolerating markdown fences."""
-        cleaned = text.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.split("\n")
-            cleaned = "\n".join(
-                lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
-            )
+        """Parse a JSON plan from LLM output, tolerant of SLM formatting."""
         try:
-            parsed = json.loads(cleaned)
+            parsed = parse_json(text)
             if isinstance(parsed, list):
                 return [
-                    s for s in parsed if isinstance(s, dict) and "step" in s and "action" in s
+                    s
+                    for s in parsed
+                    if isinstance(s, dict) and "step" in s and "action" in s
                 ]
         except (json.JSONDecodeError, TypeError):
             logger.warning("Failed to parse plan: %s", text[:200])

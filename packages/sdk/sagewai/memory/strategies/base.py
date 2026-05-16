@@ -15,27 +15,6 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 
-def strip_code_fence(raw: str) -> str:
-    """Strip a Markdown code fence (` ``` ` or ` ```json `) if present.
-
-    LLMs frequently wrap JSON in a fenced block despite an explicit
-    instruction to return raw JSON — Anthropic models in particular. The
-    extraction strategies must be LLM-agnostic, so they normalise the
-    response through this helper before ``json.loads``.
-    """
-    s = raw.strip()
-    if not s.startswith("```"):
-        return s
-    newline = s.find("\n")
-    if newline == -1:
-        return s
-    s = s[newline + 1 :]
-    fence = s.rfind("```")
-    if fence != -1:
-        s = s[:fence]
-    return s.strip()
-
-
 @dataclass(slots=True)
 class TurnEvent:
     """A single turn in a conversation.

@@ -11,7 +11,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import json
+import re
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from sagewai.models.message import ChatMessage
@@ -40,3 +42,28 @@ def extract_task(messages: list[ChatMessage]) -> str:
         if msg.role.value == "user" and msg.content:
             return msg.content
     return ""
+
+
+def parse_json(text: str) -> Any:
+    """Parse JSON from an LLM response, tolerant of SLM formatting quirks.
+
+    Cheap and local models routinely deviate from "return only JSON":
+    they wrap output in a Markdown fence, add a prose preamble, or both.
+    This parser (1) extracts a fenced block if present, (2) tries a direct
+    parse, then (3) falls back to the outermost ``[...]`` or ``{...}``
+    substring. Raises ``json.JSONDecodeError`` if no JSON can be recovered.
+    """
+    s = text.strip()
+    fence = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", s, re.DOTALL)
+    if fence:
+        s = fence.group(1).strip()
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        pass
+    for open_ch, close_ch in (("[", "]"), ("{", "}")):
+        start = s.find(open_ch)
+        end = s.rfind(close_ch)
+        if start != -1 and end > start:
+            return json.loads(s[start : end + 1])
+    raise json.JSONDecodeError("no JSON object found in text", s, 0)

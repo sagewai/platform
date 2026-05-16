@@ -130,10 +130,10 @@ async def test_self_correction_json():
         ),
     )
     response = await agent.chat("Extract: John Smith is 30 years old and lives in New York.")
-    # Strip markdown code fences if present (LLMs commonly wrap JSON in ```json...```)
-    from sagewai.core.self_correction import _strip_markdown_json
+    # Parse JSON with support for Markdown fences and prose preambles (LLMs commonly wrap JSON in ```json...```)
+    from sagewai.core._strategy_utils import parse_json
 
-    data = json.loads(_strip_markdown_json(response))
+    data = parse_json(response)
     assert "name" in data
     assert "age" in data
     assert "city" in data

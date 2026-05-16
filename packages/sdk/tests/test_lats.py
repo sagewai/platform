@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from sagewai.core._strategy_utils import parse_score
 from sagewai.core.base import BaseAgent
 from sagewai.core.events import AgentEvent
 from sagewai.core.lats import LATSNode, LATSStrategy
@@ -114,16 +115,16 @@ class TestLATSHelpers:
         assert LATSStrategy._extract_task(messages) == ""
 
     def test_parse_score_valid(self):
-        assert LATSStrategy._parse_score("8") == 8.0
-        assert LATSStrategy._parse_score("Score: 7.5") == 7.5
-        assert LATSStrategy._parse_score("  3  ") == 3.0
+        assert parse_score("8") == 8.0
+        assert parse_score("Score: 7.5") == 7.5
+        assert parse_score("  3  ") == 3.0
 
     def test_parse_score_clamped(self):
-        assert LATSStrategy._parse_score("15") == 10.0
-        assert LATSStrategy._parse_score("0") == 1.0
+        assert parse_score("15") == 10.0
+        assert parse_score("0") == 1.0
 
     def test_parse_score_fallback(self):
-        assert LATSStrategy._parse_score("no number here") == 5.0
+        assert parse_score("no number here") == 5.5
 
     def test_format_trajectory(self):
         node = LATSNode(

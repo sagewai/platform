@@ -31,6 +31,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from sagewai.core._strategy_utils import parse_score
 from sagewai.core.events import AgentEvent
 from sagewai.models.message import ChatMessage
 from sagewai.models.tool import ToolSpec
@@ -240,21 +241,7 @@ class TreeOfThoughtsStrategy:
 
         try:
             eval_response = await agent._call_llm(eval_messages, [])
-            return self._parse_score(eval_response.content or "")
+            return parse_score(eval_response.content or "")
         except Exception:
             logger.exception("Branch evaluation failed")
             return 0.0
-
-    @staticmethod
-    def _parse_score(text: str) -> float:
-        """Extract a numeric score (1-10) from LLM evaluation response."""
-        text = text.strip()
-        # Try to find a number in the response
-        for token in text.split():
-            cleaned = token.strip(".,;:()[]")
-            try:
-                score = float(cleaned)
-                return max(1.0, min(10.0, score))
-            except ValueError:
-                continue
-        return 5.0  # Default middle score if parsing fails

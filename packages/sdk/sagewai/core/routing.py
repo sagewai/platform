@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Literal
 
 from sagewai.core.events import AgentEvent
@@ -107,11 +108,18 @@ class RoutingStrategy:
         ]
 
         response = await agent._call_llm(routing_messages, [])
-        route_text = (response.content or "").strip().lower()
+        return self._match_route(response.content or "", self.routes)
 
-        # Try exact match first, then prefix match
-        for key in self.routes:
-            if route_text == key or route_text.startswith(key):
+    @staticmethod
+    def _match_route(route_text: str, routes) -> str:
+        """Match a route key in the LLM response, tolerant of SLM prose."""
+        text = route_text.strip().lower()
+        # 1. Exact / prefix match — frontier-model fast path.
+        for key in routes:
+            if text == key.lower() or text.startswith(key.lower()):
                 return key
-
+        # 2. Whole-word containment — SLM prose fallback.
+        for key in routes:
+            if re.search(rf"\b{re.escape(key.lower())}\b", text):
+                return key
         return "__none__"

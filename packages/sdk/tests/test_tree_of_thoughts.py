@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from sagewai.core._strategy_utils import parse_score
 from sagewai.core.tree_of_thoughts import ThoughtBranch, TreeOfThoughtsStrategy
 from sagewai.models.message import ChatMessage
 
@@ -111,28 +112,28 @@ class TestConfig:
 
 class TestParseScore:
     def test_simple_number(self):
-        assert TreeOfThoughtsStrategy._parse_score("8") == 8.0
+        assert parse_score("8") == 8.0
 
     def test_number_with_text(self):
-        assert TreeOfThoughtsStrategy._parse_score("Score: 7") == 7.0
+        assert parse_score("Score: 7") == 7.0
 
     def test_decimal(self):
-        assert TreeOfThoughtsStrategy._parse_score("7.5") == 7.5
+        assert parse_score("7.5") == 7.5
 
     def test_clamped_high(self):
-        assert TreeOfThoughtsStrategy._parse_score("15") == 10.0
+        assert parse_score("15") == 10.0
 
     def test_clamped_low(self):
-        assert TreeOfThoughtsStrategy._parse_score("0") == 1.0
+        assert parse_score("0") == 1.0
 
     def test_no_number(self):
-        assert TreeOfThoughtsStrategy._parse_score("no number here") == 5.0
+        assert parse_score("no number here") == 5.5
 
     def test_number_with_punctuation(self):
-        assert TreeOfThoughtsStrategy._parse_score("(8)") == 8.0
+        assert parse_score("(8)") == 8.0
 
     def test_empty_string(self):
-        assert TreeOfThoughtsStrategy._parse_score("") == 5.0
+        assert parse_score("") == 5.5
 
 
 # ---------------------------------------------------------------------------

@@ -32,6 +32,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
+from sagewai.core._strategy_utils import parse_json
 from sagewai.core.events import AgentEvent
 from sagewai.core.strategies import ReActStrategy
 from sagewai.models.message import ChatMessage
@@ -111,28 +112,12 @@ class ExemplarStore:
         return sum(len(v) for v in self._exemplars.values())
 
 
-def _strip_markdown_json(text: str) -> str:
-    """Strip markdown code fences from JSON output.
-
-    LLMs commonly wrap JSON in ```json ... ``` blocks.
-    """
-    import re
-
-    if not text:
-        return text or ""
-    stripped = text.strip()
-    # Match ```json ... ``` or ``` ... ```
-    m = re.match(r"^```(?:json)?\s*\n?(.*?)\n?\s*```$", stripped, re.DOTALL)
-    if m:
-        return m.group(1).strip()
-    return stripped
-
-
 def validate_json_output(text: str) -> dict[str, Any]:
     """Validate that text is parseable JSON. Raises ValueError if not."""
-    cleaned = _strip_markdown_json(text)
+    if not isinstance(text, str):
+        raise ValueError(f"Invalid JSON output: expected string, got {type(text).__name__}")
     try:
-        return json.loads(cleaned)
+        return parse_json(text)
     except (json.JSONDecodeError, TypeError) as exc:
         raise ValueError(f"Invalid JSON output: {exc}") from exc
 

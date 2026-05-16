@@ -79,3 +79,12 @@ class TestMemoryWriter:
     async def test_should_extract_on_compaction(self):
         writer = MemoryWriter(model="gpt-4o-mini")
         assert writer.should_extract(turn_count=1, compaction_happened=True)
+
+    def test_extract_facts_handles_fenced_json(self):
+        """Fenced JSON must yield clean facts, not fence markers."""
+        from sagewai.core.memory_writer import _extract_facts_from_text
+
+        raw = '```json\n["user likes coffee", "user lives in Berlin"]\n```'
+        facts = _extract_facts_from_text(raw)
+        assert facts == ["user likes coffee", "user lives in Berlin"]
+        assert all("```" not in f for f in facts)

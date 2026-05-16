@@ -45,6 +45,7 @@ import math
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from sagewai.core._strategy_utils import parse_score
 from sagewai.core.events import AgentEvent
 from sagewai.models.message import ChatMessage
 from sagewai.models.tool import ToolSpec
@@ -393,7 +394,7 @@ class LATSStrategy:
 
         try:
             response = await agent._call_llm(eval_messages, [])
-            return self._parse_score(response.content or "")
+            return parse_score(response.content or "")
         except Exception:
             logger.exception("LATS evaluation failed")
             return 0.0
@@ -481,16 +482,3 @@ class LATSStrategy:
                 for tc in msg.tool_calls:
                     parts.append(f"TOOL CALL: {tc.name}({tc.arguments})")
         return "\n".join(parts)
-
-    @staticmethod
-    def _parse_score(text: str) -> float:
-        """Extract a numeric score (1-10) from LLM evaluation response."""
-        text = text.strip()
-        for token in text.split():
-            cleaned = token.strip(".,;:()[]")
-            try:
-                score = float(cleaned)
-                return max(1.0, min(10.0, score))
-            except ValueError:
-                continue
-        return 5.0

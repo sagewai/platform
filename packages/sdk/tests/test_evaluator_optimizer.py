@@ -53,6 +53,13 @@ class TestScoreFeedbackParsing:
     def test_extract_score_fallback(self):
         assert EvaluatorOptimizerStrategy._extract_score("7") == 7.0
 
+    def test_score_recovered_without_score_label(self):
+        """An SLM reply with no 'Score:' line still yields a numeric score."""
+        score = EvaluatorOptimizerStrategy._extract_score(
+            "This is solid work, I'd give it an 8."
+        )
+        assert score == 8.0
+
     def test_extract_feedback_standard(self):
         fb = EvaluatorOptimizerStrategy._extract_feedback(
             "Score: 5\nFeedback: Needs more detail"

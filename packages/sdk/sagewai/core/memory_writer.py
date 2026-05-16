@@ -26,10 +26,27 @@ import json
 import logging
 from typing import Any
 
+from sagewai.core._strategy_utils import parse_json
 from sagewai.intelligence.extractors.protocol import FactExtractor
 from sagewai.models.message import ChatMessage
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_facts_from_text(text: str) -> list[str]:
+    """Parse a fact list from LLM output, tolerant of SLM formatting.
+
+    Handles fenced JSON, prose preambles, and fallback to newline-split.
+    """
+    try:
+        facts = parse_json(text)
+        if isinstance(facts, list):
+            return [str(f) for f in facts]
+    except json.JSONDecodeError:
+        # Fallback: split by newlines, strip bullets
+        lines = [line.strip().lstrip("- \u2022").strip() for line in text.split("\n")]
+        return [line for line in lines if line and not line.startswith("```")]
+    return []
 
 
 async def _call_extraction_llm(model: str, prompt: str) -> list[str]:
@@ -43,15 +60,7 @@ async def _call_extraction_llm(model: str, prompt: str) -> list[str]:
         max_tokens=500,
     )
     text = response.choices[0].message.content or "[]"
-    try:
-        facts = json.loads(text)
-        if isinstance(facts, list):
-            return [str(f) for f in facts]
-    except json.JSONDecodeError:
-        # Fallback: split by newlines, strip bullets
-        lines = [line.strip().lstrip("- \u2022").strip() for line in text.split("\n")]
-        return [line for line in lines if line]
-    return []
+    return _extract_facts_from_text(text)
 
 
 class MemoryWriter:

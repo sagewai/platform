@@ -215,3 +215,57 @@ class TestPlanningEvents:
         plan_events = [(e, d) for e, d in events if e == AgentEvent.PLAN_CREATED]
         assert len(plan_events) == 1
         assert len(plan_events[0][1]["steps"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# parse_json integration
+# ---------------------------------------------------------------------------
+
+
+class TestParsePlanWithProseAndFence:
+    def test_parse_plan_with_prose_preamble(self):
+        """A plan wrapped in prose + fence still parses."""
+        raw = (
+            "Here is the plan:\n```json\n"
+            '[{"step": 1, "action": "search"}, {"step": 2, "action": "summarise"}]\n'
+            "```"
+        )
+        plan = PlanningStrategy._parse_plan(raw)
+        assert len(plan) == 2
+        assert plan[0]["action"] == "search"
+        assert plan[1]["action"] == "summarise"
+
+    def test_parse_plan_with_markdown_fence_only(self):
+        """A plan in a fence without prose preamble parses."""
+        raw = (
+            "```json\n"
+            '[{"step": 1, "action": "do"},  {"step": 2, "action": "verify"}]\n'
+            "```"
+        )
+        plan = PlanningStrategy._parse_plan(raw)
+        assert len(plan) == 2
+        assert plan[0]["action"] == "do"
+
+    def test_parse_plan_raw_json(self):
+        """Raw JSON without fence parses."""
+        raw = '[{"step": 1, "action": "test"}]'
+        plan = PlanningStrategy._parse_plan(raw)
+        assert len(plan) == 1
+        assert plan[0]["action"] == "test"
+
+    def test_parse_plan_invalid_json_returns_empty(self):
+        """Invalid JSON returns empty list."""
+        raw = "not json at all"
+        plan = PlanningStrategy._parse_plan(raw)
+        assert plan == []
+
+    def test_parse_plan_missing_required_fields(self):
+        """Items without 'step' or 'action' are filtered out."""
+        raw = (
+            '[{"step": 1, "action": "valid"}, '
+            '{"step": 2}, '
+            '{"action": "missing_step"}]\n'
+        )
+        plan = PlanningStrategy._parse_plan(raw)
+        assert len(plan) == 1
+        assert plan[0]["action"] == "valid"

@@ -244,3 +244,19 @@ class TestRoutingEvents:
         route_events = [(e, d) for e, d in events if e == AgentEvent.ROUTE_SELECTED]
         assert len(route_events) == 1
         assert route_events[0][1]["route"] == "greet"
+
+
+# ---------------------------------------------------------------------------
+# _match_route static helper — SLM prose tolerance
+# ---------------------------------------------------------------------------
+
+
+def test_route_match_tolerates_slm_prose():
+    """An SLM that wraps the route key in prose still routes correctly."""
+    routes = {"billing": "Billing questions", "support": "Technical support"}
+    assert RoutingStrategy._match_route("billing", routes) == "billing"
+    assert RoutingStrategy._match_route("route: billing", routes) == "billing"
+    assert RoutingStrategy._match_route(
+        "I think this is a billing question.", routes
+    ) == "billing"
+    assert RoutingStrategy._match_route("totally unrelated", routes) == "__none__"
