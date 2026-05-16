@@ -6,7 +6,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """Plan ART — workflow_runs.artifact_destination column.
 
 Spec:        docs/superpowers/specs/2026-04-27-plan-art-artifact-destination-design.md

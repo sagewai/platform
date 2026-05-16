@@ -6,7 +6,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """Tests for ProfileBackend.supports_value_history / get_secret_at_version."""
 import pytest
 from sagewai.sealed.backend import (

@@ -6,7 +6,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """Admin routes for /api/v1/admin/workflows/{name}/artifact_destination — Plan ART."""
 from __future__ import annotations
 

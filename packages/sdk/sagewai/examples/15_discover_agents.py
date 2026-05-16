@@ -7,7 +7,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """Example 15 — Discover and invoke agents from the registry.
 
 Registers a set of agents, then discovers them by capability tag

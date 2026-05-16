@@ -6,7 +6,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """Templated markdown brief for the ``/explain`` endpoint.
 
 ``render_brief`` is a pure function — no LLM calls.  v1.0 is entirely

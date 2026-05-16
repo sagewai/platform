@@ -6,7 +6,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """Sagewai LLM — async HTTP client for the proprietary hosted blueprint service.
 
 Public API surface for the client. This subpackage is the open-source

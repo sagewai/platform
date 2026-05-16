@@ -92,6 +92,6 @@ See [CONTRIBUTING.md](https://github.com/sagewai/platform/blob/main/CONTRIBUTING
 
 ## License
 
-AGPL-3.0-or-later — see [LICENSE](https://github.com/sagewai/platform/blob/main/LICENSE). Commercial licenses available for organisations that need an alternative to AGPL. See [COMMERCIAL_LICENSE.md](https://github.com/sagewai/platform/blob/main/COMMERCIAL_LICENSE.md) for details.
+AGPL-3.0-or-later — see [LICENSE](https://github.com/sagewai/platform/blob/main/LICENSE). Commercial licenses available for organisations that need an alternative to AGPL. See [COMMERCIAL-LICENSE.md](https://github.com/sagewai/platform/blob/main/COMMERCIAL-LICENSE.md) for details.
 
 Built by [Ali Arda Diri](https://github.com/sagewai).

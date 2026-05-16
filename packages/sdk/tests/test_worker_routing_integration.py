@@ -6,7 +6,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """Integration tests for distributed worker routing against real PostgreSQL.
 
 Requires a running PostgreSQL with the 004_worker_routing migration applied.

@@ -6,7 +6,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """Stateless secret-value redaction for the host-side RPC seam.
 
 Tier-2 plaintext briefly lives in worker memory (per-exec env on

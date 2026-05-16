@@ -6,7 +6,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """Full-stack admin endpoint smoke — every route returns SOMETHING sensible.
 
 The launch coordination plan (§4 acceptance criteria #6) calls for

@@ -6,7 +6,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """Sealed-iii.A — sealed_revocations table + workflow_runs.revoked_at columns.
 
 Spec:        Sealed-iii.A (mid-run revocation API + pool reset hook)

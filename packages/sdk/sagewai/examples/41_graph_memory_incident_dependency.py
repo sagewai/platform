@@ -7,7 +7,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """Example 41 — Graph memory beats vector retrieval on incident dependencies.
 
 The on-call agent in Example 30 reacts to a single incident. This example

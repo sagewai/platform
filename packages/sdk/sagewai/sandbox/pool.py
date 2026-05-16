@@ -6,7 +6,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """Backwards-compat shim. Importers should use:
 - sagewai.sandbox.pool_protocol.SandboxPool (Protocol)
 - sagewai.sandbox.local_cache_pool.LocalCacheSandboxPool (concrete)

@@ -6,7 +6,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """In-process pub/sub bus for mission lifecycle events.
 
 A single :class:`LifecycleBus` instance lives for the lifetime of the

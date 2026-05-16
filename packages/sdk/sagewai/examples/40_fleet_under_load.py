@@ -7,7 +7,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """Example 40 — Fleet under load: 24 workers, 100 tasks, real numbers.
 
 The Fleet pillar's headline claim is that workers route by capability +

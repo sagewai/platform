@@ -6,7 +6,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 # Copyright 2026 Ali Arda Diri, Berlin, Germany
 # (Licensed under AGPL-3.0-or-later — see LICENSE)
 """LocalCacheSandboxPool.stats_snapshot reflects live per-tuple stats."""

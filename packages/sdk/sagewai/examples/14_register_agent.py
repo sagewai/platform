@@ -7,7 +7,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """Example 14 — Register agents to your organization's registry.
 
 Shows how to register agents with capability tags so that

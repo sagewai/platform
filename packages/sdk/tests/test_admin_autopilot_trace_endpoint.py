@@ -6,7 +6,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """Tests for ``GET /api/v1/autopilot/missions/{id}/trace`` — Plan H Task 6.
 
 Returns the persisted run trace + run summary so the frontend can

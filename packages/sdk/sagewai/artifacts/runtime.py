@@ -6,7 +6,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """Runtime hook — call after a Mode 3+ run finishes its workspace work.
 
 The future per-step CLI-dispatch plan calls ``apply_artifact_destination``

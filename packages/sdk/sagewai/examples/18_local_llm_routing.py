@@ -7,7 +7,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """Example 18 — Route simple->local, complex->cloud — $0/token for simple tasks.
 
 Demonstrates the harness routing simple tasks to a local model (Ollama,

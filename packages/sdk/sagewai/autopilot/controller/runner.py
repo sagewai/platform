@@ -6,7 +6,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """SchedulerRunner — async background loop that drives MissionScheduler.tick().
 
 The :class:`MissionScheduler` is pull-based: it has a ``tick()`` method

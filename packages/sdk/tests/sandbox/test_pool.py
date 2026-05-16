@@ -6,7 +6,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """Tests for LocalCacheSandboxPool lifecycle (uses NullBackend to avoid Docker).
 
 NOTE: The legacy SandboxPool class was retired in Plan 1.5 Task 18.

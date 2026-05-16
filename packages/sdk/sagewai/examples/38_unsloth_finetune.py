@@ -7,7 +7,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """Example 38 — Real LoRA fine-tune (Unsloth on CUDA, mlx-tune on Mac).
 
 Example 36 ends with a ``FineTuneJob`` ready to dispatch. Example 17 was

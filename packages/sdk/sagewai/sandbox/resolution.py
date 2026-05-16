@@ -6,7 +6,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """Sandbox requirement resolution — the cascade consumed by every enqueue path.
 
 Callers (workflow.enqueue, CLI, autopilot MissionDriver) pass whatever

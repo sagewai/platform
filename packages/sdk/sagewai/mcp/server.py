@@ -6,7 +6,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """MCP Server — Expose agent tools as an MCP-compliant server.
 
 Wraps a list of :class:`ToolSpec` objects and serves them via the

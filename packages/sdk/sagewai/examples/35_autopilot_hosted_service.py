@@ -7,7 +7,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """Example 35 — Autopilot end-to-end with the hosted blueprint service.
 
 **Freemium boundary:** this example requires the hosted ``sagewai-llm``

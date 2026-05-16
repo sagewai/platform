@@ -6,7 +6,7 @@
 # See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
 #
 # This file is also available under a commercial license.
-# See COMMERCIAL_LICENSE.md for details.
+# See COMMERCIAL-LICENSE.md for details.
 """Mode-aware runner — workflow_runs.execution_mode column.
 
 Spec:        docs/architecture/execution-modes.md (Mode 0/1/2/3/3b taxonomy)
