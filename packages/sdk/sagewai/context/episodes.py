@@ -23,6 +23,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from sagewai.core._strategy_utils import parse_json
+
 if TYPE_CHECKING:
     from sagewai.intelligence.embeddings.protocol import Embedder
 
@@ -244,12 +246,9 @@ class EpisodeStore:
 
             import json
 
-            text = (response.choices[0].message.content or "[]").strip()
-            # Strip markdown code fences that LLMs frequently add
-            if text.startswith("```"):
-                text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            text = response.choices[0].message.content or "[]"
             try:
-                lessons = json.loads(text)
+                lessons = parse_json(text)
                 if isinstance(lessons, list):
                     return [str(l) for l in lessons[:5]]
             except json.JSONDecodeError:
@@ -467,11 +466,9 @@ async def _extract_lessons_static(episode: Episode, model: str) -> list[str]:
             max_tokens=300,
         )
 
-        text = (response.choices[0].message.content or "[]").strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        text = response.choices[0].message.content or "[]"
         try:
-            lessons = json.loads(text)
+            lessons = parse_json(text)
             if isinstance(lessons, list):
                 return [str(l) for l in lessons[:5]]
         except json.JSONDecodeError:

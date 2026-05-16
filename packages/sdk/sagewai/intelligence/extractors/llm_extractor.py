@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 
+from sagewai.core._strategy_utils import parse_json
 from sagewai.intelligence.models import ExtractionResult, RelationTriple
 
 logger = logging.getLogger(__name__)
@@ -77,13 +78,7 @@ class LLMEntityExtractor:
         )
 
         try:
-            raw = response.choices[0].message.content.strip()
-            if raw.startswith("```"):
-                lines = raw.split("\n")
-                raw = "\n".join(
-                    lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
-                )
-            parsed = json.loads(raw)
+            parsed = parse_json(response.choices[0].message.content or "")
             return [
                 ExtractionResult(
                     text=e.get("text", ""),
@@ -139,13 +134,7 @@ class LLMRelationExtractor:
         )
 
         try:
-            raw = response.choices[0].message.content.strip()
-            if raw.startswith("```"):
-                lines = raw.split("\n")
-                raw = "\n".join(
-                    lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
-                )
-            parsed = json.loads(raw)
+            parsed = parse_json(response.choices[0].message.content or "")
             return [
                 RelationTriple(
                     subject=s,

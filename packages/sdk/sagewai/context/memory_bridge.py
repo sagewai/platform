@@ -20,6 +20,8 @@ import json
 import logging
 from typing import Any
 
+from sagewai.core._strategy_utils import parse_json
+
 from sagewai.context.ingestion import _FALLBACK_ERRORS
 from sagewai.context.models import (
     ContextDocument,
@@ -46,12 +48,12 @@ async def _call_extraction_llm(model: str, prompt: str) -> list[str]:
         )
         text = response.choices[0].message.content or "[]"
         try:
-            facts = json.loads(text)
+            facts = parse_json(text)
             if isinstance(facts, list):
                 return [str(f) for f in facts]
         except json.JSONDecodeError:
             lines = [line.strip().lstrip("- \u2022").strip() for line in text.split("\n")]
-            return [line for line in lines if line]
+            return [line for line in lines if line and not line.startswith("```")]
     except _FALLBACK_ERRORS:
         logger.warning("LLM extraction failed, returning empty facts", exc_info=True)
     return []
