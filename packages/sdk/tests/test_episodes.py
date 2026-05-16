@@ -9,9 +9,15 @@
 # See COMMERCIAL-LICENSE.md for details.
 """Tests for episodic memory (#408)."""
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
-from sagewai.context.episodes import Episode, EpisodeStore
+from sagewai.context.episodes import (
+    Episode,
+    EpisodeStore,
+    _extract_lessons_static,
+)
 from sagewai.context.stores import InMemoryVectorStore
 
 
@@ -125,6 +131,47 @@ class TestEpisodeStore:
             Episode(goal="b", project_id="p2"), extract_lessons=False
         )
         assert len(store.list_all(project_id="p1")) == 1
+
+
+def _fenced_llm_response(content: str) -> MagicMock:
+    """Build a litellm-style response carrying ``content`` verbatim."""
+    resp = MagicMock()
+    resp.choices = [MagicMock(message=MagicMock(content=content))]
+    return resp
+
+
+class TestLessonExtractionParsing:
+    """Lesson extraction must survive SLM markdown-fenced JSON output."""
+
+    @pytest.mark.asyncio
+    async def test_capture_parses_fenced_json_lessons(self, store):
+        """EpisodeStore._extract_lessons unwraps a ```json fenced array."""
+        fenced = '```json\n["Check sub-totals carefully", "Verify period dates"]\n```'
+        with patch(
+            "litellm.acompletion",
+            new_callable=AsyncMock,
+            return_value=_fenced_llm_response(fenced),
+        ):
+            ep = Episode(goal="Audit revenue", outcome="done", success=True)
+            captured = await store.capture(ep, extract_lessons=True)
+        assert captured.lessons == [
+            "Check sub-totals carefully",
+            "Verify period dates",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_extract_lessons_static_parses_fenced_json(self):
+        """_extract_lessons_static unwraps a bare ``` fenced array."""
+        fenced = '```\n["lesson one", "lesson two"]\n```'
+        with patch(
+            "litellm.acompletion",
+            new_callable=AsyncMock,
+            return_value=_fenced_llm_response(fenced),
+        ):
+            lessons = await _extract_lessons_static(
+                Episode(goal="ship release", success=True), "gpt-4o-mini"
+            )
+        assert lessons == ["lesson one", "lesson two"]
 
 
 class TestFormatForPrompt:

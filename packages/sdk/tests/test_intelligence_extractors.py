@@ -389,6 +389,23 @@ class TestLLMRelationExtractor:
             triples = await ext.extract("Some text")
             assert triples == []
 
+    async def test_extract_with_code_fence(self) -> None:
+        """Handles markdown code-fenced JSON responses (SLM quirk)."""
+        fenced = '```json\n[["Python", "is_a", "Language"]]\n```'
+        mock_response = MagicMock()
+        mock_response.choices = [
+            MagicMock(message=MagicMock(content=fenced))
+        ]
+
+        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = mock_response
+            ext = LLMRelationExtractor()
+            triples = await ext.extract("Python is a language.")
+            assert len(triples) == 1
+            assert triples[0].subject == "Python"
+            assert triples[0].predicate == "is_a"
+            assert triples[0].object == "Language"
+
 
 # ── ProviderRegistry ──────────────────────────────────────────────────
 

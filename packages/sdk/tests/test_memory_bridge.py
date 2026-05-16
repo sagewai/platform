@@ -9,10 +9,12 @@
 # See COMMERCIAL-LICENSE.md for details.
 """Tests for MemoryBridge — conversation/workflow/research → context."""
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 from sagewai.context.engine import ContextEngine
-from sagewai.context.memory_bridge import MemoryBridge
+from sagewai.context.memory_bridge import MemoryBridge, _call_extraction_llm
 from sagewai.context.models import ContextScope, ContextSource
 from sagewai.context.stores import InMemoryMetadataStore, InMemoryVectorStore
 from sagewai.models.message import ChatMessage
@@ -126,3 +128,19 @@ class TestExtractFromConversation:
         )
         # Should return empty (LLM failed) rather than raising
         assert isinstance(docs, list)
+
+
+class TestCallExtractionLLM:
+    """Fact extraction must survive SLM markdown-fenced JSON output."""
+
+    @pytest.mark.asyncio
+    async def test_parses_fenced_json_facts(self):
+        """_call_extraction_llm unwraps a ```json fenced array of facts."""
+        fenced = '```json\n["User prefers blue", "Team chose Rust"]\n```'
+        resp = MagicMock()
+        resp.choices = [MagicMock(message=MagicMock(content=fenced))]
+        with patch(
+            "litellm.acompletion", new_callable=AsyncMock, return_value=resp
+        ):
+            facts = await _call_extraction_llm("gpt-4o-mini", "prompt")
+        assert facts == ["User prefers blue", "Team chose Rust"]
