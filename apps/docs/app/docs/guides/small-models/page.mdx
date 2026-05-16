@@ -1,0 +1,257 @@
+export const metadata = {
+  title: 'Small and local models — getting the most from limited context windows',
+  description:
+    'Use the Directive Engine to run production agents on Ollama, llama.cpp, and any small model. Model profiles, @context, /tool prose-parser, and @transform for inputs larger than the context window.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/guides/small-models' },
+};
+
+# Getting the most from small and local models
+
+Small and local models — Ollama, llama.cpp, LM Studio, vLLM — cost nothing per token, keep your data on-network, and can run fine-tuned SLMs trained on your own successful runs. The trade-offs are a shorter context window and, for many models, no native tool-calling API.
+
+The Sagewai **Directive Engine** is designed to close that gap. It preprocesses prompts *before* the LLM call — injecting retrieved context, resolving memory queries, describing tools in prose, and compressing oversized inputs — so a model with an 8K window and no function-calling support can still run as a fully capable production agent.
+
+```python
+from sagewai import DirectiveEngine
+
+engine = DirectiveEngine(
+    context=my_context_engine,
+    memory=my_memory_store,
+    tools={"search": search_tool},
+    model="llama3.2:latest",  # profile auto-detected as SMALL
+)
+result = await engine.resolve(
+    "@context('incident history') @memory('past alerts') /tool.search('DeployX') "
+    "What caused this alert?"
+)
+# result.prompt → enriched prompt ready for the local model
+```
+
+---
+
+## Model profiles
+
+The engine adapts its output format, compression level, and tool-call mode to the model's capability class. Pass `model=` and the profile is detected automatically, or supply `model_profile=` to override explicitly.
+
+| Profile | Context tokens | Compression | Tool mode | Typical use |
+|---------|---------------|-------------|-----------|-------------|
+| `SMALL` | 2 048 | 5× aggressive | `prompt_based` | Local models under 13B parameters (Ollama, llama.cpp, vLLM) |
+| `MEDIUM` | 8 192 | 2× | native | Mid-range APIs (GPT-4o-mini, Mistral 7B on cloud) |
+| `LARGE` | 32 768 | none | native | Frontier models (GPT-4o, Claude Opus, Gemini Pro) |
+
+```python
+from sagewai import detect_profile, SMALL, MEDIUM, LARGE
+
+profile = detect_profile("llama3.2:latest")      # → SMALL
+profile = detect_profile("ollama/mistral")        # → SMALL
+profile = detect_profile("gpt-4o-mini")           # → MEDIUM
+profile = detect_profile("claude-opus-4-6")       # → LARGE
+profile = detect_profile("my-custom-model")       # → MEDIUM (fallback)
+```
+
+**What the profile changes:**
+
+- **Compression ratio** — at `5.0`, the engine fits retrieved context into the tighter token budget. Lower-priority context is trimmed first; nothing is dropped without a warning in the `DirectiveResult.metadata`.
+- **Delimiter style** — `SMALL` wraps context in `[CONTEXT]` / `[SOURCE]` markers that smaller models parse more reliably than plain prose blocks.
+- **Explicit instructions** — `SMALL` adds framing like "Use the context below to answer the question" before injected blocks.
+- **Tool-call mode** — `SMALL` switches to `prompt_based`, which describes all available tools in the system prompt as prose and parses the model's response for `/tool.name(args)` patterns.
+
+Override the profile completely when auto-detection doesn't match your model:
+
+```python
+from sagewai import DirectiveEngine, SMALL
+
+engine = DirectiveEngine(
+    model_profile=SMALL,  # force SMALL for a model the detector doesn't recognise
+    tools={"search": search_tool},
+)
+```
+
+---
+
+## Injecting infrastructure: @context, @memory, @agent
+
+Small models cannot call external APIs mid-inference. The directive engine handles those fetches *for* the model before the LLM sees the prompt.
+
+### @context — retrieved knowledge
+
+Queries the configured Context Engine (RAG) and injects the top-k results as formatted blocks. The engine respects the profile's token budget — on `SMALL`, it trims aggressively while keeping the most relevant passages.
+
+```python
+# Fetch relevant runbook sections before asking about an incident
+"@context('on-call runbook database alert') What should I do first?"
+```
+
+Scoped retrieval narrows results to a project, tag set, or namespace:
+
+```python
+"@context('database connection errors', scope='project', tags='postgres,production')"
+```
+
+### @memory — agent memory
+
+Searches the project-scoped memory store and injects matching records. Works with `VectorMemory`, `GraphMemory`, and any `MemoryProvider`.
+
+```python
+# Recall past incidents involving the same service
+"@memory('ServiceY past outages') Has this service had similar issues before?"
+```
+
+After a run that used `@transform(graphify, …)` (see below), `@memory` can retrieve the structured sub-graph instead of scanning raw transcripts — the same memory interface, just backed by richer data.
+
+### @agent — delegating a single step to a stronger model
+
+If one step genuinely requires frontier-model reasoning (complex planning, multi-constraint code generation), delegate it while keeping the outer loop on the cheap local model:
+
+```python
+"@agent:planner('Break this incident response into 5 subtasks') Now execute step 1."
+```
+
+The outer agent is the small model; `planner` can run on whatever model is best for that sub-task.
+
+---
+
+## Tool access without native tool calling
+
+Many small models do not support the OpenAI function-calling protocol. The directive engine's `/tool` prose-parser bridges that gap: it injects tool descriptions into the system prompt as plain prose and parses the model's response for `/tool.name(args)` patterns — no function-calling API needed.
+
+```python
+engine = DirectiveEngine(
+    tools={"search": search_tool, "read_file": read_tool},
+    model="codellama:7b",        # → SMALL → tool_call_mode = prompt_based
+    allow_all_tools=True,
+)
+```
+
+The system prompt the model receives includes:
+
+```
+Available tools:
+  /tool.search(query) — search the knowledge base for relevant documents
+  /tool.read_file(path) — read a file from the project
+```
+
+When the model responds with `/tool.search("incident logs")`, the engine extracts the call, executes the real tool, and injects the result for the next turn. The MCP tool proxy works the same way via `/mcp.server.tool(args)`.
+
+Small models can also reach the `@transform` engine this way:
+
+```
+/tool.transform(operation="summarize", content="…", params={"max_words": 150})
+```
+
+---
+
+## @transform — for inputs larger than the context window
+
+A model with a 4–8K context window cannot read a 40-page contract, a week of incident logs, or the accumulated transcript of a long mission. `@transform` compresses or restructures the input *before* it reaches the model — inline, as part of prompt resolution.
+
+`@transform` is a **first-class built-in directive** in the engine core. Its multi-argument syntax — bare operation token, nested directive reference or string, optional `key=value` params — is handled natively, not through the `DirectiveRegistry` custom-directive path.
+
+### summarize — fit a large input into a small window
+
+```python
+# Compress a long document before the small model answers questions about it
+"@transform(summarize, @context('vendor contract clauses'), max_words=300) "
+"Answer questions about this contract."
+```
+
+The engine resolves `@context('vendor contract clauses')` to the full document text, calls `summarize` (via a configurable — optionally small/local — LLM), and injects the summary in place of the raw document. The model sees only the summary.
+
+Control the output length with `max_words` (default `200`):
+
+```python
+"@transform(summarize, @memory('mission-42'), max_words=150)"
+```
+
+### graphify — turn accumulated context into retrievable graph memory
+
+When an agent accumulates a long context over many turns, `graphify` distils it into relational triples stored in the project-scoped `GraphMemory`. Later runs retrieve the connected sub-graph via `@memory`, cheaply, instead of re-reading long transcripts.
+
+```python
+# After an incident triage session, distil the transcript into graph memory
+"@transform(graphify, @context('incident transcript'))"
+# Injected output: "12 relations into graph memory: Alert→triggered-by→DeployX; …"
+```
+
+```python
+# Next incident: the graph is already populated
+"@memory('DeployX related services') Was anything else affected by the same deploy?"
+```
+
+Extracting zero triples is a success — the engine never fails directive resolution on an empty result. The `graphify` extractor is `parse_json`-robust, so a fenced SLM response still yields clean triples.
+
+### Custom transforms
+
+Register any async callable as a named operation with `transform.register`:
+
+```python
+from sagewai.transform import transform
+
+async def extract_risk_score(content, *, project_id=None, **params):
+    # parse content and return a risk summary
+    return "Risk score: 7/10 — Liability clause is unfavourable"
+
+transform.register("extract_risk_score", extract_risk_score)
+```
+
+```python
+"@transform(extract_risk_score, @context('contract section 4'))"
+```
+
+A string return is auto-wrapped into a successful `TransformResult`. Return a `TransformResult` directly to include structured `metadata` or signal a recoverable failure.
+
+For a small model, custom operations are especially powerful: the directive engine does the structured work (extraction, scoring, classification) before the model sees the prompt, so the model only needs to reason on the already-processed output.
+
+`transform.register("name", fn)` adds a callable to the `TransformRegistry` — it extends what `@transform` can *do*, not what directives the engine parses. It is separate from `DirectiveRegistry`, which handles single-quoted-arg custom sigils like `@kb('query')`.
+
+See the [@transform API reference](/docs/api-reference/directives#transform) for the full parameter table and tool form.
+
+---
+
+## Putting it all together
+
+A production pattern for a local model with no native tool calling and a limited context window:
+
+```python
+from sagewai import DirectiveEngine
+from sagewai.transform import transform
+
+# register a custom op once at startup
+async def tag_urgency(content, *, project_id=None, **params):
+    return "Urgency: HIGH — database cluster, customer-facing, no failover"
+
+transform.register("tag_urgency", tag_urgency)
+
+engine = DirectiveEngine(
+    context=context_engine,
+    memory=memory_store,
+    tools={"search": search_tool},
+    model="llama3.2:latest",   # → SMALL: prompt_based tools, 2048-token budget, 5× compression
+)
+
+# Compose directives: compress → classify → inject memory → tool access
+prompt = (
+    "@transform(summarize, @context('vendor contract'), max_words=200) "
+    "@transform(tag_urgency, @memory('open incidents')) "
+    "@memory('past vendor issues') "
+    "Identify clauses that conflict with our standard terms."
+)
+
+result = await engine.resolve(prompt)
+# result.prompt fits in the local model's context window,
+# has tool descriptions in prose, and has injected memory blocks
+response = await local_model.chat(result.prompt)
+```
+
+---
+
+## Examples
+
+- `sagewai/examples/50_incident_knowledge_graph.py` — an on-call agent uses
+  `@transform(graphify, …)` to distil incident transcripts into `GraphMemory`; a
+  follow-up incident retrieves the connected sub-graph to triage faster.
+
+- `sagewai/examples/51_big_input_small_model.py` — a large document is compressed
+  inline with `@transform(summarize, …)` so a local Ollama model can answer questions
+  about it; the example also demonstrates a custom transform operation via
+  `transform.register(…)`.

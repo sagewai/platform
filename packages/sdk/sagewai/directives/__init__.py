@@ -9,10 +9,21 @@
 # See COMMERCIAL-LICENSE.md for details.
 """Sagewai Directive Engine — prompt preprocessing for any LLM.
 
-Resolves ``@context``, ``@memory``, ``@agent``, ``/tool``, ``/mcp``, and
-``#meta`` directives (plus ``{{ }}`` templates) into enriched context before
-the LLM call. Enables small/local models to leverage Sagewai's full
-infrastructure without native tool-calling support.
+Resolves ``@context``, ``@memory``, ``@agent``, ``@transform``, ``/tool``,
+``/mcp``, and ``#meta`` directives (plus ``{{ }}`` templates) into enriched
+context before the LLM call. Enables small/local models to leverage Sagewai's
+full infrastructure without native tool-calling support.
+
+Directives:
+
+- ``@context('query')`` — retrieve context via RAG
+- ``@memory('query')`` — search the agent's memory store
+- ``@agent:name('task')`` — delegate a sub-task to another agent
+- ``@transform(op, source)`` — apply a named transform (graphify, summarize, or
+  a custom registered operation) to resolved text before the LLM call
+- ``/tool.name('args')`` — invoke a tool (prompt-based for small models)
+- ``/mcp.server.tool('args')`` — invoke an MCP tool
+- ``#model:name`` / ``#budget:amount`` — per-call execution overrides
 
 Quick start::
 

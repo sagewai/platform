@@ -1,7 +1,7 @@
 export const metadata = {
   title: 'Directives API — prompt preprocessor for any LLM',
   description:
-    '@context, @memory, @agent, /tool, /mcp, #meta directive resolution. Lets small/local LLMs use the full Sagewai stack without native tool calling.',
+    '@context, @memory, @agent, @transform, /tool, /mcp, #meta directive resolution. Lets small/local LLMs use the full Sagewai stack without native tool calling.',
   alternates: { canonical: 'https://docs.sagewai.ai/docs/api-reference/directives' },
 };
 
@@ -160,6 +160,91 @@ profile = detect_profile("unknown-model")            # -> MEDIUM
 detect_profile(model: str) -> ModelProfile
 ```
 
+---
+
+## @transform
+
+`@transform` is a **first-class built-in directive** wired into the directive core — it is not registered through `DirectiveRegistry`. Its syntax uses an extended multi-argument form that the custom-directive registry does not support: the first argument is a **bare operation token** (not a quoted string), the second is a **nested directive reference** (`@context(...)`, `@memory(...)`) or a literal string, and any additional `key=value` pairs are forwarded as operation params.
+
+```
+@transform(operation, source)
+@transform(operation, source, key=value, …)
+```
+
+The `source` argument is resolved first — nested directives are expanded to text — then the transform runs on that result. The `TransformResult.output` is injected into the enriched prompt in place of the directive. A failed transform injects nothing and logs a warning; directive resolution always degrades gracefully.
+
+### Operations
+
+| Operation | Description |
+|-----------|-------------|
+| `graphify` | Extracts relation triples and writes them to project-scoped `GraphMemory`. Output is a compact digest of the relations written. |
+| `summarize` | Summarises the input text. Accepts a `max_words` param (default `200`). |
+| custom | Any async callable registered via `transform.register("name", fn)`. |
+
+### `graphify` — long context into graph memory
+
+Extracts `(subject, predicate, object)` triples from text using the `LLMRelationExtractor`, then writes each triple to the project-scoped `GraphMemory`. Extracting zero triples is a success — `metadata.relations_written` is `0` and the output notes "no relations extracted". The `LLMRelationExtractor` is `parse_json`-robust, so a fenced SLM response still yields clean triples.
+
+```python
+# Distil a long incident transcript into graph memory
+@transform(graphify, @context('incident transcript'))
+```
+
+Injected output: `"12 relations into graph memory: Alert→triggered-by→DeployX; DeployX→owned-by→TeamA; …"`
+
+### `summarize` — compress a large input for a small context window
+
+One LLM summarisation call. A small or local model is an acceptable choice. The `max_words` param controls output length (default `200`).
+
+```python
+# Compress a memory namespace before a small model sees it
+@transform(summarize, @memory('mission-42'), max_words=200)
+```
+
+### Custom operations
+
+Register an async callable in-process; `@transform` then invokes it by name:
+
+```python
+from sagewai.transform import transform
+
+async def extract_clauses(content, *, project_id=None, **params):
+    # parse content and return a summary string
+    return "Liability clause found; Termination clause: 30 days"
+
+transform.register("extract_clauses", extract_clauses)
+```
+
+```python
+@transform(extract_clauses, @context('vendor contract'))
+```
+
+A bare-string return is auto-wrapped into a successful `TransformResult`. Return a `TransformResult` directly to set `metadata` or signal failure.
+
+**`transform.register` vs `DirectiveRegistry`:** `transform.register("name", fn)` adds a callable to the `TransformRegistry` — it extends what `@transform` can *do*, not what directives the engine parses. To add a new directive sigil (e.g. `@kb('query')` with the single-quoted-arg form), use `DirectiveRegistry` instead.
+
+### Tool form (mid-loop)
+
+The same engine is also available as the `transform` built-in tool — called mid-loop by any agent. Models without native tool calling reach it via the `/tool` prose-parser:
+
+```
+/tool.transform(operation="summarize", content="…", params={"max_words": 100})
+```
+
+Returns `TransformResult.output` on success, or a `"transform failed: …"` string on failure that the agent can inspect and react to.
+
+### Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `operation` | `str` | Yes | `"graphify"`, `"summarize"`, or a registered custom name |
+| `source` | directive or str | Yes | Text to transform. Nested directives are resolved to text first. |
+| `max_words` | `int` | No (`summarize` only) | Summary word limit (default `200`) |
+
+All operations run under a configurable timeout (the engine's `resolution_timeout`, default `10.0` s). Uses `asyncio.wait_for` internally — Python 3.10-safe.
+
+---
+
 ### Directive Syntax Reference
 
 | Directive | Syntax | Description |
@@ -171,6 +256,7 @@ detect_profile(model: str) -> ModelProfile
 | Workflow | `@wf:name('input')` | Invoke a saved workflow |
 | Tool | `/tool.name('args')` | Invoke a tool |
 | MCP | `/mcp.server.tool('args')` | Invoke an MCP tool |
+| Transform | `@transform(op, source)` | Built-in core directive (extended syntax); apply a named transform before the LLM call |
 | Model | `#model:name` | Override model for this call |
 | Budget | `#budget:amount` | Set cost budget |
 | Dynamic | `` @datetime ``, `` @date ``, `` @time `` | Current date/time values |

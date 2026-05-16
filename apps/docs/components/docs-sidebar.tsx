@@ -154,6 +154,7 @@ const SECTIONS: NavSection[] = [
       { label: 'Cost Management', href: '/docs/guides/cost-management' },
       { label: 'PII Protection', href: '/docs/guides/pii-protection' },
       { label: 'Local Inference', href: '/docs/guides/local-inference' },
+      { label: 'Small and Local Models', href: '/docs/guides/small-models' },
       { label: 'CI/CD Integration', href: '/docs/guides/ci-cd' },
       { label: 'VS Code Extension', href: '/docs/guides/vscode-extension' },
       { label: 'Client Wrappers (17 Languages)', href: '/docs/guides/client-wrappers' },
