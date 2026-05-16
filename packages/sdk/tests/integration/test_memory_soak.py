@@ -62,7 +62,12 @@ from typing import Any
 
 import pytest
 
-from sagewai.memory import MemoryBranch, RAGEngine
+from sagewai.memory import (
+    MemoryBranch,
+    RAGEngine,
+    SemanticFactStrategy,
+    TurnEvent,
+)
 
 pytestmark = [pytest.mark.soak]
 
@@ -222,30 +227,154 @@ async def test_soak_checkpoint_save_restore():
 
 # ── 3. LLM-swap mid-mission ─────────────────────────────────────────
 
+# Eight explicit user facts planted across the swap conversation, each
+# paired with a distinctive lowercase keyword used to score recovery.
+_PLANTED_FACTS: list[tuple[str, str]] = [
+    ("By the way, my name is Sam Rivera.", "rivera"),
+    ("I should mention I live in Berlin, Germany.", "berlin"),
+    ("For context, I work as a backend engineer.", "engineer"),
+    ("One preference: I always use dark mode in my editor.", "dark mode"),
+    ("I have a dog named Pixel.", "pixel"),
+    ("Important — I'm allergic to peanuts.", "peanut"),
+    ("I speak German and English fluently.", "german"),
+    ("I drink coffee every morning and never tea.", "coffee"),
+]
+
+# Generic Q&A filler — deliberately contains no facts about the user.
+_FILLER_PAIRS: list[tuple[str, str]] = [
+    ("What does HTTP stand for?", "HTTP stands for HyperText Transfer Protocol."),
+    ("How do I reverse a list in Python?", "Use list[::-1] or reversed(list)."),
+    ("What is a hash map?", "A hash map stores key-value pairs with O(1) average lookup."),
+    ("Explain Big-O notation briefly.", "Big-O describes how cost grows with input size."),
+    ("Difference between TCP and UDP?", "TCP is reliable and ordered; UDP is faster, best-effort."),
+    ("How do I make an HTTP request in Python?", "Use httpx, e.g. httpx.get(url)."),
+    ("What is a primary key?", "A primary key uniquely identifies each row in a table."),
+    ("Explain what a closure is.", "A closure captures variables from its enclosing scope."),
+    ("What does a load balancer do?", "It distributes incoming traffic across servers."),
+    ("How does garbage collection work?", "It reclaims memory no longer reachable by the program."),
+    ("What is a REST API?", "A REST API exposes resources over HTTP using standard verbs."),
+    ("Process versus thread?", "Processes have isolated memory; threads share it within a process."),
+    ("What is idempotency?", "An idempotent operation yields the same result however many times it runs."),
+    ("How do I sort a dict by value?", "Use sorted(d.items(), key=lambda kv: kv[1])."),
+    ("What is a race condition?", "A bug where the outcome depends on unpredictable timing."),
+    ("What does CI/CD stand for?", "Continuous Integration and Continuous Delivery."),
+    ("What is a foreign key?", "A foreign key references another table's primary key."),
+    ("Explain what caching is.", "Caching stores results so future requests are served faster."),
+]
+
+
+def _swap_conversation() -> list[TurnEvent]:
+    """Build a 52-turn conversation: 8 explicit user facts among generic filler."""
+    sid = "soak-llm-swap"
+    turns: list[TurnEvent] = []
+    fi = 0
+    for i, (q, a) in enumerate(_FILLER_PAIRS):
+        turns.append(TurnEvent(role="user", content=q, session_id=sid))
+        turns.append(TurnEvent(role="assistant", content=a, session_id=sid))
+        if i % 2 == 1 and fi < len(_PLANTED_FACTS):
+            turns.append(TurnEvent(role="user", content=_PLANTED_FACTS[fi][0], session_id=sid))
+            turns.append(TurnEvent(role="assistant", content="Thanks, noted.", session_id=sid))
+            fi += 1
+    while fi < len(_PLANTED_FACTS):
+        turns.append(TurnEvent(role="user", content=_PLANTED_FACTS[fi][0], session_id=sid))
+        turns.append(TurnEvent(role="assistant", content="Thanks, noted.", session_id=sid))
+        fi += 1
+    return turns
+
+
+class _BoundLLMClient:
+    """Duck-typed LLM client for memory strategies: binds a model id and
+    exposes ``acompletion(*, messages)`` over litellm. Provider keys are
+    read from the environment (ANTHROPIC_API_KEY / OPENAI_API_KEY)."""
+
+    def __init__(self, model: str) -> None:
+        self._model = model
+
+    async def acompletion(self, *, messages: list[dict[str, str]]) -> Any:
+        import litellm
+
+        return await litellm.acompletion(
+            model=self._model,
+            messages=messages,
+            temperature=0,
+            timeout=90,
+        )
+
 
 @pytest.mark.asyncio
 async def test_soak_llm_swap_stability():
-    """Memory subsystem stays coherent when the conversation LLM swaps.
+    """Memory extraction stays coherent when the LLM behind it swaps.
 
-    The memory layer should be LLM-agnostic — strategies + retrieval should
-    not bake in any specific LLM's tokenization or embedding. We verify
-    by extracting facts via two different mock-LLM clients and confirming
-    they produce comparable extracted records.
+    The memory layer must be LLM-agnostic: the same conversation, run
+    through ``SemanticFactStrategy`` backed by two different providers'
+    models, should recover the same user facts. We plant eight explicit
+    facts in a 52-turn conversation, extract with an Anthropic model and
+    with an OpenAI model, and require both high per-model recall and high
+    cross-model agreement.
     """
     if not _real_llm_enabled():
         pytest.skip(
             "SAGEWAI_SOAK_REAL_LLM=1 + an API key required for real-LLM swap"
         )
+    if not (os.environ.get("ANTHROPIC_API_KEY") and os.environ.get("OPENAI_API_KEY")):
+        pytest.skip(
+            "scenario 3 needs BOTH ANTHROPIC_API_KEY and OPENAI_API_KEY "
+            "(it swaps an Anthropic model for an OpenAI model)"
+        )
 
-    # When real-LLM is enabled, this would:
-    #   1. Build a long conversation (50+ turns)
-    #   2. Run extraction with claude-haiku-4-5
-    #   3. Run extraction with gpt-4o-mini
-    #   4. Compare extracted facts for semantic overlap
-    # Without real LLMs, the swap-stability scenario reduces to checking
-    # that the strategy framework accepts duck-typed clients.
-    pytest.skip(
-        "real-LLM swap not yet wired in scaffolding; awaiting API key + corpus"
+    turns = _swap_conversation()
+    anthropic_model = "anthropic/claude-haiku-4-5"
+    openai_model = "gpt-4o-mini"
+
+    anthropic_records = await SemanticFactStrategy(
+        _BoundLLMClient(anthropic_model)
+    ).extract(turns)
+    openai_records = await SemanticFactStrategy(
+        _BoundLLMClient(openai_model)
+    ).extract(turns)
+
+    keywords = [kw for _, kw in _PLANTED_FACTS]
+
+    def _recovered(records: list[Any]) -> set[str]:
+        blob = " ".join(r.content for r in records).lower()
+        return {kw for kw in keywords if kw in blob}
+
+    anthropic_rec = _recovered(anthropic_records)
+    openai_rec = _recovered(openai_records)
+    anthropic_recall = len(anthropic_rec) / len(keywords)
+    openai_recall = len(openai_rec) / len(keywords)
+    union = anthropic_rec | openai_rec
+    agreement = len(anthropic_rec & openai_rec) / len(union) if union else 0.0
+
+    result = {
+        "conversation_turns": len(turns),
+        "planted_facts": len(keywords),
+        "anthropic_model": anthropic_model,
+        "openai_model": openai_model,
+        "anthropic_extracted": len(anthropic_records),
+        "openai_extracted": len(openai_records),
+        "anthropic_recall": round(anthropic_recall, 3),
+        "openai_recall": round(openai_recall, 3),
+        "cross_model_agreement": round(agreement, 3),
+        "anthropic_missing": sorted(set(keywords) - anthropic_rec),
+        "openai_missing": sorted(set(keywords) - openai_rec),
+        "real_llm": True,
+    }
+    _append_report("3. LLM-swap stability", result)
+
+    assert anthropic_records, "Anthropic model extracted no facts"
+    assert openai_records, "OpenAI model extracted no facts"
+    assert anthropic_recall >= 0.6, (
+        f"Anthropic recall {anthropic_recall:.2f} too low "
+        f"(missing {result['anthropic_missing']})"
+    )
+    assert openai_recall >= 0.6, (
+        f"OpenAI recall {openai_recall:.2f} too low "
+        f"(missing {result['openai_missing']})"
+    )
+    assert agreement >= 0.6, (
+        f"cross-model agreement {agreement:.2f} too low — "
+        "memory extraction is not LLM-agnostic"
     )
 
 

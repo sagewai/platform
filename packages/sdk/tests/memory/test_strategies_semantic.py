@@ -36,3 +36,25 @@ async def test_extracts_facts_into_semantic_namespace():
 async def test_empty_turns_returns_no_records():
     out = await SemanticFactStrategy(llm=_FakeLLM()).extract([])
     assert out == []
+
+
+class _FencedLLM:
+    """Mimics models (Anthropic in particular) that wrap JSON in a fence."""
+
+    async def acompletion(self, *, messages, **_):
+        return {
+            "choices": [
+                {"message": {"content": '```json\n["user lives in Berlin"]\n```'}}
+            ]
+        }
+
+
+@pytest.mark.asyncio
+async def test_extracts_facts_from_fenced_json():
+    """A Markdown-fenced JSON response is still parsed — strategies must be
+    LLM-agnostic. Regression guard for the soak scenario-3 finding."""
+    out = await SemanticFactStrategy(llm=_FencedLLM()).extract(
+        [TurnEvent(role="user", content="I live in Berlin.", session_id="s1")]
+    )
+    assert len(out) == 1
+    assert "Berlin" in out[0].content

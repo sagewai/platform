@@ -15,7 +15,11 @@ import json
 import logging
 from typing import Any
 
-from sagewai.memory.strategies.base import ExtractedRecord, TurnEvent
+from sagewai.memory.strategies.base import (
+    ExtractedRecord,
+    TurnEvent,
+    strip_code_fence,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +49,7 @@ class PreferenceStrategy:
         )
         raw = resp["choices"][0]["message"]["content"].strip()
         try:
-            prefs = json.loads(raw)
+            prefs = json.loads(strip_code_fence(raw))
         except json.JSONDecodeError:
             logger.warning("preference strategy: non-JSON response: %r", raw[:200])
             return []
