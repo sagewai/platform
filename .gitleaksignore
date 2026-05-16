@@ -1,0 +1,39 @@
+# .gitleaksignore — reviewed-and-accepted secret-scan findings.
+#
+# Every fingerprint below was assessed in the pre-launch secret audit
+# (2026-05-16, gitleaks full-history scan of all 386 commits). None is
+# a live production credential. Fingerprint format is
+# `commit:path:rule:line`. Regenerate with:
+#   gitleaks detect --report-format json --report-path report.json
+#
+# --- docs placeholders (example values, meant to be in the docs) ---
+1f1f0aa0de5b6b4ab2da3a36e39d135408cc54ee:apps/docs/app/docs/api-reference/rest-api/page.mdx:generic-api-key:294
+1f1f0aa0de5b6b4ab2da3a36e39d135408cc54ee:apps/docs/app/docs/guides/litellm-integration/page.mdx:curl-auth-header:143
+1f1f0aa0de5b6b4ab2da3a36e39d135408cc54ee:apps/docs/app/docs/guides/mcp-server/page.mdx:curl-auth-header:146
+#
+# --- test placeholders / fixtures (fake values hardcoded in tests) ---
+6232ca0359a2f38334f25797147bfad1d1773fdb:tests/test_cli_commands.py:generic-api-key:646
+18f868d807f25bb00111b06cd699d18af38291b6:packages/sdk/tests/test_admin_inference_provider_routes.py:generic-api-key:78
+025b9b09bc486e3ec6f07d37ebdadf2ca3e4b108:packages/sdk/tests/cli/test_profiles_acl_cli.py:generic-api-key:28
+#
+# --- fake demo secrets in example 33 (AcmeCo/GlobexCorp demo data) ---
+97c7b7030496dd982bbd472ddbe5a4cfdd702b68:packages/sdk/sagewai/examples/33_fleet_sealed_integration.py:generic-api-key:83
+97c7b7030496dd982bbd472ddbe5a4cfdd702b68:packages/sdk/sagewai/examples/33_fleet_sealed_integration.py:generic-api-key:90
+8040263252364c112225ee24895fd0b72b74dfb9:packages/sdk/sagewai/examples/33_fleet_sealed_integration.py:generic-api-key:83
+8040263252364c112225ee24895fd0b72b74dfb9:packages/sdk/sagewai/examples/33_fleet_sealed_integration.py:generic-api-key:90
+#
+# --- not secrets: a SHA-256 checksum + the literal string "SHA-256-verified" ---
+dc93e3d71cbf173393699d759402431e8d5b0034:packages/tool-runner/images/api/Dockerfile:generic-api-key:11
+dc93e3d71cbf173393699d759402431e8d5b0034:packages/tool-runner/images/api/Dockerfile:generic-api-key:14
+dc93e3d71cbf173393699d759402431e8d5b0034:packages/tool-runner/images/pins.env:generic-api-key:125
+#
+# --- proprietary spec doc — scrubbed from history at launch via filter-repo ---
+025b9b09bc486e3ec6f07d37ebdadf2ca3e4b108:docs/superpowers/plans/2026-04-27-sealed-iii-b-d.md:generic-api-key:2657
+#
+# --- e2e test session token (apps/admin/e2e/.auth-state.json) ---
+# Dead test token for a throwaway test admin against an ephemeral
+# local backend — no exploit value. Untracked + .gitignore'd as of
+# this PR, and listed in the launch filter-repo path set so it is
+# scrubbed from history. Suppressed here so the secret-scan gate is
+# green in the interim.
+557232942a71f9bace367eceaa628f1cadfc279e:apps/admin/e2e/.auth-state.json:generic-api-key:1

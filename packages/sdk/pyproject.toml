@@ -56,9 +56,9 @@ dependencies = [
 [project.urls]
 Homepage = "https://sagewai.ai"
 Documentation = "https://docs.sagewai.ai"
-Repository = "https://github.com/sagewai/sagewai"
-Issues = "https://github.com/sagewai/sagewai/issues"
-Changelog = "https://github.com/sagewai/sagewai/blob/main/CHANGELOG.md"
+Repository = "https://github.com/sagewai/platform"
+Issues = "https://github.com/sagewai/platform/issues"
+Changelog = "https://github.com/sagewai/platform/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 memory = [

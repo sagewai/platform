@@ -167,4 +167,4 @@ See the [Client Wrappers guide](https://docs.sagewai.ai/docs/guides/client-wrapp
 - [Tutorials](https://docs.sagewai.ai/docs/guides/tutorials) — 8 step-by-step tutorials from beginner to enterprise
 - [Examples](sagewai/examples/) — 23 runnable examples covering every feature
 - [API Reference](https://docs.sagewai.ai) — full documentation
-- [GitHub](https://github.com/sagewai/sagewai) — source code and issues
+- [GitHub](https://github.com/sagewai/platform) — source code and issues

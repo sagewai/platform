@@ -42,8 +42,8 @@ See [Infrastructure Management](https://docs.sagewai.ai/docs/guides/infrastructu
 
 ```bash
 # Clone the repository
-git clone https://github.com/sagewai/sagewai.git
-cd sagewai
+git clone https://github.com/sagewai/platform.git
+cd platform
 
 # Install all dependencies
 uv sync --all-packages
@@ -172,6 +172,6 @@ No Contributor License Agreement (CLA) is required.
 
 ## Questions?
 
-- Open a [GitHub Discussion](https://github.com/sagewai/sagewai/discussions) for questions
-- File a [GitHub Issue](https://github.com/sagewai/sagewai/issues) for bugs or feature requests
+- Open a [GitHub Discussion](https://github.com/sagewai/platform/discussions) for questions
+- File a [GitHub Issue](https://github.com/sagewai/platform/issues) for bugs or feature requests
 - Email: hello@sagewai.ai
