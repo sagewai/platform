@@ -70,7 +70,7 @@ Examples organised under the five-pillar architecture (see [`sagewai/examples/`]
 - **Fleet** — `26_fleet_demo.py`: workers, capability dispatch, project scoping, sandbox execution.
 - **Observatory** — examples emit OTel spans and Prometheus metrics consumed by the local Grafana stack.
 - **Training Loop** — `25_training_pipeline.py`: collect, curate, export Alpaca/ShareGPT, fine-tune with Unsloth.
-- **Transform directive** — `50_incident_knowledge_graph.py`: `@transform(graphify, …)` to distil incident transcripts into `GraphMemory` across runs. `51_big_input_small_model.py`: compress a large document with `@transform(summarize, …)` so a local model can answer questions about it; demonstrates custom transform ops via `transform.register(…)`.
+- **Transform directive** — `50_incident_knowledge_graph.py`: `@transform(graphify, …)` to distil incident transcripts into `GraphMemory` across runs. `51_big_input_small_model.py`: compress a large document with `@transform(summarize, …)` so a local model can answer questions about it; demonstrates custom transform ops registered on a `TransformRegistry`.
 
 ## CLI
 

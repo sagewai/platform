@@ -164,7 +164,18 @@ detect_profile(model: str) -> ModelProfile
 
 ## @transform
 
-`@transform` is a **first-class built-in directive** wired into the directive core — it is not registered through `DirectiveRegistry`. Its syntax uses an extended multi-argument form that the custom-directive registry does not support: the first argument is a **bare operation token** (not a quoted string), the second is a **nested directive reference** (`@context(...)`, `@memory(...)`) or a literal string, and any additional `key=value` pairs are forwarded as operation params.
+`@transform` applies a named transform — `graphify`, `summarize`, or a custom registered operation — to a body of text **before** the LLM call. Wire it onto a `DirectiveEngine` with `register_transform_directive`:
+
+```python
+from sagewai.directives import DirectiveEngine
+from sagewai.transform import register_transform_directive
+
+engine = DirectiveEngine(model="ollama/llama3.2:3b")
+register_transform_directive(engine)
+# @transform(...) now resolves on this engine
+```
+
+Unlike `@context` or `@memory`, `@transform` is not a built-in — it must be registered explicitly. `register_transform_directive` registers it as a **multi-argument custom directive** (the `raw_args` form of `DirectiveRegistry`, which the single-quoted-arg form does not support): the first argument is a **bare operation token** (not a quoted string), the second is a **nested directive reference** (`@context(...)`, `@memory(...)`) or a literal string, and any additional `key=value` pairs are forwarded as operation params.
 
 ```
 @transform(operation, source)
@@ -179,7 +190,7 @@ The `source` argument is resolved first — nested directives are expanded to te
 |-----------|-------------|
 | `graphify` | Extracts relation triples and writes them to project-scoped `GraphMemory`. Output is a compact digest of the relations written. |
 | `summarize` | Summarises the input text. Accepts a `max_words` param (default `200`). |
-| custom | Any async callable registered via `transform.register("name", fn)`. |
+| custom | Any async callable registered on a `TransformRegistry` via `registry.register("name", fn)`. |
 
 ### `graphify` — long context into graph memory
 
@@ -203,16 +214,24 @@ One LLM summarisation call. A small or local model is an acceptable choice. The 
 
 ### Custom operations
 
-Register an async callable in-process; `@transform` then invokes it by name:
+A transform operation is any async callable. Register one on a `TransformRegistry`, wrap that registry in a `TransformEngine`, and pass the engine to `register_transform_directive` — `@transform` then invokes the operation by name:
 
 ```python
-from sagewai.transform import transform
+from sagewai.transform import (
+    TransformEngine,
+    default_registry,
+    register_transform_directive,
+)
 
 async def extract_clauses(content, *, project_id=None, **params):
     # parse content and return a summary string
     return "Liability clause found; Termination clause: 30 days"
 
-transform.register("extract_clauses", extract_clauses)
+# default_registry() carries graphify + summarize — add the custom op to it
+registry = default_registry()
+registry.register("extract_clauses", extract_clauses)
+
+register_transform_directive(engine, transform_engine=TransformEngine(registry))
 ```
 
 ```python
@@ -221,7 +240,7 @@ transform.register("extract_clauses", extract_clauses)
 
 A bare-string return is auto-wrapped into a successful `TransformResult`. Return a `TransformResult` directly to set `metadata` or signal failure.
 
-**`transform.register` vs `DirectiveRegistry`:** `transform.register("name", fn)` adds a callable to the `TransformRegistry` — it extends what `@transform` can *do*, not what directives the engine parses. To add a new directive sigil (e.g. `@kb('query')` with the single-quoted-arg form), use `DirectiveRegistry` instead.
+**`TransformRegistry` vs `DirectiveRegistry`:** `TransformRegistry.register("name", fn)` adds an *operation* `@transform` can run — it extends what `@transform` can *do*, not what directives the engine parses. To add a new directive sigil (e.g. `@kb('query')` with the single-quoted-arg form), use `DirectiveRegistry` instead.
 
 ### Tool form (mid-loop)
 
@@ -241,7 +260,7 @@ Returns `TransformResult.output` on success, or a `"transform failed: …"` stri
 | `source` | directive or str | Yes | Text to transform. Nested directives are resolved to text first. |
 | `max_words` | `int` | No (`summarize` only) | Summary word limit (default `200`) |
 
-All operations run under a configurable timeout (the engine's `resolution_timeout`, default `10.0` s). Uses `asyncio.wait_for` internally — Python 3.10-safe.
+Every operation runs under the `TransformEngine`'s configurable `timeout` (default `30.0` s), applied with `asyncio.wait_for` — Python 3.10-safe. When invoked as a directive, the directive engine's own `resolution_timeout` additionally bounds overall directive resolution.
 
 ---
 
@@ -256,7 +275,7 @@ All operations run under a configurable timeout (the engine's `resolution_timeou
 | Workflow | `@wf:name('input')` | Invoke a saved workflow |
 | Tool | `/tool.name('args')` | Invoke a tool |
 | MCP | `/mcp.server.tool('args')` | Invoke an MCP tool |
-| Transform | `@transform(op, source)` | Built-in core directive (extended syntax); apply a named transform before the LLM call |
+| Transform | `@transform(op, source)` | Apply a named transform before the LLM call (extended multi-arg syntax; enable with `register_transform_directive`) |
 | Model | `#model:name` | Override model for this call |
 | Budget | `#budget:amount` | Set cost budget |
 | Dynamic | `` @datetime ``, `` @date ``, `` @time `` | Current date/time values |

@@ -883,6 +883,28 @@ class TestEngine:
         # @unknown is not a built-in or registered directive, passes through
         assert "Hello" in result.prompt
 
+    async def test_register_raw_args_custom_directive(self):
+        """A raw_args custom directive receives the full argument string."""
+        seen: list[str] = []
+
+        async def handler(raw: str) -> str:
+            seen.append(raw)
+            return f"GOT[{raw}]"
+
+        engine = DirectiveEngine(model="gpt-4o")
+        engine.register("xf", "@xf", handler, raw_args=True)
+        result = await engine.resolve("@xf(alpha, @inner('q'), n=3) done")
+        # The handler sees every argument, including a nested directive ref.
+        assert seen == ["alpha, @inner('q'), n=3"]
+        assert "GOT[alpha, @inner('q'), n=3]" in result.prompt
+
+    async def test_single_arg_custom_directive_still_works(self):
+        """The default single-quoted-argument form is unchanged by raw_args."""
+        engine = DirectiveEngine(model="gpt-4o")
+        engine.register("kb", "@kb", lambda q: f"KB:{q}")
+        result = await engine.resolve("@kb('deep learning') more")
+        assert "KB:deep learning" in result.prompt
+
     async def test_metadata_populated(self):
         engine = DirectiveEngine(
             context=MockContextProvider(),

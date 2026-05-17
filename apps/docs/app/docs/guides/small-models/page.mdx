@@ -145,7 +145,15 @@ Small models can also reach the `@transform` engine this way:
 
 A model with a 4–8K context window cannot read a 40-page contract, a week of incident logs, or the accumulated transcript of a long mission. `@transform` compresses or restructures the input *before* it reaches the model — inline, as part of prompt resolution.
 
-`@transform` is a **first-class built-in directive** in the engine core. Its multi-argument syntax — bare operation token, nested directive reference or string, optional `key=value` params — is handled natively, not through the `DirectiveRegistry` custom-directive path.
+`@transform` is wired onto a `DirectiveEngine` with `register_transform_directive` — it is not a built-in like `@context`, so register it explicitly:
+
+```python
+from sagewai.transform import register_transform_directive
+
+register_transform_directive(engine)
+```
+
+It is registered as a **multi-argument custom directive** — the `raw_args` form of `DirectiveRegistry` — so its syntax (bare operation token, nested directive reference or string, optional `key=value` params) works where the single-quoted-arg custom-directive form does not.
 
 ### summarize — fit a large input into a small window
 
@@ -182,16 +190,23 @@ Extracting zero triples is a success — the engine never fails directive resolu
 
 ### Custom transforms
 
-Register any async callable as a named operation with `transform.register`:
+A transform operation is any async callable. Register one on a `TransformRegistry`, wrap that registry in a `TransformEngine`, and pass the engine to `register_transform_directive`:
 
 ```python
-from sagewai.transform import transform
+from sagewai.transform import (
+    TransformEngine,
+    default_registry,
+    register_transform_directive,
+)
 
 async def extract_risk_score(content, *, project_id=None, **params):
     # parse content and return a risk summary
     return "Risk score: 7/10 — Liability clause is unfavourable"
 
-transform.register("extract_risk_score", extract_risk_score)
+registry = default_registry()          # carries graphify + summarize
+registry.register("extract_risk_score", extract_risk_score)
+
+register_transform_directive(engine, transform_engine=TransformEngine(registry))
 ```
 
 ```python
@@ -202,7 +217,7 @@ A string return is auto-wrapped into a successful `TransformResult`. Return a `T
 
 For a small model, custom operations are especially powerful: the directive engine does the structured work (extraction, scoring, classification) before the model sees the prompt, so the model only needs to reason on the already-processed output.
 
-`transform.register("name", fn)` adds a callable to the `TransformRegistry` — it extends what `@transform` can *do*, not what directives the engine parses. It is separate from `DirectiveRegistry`, which handles single-quoted-arg custom sigils like `@kb('query')`.
+`TransformRegistry.register("name", fn)` adds an *operation* `@transform` can run — it extends what `@transform` can *do*, not what directives the engine parses. It is separate from `DirectiveRegistry`, which handles single-quoted-arg custom sigils like `@kb('query')`.
 
 See the [@transform API reference](/docs/api-reference/directives#transform) for the full parameter table and tool form.
 
@@ -213,14 +228,19 @@ See the [@transform API reference](/docs/api-reference/directives#transform) for
 A production pattern for a local model with no native tool calling and a limited context window:
 
 ```python
-from sagewai import DirectiveEngine
-from sagewai.transform import transform
+from sagewai.directives import DirectiveEngine
+from sagewai.transform import (
+    TransformEngine,
+    default_registry,
+    register_transform_directive,
+)
 
 # register a custom op once at startup
 async def tag_urgency(content, *, project_id=None, **params):
     return "Urgency: HIGH — database cluster, customer-facing, no failover"
 
-transform.register("tag_urgency", tag_urgency)
+registry = default_registry()
+registry.register("tag_urgency", tag_urgency)
 
 engine = DirectiveEngine(
     context=context_engine,
@@ -228,6 +248,7 @@ engine = DirectiveEngine(
     tools={"search": search_tool},
     model="llama3.2:latest",   # → SMALL: prompt_based tools, 2048-token budget, 5× compression
 )
+register_transform_directive(engine, transform_engine=TransformEngine(registry))
 
 # Compose directives: compress → classify → inject memory → tool access
 prompt = (
@@ -253,5 +274,5 @@ response = await local_model.chat(result.prompt)
 
 - `sagewai/examples/51_big_input_small_model.py` — a large document is compressed
   inline with `@transform(summarize, …)` so a local Ollama model can answer questions
-  about it; the example also demonstrates a custom transform operation via
-  `transform.register(…)`.
+  about it; the example also demonstrates a custom transform operation registered on
+  a `TransformRegistry`.

@@ -172,16 +172,28 @@ class DirectiveEngine:
             return ""
         return self._instruction_loader.load(start_dir=start_dir)
 
-    def register(self, name: str, sigil: str, handler: Any, description: str = "") -> None:
+    def register(
+        self,
+        name: str,
+        sigil: str,
+        handler: Any,
+        description: str = "",
+        *,
+        raw_args: bool = False,
+    ) -> None:
         """Register a custom directive type.
 
-        The handler is called with the directive's raw argument string and
-        should return a string (sync or async). Example::
+        The handler is called with the directive's argument string and should
+        return a string (sync or async). Example::
 
             engine.register("kb", "@kb", search_knowledge_base)
             # Now @kb('query') works in prompts
+
+        With ``raw_args=True`` the directive accepts a multi-argument call
+        ``@sigil(a, b, kw=v)`` and the handler receives the raw, unparsed
+        argument string for custom parsing.
         """
-        self._registry.register(name, sigil, handler, description)
+        self._registry.register(name, sigil, handler, description, raw_args=raw_args)
         # Also wire into the resolver's custom handlers
         self._resolver._custom_handlers[name] = handler
 
@@ -221,12 +233,13 @@ class DirectiveEngine:
                 directives_found=[],
             )
 
-        # Parse → AST (built-in directives)
-        nodes = parse(text)
-
-        # Inject custom directive nodes from registry matches
+        # Parse → AST. Custom-directive spans are carved from the raw text
+        # BEFORE built-in parsing, so a built-in directive nested inside a
+        # custom directive's arguments stays within the CustomNode.
         if has_custom:
-            nodes = self._inject_custom_nodes(text, nodes)
+            nodes = self._parse_with_custom(text)
+        else:
+            nodes = parse(text)
 
         clean_text = extract_clean_text(nodes)
 
@@ -329,60 +342,51 @@ class DirectiveEngine:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _inject_custom_nodes(self, text: str, nodes: list) -> list:
-        """Scan text for custom directive matches and replace TextNodes."""
-        from sagewai.directives.ast import CustomNode, TextNode
+    def _parse_with_custom(self, text: str) -> list:
+        """Parse text into AST nodes, carving out custom-directive spans first.
+
+        Custom-directive matches are extracted from the raw text BEFORE
+        built-in parsing. A built-in directive nested inside a custom
+        directive's arguments (e.g. ``@context(...)`` inside ``@transform(...)``)
+        therefore stays within the ``CustomNode`` for the handler to resolve,
+        rather than being parsed independently.
+        """
+        import re as _re
+
+        from sagewai.directives.ast import CustomNode
 
         matches = self._registry.match(text)
         if not matches:
-            return nodes
+            return parse(text)
 
-        # Build a set of (start, end, CustomNode) from matches
-        custom_spans: list[tuple[int, int, CustomNode]] = []
-        for directive, m in matches:
-            raw_value = m.group()
-            # Extract the quoted argument from the match
-            import re
-
-            arg_m = re.search(r"""['"](.+?)['"]""", raw_value)
-            arg = arg_m.group(1) if arg_m else raw_value
-            custom_spans.append(
-                (
-                    m.start(),
-                    m.end(),
-                    CustomNode(directive_name=directive.name, raw_value=arg),
-                )
-            )
-
-        if not custom_spans:
-            return nodes
-
-        # Re-tokenize: split TextNodes that contain custom directive matches
-        result: list = []
-        for node in nodes:
-            if not isinstance(node, TextNode):
-                result.append(node)
+        # Order matches by start offset; drop any that overlap an earlier one.
+        ordered = sorted(matches, key=lambda dm: dm[1].start())
+        selected: list[tuple[Any, Any]] = []
+        cursor = 0
+        for directive, m in ordered:
+            if m.start() < cursor:
                 continue
+            selected.append((directive, m))
+            cursor = m.end()
 
-            # Check if any custom span falls within this text node's range
-            # For simplicity, scan the text content for matches
-            remaining = node.text
-            for directive, m in matches:
-                raw = m.group()
-                if raw in remaining:
-                    import re as _re
+        nodes: list = []
+        pos = 0
+        for directive, m in selected:
+            if m.start() > pos:
+                nodes.extend(parse(text[pos : m.start()]))
+            if directive.raw_args:
+                # Multi-argument directive: hand the handler the full raw
+                # argument string (everything within the outer parens).
+                arg = m.group(1)
+            else:
+                arg_m = _re.search(r"""['"](.+?)['"]""", m.group())
+                arg = arg_m.group(1) if arg_m else m.group()
+            nodes.append(CustomNode(directive_name=directive.name, raw_value=arg))
+            pos = m.end()
+        if pos < len(text):
+            nodes.extend(parse(text[pos:]))
 
-                    parts = remaining.split(raw, 1)
-                    if parts[0]:
-                        result.append(TextNode(text=parts[0]))
-                    arg_m = _re.search(r"""['"](.+?)['"]""", raw)
-                    arg = arg_m.group(1) if arg_m else raw
-                    result.append(CustomNode(directive_name=directive.name, raw_value=arg))
-                    remaining = parts[1] if len(parts) > 1 else ""
-            if remaining:
-                result.append(TextNode(text=remaining))
-
-        return result
+        return nodes
 
     def _compress_blocks(
         self,

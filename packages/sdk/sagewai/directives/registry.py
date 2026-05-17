@@ -35,17 +35,29 @@ class CustomDirective:
         sigil: str,
         handler: DirectiveHandler,
         description: str = "",
+        *,
+        raw_args: bool = False,
     ) -> None:
         self.name = name
         self.sigil = sigil  # e.g., "@kb" for @kb('query')
         self.handler = handler
         self.description = description
+        self.raw_args = raw_args
         # Build regex for this directive
-        _QUOTED = r"""(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")"""
         escaped = re.escape(sigil)
-        self.pattern = re.compile(
-            rf"{escaped}\(\s*{_QUOTED}(?:\s*,\s*\w+\s*=\s*(?:{_QUOTED}|\d+))*\s*\)"
-        )
+        if raw_args:
+            # Multi-argument form: ``@sigil(a, b, kw=v)``. Capture everything
+            # between the outer parens, tolerating one level of nested parens
+            # (so a nested directive may be passed as an argument). The
+            # handler receives the raw, unparsed argument string.
+            self.pattern = re.compile(rf"{escaped}\(((?:[^()]|\([^()]*\))*)\)")
+        else:
+            # Single-argument form: ``@sigil('arg', kw=v)``. The handler
+            # receives the first quoted argument.
+            _QUOTED = r"""(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")"""
+            self.pattern = re.compile(
+                rf"{escaped}\(\s*{_QUOTED}(?:\s*,\s*\w+\s*=\s*(?:{_QUOTED}|\d+))*\s*\)"
+            )
 
 
 class DirectiveRegistry:
@@ -67,6 +79,8 @@ class DirectiveRegistry:
         sigil: str,
         handler: DirectiveHandler,
         description: str = "",
+        *,
+        raw_args: bool = False,
     ) -> None:
         """Register a custom directive type.
 
@@ -75,12 +89,18 @@ class DirectiveRegistry:
             sigil: The prefix used in prompts (e.g., ``"@kb"``).
             handler: Async or sync function that resolves the directive.
             description: Human-readable description.
+            raw_args: When True, the directive accepts a multi-argument call
+                ``@sigil(a, b, kw=v)`` and the handler receives the raw,
+                unparsed argument string. When False (default), the directive
+                uses the single-quoted-argument form ``@sigil('arg')`` and the
+                handler receives the first quoted argument.
         """
         self._directives[name] = CustomDirective(
             name=name,
             sigil=sigil,
             handler=handler,
             description=description,
+            raw_args=raw_args,
         )
 
     def unregister(self, name: str) -> None:
