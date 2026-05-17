@@ -58,8 +58,11 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-bg-page">
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
-      {/* Docs Navigation Bar */}
-      <nav className="sticky top-0 z-50 bg-bg-page/80 backdrop-blur-md border-b border-border">
+      {/* Docs Navigation Bar — solid background at all times so the
+          theme-keyed wordmark always sits on a matching surface. Do not make
+          this translucent or scroll-reactive. See the navbar rule in
+          sagewai/atelier:brand/docs/sagewai_branding.md § "Logo & Navbar". */}
+      <nav className="sticky top-0 z-50 bg-bg-page border-b border-border">
         <div className="max-w-[90rem] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             {/* Hamburger — mobile only */}
