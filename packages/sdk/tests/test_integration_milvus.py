@@ -7,8 +7,9 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""Milvus vector memory integration tests — require docker-compose.dev.yml.
+"""Milvus vector memory integration tests — require a running Milvus server.
 
+Start Milvus from the repo root:  docker compose --profile milvus up -d
 Run: pytest tests/test_integration_milvus.py -v -m integration
 """
 

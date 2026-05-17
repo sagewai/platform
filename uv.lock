@@ -3893,7 +3893,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/5d/ab/34ec41718af73c001
 
 [[package]]
 name = "pymilvus"
-version = "3.0.0"
+version = "2.6.14"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cachetools" },
@@ -3906,8 +3906,9 @@ dependencies = [
     { name = "requests" },
     { name = "setuptools" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/59/8c/ad0277685b6f7bc63a626ab77973e31f38e77e0d8a2af99733cf6b6cf138/pymilvus-2.6.14.tar.gz", hash = "sha256:078fb16731569b2fd8b82436e295f70ee2a682c8892ed0e9c919c9cbc9d0dfbd", size = 1604893, upload-time = "2026-05-15T14:11:47.052Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ac/c1/01647e61f3a82fd881382746b6dde3401d65b88cd4f75bd059901fb2392b/pymilvus-3.0.0-1-py3-none-any.whl", hash = "sha256:57c8e7c87fbbf579f122b4df893949bc78e50bca2988527864891bd544817b05", size = 344817, upload-time = "2026-05-07T14:57:45.235Z" },
+    { url = "https://files.pythonhosted.org/packages/df/0e/2807bf330edb41537caabf483fa4128e429b8fa5bcfa9bf67effcafa722e/pymilvus-2.6.14-py3-none-any.whl", hash = "sha256:01694978c2bbbf4bcc5ef29dc788e480245154a38eae32da7184959ea4b501fb", size = 340221, upload-time = "2026-05-15T14:11:45.052Z" },
 ]
 
 [[package]]
@@ -4660,8 +4661,8 @@ requires-dist = [
     { name = "prometheus-client", marker = "extra == 'prometheus'", specifier = "==0.25.0" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pyjwt", specifier = "==2.12.1" },
-    { name = "pymilvus", specifier = "==3.0.0" },
-    { name = "pymilvus", marker = "extra == 'memory'", specifier = "==3.0.0" },
+    { name = "pymilvus", specifier = "==2.6.14" },
+    { name = "pymilvus", marker = "extra == 'memory'", specifier = "==2.6.14" },
     { name = "python-dotenv", specifier = "==1.2.2" },
     { name = "pyyaml", specifier = "==6.0.3" },
     { name = "sagewai", extras = ["intelligence", "multimodal"], marker = "extra == 'intelligence-full'" },

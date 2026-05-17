@@ -200,6 +200,15 @@ nebula-up:
 nebula-down:
     docker compose --profile nebula stop nebula-metad nebula-storaged nebula-graphd nebula-console
 
+# Bring up the Milvus standalone stack (etcd + minio + milvus)
+# The SDK's MilvusVectorMemory connects at http://localhost:19530
+milvus-up:
+    docker compose --profile milvus up -d milvus-etcd milvus-minio milvus-standalone
+
+# Stop the Milvus standalone stack
+milvus-down:
+    docker compose --profile milvus stop milvus-etcd milvus-minio milvus-standalone
+
 # Run sagewai SDK installation health check
 doctor:
     uv run --package sagewai sagewai doctor
