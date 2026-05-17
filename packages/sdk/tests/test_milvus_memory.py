@@ -150,3 +150,41 @@ class TestMilvusMemoryProtocol:
         with patch("sagewai.memory.milvus.MilvusClient"):
             mem = MilvusVectorMemory()
             assert isinstance(mem, MemoryProvider)
+
+
+class TestMilvusVectorMemoryRealSchema:
+    """Exercises the real pymilvus schema/index API (only MilvusClient mocked).
+
+    Unlike ``test_store_creates_collection_if_missing`` — which mocks
+    ``CollectionSchema``/``FieldSchema``/``DataType`` and so passes on any
+    pymilvus version — this test lets ``_ensure_collection`` build *real*
+    pymilvus objects. It would fail if a pymilvus upgrade changed the
+    ``FieldSchema``/``CollectionSchema`` constructor or the
+    ``prepare_index_params`` API.
+    """
+
+    @pytest.mark.asyncio
+    async def test_ensure_collection_builds_real_schema_and_index_params(self):
+        from pymilvus import CollectionSchema
+
+        with patch("sagewai.memory.milvus.MilvusClient") as mock_cls:
+            mock_client = MagicMock()
+            mock_client.has_collection.return_value = False
+            mock_client.prepare_index_params.return_value = MagicMock()
+            mock_cls.return_value = mock_client
+
+            with patch(
+                "sagewai.memory.milvus._embed", new_callable=AsyncMock
+            ) as mock_embed:
+                mock_embed.return_value = [0.1] * 1536
+                mem = MilvusVectorMemory()
+                await mem.store("hello world", metadata={"source": "test"})
+
+        mock_client.create_collection.assert_called_once()
+        call = mock_client.create_collection.call_args
+        schema = call.kwargs["schema"]
+        assert isinstance(schema, CollectionSchema)
+        assert {f.name for f in schema.fields} >= {"id", "vector", "project_id"}
+        # index_params comes from the real prepare_index_params() call surface
+        assert call.kwargs["index_params"] is mock_client.prepare_index_params.return_value
+        assert call.kwargs["consistency_level"] == "Strong"
