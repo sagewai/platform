@@ -68,7 +68,6 @@ export function OrganizationJsonLd(): ReactElement {
     logo: 'https://docs.sagewai.ai/brand/sagewai_logo.webp',
     description:
       'Sagewai is the autonomous agent platform for senior engineers shipping AI features under budget. Open-source SDK, hosted Autopilot, Fleet, Observatory, and Training Loop.',
-    founder: { '@type': 'Person', name: 'Ali Arda Diri' },
     sameAs: [
       'https://github.com/sagewai',
       'https://pypi.org/project/sagewai/',

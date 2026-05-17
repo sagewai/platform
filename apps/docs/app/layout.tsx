@@ -25,7 +25,7 @@ export const metadata: Metadata = {
     'production AI agents',
     'autonomous agents',
   ],
-  authors: [{ name: 'Ali Arda Diri' }],
+  authors: [{ name: 'Sagewai' }],
   creator: 'Sagewai',
   publisher: 'Sagewai',
   alternates: {
@@ -97,7 +97,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 },
                 description:
                   'Sagewai is the autonomous agent platform for senior engineers shipping AI features under budget. Open-source SDK, hosted Autopilot, Fleet, Observatory, and Training Loop.',
-                founder: { '@type': 'Person', name: 'Ali Arda Diri' },
                 foundingDate: '2026',
                 sameAs: [
                   'https://github.com/sagewai',
