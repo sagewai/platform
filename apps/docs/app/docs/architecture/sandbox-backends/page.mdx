@@ -16,7 +16,7 @@ export const metadata = {
 
 # Sandbox backends
 
-This page is the decision guide for picking the sandbox backend that runs your Sagewai workers' isolation containers. If you're deploying Sagewai and need to choose between Docker, Kubernetes, or Lambda — or work out whether a heterogeneous fleet makes sense — start here.
+Use this page to pick the sandbox backend for your Sagewai workers. If you need to choose between Docker, Kubernetes, or Lambda — or decide whether a heterogeneous fleet makes sense — this is where to start.
 
 ## Before you start
 
@@ -40,7 +40,7 @@ Sagewai ships `Null`, `Docker`, and `Kubernetes` today. `Lambda` is on the roadm
 
 | Backend | Used for | Modes supported | Cold-start | Pool support | Status |
 |---|---|---|---|---|---|
-| Null | bare mode only — no actual sandbox | bare | n/a | n/a | shipped |
+| Null | bare mode only — no sandbox | bare | n/a | n/a | shipped |
 | Docker | local dev, single-VM ops, simple production | all modes | 2-8s | warm container pool | shipped |
 | Kubernetes | production at scale, multi-tenant clusters | all modes | 5-15s | Deployment with min-replicas | shipped |
 | Lambda | event-driven, scale-to-zero, short tools | bare, sandboxed, identity (no CLI agent) | ~ms warm / 1-3s cold; provisioned concurrency for hot paths | provisioned concurrency | roadmap |

@@ -16,9 +16,9 @@ export const metadata = {
 
 # Security tiers
 
-Sagewai routes LLM keys through two separate surfaces. Tier 1 keys are the operator's own — used by the Sagewai Agent on the worker host to plan and dispatch work. Tier 2 keys belong to your customers — used inside the sandbox by the CLI agents and tools that do the actual user-facing work. The two tiers have different lifetimes, different sources, and different trust boundaries; mixing them defeats the role separation the rest of the platform depends on.
+Sagewai routes LLM keys through two separate surfaces. Tier 1 keys are the operator's own — used by the Sagewai Agent on the worker host to plan and dispatch work. Tier 2 keys belong to your customers — used inside the sandbox by the CLI agents and tools that do the user-facing work. The two tiers have different lifetimes, different sources, and different trust boundaries; mixing them defeats the role separation the rest of the platform depends on.
 
-This page explains where each tier lives, how to configure it, how it's audited, and what you (the operator) are responsible for vs. what Sagewai handles for you.
+This page covers where each tier lives, how to configure it, how it's audited, and what you as the operator are responsible for versus what Sagewai handles.
 
 ## Before you start
 

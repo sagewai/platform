@@ -1,13 +1,13 @@
 export const metadata = {
   title: 'Self-learning API — five mechanisms for improving agents',
   description:
-    'APIs for agents that improve from interaction data. Five orthogonal mechanisms: capture, score, curate, fine-tune, promote. Use independently or together.',
+    'APIs for agents that improve from interaction data. Five mechanisms you can use independently or together.',
   alternates: { canonical: 'https://docs.sagewai.ai/docs/api-reference/self-learning' },
 };
 
 # Self-Learning API Reference
 
-APIs for building agents that improve automatically from interaction data. Self-learning in Sagewai is composed of five orthogonal mechanisms that can be used independently or together.
+APIs for building agents that improve from interaction data. Sagewai's self-learning layer is composed of five mechanisms that you can use independently or together.
 
 ```python
 from sagewai import ContextEngine
@@ -23,7 +23,7 @@ from sagewai.intelligence import (
 
 ## MemoryBridge
 
-`MemoryBridge` connects the agent's conversation history to the context engine. After each turn, it extracts facts and stores them so future agents (or future sessions) can retrieve them.
+`MemoryBridge` connects conversation history to the context engine. After each turn it extracts facts and stores them, making them available for retrieval in future turns or sessions.
 
 ```python
 from sagewai.context import MemoryBridge
@@ -79,7 +79,7 @@ Processes an entire `Conversation` object. Returns the number of facts stored.
 
 ## MemoryConsolidator
 
-Runs background consolidation over the agent's memory: deduplicates semantically similar facts, applies exponential time decay, and detects contradictions.
+Runs background consolidation over stored memory: deduplicates semantically similar facts, applies exponential time decay, and detects contradictions.
 
 ```python
 from sagewai.intelligence import MemoryConsolidator
@@ -139,7 +139,7 @@ class ConsolidationReport:
 
 ## ConversationGraphBuilder
 
-Builds a knowledge graph incrementally from conversation history. Entities and relations extracted from each message are upserted into NebulaGraph.
+Incrementally builds a knowledge graph from conversation history. Entities and relations extracted from each message are upserted into NebulaGraph.
 
 ```python
 from sagewai.intelligence import ConversationGraphBuilder
@@ -268,7 +268,7 @@ extractor = HybridFactExtractor(
 
 ## ContextEngine (auto-learn)
 
-The `ContextEngine` works with `MemoryBridge` as a companion. Create the `ContextEngine` first, then wrap it with a `MemoryBridge` to enable automatic fact extraction and storage from conversations.
+Create the `ContextEngine` first, then wrap it with a `MemoryBridge` to enable automatic fact extraction and storage from conversations.
 
 ```python
 engine = ContextEngine(

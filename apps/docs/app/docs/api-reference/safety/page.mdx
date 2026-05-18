@@ -7,7 +7,7 @@ export const metadata = {
 
 # Safety & Guardrails
 
-Guardrails validate agent inputs and outputs. Attach them to any agent to enforce content policies, detect PII, prevent hallucinations, and control costs.
+Guardrails validate agent inputs and outputs before and after each LLM call. Attach one or more to any agent to enforce content policies, detect PII, check response grounding, and cap costs.
 
 ```python
 from sagewai import UniversalAgent, ContentFilter, PIIGuard

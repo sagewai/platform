@@ -7,7 +7,7 @@ export const metadata = {
 
 # Tools & MCP
 
-Tools let agents interact with the outside world. Define tools with the `@tool` decorator, connect to MCP servers for external tool discovery, or use the connector framework for managed integrations.
+Tools give agents a way to interact with external systems. Define them with the `@tool` decorator, discover them from MCP servers, or use the connector framework for managed integrations.
 
 ```python
 from sagewai import tool, UniversalAgent
@@ -24,7 +24,7 @@ agent = UniversalAgent(name="bot", model="gpt-4o", tools=[get_weather])
 
 ## @tool Decorator
 
-Convert a typed Python function into a `ToolSpec` with auto-generated JSON Schema. The decorator extracts the name, description, and parameters from the function signature and docstring.
+Converts a typed Python function into a `ToolSpec` with an auto-generated JSON Schema. The name, description, and parameters are extracted from the function signature and docstring.
 
 ```python
 from sagewai import tool
@@ -52,7 +52,7 @@ async def search_docs(query: str, limit: int = 5) -> str:
 
 ## ToolSpec
 
-Manual tool definition. Use when you need full control over the JSON Schema.
+Manual tool definition for cases where you need full control over the JSON Schema.
 
 ```python
 from sagewai import ToolSpec
@@ -84,7 +84,7 @@ spec = ToolSpec(
 
 ## McpClient
 
-Connect to MCP (Model Context Protocol) servers and discover their tools as `ToolSpec` instances.
+Connect to MCP servers and discover their tools as `ToolSpec` instances.
 
 ### connect (stdio)
 
@@ -141,7 +141,7 @@ tools = await McpClient.connect_http(
 
 ## ConnectorRegistry
 
-Central registry for managed connectors. Handles credential resolution, connection lifecycle, and health monitoring.
+Central registry for managed connectors. It handles credential resolution, connection lifecycle, and health monitoring.
 
 ```python
 from sagewai import ConnectorRegistry

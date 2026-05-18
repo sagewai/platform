@@ -7,7 +7,7 @@ export const metadata = {
 
 # Notifications
 
-Send notifications via email, Slack, or in-app channels. Supports system-wide and per-project channel configuration with trigger-based routing.
+Send notifications via email, Slack, or in-app channels. Channels can be configured system-wide or per project; routing rules map trigger types to the appropriate channel.
 
 ```python
 from sagewai import NotificationService, SlackWebhookChannel
@@ -21,7 +21,7 @@ await svc.notify("budget_warning", "Budget Alert", "Agent exceeded 80% of daily 
 
 ## NotificationService
 
-Central notification dispatcher. Routes notifications to appropriate channels based on trigger type and project context.
+Central notification dispatcher. Routes each notification to the right channels based on trigger type and project context.
 
 ```python
 from sagewai import NotificationService
@@ -67,7 +67,7 @@ svc.register_channel("slack", project_slack, project_id="acme")
 
 ## NotificationChannel (ABC)
 
-Abstract base class for notification channels. Implement `send()` to create custom channels.
+Abstract base class for notification channels. Implement `send()` to add a custom channel.
 
 ```python
 from sagewai import NotificationChannel
@@ -126,7 +126,7 @@ channel = SMTPChannel(
 
 ## SlackWebhookChannel
 
-Send notifications to Slack via an incoming webhook. Posts Block Kit messages.
+Sends notifications to Slack via an incoming webhook using Block Kit messages.
 
 ```python
 from sagewai import SlackWebhookChannel
@@ -148,7 +148,7 @@ channel = SlackWebhookChannel(
 
 ## InAppChannel
 
-Publish notifications to an in-app event bus or callback. Used for real-time SSE-based alerts in the admin UI. Always returns `True` (best-effort delivery).
+Publishes notifications to an in-app event bus or callback. Used for real-time SSE-based alerts in the admin UI. Always returns `True` (best-effort delivery).
 
 ```python
 from sagewai import InAppChannel

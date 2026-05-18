@@ -1,44 +1,42 @@
-# Foundation — the SDK basics, ten short examples
+# Learn the SDK
 
-This is **Tier 2** of the [example catalogue](/docs/tutorials) — the bare-minimum demonstration of each major SDK capability. Each example is 60-150 lines, no sibling README, single-purpose. The goal of each is *"here's the cheapest demo that proves capability X works."*
+Ten short, focused examples — one capability per example, 60–150 lines each. Start here after [Example 01 — hello agent](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/01_hello_agent.py). Read them in dependency order (tools → memory → workflows → safety → directives → routing → app structure), or jump straight to the one that matches what you're building.
 
-If you've already run [Example 01 — hello agent](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/01_hello_agent.py), the foundation examples are your next stop. Read them in dependency order: tools → memory → workflows → safety → directives → routing → app structure.
-
-> **You don't have to read all ten.** Pick the ones that match what you're shipping. Each is independent.
+You don't have to read all ten. Each is independent.
 
 ---
 
-## The ten foundation examples
+## The ten examples
 
 ### Tool calling
 
 [**Example 02 — `tool_agent`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/02_tool_agent.py)
 
-Agent with tool-calling. Defines a tool, registers it with the agent, watches the agent call it. The cheapest demonstration that *"I can give an agent tools without scaffolding."*
+Define a tool, register it with an agent, watch the agent call it. The simplest demonstration of tool use without any framework scaffolding.
 
-**When to read:** after hello-world; before any production use.
+**When to read:** right after hello-world, before any production use.
 
 ### Multi-model swap
 
 [**Example 03 — `multi_model`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/03_multi_model.py)
 
-Same agent code, swap Anthropic ↔ OpenAI ↔ local. Demonstrates the SDK's LLM-agnostic surface end-to-end.
+Same agent code, swap Anthropic ↔ OpenAI ↔ local. Demonstrates the SDK's LLM-agnostic interface end-to-end.
 
-**When to read:** when you're choosing your initial LLM provider, or when the audience-pin person asks *"does this lock me into Anthropic?"*
+**When to read:** when you're choosing your initial LLM provider, or when you need to confirm the SDK isn't locked to a single vendor.
 
 ### Memory basics
 
 [**Example 04 — `memory_agent`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/04_memory_agent.py)
 
-Agent with memory. Basic vector memory, store-and-retrieve. Bridge to the deeper memory examples.
+Agent with memory. Basic vector memory: store and retrieve. The starting point for the deeper memory examples in [Memory and retrieval](/docs/tutorials/memory-and-retrieval).
 
-**When to read:** when you need conversation context retention across turns.
+**When to read:** when you need conversation context retained across turns.
 
 ### Multi-step workflows
 
 [**Example 05 — `workflow`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/05_workflow.py)
 
-A two-step workflow that chains agent calls. Plan → execute. The smallest workflow surface.
+A two-step workflow that chains agent calls: plan, then execute. The smallest workflow surface in the SDK.
 
 **When to read:** when single-turn agents stop being enough.
 
@@ -46,7 +44,7 @@ A two-step workflow that chains agent calls. Plan → execute. The smallest work
 
 [**Example 06 — `guardrails`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/06_guardrails.py)
 
-A guardrail that intercepts unsafe outputs and rejects them. The cheapest demo of the safety surface.
+A guardrail that intercepts unsafe outputs and rejects them. The minimal demonstration of the safety surface.
 
 **When to read:** before you expose an agent to users.
 
@@ -54,23 +52,25 @@ A guardrail that intercepts unsafe outputs and rejects them. The cheapest demo o
 
 [**Example 07 — `mcp_tools`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/07_mcp_tools.py)
 
-An agent calling tools served by an MCP (Anthropic's open standard) server. Demonstrates Sagewai speaks MCP — third-party tool servers work out of the box.
+An agent calling tools served by an MCP (Anthropic's open standard) server. Third-party MCP-compliant tool servers work out of the box.
 
 **When to read:** when integrating third-party MCP-compliant tool servers.
 
-### Directives — the *harness any LLM* moat
+### Directives
+
+Prompt directives that expand at resolution time: `@datetime`, `@context`, `@memory`, `/tool.name`.
 
 [**Example 08 — `directives`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/08_directives.py)
 
-The directive library is what lets Sagewai harness even cheap LLMs into useful agents. `@datetime`, `@context`, `@memory`, `/tool.name` directives expand at prompt-resolution time.
+Directives let the same agent code work well on Opus and on local llama3. They resolve inline in the prompt before the LLM sees the message, so a cheap model gets the same grounded context a frontier model would.
 
-**When to read:** when you want the same agent code to work on Opus and on local llama3 with similar quality.
+**When to read:** when you want consistent agent quality across different LLM tiers.
 
 ### Model routing
 
 [**Example 13 — `model_routing`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/13_model_routing.py)
 
-Routing rules — pick a different model per task class (cheap for simple, frontier for complex). The cost-down primitive.
+Routing rules: pick a different model per task class — cheap for simple, frontier for complex. The primary cost-reduction primitive in the SDK.
 
 **When to read:** when you want a tier router in front of your agent.
 
@@ -78,23 +78,23 @@ Routing rules — pick a different model per task class (cheap for simple, front
 
 [**Example 18 — `local_llm_routing`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/18_local_llm_routing.py)
 
-Same code, Ollama and LM Studio. The LLM-agnostic claim depends on this running cleanly on Ollama.
+The same code running on Ollama and LM Studio. Confirms the LLM-agnostic claim works in practice with locally-hosted models.
 
-**When to read:** when you're going off paid LLM providers.
+**When to read:** when you're moving off paid LLM providers.
 
 ### App-factory pattern
 
 [**Example 27 — `app_factory`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/27_app_factory.py)
 
-Production project structure: factory function, dependency injection, structured config. The shape your real app should grow into.
+Production project structure: factory function, dependency injection, structured config. The shape a real application should grow into once it outgrows a single file.
 
-**When to read:** when your example outgrew a single file.
+**When to read:** when your example has outgrown a single file.
 
 ---
 
-## What to read next
+## See also
 
-- **[Lighthouse](/docs/tutorials)** — once you've covered the foundation you need, the lighthouse pages show the production-grade compositions.
-- **[Patterns](/docs/tutorials/production-patterns)** — Tier 4 reference examples, longer than foundation but shorter than lighthouse.
-- **[Pillars](/docs/platform)** — capability deep-dives. Each pillar links back to its foundation and lighthouse examples.
-- **[Reference — examples](/docs/reference/examples)** — the full numbered list, in case you want to find something by file number.
+- **[Tutorials](/docs/tutorials)** — once you've covered the basics you need, the tutorials show production-grade, end-to-end compositions.
+- **[Production patterns](/docs/tutorials/production-patterns)** — longer reference examples for harder problems: orchestration shapes, multi-agent topologies, approval gates.
+- **[Platform](/docs/platform)** — capability deep-dives for each major area of the SDK.
+- **[Reference — examples](/docs/reference/examples)** — the full numbered example list.

@@ -7,7 +7,7 @@ export const metadata = {
 
 # Strategies
 
-Execution strategies define how an agent iterates between LLM calls and tool execution. The default is `ReActStrategy`. Swap strategies to change reasoning behavior without modifying agent code.
+Execution strategies control how an agent iterates between LLM calls and tool execution. The default is `ReActStrategy`. Swap to a different strategy to change reasoning behaviour without touching agent code.
 
 ```python
 from sagewai import UniversalAgent, TreeOfThoughtsStrategy

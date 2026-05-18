@@ -16,7 +16,7 @@ export const metadata = {
 
 # Runtime topology
 
-This page walks through how a Sagewai workflow run actually executes from end to end. If you're deploying Sagewai, integrating with it, or evaluating it for production, this is the picture you need: which processes exist, what each owns, and what they refuse to do. Everything else in the architecture section (security tiers, execution modes, sandbox backends) sits on top of this topology.
+This page walks through how a Sagewai workflow run executes from end to end. If you're deploying Sagewai, integrating with it, or evaluating it for production, this is the picture you need: which processes exist, what each owns, and what they refuse to do. Everything else in the architecture section (security tiers, execution modes, sandbox backends) sits on top of this topology.
 
 ## Before you start
 
@@ -33,7 +33,7 @@ Sagewai is a **control plane** plus a **worker fleet** plus a **sandbox** per ru
 - The worker fleet executes. Workers register, advertise capabilities, claim runs, and run the agent loop.
 - The sandbox is the trust boundary in any mode beyond `bare` — secrets and CLI agents live inside it, the worker host doesn't see them in cleartext.
 
-The rest of the page details each box and the contracts between them.
+The sections below detail each box and the contracts between them.
 
 ## Three properties the topology guarantees
 
@@ -206,13 +206,13 @@ The run-level lifecycle (enqueue, claim, agent dispatches by mode, audit + step 
 
 These are the violations to flag in code review or design review:
 
-1. **Tool execution on the LLM inference point.** The inference point is just a model — it cannot execute tools. Anything that talks to the LLM and calls itself a "tool runner" or "function executor" is wrong by name; the model returns tool-call requests; the tool runner inside the sandbox actually executes them.
+1. **Tool execution on the LLM inference point.** The inference point is just a model — it cannot execute tools. The model returns tool-call requests; the tool runner inside the sandbox executes them. Code that calls itself a "tool runner" or "function executor" and runs on the LLM side is misnamed.
 
 2. **Workflow step execution on the control plane.** The admin server, autopilot, and CLI never run workflow steps. They write rows; workers read them.
 
 3. **Tier-2 secrets on the worker host (when a sandbox is in scope).** In any sandboxed mode, Tier-2 secrets must never touch the worker process env. They flow from the Identity backend into the sandbox container env. The worker only sees key names on the run row.
 
-4. **Single mode for an entire workflow when steps differ in cost or risk.** Steps have independent modes — pick the cheapest mode that still satisfies the isolation each step actually needs.
+4. **Single mode for an entire workflow when steps differ in cost or risk.** Steps have independent modes — pick the cheapest mode that still satisfies the isolation each step needs.
 
 5. **Skipping the worker entirely.** There is no `Workflow.run_inline()` API on the control plane. Even quick tasks go through the queue plus a worker (which may execute `bare`, but it's still a worker). Skipping the queue silently breaks audit, replay, and capacity accounting.
 

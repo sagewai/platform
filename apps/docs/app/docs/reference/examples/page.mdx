@@ -1,18 +1,18 @@
 # Reference — examples by number
 
-This page is the **completeness surface** — every shipped example listed by number, with a one-line summary. It exists so a reader who knows the file number can find it. It is **not** the primary discovery surface; for that, go to [Lighthouse](/docs/tutorials) or [Foundation](/docs/tutorials/learn-the-sdk).
+This page lists every shipped example by number with a one-line summary. Use it when you know the file number and want to jump straight to the source. For discovery by topic, start with [Tutorials](/docs/tutorials) or [Learn the SDK](/docs/tutorials/learn-the-sdk).
 
-> **There are 47 shipped examples.** The first 32 are entry-level demonstrations of single SDK capabilities. The last 15 are lighthouse-grade walkthroughs with sibling READMEs. The [example catalogue and positioning doc](https://github.com/sagewai/atelier/blob/main/docs/v1.0/example-catalogue-and-positioning.md) is the canonical contract.
+> **There are 47 shipped examples.** The first 32 demonstrate individual SDK capabilities. The last 15 are full walkthroughs with sibling READMEs.
 
 ---
 
-## Tier 1 — Quickstart
+## Quickstart
 
-| # | Example | Tier |
-|---|---|---|
-| 01 | [hello_agent](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/01_hello_agent.py) — `pip install && python` → working agent | 1 (Quickstart) |
+| # | Example |
+|---|---|
+| 01 | [hello_agent](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/01_hello_agent.py) — `pip install && python` → working agent |
 
-## Tier 2 — Foundation
+## SDK basics
 
 | # | Example | Capability |
 |---|---|---|
@@ -27,7 +27,7 @@ This page is the **completeness surface** — every shipped example listed by nu
 | 18 | [local_llm_routing](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/18_local_llm_routing.py) | Ollama / LM Studio |
 | 27 | [app_factory](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/27_app_factory.py) | App-factory pattern |
 
-## Tier 3 — Integrations
+## Integrations
 
 | # | Example | Tool |
 |---|---|---|
@@ -39,7 +39,7 @@ This page is the **completeness surface** — every shipped example listed by nu
 | 23 | [harness_proxy](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/23_harness_proxy.py) | Harness proxy primitives |
 | 24 | [harness_agent](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/24_harness_agent.py) | Harness agent integration |
 
-## Tier 4 — Production patterns
+## Production patterns
 
 | # | Example | Problem solved |
 |---|---|---|
@@ -57,21 +57,23 @@ This page is the **completeness surface** — every shipped example listed by nu
 | 32 | [global_shared_memory](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/32_global_shared_memory.py) | Cross-agent shared knowledge |
 | 35 | [autopilot_hosted_service](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/35_autopilot_hosted_service.py) | Autopilot via hosted blueprint service |
 
-## Tier 5 — Lighthouse
+## End-to-end walkthroughs
 
-| # | Example | Real-world problem | Lighthouse page |
+Each example below ships with a sibling README and maps to a tutorials page.
+
+| # | Example | Real-world problem | Tutorial |
 |---|---|---|---|
-| 30 | [oncall_agent](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/30_oncall_agent.py) | The v1.0 lighthouse — incident response | (cross-cutting) |
+| 30 | [oncall_agent](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/30_oncall_agent.py) | Incident response | (cross-cutting) |
 | 33 | [fleet_sealed_integration](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/33_fleet_sealed_integration.py) | Multi-tenant production with isolated tenants | [Production multitenancy](/docs/tutorials/production-multitenancy) |
-| 34 | [observatory_cost_tracking](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/34_observatory_cost_tracking.py) | Show my CFO where the AI money goes | [Observability and cost](/docs/tutorials/observability-and-cost) |
+| 34 | [observatory_cost_tracking](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/34_observatory_cost_tracking.py) | Track AI spend by team and project | [Observability and cost](/docs/tutorials/observability-and-cost) |
 | 36 | [autopilot_training_loop](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/36_autopilot_training_loop.py) | Capture → fine-tune trigger | [Train your own model](/docs/tutorials/train-your-own-model) |
-| 37 | [semantic_checkpoint_recall](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/37_semantic_checkpoint_recall.py) | Weak LLMs feel like Opus on long context | [Memory and retrieval](/docs/tutorials/memory-and-retrieval) |
+| 37 | [semantic_checkpoint_recall](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/37_semantic_checkpoint_recall.py) | Maintain long context across weak models | [Memory and retrieval](/docs/tutorials/memory-and-retrieval) |
 | 38 | [unsloth_finetune](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/38_unsloth_finetune.py) | Real LoRA fine-tune, dual-backend | [Train your own model](/docs/tutorials/train-your-own-model) |
 | 38a | [mlx_lm_server_deploy](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/38a_mlx_lm_server_deploy.py) | Apple Silicon deploy via `mlx_lm.server` | [Inference deployment](/docs/tutorials/inference-deployment) |
 | 39 | [sandbox_scoped_credentials](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/39_sandbox_scoped_credentials.py) | Sandbox + scoped credentials | [Production multitenancy](/docs/tutorials/production-multitenancy) |
-| 40 | [fleet_under_load](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/40_fleet_under_load.py) | 20+ workers, Iron Man HUD live state | [Observability and cost](/docs/tutorials/observability-and-cost) |
+| 40 | [fleet_under_load](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/40_fleet_under_load.py) | 20+ workers, live state HUD | [Observability and cost](/docs/tutorials/observability-and-cost) |
 | 41 | [graph_memory_incident_dependency](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/41_graph_memory_incident_dependency.py) | Graph beats vector for multi-hop | [Memory and retrieval](/docs/tutorials/memory-and-retrieval) |
-| 42 | [support_triage_agent](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/42_support_triage_agent.py) | Drop-in customer-support triage | [Moderation and classification](/docs/tutorials/moderation-and-classification) |
+| 42 | [support_triage_agent](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/42_support_triage_agent.py) | Customer-support triage | [Moderation and classification](/docs/tutorials/moderation-and-classification) |
 | 43 | [observatory_live](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/43_observatory_live.py) | Real telemetry → live dashboards | [Observability and cost](/docs/tutorials/observability-and-cost) |
 | 44 | [colab_free_cuda](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/44_colab_free_cuda.py) | Free Tesla T4 via Drive-sync | [Inference deployment](/docs/tutorials/inference-deployment) |
 | 45 | [vastai_marketplace_bid](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/45_vastai_marketplace_bid.py) | Bid-cheapest with reliability scoring | [Inference deployment](/docs/tutorials/inference-deployment) |
@@ -88,7 +90,7 @@ This page is the **completeness surface** — every shipped example listed by nu
 
 ## What to read next
 
-- **[Lighthouse](/docs/tutorials)** — the production-grade examples organised by intent.
-- **[Foundation](/docs/tutorials/learn-the-sdk)** — the SDK basics organised by capability.
-- **[Patterns](/docs/tutorials/production-patterns)** — Tier 4 reference examples organised by pillar.
-- **[Integrations](/docs/guides/integrations)** — Tier 3 examples organised by tool.
+- **[Tutorials](/docs/tutorials)** — production-grade examples organised by intent.
+- **[Learn the SDK](/docs/tutorials/learn-the-sdk)** — SDK basics organised by capability.
+- **[Production patterns](/docs/tutorials/production-patterns)** — examples organised by use case.
+- **[Integrations](/docs/guides/integrations)** — integration examples organised by tool.

@@ -22,7 +22,7 @@ const ORG_ID = 'https://sagewai.ai/#organization';
 
 /**
  * SoftwareApplication markup for the Sagewai SDK. Embed once per
- * lighthouse-style page so AI engines link the page to the SDK.
+ * tutorial or reference page so AI engines link the page to the SDK.
  */
 export function SoftwareApplicationJsonLd(): ReactElement {
   const data = {
@@ -104,7 +104,7 @@ export interface HowToProps {
 }
 
 /**
- * Combined HowTo + TechArticle markup for Tier-5 lighthouse pages.
+ * Combined HowTo + TechArticle markup for end-to-end tutorial pages.
  *
  * AI engines parse `step` arrays for procedural recall ("how do I
  * build X with Sagewai") and `headline` for relevance ranking.
@@ -171,7 +171,7 @@ export interface TechArticleProps {
 }
 
 /**
- * TechArticle markup for non-procedural lighthouse pages
+ * TechArticle markup for non-procedural tutorial pages
  * (architecture, security, observatory).
  */
 export function TechArticleJsonLd(props: TechArticleProps): ReactElement {

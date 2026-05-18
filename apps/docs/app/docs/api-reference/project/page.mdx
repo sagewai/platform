@@ -7,7 +7,7 @@ export const metadata = {
 
 # Project & Errors
 
-Project isolation scopes all agent activity (workflow runs, audit logs, rate limits, memory) to a namespace. The error hierarchy provides structured exception handling across the SDK.
+Project isolation scopes all agent activity — workflow runs, audit logs, rate limits, and memory — to a namespace. The error hierarchy gives you structured exception handling across the full SDK.
 
 ---
 
@@ -135,7 +135,7 @@ require_project() -> ProjectContext
 
 ## Error Hierarchy
 
-All SDK exceptions inherit from `SagewaiError`, enabling a single catch for any SDK failure while still allowing fine-grained handling.
+All SDK exceptions inherit from `SagewaiError`. Catch it for any SDK failure, or catch a subclass for fine-grained handling.
 
 ```
 SagewaiError (base)

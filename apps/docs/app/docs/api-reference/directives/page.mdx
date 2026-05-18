@@ -7,7 +7,7 @@ export const metadata = {
 
 # Directives
 
-The Directive Engine preprocesses prompts before the LLM call, resolving `@context`, `@memory`, `@agent`, `/tool`, `/mcp`, and `#meta` directives into enriched context. This enables small and local models to leverage the full Sagewai infrastructure without native tool-calling support.
+The Directive Engine preprocesses prompts before the LLM call, resolving `@context`, `@memory`, `@agent`, `/tool`, `/mcp`, and `#meta` directives into enriched context. Small and local models that lack native tool-calling can use the full Sagewai stack through directive syntax alone.
 
 ```python
 from sagewai import DirectiveEngine
@@ -24,7 +24,7 @@ result = await engine.resolve("@context('ML basics') Help me learn")
 
 ## DirectiveEngine
 
-Main orchestrator for prompt preprocessing. Supports two syntax modes:
+Main orchestrator for prompt preprocessing. Two syntax modes are available:
 - **Sigil mode** (`resolve`): `@context('q')`, `/tool.name('a')`, `#model:x`
 - **Template mode** (`resolve_template`): `{{ context.search('q') }}`
 

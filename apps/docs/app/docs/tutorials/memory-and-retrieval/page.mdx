@@ -1,18 +1,16 @@
 # Memory and retrieval — make a cheap LLM hold the thread
 
-This page shows you how to give a small or local LLM the same conversational memory and multi-hop reasoning that a frontier model gets for free. After reading, you will know which retrieval pattern to reach for (semantic checkpoint recall, graph-over-vector, or both), and you will have runnable examples for each.
-
-It is for engineers building chat, support, scribe, or incident-response surfaces who want to swap Opus or GPT-4o for Haiku, Llama 3, or Mistral without losing context.
+This tutorial shows you how to give a small or local LLM the same conversational memory and multi-hop reasoning that a frontier model handles natively. After reading it you will know which retrieval pattern to reach for — semantic checkpoint recall, graph-over-vector, or both — and you will have runnable examples for each.
 
 ## Before you start
 
-- A working SageWai install (`pip install sagewai`).
+- A working Sagewai install (`pip install sagewai`).
 - One LLM you can call. Any of these works: an Anthropic key, an OpenAI key, or a local [Ollama](https://ollama.ai) install with `llama3.2` pulled.
-- For the graph-retrieval example, optionally a NebulaGraph instance if you want to run the production backend instead of the in-memory one.
+- For the graph-retrieval example, optionally a NebulaGraph instance if you want to exercise the production backend rather than the in-memory one.
 
 ## Pick a pattern
 
-The two retrieval patterns on this page solve different problems. Pick by the question your application asks.
+Choose by the question your application needs to answer.
 
 | Pattern | When it wins | Companion example |
 |---|---|---|
@@ -23,7 +21,7 @@ Most production apps end up wanting both: vector for *"what did we say about X?"
 
 ## How semantic checkpoint recall works
 
-You embed each new turn, semantically search the conversation history, and pass only the focused slice to the LLM. The model never sees the full thread, so a small model can keep up with a long one.
+You embed each new turn and semantically search the conversation history. Only the focused slice — typically the top three most-relevant turns — goes to the LLM. The model never sees the full thread, so a small model can keep up with a long one.
 
 ```mermaid
 flowchart LR
@@ -60,7 +58,7 @@ The script builds a 12-turn conversation about a fictional product launch, fires
 
 ## How graph-over-vector retrieval works
 
-For questions that walk typed relations — *"which services depend on Service A, and which of those have caused incidents in the last 90 days?"* — vector retrieval returns chunks that look similar to the query but miss transitive structure. Graph traversal walks the edges and returns the actual chain.
+For questions that walk typed relations — *"which services depend on Service A, and which of those caused incidents in the last 90 days?"* — vector retrieval returns chunks that look similar to the query, but it cannot follow transitive structure across them. Graph traversal walks the edges and returns the actual chain.
 
 ```mermaid
 flowchart LR
@@ -98,63 +96,63 @@ flowchart LR
 python 41_graph_memory_incident_dependency.py
 ```
 
-The script seeds 15 to 20 incidents and 5 to 10 services with realistic root-cause edges, issues four query types (single-hop, multi-hop, temporal, constraint propagation), and prints a side-by-side against vector retrieval. It reports average traversal depth, answer completeness vs vector, and p50/p99 latency.
+The script seeds 15–20 incidents and 5–10 services with realistic root-cause edges, issues four query types (single-hop, multi-hop, temporal, constraint propagation), and prints a side-by-side against vector retrieval. It reports average traversal depth, answer completeness vs vector, and p50/p99 latency.
 
-To exercise the production NebulaGraph backend instead of the in-memory one:
+To exercise the production NebulaGraph backend:
 
 ```bash
 python 41_graph_memory_incident_dependency.py --backend nebula
 ```
 
-You will need a reachable NebulaGraph instance. The example reads its connection settings from environment variables — see the script header.
+You need a reachable NebulaGraph instance. The example reads its connection settings from environment variables — see the script header.
 
-## Use cases
+## Where you'd use this
 
-The patterns above are what a senior engineer reaches for when their first agent starts losing the thread, or when their RAG pipeline returns *"chunks that look similar but don't actually answer the question."* Four common shapes:
+These patterns come up when your first agent starts losing the thread, or when your RAG pipeline returns chunks that look similar but do not answer the question.
 
-### 1. Customer-support chatbot for long sessions
+### Customer-support chatbot for long sessions
 
-A support bot handles multi-turn conversations where customers walk it through reproducing a bug. Sessions can hit 30 turns. Opus is fine but expensive at scale; Haiku loses context.
-
-| Concern | How this pattern solves it |
-|---|---|
-| You want a cheap model to hold a 30-turn thread without losing the early context | Embed each new turn, retrieve the top-3 most-relevant history turns, pass only that slice |
-| The customer asks *"can you re-check what I said about the staging environment?"* mid-conversation | Semantic search resolves the vague reference into the actual staging-environment turn from 18 messages back |
-| You want to swap from Opus to Haiku to local without rewriting | Same code; the example demonstrates it works on all three |
-
-### 2. On-call / incident response with cross-incident reasoning
-
-A platform team is on the hook for *"did this break before?"* questions. The on-call tool RAGs over the incident wiki and returns chunks; the human still has to follow the dependency chain.
+A support bot handles multi-turn conversations where customers walk it through reproducing a bug. Sessions hit 30 turns. Opus is fine but expensive at scale; Haiku loses context.
 
 | Concern | How this pattern solves it |
 |---|---|
-| Vector retrieval finds *similar-sounding* incidents but misses transitive dependencies | Graph traversal walks `affects_service` and `caused_by` edges; finds the actual root cause across hops |
-| The CTO wants explainability — *why* did the bot suggest this is the same root cause? | Graph retrieval emits the path; *"Service A → caused_by → Service B → previous_incident → INC-1234"* is a sentence, not a vibe |
-| You already run NebulaGraph in production for service maps | The same example code switches to `--backend nebula`; no new infra |
+| A cheap model must hold a 30-turn thread | Embed each turn, retrieve the top-3 most-relevant history turns, pass only that slice |
+| The customer asks *"can you re-check what I said about the staging environment?"* | Semantic search resolves the vague reference to the staging-environment turn from 18 messages back |
+| You need to swap from Opus to Haiku to local without rewriting | Same code; the example demonstrates it works on all three |
 
-### 3. Compliance-document Q&A with multi-hop reasoning
+### On-call and incident response with cross-incident reasoning
 
-A platform team built a RAG bot over a 5K-page compliance corpus. It returns chunks. Auditors ask *"if Section 5.2 changes, which downstream policies need a review?"* and the bot can't answer.
+A platform team needs to answer *"did this break before?"* questions. The on-call tool RAGs over the incident wiki and returns chunks; the engineer still has to follow the dependency chain.
 
 | Concern | How this pattern solves it |
 |---|---|
-| Multi-hop questions like *"which Y depend on X, and what's the latest update to each?"* fail with vector | Graph retrieval over typed edges (`depends_on`, `references`, `superseded_by`) walks the chain |
-| You want to explain answers in court if it comes to it | The graph path is the audit trail; print it next to the answer |
-| The corpus updates weekly | Re-extract the graph nightly; embedding-based vector RAG is not sufficient on its own |
+| Vector retrieval finds similar-sounding incidents but misses transitive dependencies | Graph traversal walks `affects_service` and `caused_by` edges and finds the actual root cause across hops |
+| You need explainability — *why* did the bot suggest this is the same root cause? | Graph retrieval emits the path: *"Service A → caused_by → Service B → previous_incident → INC-1234"* |
+| You already run NebulaGraph in production for service maps | The same example code switches to `--backend nebula`; no new infrastructure |
 
-### 4. Scribe app for primary-care physicians
+### Compliance-document Q&A with multi-hop reasoning
+
+A RAG bot over a 5K-page compliance corpus returns chunks. Auditors ask *"if Section 5.2 changes, which downstream policies need a review?"* and the bot cannot answer.
+
+| Concern | How this pattern solves it |
+|---|---|
+| Multi-hop questions like *"which Y depend on X, and what is the latest update to each?"* fail with vector | Graph retrieval over typed edges (`depends_on`, `references`, `superseded_by`) walks the chain |
+| You need to explain answers if a compliance review comes up | The graph path is the audit trail; print it next to the answer |
+| The corpus updates weekly | Re-extract the graph nightly; embedding-based vector RAG alone is not sufficient |
+
+### Scribe app for primary-care physicians
 
 A scribe summarises a 45-minute consultation. The doctor says *"go back to what they said about the rash"* halfway through writing the summary.
 
 | Concern | How this pattern solves it |
 |---|---|
-| HIPAA forbids sending full transcripts to a frontier API without a BAA | Local model + semantic-checkpoint pattern: only the rash-relevant slice goes to the LLM, the transcript stays on-prem |
-| 7B local models lose the thread on long consultations | They don't if they only see the relevant slice — that's the whole point |
+| HIPAA forbids sending full transcripts to a frontier API without a BAA | Local model + semantic-checkpoint pattern: only the rash-relevant slice goes to the LLM; the transcript stays on-prem |
+| 7B local models lose the thread on long consultations | They do not, if they only see the relevant slice — that is the point |
 | Doctor wants to verify the bot's recall | Print the slice next to the summary; the doctor reads it and signs off |
 
-## Foundation memory examples
+## SDK basics — memory examples
 
-If you want to learn the storage and retrieval primitives before reading the lighthouse work:
+Start here if you want to understand the storage and retrieval primitives before running the examples above.
 
 | # | Example | What it adds |
 |---|---|---|
@@ -166,6 +164,6 @@ If you want to learn the storage and retrieval primitives before reading the lig
 ## See also
 
 - **Concept page:** [Memory and RAG](/docs/core-concepts/memory) — the API surface for `RAGEngine`, `VectorMemory`, `GraphMemory`, and `MemoryBranch`.
-- **Primary pillar:** [SDK](/docs/platform/sdk) — the substrate this lighthouse exercises.
-- **Sibling lighthouse:** [Train your own model](/docs/tutorials/train-your-own-model) — pairs naturally with semantic-checkpoint recall (cheap LLM plus smart retrieval).
-- **Sibling lighthouse:** [Production multitenancy](/docs/tutorials/production-multitenancy) — the on-call agent's full Sealed boundary.
+- **SDK overview:** [SDK](/docs/platform/sdk) — the substrate these examples exercise.
+- **Related tutorial:** [Train your own model](/docs/tutorials/train-your-own-model) — pairs naturally with semantic-checkpoint recall (cheap LLM plus smart retrieval).
+- **Related tutorial:** [Production multitenancy](/docs/tutorials/production-multitenancy) — the on-call agent's full Sealed boundary.

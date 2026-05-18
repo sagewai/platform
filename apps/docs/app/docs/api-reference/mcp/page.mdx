@@ -7,7 +7,7 @@ export const metadata = {
 
 # MCP Protocol Reference
 
-The Model Context Protocol (MCP) is an open standard for connecting AI agents to external tools and data sources. Sagewai includes both an MCP client (to discover and use tools from MCP servers) and MCP server hosting (to expose agents as MCP tools).
+The Model Context Protocol (MCP) is an open standard for connecting AI agents to external tools and data sources. Sagewai ships both an MCP client — to discover and call tools from any MCP server — and MCP server hosting, so you can expose Sagewai agents as MCP tools to Claude Code, Cursor, or any other MCP-capable client.
 
 ## Overview
 
@@ -107,7 +107,7 @@ result = await agent.chat("Send a receipt for the last payment to the customer")
 
 ## MCP Server Hosting
 
-Expose Sagewai agents as MCP servers so other tools and agents can discover and use them.
+Expose Sagewai agents as MCP servers for other tools and agents to discover and call.
 
 ```python
 from sagewai.mcp.server import create_mcp_server
@@ -130,7 +130,7 @@ await server.run_sse(port=8080)
 
 ## Tool Schema
 
-MCP tools use the JSON Schema format for parameter definitions. When Sagewai discovers tools from an MCP server, each tool is converted to a `ToolSpec`:
+MCP tools use JSON Schema for parameter definitions. When Sagewai discovers tools from an MCP server, each tool is converted to a `ToolSpec`:
 
 ```json
 {
@@ -167,7 +167,7 @@ The `ToolSpec` includes:
 
 ## Available MCP Servers
 
-The Sagecurator monorepo includes 9 pre-built MCP servers:
+The Sagewai monorepo includes 9 pre-built MCP servers:
 
 | Server | Tools | Description |
 |--------|-------|-------------|
@@ -247,12 +247,12 @@ MCP uses JSON-RPC 2.0 over the chosen transport. Key methods:
 
 ## Best Practices
 
-1. **Use stdio transport for local servers** — Lower latency, simpler setup, no network configuration.
+1. **Use stdio transport for local servers** — lower latency, simpler setup, no network configuration.
 
-2. **Use SSE/HTTP transport for shared servers** — Multiple agents can connect to the same server instance.
+2. **Use SSE/HTTP transport for shared servers** — multiple agents can connect to the same server instance.
 
-3. **Combine tools from multiple servers** — Agents work best with focused, domain-specific tool sets.
+3. **Combine tools from multiple servers** — agents are easier to reason about when each tool set is focused on a single domain.
 
-4. **Set timeouts for remote servers** — Use `connect_sse(url, timeout=30)` to avoid hanging on unresponsive servers.
+4. **Set timeouts for remote servers** — pass `timeout=30` to `connect_sse` or `connect_http` to avoid blocking on unresponsive servers.
 
-5. **Monitor tool usage** — Use the analytics API to track which tools are called most frequently and their success rates.
+5. **Monitor tool usage** — use the analytics API to track call frequency and success rates per tool.

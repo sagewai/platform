@@ -7,13 +7,13 @@ export const metadata = {
 
 # REST API Reference
 
-Sagewai provides several built-in FastAPI routers for administration, analytics, agent gateway, and tool discovery. These can be mounted on any FastAPI application.
+Sagewai ships FastAPI routers for administration, analytics, agent gateway, and tool discovery. Mount any of them on your existing FastAPI application.
 
 ---
 
 ## Admin API
 
-The admin API manages agents, runs, and sessions. It is provided by the `sagewai.admin` module.
+The admin API manages agents, runs, and sessions. It lives in the `sagewai.admin` module.
 
 ### Agents
 
@@ -145,7 +145,7 @@ Get system health status.
 
 ## Analytics API
 
-Cost, usage, and risk analytics. Created via `create_analytics_router()`.
+Cost, usage, and risk analytics. Mount via `create_analytics_router()`.
 
 ### Mounting
 
@@ -264,7 +264,7 @@ Get per-agent analytics.
 
 ## Agent Gateway API
 
-Token-based authentication for external agent access.
+Token-based auth for external agent access.
 
 ### Mounting
 
@@ -322,7 +322,7 @@ Permanently delete a token.
 
 ## Tool Discovery API
 
-Expose agent tools in OpenAI function-calling format for external consumption.
+Expose agent tools in OpenAI function-calling format for external clients.
 
 ### Mounting
 
@@ -368,7 +368,7 @@ Get a specific tool by name.
 
 ## AG-UI Protocol
 
-Agent-User Interface protocol for real-time event streaming over SSE or WebSocket.
+Agent-User Interface (AG-UI) protocol for real-time event streaming over SSE or WebSocket.
 
 ### SSE Endpoint
 
@@ -412,7 +412,7 @@ Same event types as SSE, but bidirectional. Send messages as JSON:
 
 ## Authentication
 
-All app backends support three authentication methods, checked in order:
+All app backends support three auth methods, checked in order:
 
 1. **JWT** — `Authorization: Bearer <jwt-token>`
 2. **API Key** — `X-API-Key: <key>` or `Authorization: Bearer <api-key>`

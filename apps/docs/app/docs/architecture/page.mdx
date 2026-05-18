@@ -23,7 +23,7 @@ export const metadata = {
 
 # Architecture
 
-This page gives you the mental model you need to deploy Sagewai with confidence: how planning and execution split across processes, where credentials live, and which knobs you turn per workflow step. After reading, you'll know which of the four chapters that follow you actually need.
+This page gives you the mental model you need to deploy Sagewai with confidence: how planning and execution split across processes, where credentials live, and which option to set per workflow step. After reading, you'll know which of the four chapters that follow you need.
 
 If you just want to ship your first agent, start with the [Quickstart](/docs/get-started/quickstart). The architecture here is what's underneath — you don't need to internalise it to begin building.
 
@@ -36,9 +36,9 @@ Sagewai runs as two cooperating processes:
 
 You scale the two independently. Add workers when execution capacity is tight; the control plane keeps planning regardless of how busy the fleet is. A saturated fleet does not stall planning, and a slow planning step does not block other workers.
 
-## How a workflow step actually runs
+## How a workflow step runs
 
-Three behaviors govern every run. They're worth knowing before you deploy, because each one maps to a configuration choice.
+Three behaviors govern every run. Know them before you deploy — each one maps to a configuration choice.
 
 ### Each step picks its own execution mode
 
