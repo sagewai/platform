@@ -7,20 +7,17 @@ export const metadata = {
 
 # Minimal Setup
 
-This is the minimal Sagewai setup — a single SDK process making
-Tier-1 LLM calls with no sandbox and no per-customer credentials.
-Useful for local prototyping, single-tenant tools, and notebook-style
-exploration.
+Start here if you want a working agent with no infrastructure. This setup runs
+the SDK as a single Python process using your Tier-1 LLM keys — no worker fleet,
+no sandbox, no Sealed Identity. It is the right starting point for local prototyping,
+single-tenant tools, and notebook-style exploration.
 
-If you want the full **build-something-real** experience — Sagewai
-orchestrating Claude Code inside an isolated sandbox to build a
-portfolio site — go to the [Quickstart](/docs/get-started/quickstart)
+To go further — Sagewai orchestrating Claude Code inside an isolated Docker sandbox
+with per-customer credentials — see the [Quickstart](/docs/get-started/quickstart)
 instead.
 
-**What's different here:** no worker fleet, no sandbox, no Sealed
-Identity. Everything runs in one Python process using your operator
-LLM keys (Tier-1). See [Architecture: Execution modes](/docs/architecture/execution-modes#mode-0--bare)
-for the full mental model.
+See [Architecture: Execution modes](/docs/architecture/execution-modes#mode-0--bare)
+for the mental model behind this path.
 
 This guide takes you from zero to a working agent in under five minutes.
 
@@ -28,11 +25,11 @@ This guide takes you from zero to a working agent in under five minutes.
 
 ## Two Ways to Use Sagewai
 
-**Self-Hosted (Open Source):** Install the SDK, start your own Sagewai server, and manage everything on your infrastructure. On first launch, the admin panel shows a setup wizard to create your admin account and configure your organization. After setup, users log in to access the dashboard.
+**Self-Hosted (Open Source):** Install the SDK, run your own Sagewai server, and manage everything on your infrastructure. On first launch, the admin panel runs a setup wizard to create your admin account and configure your organisation. After setup, users log in to access the dashboard.
 
-**Sagewai Cloud:** Purchase and activate your account at [sagewai.ai](https://sagewai.ai), then manage your agents through the cloud admin panel at [cloud.sagewai.ai](https://cloud.sagewai.ai). No infrastructure to manage — just connect and start building.
+**Sagewai Cloud:** Activate your account at [sagewai.ai](https://sagewai.ai), then manage your agents through the cloud admin panel at [cloud.sagewai.ai](https://cloud.sagewai.ai). No infrastructure to run.
 
-Both paths use the same SDK and the same APIs. Choose self-hosted for full control, or cloud for convenience.
+Both paths use the same SDK and the same APIs.
 
 ---
 
@@ -112,7 +109,7 @@ Run it:
 python hello_agent.py
 ```
 
-That is three lines to create an agent and one line to get a response. The `chat()` method handles the full agentic loop: it sends your message to the LLM, processes any tool calls, and returns the final text response as a string.
+Three lines to create an agent, one call to get a response. `chat()` handles the full agentic loop: sends your message to the LLM, processes any tool calls, and returns the final text response as a string.
 
 ### Switch Models Instantly
 
@@ -168,7 +165,7 @@ async def main():
 asyncio.run(main())
 ```
 
-The `@tool` decorator extracts the function name, docstring, and type hints to build a tool specification that the LLM understands. The agent decides which tools to call based on the user message, executes them, and incorporates the results into its response.
+The `@tool` decorator extracts the function name, docstring, and type hints to build a tool specification. The agent decides which tools to call, executes them, and incorporates the results into its response.
 
 You can also connect external tools via the [Model Context Protocol (MCP)](/docs/api-reference/mcp):
 
@@ -278,7 +275,7 @@ Streaming handles tool calls internally. When the LLM requests a tool call, it i
 
 ## Use Directives
 
-Sagewai's **Directive Engine** is a unique prompt preprocessor that enriches prompts before the LLM sees them. Use `@` sigils to pull in context, invoke tools, or delegate to other agents — directly inside your prompt text:
+The **Directive Engine** is a prompt preprocessor that enriches prompts before the LLM sees them. Use `@` sigils to pull in context, invoke tools, or delegate to other agents — directly inside your prompt text:
 
 ```python
 agent = UniversalAgent(
@@ -312,26 +309,26 @@ Directives adapt automatically to the model's capability. For large models (GPT-
 
 ## Launch the Admin Console
 
-Sagewai includes a built-in admin API for monitoring your agents. Start it with:
+The SDK ships a built-in admin API for monitoring your agents. Start it with:
 
 ```bash
 sagewai admin serve
 ```
 
-This launches a FastAPI server (requires `sagewai[fastapi]`) where you can:
+This starts a FastAPI server (requires `sagewai[fastapi]`) where you can:
 
 - View agent runs and execution traces
 - Monitor cost and token usage
 - Manage workflows and approvals
-- Access the playground for interactive agent testing
+- Use the playground for interactive agent testing
 
-The full admin panel with a web UI is available when running the Sage platform. See the [Admin Panel guide](/docs/guides/admin-panel) for details.
+See the [Admin Panel guide](/docs/guides/admin-panel) for setup details.
 
 ---
 
-## What's Next?
+## What to read next
 
-You now have a working agent with tools, memory, streaming, and directives. Here is where to go from here:
+You have a working agent with tools, memory, streaming, and directives. Here is where to go from here:
 
 ### Learn
 

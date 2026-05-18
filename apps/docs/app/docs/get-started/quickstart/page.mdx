@@ -41,25 +41,23 @@ export const metadata = {
 
 # Quickstart — Build a portfolio site with Claude Code
 
-This is the canonical Sagewai quickstart. In about 15 minutes you'll:
+This quickstart takes about 15 minutes. You will:
 
 1. Install the SDK and bring up an admin server.
 2. Create a Sealed Identity holding your Anthropic and GitHub
    credentials.
-3. Define a workflow that orchestrates **Claude Code** inside an
-   isolated sandbox to build a portfolio site.
-4. Trigger the workflow and watch the artifact land in a GitHub
-   repository.
+3. Define a workflow that dispatches **Claude Code** inside an
+   isolated Docker sandbox to build a portfolio site.
+4. Trigger the workflow and watch the artifact commit to GitHub.
 
-If you just want a hello-world agent in the SDK with no sandbox or
-per-customer credentials, see [Minimal Setup](/docs/get-started/minimal-setup).
-The architecture model is the same — this page just exercises the
-full stack.
+If you want a hello-world agent with no sandbox or per-customer
+credentials, start with [Minimal Setup](/docs/get-started/minimal-setup) instead.
+This page exercises the full stack.
 
-> **What's about to happen, in one sentence:** Sagewai's worker
-> orchestrates a CLI agent (Claude Code) running inside an
-> identity-isolated Docker sandbox; your customer's credentials
-> never touch the worker host. See
+> **What happens, in one sentence:** Sagewai's worker dispatches a CLI
+> agent (Claude Code) inside an identity-isolated Docker sandbox; your
+> customer's credentials are injected at sandbox-start and never touch
+> the worker host. See
 > [Architecture: Execution modes — Mode 3](/docs/architecture/execution-modes#mode-3--full-cli-agent)
 > for the full topology.
 
@@ -144,7 +142,7 @@ GITHUB_TOKEN=ghp_...              ← git push uses this
 
 The profile is stored encrypted at rest (Fernet) in
 `~/.sagewai/profiles.json`. The admin server holds the master key;
-neither the worker host nor the control plane sees the values
+the worker host and control plane never see the plaintext values
 again. See [Security tiers](/docs/architecture/security-tiers) for
 the trust boundary.
 
@@ -224,11 +222,11 @@ Three steps, three modes:
 
 | Step | Mode | Why |
 |---|---|---|
-| `plan` | 0 (Bare) | Pure orchestration; cheap Tier-1 LLM call. |
-| `build_site` | 3 (Full + CLI agent) | Claude Code does the actual work, with customer credentials in the sandbox env. |
+| `plan` | 0 (Bare) | Pure orchestration; Tier-1 LLM call on the worker. |
+| `build_site` | 3 (Full + CLI agent) | Claude Code does the actual work, with customer credentials injected into the sandbox env. |
 | `summarise` | 0 (Bare) | Tier-1 again. No sandbox cost for a one-line summary. |
 
-This per-step mode selection is core to Sagewai's design — see
+Selecting mode per-step keeps sandbox costs where they are justified — see
 [Execution modes — Mixing modes within a workflow](/docs/architecture/execution-modes#mixing-modes-within-a-workflow).
 
 ---
@@ -255,7 +253,7 @@ and pool-reset event is recorded.
 
 ---
 
-## What just happened
+## What happened
 
 ```
 [control plane: admin server]              [your terminal]
@@ -285,22 +283,19 @@ and pool-reset event is recorded.
     workflow_runs.status='completed'
 ```
 
-Three things to notice:
+Three things to note:
 
-1. **Your Tier-2 credentials never touched the worker host.** They
+1. **Your Tier-2 credentials never reached the worker host.** They
    were injected into the sandbox env directly from the Sealed
    profile and scrubbed on sandbox release.
-2. **The control plane never executed a workflow step.** It planned,
-   it persisted, it queried — workers did the actual work.
-3. **The mode was per-step.** The cheap orchestration steps stayed
-   on the worker; only the CLI-agent step paid the sandbox-startup
-   cost.
-
-That is Sagewai.
+2. **The control plane never executed a workflow step.** It persisted,
+   scheduled, and queried state — workers did the actual work.
+3. **Mode selection was per-step.** The cheap orchestration steps ran
+   on the worker; only the CLI-agent step paid the sandbox-startup cost.
 
 ---
 
-## What's next
+## What to read next
 
 ### Learn the model
 

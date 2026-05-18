@@ -1,8 +1,61 @@
+import { HowToJsonLd, SoftwareApplicationJsonLd } from '@/components/structured-data';
+
+export const metadata = {
+  title: 'Observatory — cost, telemetry, and live ops dashboards',
+  description:
+    'Track AI agent costs, latency, and runs in real time with OpenTelemetry, VictoriaMetrics, Grafana, and the mission-control HUD. Self-hosted, no Sagewai-tier needed.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/platform/observatory' },
+  openGraph: {
+    title: 'Sagewai Observatory — cost dashboards and real telemetry',
+    description:
+      'Two surfaces, one OTel pipeline. Mission-control HUD for live ops, Grafana for SRE work. Reproduce every screenshot in three minutes.',
+    url: 'https://docs.sagewai.ai/docs/platform/observatory',
+    images: ['/observatory/hud-overview.png'],
+  },
+};
+
+<HowToJsonLd
+  name="Set up Sagewai Observatory for cost and telemetry dashboards"
+  description="Bring up an OpenTelemetry + VictoriaMetrics + Grafana stack and a mission-control HUD to track agent cost, latency, and runs in three minutes."
+  path="/docs/platform/observatory"
+  totalTime="PT3M"
+  steps={[
+    {
+      name: 'Start the observability stack',
+      text: 'docker compose -f docker-compose.observability.yml up -d brings up OTel collector, VictoriaMetrics, VictoriaLogs, and Grafana.',
+    },
+    {
+      name: 'Run an instrumented admin backend',
+      text: 'sagewai admin serve --host 127.0.0.1 --port 8000 emits OTLP to the collector on every HTTP request and business event.',
+    },
+    {
+      name: 'Drive realistic load',
+      text: 'python packages/sdk/sagewai/examples/43_observatory_live.py runs a mixed-tenant workload that fills every dashboard panel.',
+    },
+    {
+      name: 'Read the dashboards',
+      text: 'Open http://localhost:3000 for Grafana, /hud-ironman in the admin frontend for the mission-control HUD. Both read the same telemetry stream.',
+    },
+  ]}
+/>
+<SoftwareApplicationJsonLd />
+
 # Observatory
 
-Cost tracking, OpenTelemetry pipeline, mission-control HUD, Grafana board, audit log. Observatory is the surface that answers your CFO's question — *"why did the AI bill quadruple?"* — with a live, per-tenant breakdown they can read directly.
+Cost tracking, OpenTelemetry pipeline, mission-control HUD, Grafana board, audit log. Observatory answers the question *"why did the AI bill quadruple?"* with a live, per-tenant breakdown you can read directly.
 
-Two dashboards read the same telemetry stream so they never disagree: the HUD for live operations (agents on a graph, missions in flight, fleet posture across the top) and a Grafana board for analytics, finance, and historical query.
+Two dashboards read the same telemetry stream so they never disagree: the **mission-control HUD** for live operations (agents on a graph, missions in flight, fleet posture across the top) and the **Grafana board** for analytics, finance, and historical query.
+
+The dashboards on this page are **rendered from a real run of
+[Example 43](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/43_observatory_live.py)**
+— not pre-canned, not synthesised. Every panel is sourced from real
+HTTP traffic against a real admin backend. To reproduce them yourself,
+run the example: it brings the dashboards to life in about three
+minutes on a clean machine.
+
+**Prerequisites:** Docker, the Sagewai admin backend, and an API key. See [getting started](/docs/get-started/quickstart).
+
+---
 
 ## What you can do with it
 
@@ -12,31 +65,236 @@ Two dashboards read the same telemetry stream so they never disagree: the HUD fo
 - **Audit business events.** Structured events (`setup.completed`, `auth.login.*`, `agent.created`, `agent.run.*`, `provider.test.*`) land in the log store and are queryable from the audit view.
 - **Export to your SIEM.** The OTel pipeline emits OTLP; point an external collector at the same backend you use for the rest of your services.
 
-## See it in action
+---
 
-### Primary example — live cost dashboard
+## Two surfaces, one telemetry stream
 
-[**Observability and cost**](/docs/tutorials/observability-and-cost) — Example 43 fires a mixed-tenant workload at the admin backend (real HTTP traffic, real OTel spans), and within three minutes both dashboards show real numbers. The page renders the dashboards from a real run, not pre-canned screenshots.
+```mermaid
+flowchart LR
+    subgraph App["Sagewai admin backend"]
+        A["FastAPI routes<br/>(160+ endpoints)"]
+        E["Structured business events<br/>setup.completed · auth.login.* · agent.run.*"]
+    end
 
-### Sibling examples
+    subgraph Collector["OTel Collector (:4317 / :4318)"]
+        OR["Receivers<br/>(OTLP gRPC + HTTP)"]
+        OP["Processors<br/>(batch · resource · filter/health)"]
+        OE1["Prometheus exporter<br/>:8889"]
+        OE2["OTLP/HTTP logs exporter"]
+    end
 
-- [**Production multitenancy**](/docs/tutorials/production-multitenancy) — the per-tenant tagging that makes per-project cost rollups possible.
-- [**Train your own model**](/docs/tutorials/train-your-own-model) — once the cost line is on the dashboard, the cost-down target is concrete.
+    subgraph Storage["Storage"]
+        VM[("VictoriaMetrics<br/>:8428<br/>30d retention")]
+        VL[("VictoriaLogs<br/>:9428<br/>30d retention")]
+    end
 
-### Pattern examples
+    subgraph Surfaces["Dashboards"]
+        HUD["Mission-control HUD<br/>/hud-ironman"]
+        GR["Grafana<br/>:3000"]
+    end
 
-- [**Example 34 — `observatory_cost_tracking`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/34_observatory_cost_tracking.py) — per-tenant cost tracking, the CFO line.
-- [**Example 40 — `fleet_under_load`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/40_fleet_under_load.py) — 20+ workers, live HUD state.
-- [**Example 12 — `budget_enforcement`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/12_budget_enforcement.py) — per-user/team/project budget caps.
+    A -->|"OTLP"| OR
+    E -->|"OTLP"| OR
+    OR --> OP
+    OP --> OE1
+    OP --> OE2
+    OE1 -->|"VM scrapes every 10s"| VM
+    OE2 --> VL
+    VM --> GR
+    VL --> GR
+    A -->|"REST: agents · runs · fleet"| HUD
+```
 
-## Where to go to ship it
+The HUD reads from the live REST API for the immediate state of
+agents, missions, and fleet. The Grafana board reads from
+VictoriaMetrics (metrics, scraped from the OTel collector's Prometheus
+endpoint every 10 seconds) and VictoriaLogs (logs, exported via OTLP).
+The same OTel collector serves both — no shadow pipeline, no
+demo-only data path.
 
-- **[Observatory overview](/docs/platform/observatory)** — the HUD and the Grafana board, in detail.
-- **[Admin Panel guide](/docs/guides/admin-panel)** — the surface where Audit, Runs, Profiles, and dashboards live.
-- **[Cost management guide](/docs/guides/cost-management)** — strategies for keeping the bill down.
+---
+
+## Bring the stack up and drive load
+
+Three commands in three terminals. The first two bring the stack up;
+the third drives the realistic mixed-tenant load that produced the
+screenshots below.
+
+```bash
+# Terminal 1 — observability
+docker compose -f docker-compose.observability.yml up -d
+
+# Terminal 2 — admin backend (instrumented FastAPI)
+sagewai admin serve --host 127.0.0.1 --port 8000
+
+# Terminal 3 — drive load (Tuesday morning at a 200-person SaaS)
+python packages/sdk/sagewai/examples/43_observatory_live.py
+```
+
+That gives you:
+
+- **Grafana** at `http://localhost:3000` (admin / admin, anonymous viewing enabled)
+- **VictoriaMetrics** at `http://localhost:8428` (Prometheus-compatible query API)
+- **VictoriaLogs** at `http://localhost:9428`
+- **OTel Collector** at `localhost:4317` (gRPC) / `localhost:4318` (HTTP)
+
+For the mission-control HUD, additionally start the admin frontend
+(`just admin-dev`) and visit `/hud-ironman`. The HUD is admin-only;
+the Grafana board is anonymous by default for read access.
+
+---
+
+## The mission-control HUD
+
+The HUD is the dashboard you put on the projector. 1920×1080
+canvas — agents on the graph, missions in flight, fleet posture across
+the top, an event ticker down the side. Mode badge in the topbar
+says `LIVE` when the backend is reachable, `DEMO · BACKEND OFFLINE`
+when it isn't, so you can never confuse a screen recording for a
+live system.
+
+<img
+  src="/observatory/hud-overview.png"
+  alt="Mission-control HUD — full canvas in LIVE mode"
+  style={{ width: '100%', maxWidth: 960, marginTop: '1.5rem', borderRadius: 8, border: '1px solid var(--border)' }}
+/>
+
+The captured screenshot above shows Example 43 mid-run: the agent
+roster lists Acme Support's four agents and Globex Code Review's
+agents, the inspector pane on the right shows the model + temperature
++ tools for the selected `acme-support-triager`, and the project bar
+across the top lets you switch tenants.
+
+The topbar carries five KPIs that are pre-attentive — visible from
+across a meeting room:
+
+<img
+  src="/observatory/hud-topbar-kpis.png"
+  alt="HUD topbar — system readout, mode badge, five KPIs"
+  style={{ width: '100%', maxWidth: 960, marginTop: '1.5rem', borderRadius: 8, border: '1px solid var(--border)' }}
+/>
+
+---
+
+## The Grafana board
+
+Five rows. Top to bottom, the story flows from "is the platform
+healthy" → "where is the latency" → "what's failing" → "is the
+telemetry pipeline itself OK" → "show me the actual log lines."
+
+### Row 1 — System Health
+
+Four stat panels: Request Rate, Error Rate (5xx), Active Requests,
+Avg Latency. The "is anything red right now" view.
+
+<img
+  src="/observatory/grafana-row1-system-health.png"
+  alt="Grafana — Row 1 (System Health) under Example 43 load"
+  style={{ width: '100%', maxWidth: 960, marginTop: '1.5rem', borderRadius: 8, border: '1px solid var(--border)' }}
+/>
+
+### Row 2 — HTTP Performance
+
+Per-route request rate and p95 latency. One line per route — the
+example exercises 14 different admin endpoints, all of which show
+up here.
+
+<img
+  src="/observatory/grafana-row2-http-performance.png"
+  alt="Grafana — Row 2 (HTTP Performance) per-route"
+  style={{ width: '100%', maxWidth: 960, marginTop: '1.5rem', borderRadius: 8, border: '1px solid var(--border)' }}
+/>
+
+### Row 3 — Requests by Status
+
+Stacked status-code distribution + response-size p95. The example
+deliberately fires a few 401/404 probes so the Status Code panel
+has more than one band.
+
+<img
+  src="/observatory/grafana-row3-status.png"
+  alt="Grafana — Row 3 (Requests by Status) with 4xx mix"
+  style={{ width: '100%', maxWidth: 960, marginTop: '1.5rem', borderRadius: 8, border: '1px solid var(--border)' }}
+/>
+
+### Row 4 — OTel Pipeline Health
+
+Spans processed, log records sent, log queue size. The "is the
+telemetry pipeline itself the problem" view — when data goes missing,
+this row is where the answer lives.
+
+<img
+  src="/observatory/grafana-row4-otel-pipeline.png"
+  alt="Grafana — Row 4 (OTel Pipeline Health)"
+  style={{ width: '100%', maxWidth: 960, marginTop: '1.5rem', borderRadius: 8, border: '1px solid var(--border)' }}
+/>
+
+### Row 5 — Application Logs
+
+Live-tail of structured admin events. Sagewai backends emit business
+events as logs, so this panel doubles as an audit feed:
+`agent.created`, `agent.run.*`, `auth.login.*`, `setup.completed`,
+`provider.test.*`. Filter by `project_id` in the panel query box to
+see only one tenant's activity.
+
+<img
+  src="/observatory/grafana-row5-logs.png"
+  alt="Grafana — Row 5 (Application Logs) live-tail"
+  style={{ width: '100%', maxWidth: 960, marginTop: '1.5rem', borderRadius: 8, border: '1px solid var(--border)' }}
+/>
+
+---
+
+## When to look at which
+
+| You are about to | Open this |
+|---|---|
+| Demo Sagewai to a non-engineer (CEO, customer, all-hands) | Mission-control HUD |
+| Investigate a slow request or a 5xx spike | Grafana Dashboard |
+| Check whether a specific project's run is making progress | Mission-control HUD — switch the project bar |
+| Build an alerting rule for production | Grafana Dashboard — copy the panel's PromQL |
+| Audit which routes are getting hammered | Grafana Dashboard — Request Rate by Route panel |
+| Watch a Fleet under load (Example 40) | Both — HUD for the picture, Grafana for the numbers |
+
+---
+
+## Bring your own observability stack
+
+The compose stack is a complete batteries-included setup, but most
+teams already pay for Datadog, Grafana Cloud, or run their own Prometheus/Loki. The OTel collector is the
+only fixed seam — point your existing endpoint at the
+`http_server_*` metrics it exposes on `:8889` and the dashboards work
+unchanged. The provisioning files in `observability/grafana/` are
+runnable locally and copy-pastable into Grafana Cloud's import flow.
+
+There is no Sagewai-hosted observability tier. Your telemetry never
+leaves your infrastructure unless you explicitly route it somewhere.
+
+---
+
+## Anti-patterns
+
+1. **Treating the HUD as the alerting surface.** The HUD is a live picture; it has no history, no PromQL, no alerts. Use Grafana for "wake me up at 3am" rules.
+
+2. **Treating Grafana as the demo surface.** Grafana is honest but not photogenic. Don't try to win a CEO with a panel of timeseries charts; that's what the HUD is for.
+
+3. **Wiring custom metrics to a sidecar Prometheus.** The OTel collector is the seam. New metrics should be emitted via OTLP and picked up by the existing pipeline, not exported on a side channel that the dashboards don't see.
+
+4. **Using `prometheusremotewrite` to ship to VictoriaMetrics.** Known footgun — silently drops histograms and counters. The shipped pipeline uses the Prometheus exporter on `:8889` + VM scraping, not remote-write. Don't change this without reading the comment in `observability/otel-collector/config.yaml`.
+
+---
 
 ## See also
 
-- **[Fleet](/docs/platform/fleet)** — the per-worker telemetry that Observatory aggregates.
+- **[Fleet](/docs/platform/fleet)** — per-worker telemetry that Observatory aggregates.
 - **[Security overview](/docs/platform/security)** — the redaction layer that makes telemetry safe to export.
-- **[All products](/docs/platform)** — the other four.
+- **[Cost management guide](/docs/guides/cost-management)** — how budget caps, cost meters, and per-team attribution are wired in the SDK.
+- **[Fleet enterprise architecture](/docs/guides/fleet-architecture)** — the multi-tenant story the dashboards are scoped to.
+- **[Architecture overview](/docs/architecture)** — the control-plane / fleet split that produces the telemetry stream this page renders.
+- **[All products](/docs/platform)** — the other components.
+
+**Runnable examples on GitHub:**
+
+- [Example 43 — Observatory live](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/43_observatory_live.py) — the load driver that produced every screenshot on this page.
+- [Example 34 — Observatory cost tracking](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/34_observatory_cost_tracking.py) — per-tenant cost tracking.
+- [Example 40 — Fleet under load](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/40_fleet_under_load.py) — generates pure fleet-dispatch load (no admin backend required).

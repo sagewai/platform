@@ -9,7 +9,7 @@ End-to-end, the loop is achievable in a weekend for under $5 of compute. Once yo
 - **Capture every answer automatically.** The Curator instruments agent runs and writes successful responses to JSONL at `~/.sagewai/training/`. No manual capture code.
 - **Promote training-grade samples.** Filter, dedupe, and promote the captured corpus into a dataset ready for fine-tuning.
 - **Trigger fine-tunes on a threshold.** When the dataset crosses a configured size, Sagewai kicks off a fine-tune job — manually or via the autopilot loop.
-- **Fine-tune small models on cheap GPUs.** Unsloth integration runs real LoRA fine-tunes of 3-7B base models on a free Colab T4 or a $0.30/hr Spheron GPU.
+- **Fine-tune small models on cheap GPUs.** Unsloth integration runs real LoRA fine-tunes of 3-7B base models on a free Colab T4 or a $0.34/hr RunPod A10G.
 - **Deploy locally.** Ship the LoRA via Ollama on your laptop, `mlx_lm.server` on Apple Silicon, or any OpenAI-compatible endpoint.
 - **Measure cost-down end-to-end.** Each fine-tune example reports $/call before and after, against the cloud baseline.
 
@@ -19,7 +19,7 @@ End-to-end, the loop is achievable in a weekend for under $5 of compute. Once yo
 
 [**Train your own model**](/docs/tutorials/train-your-own-model) walks the full capture → fine-tune → deploy arc. Real numbers, real LoRA, real cost-down.
 
-### Sibling lighthouse — the deploy half
+### Deploy half — inference deployment
 
 [**Inference deployment**](/docs/tutorials/inference-deployment) covers the deploy half in detail: five GPU-provisioning tiers, two local-deploy paths, one SDK surface.
 
@@ -45,4 +45,4 @@ End-to-end, the loop is achievable in a weekend for under $5 of compute. Once yo
 
 - **[Autopilot](/docs/platform/autopilot)** — the loop closes automatically when Autopilot triggers a fine-tune as the corpus crosses the threshold.
 - **[Observatory](/docs/platform/observatory)** — the cost-down measurement surface.
-- **[All products](/docs/platform)** — the other four.
+- **[All products](/docs/platform)** — the other components.

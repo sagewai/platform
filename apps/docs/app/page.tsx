@@ -47,9 +47,9 @@ const FEATURES = [
 
 const SPINE = {
   icon: <Lock size={28} />,
-  title: 'One spine — Sealed',
+  title: 'Sealed — the security layer',
   description:
-    'Defense-in-depth security across all five pillars: per-CLI workload identity, externalised secret backends with JIT credentials, redaction at the RPC boundary, replay safety, per-CLI ACL, JIT-HITL callbacks, reactive directives. Five phases, twelve specs — the security model agent platforms have been ignoring.',
+    'Per-CLI workload identity, externalised secret backends with just-in-time credentials, redaction at the RPC boundary, per-CLI access control, JIT human-in-the-loop on high-privilege actions, and replay-safe audit. Sealed is the security layer wired into every part of the platform.',
 };
 
 const MODELS = [
@@ -65,8 +65,7 @@ const MODELS = [
   { name: 'Llama 3.1 405B', provider: 'Meta' },
 ];
 
-const QUICKSTART_CODE = `from sagewai.engines.universal import UniversalAgent
-from sagewai.models.tool import tool
+const QUICKSTART_CODE = `from sagewai import UniversalAgent, tool
 
 @tool
 async def get_weather(city: str) -> str:
@@ -82,8 +81,7 @@ agent = UniversalAgent(
 response = await agent.chat("What's the weather in Berlin?")
 print(response)  # "It's sunny and 22\u00B0C in Berlin!"`;
 
-const WORKFLOW_CODE = `from sagewai.engines.universal import UniversalAgent
-from sagewai.core.workflows import SequentialAgent, ParallelAgent
+const WORKFLOW_CODE = `from sagewai import UniversalAgent, SequentialAgent, ParallelAgent
 
 researcher = UniversalAgent(name="researcher", model="gpt-4o")
 writer = UniversalAgent(name="writer", model="claude-3-5-sonnet-20241022")
@@ -97,7 +95,7 @@ pipeline = SequentialAgent(
 
 result = await pipeline.chat("Write about quantum computing")`;
 
-const GUARDRAILS_CODE = `from sagewai.engines.universal import UniversalAgent
+const GUARDRAILS_CODE = `from sagewai import UniversalAgent
 from sagewai.safety.pii import PIIGuard, PIIEntityType
 from sagewai.safety.hallucination import HallucinationGuard
 
@@ -178,16 +176,15 @@ export default function LandingPage() {
               Open Source · The Autonomous Agent Platform
             </div>
             <h1 className="text-5xl md:text-6xl font-bold text-text-primary leading-tight tracking-tight mb-6">
-              The{' '}
+              Build agents that{' '}
               <span className="bg-gradient-to-r from-primary to-accent-purple bg-clip-text text-transparent">
-                factory
-              </span>{' '}
-              that runs itself.
+                run in production.
+              </span>
             </h1>
             <p className="text-xl text-text-secondary leading-relaxed mb-10 max-w-[42rem] mx-auto">
-              Sagewai is the autonomous agent platform: describe the goal, we design the
-              agents, run them in production, and fine-tune local models so every run
-              gets cheaper.
+              Sagewai is an open-source agent platform: describe the goal, the Autopilot designs
+              the agent graph, workers run it in isolation, and the Training Loop fine-tunes local
+              models so every run gets cheaper.
             </p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
               <Link
@@ -214,12 +211,12 @@ export default function LandingPage() {
         <CodeBlock code={QUICKSTART_CODE} title="quickstart.py" />
       </section>
 
-      {/* Feature Cards (5 Pillars) */}
+      {/* Feature Cards */}
       <section className="max-w-6xl mx-auto px-6 py-20">
         <div className="text-center mb-12">
           <h2 className="text-3xl font-bold text-text-primary mb-3">What you get</h2>
           <p className="text-text-secondary max-w-[42rem] mx-auto italic">
-            Five pillars hold up the platform; one spine runs through all of them — that&apos;s what makes the agent platform safe to give a credit card.
+            The platform is the SDK plus four capabilities — Autopilot, Fleet, Observatory, Training Loop — with Sealed security across all of them.
           </p>
         </div>
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -229,7 +226,7 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Sealed spine — visually distinct from the pillar grid */}
+      {/* Sealed security card — visually distinct from the capability grid */}
       <section className="max-w-4xl mx-auto px-6 pb-20">
         <FeatureCard
           icon={SPINE.icon}
@@ -381,7 +378,7 @@ export default function LandingPage() {
                 />
               </div>
               <p className="text-sm text-text-muted mt-2">
-                The factory that runs itself.
+                The autonomous agent platform.
               </p>
             </div>
             <div>
