@@ -1,60 +1,60 @@
 # Inference
 
-This page helps you decide where to run model inference for a SageWai
-agent — from a free Colab T4 to a serverless production endpoint —
-and what each option costs. After reading, you'll know which tier
-fits your current workload, roughly what you'll pay, and which
-runnable example to copy.
+Choose where to run model inference for a Sagewai agent — from a free
+Colab T4 to a serverless production endpoint. This page maps workload
+shapes to tiers, gives you realistic price estimates, and points you
+to the runnable example for each path.
 
 ## Before you start
 
-- A SageWai install (`pip install sagewai`) and a Python 3.10+ environment.
-- A `~/.sagewai/.env` file you can drop vendor keys into when you go live.
-- A rough idea of the workload: dev-time experiment, batch fine-tune, or production serving.
+- `pip install sagewai` and a Python 3.10+ environment.
+- A `~/.sagewai/.env` file for vendor keys when you move to live mode.
+- A rough sense of your workload: dev loop, batch fine-tune, or
+  production serving.
 
-## How to choose a tier
+## Pick a tier
 
-The cheapest provider depends on the shape of the job, not just the
-sticker price. Use this table to map workload to tier:
+The right provider depends on the shape of the job, not just the
+headline price. Use this table to match workload to tier:
 
 | Workload | Pick | Why |
 |---|---|---|
 | Dev loop, small-model inference on your laptop | **Local (Ollama / LM Studio)** | Free, instant, no network |
 | First fine-tune, no budget, no GPU | **Colab free T4** | Free CUDA via a Google account |
-| Long batch fine-tune, lowest cost | **Vast.ai** | Marketplace pricing, per-host reliability scores |
-| Reliable fine-tune, root access, "this just works" | **RunPod** | Mature `runpodctl`, predictable per-hour pricing |
+| Long batch fine-tune at lowest cost | **Vast.ai** | Marketplace pricing with per-host reliability scores |
+| Reliable fine-tune, root access | **RunPod** | Mature `runpodctl`, predictable per-hour pricing |
 | Production inference with autoscaling | **Modal** | Per-second billing, no idle GPU spend |
-| You already have an inference endpoint | **Custom (bring-your-own)** | Wrap any OpenAI-compatible URL as a SageWai backend |
+| You already have an inference endpoint | **Custom** | Wrap any OpenAI-compatible URL as a Sagewai backend |
 
-## The tiers in detail
+## Tiers in detail
 
 ### Local — your laptop
 
 **Ollama** or **LM Studio** running on your own machine. Free.
-Adequate for development, inference of small models, and routing
-requests away from paid APIs during the dev loop. Limited by the
-laptop's GPU (or lack of one). See [Example 18 — local LLM routing](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/18_local_llm_routing.py).
+Adequate for development and small-model inference during the dev loop.
+Limited to the laptop's GPU (or CPU fallback). See [Example 18 — local LLM routing](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/18_local_llm_routing.py).
 
 ### Free CUDA via Google Colab
 
-Anyone with a Google account gets a Tesla T4 (16GB) for free with a
-session limit of about 12 hours. [Example 44](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/44_colab_free_cuda.py)
-orchestrates Colab via Drive-sync: ship a notebook template, open it
-once, the notebook runs the fine-tune on the free T4, the orchestrator
-picks up the LoRA from Drive. **Zero dollars.** This is the fastest
-way to your first fine-tune if you don't have hardware. See
+A Google account gets you a Tesla T4 (16 GB) for free, with a session
+limit of about 12 hours. [Example 44](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/44_colab_free_cuda.py)
+orchestrates Colab via Drive-sync: upload a notebook template, open it
+once in your browser, the notebook runs the fine-tune on the free T4,
+the orchestrator picks up the LoRA from Drive. Cost: $0. This is the
+fastest path to a first fine-tune if you don't have hardware. See
 [Free CUDA via Colab](/docs/inference/free-cuda-via-colab) for the
 walkthrough.
 
-### Vast.ai — the budget aggregator
+### Vast.ai — GPU marketplace
 
-A GPU marketplace. Mature Python CLI (`vastai`), per-host reliability
-scoring (uptime history, internet speed, dlperf benchmarks), wide GPU
-selection from consumer RTX 3090s to datacentre A100s.
+A GPU marketplace with a mature Python CLI (`vastai`) and per-host
+reliability scoring (uptime history, internet speed, dlperf benchmarks).
+Wide GPU selection from consumer RTX 3090s to datacentre A100s.
 
-- **24GB GPUs:** $0.20–$0.45/hr (RTX 3090 / 4090, varies by host)
-- **A100 80GB:** $0.80–$1.60/hr
-- **Best for:** the cheapest sustained cost for batch fine-tunes; per-host reliability scoring lets you avoid flaky machines
+- **24 GB GPUs:** $0.20–$0.45/hr (RTX 3090 / 4090, varies by host)
+- **A100 80 GB:** $0.80–$1.60/hr
+- **Best for:** sustained batch fine-tunes where you want the lowest
+  cost-per-hour and are willing to filter for reliable hosts
 
 See [Example 45 — Vast.ai marketplace bidding](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/45_vastai_marketplace_bid.py).
 
@@ -63,46 +63,47 @@ See [Example 45 — Vast.ai marketplace bidding](https://github.com/sagewai/plat
 Bare-metal access, root permission, mature `runpodctl` CLI plus
 Python SDK.
 
-- **RTX 4090 (24GB):** ~$0.34/hr
-- **RTX 5090 (32GB):** ~$0.69/hr
-- **Best for:** the default *"this just works"* tier for fine-tunes; the example most operators copy-paste
+- **RTX 4090 (24 GB):** ~$0.34/hr
+- **RTX 5090 (32 GB):** ~$0.69/hr
+- **Best for:** the default rental option for fine-tunes; most
+  operators copy the RunPod example first
 
 See [Example 47 — RunPod fine-tune orchestration](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/47_runpod_finetune_orchestration.py).
 
 ### Modal — serverless inference
 
 You don't provision a server — you decorate a Python function and
-Modal provisions on demand. Per-second billing, cold-starts measured
+Modal provisions on demand. Per-second billing; cold-starts measured
 in seconds rather than minutes.
 
-- **A10G 24GB:** ~$0.0006/sec when warm
-- **Best for:** **production inference**, not training. Sub-second autoscaling without idle-GPU spend.
+- **A10G 24 GB:** ~$0.0006/sec when warm
+- **Best for:** production inference, not training. Autoscales
+  without leaving idle GPU spend.
 
 See [Example 48 — Modal serverless inference](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/48_modal_serverless_inference.py).
 
 ### Bring your own endpoint
 
-Already running inference on a vendor SageWai doesn't ship for? Wrap
-any OpenAI-compatible HTTP endpoint as a SageWai tool or LLM backend
-with [Example 46](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/46_custom_inference_as_tool.py).
+Running inference on a vendor Sagewai doesn't ship with? Wrap any
+OpenAI-compatible HTTP endpoint as a Sagewai LLM backend using
+[Example 46](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/46_custom_inference_as_tool.py).
 The framework is vendor-agnostic.
 
 ## Comparison at a glance
 
-| Provider | Best for | 24GB GPU price | CLI maturity | Example |
+| Provider | Best for | 24 GB GPU price | CLI maturity | Example |
 |---|---|---|---|---|
 | **Local (Ollama)** | Dev, small-model inference | $0 | mature | [Ex 18](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/18_local_llm_routing.py) |
-| **Colab + Drive-sync** | Free CUDA, education, first SLM fine-tune | $0 | drive-sync wrapper | [Ex 44](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/44_colab_free_cuda.py) |
-| **Vast.ai** | Lowest cost, long soaks, per-host reliability scoring | $0.20–$0.45/hr | mature | [Ex 45](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/45_vastai_marketplace_bid.py) |
-| **RunPod** | Reliable automation, the default rental tier | $0.34–$0.70/hr | gold standard | [Ex 47](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/47_runpod_finetune_orchestration.py) |
+| **Colab + Drive-sync** | Free CUDA, first SLM fine-tune | $0 | drive-sync wrapper | [Ex 44](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/44_colab_free_cuda.py) |
+| **Vast.ai** | Lowest cost, long batch runs | $0.20–$0.45/hr | mature | [Ex 45](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/45_vastai_marketplace_bid.py) |
+| **RunPod** | Reliable automation, default rental | $0.34–$0.70/hr | gold standard | [Ex 47](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/47_runpod_finetune_orchestration.py) |
 | **Modal** | Production inference, serverless | per-second | gold standard | [Ex 48](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/48_modal_serverless_inference.py) |
-| **Custom endpoint** | Bring your own — vendor-agnostic plugin | varies | n/a | [Ex 46](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/46_custom_inference_as_tool.py) |
+| **Custom endpoint** | Bring your own — vendor-agnostic | varies | n/a | [Ex 46](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/46_custom_inference_as_tool.py) |
 
-## A realistic budget for the full arc
+## Realistic budget for the full arc
 
-If you want to walk every tier — free experiment, first fine-tune,
-big fine-tune, production serving — the realistic spend stays under
-$25:
+Walking every tier — free experiment, first fine-tune, larger
+fine-tune, production serving — stays under $25:
 
 | Step | Tier | Cost |
 |---|---|---|
@@ -113,38 +114,47 @@ $25:
 | **Full demo** | All four tiers | **under $25** |
 
 Every example linked from these pages is runnable. None require a
-paid LLM key to walk through in stub mode. Live mode needs a vendor
-key in `~/.sagewai/.env`; each example tells you which key it needs
-and what it costs.
+paid LLM key in stub mode. Live mode needs a vendor key in
+`~/.sagewai/.env`; each example tells you which key it needs and
+what it costs.
 
-## A suggested progression
+## Suggested progression
 
-The arc most teams follow:
+Most teams move through four stages:
 
-1. **Bootstrap on a frontier model** (Opus, GPT-5, Sonnet) so you ship in Q1. See [Start with juggernauts](/docs/inference/start-with-juggernauts).
-2. **Capture the answers.** SageWai records prompts and responses you can curate into a training dataset.
+1. **Start on a frontier model** (Opus, GPT-5, Sonnet) to ship in Q1. See [Start with the big providers](/docs/inference/start-with-juggernauts).
+2. **Capture the answers.** Sagewai records prompts and responses you can curate into a training dataset.
 3. **Train your own small model** on free Colab or a cheap rental. See [Free CUDA via Colab](/docs/inference/free-cuda-via-colab).
-4. **Deploy it locally** so you stop paying per token. See [Deploy locally](/docs/inference/deploy-locally).
+4. **Deploy it locally** and stop paying per token. See [Deploy locally](/docs/inference/deploy-locally).
 
-The shorthand: *"Bootstrap with the juggernauts. Capture their
-answers. Train your own model. Deploy locally. Never pay per-token
-again."*
+The shorthand: start on a frontier model, capture its answers, train
+your own model, deploy locally.
 
 ## Where to start
 
-- **Never fine-tuned a model before:** read [Free CUDA via Colab](/docs/inference/free-cuda-via-colab). You don't need a corporate card or a GPU — a Google account is enough.
+- **Never fine-tuned a model before:** read [Free CUDA via Colab](/docs/inference/free-cuda-via-colab). You need a Google account, not a credit card.
 - **Want the cheapest production path:** read [Rent when you grow](/docs/inference/rent-when-you-grow).
 - **Already have an inference endpoint:** see [Example 46](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/46_custom_inference_as_tool.py) to wrap it.
 
 ## Anti-patterns
 
-1. **Treating one tier as the answer for every workload.** A 12-hour batch fine-tune doesn't belong on Modal (per-second billing compounds); a 200ms inference call doesn't belong on a Vast.ai bare-metal rental (provisioning latency dominates).
+1. **Using one tier for every workload.** A 12-hour batch fine-tune
+   doesn't belong on Modal (per-second billing compounds); a 200ms
+   inference call doesn't belong on a Vast.ai bare-metal rental
+   (provisioning latency dominates).
 
-2. **Skipping the bootstrap step.** Starting on Opus or GPT-5 in Q1 is the right call, not a compromise. Capturing those answers into a training dataset is what makes the cost-down credible later. Read [Start with juggernauts](/docs/inference/start-with-juggernauts).
+2. **Skipping the frontier-model bootstrap.** Starting on a capable
+   frontier model in Q1 is the right call, not a compromise. Capturing
+   those answers into a training dataset is what makes cost reduction
+   credible later. Read [Start with the big providers](/docs/inference/start-with-juggernauts).
 
-3. **Renting before measuring.** The [Observatory cost dashboard](/docs/platform/observatory) tells you which workflow is the actual API-bill driver. Fine-tune that first.
+3. **Renting before measuring.** The [Observatory cost dashboard](/docs/platform/observatory)
+   shows you which workflow is driving your API bill. Fine-tune that
+   workload first.
 
-4. **Locking yourself to one provider.** Every example here is a swappable orchestration script, not a vendor SDK wrapper. Keep it that way.
+4. **Locking yourself to one provider.** Every example here is a
+   swappable orchestration script, not a vendor SDK wrapper. Keep it
+   that way.
 
 ## See also
 

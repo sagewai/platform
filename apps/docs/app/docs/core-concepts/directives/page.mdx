@@ -3,7 +3,7 @@ import { TechArticleJsonLd } from '@/components/structured-data';
 export const metadata = {
   title: 'Directives — harness any LLM, even small local ones',
   description:
-    'Prompt-side resolution that lets weak LLMs (no native tool calls) use Sagewai memory, MCP tools, and delegation. The any-LLM moat.',
+    'Prompt-side resolution that lets weak LLMs use Sagewai memory, MCP tools, and delegation — even without native tool-calling.',
   alternates: { canonical: 'https://docs.sagewai.ai/docs/core-concepts/directives' },
 };
 
@@ -16,13 +16,15 @@ export const metadata = {
 
 # Directives
 
-The Directive Engine is a prompt preprocessor that resolves special syntax into enriched context before the LLM sees the prompt. It enables any model — including small, local LLMs without native tool-calling support — to leverage Sagewai's full infrastructure: Context Engine, Memory, Tools, MCP connectors, and cross-agent delegation.
+The Directive Engine is a prompt preprocessor that resolves special syntax into enriched context before the LLM sees the prompt. Enable it on any agent with `directives=True` to use `@context`, `@memory`, `@agent`, `/tool`, and `#model` sigils in your prompts. This lets any model — including small, local LLMs without native tool-calling support — access Sagewai's Context Engine, Memory, MCP connectors, and cross-agent delegation.
+
+**Prerequisites:** [Context Engine](/docs/core-concepts/context-engine) · [Memory & RAG](/docs/core-concepts/memory) · **Next:** [Safety](/docs/core-concepts/safety)
 
 ## Why Directives?
 
-Most LLM frameworks require native function-calling support for tool use. This locks out smaller open-source models. The Directive Engine solves this by resolving all external references at prompt time, injecting the results as text context. The LLM only needs to understand natural language.
+Most LLM frameworks require native function-calling support for tool use, which excludes smaller open-source models. The Directive Engine sidesteps this by resolving all external references at prompt time and injecting the results as plain text. The LLM only needs to understand natural language.
 
-For large models (GPT-4o, Claude), directives provide a convenient shorthand for pulling in context. For small models (Phi-3, Llama 3.1 7B, CodeLlama), directives are essential — they enable capabilities these models cannot access natively.
+For large models (GPT-4o, Claude), directives are a shorthand for pulling in context without writing retrieval code. For small models (Phi-3, Llama 3.1 7B, CodeLlama), they provide capabilities those models cannot reach on their own.
 
 ## Quick Start
 
@@ -101,7 +103,7 @@ Delegate a task to a named agent using colon syntax:
 Summarize the findings for a non-technical audience.
 ```
 
-The Directive Engine resolves this by running the named agent, capturing its output, and injecting it as context.
+The Directive Engine runs the named agent, captures its output, and injects that output as context before the current agent proceeds.
 
 ### @wf:name — Invoke a Saved Workflow
 
@@ -143,7 +145,7 @@ Analyze this dataset thoroughly.
 
 ## Dynamic Parameters
 
-Directives support dynamic parameters that are resolved at runtime. Use backtick delimiters:
+Directives support runtime-resolved parameters using backtick delimiters:
 
 | Parameter | Resolves To |
 |-----------|-------------|
@@ -169,7 +171,7 @@ For more complex expressions, use double-brace templates:
 Summarize the financial performance.
 ```
 
-Templates and sigils can be mixed in the same prompt:
+Templates and sigils can appear in the same prompt:
 
 ```
 @memory('customer history')
@@ -181,7 +183,7 @@ Recommend products based on past purchases.
 
 ## Model Profiles
 
-The Directive Engine auto-detects the model's capability tier and adjusts formatting accordingly:
+The Directive Engine detects the model's capability tier and adjusts its output format to match. Small models get compressed context and explicit framing; large models get full context with no modifications.
 
 | Profile | Context Budget | Compression | Tool Mode | Example Models |
 |---------|---------------|-------------|-----------|----------------|
@@ -208,17 +210,17 @@ engine = DirectiveEngine(
 
 ### What Profiles Control
 
-- **Compression ratio** — Small models get aggressively compressed context (extractive compression keeps the most important sentences)
+- **Compression ratio** — Small models receive aggressively compressed context (extractive compression retains the highest-scoring sentences)
 - **Delimiters** — Small models get structured `[CONTEXT]` / `[SOURCE]` delimiters for clarity
-- **Explicit instructions** — Small models get added framing like "You MUST use the context above"
+- **Explicit instructions** — Small models receive framing like "You MUST use the context above"
 - **Tool-call mode** — Small models use prompt-based tool descriptions with a `TOOL_CALL:` output marker instead of native function calling
-- **Token budget allocation** — Each profile allocates tokens differently across context, tools, few-shot examples, and instructions
+- **Token budget allocation** — Each profile splits its token budget differently across context, tools, few-shot examples, and instructions
 
 ---
 
 ## Using the DirectiveEngine Directly
 
-For advanced use, create a `DirectiveEngine` instance and resolve prompts manually:
+For cases where you need direct control, construct a `DirectiveEngine` and call `resolve()` yourself:
 
 ```python
 from sagewai import DirectiveEngine, DirectiveResult
@@ -254,12 +256,12 @@ result: DirectiveResult = await engine.resolve(
 
 ## Security
 
-The Directive Engine includes several safety mechanisms:
+The Directive Engine applies several constraints during resolution:
 
 - **Tool and MCP allowlists** — Only explicitly allowed tools can be invoked via `/tool` directives
-- **Resolution timeout** — Directive resolution times out after 120 seconds (prevents hangs with local models)
-- **Circular agent detection** — `@agent:name()` delegation tracks a call stack and aborts at depth 3
-- **Meta validation** — `#model` and `#budget` overrides are validated before application
+- **Resolution timeout** — Directive resolution times out after 120 seconds to prevent hangs with slow local models
+- **Circular agent detection** — `@agent:name()` delegation tracks a call stack and stops at depth 3
+- **Meta validation** — `#model` and `#budget` overrides are validated before being applied
 
 ---
 

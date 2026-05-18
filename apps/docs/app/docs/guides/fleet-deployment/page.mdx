@@ -1,36 +1,26 @@
 export const metadata = {
-  title: 'Fleet deployment — distributed Sagewai workers',
+  title: 'Fleet deployment — run workers on your own infrastructure',
   description:
-    'Run Sagewai workflow workers on your own infrastructure. Cloud orchestration, on-prem GPUs, edge devices. Hybrid deployment with hard project isolation.',
-  alternates: { canonical: 'https://docs.sagewai.ai/docs/guides/fleet' },
+    'Deploy Sagewai fleet workers on Docker, bare metal, systemd, or Kubernetes. Enrollment, approval, LLM-aware routing, pool segmentation, and monitoring.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/guides/fleet-deployment' },
 };
 
-# Enterprise Fleet: Distributed Workers
+# Fleet Deployment
 
-The Sagewai Enterprise Fleet lets you run workflow workers on your own infrastructure — your servers, your GPUs, your private network — while the Sagewai cloud orchestrates task routing and monitoring.
+Run Sagewai workflow workers on hardware you control — your servers, your GPUs, your private network — while the Sagewai gateway handles task routing and monitoring.
 
 > **Tier**: Premium and Enterprise plans. Free tier is limited to one local worker.
 
----
-
-## What the Fleet System Does
-
-Instead of running all agents in the cloud, fleet workers run on hardware you control:
-
-- A worker on a GPU server in your data center runs LLaMA 3 locally
-- A worker in your Kubernetes cluster processes sensitive documents without leaving your VPC
-- A worker on a developer's laptop handles low-priority background tasks
-
-The Sagewai gateway distributes workflow tasks to workers based on pool membership, capability labels, and model availability. Workers register once; the gateway handles routing automatically.
+For a conceptual overview of how the fleet system works, see [Fleet](/docs/platform/fleet). For dispatch internals, isolation model, and security layers, see [Fleet Architecture](/docs/guides/fleet-architecture).
 
 ---
 
-## How Enrollment Works
+## How enrollment works
 
 ```
 1. Admin generates an enrollment key
 2. Worker binary reads the key on startup
-3. Worker calls FleetRegistry.register_worker() via the gateway
+3. Worker registers itself via the fleet API
 4. Admin approves the worker (admin panel or CLI)
 5. Worker is now eligible to receive tasks
 ```
@@ -41,13 +31,16 @@ From the admin panel at **Fleet → Enrollment Keys → New Key**, or via the CL
 
 ```bash
 sagewai fleet create-key \
+  --org acme \
+  --name gpu-onboarding \
   --pool gpu-workers \
   --label env=production \
   --label gpu=true \
+  --max-uses 10 \
   --expires-in 30d
 ```
 
-This returns a `wrt-1.` prefixed token (WRT = Worker Registration Token). Store it securely.
+This returns a key shown once — store it securely. Only the SHA-256 hash is saved server-side.
 
 ### Step 2: Start a worker
 
@@ -69,50 +62,18 @@ The worker registers itself, starts a heartbeat loop (every 30 seconds), and beg
 
 ### Step 3: Approve the worker
 
-In the admin panel under **Fleet → Workers**, new workers appear with status `PENDING`. Click **Approve** or use the CLI:
+New workers appear in the admin panel under **Fleet → Workers** with status `PENDING`. Click **Approve**, or use the CLI:
 
 ```bash
 sagewai fleet list-workers --status pending
-# Approve via the admin panel at Fleet → Workers → Approve
+sagewai fleet approve-worker <worker-id>
 ```
 
 Once approved, the worker receives tasks immediately.
 
 ---
 
-## LLM-Aware Routing
-
-Specify which model a workflow step requires, and the dispatcher routes to a worker that has it:
-
-```python
-from sagewai import DurableWorkflow, UniversalAgent
-from sagewai.models.worker import RoutingConstraints
-
-workflow = DurableWorkflow(name="inference-pipeline", store=store)
-
-@workflow.step("heavy-inference", routing=RoutingConstraints(target_model="llama3:70b"))
-async def heavy_inference(prompt: str) -> str:
-    agent = UniversalAgent(name="llm", model="llama3:70b")
-    return await agent.chat(prompt)
-```
-
-The `target_model` filter is evaluated at claim time using `@>` operator on the worker's declared `models_canonical` list. If no worker with the required model is available, the task queues until one becomes available.
-
----
-
-## Security Model
-
-| Layer | Mechanism |
-|-------|-----------|
-| Enrollment | WRT tokens (JWT, `wrt-1.` prefix, JTI revocation list) |
-| Payload encryption | Per-org Fernet key; task payloads are encrypted before transit |
-| Approval workflow | New workers require explicit admin approval before receiving tasks |
-| Anomaly detection | Auto-revokes workers with repeated failures, rate anomalies, or model mismatches |
-| mTLS | Planned for Enterprise tier — mutual TLS between gateway and workers |
-
----
-
-## Deployment Options
+## Deployment options
 
 ### Docker (recommended for quick start)
 
@@ -121,9 +82,31 @@ docker run --rm \
   -e ENROLLMENT_KEY="wrt-1.eyJ..." \
   -e FLEET_GATEWAY_URL="https://gateway.sagewai.ai" \
   -e WORKER_POOL="default" \
-  -e WORKER_MODELS="gpt-4o,claude-3-5-sonnet-20241022" \
+  -e WORKER_MODELS="gpt-4o,claude-sonnet-4" \
   sagewai/worker:latest
 ```
+
+**Scale workers:**
+```bash
+docker compose up -d --scale worker=5
+# or with Podman
+podman-compose up -d --scale worker=5
+```
+
+### Worker environment variables
+
+| Variable | Required | Default | Purpose |
+|----------|----------|---------|---------|
+| `FLEET_GATEWAY_URL` | Yes | — | Server endpoint URL |
+| `ENROLLMENT_KEY` | Yes* | — | Auto-registration key (*or `WRT_TOKEN`) |
+| `WRT_TOKEN` | Yes* | — | Pre-issued JWT auth (*or `ENROLLMENT_KEY`) |
+| `WORKER_POOL` | No | `default` | Pool assignment |
+| `WORKER_LABELS` | No | — | Comma-separated `key=value` pairs |
+| `WORKER_MODELS` | No | — | Comma-separated model names |
+| `OPENAI_API_KEY` | No | — | For cloud model access |
+| `ANTHROPIC_API_KEY` | No | — | For Anthropic Claude access |
+| `OLLAMA_HOST` | No | `localhost:11434` | For local Ollama inference |
+| `HEARTBEAT_INTERVAL` | No | `30` | Seconds between heartbeats |
 
 ### Bare metal / systemd
 
@@ -137,35 +120,92 @@ sagewai worker start \
 
 ### Kubernetes
 
+**CPU workers with autoscaling:**
+
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: sagewai-worker
+  name: sagewai-cpu-workers
 spec:
   replicas: 3
+  selector:
+    matchLabels: { app: sagewai-worker, pool: cpu }
   template:
+    metadata:
+      labels: { app: sagewai-worker, pool: cpu }
     spec:
       containers:
-        - name: worker
-          image: sagewai/worker:latest
-          env:
-            - name: ENROLLMENT_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: sagewai-fleet
-                  key: enrollment-key
-            - name: FLEET_GATEWAY_URL
-              value: "https://gateway.sagewai.ai"
-            - name: WORKER_POOL
-              value: "k8s-pool"
+      - name: worker
+        image: sagewai/worker:latest
+        env:
+        - { name: FLEET_GATEWAY_URL, value: "http://sagewai-server:8000" }
+        - { name: WORKER_POOL, value: "cpu" }
+        - { name: WORKER_MODELS, value: "gpt-4o,claude-sonnet-4" }
+        envFrom:
+        - secretRef: { name: sagewai-worker-secrets }
+        resources:
+          requests: { memory: "512Mi", cpu: "500m" }
+          limits: { memory: "2Gi", cpu: "2000m" }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sagewai-cpu-workers-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sagewai-cpu-workers
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+  - type: External
+    external:
+      metric: { name: sagewai_pending_runs }
+      target: { type: AverageValue, averageValue: "5" }
+```
+
+**GPU workers (one per GPU node):**
+
+```yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: sagewai-gpu-workers
+spec:
+  selector:
+    matchLabels: { app: sagewai-worker, pool: gpu }
+  template:
+    metadata:
+      labels: { app: sagewai-worker, pool: gpu }
+    spec:
+      nodeSelector:
+        nvidia.com/gpu: "true"
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: worker
+        image: sagewai/worker:latest
+        env:
+        - { name: FLEET_GATEWAY_URL, value: "http://sagewai-server:8000" }
+        - { name: WORKER_POOL, value: "gpu" }
+        - { name: WORKER_MODELS, value: "ollama/llama3.1:70b" }
+        envFrom:
+        - secretRef: { name: sagewai-worker-secrets }
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+            memory: "8Gi"
 ```
 
 ---
 
-## Worker Pools and Labels
+## Worker pools and labels
 
-Use pools to segment workers by environment or purpose, and labels for fine-grained routing:
+Use pools to segment workers by environment or purpose; use labels for fine-grained routing within a pool.
 
 ```python
 # Development pool
@@ -173,15 +213,68 @@ dev_worker = WorkflowWorker(pool="dev", labels={"region": "us-west"})
 
 # Production GPU pool
 gpu_worker = WorkflowWorker(pool="gpu-prod", labels={"gpu": "true", "vram": "80gb"})
-
-# Route a workflow step to GPU workers only
-@workflow.step("embedding", routing=RoutingConstraints(
-    target_pool="gpu-prod",
-    target_labels={"gpu": "true"},
-))
-async def embed(texts: list[str]) -> list[list[float]]:
-    ...
 ```
+
+### LLM-aware routing
+
+Specify which model a workflow step requires and the dispatcher routes to a worker that has it:
+
+```python
+from sagewai import DurableWorkflow, UniversalAgent
+from sagewai import RoutingConstraints
+
+workflow = DurableWorkflow(name="inference-pipeline", store=store)
+
+@workflow.step("heavy-inference", routing=RoutingConstraints(target_model="llama3:70b"))
+async def heavy_inference(prompt: str) -> str:
+    agent = UniversalAgent(name="llm", model="llama3:70b")
+    return await agent.chat(prompt)
+```
+
+The `target_model` filter is evaluated at claim time. If no worker with the required model is available, the task queues until one becomes available.
+
+### Load balancing strategies
+
+| Strategy | Behavior | Best For |
+|----------|----------|----------|
+| `DIRECT` | No pre-assignment; workers self-select | Simple setups |
+| `ROUND_ROBIN` | Rotate through eligible workers | Even distribution |
+| `LEAST_LOADED` | Pick worker with lowest `active_runs / max_concurrent` ratio | Optimal utilization |
+| `THRESHOLD` | Like LEAST_LOADED but skip workers above 90% capacity | Headroom for spikes |
+
+```python
+from sagewai import RoutingConstraints
+
+routing = RoutingConstraints(
+    worker_pool="gpu",
+    worker_labels={"region": "eu-west"},
+    strategy="LEAST_LOADED",
+    capacity_threshold=0.9,
+)
+```
+
+### Pool design patterns
+
+| Pool | Purpose | Models | Cost |
+|------|---------|--------|------|
+| `cpu-fast` | High-volume, low-complexity | GPT-4o-mini, Haiku | Low |
+| `cpu-smart` | Complex reasoning | GPT-4o, Sonnet, Opus | Medium-High |
+| `gpu-local` | On-prem GPU inference | Ollama (Llama, Mistral) | $0/token |
+| `gpu-finetune` | Dedicated fine-tuning | Unsloth | $0/token |
+| `regional-eu` | EU data residency | Any | Compliance-driven |
+| `regional-us` | US data residency | Any | Compliance-driven |
+
+---
+
+## Worker sizing guide
+
+| Workload | Container Memory | CPU | GPU | Max Concurrent |
+|----------|-----------------|-----|-----|----------------|
+| Cloud API agents (GPT-4o, Claude) | 512 MB | 0.5 core | None | 8–16 |
+| Local Ollama 7B | 6 GB | 2 cores | 1x RTX 3060 | 2–4 |
+| Local Ollama 70B | 48 GB | 4 cores | 1x A100 | 1–2 |
+| RAG + embeddings | 2 GB | 1 core | Optional | 4–8 |
+| Fine-tuning (Unsloth) | 16 GB | 4 cores | 1x RTX 3090+ | 1 |
 
 ---
 
@@ -201,3 +294,18 @@ The CLI equivalent:
 sagewai fleet list-workers
 sagewai fleet list-workers --pool gpu-prod --status online
 ```
+
+Prometheus metrics for autoscaling or Grafana dashboards:
+
+```
+sagewai_pending_runs    — tasks waiting for workers
+sagewai_worker_load     — per-worker utilization
+sagewai_run_duration    — workflow execution time
+```
+
+---
+
+## See also
+
+- [Fleet](/docs/platform/fleet) — conceptual overview: what the fleet system is and when to use it
+- [Fleet Architecture](/docs/guides/fleet-architecture) — dispatch internals, isolation model, security layers, database schema

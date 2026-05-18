@@ -5,11 +5,13 @@ export const metadata = {
   alternates: { canonical: 'https://docs.sagewai.ai/docs/guides/small-models' },
 };
 
-# Getting the most from small and local models
+# Running agents on small and local models
 
-Small and local models — Ollama, llama.cpp, LM Studio, vLLM — cost nothing per token, keep your data on-network, and can run fine-tuned SLMs trained on your own successful runs. The trade-offs are a shorter context window and, for many models, no native tool-calling API.
+This page shows you how to run production agents on small and local models — Ollama, llama.cpp, LM Studio, vLLM — using Sagewai's Directive Engine. You do not need a GPU or an API key to follow along; Ollama running on a laptop is enough.
 
-The Sagewai **Directive Engine** is designed to close that gap. It preprocesses prompts *before* the LLM call — injecting retrieved context, resolving memory queries, describing tools in prose, and compressing oversized inputs — so a model with an 8K window and no function-calling support can still run as a fully capable production agent.
+**Prerequisites:** install `sagewai` and have a local model available via Ollama or llama.cpp. See [prerequisites](/docs/get-started/prerequisites) if you need to set that up first.
+
+Local models cost nothing per token, stay on your network, and can be fine-tuned on your own successful runs. The trade-off is a shorter context window and, for many models, no native tool-calling API. The Directive Engine handles both: it pre-processes prompts before the LLM call — injecting retrieved context, resolving memory queries, describing tools in prose, and compressing oversized inputs — so a model with an 8K window and no function-calling support can still act as a capable production agent.
 
 ```python
 from sagewai import DirectiveEngine
@@ -31,7 +33,7 @@ result = await engine.resolve(
 
 ## Model profiles
 
-The engine adapts its output format, compression level, and tool-call mode to the model's capability class. Pass `model=` and the profile is detected automatically, or supply `model_profile=` to override explicitly.
+The engine adapts its output format, compression level, and tool-call mode to the model's capability class. Pass `model=` and the profile is detected automatically, or supply `model_profile=` to override.
 
 | Profile | Context tokens | Compression | Tool mode | Typical use |
 |---------|---------------|-------------|-----------|-------------|
@@ -49,14 +51,14 @@ profile = detect_profile("claude-opus-4-6")       # → LARGE
 profile = detect_profile("my-custom-model")       # → MEDIUM (fallback)
 ```
 
-**What the profile changes:**
+What the profile controls:
 
-- **Compression ratio** — at `5.0`, the engine fits retrieved context into the tighter token budget. Lower-priority context is trimmed first; nothing is dropped without a warning in the `DirectiveResult.metadata`.
+- **Compression ratio** — at `5.0`, the engine fits retrieved context into the tighter token budget. Lower-priority context is trimmed first; nothing is dropped without a warning in `DirectiveResult.metadata`.
 - **Delimiter style** — `SMALL` wraps context in `[CONTEXT]` / `[SOURCE]` markers that smaller models parse more reliably than plain prose blocks.
 - **Explicit instructions** — `SMALL` adds framing like "Use the context below to answer the question" before injected blocks.
-- **Tool-call mode** — `SMALL` switches to `prompt_based`, which describes all available tools in the system prompt as prose and parses the model's response for `/tool.name(args)` patterns.
+- **Tool-call mode** — `SMALL` switches to `prompt_based`, which describes tools in the system prompt as prose and parses the model's response for `/tool.name(args)` patterns.
 
-Override the profile completely when auto-detection doesn't match your model:
+Override the profile when auto-detection does not match your model:
 
 ```python
 from sagewai import DirectiveEngine, SMALL
@@ -69,13 +71,13 @@ engine = DirectiveEngine(
 
 ---
 
-## Injecting infrastructure: @context, @memory, @agent
+## Injecting data before the LLM call: @context, @memory, @agent
 
-Small models cannot call external APIs mid-inference. The directive engine handles those fetches *for* the model before the LLM sees the prompt.
+Small models cannot call external APIs mid-inference. The directive engine handles those fetches before the LLM sees the prompt.
 
 ### @context — retrieved knowledge
 
-Queries the configured Context Engine (RAG) and injects the top-k results as formatted blocks. The engine respects the profile's token budget — on `SMALL`, it trims aggressively while keeping the most relevant passages.
+Queries the configured Context Engine (RAG) and injects the top-k results as formatted blocks. On `SMALL`, it trims aggressively to stay inside the token budget while keeping the most relevant passages.
 
 ```python
 # Fetch relevant runbook sections before asking about an incident
@@ -97,23 +99,23 @@ Searches the project-scoped memory store and injects matching records. Works wit
 "@memory('ServiceY past outages') Has this service had similar issues before?"
 ```
 
-After a run that used `@transform(graphify, …)` (see below), `@memory` can retrieve the structured sub-graph instead of scanning raw transcripts — the same memory interface, just backed by richer data.
+After a run that used `@transform(graphify, …)` (see below), `@memory` can retrieve a structured sub-graph instead of scanning raw transcripts — the same memory interface, just backed by richer data.
 
-### @agent — delegating a single step to a stronger model
+### @agent — delegating one step to a stronger model
 
-If one step genuinely requires frontier-model reasoning (complex planning, multi-constraint code generation), delegate it while keeping the outer loop on the cheap local model:
+If a single step genuinely requires frontier-model reasoning (complex planning, multi-constraint code generation), you can delegate it while keeping the outer loop on the cheap local model:
 
 ```python
 "@agent:planner('Break this incident response into 5 subtasks') Now execute step 1."
 ```
 
-The outer agent is the small model; `planner` can run on whatever model is best for that sub-task.
+The outer agent is your small model; `planner` can run on whatever model fits that sub-task.
 
 ---
 
-## Tool access without native tool calling
+## Tool access without native function calling
 
-Many small models do not support the OpenAI function-calling protocol. The directive engine's `/tool` prose-parser bridges that gap: it injects tool descriptions into the system prompt as plain prose and parses the model's response for `/tool.name(args)` patterns — no function-calling API needed.
+Many small models do not support the OpenAI function-calling protocol. The directive engine's `/tool` prose-parser bridges that gap: it injects tool descriptions into the system prompt as plain text and parses the model's response for `/tool.name(args)` patterns — no function-calling API needed.
 
 ```python
 engine = DirectiveEngine(
@@ -133,7 +135,7 @@ Available tools:
 
 When the model responds with `/tool.search("incident logs")`, the engine extracts the call, executes the real tool, and injects the result for the next turn. The MCP tool proxy works the same way via `/mcp.server.tool(args)`.
 
-Small models can also reach the `@transform` engine this way:
+Small models can also reach the `@transform` engine through a tool call:
 
 ```
 /tool.transform(operation="summarize", content="…", params={"max_words": 150})
@@ -141,11 +143,11 @@ Small models can also reach the `@transform` engine this way:
 
 ---
 
-## @transform — for inputs larger than the context window
+## @transform — handling inputs larger than the context window
 
-A model with a 4–8K context window cannot read a 40-page contract, a week of incident logs, or the accumulated transcript of a long mission. `@transform` compresses or restructures the input *before* it reaches the model — inline, as part of prompt resolution.
+A model with a 4–8K context window cannot read a 40-page contract, a week of incident logs, or the accumulated transcript of a long mission. `@transform` compresses or restructures the input before it reaches the model — inline, as part of prompt resolution.
 
-`@transform` is wired onto a `DirectiveEngine` with `register_transform_directive` — it is not a built-in like `@context`, so register it explicitly:
+`@transform` is wired onto a `DirectiveEngine` via `register_transform_directive`. It is not a built-in like `@context`, so you must register it explicitly:
 
 ```python
 from sagewai.transform import register_transform_directive
@@ -153,7 +155,7 @@ from sagewai.transform import register_transform_directive
 register_transform_directive(engine)
 ```
 
-It is registered as a **multi-argument custom directive** — the `raw_args` form of `DirectiveRegistry` — so its syntax (bare operation token, nested directive reference or string, optional `key=value` params) works where the single-quoted-arg custom-directive form does not.
+It is registered as a multi-argument custom directive — the `raw_args` form of `DirectiveRegistry` — so its syntax (bare operation token, nested directive reference or string, optional `key=value` params) works where the single-quoted-arg custom-directive form does not.
 
 ### summarize — fit a large input into a small window
 
@@ -163,7 +165,7 @@ It is registered as a **multi-argument custom directive** — the `raw_args` for
 "Answer questions about this contract."
 ```
 
-The engine resolves `@context('vendor contract clauses')` to the full document text, calls `summarize` (via a configurable — optionally small/local — LLM), and injects the summary in place of the raw document. The model sees only the summary.
+The engine resolves `@context('vendor contract clauses')` to the full document text, calls `summarize` (via a configurable — optionally local — LLM), and injects the summary in place of the raw document. The model sees only the summary.
 
 Control the output length with `max_words` (default `200`):
 
@@ -186,7 +188,7 @@ When an agent accumulates a long context over many turns, `graphify` distils it 
 "@memory('DeployX related services') Was anything else affected by the same deploy?"
 ```
 
-Extracting zero triples is a success — the engine never fails directive resolution on an empty result. The `graphify` extractor is `parse_json`-robust, so a fenced SLM response still yields clean triples.
+Extracting zero triples is a success — the engine does not fail directive resolution on an empty result. The `graphify` extractor is `parse_json`-robust, so a fenced SLM response still yields clean triples.
 
 ### Custom transforms
 
@@ -213,17 +215,17 @@ register_transform_directive(engine, transform_engine=TransformEngine(registry))
 "@transform(extract_risk_score, @context('contract section 4'))"
 ```
 
-A string return is auto-wrapped into a successful `TransformResult`. Return a `TransformResult` directly to include structured `metadata` or signal a recoverable failure.
+A string return value is auto-wrapped into a successful `TransformResult`. Return a `TransformResult` directly to include structured `metadata` or signal a recoverable failure.
 
-For a small model, custom operations are especially powerful: the directive engine does the structured work (extraction, scoring, classification) before the model sees the prompt, so the model only needs to reason on the already-processed output.
+Custom operations are especially useful with small models: the directive engine does the structured work (extraction, scoring, classification) before the model sees the prompt, so the model only needs to reason on the already-processed output.
 
-`TransformRegistry.register("name", fn)` adds an *operation* `@transform` can run — it extends what `@transform` can *do*, not what directives the engine parses. It is separate from `DirectiveRegistry`, which handles single-quoted-arg custom sigils like `@kb('query')`.
+`TransformRegistry.register("name", fn)` adds an operation `@transform` can run — it extends what `@transform` can do, not which directives the engine parses. It is separate from `DirectiveRegistry`, which handles single-quoted-arg custom sigils like `@kb('query')`.
 
 See the [@transform API reference](/docs/api-reference/directives#transform) for the full parameter table and tool form.
 
 ---
 
-## Putting it all together
+## Putting it together
 
 A production pattern for a local model with no native tool calling and a limited context window:
 

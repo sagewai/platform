@@ -5,38 +5,25 @@ export const metadata = {
   alternates: { canonical: 'https://docs.sagewai.ai/docs/guides/sandboxing/custom-images' },
 };
 
-# Custom sandbox images (BYO)
+# Custom sandbox images
 
-Sagewai ships seven pre-built sandbox variants (`base`, `general`, `ml`, `ops`,
-`erp`, `ecommerce`, `api`) at `ghcr.io/sagewai/sandbox-<variant>`. When you
-need tooling we don't ship — a specific CLI, a private wheel, a GPU runtime,
-or just a smaller/larger base — you can bake your own image and point
-`sagewai worker start --sandbox-image` at it.
+Sagewai ships seven pre-built sandbox variants (`base`, `general`, `ml`, `ops`, `erp`, `ecommerce`, `api`) at `ghcr.io/sagewai/sandbox-<variant>`. When you need tooling that none of those variants include — a specific CLI, a private wheel, a GPU runtime, or a smaller image — build your own and point `sagewai worker start --sandbox-image` at it.
 
-This page covers the hard constraints your image must meet, a copy-paste
-template, and the validation step.
+This page covers the requirements your image must satisfy, a copy-paste Dockerfile template, and the validation step.
 
 ## Requirements
 
-Your image MUST:
+Your image **must**:
 
-1. **Include `sagewai-tool-runner`** in a version that satisfies this SDK's
-   `TOOL_RUNNER_VERSION_SPEC` (currently `>=0.1,<0.2`). The binary must be
-   on `PATH` as `sagewai-tool-runner`.
-2. **Have `tini` (or equivalent) as PID 1**, with a long-lived command so
-   the container stays alive. `ENTRYPOINT ["/usr/bin/tini", "--"]` +
-   `CMD ["sleep", "infinity"]` works.
-3. **Default `WORKDIR` to `/workspace`**, and leave it writable by the
-   `root` user (Sagewai mounts the scratch dir here).
+1. **Include `sagewai-tool-runner`** at a version satisfying this SDK's `TOOL_RUNNER_VERSION_SPEC` (currently `>=0.1,<0.2`). The binary must be on `PATH` as `sagewai-tool-runner`.
+2. **Use `tini` (or equivalent) as PID 1**, with a long-lived command so the container stays alive. `ENTRYPOINT ["/usr/bin/tini", "--"]` combined with `CMD ["sleep", "infinity"]` works.
+3. **Set `WORKDIR` to `/workspace`**, and leave it writable by the `root` user. Sagewai mounts the scratch directory there.
 
-Your image SHOULD:
+Your image **should**:
 
-- Inherit from `ghcr.io/sagewai/sandbox-base:<your-sdk-version>` — this
-  covers points 1-3 for you.
-- Keep root filesystem read-only at runtime (Sagewai sets this already,
-  so avoid writing to `/etc`, `/usr`, etc. during execution).
-- Declare all added tools in the image's `README.md` so operators know
-  what's available.
+- Inherit from `ghcr.io/sagewai/sandbox-base:<your-sdk-version>` — this satisfies all three requirements above.
+- Keep the root filesystem read-only at runtime. Sagewai already enforces this, so avoid writing to `/etc`, `/usr`, or similar paths during execution.
+- Document the tools you added in the image's `README.md` so operators know what is available.
 
 ## Template
 
@@ -60,20 +47,18 @@ COPY requirements-internal.txt /tmp/
 RUN pip install --no-cache-dir --require-hashes -r /tmp/requirements-internal.txt \
   && rm /tmp/requirements-internal.txt
 
-# Don't overwrite ENTRYPOINT or CMD — base's config is what tool-runner needs.
+# Do not overwrite ENTRYPOINT or CMD — the base image's config is what tool-runner expects.
 ```
 
 ## Validate before shipping
 
-Always run `sagewai sandbox validate` before wiring a new image into a
-project. It pulls the image, probes the runner, and confirms the sandbox
-lifecycle works end-to-end:
+Run `sagewai sandbox validate` against your image before wiring it into a project. The command pulls the image, probes the runner, and confirms the full sandbox lifecycle:
 
 ```bash
 sagewai sandbox validate ghcr.io/your-org/your-sandbox:1.0
 ```
 
-A passing image prints six `✓` lines:
+A compatible image prints six check lines:
 
 ```
   ✓ image pulled (digest sha256:...)
@@ -85,31 +70,22 @@ A passing image prints six `✓` lines:
   PASS — image is compatible with this SDK
 ```
 
-Failures exit non-zero with a specific remediation. The most common error
-— `sagewai-tool-runner not found in PATH` — usually means you stripped
-`/usr/local/bin` from your image; re-inherit from `sandbox-base` and
-retry.
+Failures exit non-zero with a specific remediation message. The most common error — `sagewai-tool-runner not found in PATH` — usually means `/usr/local/bin` was stripped from your image. Re-inherit from `sandbox-base` and retry.
 
 ## Pointing workers at a custom image
 
-Two ways:
+Two ways to use your image:
 
 ```bash
-# Worker-default (applies to every run this worker claims)
+# Worker-default: applies to every run this worker claims
 sagewai worker start --sandbox-image ghcr.io/your-org/your-sandbox:1.0 …
 
-# Agent-scoped (just this one agent)
+# Agent-scoped: applies only to this agent
 # In your agent spec YAML: sandbox_image: ghcr.io/your-org/your-sandbox:1.0
 ```
 
-Custom images skip SDK-level digest verification (they're not in the
-manifest). Sagewai logs a single `INFO` line with the resolved digest on
-first use so auditors can reconstruct what actually ran. Run
-`sagewai sandbox validate` as your trust anchor.
+Custom images skip SDK-level digest verification (they are not in the Sagewai manifest). On first use, Sagewai logs a single `INFO` line with the resolved digest so auditors can reconstruct what actually ran. Treat `sagewai sandbox validate` as your trust anchor for these images.
 
-## Reclaim some size
+## Keeping image size down
 
-The `general` variant carries ~900 MB (Playwright + chromium dominate).
-If you don't need browser automation, inherit from `base` directly and
-add only what your agents need. A minimal web-scraping image can come in
-at ~300 MB.
+The `general` variant weighs ~900 MB — Playwright and Chromium dominate. If you do not need browser automation, inherit from `base` directly and add only what your agents require. A minimal web-scraping image can come in at ~300 MB.

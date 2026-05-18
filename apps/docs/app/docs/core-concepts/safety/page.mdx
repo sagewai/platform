@@ -16,7 +16,9 @@ export const metadata = {
 
 # Safety & Guardrails
 
-Sagewai provides multiple layers of safety: input/output guardrails that run automatically on every agent call, budget enforcement that prevents runaway costs, and audit logging for compliance.
+Sagewai runs guardrails automatically on every agent call: input guardrails check incoming messages, output guardrails check LLM responses, budget enforcement caps per-request and per-project spend, and audit logging records every action for compliance. This page shows how to configure each layer and how to write custom guardrails.
+
+**Prerequisites:** [Agents](/docs/core-concepts/agents) · **Next:** [Self-Learning](/docs/core-concepts/self-learning) · [Context Engine](/docs/core-concepts/context-engine)
 
 ## How Guardrails Work
 
@@ -42,10 +44,11 @@ flowchart TD
     style Response fill:#dcfce7,stroke:#16a34a
 ```
 
-Each guardrail has three possible actions:
+Each guardrail returns one of three actions:
+
 - **`block`** — Reject the message, raise `GuardrailViolationError`
-- **`warn`** — Log the violation but allow the message through
-- **`escalate`** — Emit a `GUARDRAIL_ESCALATION` event, allow the message
+- **`warn`** — Log the violation but let the message through
+- **`escalate`** — Emit a `GUARDRAIL_ESCALATION` event, let the message through
 
 Guardrails apply to all entry points: `chat()`, `chat_with_history()`, and `chat_stream()`.
 
@@ -53,7 +56,7 @@ Guardrails apply to all entry points: `chat()`, `chat_with_history()`, and `chat
 
 ## PIIGuard
 
-Detect and handle personally identifiable information in agent inputs and outputs:
+`PIIGuard` detects personally identifiable information in agent inputs and outputs and takes the action you configure.
 
 ```python
 from sagewai import UniversalAgent, PIIGuard
@@ -100,7 +103,7 @@ agent = UniversalAgent(
 
 ### Standalone Usage
 
-Use `PIIGuard` outside of an agent for direct PII detection:
+You can use `PIIGuard` outside of an agent when you need direct detection or redaction:
 
 ```python
 guard = PIIGuard(action="redact")
@@ -116,7 +119,7 @@ clean_text = guard.redact("Contact me at john@example.com or 555-123-4567")
 
 ## HallucinationGuard
 
-Check if LLM output is grounded in the provided RAG context using keyword overlap scoring:
+`HallucinationGuard` checks whether the LLM's output is grounded in the RAG context that was retrieved for the request. It uses keyword overlap scoring to compute a grounding score from 0.0 to 1.0.
 
 ```python
 from sagewai import UniversalAgent, HallucinationGuard
@@ -136,27 +139,27 @@ agent = UniversalAgent(
 
 ### How It Works
 
-1. The agent generates a response based on RAG context
-2. `HallucinationGuard` compares the response against the RAG context
-3. It calculates a grounding score (0.0 to 1.0) based on keyword overlap
-4. If the score falls below the threshold, the configured action triggers
+1. The agent generates a response using retrieved RAG context.
+2. `HallucinationGuard` compares the response against that context.
+3. It computes a grounding score based on keyword overlap (0.0–1.0).
+4. If the score falls below the threshold, the configured action triggers.
+
+The guard only activates when RAG context is present. Without it, the check always passes.
 
 ### Threshold Tuning
 
 | Range | Behavior |
 |-------|----------|
-| 0.1 - 0.2 | Very permissive. Only flags near-zero overlap |
-| 0.3 - 0.5 | Balanced. Good default for most applications |
-| 0.6 - 0.8 | Strict. May flag valid paraphrases |
+| 0.1–0.2 | Very permissive. Only flags near-zero overlap |
+| 0.3–0.5 | Balanced. Good default for most applications |
+| 0.6–0.8 | Strict. May flag valid paraphrases |
 | 0.9+ | Very strict. Only accepts near-verbatim responses |
-
-The guard only triggers when RAG context is available. Without it, it always passes.
 
 ---
 
 ## ContentFilter
 
-Block messages containing specific words or patterns:
+`ContentFilter` blocks messages containing specific words or regex patterns.
 
 ```python
 from sagewai import UniversalAgent, ContentFilter
@@ -178,7 +181,7 @@ agent = UniversalAgent(
 
 ## TokenBudgetGuard
 
-Prevent agents from exceeding a per-request cost budget:
+`TokenBudgetGuard` tracks estimated token costs during the agent loop and blocks further processing when the per-request budget is exceeded.
 
 ```python
 from sagewai import UniversalAgent, TokenBudgetGuard
@@ -192,13 +195,11 @@ agent = UniversalAgent(
 )
 ```
 
-The guard tracks estimated token costs during the agent loop and blocks further processing when the budget is exceeded.
-
 ---
 
 ## OutputSchemaGuard
 
-Validate that the agent's output matches a specific JSON schema:
+`OutputSchemaGuard` validates that the agent's output matches a JSON schema before returning it to the caller.
 
 ```python
 from sagewai import UniversalAgent, OutputSchemaGuard
@@ -223,7 +224,7 @@ agent = UniversalAgent(
 
 ## Budget Enforcement
 
-Beyond per-request `TokenBudgetGuard`, Sagewai enforces project-level budgets in `BaseAgent._call_llm()`. Every LLM call checks the budget and records spend automatically.
+Beyond per-request `TokenBudgetGuard`, Sagewai enforces project-level budgets in `BaseAgent._call_llm()`. Every LLM call checks the budget and records spend automatically — no extra code needed.
 
 Budget actions:
 
@@ -248,7 +249,7 @@ except SagewaiBudgetExceededError as e:
 
 ## Audit Logging
 
-The `AuditLogger` records all agent actions for compliance and debugging:
+`AuditLogger` records agent actions for compliance and debugging:
 
 ```python
 from sagewai.observability.audit import AuditLogger
@@ -259,13 +260,13 @@ logger = AuditLogger(backend="file", path="/var/log/sagewai/audit.jsonl")
 agent.on_event(logger.handle_event)
 ```
 
-Audit logs capture: run starts/finishes, tool calls, guardrail violations, budget checks, and workflow state transitions. Logs can be archived to S3 or GCS using the archival backend.
+Each log entry captures: run starts and finishes, tool calls, guardrail violations, budget checks, and workflow state transitions. Logs can be archived to S3 or GCS using the archival backend.
 
 ---
 
 ## Combining Guardrails
 
-Guardrails are applied in order. Combine multiple guardrails for defense-in-depth:
+Guardrails execute in the order you list them. Stack multiple guardrails to address different failure modes at each stage:
 
 ```python
 from sagewai import (
@@ -294,16 +295,17 @@ agent = UniversalAgent(
 ```
 
 Recommended order:
+
 1. **PIIGuard** first — redact sensitive data before it reaches the LLM
-2. **ContentFilter** — block injection attacks
-3. **HallucinationGuard** — check output grounding
+2. **ContentFilter** — block injection attempts early
+3. **HallucinationGuard** — check output grounding before returning
 4. **TokenBudgetGuard** — prevent runaway costs
 
 ---
 
 ## Custom Guardrails
 
-Create your own guardrail by implementing the `Guardrail` abstract class:
+Implement the `Guardrail` abstract class to write your own:
 
 ```python
 from sagewai import Guardrail, GuardrailResult
@@ -322,7 +324,7 @@ class ProfanityFilter(Guardrail):
         return GuardrailResult(passed=True)
 ```
 
-Both `check_input` and `check_output` must be async methods that return a `GuardrailResult`.
+Both `check_input` and `check_output` must be async and return a `GuardrailResult`.
 
 ---
 

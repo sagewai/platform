@@ -1,9 +1,9 @@
 import { TechArticleJsonLd, SoftwareApplicationJsonLd } from '@/components/structured-data';
 
 export const metadata = {
-  title: 'Self-learning agents — capture, train, deploy local',
+  title: 'Self-learning agents — continuous improvement from production runs',
   description:
-    'Sagewai agents learn from every interaction. Curator captures production runs; Promoter triggers fine-tunes; deploy via Ollama. The cost-down loop.',
+    'Five mechanisms for agents that improve over time: auto-learn, episodic memory, self-correction, knowledge graph building, and memory consolidation.',
   alternates: { canonical: 'https://docs.sagewai.ai/docs/core-concepts/self-learning' },
 };
 
@@ -11,22 +11,21 @@ export const metadata = {
   name="Sagewai self-learning agents"
   description="The training loop: agents learn from production runs. Curator captures, Promoter promotes, Ollama deploys. Cost-down to zero per token."
   path="/docs/core-concepts/self-learning"
-  articleSection="Training Loop"
+  articleSection="Core concepts"
 />
 <SoftwareApplicationJsonLd />
 
 # Self-Learning Agents
 
-Sagewai agents don't just respond --- they **learn from every interaction**. The SDK provides
-five complementary learning mechanisms that work together to make agents smarter over time,
-**without requiring any LLM for the learning itself**.
+Sagewai agents can improve over time through five complementary mechanisms. Each mechanism is independent — enable only the ones you need. All five work without requiring an LLM for the learning operations themselves.
+
+**Prerequisites:** [Memory & RAG](/docs/core-concepts/memory) · [Context Engine](/docs/core-concepts/context-engine) · **Next:** [Directives](/docs/core-concepts/directives)
 
 ## The Five Learning Mechanisms
 
 ### 1. Auto-Learn (MemoryBridge)
 
-When `auto_learn=True`, the agent automatically extracts facts from conversations and stores
-them in the Context Engine. Facts are extracted every N turns (configurable via `learn_every_n_turns`).
+Set `auto_learn=True` on an agent and it will extract facts from conversations and store them in the Context Engine automatically. Extraction runs every N turns, controlled by `learn_every_n_turns`.
 
 ```python
 from sagewai import UniversalAgent
@@ -45,27 +44,24 @@ agent = UniversalAgent(
 # - Action items ("TODO: set up CI pipeline")
 ```
 
-**How it works:** The `MemoryBridge` receives conversation history and delegates to a
-`FactExtractor`. The SDK ships three extractors:
+The `MemoryBridge` receives conversation history and delegates to a `FactExtractor`. Three extractors are available:
 
 | Extractor | Needs LLM? | Speed | Quality |
 |-----------|-----------|-------|---------|
 | `RuleBasedFactExtractor` | No | Instant | Good for structured facts |
-| `LLMFactExtractor` | Yes | ~1-2s | Best for nuanced extraction |
+| `LLMFactExtractor` | Yes | ~1–2s | Best for nuanced extraction |
 | `HybridFactExtractor` | Optional | Fast + enhanced | Rules first, LLM fills gaps |
 
-The `RuleBasedFactExtractor` uses pattern matching to detect decisions, preferences,
-events, and action items without any API calls. The `HybridFactExtractor` runs rules
-first and optionally enhances with an LLM pass for anything the rules missed.
+`RuleBasedFactExtractor` uses pattern matching to detect decisions, preferences, events, and action items with no API calls. `HybridFactExtractor` runs rules first and optionally does an LLM pass for anything the rules missed.
 
 ### 2. Episodic Memory
 
-Agents remember past task executions --- what worked, what didn't, and what they learned.
+Agents can record task executions — what they did, what worked, and what they learned — and retrieve those records when a similar task comes up later.
 
 ```python
-from sagewai.context import EpisodeStore, Episode
+from sagewai.context import EpisodeStore, Episode, InMemoryVectorStore
 
-episodes = EpisodeStore()
+episodes = EpisodeStore(vector_store=InMemoryVectorStore())  # vector store enables semantic retrieval
 
 # After completing a task, store the episode
 episode = Episode(
@@ -77,21 +73,18 @@ episode = Episode(
     lessons=["Financial data older than 6 months is unreliable",
              "Compare at least 3 competitors for credible analysis"],
 )
-await episodes.store(episode)
+await episodes.capture(episode)
 
 # Next time a similar task comes up, retrieve relevant episodes
-similar = await episodes.search("analyze competitor pricing", top_k=3)
+similar = await episodes.retrieve("analyze competitor pricing", top_k=3)
 # Agent now has lessons learned from previous attempts
 ```
 
-Episodes are stored with embeddings, so retrieval is semantic --- an agent working on
-"pricing comparison" will find episodes about "competitor pricing analysis" even though
-the exact words differ.
+Episodes are stored with embeddings, so retrieval is semantic. An agent working on "pricing comparison" will find episodes tagged "competitor pricing analysis" even when the exact words differ.
 
 ### 3. Self-Correction (Exemplar Store)
 
-When an agent makes a mistake, the correction is stored as an exemplar for future reference.
-This is inspired by the PALADIN pattern --- mistakes become teaching examples.
+When an agent makes a mistake and a correction is provided, `SelfCorrectionStrategy` stores the failure as an exemplar. On future tasks that resemble the failure, the exemplar is injected as a one-shot "don't do this, do this instead" guide.
 
 ```python
 from sagewai.core.self_correction import SelfCorrectionStrategy, FailureExemplar
@@ -103,17 +96,14 @@ from sagewai.core.self_correction import SelfCorrectionStrategy, FailureExemplar
 # 4. Prevents the same mistake from recurring (max_corrections configurable)
 ```
 
-The key insight: rather than discarding failed attempts, the SDK stores them as
-negative examples. When the agent encounters a similar task later, the exemplar is
-injected into the prompt as a "don't do this, do this instead" guide.
+Failed attempts are not discarded. They become training signal that shapes future behavior without any manual intervention.
 
 ### 4. Knowledge Graph Building
 
-Every conversation incrementally builds a structured knowledge graph. Entities and
-relations are extracted and stored in NebulaGraph (or an in-memory fallback).
+Each conversation incrementally adds entities and relations to a structured knowledge graph stored in NebulaGraph (or an in-memory fallback).
 
 ```python
-from sagewai.intelligence import EntityExtractor, RelationExtractor
+from sagewai.intelligence import GLiNEREntityExtractor, HeuristicRelationExtractor
 
 # Entity extraction (zero-shot, runs locally)
 ner = GLiNEREntityExtractor(
@@ -131,13 +121,11 @@ relations = await rel.extract(text, entities)
 # [RelationTriple("Alice", "uses", "PostgreSQL", confidence=0.87)]
 ```
 
-The graph grows with every conversation, building a structured representation of
-your organization's knowledge. Agents can then traverse the graph to answer questions
-like "who works on what?" or "what technologies does team X use?".
+The graph accumulates structure over time. Agents can traverse it to answer questions like "who works on what?" or "what technologies does team X use?" — queries that vector search alone cannot answer reliably.
 
 ### 5. Memory Consolidation
 
-Over time, memory is cleaned, deduplicated, and weighted by recency.
+Over time, the memory store can accumulate duplicate or contradictory facts. `MemoryConsolidator` deduplicates by similarity, applies time-based decay, and flags contradictions for review.
 
 ```python
 from sagewai.intelligence import MemoryConsolidator
@@ -160,28 +148,25 @@ contradictions = await consolidator.detect_contradictions(
 )
 ```
 
-Temporal fact tracking on NebulaGraph ensures that superseded facts (e.g., a
-technology migration) are properly marked with `valid_from` and `superseded_at`
-timestamps rather than deleted.
+On NebulaGraph, superseded facts — such as a technology migration — are marked with `valid_from` and `superseded_at` timestamps rather than deleted. History is preserved; relevance scoring adjusts automatically.
 
 ---
 
 ## LLM-Independent Learning
 
-Unlike platforms that require an LLM for every intelligence operation, Sagewai's
-learning pipeline works with zero API keys:
+Every component in the learning pipeline has a local fallback. Your agents can learn without any external API:
 
 | Component | LLM Required? | Offline Alternative |
 |-----------|--------------|---------------------|
 | Fact extraction | No | `RuleBasedFactExtractor` (regex patterns) |
-| Entity extraction | No | `GLiNEREntityExtractor` (50MB local model) |
-| Embeddings | No | `SentenceTransformerEmbedder` (80MB local model) |
+| Entity extraction | No | `GLiNEREntityExtractor` (50 MB local model) |
+| Embeddings | No | `SentenceTransformerEmbedder` (80 MB local model) |
 | Relation extraction | No | `HeuristicRelationExtractor` (co-occurrence) |
 | Graph building | No | Uses the extractors above |
 | Memory consolidation | No | `MemoryConsolidator` (cosine similarity) |
 | Summarization | No | `SemanticSummarizer` (embedding-scored extractive) |
 
-Install the intelligence extras and agents learn without any external API:
+Install the intelligence extras to unlock offline learning:
 
 ```bash
 pip install sagewai[intelligence]
@@ -191,7 +176,7 @@ pip install sagewai[intelligence]
 
 ## Configuration
 
-Use `IntelligenceConfig` to control provider selection:
+`IntelligenceConfig` controls which provider each component uses:
 
 ```python
 from sagewai.intelligence import IntelligenceConfig
@@ -204,22 +189,16 @@ config = IntelligenceConfig(
 )
 ```
 
-The `"auto"` setting tries local providers first, falls back to API-based providers
-if available, and uses deterministic fallbacks (hash embeddings, rule-based extraction)
-as a last resort. This means your agents always work, even offline.
+The `"auto"` setting tries local providers first, falls back to API-based providers if available, and uses deterministic fallbacks as a last resort. Agents keep working even without network access.
 
 ## Observability
 
-Every learning operation is observable through the admin console:
+The learning pipeline emits events through the SDK's event system. Hook into `on_memory_store`, `on_fact_extracted`, and `on_episode_stored` for custom observability, or use the admin console:
 
-- **Context Engine dashboard** --- See stored documents and extracted facts
-- **Knowledge Graph explorer** --- Browse entities and their relations interactively
-- **Agent Runs** --- Track which memories were retrieved and used in each response
-- **Cost Analytics** --- Monitor intelligence layer costs vs LLM costs
-
-The intelligence pipeline emits events through the SDK's event system, so you can
-hook into `on_memory_store`, `on_fact_extracted`, and `on_episode_stored` callbacks
-for custom observability.
+- **Context Engine dashboard** — See stored documents and extracted facts
+- **Knowledge Graph explorer** — Browse entities and their relations interactively
+- **Agent Runs** — Track which memories were retrieved and used in each response
+- **Cost Analytics** — Compare intelligence layer costs against LLM costs
 
 ## How It All Fits Together
 
@@ -246,14 +225,13 @@ LLM generates response
 Return response to user
 ```
 
-The retrieve-then-learn cycle runs automatically when `auto_learn=True`. No
-additional code is needed beyond the agent constructor.
+The retrieve-then-learn cycle runs automatically when `auto_learn=True`. No additional code is needed beyond the agent constructor.
 
 ---
 
-## Next Steps
+## What's Next
 
-- [Context Engine](/docs/core-concepts/context-engine) --- How documents and facts are stored and retrieved
-- [Memory and RAG](/docs/core-concepts/memory) --- Vector store and graph store architecture
-- [Directives](/docs/core-concepts/directives) --- Use `@memory` and `@context` directives in prompts
-- [Admin Panel](/docs/guides/admin-panel) --- Monitor learning through the admin dashboard
+- [Context Engine](/docs/core-concepts/context-engine) — How documents and facts are stored and retrieved
+- [Memory and RAG](/docs/core-concepts/memory) — Vector store and graph store architecture
+- [Directives](/docs/core-concepts/directives) — Use `@memory` and `@context` directives in prompts
+- [Admin Panel](/docs/guides/admin-panel) — Monitor learning through the admin dashboard

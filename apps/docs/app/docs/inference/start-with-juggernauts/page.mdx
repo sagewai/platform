@@ -1,24 +1,43 @@
-# Start with juggernauts
+# Start with the big providers
 
-This page shows you how to ship your first AI feature on a **juggernaut** — a top-tier frontier model like Claude Opus or GPT-5 — and capture training data from day one so you can swap to a cheaper local model later. It's for engineers under quarterly deadlines who need a working feature in weeks, not months. After reading, you'll have a runnable agent on a frontier model and a path to cut its cost by ~80% in a future quarter without rewriting application code.
+This page shows you how to ship your first AI feature on a
+frontier model — Claude Opus, GPT-5, or another top-tier
+provider — and capture training data from day one so you can
+switch to a cheaper local model later. It's for engineers under
+quarterly deadlines who need a working feature in weeks, not
+months. By the end you'll have a runnable agent on a frontier
+model and a path to cut its cost by ~80% in a later quarter
+without rewriting application code.
 
 ## Before you start
 
 - Python 3.10+ and `pip install sagewai`.
-- An API key for at least one frontier provider (Anthropic, OpenAI, or another supported provider) in `~/.sagewai/.env`.
-- A task you can describe in one sentence (e.g. *"categorise support tickets as refund, technical, account, or other"*).
+- An API key for at least one frontier provider (Anthropic, OpenAI,
+  or another supported provider) in `~/.sagewai/.env`.
+- A task you can describe in one sentence (e.g. *"categorise support
+  tickets as refund, technical, account, or other"*).
 
-## Why frontier models first
+## Why a frontier model first
 
-If you reach for the cheapest open model under deadline, you risk burning two weeks debugging context windows, one week tuning prompts, and shipping an agent that misclassifies 8% of inputs. Quality is unknown until you measure it.
+If you reach for the cheapest open model under deadline, you risk
+burning two weeks debugging context windows, one week tuning prompts,
+and shipping an agent that misclassifies 8% of inputs. Quality is
+unknown until you measure it.
 
-A frontier model gives you known quality on day one. The bill is real, but a working feature with a known cost is a much easier conversation with your CFO than a missed deadline. Once it ships, you have something to optimise.
+A frontier model gives you known quality on day one. The bill is
+real, but a working feature with a known cost is a much easier
+conversation with finance than a missed deadline. Once it ships,
+you have something concrete to optimise.
 
-SageWai is built around this arc: ship on a juggernaut, capture every response as training data, then fine-tune a local model on that data when cost matters more than time-to-ship.
+Sagewai is built around this arc: ship on a frontier model, capture
+every response as training data, then fine-tune a local model on
+that data when cost matters more than time-to-ship.
 
 ## Configure a frontier model
 
-Set the model string on `Agent`. The same code works across Claude, GPT, and (later) a local Ollama model — only the `model` value changes.
+Set the model string on `Agent`. The same code runs against Claude,
+GPT, and (later) a local Ollama model — only the `model` value
+changes.
 
 ```python
 import asyncio
@@ -27,7 +46,7 @@ from sagewai.core import Agent
 async def main():
     agent = Agent(
         name="support-triage",
-        model="claude-opus-4-7",  # the juggernaut
+        model="claude-opus-4-7",  # frontier model
         system_prompt=(
             "Categorise the support ticket as: refund, "
             "technical, account, or other."
@@ -45,17 +64,23 @@ To swap to GPT-5, change one string:
 agent = Agent(name="support-triage", model="gpt-5", ...)
 ```
 
-Once you have a fine-tuned local model (covered later in the lifecycle), the same swap points at Ollama:
+Once you have a fine-tuned local model (covered later in the
+lifecycle), the same swap points at Ollama:
 
 ```python
 agent = Agent(name="support-triage", model="ollama/my-finetuned-llama:latest", ...)
 ```
 
-Application code does not change. See [Example 18 — local LLM routing](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/18_local_llm_routing.py) for the full swap demonstration across Claude, GPT, and Ollama.
+Application code does not change. See [Example 18 — local LLM routing](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/18_local_llm_routing.py)
+for the full swap demonstration across Claude, GPT, and Ollama.
 
 ## Capture training data from day one
 
-The cost-down later only works if you've been collecting input/output pairs the whole time. Configure the Curator on the same project as your agent and every successful run becomes a candidate training sample, scored by user feedback (thumbs-up / thumbs-down) or by an LLM-judge classifier you configure.
+The cost reduction later only works if you've been collecting
+input/output pairs the whole time. Configure the Curator on the
+same project as your agent; every successful run becomes a candidate
+training sample, scored by user feedback (thumbs-up / thumbs-down)
+or by an LLM-judge classifier you configure.
 
 ```python
 from sagewai.curator import Curator
@@ -66,46 +91,63 @@ curator = Curator(
 )
 ```
 
-After a few weeks of production traffic on the frontier model, the Curator typically holds several thousand high-quality input/output pairs — enough to fine-tune a 3B local model that hits 90%+ of Opus quality on *your specific task* at roughly 1% of the per-call cost.
+After a few weeks of production traffic on the frontier model, the
+Curator typically holds several thousand high-quality input/output
+pairs — enough to fine-tune a 3B local model that hits 90%+ of Opus
+quality on your specific task at roughly 1% of the per-call cost.
 
-For the full Curator → JSONL → Unsloth → Ollama loop, see [Example 36 — autopilot training loop](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/36_autopilot_training_loop.py) and [Example 38 — Unsloth fine-tune](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/38_unsloth_finetune.py).
+For the full Curator → JSONL → Unsloth → Ollama loop, see
+[Example 36 — autopilot training loop](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/36_autopilot_training_loop.py)
+and [Example 38 — Unsloth fine-tune](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/38_unsloth_finetune.py).
 
 ## Monitor cost as you go
 
-Wire the [Observatory cost dashboard](/docs/platform/observatory) on the same project. It tracks per-agent spend in near real-time so you can:
+Wire the [Observatory cost dashboard](/docs/platform/observatory) on
+the same project. It tracks per-agent spend in near real-time so you
+can:
 
-- Show the bill to your CFO with a screenshot, not a guess.
-- Spot a runaway loop before it costs more than a weekend of fine-tuning.
-- Know when the cost crosses the threshold where a local model starts paying back.
+- Show the bill with a screenshot, not a spreadsheet estimate.
+- Catch a runaway loop before it costs more than a weekend of
+  fine-tuning.
+- Know when the per-call cost crosses the threshold where a local
+  model starts paying back.
 
 ## The full lifecycle
 
-A typical SageWai project moves through four checkpoints. You start at the top; each row builds on the last.
+A typical Sagewai project moves through four stages. You start at
+the top; each row builds on the last.
 
 | Stage | Model | Why |
 |---|---|---|
 | Ship | Claude Opus / GPT-5 | Known quality, deadline met |
-| Explain the cost | Same juggernaut + Observatory | Show your CFO the bill |
-| Cost down | Curator → fine-tune → Ollama | ~80% bill drop |
-| Optionality | Local model on your infra | Pricing and roadmap independence |
+| Show the cost | Same model + Observatory | Visible spend numbers |
+| Cut the cost | Curator → fine-tune → Ollama | ~80% bill drop |
+| Vendor independence | Local model on your infra | No provider lock-in |
 
-Each transition is a one-line model swap in your `Agent` config — application code does not change.
+Each transition is a one-line model swap in your `Agent` config.
+Application code does not change.
 
 ## Anti-patterns
 
-1. **Optimising before you have a product.** The cheapest model is the one that ships your feature on time. That is almost never the smallest open model in week one.
+1. **Optimising before you have a product.** The cheapest model
+   is the one that ships your feature on time. That is almost never
+   the smallest open model in week one.
 
-2. **Skipping the Curator.** Training data has to exist before you can fine-tune. Capturing retroactively from logs is a week of pain; capturing prospectively from the Curator is a one-line wire-up.
+2. **Skipping the Curator.** Training data has to exist before you
+   can fine-tune. Capturing retroactively from logs is a week of pain;
+   capturing prospectively via the Curator is a one-line wire-up.
 
-3. **Treating the cost-down as a 10-week project.** With SageWai, the same engineer can ship an Unsloth fine-tune on a free Colab T4 over a weekend. See [Free CUDA via Colab](/docs/inference/free-cuda-via-colab).
+3. **Treating the cost reduction as a 10-week project.** With
+   Sagewai, the same engineer can run an Unsloth fine-tune on a free
+   Colab T4 over a weekend. See [Free CUDA via Colab](/docs/inference/free-cuda-via-colab).
 
 ## Next steps
 
 1. Run the agent above against your real task and confirm the output quality.
-2. Wire the Curator from day one — it costs nothing and it is the reason the cost-down will work.
-3. Open the [Observatory cost dashboard](/docs/platform/observatory) so you have spend numbers ready when finance asks.
+2. Wire the Curator from day one — it costs nothing and it makes the cost reduction possible.
+3. Open the [Observatory cost dashboard](/docs/platform/observatory) so you have spend numbers ready.
 4. Read [Free CUDA via Colab](/docs/inference/free-cuda-via-colab) before the cost-down lands so you already know how the fine-tune works.
-5. When Colab's 16GB cap or 12-hour session limit bites, graduate to [Rent when you grow](/docs/inference/rent-when-you-grow).
+5. When Colab's 16 GB cap or 12-hour session limit bites, move to [Rent when you grow](/docs/inference/rent-when-you-grow).
 
 ## See also
 

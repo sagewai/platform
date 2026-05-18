@@ -7,15 +7,9 @@ export const metadata = {
 
 # Sandboxing
 
-Sagewai workers can run tool calls (bash, code-eval, filesystem, …) inside an
-ephemeral container so a run in project A cannot read env, files, or tokens
-belonging to project B running on the same worker. This page covers the
-runtime options.
+Workers can run tool calls — bash, code-eval, filesystem access, and others — inside an ephemeral container. This ensures a run in project A cannot read the environment variables, files, or tokens belonging to project B running on the same worker.
 
-> **Looking for the conceptual model?** This page is the operator
-> handbook for configuring the worker. For the architecture decision
-> guide (Docker vs Kubernetes vs Lambda, mode/backend compatibility),
-> see [Architecture: Sandbox backends](/docs/architecture/sandbox-backends).
+> **Looking for the conceptual model?** This page is the operator handbook for configuring the worker. For the architecture decision guide (Docker vs Kubernetes vs Lambda, mode and backend compatibility), see [Architecture: Sandbox backends](/docs/architecture/sandbox-backends).
 
 ## Modes
 
@@ -28,7 +22,7 @@ runtime options.
 
 ## Selection precedence
 
-Highest first:
+Highest takes effect:
 
 1. Worker CLI flag `--sandbox-mode`
 2. Worker config file (`~/.sagewai/worker.yaml`, not shipped in Plan 1)
@@ -51,25 +45,25 @@ sagewai worker start \
 ## Debugging
 
 ```bash
-# Backend health
+# Check backend health
 sagewai sandbox doctor
 
-# Live sandboxes on this host
+# List live sandboxes on this host
 sagewai sandbox list
 
-# Force-kill orphans
+# Force-kill orphaned containers
 sagewai sandbox reap --older-than 10m
 ```
 
 ## Fallback behavior
 
-If the requested backend is unhealthy (e.g., Docker daemon down):
+When the requested backend is unhealthy (for example, the Docker daemon is down):
 
-- **Non-production** projects fall back one mode (`per_run → per_tool → none`) with a `WARN` log.
+- **Non-production** projects fall back one mode (`per_run → per_tool → none`) and emit a `WARN` log.
 - **Production** projects refuse to start. The worker exits non-zero so the process supervisor can surface the outage.
 
 ## Roadmap
 
 - **Plan 2** — full sandbox image family (`general`, `ml`, `ml-cuda`, `ops`, `erp`, `ecommerce`, `api`), published to GHCR with SHA-pinned digests.
 - **Plan 3** — fleet label advertisement for multi-tenant task routing, admin UI surfaces, Grafana dashboard row, egress-allowlist proxy.
-- **Future** — _Sagewai Sealed_ will replace the minimal env-var secret provider with JIT credentials, redaction, workload identity, and HITL approval.
+- **Future** — Sagewai Sealed will replace the minimal env-var secret provider with JIT credentials, redaction, workload identity, and HITL approval.

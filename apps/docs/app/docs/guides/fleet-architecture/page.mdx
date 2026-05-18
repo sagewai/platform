@@ -3,24 +3,26 @@ import { TechArticleJsonLd } from '@/components/structured-data';
 export const metadata = {
   title: 'Fleet architecture — distributed AI agent workers',
   description:
-    'Sagewai Fleet: enrollment flow, capability-based dispatch, heartbeats, security layers. The distributed-execution architecture for production AI agents.',
+    'Sagewai Fleet internals: enrollment flow, capability-based dispatch, heartbeats, security layers, multi-project isolation, server setup, and production K8s deployment.',
   alternates: { canonical: 'https://docs.sagewai.ai/docs/guides/fleet-architecture' },
 };
 
 <TechArticleJsonLd
   name="Sagewai Fleet architecture"
-  description="Distributed AI agent worker fleet: enrollment, dispatch, heartbeat, security layers, capability matching, project isolation."
+  description="Distributed AI agent worker fleet: enrollment, dispatch, heartbeat, security layers, capability matching, project isolation, production deployment."
   path="/docs/guides/fleet-architecture"
   articleSection="Fleet"
 />
 
 # Fleet Architecture
 
-A deep-dive into how the Sagewai Enterprise Fleet system is designed — enrollment flow, task dispatch, heartbeat management, and security layers.
+A deep-dive into how the Sagewai Fleet system is designed — enrollment flow, task dispatch, heartbeat management, security layers, multi-project isolation, and production deployment.
+
+For the operator how-to (deploy workers, enrollment steps, pool configuration), see [Fleet Deployment](/docs/guides/fleet-deployment). For a conceptual overview, see [Fleet](/docs/platform/fleet).
 
 ---
 
-## System Overview
+## System overview
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -60,7 +62,7 @@ A deep-dive into how the Sagewai Enterprise Fleet system is designed — enrollm
 
 ---
 
-## Component Reference
+## Component reference
 
 | Component | Location | Responsibility |
 |-----------|----------|----------------|
@@ -75,7 +77,7 @@ A deep-dive into how the Sagewai Enterprise Fleet system is designed — enrollm
 
 ---
 
-## Enrollment Flow
+## Enrollment flow
 
 ```
 Worker starts
@@ -109,7 +111,7 @@ Worker polls for tasks (approved status required)
 
 ---
 
-## Task Dispatch Flow
+## Task dispatch flow
 
 ```
 Workflow step ready for execution
@@ -140,9 +142,21 @@ Worker executes task, reports result
 WorkflowMonitor marks step complete, continues workflow
 ```
 
+### Three dimensions of matching
+
+| Dimension | How It Works |
+|-----------|-------------|
+| **Model** | Task requires `gpt-4o` → only workers declaring `gpt-4o` can claim it |
+| **Pool** | Task targets `gpu` pool → only workers in the `gpu` pool see it |
+| **Labels** | Task requires `{region: eu-west}` → only workers with that label match |
+
+### Model normalization
+
+`openai/gpt-4o`, `gpt-4o`, and `GPT-4o` are all treated as the same model. The normalizer strips provider prefixes, lowercases, and replaces colons with hyphens.
+
 ---
 
-## Heartbeat Flow
+## Heartbeat flow
 
 Workers send a heartbeat every **30 seconds** to signal liveness:
 
@@ -171,11 +185,11 @@ If 2+ anomaly types → auto-revoke worker
 
 ---
 
-## Security Layers
+## Security layers
 
-### Layer 1: Enrollment Token (WRT)
+### Layer 1: Enrollment token (WRT)
 
-Each enrollment key is single-use (or time-limited). The stored key is SHA-256 hashed; the plaintext is only shown once at creation time.
+Each enrollment key is single-use or time-limited. The stored key is SHA-256 hashed; the plaintext is only shown once at creation time.
 
 ```python
 # Key structure (JWT claims)
@@ -190,25 +204,270 @@ Each enrollment key is single-use (or time-limited). The stored key is SHA-256 h
 }
 ```
 
-### Layer 2: Payload Encryption
+### Layer 2: Payload encryption
 
 Task payloads (prompts, tool inputs, agent configs) are encrypted with a per-org Fernet key before leaving the gateway. Workers in other organizations cannot decrypt tasks even if they intercept the traffic.
 
-### Layer 3: Approval Gate
+### Layer 3: Approval gate
 
 No worker receives tasks until an admin explicitly approves it. The approval is logged in the audit trail with the approver's identity and timestamp.
 
-### Layer 4: Anomaly Detection
+### Layer 4: Anomaly detection
 
 The `FleetAnomalyDetector` runs continuously. Any worker exhibiting suspicious patterns (sudden rate spike, repeated failures, claiming tasks for models it doesn't have) is automatically revoked pending investigation.
 
-### Layer 5: mTLS (Enterprise, planned)
+Auto-alerts fire on:
+- More than 60 claims per minute (possible bot)
+- More than 10 failures per hour (unhealthy worker)
+- Missed heartbeats for 5+ minutes (crashed worker)
+- Model mismatches (worker claiming tasks it can't serve)
+
+### Layer 5: Per-worker credential injection
+
+Different workers can use different LLM backends. Credentials are injected via ContextVar at execution time — never stored in the database, never sent to the server.
+
+```python
+from sagewai import WorkerCredentials
+
+# GPU worker in EU: uses local Ollama
+gpu_creds = WorkerCredentials(
+    model_overrides={"default": "ollama/llama3.1:70b"},
+    inference_overrides={"api_base": "http://localhost:11434"},
+)
+
+# Cloud worker in US: uses OpenAI
+cloud_creds = WorkerCredentials(
+    model_overrides={"default": "gpt-4o"},
+    inference_overrides={"api_key": "sk-..."},
+)
+```
+
+### Layer 6: mTLS (Enterprise, planned)
 
 Workers will present client certificates issued by the org's CA. The gateway verifies both the WRT token and the client certificate. Revoked certificates are propagated via OCSP.
 
 ---
 
-## Database Schema
+## Multi-project isolation
+
+Every operation in Sagewai is scoped to a project. Each project gets its own namespace, quotas, and data isolation.
+
+```python
+from sagewai import ProjectContext
+
+async with ProjectContext(
+    project_id="team-marketing",
+    max_tokens_per_minute=100_000,
+    max_requests_per_minute=50,
+    max_cost_per_day_usd=30.0,
+):
+    # All agent runs, memory queries, and budget checks
+    # are automatically scoped to "team-marketing"
+    response = await agent.chat("Generate Q4 campaign ideas")
+```
+
+Team A (marketing, $30/day, `cpu` pool) and Team B (engineering, $200/day, `gpu` pool) run on the same server. Each team's spend, agents, memory, and workflow runs are fully isolated.
+
+### Per-project quotas
+
+| Quota | Description | Enforcement |
+|-------|-------------|-------------|
+| `max_tokens_per_minute` | Token throughput limit | 60-second sliding window |
+| `max_requests_per_minute` | Request rate limit | 60-second sliding window |
+| `max_cost_per_day_usd` | Daily spend cap | Resets at midnight UTC |
+
+Quotas are enforced in the `ProjectContext` before every LLM call.
+
+---
+
+## Server setup
+
+The server container runs the complete Sagewai platform:
+
+- **Gateway API** — Fleet task dispatch, webhook triggers, OpenAI-compatible endpoint
+- **Admin Console** — Project management, analytics, budget enforcement
+- **Fleet Registry** — Worker enrollment, approval, health monitoring
+- **Workflow Supervisor** — Stale run detection and recovery (5-min heartbeat timeout)
+
+### Compose spec (container-runtime agnostic)
+
+```yaml
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: sagewai
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports: ["5432:5432"]
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+
+  sagewai-server:
+    image: sagewai/server:latest
+    ports: ["8000:8000"]
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/sagewai
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      SAGEWAI_ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+    deploy:
+      resources:
+        limits: { memory: 2G }
+
+volumes:
+  postgres_data:
+```
+
+### Container runtime support
+
+| Runtime | Command | Notes |
+|---------|---------|-------|
+| Docker Compose V2 | `docker compose up -d` | Default on modern Docker Desktop |
+| Podman Compose | `podman-compose up -d` | Rootless, daemonless |
+| nerdctl (containerd) | `nerdctl compose up -d` | Lightweight |
+| Kubernetes | See K8s section below | Production-grade |
+
+---
+
+## Production Kubernetes deployment
+
+### Server deployment
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sagewai-server
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: sagewai-server }
+  template:
+    metadata:
+      labels: { app: sagewai-server }
+    spec:
+      containers:
+      - name: server
+        image: sagewai/server:latest
+        ports:
+        - containerPort: 8000
+        envFrom:
+        - secretRef: { name: sagewai-secrets }
+        resources:
+          requests: { memory: "1Gi", cpu: "500m" }
+          limits: { memory: "2Gi", cpu: "2000m" }
+        livenessProbe:
+          httpGet: { path: /api/v1/health, port: 8000 }
+          initialDelaySeconds: 10
+        readinessProbe:
+          httpGet: { path: /api/v1/health, port: 8000 }
+          initialDelaySeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sagewai-server
+spec:
+  selector: { app: sagewai-server }
+  ports:
+  - port: 8000
+    targetPort: 8000
+```
+
+### Terraform module
+
+```hcl
+module "sagewai_fleet" {
+  source = "sagewai/fleet/kubernetes"
+
+  server_replicas = 2
+  server_image    = "sagewai/server:latest"
+
+  worker_pools = {
+    cpu = {
+      replicas      = 3
+      models        = ["gpt-4o", "claude-sonnet-4"]
+      node_selector = {}
+      resources     = { memory = "2Gi", cpu = "2" }
+    }
+    gpu = {
+      replicas      = 0  # DaemonSet on GPU nodes instead
+      models        = ["ollama/llama3.1:70b"]
+      node_selector = { "nvidia.com/gpu" = "true" }
+      resources     = { memory = "8Gi", gpu = 1 }
+    }
+  }
+
+  database_url   = var.database_url
+  redis_url      = var.redis_url
+  encryption_key = var.encryption_key
+}
+```
+
+### Pulumi (TypeScript)
+
+```typescript
+import * as k8s from "@pulumi/kubernetes";
+
+const server = new k8s.apps.v1.Deployment("sagewai-server", {
+  spec: {
+    replicas: 2,
+    selector: { matchLabels: { app: "sagewai-server" } },
+    template: {
+      metadata: { labels: { app: "sagewai-server" } },
+      spec: {
+        containers: [{
+          name: "server",
+          image: "sagewai/server:latest",
+          ports: [{ containerPort: 8000 }],
+          envFrom: [{ secretRef: { name: "sagewai-secrets" } }],
+          resources: {
+            requests: { memory: "1Gi", cpu: "500m" },
+            limits: { memory: "2Gi", cpu: "2000m" },
+          },
+        }],
+      },
+    },
+  },
+});
+
+const cpuWorkers = new k8s.apps.v1.Deployment("sagewai-cpu-workers", {
+  spec: {
+    replicas: 3,
+    selector: { matchLabels: { app: "sagewai-worker", pool: "cpu" } },
+    template: {
+      metadata: { labels: { app: "sagewai-worker", pool: "cpu" } },
+      spec: {
+        containers: [{
+          name: "worker",
+          image: "sagewai/worker:latest",
+          env: [
+            { name: "WORKER_POOL", value: "cpu" },
+            { name: "WORKER_MODELS", value: "gpt-4o,claude-sonnet-4" },
+          ],
+          envFrom: [{ secretRef: { name: "sagewai-worker-secrets" } }],
+        }],
+      },
+    },
+  },
+});
+```
+
+---
+
+## Database schema
 
 Three tables support the fleet system (migration `005_fleet.py`):
 
@@ -233,3 +492,32 @@ fleet_audit_events (
 ```
 
 The `models_canonical` column uses a GIN index for efficient `@>` containment queries during task routing.
+
+---
+
+## Example: multi-team deployment
+
+**Acme Corp** runs three teams on one Sagewai server:
+
+| Team | Project | Pool | Budget | Models | Use Case |
+|------|---------|------|--------|--------|----------|
+| Marketing | `mkt` | `cpu-fast` | $30/day | GPT-4o-mini | Content generation agents |
+| Engineering | `eng` | `gpu-local` | $0/day | Llama 3.1 70B (Ollama) | Code review agents |
+| Research | `research` | `cpu-smart` | $100/day | Claude Sonnet | Analysis and reasoning agents |
+
+1. Ops deploys 1 server + 5 workers (2 cpu-fast, 1 gpu-local, 2 cpu-smart)
+2. Each team gets a scoped enrollment key for their pool
+3. Workers auto-register and start claiming tasks
+4. Marketing submits a content workflow → routed to `cpu-fast` → GPT-4o-mini
+5. Engineering submits a code review → routed to `gpu-local` → Llama 3.1 70B ($0)
+6. Research submits analysis → routed to `cpu-smart` → Claude Sonnet
+7. Each team's spend is tracked independently; engineering runs for free
+
+Three teams, fully isolated, with automatic routing and cost control. No team can exhaust another team's budget.
+
+---
+
+## See also
+
+- [Fleet](/docs/platform/fleet) — conceptual overview
+- [Fleet Deployment](/docs/guides/fleet-deployment) — step-by-step worker setup, enrollment, and monitoring

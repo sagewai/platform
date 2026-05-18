@@ -5,62 +5,63 @@ export const metadata = {
   alternates: { canonical: 'https://docs.sagewai.ai/docs/guides/video-tutorials' },
 };
 
-# Video Tutorials
+# Video tutorials
 
-Video walkthroughs for every major Sagewai feature. Follow along to go from zero to production deployment.
+Each video builds something concrete, shows it running, and points to the next step. The code from every tutorial is in `sagewai/examples/` so you can run it locally.
 
-## Getting Started
+## Getting started
 
-| # | Title | Duration | What You'll Learn |
-|---|-------|----------|-------------------|
-| 1 | **Sagewai in 5 Minutes: Your First AI Agent** | 5 min | Install sagewai, create a 4-line agent with GPT-4o, add a custom tool with `@tool`, run it. Zero to working agent. |
+| # | Title | Duration | What you build |
+|---|-------|----------|----------------|
+| 1 | **Sagewai in 5 Minutes: Your First AI Agent** | 5 min | Install sagewai, create a 4-line agent with GPT-4o, add a custom tool with `@tool`, run it. |
 | 2 | **Run AI Agents for Free with Ollama + Sagewai** | 8 min | Install Ollama, pull llama3.1, create an agent with `providers.ollama()`. No API keys, no cloud costs, completely local. |
-| 3 | **Sagewai vs LangChain vs CrewAI: Honest Comparison** | 12 min | Side-by-side feature comparison. Build the same research agent in all three frameworks. See what Sagewai does differently — cost control, fleet workers, local inference. |
+| 3 | **Sagewai vs LangChain vs CrewAI: Honest Comparison** | 12 min | Build the same research agent in all three frameworks. Side-by-side look at cost control, fleet workers, and local inference. |
 
-## Core Features
+## Core SDK features
 
-| # | Title | Duration | What You'll Learn |
-|---|-------|----------|-------------------|
-| 4 | **Building a Research Agent with Memory** | 10 min | Create an agent that remembers facts across conversations using GraphMemory. Watch the knowledge graph build in real-time as the agent learns. |
-| 5 | **RAG in 10 Minutes: PDF Q&A with Context Engine** | 10 min | Ingest a PDF document, ask questions about it, see retrieval in action with the `@context` directive. Demonstrate vector + graph hybrid search. |
-| 6 | **Multi-Agent Workflows: Researcher, Analyst, Writer** | 12 min | Build a 3-agent content pipeline with SequentialAgent. Watch data flow between agents and monitor execution in the admin panel. |
-| 7 | **Sagewai Directives: The Prompt Preprocessor** | 8 min | Deep dive into `@context`, `@memory`, `@agent:name()`, `@wf:name()`, `/tool`, `#model`. See how directives transform prompts before they reach the LLM. |
-| 8 | **Safety and Guardrails: PII, Hallucination, Budget Control** | 10 min | Add PIIGuard, HallucinationGuard, and TokenBudgetGuard to an agent. Watch blocked responses, redacted PII, and budget enforcement in action. |
+| # | Title | Duration | What you build |
+|---|-------|----------|----------------|
+| 4 | **Building a Research Agent with Memory** | 10 min | An agent that remembers facts across conversations using GraphMemory. The knowledge graph builds as the agent runs. |
+| 5 | **RAG in 10 Minutes: PDF Q&A with Context Engine** | 10 min | Ingest a PDF, ask questions about it, watch retrieval work with the `@context` directive. Demonstrates vector + graph hybrid search. |
+| 6 | **Multi-Agent Workflows: Researcher, Analyst, Writer** | 12 min | A 3-agent content pipeline with SequentialAgent. Data flows between agents; execution is visible in the admin panel. |
+| 7 | **Sagewai Directives: The Prompt Preprocessor** | 8 min | `@context`, `@memory`, `@agent:name()`, `@wf:name()`, `/tool`, `#model`. Watch how directives transform a prompt before the LLM call. |
+| 8 | **Safety and Guardrails: PII, Hallucination, Budget Control** | 10 min | Add PIIGuard, HallucinationGuard, and TokenBudgetGuard to an agent. See blocked responses, redacted PII, and budget enforcement in action. |
 
-## Developer Tools
+## Developer tools
 
-| # | Title | Duration | What You'll Learn |
-|---|-------|----------|-------------------|
-| 9 | **VS Code Extension: Faster Agent Development** | 6 min | Install the Sagewai VS Code extension. Demo syntax highlighting for directives, use scaffold commands (New Agent, New Workflow, Add Tool), and code snippets in action. |
-| 10 | **Using Sagewai from TypeScript, Go, and Rust** | 10 min | Start the harness proxy, connect from three languages using client wrappers. Same agent infrastructure, three ecosystems. See the unified API surface. |
-| 11 | **MCP Server: Give Claude Code and Cursor Your Agent's Tools** | 8 min | Create an MCP server with `sagewai mcp serve`, connect it to Claude Code and Cursor. Watch AI coding assistants use your custom tools. |
+| # | Title | Duration | What you build |
+|---|-------|----------|----------------|
+| 9 | **VS Code Extension: Faster Agent Development** | 6 min | Install the Sagewai VS Code extension. Directive syntax highlighting, scaffold commands (New Agent, New Workflow, Add Tool), code snippets. |
+| 10 | **Using Sagewai from TypeScript, Go, and Rust** | 10 min | Start the harness proxy, connect from three languages using client wrappers. Same agent infrastructure, three ecosystems. |
+| 11 | **MCP Server: Give Claude Code and Cursor Your Agent's Tools** | 8 min | Create an MCP server with `sagewai mcp serve`, connect it to Claude Code and Cursor. AI coding assistants call your custom tools. |
 
-## Enterprise and Production
+## Enterprise and production
 
-| # | Title | Duration | What You'll Learn |
-|---|-------|----------|-------------------|
-| 12 | **Fleet Architecture: Server + Workers Explained** | 15 min | Full architecture walkthrough. Deploy a server container, create enrollment keys, start 3 workers (CPU + GPU), submit tasks, and watch pool/label routing in action. |
-| 13 | **Multi-Tenant Setup: Per-Team Isolation and Budgets** | 10 min | Create 3 projects with different budgets and worker pools. See complete isolation — each team's spend, agents, and data fully separated on the same server. |
-| 14 | **Zero-Cost AI: Fine-Tune with Unsloth, Serve with Ollama** | 15 min | Full pipeline: generate training data with GPT-4o, fine-tune with Unsloth (4-bit QLoRA), export to GGUF, serve via Ollama, harness auto-discovers it. $0/token inference forever. |
+| # | Title | Duration | What you build |
+|---|-------|----------|----------------|
+| 12 | **Fleet Architecture: Server + Workers Explained** | 15 min | Deploy a server container, create enrollment keys, start 3 workers (CPU + GPU), submit tasks, and watch pool/label routing. |
+| 13 | **Multi-Tenant Setup: Per-Team Isolation and Budgets** | 10 min | Create 3 projects with different budgets and worker pools. Each team's spend, agents, and data stay isolated on the same server. |
+| 14 | **Zero-Cost AI: Fine-Tune with Unsloth, Serve with Ollama** | 15 min | Generate training data with GPT-4o, fine-tune with Unsloth (4-bit QLoRA), export to GGUF, serve via Ollama. Harness auto-discovers it; $0/token inference. |
 | 15 | **Production Kubernetes Deployment** | 12 min | Deploy Sagewai fleet on K8s: server Deployment, GPU worker DaemonSet with NVIDIA tolerations, HPA for CPU workers. Terraform and Pulumi templates. Monitoring with Grafana. |
-| 16 | **CI/CD Agents: PR Summaries and Eval Quality Gates** | 10 min | Add `run-agent` and `run-evals` GitHub Actions to a real repo. Demo a PR summary bot that comments on every PR and a quality gate that fails CI when agent performance drops. |
-| 17 | **The LLM Harness: Proxy, Route, and Budget All AI Calls** | 10 min | Point Claude Code and Cursor at the harness proxy. See complexity-based routing (Haiku for typos, Opus for architecture), per-team budgets, and the full audit trail. |
+| 16 | **CI/CD Agents: PR Summaries and Eval Quality Gates** | 10 min | Add `run-agent` and `run-evals` GitHub Actions to a real repo. A PR summary bot comments on every PR; a quality gate fails CI when agent performance drops. |
+| 17 | **The LLM Harness: Proxy, Route, and Budget All AI Calls** | 10 min | Point Claude Code and Cursor at the harness proxy. Complexity-based routing (Haiku for typos, Opus for architecture), per-team budgets, full audit trail. |
 
 ## Advanced
 
-| # | Title | Duration | What You'll Learn |
-|---|-------|----------|-------------------|
-| 18 | **Durable Workflows: Temporal-like Execution in Python** | 12 min | Build a workflow with ApprovalGate for human-in-the-loop review. Show PostgreSQL-backed checkpointing, worker crash recovery, and the dead letter queue. |
-| 19 | **Self-Learning Agents: Improve Automatically from Usage** | 10 min | Enable auto-learn on an agent, show it storing successful interaction patterns over time. Demonstrate measurably improved responses as the agent learns from its conversations. |
-| 20 | **Building a Full-Stack AI App with Sagewai** | 20 min | End-to-end: Python backend with FastAPI + Sagewai agents, Next.js frontend consuming the API, admin panel monitoring everything. The complete developer experience from code to production. |
+| # | Title | Duration | What you build |
+|---|-------|----------|----------------|
+| 18 | **Durable Workflows: Temporal-like Execution in Python** | 12 min | A workflow with ApprovalGate for human-in-the-loop review. PostgreSQL-backed checkpointing, worker crash recovery, and the dead letter queue. |
+| 19 | **Self-Learning Agents: Improve Automatically from Usage** | 10 min | Enable auto-learn on an agent, watch it store successful interaction patterns. Response quality improves as the agent accumulates runs. |
+| 20 | **Building a Full-Stack AI App with Sagewai** | 20 min | Python backend with FastAPI + Sagewai agents, Next.js frontend, admin panel monitoring everything. End-to-end from code to production. |
 
-## Recording Notes
+## Recording structure
 
-Each video follows this structure:
+Each video follows the same format:
+
 1. **What we're building** (30 seconds) — show the end result first
 2. **Prerequisites** (30 seconds) — what you need installed
 3. **Live coding** (main content) — build it step by step
 4. **Run and demo** (1-2 minutes) — show it working
 5. **What's next** (15 seconds) — link to the next video
 
-All code from these videos is available in the `sagewai/examples/` directory of the SDK.
+All code is in the `sagewai/examples/` directory of the SDK.

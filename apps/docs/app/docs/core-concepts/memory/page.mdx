@@ -17,7 +17,9 @@ export const metadata = {
 
 # Memory & RAG
 
-Sagewai provides a layered memory architecture: conversation history for short-term context, vector and graph stores for long-term retrieval, a hybrid RAG engine for combining both, and the Context Engine for production-grade document management with scoped access.
+Memory gives agents access to information beyond the current conversation. Sagewai layers four mechanisms: conversation history for short-term context, vector and graph stores for long-term retrieval, a hybrid RAG engine that combines both, and the Context Engine for production document management with scoped access.
+
+**Prerequisites:** [Agents](/docs/core-concepts/agents) · **Next:** [Context Engine](/docs/core-concepts/context-engine) · [Directives](/docs/core-concepts/directives)
 
 ## Architecture Overview
 
@@ -41,13 +43,13 @@ Optional re-ranking (cross-encoder)
 Retrieved context injected into agent messages
 ```
 
-Memory is integrated directly into `BaseAgent`. When you set the `memory` parameter, relevant context is automatically retrieved and injected before each LLM call.
+Memory integrates directly into `BaseAgent`. When you set the `memory` parameter, the agent retrieves relevant context and injects it before each LLM call — no extra code on your side.
 
 ---
 
 ## ConversationManager
 
-For multi-turn conversations where the agent remembers previous exchanges, use `ConversationManager` for automatic state management:
+For multi-turn conversations where the agent needs to remember previous exchanges, `ConversationManager` handles state automatically:
 
 ```python
 from sagewai import UniversalAgent
@@ -60,7 +62,7 @@ await manager.send("What is 2 + 2?")      # "4"
 await manager.send("Now multiply that by 3")  # "12" — remembers context
 ```
 
-For manual control, use `chat_with_history()` with explicit message management:
+If you prefer to manage message history yourself, use `chat_with_history()` directly:
 
 ```python
 from sagewai import UniversalAgent, ChatMessage
@@ -82,9 +84,9 @@ response = await agent.chat_with_history(messages)
 
 ## VectorMemory
 
-Semantic similarity search using embedding vectors. Best for retrieving documents, passages, and factual knowledge.
+Semantic similarity search over embedding vectors. Use it for retrieving documents, passages, and factual knowledge.
 
-### In-Memory (Prototyping)
+### In-Memory (Development)
 
 ```python
 from sagewai.memory.vector import VectorMemory
@@ -131,9 +133,9 @@ results = await memory.retrieve("quantum computing basics", top_k=3)
 
 ## GraphMemory
 
-Knowledge graph storage for relational data. Best for retrieving entity relationships, hierarchies, and structured knowledge.
+Knowledge graph storage for relational data. Use it when queries ask about entity relationships, hierarchies, or structured knowledge rather than semantic similarity.
 
-### In-Memory (Prototyping)
+### In-Memory (Development)
 
 ```python
 from sagewai.memory.graph import GraphMemory
@@ -149,7 +151,7 @@ results = await memory.retrieve("Who works at Acme Corp?")
 
 ### NebulaGraphMemory (Production)
 
-For production, use NebulaGraph for persistent graph storage with temporal fact tracking:
+For production, use NebulaGraph for persistent storage with temporal fact tracking:
 
 ```python
 from sagewai.memory.nebula import NebulaGraphMemory
@@ -166,13 +168,13 @@ await memory.store_relation("Alice", "manages", "Project X")
 results = await memory.retrieve("What does Alice manage?")
 ```
 
-NebulaGraph supports temporal fact tracking with `valid_from` and `superseded_at` timestamps, so facts can be versioned over time.
+NebulaGraph tracks facts over time using `valid_from` and `superseded_at` timestamps — so you can store and query the history of a relationship, not just its current value.
 
 ---
 
 ## RAGEngine
 
-The `RAGEngine` orchestrates both vector and graph memory for hybrid retrieval. It uses a `QueryRouter` to classify incoming queries and route them to the appropriate backend.
+`RAGEngine` orchestrates both vector and graph backends for hybrid retrieval. Its `QueryRouter` classifies each incoming query and routes it to the right backend — or both.
 
 ```python
 from sagewai.memory.rag import RAGEngine, RetrievalStrategy
@@ -214,9 +216,7 @@ response = await agent.chat("What are the key findings from our Q4 report?")
 
 ## Episodic Memory
 
-Episodic memory captures structured records of completed agent tasks: the goal, context used, actions taken, outcome, and lessons learned. On future similar tasks, relevant episodes are retrieved to inform strategy.
-
-This gives agents *experience*, not just *knowledge*.
+Episodic memory stores structured records of completed tasks: the goal, context used, actions taken, outcome, and lessons. On future similar tasks, the agent retrieves relevant past episodes to inform its approach.
 
 ```python
 from sagewai.context import EpisodeStore, Episode, InMemoryVectorStore
@@ -237,13 +237,13 @@ await store.capture(episode)
 similar = await store.retrieve("audit financial statements", top_k=3)
 ```
 
-For persistent episodes that survive restarts, use `PersistentEpisodeStore` which delegates to a `ContextEngine` instance.
+For episodes that survive restarts, use `PersistentEpisodeStore`, which delegates storage to a `ContextEngine` instance.
 
 ---
 
 ## MemoryWriter
 
-Automatically extract key facts from conversations and store them in memory:
+`MemoryWriter` extracts key facts from conversation history on a schedule and stores them in the memory backend. Use it for long-running conversations to prevent important context from being lost during compaction.
 
 ```python
 from sagewai.core.memory_writer import MemoryWriter
@@ -257,13 +257,13 @@ if writer.should_extract(turn_count=10):
     facts = await writer.extract_and_store(messages, memory)
 ```
 
-`MemoryWriter` uses a small, fast model to identify and extract key facts from conversation history, then stores them in the memory backend for future retrieval.
+A small, fast model does the extraction — you control how often it runs by setting `extract_every_n_turns`.
 
 ---
 
 ## QueryRouter
 
-The `QueryRouter` classifies queries to determine the best retrieval strategy:
+`QueryRouter` classifies a query and returns the best retrieval strategy for it:
 
 ```python
 from sagewai.memory.query_router import QueryRouter
@@ -275,21 +275,23 @@ router.classify("Who manages Project X?")           # "relational" -> GraphMemor
 router.classify("Team leads working on AI?")        # "hybrid" -> both
 ```
 
+`RAGEngine` uses `QueryRouter` internally. You can also call it directly to route queries yourself.
+
 ---
 
 ## Best Practices
 
-1. **Start with in-memory stores** for development and testing, then switch to Milvus/NebulaGraph for production.
+1. **Start with in-memory stores** for development and testing, then switch to Milvus/NebulaGraph before going to production.
 
-2. **Use the Context Engine** for production applications that need document ingestion, scoped access, and lifecycle management. See the [Context Engine](/docs/core-concepts/context-engine) page for details.
+2. **Use the Context Engine** when you need document ingestion, scoped access, and lifecycle management. See the [Context Engine](/docs/core-concepts/context-engine) page for details.
 
-3. **Use `RetrievalStrategy.HYBRID`** when you have both factual documents and relational data. The RAG engine merges results from both backends.
+3. **Use `RetrievalStrategy.HYBRID`** when you have both factual documents and relational data. The RAG engine merges results from both backends using reciprocal rank fusion.
 
-4. **Set `top_k` appropriately** — too few results may miss relevant context, too many may overwhelm the LLM's context window. Start with 5 and adjust.
+4. **Set `top_k` carefully** — too few results may miss relevant context; too many may push past the LLM's context window. Start with 5 and adjust based on output quality.
 
-5. **Use `MemoryWriter`** for long-running conversations to prevent important context from being lost during compaction.
+5. **Use `MemoryWriter`** for long-running conversations to keep important facts in scope even after context compaction.
 
-6. **Enable episodic memory** for agents that perform recurring tasks. Past experiences improve future performance without additional training.
+6. **Enable episodic memory** for agents that run the same types of tasks repeatedly. Past outcomes inform future runs without any additional training.
 
 ---
 

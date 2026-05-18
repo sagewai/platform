@@ -21,13 +21,15 @@ export const metadata = {
 />
 <SoftwareApplicationJsonLd />
 
-# Sagewai vs. Alternatives
+# Sagewai vs. alternatives
 
-How Sagewai compares to other agent frameworks. Sagewai is not just an SDK — it is a complete platform with deployment infrastructure, cost governance, and enterprise-grade fleet management. The short version: **LangChain and LlamaIndex are excellent SDKs; Sagewai is the platform you ship into production.** LangChain ships building blocks; LlamaIndex specialises in retrieval; Sagewai stitches the SDK to a worker fleet, an observability stack, a security spine, and a training loop that takes your Opus traffic to a local model you own.
+This page compares Sagewai to LangChain, LlamaIndex, CrewAI, AutoGen, and Semantic Kernel. The goal is to help you pick the right tool for your situation, not to declare a winner.
 
-If you only need a script that calls an LLM with a tool, LangChain or LlamaIndex's quickstarts are faster to copy-paste. If you need an agent in production this quarter — with cost dashboards, multi-tenant isolation, audit trail, and a credible answer for the Q3 *"why did the API bill quadruple"* meeting — that is Sagewai's territory.
+LangChain and LlamaIndex are SDK-layer frameworks: they give you building blocks for calling LLMs and building retrieval pipelines. Sagewai covers the SDK layer too, but also includes a worker fleet, an observability stack, multi-tenant cost governance, Sealed security tiers, and a training loop that moves your cloud-model traffic to local inference over time.
 
-## Feature Comparison
+If you need a one-off script that calls an LLM with a tool, LangChain's quickstart will get you there faster. If you need an agent running in production this quarter — with cost dashboards, multi-tenant isolation, an audit trail, and a credible path to reduce API spend — that is where Sagewai's additional scope pays off.
+
+## Feature comparison
 
 | Feature | Sagewai | LangChain | LlamaIndex | CrewAI | AutoGen | Semantic Kernel |
 |---------|---------|-----------|-----------|--------|---------|----------------|
@@ -52,32 +54,32 @@ If you only need a script that calls an LLM with a tool, LangChain or LlamaIndex
 | **Sandbox Isolation** | Docker / Podman / Kubernetes / AgentCore | None | None | None | None | None |
 | **Client Libraries** | 17 languages (TS, Go, Rust, Java, C#, + 12 more) | Python, JS | Python, TS | Python | Python, .NET | Python, .NET, Java |
 | **CI/CD Integration** | GitHub Actions (run-agent, run-evals, deploy-worker) | None | None | None | None | None |
-| **Admin Console** | Built-in web dashboard + Iron Man HUD | Via LangSmith (paid) | None | None | Via AutoGen Studio | None |
+| **Admin Console** | Built-in web dashboard | Via LangSmith (paid) | None | None | Via AutoGen Studio | None |
 | **License** | AGPL-3.0 (free) + commercial | MIT | MIT | MIT | CC-BY-4.0 | MIT |
 
-## When to Choose Sagewai
+## When to use Sagewai
 
-**Enterprise cost control** — Per-project budgets, complexity-based routing, full spend audit trail. No other framework tracks costs at the platform level.
+**Enterprise cost control** — per-project budgets, complexity-based routing, and a full spend audit trail. No other framework tracks costs at the platform level.
 
-**Distributed execution** — Server + worker architecture with pool/label routing. Run GPU workers on-prem and CPU workers in the cloud. Scale independently.
+**Distributed execution** — the server + worker architecture lets you run GPU workers on-prem and CPU workers in the cloud, scaling each independently.
 
-**Multi-tenant isolation** — Each team gets their own project with isolated namespaces, quotas, and encryption. Critical for organizations with multiple AI initiatives.
+**Multi-tenant isolation** — each team gets its own project with isolated namespaces, quotas, and encryption. Critical when multiple teams are running AI on the same infrastructure.
 
-**Local inference at scale** — Built-in Ollama/vLLM/Unsloth support with auto-discovery. Fine-tune domain models and serve at $0/token.
+**Local inference at scale** — Ollama/vLLM/Unsloth support with auto-discovery. Fine-tune domain-specific models and serve them at $0/token.
 
-**Full ownership** — Self-host everything. No vendor dependency, no data leaving your network, no per-seat pricing.
+**Full ownership** — self-host the entire stack. No vendor dependency, no data leaving your network.
 
 **Polyglot integration** — 17 client libraries mean your Go backend, Rust service, and TypeScript frontend all talk to the same agent infrastructure.
 
-## When NOT to Choose Sagewai
+## When not to use Sagewai
 
-**Quick prototyping** — If you need a one-off script with minimal setup, LangChain's simpler getting-started may be faster for throwaway experiments.
+**Quick prototyping** — if you need a one-off script with minimal setup, LangChain's simpler onboarding may be faster for throwaway experiments.
 
-**Notebook-first workflow** — If you work primarily in Jupyter notebooks and want inline chain visualization, LangSmith + LangChain may suit your workflow better.
+**Notebook-first workflow** — if you work primarily in Jupyter and want inline chain visualisation, LangSmith + LangChain may suit your workflow better.
 
-**Microsoft ecosystem** — If you are deep in Azure and .NET, Semantic Kernel has tighter Azure integration out of the box.
+**Microsoft ecosystem** — if you are deep in Azure and .NET, Semantic Kernel has tighter Azure integration out of the box.
 
-**Multi-agent conversations** — If your primary use case is autonomous agent debates and conversations (not workflows), AutoGen's conversation patterns are purpose-built for this.
+**Multi-agent conversations** — if your primary use case is autonomous agent debates and conversations (not workflows), AutoGen's conversation patterns are purpose-built for that.
 
 ## Migration from LangChain
 
@@ -105,7 +107,7 @@ Key conceptual mapping:
 | `Workflow` class | `SequentialAgent` / `DurableWorkflow` |
 | `IngestionPipeline` | `ContextEngine` ingestion + chunking pipeline |
 
-LlamaIndex is excellent for retrieval-heavy use cases. Sagewai's Context Engine gives you the same indices wired into a multi-tenant platform with audit, cost tracking, and worker dispatch.
+LlamaIndex is well-suited to retrieval-heavy use cases. Sagewai's Context Engine gives you the same retrieval indices wired into a multi-tenant platform with audit, cost tracking, and worker dispatch.
 
 ## Migration from CrewAI
 
@@ -116,14 +118,13 @@ LlamaIndex is excellent for retrieval-heavy use cases. Sagewai's Context Engine 
 | `Crew(agents=[...], tasks=[...])` | `SequentialAgent` or `ParallelAgent` |
 | `crew.kickoff()` | `await workflow.run()` |
 
-## The Sagewai Advantage
+## What Sagewai adds beyond the SDK
 
-Most frameworks stop at the SDK layer — they help you build agents but leave deployment, cost control, and operations to you. Sagewai provides the complete stack:
+Most agent frameworks stop at the SDK layer — they help you build agents but leave deployment, cost control, and operations to you. Sagewai adds:
 
-- **Build** agents with the SDK
-- **Govern** them with the Registry
-- **Control costs** with the Harness
-- **Monitor** with the Observatory
-- **Deploy** with the Fleet
+- **Registry** — store, version, and govern agents
+- **Harness** — proxy, route, and budget all AI calls
+- **Observatory** — OpenTelemetry-native observability
+- **Fleet** — distributed worker execution with pool/label routing
 
-All open-source, all self-hosted, all yours.
+All open-source, all self-hosted.

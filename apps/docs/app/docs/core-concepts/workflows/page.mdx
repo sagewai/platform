@@ -16,13 +16,13 @@ export const metadata = {
 
 # Workflows
 
-Workflows compose multiple agents into deterministic execution patterns. Unlike a single agent that decides what to do via LLM, workflow agents follow a fixed structure — sequential, parallel, conditional, or iterative — while each sub-agent within the workflow uses its own LLM.
+Workflows compose multiple agents into a deterministic execution structure. Each sub-agent uses its own LLM; the workflow controls the order and state hand-off. For tasks that must survive process crashes, Sagewai adds `DurableWorkflow` with PostgreSQL-backed step checkpointing, human-in-the-loop approval gates, and distributed workers.
 
-For durable execution that survives process crashes, Sagewai provides `DurableWorkflow` with PostgreSQL-backed checkpointing, human-in-the-loop approval gates, and distributed workers.
+**Prerequisites:** [Agents](/docs/core-concepts/agents) · **Next:** [Context Engine](/docs/core-concepts/context-engine) · [Safety](/docs/core-concepts/safety)
 
 ## Workflow Agents
 
-Four built-in workflow agents handle the most common composition patterns. See the [Agents](/docs/core-concepts/agents#agent-composition) page for full details on each.
+Four built-in workflow agents cover the most common composition patterns. See the [Agents](/docs/core-concepts/agents#agent-composition) page for full constructor details.
 
 | Pattern | Description |
 |---------|-------------|
@@ -52,7 +52,7 @@ result = await pipeline.chat("Write about quantum computing advances in 2025")
 
 ## DurableWorkflow
 
-`DurableWorkflow` provides step-level checkpointing and automatic recovery. If a process crashes mid-workflow, it resumes from the last completed step on restart.
+`DurableWorkflow` checkpoints each step to PostgreSQL as it completes. If the process crashes mid-run, pass the same `run_id` on restart and the workflow picks up from where it left off — skipping completed steps automatically.
 
 ```python
 from sagewai import DurableWorkflow, UniversalAgent
@@ -93,14 +93,14 @@ result = await wf.run(topic="quantum computing")
 
 ### Resuming After Crash
 
-If the process crashes after the "research" step completes but before "draft" finishes, pass the same `run_id` to resume:
+If the process crashes after "research" completes but before "draft" finishes, pass the same `run_id` to resume:
 
 ```python
-# On restart — skips "research", resumes from "draft"
+# Skips "research", resumes from "draft"
 result = await wf.run(run_id="article-pipeline-abc123")
 ```
 
-The workflow reads checkpointed state from PostgreSQL and skips already-completed steps.
+The workflow reads checkpointed state from PostgreSQL and skips steps that already completed.
 
 ### Stores
 
@@ -113,7 +113,7 @@ The workflow reads checkpointed state from PostgreSQL and skips already-complete
 
 ## ApprovalGate
 
-`ApprovalGate` pauses a workflow and waits for human approval before continuing. This enables human-in-the-loop patterns for sensitive operations.
+`ApprovalGate` pauses a workflow at a named step and waits for explicit human approval before continuing. Use it when a step involves an irreversible action — publishing, sending, deploying — and you need a human sign-off in the loop.
 
 ```python
 from sagewai import DurableWorkflow, ApprovalGate, UniversalAgent
@@ -132,7 +132,7 @@ async def draft(topic: str) -> str:
 
 @wf.step("review")
 async def review(content: str) -> str:
-    # This pauses the workflow until a human approves
+    # Pauses the workflow here until a human approves
     await gate.request_approval(
         prompt=f"Approve publication of: {content[:200]}...",
         context={"content": content},
@@ -153,7 +153,7 @@ except Exception:
 
 ### Approving or Rejecting
 
-From an admin endpoint, CLI, or any external process:
+From an admin endpoint, CLI, or any other process:
 
 ```python
 # Approve — the workflow resumes from the review step
@@ -167,18 +167,18 @@ await gate.reject(
 )
 ```
 
-After approval, resume the workflow:
+After approval, resume with the same `run_id`:
 
 ```python
 result = await wf.run(run_id="content-run-001")
-# Picks up from "review" step, then runs "publish"
+# Picks up from "review", then runs "publish"
 ```
 
 ---
 
 ## WorkflowWorker
 
-`WorkflowWorker` is a distributed execution consumer that polls for pending workflow runs, claims them atomically, and executes them with heartbeat emission. Multiple workers can run concurrently against the same database for horizontal scaling.
+`WorkflowWorker` is a distributed execution consumer. It polls the database for pending runs, claims them atomically with `FOR UPDATE SKIP LOCKED`, executes them, and emits heartbeats. Run multiple workers against the same database for horizontal scaling.
 
 ```python
 from sagewai import WorkflowWorker
@@ -199,7 +199,7 @@ await worker.start()  # Blocks until shutdown
 
 ### Pool and Label Routing
 
-Workers support pool and label-based routing, similar to Temporal task queues. This lets you route specific workflows to workers with the right resources:
+Workers support pool and label-based routing to direct specific workflows to workers that have the right resources — local GPU, specific cloud region, etc.:
 
 ```python
 from sagewai import WorkflowWorker, WorkerLoadBalancer
@@ -221,11 +221,11 @@ worker = WorkflowWorker(
 )
 ```
 
-When a workflow run specifies routing constraints, the worker claim query uses PostgreSQL's `FOR UPDATE SKIP LOCKED` pattern with JSONB label containment for contention-free work distribution.
+The claim query uses JSONB label containment so routing decisions happen in the database, not in application code.
 
 ### Worker Credentials
 
-Per-worker credentials are injected into agents via `ContextVar`, so agents automatically use the worker's model, API base, and API key at LLM call time:
+Per-worker credentials are injected into agents via `ContextVar`, so an agent automatically uses the worker's model and API configuration at LLM call time without any changes to your agent code:
 
 ```python
 from sagewai import get_worker_credentials
@@ -239,7 +239,7 @@ creds = get_worker_credentials()
 
 ## WorkflowMonitor
 
-`WorkflowMonitor` provides Temporal-like visibility into workflow executions:
+`WorkflowMonitor` provides visibility into workflow executions — running, completed, and failed:
 
 ```python
 from sagewai import WorkflowMonitor
@@ -254,7 +254,7 @@ executions = await monitor.list_executions(status="running")
 # Inspect a specific execution
 detail = await monitor.get_execution("run-abc123")
 
-# Get execution timeline (like Temporal's event history)
+# Get execution timeline (step-by-step event history)
 timeline = await monitor.get_execution_timeline("run-abc123")
 
 # Retry a failed execution
@@ -265,7 +265,7 @@ await monitor.retry_execution("run-abc123")
 
 ## DeadLetterQueue
 
-Failed workflow runs that exhaust their retry attempts are moved to the Dead Letter Queue for manual inspection:
+Runs that exhaust all retry attempts move to the Dead Letter Queue. From there you can inspect the failure, retry manually, or discard:
 
 ```python
 from sagewai import DeadLetterQueue
@@ -291,7 +291,7 @@ await dlq.discard_entry("run-abc123")
 
 ## Complete Example
 
-Here is a durable workflow that survives crashes, requires human approval, and runs on distributed workers:
+A durable workflow that survives crashes, requires human approval before publishing, and runs on distributed workers:
 
 ```python
 import asyncio

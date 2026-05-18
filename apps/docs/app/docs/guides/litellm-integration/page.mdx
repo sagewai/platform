@@ -1,15 +1,15 @@
 export const metadata = {
-  title: 'LiteLLM integration — Sagewai as enterprise LLM gateway',
+  title: 'LiteLLM integration — unified LLM gateway for Sagewai',
   description:
-    'Deploy LiteLLM Proxy as your AI gateway with Sagewai as the agent platform. One bill, one governance layer, hundreds of models.',
+    'Deploy LiteLLM Proxy as your organization\'s AI gateway and point Sagewai agents at it. Per-project virtual keys, spend limits, and multi-provider routing in one place.',
   alternates: { canonical: 'https://docs.sagewai.ai/docs/guides/litellm-integration' },
 };
 
-# Enterprise LLM Gateway with LiteLLM Proxy
+# LiteLLM Proxy Integration
 
-Deploy LiteLLM Proxy as your organization's AI gateway with Sagewai as the agent platform. One bill, one governance layer, multiple models.
+This guide shows you how to run LiteLLM Proxy as a shared gateway and point Sagewai agents at it. Every LLM call from Claude Code, Cursor, and your agents flows through a single endpoint. You get unified spend tracking, model access control, and rate limiting without changing any application code.
 
-> **Why a proxy?** Every LLM call from Claude Code, Cursor, and Sagewai agents flows through a single gateway. You get unified spend tracking, model access control, and rate limiting without changing application code.
+**Prerequisites:** Docker or Podman installed, Sagewai SDK installed, at least one provider API key.
 
 ---
 
@@ -42,11 +42,11 @@ Deploy LiteLLM Proxy as your organization's AI gateway with Sagewai as the agent
     +---------+ +---------+ +---------+
 ```
 
-Sagewai uses LiteLLM as its inference backend (via `litellm.acompletion`), so pointing every agent at a LiteLLM Proxy requires only setting `api_base` -- no application code changes.
+Sagewai uses LiteLLM as its inference backend via `litellm.acompletion`. Pointing agents at a LiteLLM Proxy requires only setting `api_base` — no code changes beyond that.
 
 ---
 
-## Quick Start
+## Quick start
 
 ### 1. Deploy LiteLLM Proxy
 
@@ -75,7 +75,7 @@ model_list:
 
   - model_name: claude-sonnet
     litellm_params:
-      model: claude-sonnet-4-20250514
+      model: claude-sonnet-4-5-20250929
       api_key: os.environ/ANTHROPIC_API_KEY
 
   - model_name: gemini-flash
@@ -87,9 +87,9 @@ general_settings:
   master_key: sk-your-master-key
 ```
 
-### 2. Point Sagewai at the Proxy
+### 2. Point Sagewai at the proxy
 
-Every `UniversalAgent` routes LLM calls through `litellm.acompletion`. Set `api_base` to redirect those calls to your proxy:
+Set `api_base` on any `UniversalAgent` to redirect its LLM calls through the proxy:
 
 ```python
 from sagewai import UniversalAgent, AgentConfig, InferenceConfig
@@ -106,16 +106,16 @@ agent = UniversalAgent(
 )
 ```
 
-Or via environment variables (applies to all agents):
+To apply this to all agents without modifying each one, set environment variables instead:
 
 ```bash
 LITELLM_PROXY_URL=http://litellm:4000
 LITELLM_API_KEY=sk-your-master-key
 ```
 
-### 3. Verify Connectivity
+### 3. Verify connectivity
 
-Use the built-in `LiteLLMProxyClient` to check the proxy is reachable and discover available models:
+Use `LiteLLMProxyClient` to check the proxy is reachable and to see which models are registered:
 
 ```python
 from sagewai.integrations import LiteLLMProxyClient
@@ -135,18 +135,13 @@ for m in models:
 
 ---
 
-## Virtual Keys Per Project
+## Virtual keys per project
 
-Each Sagewai project can get its own LiteLLM virtual key. This gives you:
+Give each Sagewai project its own LiteLLM virtual key to track spend separately and restrict which models the project can reach.
 
-- Per-project spend tracking
-- Independent rate limits
-- Model access control (restrict which models a project can use)
-
-Create a virtual key on the LiteLLM proxy, then assign it to a project:
+Create a virtual key on the proxy:
 
 ```bash
-# Create a virtual key on the LiteLLM proxy
 curl -X POST http://litellm:4000/key/generate \
   -H "Authorization: Bearer sk-your-master-key" \
   -H "Content-Type: application/json" \
@@ -158,7 +153,7 @@ curl -X POST http://litellm:4000/key/generate \
   }'
 ```
 
-Then configure the project's agents to use that key:
+Configure the project's agents to use that key:
 
 ```python
 agent = UniversalAgent(
@@ -175,9 +170,9 @@ agent = UniversalAgent(
 
 ---
 
-## Full docker-compose Example
+## Full docker-compose example
 
-A complete stack with Sagewai admin, LiteLLM Proxy, and Postgres:
+A complete stack with Sagewai admin, LiteLLM Proxy, and PostgreSQL:
 
 ```yaml
 # docker-compose.yml
@@ -241,9 +236,9 @@ docker compose up -d
 
 ---
 
-## Spend Monitoring
+## Spend monitoring
 
-The `LiteLLMProxyClient` exposes spend data from the proxy:
+Retrieve current spend from the proxy using `LiteLLMProxyClient`:
 
 ```python
 from sagewai.integrations import LiteLLMProxyClient
@@ -256,22 +251,22 @@ client = LiteLLMProxyClient(
 spend = await client.get_spend()
 ```
 
-LiteLLM Proxy tracks spend per virtual key automatically. Combined with Sagewai's built-in budget enforcement (`check_budget()` / `record_spend()` in `BaseAgent`), you get two independent layers of cost control.
+LiteLLM Proxy tracks spend per virtual key automatically. Combined with Sagewai's `check_budget()` / `record_spend()` in `BaseAgent`, you have two independent layers of cost control.
 
 ---
 
-## Model Routing Strategies
+## Model routing strategies
 
-LiteLLM Proxy supports routing strategies that distribute requests across providers:
+Configure how LiteLLM Proxy distributes requests across providers:
 
 | Strategy | Behavior |
 |----------|----------|
 | `simple-shuffle` | Round-robin across provider deployments |
-| `least-busy` | Route to the provider with fewest in-flight requests |
-| `latency-based-routing` | Route to the fastest responding provider |
-| `cost-based-routing` | Route to the cheapest available deployment |
+| `least-busy` | Routes to the deployment with the fewest in-flight requests |
+| `latency-based-routing` | Routes to the fastest-responding deployment |
+| `cost-based-routing` | Routes to the cheapest available deployment |
 
-Configure in `litellm-config.yaml`:
+Set the strategy in `litellm-config.yaml`:
 
 ```yaml
 router_settings:
@@ -281,18 +276,18 @@ router_settings:
   allowed_fails: 2
 ```
 
-This is complementary to Sagewai's fleet routing. LiteLLM routes at the LLM provider level (which OpenAI deployment to hit); Sagewai fleet routes at the worker level (which machine runs the agent).
+Note: LiteLLM routing and Sagewai fleet routing operate at different levels. LiteLLM decides which LLM provider deployment to call; Sagewai fleet decides which worker machine runs the agent.
 
 ---
 
-## Budget Governance: Two Layers
+## Budget governance: two layers
 
 | Layer | Scope | Enforcement |
 |-------|-------|-------------|
-| **LiteLLM Proxy** | Per virtual key | Hard limit -- proxy rejects requests when budget is exhausted |
-| **Sagewai SDK** | Per project | Soft limit -- `check_budget()` can warn, throttle, or stop agents |
+| **LiteLLM Proxy** | Per virtual key | Hard — proxy rejects requests when budget is exhausted |
+| **Sagewai SDK** | Per project | Soft — `check_budget()` can warn, throttle, or stop agents |
 
-Best practice: set the LiteLLM virtual key budget ~20% above the Sagewai project budget. The SDK handles graceful degradation (throttling, warnings); the proxy acts as a hard safety net.
+Set the LiteLLM virtual key budget about 20% above the Sagewai project budget. The SDK provides graceful degradation (warnings, throttling); the proxy acts as a hard ceiling.
 
 ```python
 # Sagewai budget: $80/month per project
@@ -301,9 +296,9 @@ Best practice: set the LiteLLM virtual key budget ~20% above the Sagewai project
 
 ---
 
-## Fleet Workers with LiteLLM
+## Fleet workers with LiteLLM
 
-Fleet workers running on your own infrastructure can also route through the proxy. Set `api_base` in worker credentials so that workers in different pools use different virtual keys:
+Workers running on your own infrastructure can also route through the proxy. Set `api_base` in worker credentials so that workers in different pools use different virtual keys:
 
 ```python
 from sagewai import WorkflowWorker
@@ -325,17 +320,17 @@ worker = WorkflowWorker(
 await worker.start()
 ```
 
-The worker's `inference_overrides` are injected into every `UniversalAgent` that runs on it via a ContextVar, so all LLM calls flow through the proxy.
+`inference_overrides` are injected via a ContextVar into every `UniversalAgent` that runs on the worker, so all LLM calls flow through the proxy without any per-agent configuration.
 
 ---
 
-## Security Considerations
+## Security considerations
 
-- **API keys encrypted at rest**: Sagewai stores credentials with Fernet encryption in Postgres. LiteLLM stores provider keys server-side; virtual keys never expose the underlying provider key.
-- **SSRF protection**: The SDK validates proxy URLs to prevent server-side request forgery.
-- **Network isolation**: In production, the LiteLLM proxy should only be accessible from your internal network. Agents and workers connect to it; it never needs public exposure.
-- **Virtual key scoping**: Each project gets a virtual key with model allowlists and budget caps. A compromised key cannot access models outside its scope.
-- **Master key management**: The LiteLLM master key should be stored in a secrets manager (GCP Secret Manager, AWS Secrets Manager, HashiCorp Vault) and injected via environment variable.
+- **API keys encrypted at rest**: Sagewai stores credentials with Fernet encryption in PostgreSQL. LiteLLM stores provider keys server-side; virtual keys never expose the underlying provider key to callers.
+- **SSRF protection**: The SDK validates proxy URLs before use.
+- **Network isolation**: In production, put the LiteLLM proxy inside your internal network. Agents and workers connect to it; it does not need a public address.
+- **Virtual key scoping**: Each project key has an explicit model allowlist and budget cap. A compromised key cannot reach models outside its scope.
+- **Master key management**: Store the LiteLLM master key in a secrets manager (GCP Secret Manager, AWS Secrets Manager, HashiCorp Vault) and inject it via environment variable.
 
 ---
 
@@ -351,12 +346,12 @@ curl http://litellm:4000/health
 
 **Models not showing up**
 
-Ensure the model names in `litellm-config.yaml` match what you pass to `UniversalAgent`. Use `LiteLLMProxyClient.list_models()` to see what the proxy exposes.
+Model names in `litellm-config.yaml` must match what you pass to `UniversalAgent`. Run `LiteLLMProxyClient.list_models()` to see exactly what names the proxy exposes.
 
 **Spend data is empty**
 
-LiteLLM requires a Postgres database to persist spend logs. Verify `DATABASE_URL` is set in the LiteLLM container and the database is reachable.
+LiteLLM requires a PostgreSQL database to persist spend logs. Confirm `DATABASE_URL` is set in the LiteLLM container and the database is reachable.
 
 **Virtual key budget exceeded**
 
-The proxy returns HTTP 429 when a virtual key's budget is exhausted. Increase the key's budget via the LiteLLM admin UI or API, or create a new key.
+The proxy returns HTTP 429 when a key's budget is exhausted. Increase the key's budget via the LiteLLM admin UI or API, or issue a new key with a higher limit.

@@ -5,13 +5,13 @@ export const metadata = {
   alternates: { canonical: 'https://docs.sagewai.ai/docs/guides/vscode-extension' },
 };
 
-# VS Code Extension
+# VS Code extension
 
-The Sagewai VS Code extension accelerates agent development with directive syntax highlighting, scaffold commands, and code snippets. Zero configuration required.
+The Sagewai VS Code extension adds directive syntax highlighting, scaffold commands, and code snippets for agent development. It requires no configuration and activates automatically when you open a Python or Markdown file.
 
 ## Installation
 
-### From VSIX (Current)
+### From VSIX (current)
 
 ```bash
 cd vscode/
@@ -20,25 +20,23 @@ npm run compile
 npx @vscode/vsce package
 ```
 
-Then in VS Code: Command Palette → "Extensions: Install from VSIX..." → select the generated `.vsix` file.
+Then open the Command Palette in VS Code, run **Extensions: Install from VSIX...**, and select the generated `.vsix` file.
 
-### From Source (Development)
+### From source (development)
 
 1. Open the `vscode/` directory in VS Code
 2. Press **F5** to launch the Extension Development Host
-3. The extension auto-activates for Python and Markdown files
+3. The extension activates for Python and Markdown files automatically
 
-### VS Code Marketplace (Coming Soon)
+### VS Code Marketplace (coming soon)
 
 ```
 ext install sagewai.sagewai
 ```
 
-## Features
+## Directive syntax highlighting
 
-### Directive Syntax Highlighting
-
-The extension injects syntax highlighting for all Sagewai directive types in Python and Markdown files. Directives are visually distinguished from regular code, making it easy to spot retrieval, delegation, and configuration at a glance.
+The extension injects TextMate grammar patterns into Python and Markdown files. Directives are highlighted separately from regular Python strings, which helps you spot retrieval calls, agent delegations, and model overrides at a glance.
 
 **Supported directives:**
 
@@ -55,17 +53,13 @@ The extension injects syntax highlighting for all Sagewai directive types in Pyt
 | `@user`, `@project` | Context parameters | Current user and project |
 | `{{ expression }}` | Template expressions | `{{ context.search('query') }}` |
 
-### Scaffold Commands
+## Scaffold commands
 
-Access from the Command Palette (Cmd+Shift+P / Ctrl+Shift+P):
+Open the Command Palette (Cmd+Shift+P or Ctrl+Shift+P) to access these commands:
 
-#### Sagewai: New Agent
+### Sagewai: New Agent
 
-Generates a complete agent file with:
-- Imports (`UniversalAgent`, `tool`)
-- An example `@tool` decorated function
-- Agent configuration (name, model, system_prompt, tools)
-- Async usage example
+Generates a complete agent file with proper imports, an example `@tool` decorated function, agent configuration, and an async usage example:
 
 ```python
 from sagewai import UniversalAgent, tool
@@ -86,7 +80,7 @@ agent = UniversalAgent(
 # Usage: response = await agent.chat("Find the latest AI news")
 ```
 
-#### Sagewai: New Workflow
+### Sagewai: New Workflow
 
 Generates a multi-agent sequential pipeline:
 
@@ -113,15 +107,15 @@ pipeline = SequentialAgent(
 # Usage: result = await pipeline.chat("Write an article about quantum computing")
 ```
 
-#### Sagewai: Add Tool
+### Sagewai: Add Tool
 
-Inserts a `@tool` decorated function at your cursor position with interactive tabstops — Tab through the function name, parameters, and docstring.
+Inserts a `@tool` decorated function at your cursor position. Tab stops let you fill in the function name, parameters, and docstring without touching the surrounding boilerplate.
 
-### Code Snippets
+## Code snippets
 
 Type a prefix and press Tab to expand:
 
-| Prefix | Expands To | Use Case |
+| Prefix | Expands to | Use case |
 |--------|-----------|----------|
 | `swagent` | Full agent with tool and config | Quick agent setup |
 | `swtool` | `@tool` decorated function | Add a single tool |
@@ -130,27 +124,25 @@ Type a prefix and press Tab to expand:
 | `swmem` | `@memory('query')` | Memory search directive |
 | `swag` | `@agent:name('task')` | Agent delegation directive |
 
-## How It Improves Your Workflow
+## What the extension does for your workflow
 
-**Eliminates boilerplate** — Scaffold a complete agent in 2 seconds instead of 30 seconds of typing. Every generated file follows SDK conventions (async patterns, proper imports, tool decorator).
+**Scaffold commands** generate a complete, correctly structured file in a couple of seconds — correct imports, async patterns, `@tool` decorator, `UniversalAgent` config — rather than typing it from scratch.
 
-**Visual feedback** — Catch directive syntax errors before running your code. Highlighted directives stand out from regular Python strings, making prompt engineering more visual.
+**Syntax highlighting** makes directive strings visually distinct from regular Python strings. You can see at a glance which parts of a prompt are directives, which helps when editing multi-directive prompts.
 
-**Consistent patterns** — Generated code always follows Sagewai conventions: async functions, proper imports, UniversalAgent configuration, tool decorator patterns.
+**Snippets with tab stops** let you fill in the variable parts (name, system prompt, tool parameters) without hunting through boilerplate. Tab from placeholder to placeholder.
 
-**Interactive tabstops** — When using scaffold commands or snippets, Tab through placeholders to fill in names, prompts, and parameters without touching boilerplate.
-
-**Works alongside AI assistants** — The extension complements Copilot, Cursor, and Claude Code. Syntax highlighting helps AI assistants understand your directives, while snippets provide the scaffolding that AI fills in.
+**Works alongside AI assistants** — Copilot, Cursor, and Claude Code can all see highlighted directives in your code. Snippets handle the scaffolding so your AI assistant focuses on the logic.
 
 ## Configuration
 
-**Zero configuration needed.** The extension activates automatically when you open any Python or Markdown file. All features work out of the box.
+No configuration is required. The extension activates automatically when you open any Python or Markdown file.
 
 **Requirements:**
 - VS Code 1.85.0 or later
 - No runtime dependencies
 
-## Technical Details
+## Technical details
 
 - **Activation events:** `onLanguage:python`, `onLanguage:markdown`
 - **Grammar injection:** TextMate grammar patterns injected into Python and Markdown

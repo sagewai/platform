@@ -1,17 +1,17 @@
 export const metadata = {
   title: 'Local inference — Ollama, vLLM, LM Studio, llama.cpp',
   description:
-    'Run LLMs locally with Sagewai: zero API cost, your data stays in your network. Ollama, vLLM, LM Studio, and llama.cpp all supported.',
+    'Run LLMs locally with Sagewai: zero API cost, data stays in your network. Ollama, vLLM, LM Studio, and llama.cpp all supported.',
   alternates: { canonical: 'https://docs.sagewai.ai/docs/guides/local-inference' },
 };
 
 # Local Inference & LLM Providers
 
-Sagewai supports 100+ LLM models and providers. Use cloud APIs, managed inference services, or run models locally with zero API costs.
+Sagewai supports 100+ LLM models across cloud and local providers. This guide covers how to configure each option, what keys you need, and how the intelligence layer falls back to local models automatically.
 
-## Cloud API Providers
+## Cloud API providers
 
-| Provider | Models | Free Tier | Env Variable | Signup |
+| Provider | Models | Free tier | Env variable | Signup |
 |----------|--------|-----------|-------------|--------|
 | OpenAI | GPT-4o, GPT-4o-mini, o1, o3 | $5 credit | `OPENAI_API_KEY` | [platform.openai.com](https://platform.openai.com) |
 | Anthropic | Claude Opus, Sonnet, Haiku | Pay-as-you-go | `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) |
@@ -21,22 +21,25 @@ Sagewai supports 100+ LLM models and providers. Use cloud APIs, managed inferenc
 | Fireworks | Open-source models | $1 credit | `FIREWORKS_API_KEY` | [fireworks.ai](https://fireworks.ai) |
 | Cerebras | Fast inference | Free tier | `CEREBRAS_API_KEY` | [cloud.cerebras.ai](https://cloud.cerebras.ai) |
 
-## Which API Keys Do You Actually Need?
+## Which API keys do you need?
 
-- **Admin panel** (monitoring, fleet management): No LLM key needed
-- **Running agents**: At least 1 provider key (any from the table above)
-- **Context Engine (RAG)**: Embedding model — falls back to local SentenceTransformer automatically (no key needed)
-- **Harness proxy**: Keys for each backend you want to route to
-- **Intelligence layer** (entity extraction, summarization): Auto-falls-back to local models (no key needed)
-- **Fine-tuning with Unsloth**: No API key needed (runs locally)
+| Use case | Keys required |
+|----------|--------------|
+| Admin panel (monitoring, fleet management) | None |
+| Running agents | At least one provider key (any from the table above) |
+| Context Engine (RAG) | None — falls back to local SentenceTransformer |
+| Harness proxy | Keys for each backend you want to route to |
+| Intelligence layer (entity extraction, summarization) | None — falls back to local models |
+| Fine-tuning with Unsloth | None — runs locally |
 
-## Local Inference Providers
+## Local inference providers
 
-### Ollama (Recommended for Beginners)
+### Ollama
 
-The easiest way to run models locally. Works on macOS, Linux, and Windows.
+The most straightforward option. Runs on macOS, Linux, and Windows.
 
 **Install:**
+
 ```bash
 # macOS / Linux
 curl -fsSL https://ollama.ai/install.sh | sh
@@ -45,12 +48,14 @@ curl -fsSL https://ollama.ai/install.sh | sh
 ```
 
 **Pull a model and start:**
+
 ```bash
 ollama pull llama3.1:8b
-ollama serve  # starts on localhost:11434
+ollama serve  # listens on localhost:11434
 ```
 
 **Use with Sagewai:**
+
 ```python
 from sagewai import UniversalAgent, providers
 
@@ -64,7 +69,8 @@ response = await agent.chat("Explain quantum computing")
 
 **Environment variable:** `OLLAMA_HOST` (default: `http://localhost:11434`)
 
-**GPU passthrough (containers):**
+**GPU passthrough in containers:**
+
 ```bash
 # Docker
 docker run -d --gpus all -p 11434:11434 ollama/ollama
@@ -73,9 +79,9 @@ docker run -d --gpus all -p 11434:11434 ollama/ollama
 podman run -d --device nvidia.com/gpu=all -p 11434:11434 ollama/ollama
 ```
 
-### vLLM (Recommended for Production Serving)
+### vLLM
 
-High-throughput serving with continuous batching and tensor parallelism.
+High-throughput serving with continuous batching and tensor parallelism. Use this for production serving on GPU hardware.
 
 ```bash
 pip install vllm
@@ -83,6 +89,7 @@ vllm serve meta-llama/Llama-3.1-8B-Instruct --port 8000
 ```
 
 **Use with Sagewai:**
+
 ```python
 from sagewai import UniversalAgent, providers
 
@@ -95,17 +102,18 @@ agent = UniversalAgent(
 )
 ```
 
-vLLM requires an NVIDIA GPU with sufficient VRAM for the model.
+vLLM requires an NVIDIA GPU with enough VRAM for the model you choose.
 
-### LM Studio (Recommended for GUI Users)
+### LM Studio
 
-Desktop app with a model browser and one-click local server.
+Desktop application with a model browser and a built-in local inference server.
 
 1. Download from [lmstudio.ai](https://lmstudio.ai)
-2. Browse and download a model (e.g., Mistral 7B)
-3. Start the local server (toggle in the app)
+2. Browse and download a model (for example, Mistral 7B)
+3. Toggle on the local server from within the app
 
 **Use with Sagewai:**
+
 ```python
 from sagewai import UniversalAgent, providers
 
@@ -117,19 +125,20 @@ agent = UniversalAgent(
 
 **Environment variable:** `LM_STUDIO_HOST` (default: `http://localhost:1234`)
 
-### llama.cpp (Lightweight C++ Inference)
+### llama.cpp
 
-Minimal resource usage, runs well on CPU. Uses GGUF model format.
+Minimal resource usage. Runs on CPU and works well on machines without a GPU. Uses GGUF model format.
 
 ```bash
 # macOS
 brew install llama.cpp
 
-# Start server with a GGUF model
+# Start the server with a GGUF model
 llama-server -m model.gguf --port 8080
 ```
 
 **Use with Sagewai:**
+
 ```python
 from sagewai import UniversalAgent, providers
 
@@ -141,28 +150,28 @@ agent = UniversalAgent(
 
 **Environment variable:** `LLAMA_CPP_HOST` (default: `http://localhost:8080`)
 
-### Unsloth (Fine-Tuning + Serving)
+### Unsloth (fine-tuning + serving)
 
-Fine-tune domain-specific models, then serve them locally at $0/token.
+Fine-tune a domain-specific model on your own data, then serve it locally at $0/token.
 
 ```bash
 pip install unsloth
 ```
 
-See Example 17 (`sagewai/examples/17_unsloth_finetune.py`) for the full pipeline:
+See [Example 38](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/38_unsloth_finetune.py) for the full pipeline:
 
-1. Agent generates Q&A training pairs from your domain data
-2. Export in Alpaca/ChatML format
-3. Unsloth fine-tunes a base model (4-bit QLoRA)
+1. An agent generates Q&A training pairs from your domain data
+2. Export in Alpaca or ChatML format
+3. Unsloth fine-tunes a base model using 4-bit QLoRA
 4. Export to GGUF format
-5. Serve via Ollama or llama-server
-6. Harness auto-discovers on port 8001
+5. Serve via Ollama or `llama-server`
+6. The Harness auto-discovers the model on port 8001
 
-## Harness Auto-Discovery
+## Harness auto-discovery
 
-When you start the LLM Harness, it automatically probes common local inference ports:
+When the LLM Harness starts, it probes these ports and registers any running server as a $0/token backend:
 
-| Port | Server | Probe Endpoint |
+| Port | Server | Probe endpoint |
 |------|--------|---------------|
 | 11434 | Ollama | `GET /api/tags` |
 | 1234 | LM Studio | `GET /v1/models` |
@@ -170,22 +179,23 @@ When you start the LLM Harness, it automatically probes common local inference p
 | 8000 | vLLM | `GET /v1/models` |
 | 8080 | LocalAI / llama.cpp | `GET /v1/models` |
 
-Discovered servers are automatically registered as backends with $0/token cost tracking. No configuration needed — just start your local server and the harness finds it.
+No configuration is needed. Start your local server and the Harness picks it up.
 
 Source: `sagewai/harness/discovery.py` — `discover_local_backends()`
 
-## Intelligence Layer Local Models
+## Intelligence layer local models
 
-The intelligence layer uses a tiered fallback system. Local models are tried first — no API keys required:
+The intelligence layer uses a tiered fallback. Local models are attempted first, with no API keys required:
 
-| Capability | Local (Primary) | API (Fallback) | Hash (Final Fallback) |
+| Capability | Local (primary) | API (fallback) | Hash (final fallback) |
 |-----------|-----------------|----------------|----------------------|
 | Embeddings | SentenceTransformer (`all-MiniLM-L6-v2`, 384-dim) | API Embedder (API key required) | HashEmbedder (deterministic, always works) |
-| Entity Extraction | GLiNER (`urchade/gliner_medium-v2.1`, ~50 MB) | LLM Extractor (any model) | — |
+| Entity extraction | GLiNER (`urchade/gliner_medium-v2.1`, ~50 MB) | LLM Extractor (any model) | — |
 | Transcription | faster-whisper (CTranslate2, ~150 MB) | OpenAI Whisper API | — |
 | Summarization | SemanticSummarizer (embedding-scored extractive) | BART abstractive | — |
 
-**Configure explicitly:**
+**Configure the providers explicitly:**
+
 ```python
 from sagewai.intelligence.config import IntelligenceConfig
 
@@ -196,25 +206,25 @@ config = IntelligenceConfig(
 )
 ```
 
-## Local-Only .env Template
+## Local-only .env template
 
-Run Sagewai with zero cloud API keys:
+To run Sagewai with no cloud API keys at all:
 
 ```bash
-# .env — No cloud API keys needed!
+# .env
 OLLAMA_HOST=http://localhost:11434
 
 # Intelligence layer defaults to local models automatically.
-# Explicitly set if you want to be sure:
+# Set explicitly if you want to be certain:
 # SAGEWAI_INTELLIGENCE_EMBEDDING=local
 # SAGEWAI_INTELLIGENCE_EXTRACTION=local
 ```
 
-## Provider Factory Reference
+## Provider factory reference
 
 All factory functions from `sagewai/providers.py`:
 
-| Function | Provider | Default Port | Env Variable |
+| Function | Provider | Default port | Env variable |
 |----------|----------|-------------|--------------|
 | `providers.ollama(model)` | Ollama | 11434 | `OLLAMA_HOST` |
 | `providers.lm_studio(model)` | LM Studio | 1234 | `LM_STUDIO_HOST` |
@@ -227,6 +237,6 @@ All factory functions from `sagewai/providers.py`:
 | `providers.fireworks(model)` | Fireworks | — | `FIREWORKS_API_KEY` |
 | `providers.cerebras(model)` | Cerebras | — | `CEREBRAS_API_KEY` |
 | `providers.huggingface(model)` | HuggingFace | — | `HF_TOKEN` |
-| `providers.custom(model, api_base)` | Any OpenAI-compatible | — | — |
+| `providers.custom(model, api_base)` | Any OpenAI-compatible server | — | — |
 
-All return a `dict` for direct unpacking: `UniversalAgent(name="bot", **providers.ollama("llama3.1:8b"))`
+Each function returns a `dict` you can unpack directly: `UniversalAgent(name="bot", **providers.ollama("llama3.1:8b"))`.

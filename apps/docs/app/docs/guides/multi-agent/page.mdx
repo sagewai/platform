@@ -7,32 +7,35 @@ export const metadata = {
 
 # Multi-Agent Workflows
 
-This guide shows you how to compose multiple agents into workflows that solve complex tasks. You will learn three patterns: sequential pipelines, parallel fan-out, and iterative refinement.
+This guide shows you how to compose multiple agents into workflows. You will build three patterns: sequential pipelines, parallel fan-out, and iterative refinement. Each agent in a workflow runs its own LLM and system prompt — you pick the model that fits the task.
 
-## When to Use Multi-Agent Workflows
+**Prerequisites:** Complete [First Agent](/docs/get-started/first-agent) before starting here.
 
-Use multi-agent workflows when:
-- A task has distinct phases that benefit from different models or prompts
-- Multiple independent analyses should run simultaneously
-- Output needs iterative refinement by a critic agent
-- You want deterministic execution flow (not LLM-decided)
+## When to use multi-agent workflows
+
+Reach for multi-agent workflows when:
+
+- A task has distinct phases that benefit from different models or prompts.
+- Multiple independent analyses should run at the same time.
+- Output needs iterative refinement from a critic agent.
+- You want deterministic execution order rather than LLM-decided routing.
 
 ---
 
-## Pattern 1: Sequential Pipeline
+## Pattern 1: Sequential pipeline
 
-Run agents one after another, where each agent's output feeds into the next.
+Agents run one after another. Each agent receives the previous agent's output as its input.
 
-### Example: Article Writing Pipeline
+### Example: article writing pipeline
 
 ```python
 from sagewai.engines.universal import UniversalAgent
 from sagewai.core.workflows import SequentialAgent
 
-# Stage 1: Research — fast model gathers raw information
+# Stage 1: gather raw information with a fast, cheap model
 researcher = UniversalAgent(
     name="researcher",
-    model="gpt-4o-mini",  # Fast, cheap for bulk processing
+    model="gpt-4o-mini",
     system_prompt=(
         "You are a research specialist. Given a topic, gather key facts, "
         "statistics, and recent developments. Return raw research notes."
@@ -40,10 +43,10 @@ researcher = UniversalAgent(
     tools=[web_search],
 )
 
-# Stage 2: Write — strong model produces polished prose
+# Stage 2: write polished prose with a stronger model
 writer = UniversalAgent(
     name="writer",
-    model="claude-3-5-sonnet-20241022",  # Strong writing model
+    model="claude-3-5-sonnet-20241022",
     system_prompt=(
         "You are a professional writer. Given research notes, write a "
         "well-structured article with an introduction, body, and conclusion. "
@@ -51,7 +54,7 @@ writer = UniversalAgent(
     ),
 )
 
-# Stage 3: Edit — another model reviews for quality
+# Stage 3: review for accuracy and style
 editor = UniversalAgent(
     name="editor",
     model="gpt-4o",
@@ -68,12 +71,11 @@ pipeline = SequentialAgent(
     agents=[researcher, writer, editor],
 )
 
-# Run the full pipeline
 result = await pipeline.chat("Write about the future of renewable energy")
 print(result)
 ```
 
-### How the Data Flows
+### Data flow
 
 ```
 "Write about renewable energy"
@@ -91,15 +93,15 @@ print(result)
 Final polished article
 ```
 
-Each agent receives the previous agent's output as its input message. This is fully deterministic — agents always execute in order.
+Each agent receives the previous agent's output as its input message. Execution is fully deterministic — agents always run in the order you specify.
 
 ---
 
-## Pattern 2: Parallel Fan-Out
+## Pattern 2: Parallel fan-out
 
-Run multiple agents simultaneously on the same input. Useful for getting multiple perspectives or running independent analyses.
+All agents receive the same input and run at the same time. Use this when you need multiple independent analyses of the same document.
 
-### Example: Multi-Perspective Document Review
+### Example: multi-perspective document review
 
 ```python
 from sagewai.core.workflows import ParallelAgent
@@ -126,7 +128,7 @@ financial_reviewer = UniversalAgent(
 
 style_reviewer = UniversalAgent(
     name="style-reviewer",
-    model="gpt-4o-mini",  # Cheaper model for style checks
+    model="gpt-4o-mini",
     system_prompt=(
         "You are a technical writer. Review the document for clarity, "
         "grammar, consistency, and readability. Suggest improvements."
@@ -145,17 +147,17 @@ print(result)
 # Output includes all three reviews, labeled by agent name
 ```
 
-### Performance Benefit
+### Performance
 
-Parallel execution uses `asyncio.gather()` under the hood. If each review takes 5 seconds, the total time is ~5 seconds (not 15).
+`ParallelAgent` uses `asyncio.gather()` internally. If each review takes 5 seconds, the total wall-clock time is ~5 seconds rather than 15.
 
 ---
 
-## Pattern 3: Iterative Refinement Loop
+## Pattern 3: Iterative refinement loop
 
-Repeat an agent until the output meets a quality threshold.
+Run an agent repeatedly until its output meets a condition, or until a maximum iteration count is reached.
 
-### Example: Code Generation with Self-Review
+### Example: code generation with self-review
 
 ```python
 from sagewai.core.workflows import LoopAgent
@@ -170,7 +172,7 @@ code_generator = UniversalAgent(
     ),
 )
 
-# Loop until the agent outputs "APPROVED" or 5 iterations
+# Exit when the agent outputs "APPROVED", or after 5 iterations
 refinement_loop = LoopAgent(
     name="code-refiner",
     agent=code_generator,
@@ -185,7 +187,7 @@ result = await refinement_loop.chat(
 print(result)
 ```
 
-### How the Loop Works
+### Loop execution
 
 ```
 Iteration 1: "Write email validator" --> First draft of code
@@ -194,14 +196,16 @@ Iteration 3: Improved version --> "APPROVED" final version
 Loop exits because stop_condition is True
 ```
 
+Always set `max_iterations`. Without a ceiling the loop runs indefinitely if the stop condition is never satisfied.
+
 ---
 
-## Combining Patterns
+## Combining patterns
 
-Real-world applications often nest patterns:
+Nest patterns to match the structure of your task:
 
 ```python
-# Inner parallel: research from multiple sources
+# Inner parallel: research from multiple sources simultaneously
 web_researcher = UniversalAgent(name="web", model="gpt-4o-mini", tools=[web_search])
 db_researcher = UniversalAgent(name="db", model="gpt-4o-mini", tools=[db_query])
 
@@ -241,9 +245,9 @@ result = await full_pipeline.chat("Write a market analysis report on AI startups
 
 ---
 
-## Making Workflows Durable
+## Making workflows durable
 
-For long-running workflows that must survive process restarts, enable durability:
+For workflows that take more than a few seconds, enable checkpointing. If the process crashes after `researcher` completes, the next run resumes from `writer` rather than the beginning.
 
 ```python
 from sagewai.core.durability import DurabilityMode
@@ -259,28 +263,25 @@ pipeline = SequentialAgent(
     store=store,
 )
 
-# If the process crashes after researcher completes,
-# restarting resumes from writer (not from the beginning)
 result = await pipeline.chat("Write about quantum computing")
 ```
 
 ---
 
-## Using Different Models Per Agent
+## Choosing a model per agent
 
-One of the key benefits of multi-agent workflows is model selection per task:
+Assign the cheapest model that can do the job for each stage.
 
-| Task | Recommended Model | Reason |
-|------|-------------------|--------|
-| Research/data gathering | `gpt-4o-mini` | Fast, cheap, good at following tool instructions |
+| Task | Recommended model | Why |
+|------|-------------------|-----|
+| Research / data gathering | `gpt-4o-mini` | Fast and cost-effective at following tool instructions |
 | Creative writing | `claude-3-5-sonnet-20241022` | Strong prose quality |
 | Code generation | `gpt-4o` | Strong reasoning and code output |
-| Review/editing | `gpt-4o` | Good at analysis and critique |
-| Summarization | `gpt-4o-mini` | Fast, cost-effective for compression |
-| Style checking | `gpt-4o-mini` | Pattern matching, grammar rules |
+| Review / editing | `gpt-4o` | Good at analysis and critique |
+| Summarization | `gpt-4o-mini` | Efficient at compression |
+| Style checking | `gpt-4o-mini` | Pattern matching and grammar rules |
 
 ```python
-# Each agent uses the best model for its task
 researcher = UniversalAgent(name="researcher", model="gpt-4o-mini")
 writer = UniversalAgent(name="writer", model="claude-3-5-sonnet-20241022")
 reviewer = UniversalAgent(name="reviewer", model="gpt-4o")
@@ -288,16 +289,16 @@ reviewer = UniversalAgent(name="reviewer", model="gpt-4o")
 
 ---
 
-## Best Practices
+## Best practices
 
-1. **Keep system prompts focused.** Each agent should have a narrow, well-defined role. Broad prompts lead to confused output.
+1. **Keep system prompts narrow.** Each agent should have a single, well-defined role. Broad prompts produce unfocused output and make debugging harder.
 
-2. **Use cheaper models for simple tasks.** Research gathering and style checks do not need the most expensive model.
+2. **Assign cheaper models to simpler tasks.** Research gathering and style checks do not need the most capable model.
 
-3. **Set max_iterations on LoopAgent.** Always have a maximum to prevent infinite loops if the stop condition is never met.
+3. **Always set `max_iterations` on `LoopAgent`.** A missing ceiling means an infinite loop if the stop condition is never met.
 
-4. **Monitor costs.** Use the analytics API to track per-agent costs and identify optimization opportunities.
+4. **Monitor costs.** Use the analytics API to track per-agent spend and find where to optimize.
 
-5. **Test each agent individually** before composing them into workflows. This makes debugging much easier.
+5. **Test each agent in isolation** before composing it into a workflow. A bug that is obvious in a unit test becomes hard to trace inside a pipeline.
 
-6. **Use durable workflows** for any pipeline that takes more than a few seconds. This prevents lost work on crashes.
+6. **Enable durable workflows** for any pipeline that runs for more than a few seconds. This prevents restarting from scratch after a crash.

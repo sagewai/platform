@@ -21,11 +21,13 @@ export const metadata = {
 />
 <SoftwareApplicationJsonLd />
 
-# Training & Fine-Tuning
+# Training and fine-tuning
 
-Build domain-specific LLMs from your agent conversations. Sagewai captures every agent run as structured training data, then uses Unsloth to fine-tune open-source models on your corporate data — entirely within your infrastructure.
+This page walks you through the full training loop: capturing agent runs as structured training data, fine-tuning an open-source model with Unsloth, and deploying it via Ollama — entirely within your own infrastructure.
 
-## The Training Pipeline
+**Prerequisites:** a working Sagewai setup (see [prerequisites](/docs/get-started/prerequisites)) and a GPU with 6+ GB VRAM for fine-tuning (RTX 3060 handles 7B models; RTX 3090+ for 13B). You can run training on Colab, RunPod, or Vast.ai if you do not have a local GPU.
+
+## Pipeline overview
 
 ```mermaid
 graph LR
@@ -39,29 +41,30 @@ graph LR
     H --> I[$0/token Inference]
 ```
 
-## Why This Matters
+## How this works
 
-Every time your agents run, Sagewai logs the full conversation — inputs, outputs, tool calls, reasoning steps, and outcomes. This is high-quality, domain-specific training data that no public dataset can match.
+Every agent run logs the full conversation — inputs, outputs, tool calls, reasoning steps, and outcomes. That log is your training data. No public dataset matches it for your specific domain.
 
-**The value chain:**
-1. Agents converse using cloud models (GPT-4o, Claude) — expensive but high quality
+The process is:
+
+1. Agents run against cloud models (GPT-4o, Claude) — expensive but high quality
 2. Conversations are logged as structured corpus data
-3. Corpus is cleaned, deduplicated, and formatted for training
+3. The corpus is cleaned, deduplicated, and formatted for training
 4. Unsloth fine-tunes an open-source base model (Llama, Mistral) on your corpus
 5. The fine-tuned model is served locally via Ollama
-6. Harness auto-discovers it and routes appropriate tasks at $0/token
-7. Over time, more conversations = better model = less cloud API spend
+6. The harness auto-discovers it and routes appropriate tasks at $0/token
+7. More runs produce more training data, which improves the next fine-tuning iteration
 
-**Enterprise use cases:**
-- **Legal firms**: Train on contract review conversations → specialist legal LLM
-- **Healthcare**: Train on medical Q&A → domain medical assistant
-- **Maintenance**: Train on equipment troubleshooting → field technician AI
-- **Finance**: Train on compliance checks → regulatory analysis model
-- **Customer support**: Train on resolved tickets → automated response agent
+**Some domain examples:**
+- Legal firms: train on contract review conversations to get a specialist legal LLM
+- Healthcare: train on medical Q&A for a domain-specific assistant
+- Maintenance: train on equipment troubleshooting transcripts for field technician support
+- Finance: train on compliance-check runs for regulatory analysis
+- Customer support: train on resolved tickets for automated response agents
 
-## How Conversation Logging Works
+## How conversation logging works
 
-Every Sagewai agent automatically logs runs to the admin store. Each run captures:
+Every Sagewai agent logs runs to the admin store automatically — no extra configuration:
 
 ```python
 # Automatic — no configuration needed
@@ -75,7 +78,7 @@ agent = UniversalAgent(
 result = await agent.chat("Review clause 7.3 of the NDA for non-compete issues")
 ```
 
-**What gets logged per run:**
+Each run record includes:
 - Agent name, model, strategy
 - Full message history (system prompt, user input, assistant response)
 - Tool calls and results
@@ -83,13 +86,12 @@ result = await agent.chat("Review clause 7.3 of the NDA for non-compete issues")
 - Timestamps and duration
 - Project context (for multi-tenant isolation)
 
-## Few-Shot and One-Shot Learning
+## Few-shot learning before fine-tuning
 
-Before fine-tuning, Sagewai uses logged conversations as few-shot examples to improve agent prompts immediately:
+Before you have enough data to fine-tune, you can use logged conversations as few-shot examples to improve agent responses immediately:
 
 ```python
-from sagewai import UniversalAgent
-from sagewai.core.session import SessionStore
+from sagewai import UniversalAgent, SessionStore
 
 store = SessionStore()
 
@@ -102,15 +104,11 @@ agent = UniversalAgent(
 )
 ```
 
-With `auto_learn=True`, the agent:
-1. Tracks which responses led to positive outcomes
-2. Stores successful interaction patterns in memory
-3. Retrieves relevant examples as few-shot context for similar future queries
-4. Measurably improves response quality over time
+With `auto_learn=True`, the agent tracks which responses led to positive outcomes, stores successful interaction patterns in memory, and retrieves relevant examples as few-shot context for similar future queries.
 
-## Building the Training Corpus
+## Building the training corpus
 
-### Step 1: Collect Conversations
+### Step 1: Collect conversations
 
 ```python
 from sagewai.admin.analytics import AnalyticsStore
@@ -127,7 +125,7 @@ runs = await analytics.list_runs(
 print(f"Collected {len(runs)} conversation records")
 ```
 
-### Step 2: Export as Training Data
+### Step 2: Export as training data
 
 ```python
 from sagewai.tools.ml import export_training_corpus
@@ -147,7 +145,7 @@ print(f"Removed {corpus.duplicates_removed} duplicates")
 print(f"PII instances redacted: {corpus.pii_redacted}")
 ```
 
-**Output format (Alpaca):**
+Output format (Alpaca):
 ```json
 {
   "instruction": "Review clause 7.3 of the NDA for non-compete issues",
@@ -156,16 +154,16 @@ print(f"PII instances redacted: {corpus.pii_redacted}")
 }
 ```
 
-### Step 3: Clean and Validate
+### Step 3: Cleaning and validation
 
-The corpus builder automatically handles:
-- **Deduplication**: Semantic similarity check (cosine > 0.95 = duplicate)
-- **PII redaction**: Removes emails, phone numbers, SSNs before training
-- **Quality filtering**: Filters out conversations with errors, timeouts, or low token counts
-- **Format validation**: Ensures all examples have proper instruction/output pairs
-- **Length normalization**: Trims overly long responses, pads short ones
+The corpus builder handles these automatically:
+- **Deduplication**: semantic similarity check (cosine &gt; 0.95 = duplicate)
+- **PII redaction**: removes emails, phone numbers, SSNs before training
+- **Quality filtering**: drops conversations with errors, timeouts, or low token counts
+- **Format validation**: ensures all examples have proper instruction/output pairs
+- **Length normalisation**: trims overly long responses, pads short ones
 
-### Step 4: Archive to Storage
+### Step 4: Archive to storage
 
 ```python
 # Archive corpus to S3 or local filesystem
@@ -176,18 +174,16 @@ await corpus.archive(
 )
 ```
 
-## Fine-Tuning with Unsloth
+## Fine-tuning with Unsloth
 
-### Prerequisites
+### Install the training extra
 
 ```bash
 pip install "sagewai[training]"
 # Includes: unsloth, datasets, trl
 ```
 
-**Hardware**: GPU with 6+ GB VRAM (RTX 3060 for 7B models, RTX 3090+ for 13B)
-
-### Run Fine-Tuning
+### Run fine-tuning
 
 ```python
 from sagewai.tools.ml import fine_tune_model
@@ -228,9 +224,9 @@ print(f"GGUF model saved to: {gguf_path}")
 print(f"Model size: {gguf_path.stat().st_size / 1e9:.1f} GB")
 ```
 
-## Serving the Fine-Tuned Model
+## Serving the fine-tuned model
 
-### Option A: Ollama (Recommended)
+### Option A: Ollama (recommended)
 
 ```bash
 # Create an Ollama modelfile
@@ -257,9 +253,9 @@ ollama run legal-llm "Review this indemnification clause..."
 llama-server -m models/legal-llm-v1.gguf --port 8001
 ```
 
-### Auto-Discovery
+### Auto-discovery
 
-Once your model is running, the Sagewai harness auto-discovers it:
+Once your model is running, the harness discovers it automatically:
 
 ```bash
 # Harness probes these ports on startup:
@@ -271,7 +267,7 @@ sagewai harness start
 # Output: "Discovered local backend: legal-llm on localhost:11434 ($0.00/token)"
 ```
 
-### Route Tasks to Your Model
+### Route tasks to your model
 
 ```python
 from sagewai import UniversalAgent, providers
@@ -287,7 +283,7 @@ agent = UniversalAgent(
 # Complex multi-jurisdictional analysis → GPT-4o (paid)
 ```
 
-## The Continuous Improvement Loop
+## The iteration cycle
 
 ```mermaid
 graph TD
@@ -304,31 +300,22 @@ graph TD
     J --> B
 ```
 
-**The flywheel effect:**
-1. Start with cloud models (expensive, high quality)
-2. Conversations accumulate as training data
-3. Fine-tune local model every quarter (or on-demand)
-4. Route more tasks to local model as quality improves
-5. Cloud API spend decreases over time
-6. Each fine-tuning iteration improves the model further
+Start with cloud models for quality. As conversations accumulate, fine-tune a local model every quarter (or on demand). Route more tasks to the local model as quality improves. Cloud API spend drops over each iteration. The next fine-tuning run starts from a larger, better-curated corpus.
 
-## Data Privacy & Security
+## Data privacy
 
-**All training happens locally:**
-- Conversation data never leaves your infrastructure
+All training runs inside your infrastructure:
+- Conversation data does not leave your network
 - PII is redacted before corpus export
-- Training runs on your GPU (or cloud GPU you control)
+- Training runs on your GPU or a cloud GPU you control
 - Fine-tuned models are served from your servers
-- No data shared with model providers
+- No data is shared with model providers
 
-**Per-project isolation:**
-- Each project's conversations are isolated
-- Training corpus can be scoped to specific projects
-- Fine-tuned models can be restricted to specific worker pools
+Per-project isolation means each project's conversations are kept separate. Training corpora can be scoped to specific projects, and fine-tuned models can be restricted to specific worker pools.
 
-## Complete Example
+## Complete example
 
-See `sagewai/examples/17_unsloth_finetune.py` for a runnable end-to-end example:
+See [Example 38](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/38_unsloth_finetune.py) for a runnable end-to-end example:
 
 ```python
 import asyncio
@@ -379,14 +366,14 @@ async def main():
     )
 
     response = await student.chat("Review this non-compete clause...")
-    print(response)  # Domain-expert quality at $0/token
+    print(response)  # Domain-specific quality at $0/token
 
 asyncio.run(main())
 ```
 
-## What's Next
+## What to read next
 
-- **[Local Inference](/docs/guides/local-inference)** — Set up Ollama, vLLM, LM Studio for serving
-- **[Fleet Architecture](/docs/guides/fleet-architecture)** — Deploy workers with local models at scale
-- **[Cost Management](/docs/guides/cost-management)** — Track savings from local inference
-- **[Hardware Requirements](/docs/get-started/prerequisites)** — GPU specs for training and serving
+- [Local Inference](/docs/guides/local-inference) — set up Ollama, vLLM, and LM Studio for serving
+- [Fleet Architecture](/docs/guides/fleet-architecture) — deploy workers with local models at scale
+- [Cost Management](/docs/guides/cost-management) — track savings from local inference
+- [Hardware Requirements](/docs/get-started/prerequisites) — GPU specs for training and serving

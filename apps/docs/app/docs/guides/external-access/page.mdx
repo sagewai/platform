@@ -5,19 +5,16 @@ export const metadata = {
   alternates: { canonical: 'https://docs.sagewai.ai/docs/guides/external-access' },
 };
 
-# Connecting External AI Tools to Sagewai
+# Connecting External Tools to Sagewai
 
-Sagewai exposes an **OpenAI-compatible API** at `/v1/chat/completions` and `/v1/models`.
-This means any tool that speaks the OpenAI protocol can use your Sagewai agents ---
-including Claude Code, ChatGPT custom GPTs, Gemini, Cursor, and more.
+The Sagewai gateway exposes `/v1/chat/completions` and `/v1/models` — the same interface as the OpenAI Chat Completions API. Any tool that speaks the OpenAI protocol can route to your Sagewai agents with a one-line URL change.
 
-## How It Works
+## How it works
 
-Sagewai's gateway maps each registered agent to a "model" name. When an external tool
-sends a chat completion request, the gateway routes it to the corresponding Sagewai agent.
+The gateway maps each registered agent to a model name. When a chat completion request arrives, it resolves the model name to the agent and runs it.
 
 ```
-External Tool (Claude Code, Cursor, etc.)
+External Tool (Cursor, OpenAI SDK, etc.)
     |
     v
 POST /v1/chat/completions  { "model": "my-agent", ... }
@@ -29,20 +26,19 @@ Sagewai Gateway  -->  resolve "my-agent"  -->  AgentRegistry
 UniversalAgent.chat(message)
     |
     v
-Response (OpenAI-compatible JSON)
+OpenAI-compatible JSON response
 ```
 
-## Starting the Gateway
+## Starting the gateway
 
 ```bash
-# Start the admin backend (includes gateway)
-make dev-native APP=admin
-
-# Or start just the gateway
+# Start the admin backend, which includes the gateway
 sagewai admin serve --port 8000
+# or via justfile:
+just dev-all
 ```
 
-The gateway is available at `http://localhost:8000/v1/`.
+The gateway listens at `http://localhost:8000/v1/`.
 
 ## Authentication
 
@@ -52,12 +48,12 @@ Generate an API token:
 sagewai token create --agent my-agent --scopes chat
 ```
 
-Use it in the `Authorization: Bearer <token>` header.
+Pass it as `Authorization: Bearer <token>` on every request.
 
-## Testing with curl
+## Verify with curl
 
 ```bash
-# List available agents (models)
+# List available agents (each appears as a model)
 curl http://localhost:8000/v1/models \
   -H "Authorization: Bearer <token>"
 
@@ -71,81 +67,7 @@ curl http://localhost:8000/v1/chat/completions \
   }'
 ```
 
-## Claude Code
-
-Claude Code natively uses the Anthropic API, not OpenAI-compatible endpoints.
-To access Sagewai agents from Claude Code, use the **MCP server approach**
-(see below) or call the gateway from a custom tool:
-
-```python
-# In a Claude Code custom tool or script:
-import httpx
-
-response = httpx.post(
-    "http://localhost:8000/v1/chat/completions",
-    headers={"Authorization": "Bearer your-sagewai-token"},
-    json={
-        "model": "knowledge-agent",
-        "messages": [{"role": "user", "content": "What were last week's decisions?"}],
-    },
-)
-print(response.json()["choices"][0]["message"]["content"])
-```
-
-For deeper integration, use the [Sagewai MCP Server](/docs/guides/mcp-server) so
-agents appear as callable tools directly in Claude Code.
-
-## ChatGPT Custom GPT
-
-When creating a Custom GPT, use the Actions feature:
-
-1. Set the API endpoint to `http://your-server:8000/v1/chat/completions`
-2. Add the Bearer token authentication
-3. The GPT will be able to query your Sagewai agents
-
-## Gemini / Google AI Studio
-
-Use the OpenAI-compatible client:
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://localhost:8000/v1",
-    api_key="your-sagewai-token",
-)
-
-response = client.chat.completions.create(
-    model="knowledge-agent",
-    messages=[{"role": "user", "content": "Summarize our Q1 results"}],
-)
-print(response.choices[0].message.content)
-```
-
-## Cursor IDE
-
-In Cursor settings, add a custom model provider:
-
-- **Base URL**: `http://localhost:8000/v1`
-- **API Key**: your Sagewai token
-- **Model Name**: the agent name from `/v1/models`
-
-Cursor will then use your Sagewai agent for code completions and chat.
-
-## LiteLLM Proxy
-
-If you use LiteLLM as a unified proxy, add Sagewai as a provider:
-
-```yaml
-model_list:
-  - model_name: sagewai/knowledge-agent
-    litellm_params:
-      model: openai/knowledge-agent
-      api_base: http://localhost:8000/v1
-      api_key: your-sagewai-token
-```
-
-## Python OpenAI SDK
+## OpenAI Python SDK
 
 Any application using the OpenAI Python SDK can connect directly:
 
@@ -157,7 +79,7 @@ client = OpenAI(
     api_key="your-sagewai-token",
 )
 
-# List all available agents
+# Each agent appears as a model ID
 models = client.models.list()
 for m in models.data:
     print(m.id)  # e.g. "knowledge-agent", "research-agent"
@@ -183,22 +105,70 @@ for chunk in stream:
         print(chunk.choices[0].delta.content, end="")
 ```
 
-## MCP Server (for Claude Code and Cursor)
+## Cursor IDE
 
-For deeper integration, use the Sagewai MCP server which exposes agents as tools
-rather than chat models. This allows Claude Code to invoke specific Sagewai agents
-as part of its tool-calling workflow.
+In Cursor settings, add a custom model provider:
+
+- **Base URL**: `http://localhost:8000/v1`
+- **API Key**: your Sagewai token
+- **Model Name**: the agent name from `/v1/models`
+
+Cursor will use that agent for code completions and chat.
+
+## Claude Code
+
+Claude Code uses the Anthropic API directly, not the OpenAI-compatible endpoint. To reach Sagewai agents from Claude Code, use the MCP server (see below) or call the gateway from a custom tool:
+
+```python
+import httpx
+
+response = httpx.post(
+    "http://localhost:8000/v1/chat/completions",
+    headers={"Authorization": "Bearer your-sagewai-token"},
+    json={
+        "model": "knowledge-agent",
+        "messages": [{"role": "user", "content": "What were last week's decisions?"}],
+    },
+)
+print(response.json()["choices"][0]["message"]["content"])
+```
+
+For deeper integration, expose agents as callable MCP tools via the [Sagewai MCP Server](/docs/guides/mcp-server) so they appear in Claude Code's tool list.
+
+## ChatGPT Custom GPT
+
+When creating a Custom GPT, use the Actions feature:
+
+1. Set the API endpoint to `http://your-server:8000/v1/chat/completions`.
+2. Add Bearer token authentication.
+
+The GPT can then query your Sagewai agents.
+
+## LiteLLM Proxy
+
+Add Sagewai as a provider in your LiteLLM config:
+
+```yaml
+model_list:
+  - model_name: sagewai/knowledge-agent
+    litellm_params:
+      model: openai/knowledge-agent
+      api_base: http://localhost:8000/v1
+      api_key: your-sagewai-token
+```
+
+## MCP Server
+
+For deeper integration, use the MCP server to expose agents as tools rather than chat models. Claude Code and Cursor can then invoke specific agents as part of their tool-calling flow.
 
 ```python
 from sagewai.mcp.server import McpServer
 
 server = McpServer(name="sagewai-tools")
 
-# Register agents as MCP tools
 server.register_agent(knowledge_agent)
 server.register_agent(research_agent)
 
-# Start the server
 await server.serve_stdio()
 ```
 
@@ -214,25 +184,25 @@ await server.serve_stdio()
 
 ### "Connection refused"
 
-Ensure the gateway is running:
+Check that the gateway is running:
 
 ```bash
 sagewai admin serve
 # or
-make dev-native APP=admin
+just dev-all
 ```
 
 ### "401 Unauthorized"
 
-Check your API token:
+List your tokens and verify the one you are using:
 
 ```bash
 sagewai token list
 ```
 
-### Agent not appearing in /v1/models
+### Agent not appearing in `/v1/models`
 
-The agent must be registered in the agent registry. Verify with:
+The agent must be registered in the registry first:
 
 ```bash
 sagewai agent list
@@ -240,14 +210,13 @@ sagewai agent list
 
 ### Streaming not working
 
-Ensure you pass `"stream": true` in the request body. The gateway supports
-Server-Sent Events (SSE) for streaming responses.
+Pass `"stream": true` in the request body. The gateway supports Server-Sent Events for streaming.
 
 ---
 
-## Next Steps
+## Next steps
 
-- [Your First Agent](/docs/get-started/first-agent) --- Build an agent to expose via the gateway
-- [Admin Panel](/docs/guides/admin-panel) --- Monitor agent usage and costs
-- [Tools and MCP](/docs/api-reference/tools) --- Expose agents as MCP tools
-- [REST API Reference](/docs/api-reference/rest-api) --- Full API documentation
+- [Your First Agent](/docs/get-started/first-agent) — build an agent to expose via the gateway
+- [Admin Panel](/docs/guides/admin-panel) — monitor agent usage and costs
+- [Tools and MCP](/docs/api-reference/tools) — expose agents as MCP tools
+- [REST API Reference](/docs/api-reference/rest-api) — full API documentation

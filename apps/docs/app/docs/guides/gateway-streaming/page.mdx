@@ -5,23 +5,23 @@ export const metadata = {
   alternates: { canonical: 'https://docs.sagewai.ai/docs/guides/gateway-streaming' },
 };
 
-# Gateway & Streaming
+# Gateway and Streaming
 
-The Sagewai Gateway exposes your agents through an OpenAI-compatible HTTP interface, handles incoming webhooks, and streams responses via Server-Sent Events (SSE) using the AG-UI protocol.
+The Sagewai gateway exposes your agents over OpenAI-compatible HTTP, handles incoming webhooks from external services, and streams responses via Server-Sent Events (SSE) using the AG-UI protocol.
 
 ---
 
 ## OpenAI-Compatible Endpoint
 
-Your agents are accessible at a drop-in replacement for the OpenAI Chat Completions API:
+Send chat completion requests to:
 
 ```
 POST /v1/chat/completions
 ```
 
-This means any client that works with OpenAI (LangChain, LlamaIndex, custom scripts) can route to Sagewai with a one-line URL change.
+Any client that works with the OpenAI API — LangChain, LlamaIndex, custom scripts — can route to Sagewai by changing the base URL.
 
-### cURL example
+### cURL
 
 ```bash
 curl -X POST https://your-gateway.sagewai.ai/v1/chat/completions \
@@ -36,7 +36,7 @@ curl -X POST https://your-gateway.sagewai.ai/v1/chat/completions \
   }'
 ```
 
-### Python client (OpenAI SDK)
+### Python (OpenAI SDK)
 
 ```python
 from openai import AsyncOpenAI
@@ -47,7 +47,7 @@ client = AsyncOpenAI(
 )
 
 response = await client.chat.completions.create(
-    model="my-research-agent",  # maps to a registered Sagewai agent
+    model="my-research-agent",
     messages=[{"role": "user", "content": "What are the key AI papers from this week?"}],
 )
 print(response.choices[0].message.content)
@@ -57,9 +57,9 @@ print(response.choices[0].message.content)
 
 ## Streaming with AG-UI (SSE)
 
-For real-time streaming, Sagewai uses the **AG-UI protocol** — an SSE-based streaming format that emits structured events as the agent works.
+For real-time streaming, Sagewai uses the AG-UI protocol — an SSE-based format that emits structured events as the agent works.
 
-### Enable streaming via the OpenAI-compat endpoint
+### Via the OpenAI-compatible endpoint
 
 ```python
 async for chunk in await client.chat.completions.create(
@@ -71,14 +71,14 @@ async for chunk in await client.chat.completions.create(
     print(delta, end="", flush=True)
 ```
 
-### AG-UI native SSE endpoint
+### AG-UI native endpoints
 
 ```
 GET /agui/ws
 POST /agui/runs
 ```
 
-The AG-UI event stream emits typed events:
+AG-UI events:
 
 | Event Type | Payload | Meaning |
 |------------|---------|---------|
@@ -91,9 +91,9 @@ The AG-UI event stream emits typed events:
 
 ### Consuming AG-UI events in JavaScript
 
+The browser `EventSource` API does not support custom headers. Use `@microsoft/fetch-event-source` or pass the token as a query parameter:
+
 ```javascript
-// Browser EventSource does not support custom headers.
-// Use @microsoft/fetch-event-source or pass token as query param:
 import { fetchEventSource } from "@microsoft/fetch-event-source";
 
 await fetchEventSource("/agui/ws?run_id=run-001", {
@@ -114,7 +114,7 @@ await fetchEventSource("/agui/ws?run_id=run-001", {
 
 ## Webhook Triggers
 
-Register webhooks so external services (Stripe, GitHub, Slack) can trigger agent runs:
+Register handlers so external services (Stripe, GitHub, Slack) can trigger agent runs by sending HTTP POST events:
 
 ```python
 from sagewai.gateway import WebhookRouter
@@ -123,22 +123,17 @@ router = WebhookRouter()
 
 @router.on("stripe.payment_intent.succeeded")
 async def handle_payment(payload: dict) -> None:
-    # payload is the verified Stripe webhook body
     agent = UniversalAgent(name="billing-agent", model="gpt-4o")
     await agent.chat(f"Process payment: {payload['id']}")
 
-# In your FastAPI app
 app.include_router(router.as_fastapi_router(), prefix="/webhooks")
 ```
 
-Webhooks are verified via **HMAC** (Stripe/Slack/GitHub signing secrets). Unverified requests are rejected before reaching the handler.
+Webhooks are verified via HMAC (using Stripe, Slack, or GitHub signing secrets). Requests that fail verification are rejected before reaching your handler.
 
 ```python
-from sagewai.gateway import WebhookRouter
-
-# Register with HMAC verification
 router = WebhookRouter(
-    secret="whsec_...",          # your webhook signing secret
+    secret="whsec_...",
     signature_header="stripe-signature",
     verification_mode="stripe",  # or "slack", "github", "hmac-sha256"
 )
@@ -171,7 +166,7 @@ await poller.start()
 
 ## Event Listeners
 
-Subscribe to real-time streams (Kafka, Redis Pub/Sub, SSE from external services):
+Subscribe to real-time streams from Kafka, Redis Pub/Sub, or external SSE sources:
 
 ```python
 from sagewai.gateway import ListenerManager
@@ -190,7 +185,7 @@ await listener.start()
 
 ## Agent-to-Agent Protocol (A2A)
 
-Agents expose **agent cards** — structured capability declarations that other agents can discover and call:
+Agents expose **agent cards** — structured capability declarations that other agents can discover and call. This lets agents from different organizations collaborate without sharing credentials.
 
 ```python
 from sagewai.protocols.a2a import AgentCard, A2AClient
@@ -204,7 +199,7 @@ card = AgentCard(
     model="gpt-4o",
 )
 
-# Another agent discovers and calls it
+# Another agent calls it
 client = A2AClient(gateway_url="https://your-gateway.sagewai.ai")
 result = await client.delegate(
     target_agent="research-agent",
@@ -212,24 +207,22 @@ result = await client.delegate(
 )
 ```
 
-The A2A protocol allows agents from different organizations to collaborate without sharing credentials — only the agent card endpoint is exposed.
-
 ---
 
-## Configuring the Gateway
+## Gateway Configuration
 
-In your admin backend's config:
+Configure which features are enabled in your admin backend:
 
 ```python
 # apps/admin/admin/config.py
 GATEWAY_ENABLED = True
-GATEWAY_OPENAI_COMPAT = True   # Enable /v1/chat/completions
-GATEWAY_AGUI = True            # Enable /agui/ endpoints
-GATEWAY_WEBHOOKS = True        # Enable webhook router
-GATEWAY_A2A = True             # Enable A2A agent cards
+GATEWAY_OPENAI_COMPAT = True   # /v1/chat/completions
+GATEWAY_AGUI = True            # /agui/ endpoints
+GATEWAY_WEBHOOKS = True        # webhook router
+GATEWAY_A2A = True             # A2A agent cards
 ```
 
-Or via environment variables:
+Or use environment variables:
 
 ```bash
 SAGEWAI_GATEWAY_ENABLED=true

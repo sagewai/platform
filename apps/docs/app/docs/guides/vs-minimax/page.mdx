@@ -7,7 +7,7 @@ export const metadata = {
 
 # Sagewai vs. MiniMax
 
-A practical comparison for teams evaluating enterprise AI orchestration frameworks. Both Sagewai and MiniMax offer agent infrastructure — but they optimise for different tradeoffs.
+A practical comparison for teams evaluating enterprise AI orchestration options. Sagewai and MiniMax both provide agent infrastructure, but their design priorities differ on model freedom, deployment model, and extensibility.
 
 ---
 
@@ -17,7 +17,7 @@ A practical comparison for teams evaluating enterprise AI orchestration framewor
 |---|---|---|
 | **Model support** | Any model (OpenAI, Gemini, Anthropic, Ollama, and 100+ more) | Primarily MiniMax proprietary models |
 | **Deployment** | Self-hosted, cloud, or hybrid | Cloud-only (SaaS) |
-| **Worker fleet** | Enterprise fleet with routing, mTLS, anomaly detection | Managed compute only |
+| **Worker fleet** | Distributed fleet with routing, mTLS, anomaly detection | Managed compute only |
 | **Memory** | Milvus vector + NebulaGraph + episodic | Managed context windows |
 | **Protocol support** | MCP, A2A, AG-UI, OpenAI-compat gateway | Proprietary API |
 | **Context engine** | Multi-scope RAG (org/project, tags, BM25+vector+graph) | Basic RAG |
@@ -27,9 +27,9 @@ A practical comparison for teams evaluating enterprise AI orchestration framewor
 
 ---
 
-## Model Freedom
+## Model freedom
 
-Sagewai is model-agnostic by design. The same agent code runs against GPT-4o today and a fine-tuned Llama on your own GPU cluster tomorrow — no rewrites.
+Sagewai is model-agnostic. The same agent code runs against GPT-4o today and a fine-tuned Llama on your own GPU cluster tomorrow — no rewrites needed:
 
 ```python
 # Same agent, different models
@@ -42,9 +42,9 @@ MiniMax agents are coupled to MiniMax models. Switching providers requires re-pl
 
 ---
 
-## Self-Hosted Execution
+## Self-hosted execution
 
-Sagewai's **Enterprise Fleet** lets you run workers on your own hardware, air-gapped networks, or private cloud — while the orchestration plane stays in Sagewai's cloud.
+Sagewai's Enterprise Fleet lets you run workers on your own hardware, air-gapped networks, or private cloud, while the orchestration plane stays wherever you deploy it:
 
 ```python
 # Worker registered from your datacenter
@@ -58,7 +58,7 @@ MiniMax has no equivalent. All compute runs on MiniMax infrastructure.
 
 ---
 
-## Memory Architecture
+## Memory architecture
 
 Sagewai provides three integrated memory layers:
 
@@ -68,13 +68,13 @@ Sagewai provides three integrated memory layers:
 | Graph | NebulaGraph | Entity relationships, temporal facts |
 | Episodic | PostgreSQL | Conversation history, session continuity |
 
-MiniMax provides managed context windows. Long-term persistence requires custom integration.
+MiniMax provides managed context windows. Long-term persistence requires custom integration work.
 
 ---
 
-## Protocol Ecosystem
+## Protocol ecosystem
 
-Sagewai speaks the protocols agents actually need in production:
+Sagewai supports the protocols agents need in production:
 
 - **MCP** — expose tools to Claude Code, Cursor, and any MCP-compatible client
 - **A2A** — agent-to-agent delegation without API wrappers
@@ -89,11 +89,13 @@ server = McpServer(agents=[my_agent])
 await server.start()
 ```
 
+MiniMax uses a proprietary API. Tooling built for its API does not transfer to other providers.
+
 ---
 
-## Directive Engine
+## Directive engine
 
-Sagewai includes a prompt preprocessing layer that makes small and local models significantly more capable by resolving context, memory, and agent delegation before the LLM call.
+Sagewai includes a prompt preprocessing layer that resolves context, memory, and agent delegation before the LLM call. This makes small and local models significantly more capable on tasks that would otherwise exceed their context window:
 
 ```
 @context('recent customer complaints', scope='org', tags='support,q4')
@@ -105,25 +107,25 @@ There is no equivalent in MiniMax.
 
 ---
 
-## When to Choose Sagewai
+## When to choose Sagewai
 
-- You need **model portability** — avoid vendor lock-in on LLM providers
+- You need **model portability** — you want to switch LLM providers without rewriting your agent code
 - You run **sensitive workloads** that cannot leave your network
-- You want **open standards** (MCP, A2A) rather than proprietary APIs
+- You want to use **open standards** (MCP, A2A) rather than proprietary APIs
 - You need **deep memory** — graph relationships, temporal facts, multi-scope RAG
-- You are building a **multi-tenant platform** where project isolation is critical
+- You are building a **multi-tenant platform** where project isolation is a hard requirement
 
-## When MiniMax May Fit
+## When MiniMax may fit
 
 - Your team is already invested in MiniMax's model ecosystem
-- You want fully managed infrastructure with zero ops overhead
-- Your use cases are conversational rather than agentic
+- You want fully managed infrastructure with minimal operational overhead
+- Your use cases are primarily conversational rather than agentic
 
 ---
 
 ## Migration from MiniMax
 
-If you are moving from MiniMax, the main mapping is:
+If you are moving from MiniMax, the main concept mapping is:
 
 | MiniMax concept | Sagewai equivalent |
 |---|---|

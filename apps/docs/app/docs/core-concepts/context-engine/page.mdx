@@ -16,11 +16,11 @@ export const metadata = {
 
 # Context Engine
 
-The Context Engine is Sagewai's production-grade memory system. It handles the full lifecycle of knowledge: ingesting documents, chunking and embedding them, storing chunks in vector and graph databases, and retrieving relevant context using multi-strategy search.
-
-Unlike the lower-level `VectorMemory` and `GraphMemory` primitives, the Context Engine adds document management, scoped access control, tag-based filtering, deduplication, conflict detection, lifecycle management, and self-editing memory tools.
+The Context Engine manages the full lifecycle of knowledge for production agents: ingest documents (text, files, URLs, directories), chunk and embed them, store chunks in vector and graph databases, and retrieve relevant context using multi-strategy search. Use it when you need document management, scoped access control, tag-based filtering, deduplication, and lifecycle policies — capabilities that the lower-level `VectorMemory` and `GraphMemory` primitives do not provide.
 
 The Context Engine implements the `MemoryProvider` protocol, so it plugs directly into any agent via `memory=engine`.
+
+**Prerequisites:** [Memory & RAG](/docs/core-concepts/memory) · **Next:** [Directives](/docs/core-concepts/directives) · [Safety](/docs/core-concepts/safety)
 
 ## Architecture
 
@@ -101,7 +101,7 @@ asyncio.run(main())
 
 ## Ingestion
 
-The Context Engine can ingest content from multiple sources:
+The Context Engine accepts content from several sources. Each source runs through the same chunking, embedding, and deduplication pipeline before storage.
 
 ### Text
 
@@ -120,7 +120,7 @@ doc = await engine.ingest_text(
 
 ### Files
 
-Supports PDF, DOCX, HTML, Markdown, images (via Docling), and source code (via tree-sitter):
+Supported formats: PDF, DOCX, HTML, Markdown, images (via Docling), and source code (via tree-sitter).
 
 ```python
 doc = await engine.ingest_file(
@@ -133,7 +133,7 @@ doc = await engine.ingest_file(
 
 ### URLs
 
-Fetches and parses web pages with built-in SSRF protection. Re-ingesting the same URL auto-supersedes the old version:
+Fetches and parses web pages with built-in SSRF protection. If you re-ingest the same URL, the engine auto-supersedes the old version rather than creating a duplicate.
 
 ```python
 doc = await engine.ingest_url(
@@ -145,7 +145,7 @@ doc = await engine.ingest_url(
 
 ### Directories
 
-Recursively indexes a directory, respecting `.gitignore`, `.claudeignore`, and other ignore files. Automatically skips binary files, `.git`, `node_modules`, and files over 50MB:
+Recursively indexes a directory tree, respecting `.gitignore`, `.claudeignore`, and other ignore files. Binary files, `.git`, `node_modules`, and files over 50 MB are skipped automatically.
 
 ```python
 docs = await engine.ingest_directory(
@@ -159,14 +159,14 @@ docs = await engine.ingest_directory(
 
 ## Scopes
 
-The Context Engine uses two access scopes for isolating and sharing knowledge:
+Every document belongs to one of two access scopes. Scopes control which agents can see which content.
 
 | Scope | Access | Use Case |
 |-------|--------|----------|
 | `ContextScope.ORG` | All projects in the organization | Company policies, shared knowledge bases |
 | `ContextScope.PROJECT` | Single project only | Project-specific documents, meeting notes |
 
-When an agent searches, it retrieves from both its project scope and the organization scope. Project-scoped results take priority over org-scoped results during deduplication.
+When an agent searches, it queries both its project scope and the organization scope. Project-scoped results take priority over org-scoped results during deduplication.
 
 ```python
 from sagewai import ContextScope
@@ -192,7 +192,7 @@ await engine.ingest_text(
 
 ## Tags
 
-Documents support tags for fine-grained access control and filtering. Tags are stored as a list of strings on each document, backed by a PostgreSQL `TEXT[]` column with a GIN index for fast lookups.
+Tags are stored as a list of strings on each document. The storage uses a PostgreSQL `TEXT[]` column with a GIN index so tag lookups stay fast at scale.
 
 ```python
 # Ingest with tags
@@ -211,13 +211,13 @@ results = await engine.search(
 )
 ```
 
-Tags are filtered at the document level before chunk retrieval, so the search only considers chunks from documents that match the requested tags.
+Tag filtering happens at the document level, before chunk retrieval. A chunk only enters search results if its parent document matches all requested tags.
 
 ---
 
 ## Multi-Strategy Retrieval
 
-The `search()` method runs three retrieval strategies in parallel and merges results:
+`search()` runs three strategies in parallel and merges their results. Each strategy has different strengths, so the combination outperforms any single approach.
 
 ```python
 results = await engine.search(
@@ -239,13 +239,13 @@ for result in results:
 | **BM25** | TF-IDF keyword matching | Exact terms, acronyms, proper nouns |
 | **Graph search** | Traverses entity relationships | "Who manages X?", relational queries |
 
-Results are merged via **Reciprocal Rank Fusion (RRF)**, which combines ranked lists without requiring score normalization. An optional cross-encoder re-ranker can be configured for higher precision.
+Results merge via **Reciprocal Rank Fusion (RRF)**, which combines ranked lists without needing score normalization across strategies. You can add a cross-encoder re-ranker for higher precision when latency allows.
 
 ---
 
 ## Self-Editing Memory Tools
 
-The Context Engine provides four tools that let agents curate their own memory during conversations:
+The Context Engine exposes four tools that let agents manage their own knowledge during a conversation:
 
 ```python
 agent = UniversalAgent(
@@ -263,11 +263,11 @@ agent = UniversalAgent(
 | `memory_forget` | Marks a stored fact as irrelevant (sets importance to 0) |
 | `memory_update` | Replaces old information with updated content |
 
-With these tools, the agent decides what to remember, what to forget, and when to update outdated facts — following the self-editing memory paradigm.
+The agent calls these tools at its own discretion — deciding what to remember, what to drop, and when to update a stale fact.
 
 ### Auto-Learn
 
-Enable `auto_learn=True` to have the agent automatically extract and store key facts from every conversation via the `MemoryBridge`:
+Set `auto_learn=True` to have the agent automatically extract and store facts from every conversation via the `MemoryBridge`. No explicit tool calls needed.
 
 ```python
 agent = UniversalAgent(
@@ -283,7 +283,7 @@ agent = UniversalAgent(
 
 ## Production Stores
 
-For production deployments, use Postgres for metadata and Milvus for vectors:
+The default in-memory stores need no infrastructure and are the right choice for development. For production, use Postgres for metadata and Milvus for vectors:
 
 ```python
 from sagewai.context import (
@@ -308,13 +308,13 @@ engine = ContextEngine(
 )
 ```
 
-The in-memory stores require no infrastructure and are the default for development. Production stores require `sagewai[memory]` and `sagewai[postgres]` extras.
+Production stores require the `sagewai[memory]` and `sagewai[postgres]` extras.
 
 ---
 
 ## Lifecycle Management
 
-The Context Engine supports configurable lifecycle policies for document compression, archival, and cleanup:
+Documents age out automatically when you configure a `LifecycleConfig`. Lifecycle actions trigger based on document age and importance scores. Re-ingesting a document auto-supersedes the previous version through the conflict detection system.
 
 ```python
 from sagewai.context import LifecycleConfig
@@ -329,8 +329,6 @@ engine = ContextEngine(
     ),
 )
 ```
-
-Lifecycle actions are triggered automatically based on document age and importance scores. The conflict detection system auto-supersedes older versions when a document is re-ingested.
 
 ---
 

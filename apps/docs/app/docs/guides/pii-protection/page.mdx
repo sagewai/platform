@@ -5,25 +5,23 @@ export const metadata = {
   alternates: { canonical: 'https://docs.sagewai.ai/docs/guides/pii-protection' },
 };
 
-# PII Protection Guide
+# PII Protection
 
-This guide covers how to protect personally identifiable information (PII) in your Sagewai agents. You will learn how to detect, redact, and monitor PII in both agent inputs and outputs.
+This guide covers how to prevent personally identifiable information (PII) from reaching LLM providers. You will set up detection, choose a response action, filter specific entity types, and connect detections to your audit pipeline.
 
-## Why PII Protection Matters
+**Prerequisites:** You have an agent running. If not, start with [First Agent](/docs/get-started/first-agent).
 
-When users interact with AI agents, they may inadvertently share sensitive information:
-- Email addresses in support tickets
-- Phone numbers in contact requests
-- Social security numbers in financial documents
-- Credit card numbers in payment conversations
+## Why you need this
 
-Without protection, this data flows to the LLM provider's API, creating compliance and privacy risks.
+When users talk to an AI agent, they often include sensitive data they may not intend to share: email addresses in support tickets, phone numbers in contact requests, SSNs in financial documents, card numbers in payment conversations. Without a guardrail, that data goes straight to the LLM provider's API and its training pipeline.
+
+`PIIGuard` intercepts messages on both the input and output paths before anything reaches the model.
 
 ---
 
-## Quick Setup
+## Quick setup
 
-Add `PIIGuard` to any agent in one line:
+Add `PIIGuard` to any agent:
 
 ```python
 from sagewai.engines.universal import UniversalAgent
@@ -36,21 +34,21 @@ agent = UniversalAgent(
 )
 ```
 
-This detects and redacts all 7 PII entity types on both input and output.
+This detects and redacts all 7 built-in entity types on both input and output paths.
 
 ---
 
-## Choosing an Action
+## Actions
 
-PIIGuard supports 5 actions, depending on your compliance requirements:
+`PIIGuard` supports five actions. Choose based on your compliance requirements.
 
-### `block` — Reject the message entirely
+### `block` — reject the message entirely
 
 ```python
 PIIGuard(action="block")
 ```
 
-The agent raises `GuardrailViolationError` if PII is detected. The message never reaches the LLM. Use this when PII must never be processed under any circumstances.
+When PII is detected, the agent raises `GuardrailViolationError`. The message never reaches the LLM. Use `block` when you cannot process PII under any circumstances.
 
 ```python
 from sagewai.safety.guardrails import GuardrailViolationError
@@ -59,37 +57,49 @@ try:
     response = await agent.chat("My SSN is 123-45-6789")
 except GuardrailViolationError as e:
     print(f"Blocked: {e}")
-    # Handle the blocked message
 ```
 
-### `redact` — Replace PII with labels
+### `redact` — replace PII with labels
 
 ```python
 PIIGuard(action="redact")
 ```
 
-PII is replaced with labels like `[REDACTED_EMAIL]` before the message reaches the LLM. The agent can still process the request, but without the sensitive data.
+When PII is detected, `action="redact"` currently raises a `GuardrailViolationError` — it does not forward the scrubbed message to the LLM. To get pass-through behaviour with PII replaced, call `guard.detect()` and `guard.redact()` directly and then decide what to forward:
 
-**Input:** "Contact me at john@example.com or 555-123-4567"
-**What the LLM sees:** "Contact me at [REDACTED_EMAIL] or [REDACTED_PHONE]"
+```python
+guard = PIIGuard(action="redact")
+findings = guard.detect(message)
+if findings:
+    clean_message = guard.redact(message)
+    # Forward clean_message to the agent instead of the original
+    response = await agent.chat(clean_message)
+else:
+    response = await agent.chat(message)
+```
 
-> Note: The redact action currently blocks (raises an error) rather than passing the redacted text. For pass-through redaction, use the `detect` and `redact` methods directly.
+The redacted form replaces each detected value with a labelled placeholder:
 
-### `warn` — Log and allow through
+| Path | Content |
+|------|---------|
+| Original | `Contact me at john@example.com or 555-123-4567` |
+| After `guard.redact()` | `Contact me at [REDACTED_EMAIL] or [REDACTED_PHONE]` |
+
+### `warn` — log and allow through
 
 ```python
 PIIGuard(action="warn")
 ```
 
-The PII violation is logged but the message is sent to the LLM unchanged. Use this during development or for audit trails where you need to track PII exposure without blocking.
+The violation is logged but the message is sent to the LLM unchanged. Use `warn` during development or when you need an audit trail without disrupting the user.
 
-### `escalate` — Emit event and allow
+### `escalate` — emit an event and allow through
 
 ```python
 PIIGuard(action="escalate")
 ```
 
-Emits a `GUARDRAIL_ESCALATION` event that can be handled by event listeners. The message is sent to the LLM unchanged.
+Emits a `GUARDRAIL_ESCALATION` event. The message is sent to the LLM unchanged. Wire up a handler to forward detections to your compliance system.
 
 ```python
 from sagewai.core.events import AgentEvent
@@ -97,29 +107,29 @@ from sagewai.core.events import AgentEvent
 async def handle_escalation(event: AgentEvent, data: dict):
     if event == AgentEvent.GUARDRAIL_ESCALATION:
         print(f"PII escalation: {data}")
-        # Log to compliance system, notify admin, etc.
+        # Forward to your compliance system or alert queue
 
 agent.on_event(handle_escalation)
 ```
 
-### `log_only` — Detect and log silently
+### `log_only` — detect and log silently
 
 ```python
 PIIGuard(action="log_only")
 ```
 
-Behaves like `warn` — detects and logs PII but does not block or modify the message.
+Behaves like `warn`: detects, logs, and passes the message through without modification.
 
 ---
 
-## Selecting Entity Types
+## Entity types
 
-By default, PIIGuard detects all 7 entity types. You can narrow the scope:
+`PIIGuard` detects all 7 entity types by default. Narrow the scope when you only care about a subset.
 
 ```python
 from sagewai.safety.pii import PIIGuard, PIIEntityType
 
-# Only detect financial PII
+# Block only financial PII
 financial_guard = PIIGuard(
     action="block",
     entity_types=[
@@ -129,7 +139,7 @@ financial_guard = PIIGuard(
     ],
 )
 
-# Only detect contact information
+# Redact only contact information
 contact_guard = PIIGuard(
     action="redact",
     entity_types=[
@@ -139,13 +149,13 @@ contact_guard = PIIGuard(
 )
 ```
 
-### Entity Types and Patterns
+### Supported entity types
 
-| Entity | Example | Regex Pattern |
-|--------|---------|---------------|
+| Entity | Example | Pattern |
+|--------|---------|---------|
 | `EMAIL` | `user@example.com` | Standard email format |
 | `PHONE` | `(555) 123-4567`, `+1-555-123-4567` | US phone with optional country code |
-| `SSN` | `123-45-6789` | US Social Security Number format |
+| `SSN` | `123-45-6789` | US Social Security Number |
 | `CREDIT_CARD` | `4111 1111 1111 1111` | 16-digit card with optional separators |
 | `IBAN` | `DE89370400440532013000` | International Bank Account Number |
 | `IP_ADDRESS` | `192.168.1.1` | IPv4 address |
@@ -153,33 +163,32 @@ contact_guard = PIIGuard(
 
 ---
 
-## Standalone PII Detection
+## Standalone detection
 
-Use PIIGuard outside of an agent for direct text processing:
+Use `PIIGuard` outside an agent to scan or clean text directly:
 
 ```python
-from sagewai.safety.pii import PIIGuard, PIIEntityType
+from sagewai.safety.pii import PIIGuard
 
 guard = PIIGuard(action="redact")
 
-# Detect PII in text
 text = "Send invoice to john@acme.com, call 555-123-4567, card 4111-1111-1111-1111"
-findings = guard.detect(text)
 
+# Detect
+findings = guard.detect(text)
 for entity_type, matched_text in findings:
     print(f"  {entity_type.value}: {matched_text}")
-# Output:
-#   EMAIL: john@acme.com
-#   PHONE: 555-123-4567
-#   CREDIT_CARD: 4111-1111-1111-1111
+# EMAIL: john@acme.com
+# PHONE: 555-123-4567
+# CREDIT_CARD: 4111-1111-1111-1111
 
-# Redact PII
+# Redact
 clean = guard.redact(text)
 print(clean)
 # "Send invoice to [REDACTED_EMAIL], call [REDACTED_PHONE], card [REDACTED_CARD]"
 ```
 
-### Batch Processing
+### Batch processing
 
 ```python
 documents = ["Doc 1 with email@test.com", "Doc 2 with 555-0123", "Doc 3 clean"]
@@ -189,17 +198,14 @@ for doc in documents:
     if findings:
         print(f"PII found: {len(findings)} entities")
         clean_doc = guard.redact(doc)
-        # Process clean_doc instead of original
-    else:
-        # Safe to process as-is
-        pass
+        # Forward clean_doc instead of the original
 ```
 
 ---
 
-## Combining with Other Guardrails
+## Combining with other guardrails
 
-PIIGuard works alongside other guardrails. Order matters — put PIIGuard first:
+List guardrails in the order you want them to run. Put `PIIGuard` first so PII is stripped before other guardrails see the text.
 
 ```python
 from sagewai.safety.guardrails import ContentFilter, TokenBudgetGuard
@@ -209,17 +215,17 @@ agent = UniversalAgent(
     name="production-agent",
     model="gpt-4o",
     guardrails=[
-        # 1. PII protection first — redact before anything else
+        # 1. Strip PII before anything else touches the message
         PIIGuard(action="redact", entity_types=[
             PIIEntityType.EMAIL,
             PIIEntityType.SSN,
             PIIEntityType.CREDIT_CARD,
         ]),
-        # 2. Content filtering — block injection attacks
+        # 2. Block known injection patterns
         ContentFilter(blocklist=["DROP TABLE", "DELETE FROM"]),
-        # 3. Hallucination guard — check output grounding
+        # 3. Warn when output lacks grounding
         HallucinationGuard(threshold=0.3, action="warn"),
-        # 4. Budget guard — prevent cost overruns
+        # 4. Cut off runaway cost
         TokenBudgetGuard(max_usd=2.0),
     ],
 )
@@ -227,16 +233,16 @@ agent = UniversalAgent(
 
 ---
 
-## Monitoring PII Events
+## Monitoring PII events
 
-Track PII detections using the Analytics API:
+Track detections through the Analytics API:
 
 ```python
 from sagewai.admin.analytics import AnalyticsStore
 
 store = AnalyticsStore()
 
-# Record PII events (called automatically by PIIGuard with escalate/log_only)
+# PIIGuard calls this automatically when action is "escalate" or "log_only"
 store.record_guardrail_event(
     agent_name="support-agent",
     event_type="pii",
@@ -244,7 +250,7 @@ store.record_guardrail_event(
     count=2,
 )
 
-# Query PII risk metrics
+# Query exposure metrics
 risks = store.get_risks(agent_name="support-agent")
 print(f"PII events: {risks['pii_events']}")
 print(f"Total guardrail events: {risks['total_events']}")
@@ -252,18 +258,18 @@ print(f"Total guardrail events: {risks['total_events']}")
 
 ---
 
-## Best Practices
+## Best practices
 
-1. **Use `block` for high-sensitivity agents** (financial, healthcare). It is better to reject a message than to risk PII exposure.
+1. **Use `block` for high-sensitivity agents** (financial, healthcare). Rejecting a message is safer than risking PII reaching the LLM.
 
-2. **Use `redact` for general-purpose agents** where PII in the input is likely accidental and the request can still be fulfilled without it.
+2. **Use `redact` for general-purpose agents** where users may accidentally include PII but the request can still be fulfilled without the sensitive values.
 
-3. **Use `escalate` in production** to track PII exposure without disrupting the user experience. Feed events into your compliance monitoring system.
+3. **Use `escalate` in production** when you want a detection audit trail without disrupting the user. Feed the events into your compliance monitoring pipeline.
 
-4. **Select only relevant entity types.** If your agent only handles financial data, there is no need to detect passport numbers.
+4. **Restrict entity types to what your agent actually handles.** If your agent only processes financial data, there is no point scanning for passport numbers.
 
-5. **Test with realistic data.** Verify that the regex patterns match the PII formats relevant to your users and regions.
+5. **Test against realistic data.** The built-in patterns target US formats. Verify they match the PII formats used by your users.
 
-6. **Layer PIIGuard with ContentFilter.** PIIGuard catches structured PII (emails, SSNs). ContentFilter catches domain-specific sensitive terms (project names, internal codes).
+6. **Pair `PIIGuard` with `ContentFilter`.** `PIIGuard` catches structured PII (emails, SSNs). `ContentFilter` catches domain-specific sensitive terms (project names, internal codes, SQL keywords).
 
-7. **Audit regularly.** Review PII event logs from the Analytics API to understand exposure patterns and adjust your guardrail configuration.
+7. **Review detection logs regularly.** Exposure patterns change over time. Audit the Analytics API output to tune your guardrail configuration.

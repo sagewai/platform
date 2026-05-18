@@ -1,36 +1,23 @@
 # Free CUDA via Colab
 
-This is the most important page in this section. If you have never
-fine-tuned a model before, by the end of this page you will know
-that you can do it on your lunch break, on a free Tesla T4, without
-a credit card and without leaving the Sagewai surface.
+You can fine-tune a model on a free Tesla T4, without a credit card,
+without leaving the Sagewai surface. This page walks through the
+setup. Prerequisites: a Google account and training data in JSONL
+format.
 
-That sentence is the whole democratisation pitch in one breath.
-Either it is true and Sagewai is the platform that taught the
-audience how to use open models, or it is false and we are just
-another framework that says nice things about open models in its
-README. Read this page; decide for yourself.
+## What you need
 
-## What's the situation?
+You have training data — maybe the Curator harvested several thousand
+input-output pairs from your Q1 Opus runs, or you exported a JSONL
+of customer-support transcripts from your existing ticketing system.
+You want to fine-tune a small open-source model on that data and
+verify the result before renting paid hardware.
 
-You have training data. Maybe the Curator harvested several
-thousand input-output pairs from your Q1 Opus runs, or maybe you
-exported a JSONL of customer-support transcripts from your existing
-ticketing system. You want to fine-tune a small open-source model
-on that data and prove that the result is good enough to deploy.
+Google Colab gives you a Tesla T4 (16 GB) for free. Session limit is
+about 12 hours. A T4 can fine-tune a 3B base model with QLoRA in two
+to three hours. The constraint is wall-clock, not money.
 
-You do not have a GPU. You will not put a $2,000 RTX 4090 on the
-corporate card to *prove that fine-tuning works*. You will not
-spin up an AWS p3 instance because the IAM ceremony alone is a
-half-day. You want a runway between *"I have data"* and *"I have
-a deployed model"* that is **measured in minutes and zero dollars**.
-
-That runway is Google Colab. Anyone with a Google account gets a
-Tesla T4 (16GB) for free, with a session limit of about 12 hours.
-A T4 is enough to fine-tune a 3B base model with QLoRA in two to
-three hours. The constraint is wall-clock, not money.
-
-## What's the recommended path?
+## How it works
 
 Sagewai's [Example 44](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/44_colab_free_cuda.py)
 orchestrates Colab via Drive-sync. Here is the shape:
@@ -53,13 +40,12 @@ flowchart LR
 The orchestrator handles steps 1, 5, and 6. You handle step 2 (one
 click in your browser). Colab handles steps 3 and 4 on the free T4.
 
-The reason it is Drive-sync and not the older `colab-cli` PyPI
-package is that `colab-cli` is unmaintained as of 2026 and its
-auth flow no longer matches Google's current OAuth surface.
-Drive-sync uses `pydrive2` against the standard Drive API, which
-is supported, documented, and stable.
+The integration uses Drive-sync via `pydrive2` (not `colab-cli`,
+which is unmaintained as of 2026 and whose auth flow no longer
+matches Google's current OAuth surface). `pydrive2` targets the
+standard Drive API and is supported and documented.
 
-## Show me a runnable thing
+## Run it
 
 ```bash
 # 1. Set up Drive OAuth (one-time, ~5 minutes)
@@ -77,10 +63,9 @@ python packages/sdk/sagewai/examples/44_colab_free_cuda.py
 #    via Ollama.
 ```
 
-That is the full path. Six commands plus one browser click. The
-orchestrator's stub mode runs end-to-end without any Drive
-credentials so you can sanity-check the wiring before you do the
-OAuth setup:
+That is the full path: install, run, one browser click, wait, done.
+Stub mode runs end-to-end without Drive credentials so you can
+verify the wiring before doing the OAuth setup:
 
 ```bash
 python packages/sdk/sagewai/examples/44_colab_free_cuda.py
@@ -90,65 +75,61 @@ python packages/sdk/sagewai/examples/44_colab_free_cuda.py
 The example's [companion README](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/44_colab_free_cuda.md)
 walks through the OAuth setup with screenshots.
 
-## What does the LoRA do?
+## What the LoRA gives you
 
-Trained on a few thousand support-triage pairs, a 3B base model
-with QLoRA on a T4 typically reaches 88-92% of Opus's
-classification accuracy on the same task. That is not a
-research result; it is a routine outcome for narrow,
-well-specified classification tasks.
+Trained on a few thousand support-triage pairs, a 3B base model with
+QLoRA on a T4 typically reaches 88–92% of Opus's classification
+accuracy on the same task. That is a routine outcome for narrow,
+well-specified classification tasks, not a research result.
 
-What the LoRA *does not* do: replace Opus on open-ended generation,
+What the LoRA does not do: replace Opus on open-ended generation,
 multi-step reasoning, or any task where the input distribution is
-broader than your training data. Match the model to the job —
-narrow tasks are where local SLMs win, and narrow tasks are also
-where most production AI features actually live.
+wider than your training data. Local SLMs win on narrow tasks —
+and narrow tasks are where most production AI features actually live.
 
-## What it costs
+## Cost
 
 | Item | Cost |
 |---|---|
 | Colab T4 GPU time | $0 |
-| Google Drive storage (~5GB) | $0 |
+| Google Drive storage (~5 GB) | $0 |
 | Drive API quota | $0 |
 | Your laptop's CPU during orchestration | $0 |
 | **Total** | **$0** |
 
-The honest version: if your fine-tune takes longer than 12 hours,
-Colab will disconnect the session and you will lose the run. For
-fine-tunes that big, see [Rent when you grow](/docs/inference/rent-when-you-grow).
-For everything that fits in 12 hours on a T4 — which is
-*"most narrow-task QLoRA fine-tunes of base models up to 7B"* —
-Colab is the answer.
+If your fine-tune takes longer than 12 hours, Colab will disconnect
+the session and you will lose the run. For fine-tunes that size, see
+[Rent when you grow](/docs/inference/rent-when-you-grow). Everything
+that fits in 12 hours on a T4 — which covers most narrow-task QLoRA
+fine-tunes of base models up to 7B — is handled here.
 
-## What would I do next?
+## Steps to follow
 
 1. Run Example 44's stub mode to verify the wiring.
 2. Set up the Drive OAuth (one-time, 5 min).
-3. Export training data via the Curator (if you have been
-   capturing) or from your existing data source.
-4. Run the live mode. Walk away. Come back in 3 hours.
+3. Export training data via the Curator (if you've been capturing)
+   or from your existing data source.
+4. Run the live mode. Come back in 3 hours.
 5. The orchestrator deploys the LoRA via Ollama; test it locally.
-6. When the LoRA passes your quality bar, swap your application
-   code's `model="claude-opus-4-7"` to `model="ollama/your-lora:latest"`.
-7. Watch the [Observatory cost dashboard](/docs/platform/observatory) tell
-   you the bill dropped.
+6. When the LoRA passes your quality bar, swap `model="claude-opus-4-7"`
+   to `model="ollama/your-lora:latest"` in your application code.
+7. Open the [Observatory cost dashboard](/docs/platform/observatory)
+   to see the per-call API spend drop.
 
 ## Anti-patterns
 
-1. **Trying to fine-tune a 70B on a T4.** Won't fit. Match the
-   model size to the GPU memory. 3B-7B base models with QLoRA fit
-   on 16GB; bigger models need bigger GPUs (see [Rent when you
-   grow](/docs/inference/rent-when-you-grow)).
+1. **Trying to fine-tune a 70B model on a T4.** It won't fit.
+   Match model size to GPU memory. 3B–7B base models with QLoRA fit
+   on 16 GB; larger models need larger GPUs (see
+   [Rent when you grow](/docs/inference/rent-when-you-grow)).
 
 2. **Treating Colab as a long-running service.** Colab disconnects
-   idle sessions and caps wall-clock at ~12 hours. It is for
-   training runs, not deployment. Deploy via Ollama on your laptop
-   or on a server you control.
+   idle sessions and caps wall-clock at ~12 hours. Use it for training
+   runs only. Deploy via Ollama on your laptop or a server you control.
 
-3. **Skipping the OAuth setup *"because I'll do it later"*.** Stub
-   mode is a verification path, not a substitute for the live run.
-   The 5-minute OAuth setup unlocks every subsequent fine-tune.
+3. **Deferring the OAuth setup.** Stub mode is a verification path,
+   not a substitute for the live run. The 5-minute OAuth setup unlocks
+   every subsequent fine-tune.
 
 ## Cross-references
 

@@ -7,7 +7,7 @@ export const metadata = {
 
 # Client Wrappers
 
-Sagewai provides client libraries in 17 programming languages. Every wrapper exposes the same API surface — Harness, Registry, Observatory, and Gateway — with three authentication methods.
+Sagewai ships client libraries for 17 programming languages. Each wrapper covers the same API surface — Harness, Registry, Observatory, and Gateway — and supports the same three authentication methods.
 
 ## Supported Languages
 
@@ -31,7 +31,7 @@ Sagewai provides client libraries in 17 programming languages. Every wrapper exp
 | **React Native** | `sagewai` | Mobile | `npm install sagewai` |
 | **Flutter** | `sagewai` | Mobile | `dart pub add sagewai` |
 
-**Tier 1** wrappers have full implementations with tests and are published to their respective package registries. **Tier 2** wrappers follow the same API surface and are currently in development — install commands will be available once packages are published. **Mobile** wrappers share the same API as their base language (TypeScript for React Native, Dart for Flutter).
+**Tier 1** wrappers are fully implemented, tested, and published to their package registries. **Tier 2** wrappers follow the same API surface and are in development — install commands will work once those packages are published. **Mobile** wrappers share their base language (TypeScript for React Native, Dart for Flutter).
 
 ## Quick Start by Language
 
@@ -222,7 +222,7 @@ IO.puts(response.content)
 
 ## Unified API Surface
 
-Every wrapper exposes the same operations organized by pillar:
+Every wrapper exposes the same operations:
 
 ### Harness (LLM Proxy)
 
@@ -262,11 +262,11 @@ Every wrapper exposes the same operations organized by pillar:
 
 ## Authentication
 
-All wrappers support three authentication methods:
+All wrappers support three authentication methods.
 
-### API Key (Simplest)
+### API Key
 
-Best for scripts, services, and development.
+Best for scripts, services, and development. Sends `X-API-Key` with every request.
 
 ```python
 # Python
@@ -283,11 +283,9 @@ const client = new SagewaiClient({ baseUrl: "...", apiKey: "sk-harness-..." });
 client := sagewai.NewClient(sagewai.WithAPIKey("sk-harness-..."))
 ```
 
-Sends `X-API-Key` header with every request.
+### JWT
 
-### JWT (Token-based)
-
-Best for authenticated users and service-to-service calls.
+Best for authenticated users and service-to-service calls. Sends `Authorization: Bearer`.
 
 ```python
 # Python
@@ -304,9 +302,7 @@ const client = new SagewaiClient({ baseUrl: "...", auth: { type: "jwt", token: "
 client := sagewai.NewClient(sagewai.WithJWT("eyJ..."))
 ```
 
-Sends `Authorization: Bearer` header.
-
-### OAuth (Enterprise)
+### OAuth
 
 Supports automatic token refresh for long-lived applications.
 
@@ -324,8 +320,6 @@ const client = new SagewaiClient({
 ```
 
 ## Response Types
-
-Consistent across all wrappers:
 
 ### ChatResponse
 
@@ -362,9 +356,9 @@ Consistent across all wrappers:
 | | Python SDK (`sagewai`) | Client Wrappers |
 |---|---|---|
 | **Install** | `pip install sagewai` | Language-specific package |
-| **Purpose** | Build agents, define tools, create workflows | Consume agents from any language |
+| **Purpose** | Build agents, define tools, create workflows | Call agents from any language |
 | **Runs** | Agent code executes locally | HTTP calls to harness/gateway |
 | **Use when** | Defining agent behavior | Integrating with existing apps, CI/CD, mobile |
 | **Features** | Full SDK (memory, directives, fleet, admin) | Harness + Registry + Observatory + Gateway APIs |
 
-In a typical setup: Python SDK defines and runs your agents on the server, while client wrappers let your TypeScript frontend, Go microservice, or Rust CLI interact with those agents.
+In a typical setup: the Python SDK defines and runs your agents on the server; client wrappers let your TypeScript frontend, Go microservice, or Rust CLI call those agents over HTTP.

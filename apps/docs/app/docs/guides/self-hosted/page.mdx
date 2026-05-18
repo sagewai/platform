@@ -5,40 +5,38 @@ export const metadata = {
   alternates: { canonical: 'https://docs.sagewai.ai/docs/guides/self-hosted' },
 };
 
-# Self-Hosted Deployment Guide
+# Self-hosted deployment
 
-Deploy Sagewai on your own infrastructure -- full control, no vendor lock-in.
+Run the full Sagewai stack on your own infrastructure. This guide covers local bring-up, environment configuration, database management, reverse proxy setup, fleet workers, and common failure modes.
 
 ---
 
 ## Prerequisites
 
-Before you begin, make sure you have:
+Before you start, install:
 
-- **Docker** and **Docker Compose v2+** installed
+- **Docker** and **Docker Compose v2+**
 - **PostgreSQL 14+** (or use the provided container)
-- **4 GB+ RAM** for a minimal deployment (8 GB+ recommended for production)
-- A **domain name** with a TLS certificate (for production deployments)
+- **4 GB RAM** minimum for a local deployment; 8 GB or more for production
+- A **domain name** and TLS certificate for production deployments
 - At least one **LLM API key** (OpenAI, Anthropic, or Google)
 
 ---
 
-## Quick Start
-
-The fastest way to get Sagewai running locally:
+## Quick start
 
 ```bash
 git clone https://github.com/sagewai/platform.git
-cd atelier
+cd platform
 cp .env.example .env
-# Edit .env with your API keys
+# Fill in your API keys in .env
 make start          # infra + DB migrations + admin backend
-make web APP=admin  # admin frontend (separate terminal)
+make web APP=admin  # admin frontend (run in a second terminal)
 ```
 
-`make start` brings up all infrastructure (PostgreSQL, Redis, Milvus, NebulaGraph, observability), applies database migrations, and starts the admin backend. The frontend requires a separate `make web APP=admin` command.
+`make start` brings up PostgreSQL, Redis, Milvus, NebulaGraph, and the observability stack, applies database migrations, and starts the admin backend. The frontend runs separately.
 
-Once running:
+Once up:
 
 - **Admin API** at `http://localhost:8000`
 - **Admin UI** at `http://localhost:3008` (after `make web`)
@@ -46,7 +44,7 @@ Once running:
 
 ---
 
-## Architecture Overview
+## Architecture overview
 
 ```
 +---------------------------------------------------------+
@@ -76,22 +74,22 @@ Once running:
 
 ---
 
-## Docker Compose Profiles
+## Docker Compose profiles
 
-Sagewai ships two compose files:
+Sagewai ships two compose files.
 
 ### Full infrastructure (`docker-compose.yml`)
 
-Starts all infrastructure and observability services. Used with `make infra`:
+Starts all infrastructure and observability services:
 
 ```bash
-make infra       # All services: Postgres, Redis, Milvus, NebulaGraph, Grafana, Prometheus, OTel
-make infra-core  # Lightweight: Postgres + Redis only
+make infra       # Postgres, Redis, Milvus, NebulaGraph, Grafana, Prometheus, OTel
+make infra-core  # Postgres + Redis only
 ```
 
 ### Development stack (`docker-compose.dev.yml`)
 
-Extends the infrastructure compose with dockerized backends (admin, nexus, chronicles, haus) and a db-migrate init container. Used with `make start`:
+Extends the infrastructure compose with dockerized backends (admin, nexus, chronicles, haus) and a db-migrate init container:
 
 ```bash
 make start   # Infrastructure + migrations + admin backend + frontend
@@ -100,7 +98,7 @@ make down    # Stop everything
 
 ### Production overrides
 
-For production, create a `docker-compose.prod.yml` overlay:
+Create a `docker-compose.prod.yml` overlay for production resource limits:
 
 ```yaml
 # docker-compose.prod.yml
@@ -132,7 +130,7 @@ services:
           memory: 4G
 ```
 
-Run with:
+Start with both files:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
@@ -140,17 +138,17 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 ---
 
-## Environment Variables
+## Environment variables
 
-Copy `.env.example` and fill in your values. The key variables:
+Copy `.env.example` and fill in the values you need.
 
 ### Required
 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `DATABASE_URL` | PostgreSQL connection string | `postgresql://sagewai:sagewai_password@localhost:5432/sagewai` |
-| `OPENAI_API_KEY` | OpenAI API key (or another LLM provider key) | -- |
-| `JWT_SECRET` | Secret for JWT token signing | -- |
+| `OPENAI_API_KEY` | OpenAI API key (or another provider key) | — |
+| `JWT_SECRET` | Secret for JWT token signing | — |
 
 ### Infrastructure
 
@@ -159,21 +157,21 @@ Copy `.env.example` and fill in your values. The key variables:
 | `REDIS_URL` | Redis connection URL | `redis://localhost:6379` |
 | `MILVUS_HOST` | Milvus vector DB host | `localhost` |
 | `MILVUS_PORT` | Milvus vector DB port | `19530` |
-| `MILVUS_URI` | Milvus URI (for Zilliz Cloud) | -- |
-| `MILVUS_TOKEN` | Milvus auth token (for Zilliz Cloud) | -- |
+| `MILVUS_URI` | Milvus URI (for Zilliz Cloud) | — |
+| `MILVUS_TOKEN` | Milvus auth token (for Zilliz Cloud) | — |
 | `NEBULA_HOST` | NebulaGraph host | `localhost` |
 | `NEBULA_PORT` | NebulaGraph port | `9669` |
 | `NEBULA_USER` | NebulaGraph username | `root` |
 | `NEBULA_PASSWORD` | NebulaGraph password | `nebula` |
 
-### AI Providers
+### AI providers
 
 | Variable | Description | Required |
 |----------|-------------|----------|
 | `OPENAI_API_KEY` | OpenAI API key | At least one |
 | `ANTHROPIC_API_KEY` | Anthropic API key | Optional |
 | `GOOGLE_API_KEY` | Google AI API key | Optional |
-| `LITELLM_PROXY_URL` | LiteLLM proxy URL (centralized gateway) | Optional |
+| `LITELLM_PROXY_URL` | LiteLLM proxy URL | Optional |
 | `LITELLM_API_KEY` | LiteLLM master key | Optional |
 
 ### Security
@@ -190,22 +188,22 @@ Copy `.env.example` and fill in your values. The key variables:
 |----------|-------------|---------|
 | `LOG_LEVEL` | Logging level | `INFO` |
 | `LOG_FORMAT` | Log format (`json` or `text`) | `json` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry collector | `http://localhost:4317` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry collector endpoint | `http://localhost:4317` |
 
 ---
 
-## Database Setup
+## Database setup
 
 ### Initial setup
 
-After starting PostgreSQL, apply migrations and optionally seed demo data:
+Apply migrations after starting PostgreSQL:
 
 ```bash
 make db-upgrade   # Apply all Alembic migrations
 make db-seed      # Seed demo data (optional)
 ```
 
-Or do both in one command:
+Or do both together:
 
 ```bash
 make db-fresh     # Drop schema + migrate + seed
@@ -225,17 +223,17 @@ psql -h localhost -U sagewai sagewai < backup.sql
 
 ```bash
 make db-upgrade   # Apply pending migrations
-make db-reset     # Drop + recreate schema (destructive)
+make db-reset     # Drop and recreate schema (destructive)
 make db-fresh     # Reset + migrate + seed
 ```
 
-> **Note**: `db-reset` drops the entire schema and recreates it. Use with caution in production.
+> **Caution:** `db-reset` drops the entire schema. Back up first on any system that holds real data.
 
 ---
 
-## Reverse Proxy Configuration
+## Reverse proxy configuration
 
-For production, place a reverse proxy in front of Sagewai to handle TLS termination.
+Place a reverse proxy in front of Sagewai in production to terminate TLS.
 
 ### Nginx
 
@@ -288,7 +286,7 @@ server {
 
 ### Caddy (automatic TLS)
 
-Caddy handles Let's Encrypt certificates automatically:
+Caddy handles Let's Encrypt certificate issuance and renewal automatically:
 
 ```
 sagewai.example.com {
@@ -308,13 +306,13 @@ sagewai.example.com {
 
 ## TLS / HTTPS
 
-Three common approaches:
+Three options:
 
-1. **Let's Encrypt via Caddy** -- automatic certificate issuance and renewal, zero configuration
-2. **Let's Encrypt via certbot** -- use with nginx, configure renewal cron
-3. **Organizational CA** -- for internal/enterprise deployments behind a corporate proxy
+1. **Let's Encrypt via Caddy** — automatic certificate issuance and renewal, no manual configuration.
+2. **Let's Encrypt via certbot** — use with nginx; configure a renewal cron job.
+3. **Organizational CA** — for internal or enterprise deployments behind a corporate proxy.
 
-For internal deployments, generate a self-signed certificate:
+For internal deployments with a self-signed certificate:
 
 ```bash
 openssl req -x509 -nodes -days 365 \
@@ -326,11 +324,11 @@ openssl req -x509 -nodes -days 365 \
 
 ---
 
-## Fleet Workers
+## Fleet workers
 
-Deploy distributed workers that connect back to the central gateway. Workers run workflows on your own hardware with your own LLM API keys.
+Fleet workers connect to the central gateway and run workflows on your own hardware with your own LLM API keys.
 
-### Using Docker
+### Docker
 
 ```bash
 docker run -d \
@@ -346,9 +344,9 @@ docker run -d \
 > docker build -t sagewai/worker:latest infra/docker/worker/
 > ```
 
-### Using Docker Compose
+### Docker Compose
 
-Copy the example from `infra/docker/worker/docker-compose.example.yml`:
+Copy the example file from `infra/docker/worker/docker-compose.example.yml`:
 
 ```bash
 cd infra/docker/worker
@@ -364,7 +362,7 @@ docker compose up -d --scale worker=3
 
 ### With local models (Ollama)
 
-Workers can advertise locally available models:
+Workers can advertise locally available models to the gateway:
 
 ```bash
 docker run -d \
@@ -378,16 +376,16 @@ docker run -d \
 
 ### Worker enrollment flow
 
-1. Generate an enrollment key in the admin panel at **Fleet > Enrollment Keys > New Key** (or via `sagewai fleet create-key`)
-2. Start the worker with the enrollment key
-3. Approve the worker in the admin panel at **Fleet > Workers**
-4. The worker begins receiving tasks immediately
+1. Generate an enrollment key in the admin panel at **Fleet > Enrollment Keys > New Key**, or run `sagewai fleet create-key`.
+2. Start the worker with the enrollment key set as `ENROLLMENT_KEY`.
+3. Approve the worker in the admin panel at **Fleet > Workers**.
+4. The worker begins receiving tasks immediately after approval.
 
 ---
 
 ## Monitoring
 
-Sagewai ships with built-in observability. After running `make infra`, these are available:
+After running `make infra`, the following observability tools are available:
 
 | Tool | URL | Purpose |
 |------|-----|---------|
@@ -399,19 +397,19 @@ The admin panel also provides built-in health monitoring at **Settings > Infrast
 
 ---
 
-## Health Checks
+## Health checks
 
-Verify your deployment is running correctly:
+Verify your deployment with:
 
 ```bash
-# Admin API health
-curl http://localhost:8000/api/v1/health
+# Admin API health summary
+curl http://localhost:8000/api/v1/health/summary
 
-# Detailed infrastructure status (Postgres, Redis, Milvus, NebulaGraph)
-curl http://localhost:8000/api/v1/admin/health
+# Detailed component status (Postgres, Redis, Milvus, NebulaGraph)
+curl http://localhost:8000/api/v1/health/detailed
 ```
 
-Both endpoints return JSON with component-level status.
+Both endpoints return JSON with per-component status.
 
 ---
 
@@ -421,14 +419,14 @@ Both endpoints return JSON with component-level status.
 # Pull latest code
 git pull origin main
 
-# Apply any new database migrations
+# Apply any new migrations
 make db-upgrade
 
 # Restart all services
 make start
 ```
 
-If using Docker images directly:
+If you run images directly:
 
 ```bash
 docker compose pull
@@ -436,22 +434,22 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 make db-upgrade
 ```
 
-> **Tip**: Always back up your database before applying migrations on a production system.
+> Back up your database before applying migrations on a production system.
 
 ---
 
-## Running Without Optional Services
+## Running without optional services
 
-Sagewai degrades gracefully when optional infrastructure is unavailable:
+Sagewai degrades when optional infrastructure is unavailable:
 
 | Service | If missing | Fallback |
 |---------|-----------|----------|
-| Milvus | Vector search disabled | In-memory embeddings (dev only) |
+| Milvus | Vector search disabled | In-memory embeddings (development only) |
 | NebulaGraph | Graph memory disabled | In-memory graph store |
 | Redis | No caching | Direct DB queries |
 | LocalStack | No S3 archival | Local filesystem archives |
 
-The minimum viable deployment is **PostgreSQL only**. Start with:
+The minimum viable deployment requires **PostgreSQL only**. Start with:
 
 ```bash
 make infra-core   # Postgres + Redis
@@ -465,7 +463,7 @@ make dev-native APP=admin
 
 ### Milvus fails to start
 
-Milvus requires etcd and MinIO. If it fails with connection errors, ensure both dependencies are healthy:
+Milvus depends on etcd and MinIO. If it fails with connection errors, check both dependencies:
 
 ```bash
 docker compose logs etcd
@@ -473,11 +471,11 @@ docker compose logs minio
 docker compose logs milvus
 ```
 
-Milvus needs up to 90 seconds for initial startup (controlled by `start_period` in the healthcheck).
+Milvus can take up to 90 seconds to become healthy on first startup. The `start_period` in the healthcheck configuration controls this window.
 
 ### NebulaGraph connection refused
 
-NebulaGraph has three components (metad, storaged, graphd) that must start in order. Wait for all three to become healthy before connecting:
+NebulaGraph has three components (metad, storaged, graphd) that start in a specific order. Wait until all three show healthy before connecting:
 
 ```bash
 docker compose ps | grep nebula
@@ -495,11 +493,11 @@ make db-seed       # Re-seed demo data if needed
 
 ### Out of memory
 
-Milvus is the most memory-hungry component. For memory-constrained environments:
+Milvus uses the most memory of any component. For memory-constrained environments:
 
-1. Use `make infra-core` instead of `make infra` (skips Milvus, NebulaGraph, observability)
-2. Set memory limits in a production compose override
-3. Consider using Zilliz Cloud (managed Milvus) instead of self-hosted Milvus
+1. Use `make infra-core` instead of `make infra` — this skips Milvus, NebulaGraph, and the observability stack.
+2. Set memory limits in a production compose override.
+3. Consider using Zilliz Cloud (managed Milvus) to offload vector storage.
 
 ### Port conflicts
 
@@ -518,4 +516,4 @@ Default ports used by Sagewai:
 | 9669 | NebulaGraph |
 | 19530 | Milvus |
 
-If any port is already in use, either stop the conflicting service or modify the port mapping in `docker-compose.yml`.
+If any port is already in use, stop the conflicting service or change the port mapping in `docker-compose.yml`.

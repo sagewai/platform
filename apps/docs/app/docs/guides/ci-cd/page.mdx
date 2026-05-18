@@ -7,19 +7,17 @@ export const metadata = {
 
 # CI/CD Integration
 
-Run Sagewai agents as CI actions — PR summaries, evaluation quality gates, worker deployment, and webhook-triggered agents.
+This guide shows how to run Sagewai agents in CI pipelines — PR summaries, evaluation quality gates, fleet worker deployment, and webhook-triggered agent runs.
 
-## Overview
-
-Sagewai provides three reusable GitHub Actions plus a trigger system for event-driven agent execution. Agents run headlessly in CI, report results as PR comments, and enforce quality gates that fail builds when agent performance drops.
+Sagewai offers three reusable GitHub Actions plus a trigger system for event-driven execution. Agents run headlessly in CI, can post results as PR comments, and can fail a build when agent performance drops below a threshold.
 
 ## Reusable GitHub Actions
 
-> **Note:** These actions are currently in development and will be published to the GitHub Marketplace as `sagewai/actions/*`. In the meantime, you can use the CLI commands shown in the [CLI for CI](#cli-for-ci) section below, which work with any CI system today.
+> **Note:** These actions are in development and will be published to the GitHub Marketplace as `sagewai/actions/*`. Until then, use the CLI commands in [CLI for CI](#cli-for-ci) below — they work with any CI system today.
 
 ### run-agent
 
-Execute any Sagewai agent in your CI pipeline:
+Execute any Sagewai agent in your pipeline:
 
 ```yaml
 - uses: sagewai/actions/run-agent@v1
@@ -32,29 +30,21 @@ Execute any Sagewai agent in your CI pipeline:
     post-as-comment: 'true'    # post result as PR comment
 ```
 
-**Use cases:**
-- PR summaries and changelogs
-- Code review agents
-- Release note generation
-- Documentation freshness checks
+Common uses: PR summaries, code review agents, release note generation, documentation freshness checks.
 
 ### run-evals
 
-Quality gate for agent performance — fails CI if scores drop below a threshold:
+Fail CI when agent quality drops below a threshold:
 
 ```yaml
 - uses: sagewai/actions/run-evals@v1
   with:
     eval-suite: evals/core-suite.yaml
-    threshold: '0.8'           # fail CI if score drops below 80%
+    threshold: '0.8'           # fail if score < 80%
     api-key: ${{ secrets.SAGEWAI_API_KEY }}
 ```
 
-**Use cases:**
-- Regression testing for agent quality
-- Continuous evaluation on push to main
-- Benchmark tracking across releases
-- A/B testing agent configurations
+Common uses: regression testing for agent quality, continuous evaluation on push to main, benchmark tracking across releases, A/B testing configurations.
 
 ### deploy-worker
 
@@ -70,19 +60,13 @@ Build, register, and deploy fleet workers from CI:
     models: 'ollama/llama3.1:70b'
 ```
 
-**Use cases:**
-- Auto-deploy workers on version tags
-- Register GPU runners to the fleet
-- Scale worker pools from CI
-- Blue-green worker deployments
+Common uses: auto-deploy workers on version tags, register GPU runners, scale worker pools, blue-green worker deployments.
 
 ## Workflow Templates
 
-Copy-paste starters for common CI patterns.
-
 ### PR Summary Bot
 
-Automatically summarize every pull request:
+Post a summary comment on every pull request:
 
 ```yaml
 name: PR Summary
@@ -111,7 +95,7 @@ jobs:
 
 ### Eval Quality Gate
 
-Fail the build if agent quality drops:
+Block merges when agent quality regresses:
 
 ```yaml
 name: Agent Quality Gate
@@ -143,7 +127,7 @@ jobs:
 
 ### Worker Deployment on Tag
 
-Deploy workers when you push a version tag:
+Deploy workers when a version tag is pushed:
 
 ```yaml
 name: Deploy Workers
@@ -167,7 +151,7 @@ jobs:
 
 ## Trigger System
 
-The gateway's trigger system maps external events to agent actions — perfect for webhook-driven CI integration.
+The gateway's trigger system maps external events to agent actions.
 
 ### How It Works
 
@@ -199,13 +183,11 @@ trigger = TriggerSpec(
 
 | Action | What It Does |
 |--------|-------------|
-| `chat` | Send event data as a message to an agent |
-| `run_workflow` | Submit a workflow run with event context |
-| `execute_tool` | Call a specific tool with event arguments |
+| `chat` | Sends event data as a message to an agent |
+| `run_workflow` | Submits a workflow run with event context |
+| `execute_tool` | Calls a specific tool with event arguments |
 
 ### Event Filters
-
-Filter which events trigger which agents:
 
 ```python
 EventFilter(
@@ -228,7 +210,7 @@ sagewai run --agent reviewer --input "Review this diff" --model gpt-4o
 # Run from a YAML config
 sagewai run --config agent.yaml
 
-# Run evaluation suite
+# Run an evaluation suite
 sagewai eval run -d evals.jsonl --agent-name QAAgent
 
 # Register a worker from CI
@@ -242,22 +224,17 @@ sagewai fleet register \
 
 ## Harness as CI Proxy
 
-Deploy the harness to control costs of CI agent runs:
+Route CI agent calls through the harness to control costs:
 
 ```yaml
-# In your CI environment
 env:
   ANTHROPIC_BASE_URL: ${{ secrets.HARNESS_URL }}/v1
   ANTHROPIC_API_KEY: ${{ secrets.HARNESS_KEY }}
 ```
 
-**Benefits:**
-- Set per-workflow budgets (e.g., $5 max per PR review)
-- Route to cheaper models for CI (Haiku for summaries, Sonnet for reviews)
-- Full audit trail of all CI LLM spend
-- Complexity classifier auto-routes by task difficulty
+With the harness in the path you can set per-workflow budgets (e.g., $5 max per PR review), route to cheaper models for CI tasks (Haiku for summaries, Sonnet for reviews), capture a full audit trail of CI LLM spend, and let the complexity classifier choose the model automatically.
 
-## Secrets & Environment
+## Secrets Reference
 
 | Secret | Purpose | Required For |
 |--------|---------|-------------|
@@ -269,10 +246,10 @@ env:
 
 ## Self-Hosted Runners with Local Inference
 
-For zero-cost CI agent execution, run fleet workers on self-hosted GitHub Actions runners with local Ollama:
+Run fleet workers on self-hosted GitHub Actions runners with Ollama for $0/token CI agent execution:
 
-1. Set up a self-hosted runner with GPU access
-2. Install Ollama on the runner: `curl -fsSL https://ollama.ai/install.sh | sh`
+1. Set up a self-hosted runner with GPU access.
+2. Install Ollama: `curl -fsSL https://ollama.ai/install.sh | sh`
 3. Pull your model: `ollama pull llama3.1:8b`
 4. Register as a fleet worker:
 
@@ -284,11 +261,11 @@ sagewai fleet register \
   --models ollama/llama3.1:8b
 ```
 
-Now CI jobs targeting the `ci-local` pool run at $0/token on your own hardware.
+Jobs targeting the `ci-local` pool run on your own hardware without LLM API costs.
 
-## Integration with Any CI System
+## Other CI Systems
 
-While the GitHub Actions are the easiest path, the CLI works with any CI system:
+The CLI works with any CI system. Use `pip install sagewai && sagewai run ...` in the relevant step:
 
 | CI System | How to Use |
 |-----------|-----------|

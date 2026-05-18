@@ -1,15 +1,17 @@
 export const metadata = {
-  title: 'Infrastructure management — Sagewai container lifecycle',
+  title: 'Infrastructure management — container lifecycle and data management',
   description:
-    'Start, stop, monitor, maintain Sagewai infrastructure. Docker, Podman alternative, native setup, data management, backup, and recovery.',
+    'Start, stop, monitor, and maintain Sagewai infrastructure. Covers Docker, Podman, native setup, data volumes, migrations, and graceful degradation.',
   alternates: { canonical: 'https://docs.sagewai.ai/docs/guides/infrastructure' },
 };
 
 # Infrastructure Management
 
-How to start, stop, monitor, and maintain Sagewai's infrastructure services. Covers container lifecycle, Podman alternative, native setup, and data management.
+This guide covers the full lifecycle of Sagewai's infrastructure services: starting and stopping containers, monitoring health, managing data volumes, running database migrations, and running without containers when needed.
 
-## Service Dependency Graph
+## Service dependency graph
+
+Services start in dependency order. If a dependency is not healthy, downstream services will not start correctly.
 
 ```
 PostgreSQL (standalone)        Redis (standalone)
@@ -23,71 +25,69 @@ OTel Collector ──► Loki ──► Grafana
 Prometheus ──────────────► Grafana
 ```
 
-PostgreSQL and Redis have no dependencies and start independently. Milvus requires etcd and MinIO to be healthy first. NebulaGraph services must start in order: metad, then storaged, then graphd. The observability stack flows into Grafana.
+PostgreSQL and Redis have no dependencies and start independently. Milvus requires etcd and MinIO to be healthy first. NebulaGraph services must start in order: metad, then storaged, then graphd. All observability data flows into Grafana.
 
-## Container Lifecycle
-
-### Starting Services
+## Starting services
 
 ```bash
-# Full infrastructure (all services + observability)
+# Full stack (all services + observability)
 make infra
 
-# Lightweight (PostgreSQL + Redis only, ~200 MB RAM)
+# Core only (PostgreSQL + Redis, ~200 MB RAM)
 make infra-core
 
-# Full stack with dockerized backends
+# Full stack with containerized application backends
 make dev-up
 ```
 
-### Stopping Services
+## Stopping services
 
 ```bash
-# Stop all containers (preserves data volumes)
+# Stop all containers, keep data volumes
 make down
-# or
+# equivalent to:
 docker compose down
 
-# Stop and DELETE all data volumes (fresh start)
+# Stop and delete all data volumes (fresh start)
 docker compose down -v
 ```
 
-### Monitoring
+## Monitoring
 
 ```bash
-# Check running services and health status
+# Check running containers and health status
 docker compose ps
 
-# Follow logs for a specific service
+# Follow logs for one service
 docker compose logs -f milvus
 
 # Follow logs for all services
 docker compose logs -f
 
 # Check health endpoints
-curl http://localhost:8000/api/v1/health          # Admin API
-curl http://localhost:8000/api/v1/admin/health     # Detailed infrastructure health
+curl http://localhost:8000/api/v1/health/summary   # Admin API summary
+curl http://localhost:8000/api/v1/health/detailed  # Detailed infrastructure health
 ```
 
-### Common Operations
+## Common operations
 
 ```bash
-# Restart a single service
+# Restart one service without rebuilding
 docker compose restart milvus
 
-# Rebuild and restart a service
+# Rebuild and restart one service
 docker compose up -d --build admin
 
-# Scale workers
+# Scale workers horizontally
 docker compose up -d --scale worker=3
 
-# View resource usage
+# Check per-container resource usage
 docker stats
 ```
 
-## Compose Specification Compliance
+## Compose Specification compatibility
 
-Sagewai's `docker-compose.yml` follows the [Compose Specification](https://compose-spec.io/), making it compatible with multiple container runtimes:
+Sagewai's `docker-compose.yml` targets the [Compose Specification](https://compose-spec.io/), so it works with multiple container runtimes:
 
 | Runtime | Command | Notes |
 |---------|---------|-------|
@@ -97,11 +97,11 @@ Sagewai's `docker-compose.yml` follows the [Compose Specification](https://compo
 
 The `version:` field is optional in the Compose Spec and may be omitted.
 
-## Podman Alternative
+## Podman alternative
 
-[Podman](https://podman.io) is a rootless, daemonless container runtime — a drop-in replacement for Docker.
+[Podman](https://podman.io) is a rootless, daemonless runtime that works as a drop-in replacement for Docker.
 
-### Setup
+**Install:**
 
 ```bash
 # macOS
@@ -112,12 +112,12 @@ podman machine start
 # Linux (Ubuntu/Debian)
 sudo apt install podman podman-compose
 
-# Alias for compatibility with Makefiles
+# Alias for Makefile compatibility
 alias docker=podman
 alias docker-compose=podman-compose
 ```
 
-### Key Differences from Docker
+**Key differences from Docker:**
 
 | Feature | Docker | Podman |
 |---------|--------|--------|
@@ -127,25 +127,25 @@ alias docker-compose=podman-compose
 | Compose | `docker compose` | `podman-compose` |
 | GPU support | `--gpus all` | `--device nvidia.com/gpu=all` |
 
-### Running Sagewai with Podman
+**Start Sagewai with Podman:**
 
 ```bash
-# Start infrastructure
 podman-compose -f docker-compose.yml up -d
 
-# Or with the alias set above, the Makefile works unchanged
+# With the alias set above, Makefile targets work unchanged:
 make infra
 ```
 
-**Volume permissions:** Podman runs rootless by default, so volume mounts may need the `:Z` suffix for SELinux:
+**Volume permissions:** Podman runs rootless by default. If you are on SELinux, add the `:Z` suffix to volume mounts:
+
 ```yaml
 volumes:
   - ./data:/var/lib/postgresql/data:Z
 ```
 
-## Native Setup (No Containers)
+## Native setup (no containers)
 
-For environments where containers are not available or not desired.
+Use this when containers are not available or not practical.
 
 ### PostgreSQL
 
@@ -161,6 +161,7 @@ sudo -u postgres createdb sagewai
 ```
 
 Set the connection string:
+
 ```bash
 export DATABASE_URL=postgresql://localhost:5432/sagewai
 ```
@@ -177,40 +178,39 @@ sudo apt install redis-server
 sudo systemctl start redis
 ```
 
-Set:
 ```bash
 export REDIS_URL=redis://localhost:6379
 ```
 
-### Milvus (Optional)
+### Milvus (optional)
 
-For vector search. Without it, Sagewai falls back to in-memory vectors (fine for development).
+Required for vector search. Without it, Sagewai falls back to in-memory vectors, which is fine for development.
 
 **Option A: Standalone binary**
+
 ```bash
 curl -sfL https://raw.githubusercontent.com/milvus-io/milvus/master/scripts/standalone_embed.sh | bash
 ```
 
-**Option B: Zilliz Cloud (Managed)**
+**Option B: Zilliz Cloud (managed)**
 
 Sign up at [cloud.zilliz.com](https://cloud.zilliz.com) and set:
+
 ```bash
 export MILVUS_HOST=your-cluster.zillizcloud.com
 export MILVUS_PORT=19530
 ```
 
-### NebulaGraph (Optional)
+### NebulaGraph (optional)
 
-For knowledge graphs. Without it, Sagewai falls back to in-memory graphs.
+Required for knowledge graphs. Without it, Sagewai falls back to in-memory graphs, which is sufficient for development. Download from [nebula-graph.io](https://nebula-graph.io).
 
-Download from [nebula-graph.io](https://nebula-graph.io) or skip — the in-memory fallback works for development.
+## Data volume management
 
-## Data Volume Management
+### Where data lives
 
-### Where Data Lives
-
-| Service | Volume Name | Data Contents |
-|---------|-------------|--------------|
+| Service | Volume name | Contents |
+|---------|-------------|----------|
 | PostgreSQL | `sagewai_postgres_data` | Workflows, runs, workers, audit logs |
 | Milvus | `sagewai_milvus_data` | Vector embeddings |
 | MinIO | `sagewai_minio_data` | Milvus object storage |
@@ -221,72 +221,72 @@ Download from [nebula-graph.io](https://nebula-graph.io) or skip — the in-memo
 ### Backup
 
 ```bash
-# PostgreSQL backup
+# Plain SQL dump
 docker compose exec postgres pg_dump -U sagewai sagewai > backup.sql
 
-# PostgreSQL backup (compressed)
+# Compressed custom-format dump
 docker compose exec postgres pg_dump -U sagewai -Fc sagewai > backup.dump
 ```
 
 ### Restore
 
 ```bash
-# From SQL dump
+# From plain SQL dump
 docker compose exec -T postgres psql -U sagewai sagewai < backup.sql
 
 # From compressed dump
 docker compose exec -T postgres pg_restore -U sagewai -d sagewai < backup.dump
 ```
 
-### Full Reset
+### Full reset
 
 ```bash
-# Drop all data and start fresh
 docker compose down -v
 make infra
 make db-upgrade
 make db-seed  # optional: load demo data
 ```
 
-Or use the shortcut:
+Or use the combined shortcut:
+
 ```bash
 make db-fresh  # drop + migrate + seed in one command
 ```
 
-## Database Migrations
+## Database migrations
+
+Migrations are managed by Alembic. Migration files live in `sagewai/db/migrations/versions/`.
 
 ```bash
 # Apply pending migrations
 make db-upgrade
 
-# Reset database (drop schema + recreate + migrate)
+# Drop schema, recreate, and migrate
 make db-reset
 
 # Seed with demo data
 make db-seed
 
-# Full reset: drop + migrate + seed
+# Drop + migrate + seed in one step
 make db-fresh
 ```
 
-Migrations are managed by Alembic. Migration files live in `sagewai/db/migrations/versions/`.
+## Graceful degradation
 
-## Graceful Degradation
+Sagewai continues to function when optional services are absent:
 
-Sagewai works with minimal infrastructure. Missing services fall back gracefully:
-
-| Missing Service | Fallback | Limitation |
+| Missing service | Fallback | Limitation |
 |----------------|----------|------------|
-| Milvus | In-memory vectors | Data lost on restart, development only |
-| NebulaGraph | In-memory graph | Data lost on restart, development only |
+| Milvus | In-memory vectors | Data lost on restart — development only |
+| NebulaGraph | In-memory graph | Data lost on restart — development only |
 | Redis | Direct database queries | Slower response times, no caching |
 | LocalStack | Local filesystem | No S3-compatible archival |
-| Observability stack | No dashboards | Agents still work, no metrics or tracing |
+| Observability stack | No dashboards | Agents still run; no metrics or tracing |
 
 **Minimum viable deployment:** PostgreSQL only.
 
 ```bash
-make infra-core    # starts Postgres + Redis (~200 MB)
+make infra-core    # starts PostgreSQL + Redis (~200 MB)
 make db-upgrade    # apply migrations
 make dev-native APP=admin  # start admin backend
 ```
