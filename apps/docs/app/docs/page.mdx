@@ -1,0 +1,33 @@
+# Sagewai documentation
+
+Sagewai is a Python SDK for building agents. Install it with `pip install sagewai`, write an agent in a few lines, and run it. When you need more — a web admin interface, a pool of remote workers, full observability, or hardened security — the platform components are there to adopt incrementally.
+
+## The mental model
+
+**SDK first.** `sagewai` is a Python library. You import it, configure an agent, and call it. No server required, no account required, no API key required for local models. Everything starts here.
+
+**Platform second.** When you outgrow a single process you add the pieces you need:
+
+- **Admin server** — a FastAPI server (`sagewai[fastapi]`) that exposes a web UI and REST API for managing agents, providers, and runs.
+- **Fleet workers** — remote processes that register with the server and execute tasks; scale horizontally, project-isolated.
+- **Observatory** — OpenTelemetry-based observability: metrics, logs, and traces routed through VictoriaMetrics and Grafana.
+- **Sealed security** — Tier-1/Tier-2 trust boundaries, JIT human-in-the-loop approvals, and vault-backed credential scoping.
+- **Autopilot** — state a goal in plain English; the platform designs, provisions, and runs the agents that deliver it.
+- **Training Loop** — collect runs, curate them, export fine-tuning datasets, and deploy your own model via Ollama.
+
+None of these require the others. Add what you need, skip what you do not.
+
+## Start here
+
+1. [Installation](/docs/get-started/installation) — `pip install sagewai`, extras, and the verify step.
+2. [Prerequisites](/docs/get-started/prerequisites) — Python 3.10+, Docker (sandbox path only), hardware profiles.
+3. [Your first agent](/docs/get-started/first-agent) — build and run an agent from scratch.
+
+## Find your way around
+
+- **[Core Concepts](/docs/core-concepts/agents)** — agents, strategies, memory, workflows, directives, safety.
+- **[Platform](/docs/platform)** — admin server, autopilot, fleet, observatory, training loop, Sealed security.
+- **[Guides](/docs/guides/multi-agent)** — task-focused how-tos: multi-agent workflows, fine-tuning, deployment, integrations.
+- **[Tutorials](/docs/tutorials)** — end-to-end walkthroughs that build complete systems step by step.
+- **[Architecture](/docs/architecture)** — runtime topology, security tiers, execution modes, sandbox backends.
+- **[Reference](/docs/reference/examples)** — numbered example file catalogue, full Python SDK API reference.

@@ -9,7 +9,7 @@ export const metadata = {
 
 Sagewai is an open-source platform for building, running, and governing AI agents on your own infrastructure. It gives you a Python SDK for building agents, a control plane for managing them, cost-aware routing across LLM providers, and full observability — all under AGPL-3.0, with no feature gates.
 
-This post is the April 2026 launch announcement. If you're new to Sagewai, the [Quickstart](/docs/getting-started) is the fastest way in.
+This post is the April 2026 launch announcement. If you're new to Sagewai, the [Quickstart](/docs/get-started/quickstart) is the fastest way in.
 
 ## The problem
 
@@ -35,7 +35,7 @@ agent = UniversalAgent(name="assistant", model="gpt-4o")
 print(asyncio.run(agent.chat("Analyze our Q1 results")))
 ```
 
-See the [SDK quickstart](/docs/getting-started/minimal-setup) for the full hello-world flow.
+See the [SDK quickstart](/docs/get-started/minimal-setup) for the full hello-world flow.
 
 ### A control plane for governing agents
 
@@ -66,7 +66,7 @@ Agents need API keys — for LLM providers, for the tools they call, sometimes f
 - **Customer credentials live in encrypted profiles.** They're decrypted only when a sandbox starts, injected as environment variables for that run, and scrubbed when the sandbox is released.
 - **Operator credentials (the keys you pay with) stay on the worker host.** They're never visible to agent code or to customer-tier sandboxes.
 
-You're responsible for the master encryption key (back it up, rotate it on a schedule that fits your compliance posture) and for choosing which credentials belong in which tier. The [Security guide](/docs/security) walks through the setup.
+You're responsible for the master encryption key (back it up, rotate it on a schedule that fits your compliance posture) and for choosing which credentials belong in which tier. The [Security guide](/docs/platform/security) walks through the setup.
 
 ## Open source, no feature gates
 
@@ -82,8 +82,8 @@ pip install sagewai
 
 Three good entry points, depending on what you want first:
 
-- **[Quickstart (15 min)](/docs/getting-started)** — install the SDK, create an encrypted credential profile, and run an agent inside an isolated sandbox.
-- **[Minimal setup](/docs/getting-started/minimal-setup)** — a hello-world agent with no sandbox, no profile, no admin server.
+- **[Quickstart (15 min)](/docs/get-started/quickstart)** — install the SDK, create an encrypted credential profile, and run an agent inside an isolated sandbox.
+- **[Minimal setup](/docs/get-started/minimal-setup)** — a hello-world agent with no sandbox, no profile, no admin server.
 - **[Examples](https://github.com/sagewai/platform/tree/main/packages/sdk/sagewai/examples)** — runnable demos covering memory, fleet workers, fine-tuning, and the routing proxy.
 
 ## What's next

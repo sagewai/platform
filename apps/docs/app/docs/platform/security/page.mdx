@@ -1,0 +1,40 @@
+# Sealed
+
+Customer credentials live inside the sandbox, not in the agent process. Sealed is the cross-cutting credential, redaction, and audit story that lets a security review sign off on running agents against production data — workload identity per CLI agent, vault-backed secrets, prompt and tool-output redaction, replay-safe audit, per-key ACLs, just-in-time human-in-the-loop, and revocation.
+
+Where the other five products are vertical capabilities (build agents, dispatch them, watch them, train them), Sealed is the spine that runs through all of them: the same identity, redaction, and audit controls apply whether you're calling an LLM from the SDK, having Autopilot drive a mission, or scaling out a Fleet.
+
+## What you can do with it
+
+- **Run each CLI agent under its own identity.** Claude Code, Codex, and Gemini each get a scoped profile; there is no shared `OPENAI_API_KEY` lifted from the parent process.
+- **Source secrets from your vault.** HashiCorp Vault, AWS Secrets Manager, 1Password, SOPS, and Bitwarden are all valid backends; secrets resolve at sandbox-start time, never sit in agent memory long.
+- **Redact prompts and tool output at the host RPC seam.** Every `stdout`, `stderr`, and tool result is filtered against the run's resolved secret values before any audit log, downstream consumer, or LLM round-trip sees it.
+- **Replay runs without drift.** Inputs, mode, identity reference, and effective key names persist at enqueue time, so a compliance replay reproduces what *was*, not what *is now*.
+- **Gate high-privilege actions on a human.** Deploys, drops, and pushes trigger a callback; the agent can auto-approve from policy or surface a just-in-time approval to a human, with credentials env-injected only after sign-off.
+- **Revoke a key, a profile, or an identity.** Future enqueues fail closed; in-flight runs that already injected the value get aborted (hard-revoke) or expire on the next sandbox-start (soft-revoke).
+- **Audit every credential touch.** Resolutions, redaction matches, sandbox resets, and revocations all emit structured events; key names are recorded, values are not.
+
+## See it in action
+
+### Primary example — multi-tenant production isolation
+
+[**Production multitenancy**](/docs/tutorials/production-multitenancy) — two pools (healthcare, finance) running side by side, project-tagged workers, profile-injected credentials, audit on every resolve and revoke. End-to-end proof that a healthcare worker cannot claim a finance task and vice versa.
+
+### Sibling examples
+
+- [**Observability and cost**](/docs/tutorials/observability-and-cost) — the redaction layer is what makes this telemetry safe to export to a third-party SIEM.
+- [**Inference deployment**](/docs/tutorials/inference-deployment) — the same credential model applies to local Ollama, rented GPUs, and bring-your-own endpoints; nothing about the deploy path bypasses Sealed.
+
+## Where to go to ship it
+
+- **[Security overview](/docs/platform/security)** — the deep dive: each layer, what it protects, and how to enable it.
+- **[Vault backend](/docs/guides/sealed-vault)** — point Sagewai at HashiCorp Vault for secret storage.
+- **[Sandboxing handbook](/docs/guides/sandboxing)** — operator-facing CLI flags for the sandbox tier.
+- **[Security tiers](/docs/architecture/security-tiers)** — Tier 1 vs Tier 2, how each is stored, audited, and revoked.
+- **[Sandbox backends](/docs/architecture/sandbox-backends)** — Docker, Kubernetes, Lambda decision guide.
+
+## See also
+
+- **[SDK](/docs/platform/sdk)** — the library you `pip install`; Sealed governs the credentials any agent built with it touches.
+- **[Fleet](/docs/platform/fleet)** — workers and projects; per-project tags are how Sealed enforces tenant boundaries at dispatch.
+- **[All products](/docs/platform)** — back to the index.

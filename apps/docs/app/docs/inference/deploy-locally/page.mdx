@@ -80,7 +80,7 @@ That is the cost-down endpoint in four steps. Sagewai's [Example
 is the canonical end-to-end demo of the Unsloth fine-tune followed
 by the Ollama deploy step. The same example also covers the
 before-vs-after cost numbers using the [Observatory cost
-dashboard](/docs/observatory).
+dashboard](/docs/platform/observatory).
 
 For Apple Silicon laptops where Ollama's Metal backend isn't yet
 optimal for your model shape, swap Ollama for `mlx_lm.server` —
@@ -127,7 +127,7 @@ bring-your-own; we do not lock you in.
    run the four-step deploy above.
 3. Swap the model string in one application code path. Run
    end-to-end.
-4. Open the [Observatory cost dashboard](/docs/observatory) and
+4. Open the [Observatory cost dashboard](/docs/platform/observatory) and
    watch the per-call API spend on that path drop to zero.
 5. Repeat for the next workload.
 
@@ -160,5 +160,5 @@ bring-your-own; we do not lock you in.
 - [Example 38 — Unsloth fine-tune](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/38_unsloth_finetune.py) — the canonical full Unsloth → Ollama loop
 - [Example 38a — mlx_lm.server deploy](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/38a_mlx_lm_server_deploy.py) — Apple Silicon path
 - [Example 46 — custom inference as tool](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/46_custom_inference_as_tool.py) — bring-your-own endpoint
-- [Observatory](/docs/observatory) — where the before-and-after numbers come from
+- [Observatory](/docs/platform/observatory) — where the before-and-after numbers come from
 - [Start with juggernauts](/docs/inference/start-with-juggernauts) — the start of this arc

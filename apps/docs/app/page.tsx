@@ -141,13 +141,13 @@ export default function LandingPage() {
             </span>
           </Link>
           <div className="hidden md:flex items-center gap-8">
-            <Link href="/docs/getting-started" className="text-sm text-text-secondary hover:text-primary transition-colors">
+            <Link href="/docs/get-started/quickstart" className="text-sm text-text-secondary hover:text-primary transition-colors">
               Docs
             </Link>
             <Link href="/docs/api-reference/python-sdk" className="text-sm text-text-secondary hover:text-primary transition-colors">
               API Reference
             </Link>
-            <Link href="/docs/guides/first-agent" className="text-sm text-text-secondary hover:text-primary transition-colors">
+            <Link href="/docs/get-started/first-agent" className="text-sm text-text-secondary hover:text-primary transition-colors">
               Guides
             </Link>
             <a
@@ -161,7 +161,7 @@ export default function LandingPage() {
             <ThemeToggle />
           </div>
           <Link
-            href="/docs/getting-started"
+            href="/docs/get-started/quickstart"
             className="bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary-hover transition-colors"
           >
             Get Started
@@ -191,7 +191,7 @@ export default function LandingPage() {
             </p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
               <Link
-                href="/docs/getting-started"
+                href="/docs/get-started/quickstart"
                 className="w-full sm:w-auto bg-primary text-white px-8 py-3.5 rounded-xl text-base font-semibold hover:bg-primary-hover transition-colors shadow-lg shadow-primary/20"
               >
                 Get Started
@@ -349,13 +349,13 @@ export default function LandingPage() {
         </div>
         <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
           <Link
-            href="/docs/getting-started"
+            href="/docs/get-started/quickstart"
             className="bg-primary text-white px-8 py-3.5 rounded-xl text-base font-semibold hover:bg-primary-hover transition-colors shadow-lg shadow-primary/20"
           >
             Read the Docs
           </Link>
           <Link
-            href="/docs/guides/first-agent"
+            href="/docs/get-started/first-agent"
             className="border border-border text-text-primary px-8 py-3.5 rounded-xl text-base font-semibold hover:border-primary hover:bg-bg-subtle transition-colors"
           >
             First Agent Tutorial
@@ -388,7 +388,7 @@ export default function LandingPage() {
               <h4 className="font-semibold text-text-primary mb-3 text-sm">Documentation</h4>
               <ul className="space-y-2">
                 <li>
-                  <Link href="/docs/getting-started" className="text-sm text-text-secondary hover:text-primary">
+                  <Link href="/docs/get-started/quickstart" className="text-sm text-text-secondary hover:text-primary">
                     Getting Started
                   </Link>
                 </li>
@@ -408,12 +408,12 @@ export default function LandingPage() {
               <h4 className="font-semibold text-text-primary mb-3 text-sm">Guides</h4>
               <ul className="space-y-2">
                 <li>
-                  <Link href="/docs/guides/tutorials" className="text-sm text-text-secondary hover:text-primary">
+                  <Link href="/docs/tutorials" className="text-sm text-text-secondary hover:text-primary">
                     Tutorials
                   </Link>
                 </li>
                 <li>
-                  <Link href="/docs/guides/fleet-enterprise" className="text-sm text-text-secondary hover:text-primary">
+                  <Link href="/docs/guides/fleet-architecture" className="text-sm text-text-secondary hover:text-primary">
                     Fleet Architecture
                   </Link>
                 </li>

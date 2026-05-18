@@ -1,0 +1,87 @@
+# End-to-end examples
+
+This section is for developers who want a complete, runnable example that mirrors a real production scenario — not a single feature in isolation. Each page below walks through one use case end-to-end: the architecture, the code, the cost story, and the personas that recognise it as their own job. Pick the page closest to what you're building and clone the example tonight.
+
+If you'd rather start with the SDK basics, head to [Foundation](/docs/tutorials/learn-the-sdk). If you want production patterns shorter than a full end-to-end walkthrough, see [Patterns](/docs/tutorials/production-patterns).
+
+---
+
+## Pick the example closest to your job
+
+Each entry links to a walkthrough page and the runnable example numbers from the SDK's `examples/` directory. The "covered by" column names the SageWai capability the example exercises, so you can also browse the topic in its own right.
+
+### [Train your own model](/docs/tutorials/train-your-own-model)
+
+Capture training data from a frontier LLM, fine-tune a 3B-parameter model on a free Colab T4 (or a $0.34/hr RunPod A10G), deploy it via Ollama, and serve real traffic at zero per-token cost. The full path from "Anthropic raised prices" to "we own the model" — end-to-end in a weekend for under $5.
+
+- **Examples:** 25, 36, 38, 38a, 44, 45, 47, 48
+- **Covered by:** [Training Loop](/docs/platform/training-loop)
+
+### [Moderation and classification](/docs/tutorials/moderation-and-classification)
+
+Community moderation, support-ticket triage, and sales-lead qualification with the same shape: a deterministic classifier ensemble inside an isolated sandbox, surfaced as MCP tools, with a cheap LLM judging the boundary cases. Full audit trail per decision.
+
+- **Examples:** 42, 49
+- **Covered by:** [SDK](/docs/platform/sdk)
+
+### [Memory and retrieval](/docs/tutorials/memory-and-retrieval)
+
+Two patterns developers ask for by name. First, semantic checkpoint recall — vague references like *"back to that earlier point"* resolve into the right slice of prior context, even on a 7B Ollama model. Second, graph-backed retrieval for multi-hop reasoning across incident dependencies, where vector chunking falls short.
+
+- **Examples:** 04, 29, 32, 37, 41
+- **Covered by:** [SDK](/docs/platform/sdk)
+
+### [Production multitenancy](/docs/tutorials/production-multitenancy)
+
+A walkthrough of running one platform for many customers without leaking credentials or work between them: per-CLI workload identity, scoped credentials injected into a containerised agent, cross-tenant isolation enforced by the dispatcher, and an audit trail across every boundary. The example a security reviewer reads end-to-end.
+
+- **Examples:** 16, 33, 39
+- **Covered by:** [Fleet](/docs/platform/fleet) and [Security](/docs/platform/security)
+
+### [Observability and cost](/docs/tutorials/observability-and-cost)
+
+Real telemetry into Grafana, a live dashboard with active agents on the graph, per-tenant cost tracking, and an OpenTelemetry pipeline you can swap into your existing stack. Five rows, fourteen panels, all driven by an actual run of the example — no canned data.
+
+- **Examples:** 12, 34, 40, 43
+- **Covered by:** [Observatory](/docs/platform/observatory)
+
+### [Inference deployment](/docs/tutorials/inference-deployment)
+
+Five inference paths (free Colab T4, Vast.ai bid market, RunPod reliable rental, Modal serverless, bring-your-own endpoint) plus the small-model deployment story (mlx-lm on Apple Silicon, Ollama everywhere else). Includes a decision table for picking the right path and snippets for plugging each into SageWai.
+
+- **Examples:** 18, 38, 38a, 44, 45, 46, 47, 48
+- **Covered by:** [Training Loop](/docs/platform/training-loop)
+
+---
+
+## What every walkthrough page contains
+
+Every page in this section uses the same shape so you can scan the one closest to your job:
+
+1. **What you'll build** — one paragraph naming the scenario and the outcome.
+2. **Architecture** — a Mermaid diagram of the moving parts.
+3. **Run it** — a 60-second clean-machine path and a full live path.
+4. **Where this shows up in the wild** — three to five concrete persona-and-industry callouts. The bar is *"I recognise one of these as my own job."*
+5. **Companion examples** — links to the runnable SDK examples that back the page, with READMEs on PyPI and GitHub.
+6. **See also** — sibling walkthroughs, prerequisite reading, and the SageWai capability the example exercises.
+
+---
+
+## Before you start
+
+The walkthroughs assume you have:
+
+- Python 3.10 or later
+- Docker installed and running (most pages use the Docker sandbox)
+- The SageWai SDK installed: `pip install 'sagewai[fastapi]'`
+- A working admin server — see [Quickstart](/docs/get-started/quickstart)
+
+Some pages need additional accounts (a HuggingFace token, a RunPod or Modal account, a Grafana endpoint). Each page lists its own prerequisites.
+
+---
+
+## See also
+
+- [Foundation](/docs/tutorials/learn-the-sdk) — short examples that introduce a single SDK feature at a time.
+- [Patterns](/docs/tutorials/production-patterns) — production-shape patterns that sit between a one-feature example and a full walkthrough.
+- [Quickstart](/docs/get-started/quickstart) — install the SDK and run your first agent in 15 minutes.

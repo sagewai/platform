@@ -1,0 +1,372 @@
+export const metadata = {
+  title: 'Minimal setup — Sagewai with no sandbox or admin',
+  description:
+    'The lightest Sagewai install: pip install sagewai, write a Python script, point at a model. No Docker, no admin server, no sandbox. 60 seconds to a working agent.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/get-started/minimal-setup' },
+};
+
+# Minimal Setup
+
+This is the minimal Sagewai setup — a single SDK process making
+Tier-1 LLM calls with no sandbox and no per-customer credentials.
+Useful for local prototyping, single-tenant tools, and notebook-style
+exploration.
+
+If you want the full **build-something-real** experience — Sagewai
+orchestrating Claude Code inside an isolated sandbox to build a
+portfolio site — go to the [Quickstart](/docs/get-started/quickstart)
+instead.
+
+**What's different here:** no worker fleet, no sandbox, no Sealed
+Identity. Everything runs in one Python process using your operator
+LLM keys (Tier-1). See [Architecture: Execution modes](/docs/architecture/execution-modes#mode-0--bare)
+for the full mental model.
+
+This guide takes you from zero to a working agent in under five minutes.
+
+---
+
+## Two Ways to Use Sagewai
+
+**Self-Hosted (Open Source):** Install the SDK, start your own Sagewai server, and manage everything on your infrastructure. On first launch, the admin panel shows a setup wizard to create your admin account and configure your organization. After setup, users log in to access the dashboard.
+
+**Sagewai Cloud:** Purchase and activate your account at [sagewai.ai](https://sagewai.ai), then manage your agents through the cloud admin panel at [cloud.sagewai.ai](https://cloud.sagewai.ai). No infrastructure to manage — just connect and start building.
+
+Both paths use the same SDK and the same APIs. Choose self-hosted for full control, or cloud for convenience.
+
+---
+
+## Install
+
+Install the SDK with pip:
+
+```bash
+pip install sagewai
+```
+
+Or with [uv](https://docs.astral.sh/uv/) (recommended):
+
+```bash
+uv add sagewai
+```
+
+Sagewai ships optional extras for advanced features:
+
+| Extra | What it adds |
+|-------|-------------|
+| `sagewai[memory]` | Docling document parsing, Milvus vectors, NebulaGraph, tiktoken |
+| `sagewai[fastapi]` | FastAPI + SSE for serving agents over HTTP |
+| `sagewai[postgres]` | asyncpg + SQLAlchemy + Alembic for durable state |
+| `sagewai[storage]` | S3 and GCS archival backends |
+
+### Prerequisites
+
+- Python 3.10 or later
+- An API key for at least one LLM provider — or use [Ollama for free local inference](/docs/guides/local-inference)
+- See [Hardware Requirements](/docs/get-started/prerequisites) for detailed system specs
+
+### Environment Setup
+
+Create a `.env` file with your API key:
+
+```bash
+# .env
+OPENAI_API_KEY=sk-...
+```
+
+Sagewai uses [LiteLLM](https://docs.litellm.ai/) under the hood, which reads standard provider environment variables automatically. You only need the key for the provider you want to use:
+
+```bash
+# Pick one (or several)
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+GOOGLE_API_KEY=AI...
+```
+
+---
+
+## Your First Agent
+
+Create a file called `hello_agent.py`:
+
+```python
+import asyncio
+from sagewai import UniversalAgent
+
+async def main():
+    agent = UniversalAgent(
+        name="my-agent",
+        model="gpt-4o",
+        system_prompt="You are a helpful assistant.",
+    )
+
+    response = await agent.chat("What is the capital of France?")
+    print(response)
+
+asyncio.run(main())
+```
+
+Run it:
+
+```bash
+python hello_agent.py
+```
+
+That is three lines to create an agent and one line to get a response. The `chat()` method handles the full agentic loop: it sends your message to the LLM, processes any tool calls, and returns the final text response as a string.
+
+### Switch Models Instantly
+
+Change the `model` parameter to use any LiteLLM-supported provider. No code changes needed:
+
+```python
+# Anthropic
+agent = UniversalAgent(name="claude", model="claude-sonnet-4-20250514")
+
+# Google Gemini
+agent = UniversalAgent(name="gemini", model="gemini/gemini-2.0-flash")
+
+# Mistral
+agent = UniversalAgent(name="mistral", model="mistral/mistral-large-latest")
+
+# Local models via Ollama
+agent = UniversalAgent(name="local", model="ollama/llama3.1")
+```
+
+---
+
+## Add a Tool
+
+Agents become powerful when they can call tools. Use the `@tool` decorator to turn any typed Python function into a tool the LLM can invoke:
+
+```python
+import asyncio
+from sagewai import UniversalAgent, tool
+
+@tool
+async def get_weather(city: str) -> str:
+    """Get current weather for a city."""
+    return f"Sunny, 22°C in {city}"
+
+@tool
+async def calculate(expression: str) -> str:
+    """Safely evaluate a math expression."""
+    import ast
+    return str(ast.literal_eval(expression))
+
+async def main():
+    agent = UniversalAgent(
+        name="assistant",
+        model="gpt-4o",
+        tools=[get_weather, calculate],
+    )
+
+    response = await agent.chat(
+        "What's the weather in Berlin, and what is 42 * 17?"
+    )
+    print(response)
+
+asyncio.run(main())
+```
+
+The `@tool` decorator extracts the function name, docstring, and type hints to build a tool specification that the LLM understands. The agent decides which tools to call based on the user message, executes them, and incorporates the results into its response.
+
+You can also connect external tools via the [Model Context Protocol (MCP)](/docs/api-reference/mcp):
+
+```python
+from sagewai import McpClient
+
+# Connect to any MCP server
+tools = await McpClient.connect_stdio(["npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp"])
+agent = UniversalAgent(name="files", model="gpt-4o", tools=tools)
+```
+
+---
+
+## Add Memory
+
+For multi-turn conversations where the agent remembers previous exchanges, use `chat_with_history()` with explicit message management:
+
+```python
+from sagewai import UniversalAgent, ChatMessage
+
+agent = UniversalAgent(name="tutor", model="gpt-4o")
+
+messages = [
+    ChatMessage.system("You are a helpful math tutor."),
+    ChatMessage.user("What is 2 + 2?"),
+]
+
+response = await agent.chat_with_history(messages)
+print(response.content)  # "4"
+
+# Continue the conversation — the agent has full context
+messages.append(response)
+messages.append(ChatMessage.user("Now multiply that by 3"))
+
+response = await agent.chat_with_history(messages)
+print(response.content)  # "12"
+```
+
+For automatic state management, use `ConversationManager`:
+
+```python
+from sagewai.core.conversation import ConversationManager
+
+manager = ConversationManager(agent=agent)
+await manager.send("What is 2 + 2?")
+await manager.send("Now multiply that by 3")  # remembers context
+```
+
+### Long-Term Memory with the Context Engine
+
+For persistent, searchable memory that survives across sessions, use the **Context Engine**. It ingests documents, chunks them, embeds them into a vector store, and retrieves relevant context on every chat turn:
+
+```python
+from sagewai import UniversalAgent, ContextEngine, ContextScope
+from sagewai.context import (
+    InMemoryMetadataStore,
+    InMemoryVectorStore,
+)
+
+# 1. Create a context engine (in-memory — no infra needed)
+engine = ContextEngine(
+    metadata_store=InMemoryMetadataStore(),
+    vector_store=InMemoryVectorStore(),
+    project_id="my-project",
+)
+
+# 2. Ingest some knowledge
+await engine.ingest_text(
+    text="Sagewai supports 100+ LLM providers via LiteLLM.",
+    title="About Sagewai",
+    scope=ContextScope.PROJECT,
+    scope_id="my-project",
+)
+
+# 3. Pass the engine as memory — the agent retrieves context automatically
+agent = UniversalAgent(
+    name="researcher",
+    model="gpt-4o",
+    memory=engine,
+    tools=engine.get_tools(),  # gives the agent memory_store, memory_search, etc.
+    auto_learn=True,           # auto-extracts facts from conversations
+)
+
+response = await agent.chat("What LLM providers does Sagewai support?")
+```
+
+The Context Engine implements the `MemoryProvider` protocol, so passing `memory=engine` gives the agent automatic RAG retrieval on every turn. Adding `tools=engine.get_tools()` lets the agent curate its own memory with store, search, forget, and update operations.
+
+---
+
+## Stream Responses
+
+For real-time output, use `chat_stream()`:
+
+```python
+async def main():
+    agent = UniversalAgent(name="writer", model="gpt-4o")
+
+    async for chunk in agent.chat_stream("Tell me a short story"):
+        print(chunk, end="", flush=True)
+    print()
+```
+
+Streaming handles tool calls internally. When the LLM requests a tool call, it is executed behind the scenes, and only text content is yielded to the caller.
+
+---
+
+## Use Directives
+
+Sagewai's **Directive Engine** is a unique prompt preprocessor that enriches prompts before the LLM sees them. Use `@` sigils to pull in context, invoke tools, or delegate to other agents — directly inside your prompt text:
+
+```python
+agent = UniversalAgent(
+    name="analyst",
+    model="gpt-4o",
+    memory=engine,      # context engine from above
+    directives=True,    # enable directive preprocessing
+)
+
+# @context pulls relevant documents, @memory searches stored facts
+response = await agent.chat(
+    "@context('Q1 revenue') Summarize our Q1 financial performance."
+)
+```
+
+Available directives:
+
+| Directive | What it does |
+|-----------|-------------|
+| `@context('query')` | Retrieves matching documents from the Context Engine |
+| `@context('query', scope='org', tags='finance')` | Scoped retrieval with tag filtering |
+| `@memory('query')` | Searches agent memory for stored facts |
+| `@agent:name('task')` | Delegates a task to another agent |
+| `@wf:name('input')` | Invokes a saved workflow |
+| `/tool.name('args')` | Calls a tool inline |
+| `#model:name` | Overrides the model for this request |
+
+Directives adapt automatically to the model's capability. For large models (GPT-4o, Claude), full context is injected. For small models (Phi-3, Llama), the engine compresses context and rewrites tool descriptions to fit within the token budget.
+
+---
+
+## Launch the Admin Console
+
+Sagewai includes a built-in admin API for monitoring your agents. Start it with:
+
+```bash
+sagewai admin serve
+```
+
+This launches a FastAPI server (requires `sagewai[fastapi]`) where you can:
+
+- View agent runs and execution traces
+- Monitor cost and token usage
+- Manage workflows and approvals
+- Access the playground for interactive agent testing
+
+The full admin panel with a web UI is available when running the Sage platform. See the [Admin Panel guide](/docs/guides/admin-panel) for details.
+
+---
+
+## What's Next?
+
+You now have a working agent with tools, memory, streaming, and directives. Here is where to go from here:
+
+### Learn
+
+- **[Tutorials](/docs/tutorials)** — 8 progressive hands-on tutorials from first agent to enterprise deployment
+- **[Video Tutorials](/docs/guides/video-tutorials)** — 20 video walkthroughs covering every feature
+- **[Your First Agent](/docs/get-started/first-agent)** — Step-by-step tutorial building a real-world research agent
+
+### Build
+
+- **[Agents](/docs/core-concepts/agents)** — BaseAgent, UniversalAgent, GoogleNativeAgent, composition patterns
+- **[Strategies](/docs/core-concepts/strategies)** — ReAct, Tree of Thoughts, LATS, Planning, Self-Correction, Routing
+- **[Memory & RAG](/docs/core-concepts/memory)** — Vector memory, graph memory, hybrid RAG, episodic memory
+- **[Workflows](/docs/core-concepts/workflows)** — Sequential, parallel, durable workflows, human approval, distributed workers
+- **[Context Engine](/docs/core-concepts/context-engine)** — Document ingestion, scoped access, multi-strategy retrieval
+- **[Directives](/docs/core-concepts/directives)** — Prompt preprocessing with `@context`, `@memory`, `@agent` sigils
+- **[Safety & Guardrails](/docs/core-concepts/safety)** — PII protection, hallucination detection, budget enforcement
+
+### Integrate
+
+- **[Client Wrappers](/docs/guides/client-wrappers)** — Use Sagewai from TypeScript, Go, Rust, and 14 more languages
+- **[VS Code Extension](/docs/guides/vscode-extension)** — Syntax highlighting, scaffolding, and code snippets
+- **[Local Inference](/docs/guides/local-inference)** — Run agents with Ollama, vLLM, or LM Studio at $0/token
+- **[CI/CD Integration](/docs/guides/ci-cd)** — Run agents in GitHub Actions as PR bots and quality gates
+
+### Ready for the real platform?
+
+When you want isolation, per-customer credentials, and CLI agents:
+
+- **[Quickstart](/docs/get-started/quickstart)** — Mode 3 end-to-end walk-through (build a portfolio site with Claude Code).
+- **[Architecture: Execution modes](/docs/architecture/execution-modes)** — when to escalate from this minimal setup.
+- **[Architecture: Sandbox backends](/docs/architecture/sandbox-backends)** — pick a sandbox backend for production.
+- **[Fleet Architecture](/docs/guides/fleet-architecture)** — server + worker topology with multi-tenant isolation.
+- **[Hardware Requirements](/docs/get-started/prerequisites)** — system specs for every deployment scenario.
+
+### Reference
+
+- **[Python SDK Reference](/docs/api-reference/python-sdk)** — Full API documentation for all 65+ public exports
+- **[vs. Alternatives](/docs/guides/vs-alternatives)** — How Sagewai compares to LangChain, CrewAI, AutoGen

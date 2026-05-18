@@ -111,7 +111,7 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
 
             <div className="hidden md:flex items-center gap-6 lg:gap-8">
               <Link
-                href="/docs/getting-started"
+                href="/docs/get-started/quickstart"
                 className="text-sm text-text-secondary hover:text-primary transition-colors"
               >
                 Getting Started
@@ -123,7 +123,7 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
                 API Reference
               </Link>
               <Link
-                href="/docs/guides/first-agent"
+                href="/docs/get-started/first-agent"
                 className="text-sm text-text-secondary hover:text-primary transition-colors"
               >
                 Guides

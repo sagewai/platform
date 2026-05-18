@@ -1,0 +1,46 @@
+# Installation
+
+Install the Sagewai SDK and verify it works before writing your first agent.
+
+## Install the SDK
+
+Install with pip:
+
+```bash
+pip install sagewai
+```
+
+Or with uv:
+
+```bash
+uv add sagewai
+```
+
+The only hard requirement is **Python 3.10+**. See [Prerequisites](/docs/get-started/prerequisites) for a full list of software and hardware requirements.
+
+## Extras
+
+Install optional extras when you need the platform components:
+
+| Extra | What it adds |
+|---|---|
+| `sagewai[fastapi]` | Admin server + uvicorn (run `sagewai admin serve`) |
+| `sagewai[postgres]` | Durable workflow storage backed by PostgreSQL |
+| `sagewai[fastapi,postgres]` | Both — the typical production installation |
+
+SQLite works for local exploration without any extra. Use Postgres for production deployments where you need persistence across restarts and multi-process access.
+
+## Verify the install
+
+```bash
+python -c "import sagewai; print(sagewai.__version__)"
+```
+
+You should see a version string. No API key is required for this check.
+
+To go further without an API key, run example `01_hello_agent.py` — it uses the no-LLM-key fallback and produces output with no external service.
+
+## Next
+
+- [Prerequisites](/docs/get-started/prerequisites) — Python version, Docker, hardware profiles.
+- [Your first agent](/docs/get-started/first-agent) — write and run a minimal agent.

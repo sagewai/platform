@@ -1,0 +1,50 @@
+# Integrations — Sagewai works with the tools you already use
+
+This is **Tier 3** of the [example catalogue](/docs/tutorials) — specific developer-tool and registry integrations. Goal: *"Sagewai works with the tools you already use."*
+
+These examples target a specific audience — the developer-tools market and registry users. They're reference-grade for that audience, not the SDK's main story. If you came here for the *"add AI to my product this quarter"* story, jump back to the [Lighthouse](/docs/tutorials) section.
+
+---
+
+## CLI proxies
+
+Sagewai can act as a transparent proxy in front of popular AI CLIs, adding observability, cost tracking, and Sealed-spine credential handling without changing the developer's day-to-day surface.
+
+| # | Example | Tool |
+|---|---|---|
+| 09 | [proxy_claude_code](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/09_proxy_claude_code.py) | Claude Code CLI |
+| 10 | [proxy_cursor](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/10_proxy_cursor.py) | Cursor IDE |
+| 11 | [proxy_codex](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/11_proxy_codex.py) | OpenAI Codex |
+
+When to read: when your team is already using one of these CLIs and you want to add observability and cost tracking without changing their workflow.
+
+## Agent registry
+
+Publish and consume agents through the Sagewai registry. The registry is the discovery surface for agents you want other teams (or other companies) to invoke.
+
+| # | Example | Direction |
+|---|---|---|
+| 14 | [register_agent](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/14_register_agent.py) | Publish to registry |
+| 15 | [discover_agents](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/15_discover_agents.py) | Consume from registry |
+
+When to read: when you're shipping an agent that other teams should be able to invoke without re-implementing the integration.
+
+## Harness primitives
+
+The Harness is Sagewai's surface for power users who want fine-grained control over the proxy + agent boundary.
+
+| # | Example | What it adds |
+|---|---|---|
+| 23 | [harness_proxy](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/23_harness_proxy.py) | Harness proxy primitives |
+| 24 | [harness_agent](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/24_harness_agent.py) | Harness agent integration |
+
+When to read: when you're integrating Sagewai into an existing tool surface and need direct access to the harness primitives.
+
+---
+
+## What to read next
+
+- **[Lighthouse](/docs/tutorials)** — the production-grade examples that solve real-world problems.
+- **[Foundation](/docs/tutorials/learn-the-sdk)** — the SDK basics if you're starting from zero.
+- **[Patterns](/docs/tutorials/production-patterns)** — Tier 4 reference examples.
+- **[Reference — examples](/docs/reference/examples)** — the full numbered list.

@@ -4,12 +4,12 @@ export const metadata = {
   title: 'Show your CFO where the AI money goes — Observatory',
   description:
     'Track AI agent costs, latency, and runs in real time with OpenTelemetry, VictoriaMetrics, Grafana, and the Iron Man HUD. Self-hosted, no Sagewai-tier needed.',
-  alternates: { canonical: 'https://docs.sagewai.ai/docs/observatory' },
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/platform/observatory' },
   openGraph: {
     title: 'Sagewai Observatory — cost dashboards and real telemetry',
     description:
       'Two surfaces, one OTel pipeline. Iron Man HUD for demos, Grafana for SRE work. Reproduce every screenshot in three minutes.',
-    url: 'https://docs.sagewai.ai/docs/observatory',
+    url: 'https://docs.sagewai.ai/docs/platform/observatory',
     images: ['/observatory/hud-overview.png'],
   },
 };
@@ -17,7 +17,7 @@ export const metadata = {
 <HowToJsonLd
   name="Show your CFO where the AI money goes with Sagewai Observatory"
   description="Bring up an OpenTelemetry + VictoriaMetrics + Grafana stack and an Iron Man HUD to track agent cost, latency, and runs in three minutes."
-  path="/docs/observatory"
+  path="/docs/platform/observatory"
   totalTime="PT3M"
   steps={[
     {
@@ -269,7 +269,7 @@ leaves your infrastructure unless you explicitly route it somewhere.
 
 - [Cost management guide](/docs/guides/cost-management) — Foundation. How budget caps, cost meters, and per-team attribution are wired in the SDK.
 - [Sagewai vs LangChain vs LlamaIndex](/docs/guides/vs-alternatives) — How Sagewai's observability surface compares to the alternatives.
-- [Fleet enterprise architecture](/docs/guides/fleet-enterprise) — Fleet pillar lighthouse. The multi-tenant story the dashboards are scoped to.
+- [Fleet enterprise architecture](/docs/guides/fleet-architecture) — Fleet pillar lighthouse. The multi-tenant story the dashboards are scoped to.
 - [Architecture overview](/docs/architecture) — The control-plane / fleet split that produces the telemetry stream this page renders.
 
 **Runnable lighthouse examples on GitHub:**

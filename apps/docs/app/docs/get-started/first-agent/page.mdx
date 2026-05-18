@@ -1,0 +1,82 @@
+# Quickstart — Hello agent in 60 seconds
+
+Sagewai's first promise is the cheapest one to verify: install the SDK, run one file, get a working agent. This page is the 60-second proof. Everything else on the docs site assumes you've done this once.
+
+> **What you get from this page:** a runnable Python script, a real agent reply, and a clear sense of where to read next based on what you're trying to ship.
+
+If you want the longer "build a portfolio site with Claude Code in a sandbox" tour instead, jump to [Getting started — full quickstart](/docs/get-started/quickstart). That page exercises the whole stack — Sealed identities, Docker sandboxes, durable workflows. This page is the lighter touch.
+
+---
+
+## Install
+
+```bash
+pip install sagewai
+```
+
+That's the only required dependency for the hello-world path. No Postgres, no Redis, no admin server. The SDK ships with a no-LLM-key fallback so the example below runs without any secrets.
+
+---
+
+## Run Example 01
+
+The canonical first example is [`01_hello_agent.py`](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/01_hello_agent.py). Copy this into a file and run it:
+
+```python
+import asyncio
+from sagewai import UniversalAgent
+
+async def main() -> None:
+    agent = UniversalAgent(name="hello", model="ollama/llama3.2:latest")
+    reply = await agent.chat("Say hello in one short sentence.")
+    print(reply)
+
+asyncio.run(main())
+```
+
+```bash
+python 01_hello_agent.py
+```
+
+If you have Ollama running with `llama3.2` pulled, the reply is real and free. If not, swap the model string for `claude-haiku-4-5-20251001` and set `ANTHROPIC_API_KEY` — same code, different LLM.
+
+---
+
+## What just happened
+
+You imported `UniversalAgent`, instantiated it with a model identifier, and called `.chat()`. Sagewai resolved the model identifier, dispatched the call, and returned the reply as a string. That is the entire SDK surface for a single-turn agent — five lines.
+
+Three things to notice:
+
+1. **Same code, any LLM.** The `model="ollama/..."` swap to `model="claude-..."` to `model="openai/..."` is one string. Tool calling, memory, workflows, and directives all preserve this property.
+2. **No vendor account required.** Ollama runs locally; the example needs zero paid keys to demonstrate the SDK working end-to-end.
+3. **No platform required.** No admin server, no worker, no Docker. The SDK is a Python library first; the platform layers on top when you need them.
+
+---
+
+## What to read next
+
+Pick the next page by what you're trying to do.
+
+### "I want to ship a real feature this quarter"
+
+You're the [audience](/) for the **Lighthouse** section. Six pages, each a real-world problem with a runnable example and a CFO-readable cost story:
+
+- [Train your own model](/docs/tutorials/train-your-own-model) — capture answers from Opus, fine-tune a 3B model, deploy it, never pay per-token again
+- [Moderation and classification](/docs/tutorials/moderation-and-classification) — community moderation with three classifiers + an LLM judge, all local
+- [Memory and retrieval](/docs/tutorials/memory-and-retrieval) — semantic checkpoint recall and graph-beats-vector for incident response
+- [Production multitenancy](/docs/tutorials/production-multitenancy) — Sealed credentials, isolated workers, no cross-tenant leak
+- [Observability and cost](/docs/tutorials/observability-and-cost) — show your CFO where the AI money goes
+- [Inference deployment](/docs/tutorials/inference-deployment) — RunPod, Modal, custom endpoints
+
+### "I want to learn the SDK first"
+
+Go to [Foundation](/docs/tutorials/learn-the-sdk) — ten short examples, each a single SDK capability (tools, memory, workflows, MCP, directives, model swap). 60-150 lines each. Read in order.
+
+### "I want the full stack tour"
+
+Go to [Getting started](/docs/get-started/quickstart) — the longer quickstart that brings up the admin server, creates a Sealed Identity, and runs Claude Code inside a Docker sandbox to build a portfolio site.
+
+### "I want to go deep on one pillar"
+
+Go to [Pillars](/docs/platform) — capability deep-dives for SDK, Autopilot, Fleet, Observatory, and Training Loop. Each pillar links back to its primary lighthouse and foundation examples.
