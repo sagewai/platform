@@ -34,9 +34,10 @@ English:
    for kill signals. A stuck pod is the only thing in this story
    that would silently drain the budget; we belt-and-braces it.
 
-A clean run on RTX 5090 spends about **$0.35** end-to-end and produces
-the same LoRA Example 38's local CUDA path produces — but on a GPU the
-developer doesn't own and never has to babysit.
+A clean run on RTX 5090 incurs a **GPU bill of about $0.35** (roughly
+30 minutes × $0.69/hr) and produces the same LoRA Example 38's local
+CUDA path produces — but on a GPU the developer doesn't own and never
+has to babysit.
 
 ## Architecture
 
@@ -159,7 +160,7 @@ python 47_runpod_finetune_orchestration.py --live --budget-usd 1.00
   Pod outcome       : completed
   GPU               : NVIDIA RTX 5090 @ $0.6900/hr
   Rental duration   : 28.4 min (1704s wall)
-  Rental spend      : $0.3265  (budget cap = $2.00)
+  Rental spend      : $0.3265  (GPU bill for this run; budget cap = $2.00)
   Cloud-call baseline (calculate_cost): $0.000320/call
   LoRA downloaded   : /tmp/sagewai-runpod-out-XXX/lora
   Pod torn down     : True
@@ -172,9 +173,9 @@ python 47_runpod_finetune_orchestration.py --live --budget-usd 1.00
   At 200 emails/day for 30 days:
     cloud-only      = $    30.00/month ($   360.00/yr)
     after fine-tune = $     0.00/month — the same task costs $0
-    one-time spend  = $   0.3265  (this RunPod fine-tune)
+    one-time spend  = $   0.3265  (GPU bill for this demo run)
 
-  Payback           : after ~65 cloud calls, the fine-tune has paid for itself
+  Payback           : after ~65 cloud calls, the GPU rental cost has paid for itself
                       (0.3 days at 200/day)
 ```
 
@@ -221,7 +222,7 @@ a fine-tune on your repo's history is cheap and private.
 | Concern | How this pattern solves it |
 |---|---|
 | The training corpus is git history — sensitive | Same data-locality story as #2: the corpus rides up to the pod, the LoRA rides back down, the pod dies. |
-| The summariser will be re-trained every 2-4 weeks as the codebase shifts | Each retrain is one `runpodctl create` + budget cap + cleanup. Cost is predictable (~$0.35/run for 30-min RTX 5090). |
+| The summariser will be re-trained every 2-4 weeks as the codebase shifts | Each retrain is one `runpodctl create` + budget cap + cleanup. GPU cost is predictable (~$0.35 for a ~30-min RTX 5090 run at $0.69/hr). |
 | The deployed LoRA needs to plug into the existing PR-review tooling | Ollama (Example 38) is the deploy target; LiteLLM-compatible HTTP. Drop into whatever currently calls Anthropic. |
 
 ## What you can change

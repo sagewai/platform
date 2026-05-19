@@ -26,9 +26,10 @@ in front of their actual customers:
 
 1. **The output is always a parseable shape.** Every call returns
    strict JSON with `tier`, `reason`, `draft_response`. The soak in
-   `_soaks/directives_soak.py` measured **100% JSON validity across
-   150 calls on three local 7B-class models** — this isn't aspirational,
-   it's measured.
+   `_soaks/directives_soak.py` measured **100% JSON schema validity across
+   150 calls on three local 7B-class models** — this measures format
+   correctness (does the output parse as valid JSON matching the required
+   schema?), not classification accuracy.
 2. **The same code runs on any LLM.** Default path is free Ollama;
    one env-var swap moves to Claude Haiku or GPT-4o-mini. The "swap
    proof" section in the script's output triple-checks two
@@ -282,9 +283,10 @@ swap when you put it in front of a real inbox:
 ## What to read next
 
 - **`packages/sdk/sagewai/examples/_soaks/directives_soak.py`** —
-  the soak harness that produced the 100% JSON validity number
-  cited above. Run it against your own 50-sample dataset to grade a
-  candidate model before promoting it to your primary.
+  the soak harness that produced the 100% JSON schema validity number
+  cited above (format check — does the output parse as valid JSON?). Run
+  it against your own 50-sample dataset to grade a candidate model's
+  format reliability before promoting it to your primary.
 - **`packages/sdk/sagewai/examples/08_directives.py`** — the public
   API tour for `DirectiveEngine`. Read it if you want to add
   `@context`, `@memory`, or `/tool.name` directives to the prompt.

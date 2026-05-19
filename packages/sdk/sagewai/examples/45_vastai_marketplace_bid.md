@@ -222,7 +222,7 @@ python 45_vastai_marketplace_bid.py --live --gpu-name A100_80GB
   Ex 47       NVIDIA RTX 5090     $0.6900    0.50  $0.3450
   Ex 45       Vast.ai RTX 3090    $0.2410    0.97  $0.2347
 
-  Vast.ai saves     : $0.1103 (32.0%) on the same fine-tune workload.
+  Vast.ai saves     : $0.1103 (32.0%) in GPU rental on the same fine-tune workload.
 ```
 
 ### What if no offer matches the filter?

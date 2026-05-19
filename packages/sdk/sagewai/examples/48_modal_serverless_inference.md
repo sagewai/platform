@@ -227,7 +227,7 @@ GPU-platform engineer. Five people who'd drop it in this quarter:
 
 Your support tooling runs 200 ticket classifications/day. You burned
 through your Anthropic Haiku trial in Q1; the CFO asked you to cap
-it. You fine-tuned a Llama-3.2-3B on RunPod for $0.35 (Example 47);
+it. You fine-tuned a Llama-3.2-3B on RunPod for a $0.35 GPU rental bill (Example 47);
 now you need somewhere to serve it that won't quietly cost $400/mo.
 
 | Concern | How this pattern solves it |

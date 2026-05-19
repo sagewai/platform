@@ -17,7 +17,7 @@ pitch their CFO. That's the bar.
 |---|---|
 | The training loop closes — a Curator-built dataset trains a real model | `FineTuneExecutor` runs Unsloth or mlx-tune end-to-end |
 | Same code, two backends | Backend dispatch in `FineTuneConfig.backend` (`auto` / `unsloth` / `mlx_tune`) |
-| Apple Silicon is a first-class target | Verified live on M-series: 8/8 = 100% on the held-out 8-sample triage eval |
+| Apple Silicon is a first-class target | Pipeline smoke-tested live on M-series: 8/8 on the 8-sample synthetic eval (confirms the pipeline runs end to end — not a benchmark of model quality) |
 | The cost story is real, not a slide | $0.005/call cloud → $0.000/call local = **\$5/1k calls** = **\$5,000/1M calls** |
 
 **Today's measured numbers** (M4 Pro / 24GB, `mlx-community/Llama-3.2-3B-Instruct`,
@@ -29,9 +29,18 @@ peak_mem (train): 7.19 GB            throughput   : ~231 tokens/sec
 adapter         : adapters.safetensors saved
 GGUF            : 3.2 GB (q8_0, via llama.cpp/convert_hf_to_gguf.py)
 ollama create   : success (smoke-load passed — Ollama runner loads cleanly)
-eval via mlx_lm : 8/8 = 100% (in-process)
-eval via ollama : 8/8 = 100% (live, after the bridge)
+eval via mlx_lm : 8/8 on 8 synthetic samples (in-process pipeline smoke-test)
+eval via ollama : 8/8 on 8 synthetic samples (live, after the bridge)
 ```
+
+> **What these numbers mean:** The 8-sample eval is a **pipeline smoke-test** —
+> 8 hand-written synthetic examples, never seen during the 10-sample training run
+> (there is overlap between the 10-training and 8-eval pools; they are drawn from
+> the same small synthetic corpus). 8/8 confirms the full pipeline ran end to end
+> — dataset → LoRA → GGUF → Ollama → inference — without crashing. It says nothing
+> about how well the model generalises. To assess generalisation you need a
+> held-out eval set that is strictly separate from training data and large enough
+> to measure statistically.
 
 ---
 
@@ -457,7 +466,7 @@ kernel will kill the Python process. The example's default behaviour
 
 ## Versions we have actually verified
 
-These are the pins that produced the 8/8 = 100% live result above:
+These are the pins that produced the 8/8 pipeline smoke-test result noted above:
 
 | Component | Version | Notes |
 |---|---|---|

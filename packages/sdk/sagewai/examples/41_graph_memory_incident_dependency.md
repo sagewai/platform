@@ -184,6 +184,15 @@ the in-memory `GraphMemory` so the example still runs end-to-end.
 
 ### Expected output (proof section)
 
+> **What these numbers represent:** The scenario below is a **synthetic
+> illustrative scenario** — 4 hand-crafted queries against 16 hand-written
+> synthetic incidents across 7 synthetic services. The completeness percentages
+> measure how many of the *pre-defined correct answers* each retrieval method
+> returns on this controlled dataset. They demonstrate the structural difference
+> between graph and vector retrieval; they are not a benchmark against a
+> real production corpus. Token reduction (11.6×) is measured on these same
+> synthetic results.
+
 ```
 ───  The proof  ─────────────────────────────────────────────────────────
 
@@ -227,7 +236,7 @@ benefit from the last six months of post-mortems, not start from zero.
 |---|---|
 | When a new incident fires, the agent should surface "have we seen this before?" instantly | Multi-hop reasoning over `caused_by` edges returns structurally equivalent past incidents (Q2 in this example) |
 | Auditor asks "what's the dependency closure of the database we're about to deprecate?" | Constraint propagation across `affects_service` ⊕ `depends_on` returns exactly the preventable-incident set (Q4) |
-| LLM context is expensive — passing 50 incident summaries to Opus on every page costs real money | Graph returns 11x fewer tokens on average than vector, while answering the question structurally instead of approximately |
+| LLM context is expensive — passing 50 incident summaries to Opus on every page costs real money | Graph returns 11x fewer tokens on this synthetic scenario than vector, while answering the question structurally instead of approximately |
 
 ### 2. Engineering manager on the customer-success platform team at a 300-person B2B SaaS
 

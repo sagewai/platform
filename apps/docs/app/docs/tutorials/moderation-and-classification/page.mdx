@@ -121,7 +121,7 @@ You have ~200 tickets a day. Half are the same five questions.
 
 | Concern | How the pattern solves it |
 |---|---|
-| Need AI in production this quarter at a capped cost | Example 42 ships a single LLM call returning strict JSON — tier, reason, draft; validates 100% across 150 calls on three local 7B models |
+| Need AI in production this quarter at a capped cost | Example 42 ships a single LLM call returning strict, schema-checked JSON — tier, reason, draft; a soak test exercises it across local 7B models to catch malformed output |
 | Auto-responding to a P0 by accident is the worst outcome | The router never auto-responds to P0/P1; tier semantics are pinned in the system prompt |
 | Start cheap, escalate only if quality slips | Run Ollama as primary; promote to Haiku only for the boundary cases your soak identifies |
 

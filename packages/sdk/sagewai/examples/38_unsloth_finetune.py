@@ -156,15 +156,17 @@ BASELINE_COST_PER_CALL_USD: float = 0.005
 # Recorded soak numbers used when no live LLM/local model is reachable.
 # Refreshed against the latest live run; re-measure on launch day, store
 # the soak report at atelier/docs/v1.0/training-loop-soak.md (forthcoming).
-RECORDED_BASELINE_ACCURACY: float = 1.00  # 8/8 — Haiku gets triage right
-RECORDED_LOCAL_ACCURACY: float = 1.00     # 8/8 measured live on Apple Silicon
+RECORDED_BASELINE_ACCURACY: float = 1.00  # 8/8 on the 8-sample synthetic smoke-test — Haiku gets triage right on hand-written examples
+RECORDED_LOCAL_ACCURACY: float = 1.00     # 8/8 on the 8-sample synthetic smoke-test (pipeline end-to-end check, not a generalisation benchmark)
 
 # Recorded fine-tune numbers from the latest local soak. M4 Pro / 24GB,
 # mlx-tune 0.4.25 + non-quantised mlx-community/Llama-3.2-3B-Instruct,
 # 10 alpaca samples, 5 iterations, batch_size=2. With
 # SAGEWAI_FT_PRODUCE_GGUF=1 and LLAMA_CPP_DIR set, the double-hop bridge
 # produces a 3.2GB q8_0 GGUF; Ollama loads cleanly (smoke-load passes)
-# and the held-out eval ran at 8/8 = 100% live via Ollama.
+# and the pipeline smoke-test ran at 8/8 on the 8 synthetic eval examples.
+# NOTE: 8/8 is a pipeline smoke-test — it confirms dataset→LoRA→GGUF→Ollama
+# ran end-to-end; it is NOT a generalisation benchmark.
 RECORDED_FT_METRICS: dict[str, str] = {
     "platform": "Apple M4 Pro / 24GB (mlx-tune 0.4.25)",
     "model": "mlx-community/Llama-3.2-3B-Instruct (fp16)",
@@ -177,8 +179,8 @@ RECORDED_FT_METRICS: dict[str, str] = {
     "tokens_per_sec": "231",
     "gguf_quant": "q8_0",
     "gguf_size_gb": "3.2",
-    "eval_via_mlx_lm": "8/8 = 100% (in-process)",
-    "eval_via_ollama": "8/8 = 100% (after llama.cpp double-hop bridge)",
+    "eval_via_mlx_lm": "8/8 on 8 synthetic samples (in-process pipeline smoke-test)",
+    "eval_via_ollama": "8/8 on 8 synthetic samples (after llama.cpp double-hop bridge, pipeline smoke-test)",
 }
 
 
@@ -1292,7 +1294,7 @@ async def main() -> None:
     print("  Curator collected the bootstrap data (cycle 1).")
     print("  FineTuneExecutor trained the model end-to-end on Apple Silicon.")
     print("  Ollama serves it for free at $0/token.")
-    print("  Held-out eval proved the quality matches cloud baseline.")
+    print("  Pipeline smoke-test (8 synthetic samples) confirmed end-to-end flow.")
     print("  Section 7 captured live production decisions back into Curator,")
     print("  queuing cycle 2 — a model trained on YOUR domain, that gets")
     print("  better with every run while the per-call cost stays $0.")

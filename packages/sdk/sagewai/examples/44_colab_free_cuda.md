@@ -43,8 +43,10 @@ English:
    moment it appears, even if the notebook ran on a fresh session.
 
 A clean run trains the LoRA in **~6-10 minutes**, downloads it,
-and reports **$0.00 spend** — and the held-out 5-sample eval shows
-≥80% accuracy on email-triage classification.
+and reports **$0.00 spend** — and the pipeline smoke-test (5 synthetic
+held-out samples) confirms ≥80% on those hand-written examples, verifying
+the pipeline ran end to end. This is not a generalisation benchmark;
+it checks that the fine-tune → deploy → eval path completes without error.
 
 ## Architecture
 
@@ -198,7 +200,7 @@ python 44_colab_free_cuda.py --live --poll-timeout-minutes 60
   Spend             : $0.000000  (session budget: 720 min)
   Cloud-call baseline (calculate_cost): $0.000320/call
   LoRA downloaded   : /tmp/sagewai-colab-out-XXX/lora.tar.gz
-  Eval accuracy     : 100.0% on 5 held-out samples (✓ ≥ 80% target)
+  Eval accuracy     : 100.0% on 5 synthetic held-out samples (✓ ≥ 80% pipeline smoke-test target)
 
 ───  Cost-down: cloud-LLM baseline vs. fine-tuned local  ────────────────
 
@@ -272,7 +274,7 @@ you on the day.
 | Concern | How this pattern solves it |
 |---|---|
 | I'd rather not trust marketing — I want to run it myself | Stub mode shows you the integration; live mode runs it for $0. The whole pitch is verifiable in one afternoon. |
-| If the free tier doesn't work, the rest of the spectrum probably doesn't either | If Example 44 produces a deployable LoRA at $0, Example 47 (~$0.35) and Example 48 (~$0.002) become much easier to trust. |
+| If the free tier doesn't work, the rest of the spectrum probably doesn't either | If Example 44 produces a deployable LoRA at $0, Example 47 (~$0.35 GPU bill for a 30-min RTX 5090 run) and Example 48 (~$0.002) become much easier to trust. |
 | Whatever I prove on Colab has to deploy on the team's actual stack | The exported LoRA is plain `safetensors` + adapter config; it loads in vLLM, Ollama, and Modal without modification. |
 
 ## What you can change
@@ -342,8 +344,9 @@ If you ran this and want to step into the rest of the inference
 spectrum:
 
 - **Example 47** (`47_runpod_finetune_orchestration.py`) — the
-  next tier up. Same fine-tune on a rented RTX 5090 (~$0.35/run);
-  no manual notebook step; faster iteration; budget-cap watchdog.
+  next tier up. Same fine-tune on a rented RTX 5090 (~$0.35 GPU bill
+  for a ~30-min run at $0.69/hr); no manual notebook step; faster
+  iteration; budget-cap watchdog.
 - **Example 45** (`45_vastai_marketplace_bid.py`) — Vast.ai's
   budget aggregator. Per-host reliability scoring + ~$0.20-$0.45/hr
   for 24GB GPUs. Right when you want the cheapest *reliable* GPU.

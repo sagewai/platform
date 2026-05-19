@@ -33,8 +33,10 @@ Selenium wrappers are brittle). The orchestrator:
    it once and click *Runtime → Run all* (~30 seconds, the only
    manual step).
 5. The notebook self-installs Unsloth, fine-tunes Llama-3.2-3B on
-   the JSONL, evaluates on a 5-sample held-out set, and writes the
-   LoRA back to the same Drive folder as ``output/lora.tar.gz``.
+   the JSONL, runs a pipeline smoke-test on 5 synthetic held-out
+   samples (verifying the pipeline completed — not a generalisation
+   benchmark), and writes the LoRA back to the same Drive folder as
+   ``output/lora.tar.gz``.
 6. The orchestrator polls Drive for the LoRA, downloads it locally,
    and reports elapsed time + total spend (which is **$0.00**).
 
@@ -353,8 +355,9 @@ def print_orchestration_plan(*, drive_root: str, poll_timeout_minutes: int) -> N
     print("     - You open it once → Runtime → Run all (~30s click)")
     print()
     print("  5. The notebook self-installs Unsloth, fine-tunes")
-    print("     Llama-3.2-3B (4-bit) on the JSONL, evaluates on a")
-    print("     held-out 5-sample set, and writes the LoRA back to:")
+    print("     Llama-3.2-3B (4-bit) on the JSONL, runs a pipeline")
+    print("     smoke-test on 5 synthetic held-out samples, and")
+    print("     writes the LoRA back to:")
     print(f"     - {run_folder}{LORA_REMOTE_RELATIVE_PATH}")
     print(f"     - {run_folder}{EVAL_RESULT_RELATIVE_PATH}")
     print()
@@ -723,8 +726,8 @@ def print_live_proof(
     if eval_accuracy_pct is not None:
         passed = "✓" if eval_accuracy_pct >= 80.0 else "✗"
         print(f"  Eval accuracy     : {eval_accuracy_pct:.1f}% on "
-              f"{len(EMAIL_TRIAGE_EVAL_DATA)} held-out samples "
-              f"({passed} ≥ 80% target)")
+              f"{len(EMAIL_TRIAGE_EVAL_DATA)} synthetic held-out samples "
+              f"({passed} ≥ 80% pipeline smoke-test target)")
     print()
 
 
