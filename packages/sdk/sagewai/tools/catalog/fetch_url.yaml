@@ -1,0 +1,19 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: fetch_url
+version: 0.1.0
+title: Fetch URL
+description: |
+  GET a URL and return the response body. Built-in. No external service.
+category: network
+kind: sdk
+sandbox_tier: SANDBOXED
+exec:
+  sdk:
+    entrypoint: sagewai.autopilot.default_tools:fetch_url
+scopes:
+  - network.outbound.fetch
+setup:
+  auth_complexity: none
+  body: |
+    Bundled with the SDK. Nothing to configure.

@@ -1,0 +1,23 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: filesystem_mcp
+version: 0.1.0
+title: Filesystem (MCP)
+description: |
+  Read and list files on a configured directory via the Anthropic
+  filesystem MCP server.
+category: developer_tools
+kind: mcp
+sandbox_tier: SANDBOXED
+exec:
+  mcp:
+    server_ref: "stdio:npx -y @modelcontextprotocol/server-filesystem"
+    tool_name: read_file
+scopes:
+  - fs.read
+setup:
+  auth_complexity: none
+  body: |
+    Requires `npx` on PATH. The MCP server is fetched on first run.
+    Configure the allowed directory via the MCP server's argv when you
+    register a project: Sagewai → Connections → Add → Filesystem.

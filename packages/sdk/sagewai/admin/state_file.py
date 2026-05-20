@@ -316,6 +316,13 @@ class AdminStateFile:
         if "providers" not in data:
             data["providers"] = []
 
+        # v1 → v2: back-fill `kind: inference` on every connection
+        # record. The vault widened from inference-only to a generic
+        # connections store (tools live here too) — old records all
+        # belong to the original inference namespace.
+        for rec in data.get("providers", []):
+            rec.setdefault("kind", "inference")
+
     # ── setup ────────────────────────────────────────────────────
 
     def is_setup_complete(self) -> bool:

@@ -29,7 +29,7 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.responses import Response, StreamingResponse
 
 from sagewai.admin.state_file import AdminStateFile
@@ -518,10 +518,19 @@ def create_admin_serve_app(
 
     artifact_destination_routes.register(app)
 
-    # Inference-providers credential vault (Gap #10)
-    from sagewai.admin import inference_provider_routes  # noqa: E402
+    # Connections credential vault (formerly inference-providers, Gap #10)
+    from sagewai.admin import connections_routes  # noqa: E402
 
-    inference_provider_routes.register(app)
+    connections_routes.register(app)
+
+    @app.api_route(
+        "/api/v1/admin/inference-providers{rest:path}",
+        methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+        include_in_schema=False,
+    )
+    async def _inference_providers_redirect(rest: str) -> RedirectResponse:
+        """Permanently moved to /api/v1/admin/connections; kept for one release."""
+        return RedirectResponse(url=f"/api/v1/admin/connections{rest}", status_code=308)
 
     # Sealed-v directive admin routes (in-memory; postgres-backed
     # approvals/evaluations are wired alongside revocation_routes below

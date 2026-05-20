@@ -1874,20 +1874,20 @@ export const adminApi = {
     return res.json();
   },
 
-  /* ─── Inference providers (Gap #10) ─── */
+  /* ─── Inference providers / connections (Gap #10) ─── */
   getInferenceProviderCatalog: () =>
     analyticsClient.get<InferenceProviderCatalog>(
-      '/api/v1/admin/inference-providers/catalog',
+      '/api/v1/admin/connections/catalog',
     ),
 
   listInferenceProviders: () =>
     analyticsClient.get<InferenceProviderMetadata[]>(
-      '/api/v1/admin/inference-providers',
+      '/api/v1/admin/connections',
     ),
 
   getInferenceProvider: (provider: InferenceProviderKey) =>
     analyticsClient.get<InferenceProviderMetadata>(
-      `/api/v1/admin/inference-providers/${encodeURIComponent(provider)}`,
+      `/api/v1/admin/connections/${encodeURIComponent(provider)}`,
     ),
 
   upsertInferenceProvider: (
@@ -1895,18 +1895,18 @@ export const adminApi = {
     payload: InferenceProviderWritePayload,
   ) =>
     analyticsClient.put<InferenceProviderMetadata>(
-      `/api/v1/admin/inference-providers/${encodeURIComponent(provider)}`,
+      `/api/v1/admin/connections/${encodeURIComponent(provider)}`,
       payload,
     ),
 
   deleteInferenceProvider: (provider: InferenceProviderKey) =>
     analyticsClient.delete<void>(
-      `/api/v1/admin/inference-providers/${encodeURIComponent(provider)}`,
+      `/api/v1/admin/connections/${encodeURIComponent(provider)}`,
     ),
 
   testInferenceProvider: (provider: InferenceProviderKey) =>
     analyticsClient.post<InferenceProviderTestResult>(
-      `/api/v1/admin/inference-providers/${encodeURIComponent(provider)}/test`,
+      `/api/v1/admin/connections/${encodeURIComponent(provider)}/test`,
       {},
     ),
 

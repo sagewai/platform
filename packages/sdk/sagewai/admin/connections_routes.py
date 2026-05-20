@@ -7,18 +7,16 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""Admin routes for /api/v1/admin/inference-providers/* (Gap #10).
+"""Admin routes for /api/v1/admin/connections/* (formerly inference-providers).
 
-Credential vault for the four cloud GPU providers + custom-endpoint
-config. Sealed-encrypted at rest via the existing Sealed Crypto/master
-key. Project-scoped via ``X-Project-ID``.
+Credential vault for the inference cloud providers + custom-endpoint
+config, generalised to also hold tool credentials. Sealed-encrypted at
+rest via the existing Sealed Crypto/master key. Project-scoped via
+``X-Project-ID``.
 
-Companion examples:
-- 44_colab_drive_orchestration  (Tier 1 — free CUDA via Colab)
-- 45_vastai_marketplace         (Tier 2 — Vast.ai bid-cheapest)
-- 46_custom_inference_endpoint  (Tier 5 — bring-your-own endpoint)
-- 47_runpod_finetune            (Tier 3 — RunPod gold standard)
-- 48_modal_serverless           (Tier 4 — Modal serverless inference)
+Each connection record carries a ``kind`` field (``"inference"`` or
+``"tool"``). The inference subset is identical to what shipped in PR
+#240; the ``"tool"`` subset is populated by the tool-catalog batches.
 """
 from __future__ import annotations
 
@@ -252,7 +250,7 @@ def _find_row(
 # ── Router ──────────────────────────────────────────────────────────
 
 
-router = APIRouter(prefix="/api/v1/admin/inference-providers", tags=["inference-providers"])
+router = APIRouter(prefix="/api/v1/admin/connections", tags=["connections"])
 
 
 @router.get("/catalog")
@@ -862,5 +860,5 @@ async def _test_custom(
 
 
 def register(app: FastAPI) -> None:
-    """Mount routes under /api/v1/admin/inference-providers/*."""
+    """Mount routes under /api/v1/admin/connections/*."""
     app.include_router(router)

@@ -1,13 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import {
   Badge,
   Button,
   ConfirmDialog,
   EmptyState,
   Skeleton,
+  Tabs,
   useToast,
 } from '@/components/ui/legacy';
 import { adminApi } from '@/utils/api';
@@ -25,7 +25,14 @@ import {
   CheckCircle2, AlertCircle, ExternalLink, KeyRound, RefreshCw, Trash2,
 } from 'lucide-react';
 
-export default function InferenceProvidersPage() {
+type ConnectionTab = 'inference' | 'tools';
+
+const TABS = [
+  { id: 'inference', label: 'Inference' },
+  { id: 'tools', label: 'Tools' },
+] as const;
+
+export default function ConnectionsPage() {
   const { currentSlug } = useProject();
   const [catalog, setCatalog] = useState<InferenceProviderCatalogEntry[]>([]);
   const [providers, setProviders] = useState<InferenceProviderMetadata[]>([]);
@@ -34,6 +41,7 @@ export default function InferenceProvidersPage() {
   const [editing, setEditing] = useState<InferenceProviderKey | null>(null);
   const [deleting, setDeleting] = useState<InferenceProviderKey | null>(null);
   const [testingKey, setTestingKey] = useState<InferenceProviderKey | null>(null);
+  const [activeTab, setActiveTab] = useState<ConnectionTab>('inference');
   const { toast } = useToast();
 
   const refresh = useCallback(async () => {
@@ -104,59 +112,75 @@ export default function InferenceProvidersPage() {
     <div className="max-w-6xl mx-auto">
       <div className="mb-lg">
         <h1 className="mt-0 mb-2 text-2xl font-bold font-[family-name:var(--font-heading)]">
-          Inference providers
+          Connections
         </h1>
         <p className="mt-0 text-sm text-muted-foreground">
-          GPU credentials for the v1.0 inference spectrum. Stored
-          encrypted-at-rest via Sealed; project-scoped to{' '}
-          <code className="text-xs">{currentSlug ?? 'org-global'}</code>. Read{' '}
-          <Link className="underline" href="/docs/inference">
-            the inference education docs
-          </Link>{' '}
-          for which tier fits which workload.
+          Manage encrypted credentials for inference providers and tool connections.
+          Stored encrypted-at-rest via Sealed; project-scoped to{' '}
+          <code className="text-xs">{currentSlug ?? 'org-global'}</code>.
         </p>
       </div>
 
-      <ProviderSpectrumBanner />
+      <Tabs
+        tabs={TABS as unknown as Array<{ id: string; label: string }>}
+        active={activeTab}
+        onChange={(id) => setActiveTab(id as ConnectionTab)}
+      />
 
-      {loading && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-          <Skeleton lines={5} />
-          <Skeleton lines={5} />
-          <Skeleton lines={5} />
-          <Skeleton lines={5} />
-        </div>
+      {activeTab === 'inference' && (
+        <>
+          <ProviderSpectrumBanner />
+
+          {loading && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+              <Skeleton lines={5} />
+              <Skeleton lines={5} />
+              <Skeleton lines={5} />
+              <Skeleton lines={5} />
+            </div>
+          )}
+
+          {error && !loading && (
+            <EmptyState
+              title="Could not load credential vault"
+              description={error}
+              actionLabel="Retry"
+              onAction={refresh}
+            />
+          )}
+
+          {!loading && !error && (
+            <div
+              data-testid="inference-provider-grid"
+              className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4"
+            >
+              {providers.map((p) => {
+                const cat = catalogByKey[p.provider];
+                if (!cat) return null;
+                return (
+                  <ProviderCard
+                    key={p.provider}
+                    provider={p}
+                    catalog={cat}
+                    onEdit={() => setEditing(p.provider)}
+                    onTest={() => onTest(p.provider)}
+                    onDelete={() => setDeleting(p.provider)}
+                    isTesting={testingKey === p.provider}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </>
       )}
 
-      {error && !loading && (
-        <EmptyState
-          title="Could not load credential vault"
-          description={error}
-          actionLabel="Retry"
-          onAction={refresh}
-        />
-      )}
-
-      {!loading && !error && (
-        <div
-          data-testid="inference-provider-grid"
-          className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4"
-        >
-          {providers.map((p) => {
-            const cat = catalogByKey[p.provider];
-            if (!cat) return null;
-            return (
-              <ProviderCard
-                key={p.provider}
-                provider={p}
-                catalog={cat}
-                onEdit={() => setEditing(p.provider)}
-                onTest={() => onTest(p.provider)}
-                onDelete={() => setDeleting(p.provider)}
-                isTesting={testingKey === p.provider}
-              />
-            );
-          })}
+      {activeTab === 'tools' && (
+        <div className="rounded-md border border-dashed p-12 text-center text-sm text-muted-foreground mt-4">
+          <h3 className="text-base font-medium text-foreground">No tool connections yet</h3>
+          <p className="mt-2">
+            Tool connections (Stripe, GitHub, Slack, etc.) will appear here once the
+            tier-1 implementations land. See the v1.0 roadmap for the rollout schedule.
+          </p>
         </div>
       )}
 

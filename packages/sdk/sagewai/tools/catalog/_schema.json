@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sagewai.ai/schemas/tool-catalog-entry.json",
+  "title": "Sagewai tool catalog entry",
+  "type": "object",
+  "required": ["id", "version", "title", "description", "category", "kind", "sandbox_tier", "exec", "scopes", "setup"],
+  "additionalProperties": false,
+  "properties": {
+    "id":          { "type": "string", "pattern": "^[a-z0-9_]+$" },
+    "version":     { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "title":       { "type": "string", "minLength": 1 },
+    "description": { "type": "string", "minLength": 1 },
+    "category":    { "type": "string", "minLength": 1 },
+    "kind":        { "enum": ["sdk", "http", "mcp", "cli", "webhook"] },
+    "sandbox_tier":{ "enum": ["TRUSTED", "SANDBOXED", "UNTRUSTED"] },
+    "scopes": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z0-9_]+(\\.[a-z0-9_]+)+$" }
+    },
+    "exec": { "type": "object" },
+    "schemas": { "type": "object" },
+    "setup": {
+      "type": "object",
+      "required": ["auth_complexity", "body"],
+      "additionalProperties": true,
+      "properties": {
+        "auth_complexity": { "enum": ["none", "api_key", "oauth2", "oauth2_webhook"] },
+        "signup_url":      { "type": "string", "format": "uri" },
+        "console_path":    { "type": "string" },
+        "key_format":      { "type": "string" },
+        "required_scopes": { "type": "array", "items": { "type": "string" } },
+        "test_endpoint":   { "type": "object" },
+        "body":            { "type": "string" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "sdk" } } },
+      "then": { "properties": { "exec": { "required": ["sdk"], "properties": {
+        "sdk": { "type": "object", "required": ["entrypoint"],
+                 "properties": { "entrypoint": { "type": "string", "pattern": "^[a-zA-Z0-9_.]+:[a-zA-Z0-9_]+$" } },
+                 "additionalProperties": false }
+      }, "not": { "anyOf": [
+        {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["webhook"]}
+      ]} } } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "http" } } },
+      "then": { "properties": { "exec": { "required": ["http"], "properties": {
+        "http": { "type": "object", "required": ["base_url", "auth", "operations"],
+                  "properties": {
+                    "base_url": { "type": "string", "format": "uri" },
+                    "auth": { "type": "object", "required": ["kind"],
+                              "properties": { "kind": { "enum": ["none", "api_key", "bearer", "basic", "oauth2", "hmac", "aws_sigv4"] } } },
+                    "operations": { "type": "object", "minProperties": 1 }
+                  }, "additionalProperties": true }
+      }, "not": { "anyOf": [
+        {"required": ["sdk"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["webhook"]}
+      ]} } } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "mcp" } } },
+      "then": { "properties": { "exec": { "required": ["mcp"], "properties": {
+        "mcp": { "type": "object", "required": ["server_ref"],
+                 "properties": { "server_ref": { "type": "string" }, "tool_name": { "type": "string" } } }
+      }, "not": { "anyOf": [
+        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["cli"]}, {"required": ["webhook"]}
+      ]} } } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "cli" } } },
+      "then": { "properties": { "exec": { "required": ["cli"], "properties": {
+        "cli": { "type": "object", "required": ["binary", "argv_template"],
+                 "properties": { "binary": { "type": "string" }, "argv_template": { "type": "array", "items": { "type": "string" } } } }
+      }, "not": { "anyOf": [
+        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["webhook"]}
+      ]} } } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "webhook" } } },
+      "then": { "properties": { "exec": { "required": ["webhook"], "properties": {
+        "webhook": { "type": "object", "required": ["url"],
+                     "properties": { "url": { "type": "string", "format": "uri" }, "callback_topic": { "type": "string" } } }
+      }, "not": { "anyOf": [
+        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["cli"]}
+      ]} } } }
+    }
+  ]
+}

@@ -378,6 +378,33 @@ Rules:
 - Never leave a known broken feature undocumented — if you can't
   fix it now, the issue IS the deliverable.
 
+## Tool catalog (sub-project 1)
+
+`packages/sdk/sagewai/tools/catalog/*.yaml` is the canonical tool catalog.
+Every blueprint `tools_required:` string must have a matching `<id>.yaml`
+here once the sub-project 2 batches land. Schema lives at
+`catalog/_schema.json`; `registry.py` validates at import time and refuses
+to load on any violation. Three seed entries shipped: `fetch_url` (kind:
+sdk), `github` (kind: http, api_key), `filesystem_mcp` (kind: mcp).
+
+Five executor modules at `sagewai/tools/executors/{sdk,http,mcp,cli,webhook}.py`
+share one interface; `sagewai.tools.executors.get(kind)` returns the
+matching `run` coroutine. `sagewai.tools.factory.build_callables()` adapts
+each `CatalogEntry` into the autopilot `ToolCallable` shape so the
+existing `ToolRunner` contract is preserved.
+
+`sagewai.autopilot.tool_scopes.scopes_for_tools` delegates to
+`registry.scopes_for` for catalogued names and falls back to the legacy
+`_TOOL_SCOPES` dict otherwise. Sub-project 2 catalogues the remaining
+legacy names tier by tier (no-auth → api_key → oauth2 → oauth2_webhook);
+once the legacy dict is empty it can be deleted.
+
+The inference-providers vault has been generalised to **connections** at
+`/api/v1/admin/connections/*`. The old path returns 308 for one release.
+Each record carries `kind: "inference" | "tool"`; the migration is
+JSON-level inside `AdminStateFile` — no SQL. Admin UI: `/connections`
+with `Inference` (current providers) + `Tools` (empty scaffold) tabs.
+
 ## Known issues you may encounter
 
 1. ~~`sagewai[fastapi]` extra missing `uvicorn`~~ **FIXED** in PR #48.

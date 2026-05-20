@@ -7,7 +7,7 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""Tests for /api/v1/admin/inference-providers/* (Gap #10)."""
+"""Tests for /api/v1/admin/connections/* (formerly inference-providers, Gap #10)."""
 from __future__ import annotations
 
 import json
@@ -38,10 +38,10 @@ def vault_paths(tmp_path, monkeypatch):
 
 @pytest.fixture
 async def client(vault_paths):
-    from sagewai.admin import inference_provider_routes
+    from sagewai.admin import connections_routes
 
     app = FastAPI()
-    inference_provider_routes.register(app)
+    connections_routes.register(app)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport, base_url="http://test",
@@ -51,7 +51,7 @@ async def client(vault_paths):
 
 @pytest.mark.asyncio
 async def test_catalog_lists_five_providers(client):
-    res = await client.get("/api/v1/admin/inference-providers/catalog")
+    res = await client.get("/api/v1/admin/connections/catalog")
     assert res.status_code == 200
     body = res.json()
     keys = {p["provider"] for p in body["providers"]}
@@ -63,7 +63,7 @@ async def test_catalog_lists_five_providers(client):
 
 @pytest.mark.asyncio
 async def test_list_returns_unconfigured_card_per_provider(client):
-    res = await client.get("/api/v1/admin/inference-providers")
+    res = await client.get("/api/v1/admin/connections")
     assert res.status_code == 200
     rows = res.json()
     assert len(rows) == 5
@@ -74,7 +74,7 @@ async def test_list_returns_unconfigured_card_per_provider(client):
 @pytest.mark.asyncio
 async def test_upsert_runpod_then_get(client, vault_paths):
     res = await client.put(
-        "/api/v1/admin/inference-providers/runpod",
+        "/api/v1/admin/connections/runpod",
         json={"secrets": {"RUNPOD_API_KEY": "rp_test_abc123"}},
     )
     assert res.status_code == 200, res.text
@@ -90,7 +90,7 @@ async def test_upsert_runpod_then_get(client, vault_paths):
 @pytest.mark.asyncio
 async def test_upsert_rejects_unknown_secret_keys(client):
     res = await client.put(
-        "/api/v1/admin/inference-providers/runpod",
+        "/api/v1/admin/connections/runpod",
         json={"secrets": {"NOT_RUNPOD_KEY": "x"}},
     )
     assert res.status_code == 400
@@ -102,13 +102,13 @@ async def test_upsert_rejects_unknown_secret_keys(client):
 async def test_project_scoping_isolates_credentials(client, vault_paths):
     # Save a credential under project A
     await client.put(
-        "/api/v1/admin/inference-providers/runpod",
+        "/api/v1/admin/connections/runpod",
         json={"secrets": {"RUNPOD_API_KEY": "key-from-a"}},
         headers={"X-Project-ID": "project-a"},
     )
     # Project B should see an unconfigured card
     res_b = await client.get(
-        "/api/v1/admin/inference-providers/runpod",
+        "/api/v1/admin/connections/runpod",
         headers={"X-Project-ID": "project-b"},
     )
     assert res_b.status_code == 200
@@ -116,7 +116,7 @@ async def test_project_scoping_isolates_credentials(client, vault_paths):
 
     # Project A still sees its own
     res_a = await client.get(
-        "/api/v1/admin/inference-providers/runpod",
+        "/api/v1/admin/connections/runpod",
         headers={"X-Project-ID": "project-a"},
     )
     assert res_a.json()["configured"] is True
@@ -125,25 +125,25 @@ async def test_project_scoping_isolates_credentials(client, vault_paths):
 @pytest.mark.asyncio
 async def test_delete_removes_credentials(client):
     await client.put(
-        "/api/v1/admin/inference-providers/runpod",
+        "/api/v1/admin/connections/runpod",
         json={"secrets": {"RUNPOD_API_KEY": "x"}},
     )
-    res = await client.delete("/api/v1/admin/inference-providers/runpod")
+    res = await client.delete("/api/v1/admin/connections/runpod")
     assert res.status_code == 204
-    after = await client.get("/api/v1/admin/inference-providers/runpod")
+    after = await client.get("/api/v1/admin/connections/runpod")
     assert after.json()["configured"] is False
 
 
 @pytest.mark.asyncio
 async def test_delete_404_when_not_configured(client):
-    res = await client.delete("/api/v1/admin/inference-providers/runpod")
+    res = await client.delete("/api/v1/admin/connections/runpod")
     assert res.status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_test_connection_no_credentials_returns_ok_false(client):
     res = await client.post(
-        "/api/v1/admin/inference-providers/runpod/test"
+        "/api/v1/admin/connections/runpod/test"
     )
     assert res.status_code == 200
     body = res.json()
@@ -155,11 +155,11 @@ async def test_test_connection_no_credentials_returns_ok_false(client):
 async def test_test_connection_colab_validates_oauth_json(client):
     valid = json.dumps({"installed": {"client_id": "abc.apps.googleusercontent.com"}})
     await client.put(
-        "/api/v1/admin/inference-providers/colab",
+        "/api/v1/admin/connections/colab",
         json={"secrets": {"GOOGLE_DRIVE_OAUTH_JSON": valid}},
     )
     res = await client.post(
-        "/api/v1/admin/inference-providers/colab/test"
+        "/api/v1/admin/connections/colab/test"
     )
     body = res.json()
     assert body["ok"] is True, body
@@ -169,11 +169,11 @@ async def test_test_connection_colab_validates_oauth_json(client):
 @pytest.mark.asyncio
 async def test_test_connection_colab_rejects_bad_json(client):
     await client.put(
-        "/api/v1/admin/inference-providers/colab",
+        "/api/v1/admin/connections/colab",
         json={"secrets": {"GOOGLE_DRIVE_OAUTH_JSON": "{not json"}},
     )
     res = await client.post(
-        "/api/v1/admin/inference-providers/colab/test"
+        "/api/v1/admin/connections/colab/test"
     )
     body = res.json()
     assert body["ok"] is False
@@ -183,7 +183,7 @@ async def test_test_connection_colab_rejects_bad_json(client):
 @pytest.mark.asyncio
 async def test_test_connection_custom_requires_base_url(client):
     await client.put(
-        "/api/v1/admin/inference-providers/custom",
+        "/api/v1/admin/connections/custom",
         json={
             "secrets": {"CUSTOM_AUTH_VALUE": "abc"},
             "env": {},
@@ -191,7 +191,7 @@ async def test_test_connection_custom_requires_base_url(client):
         },
     )
     res = await client.post(
-        "/api/v1/admin/inference-providers/custom/test"
+        "/api/v1/admin/connections/custom/test"
     )
     body = res.json()
     assert body["ok"] is False
@@ -200,7 +200,7 @@ async def test_test_connection_custom_requires_base_url(client):
 
 @pytest.mark.asyncio
 async def test_unknown_provider_404(client):
-    res = await client.get("/api/v1/admin/inference-providers/spheron")
+    res = await client.get("/api/v1/admin/connections/spheron")
     assert res.status_code == 404
 
 
@@ -220,16 +220,16 @@ async def test_upsert_without_master_key_returns_503(
         vault_paths["vault_path"].parent / "nonexistent.key",
     )
 
-    from sagewai.admin import inference_provider_routes
+    from sagewai.admin import connections_routes
 
     app = FastAPI()
-    inference_provider_routes.register(app)
+    connections_routes.register(app)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport, base_url="http://test",
     ) as cl:
         res = await cl.put(
-            "/api/v1/admin/inference-providers/runpod",
+            "/api/v1/admin/connections/runpod",
             json={"secrets": {"RUNPOD_API_KEY": "x"}},
         )
     assert res.status_code == 503
@@ -241,11 +241,11 @@ async def test_test_connection_records_outcome_on_card(client):
     # Save Colab with valid OAuth JSON and run the (in-process) test.
     valid = json.dumps({"installed": {"client_id": "abc.apps.googleusercontent.com"}})
     await client.put(
-        "/api/v1/admin/inference-providers/colab",
+        "/api/v1/admin/connections/colab",
         json={"secrets": {"GOOGLE_DRIVE_OAUTH_JSON": valid}},
     )
-    await client.post("/api/v1/admin/inference-providers/colab/test")
-    res = await client.get("/api/v1/admin/inference-providers/colab")
+    await client.post("/api/v1/admin/connections/colab/test")
+    res = await client.get("/api/v1/admin/connections/colab")
     body = res.json()
     assert body["last_test_ok"] is True
     assert body["last_tested_at"] is not None

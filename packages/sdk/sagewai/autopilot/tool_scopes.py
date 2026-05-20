@@ -58,10 +58,18 @@ def get_scopes(tool_name: str) -> frozenset[str]:
 def scopes_for_tools(tool_names: list[str]) -> frozenset[str]:
     """Return the union of scopes required by all tools in *tool_names*.
 
-    An empty list returns an empty frozenset.  Unknown tools contribute
-    nothing to the union (they carry no scope requirements).
+    Catalogued tools (``sagewai.tools.registry``) win. Tools not yet in
+    the catalog fall back to ``_TOOL_SCOPES`` so the migration can land
+    incrementally. An empty list returns an empty frozenset. Unknown
+    tools contribute nothing.
     """
+    from sagewai.tools import registry  # local import avoids cycles
+
     result: set[str] = set()
     for t in tool_names:
+        catalog_scopes = registry.scopes_for(t)
+        if catalog_scopes:
+            result |= catalog_scopes
+            continue
         result |= _TOOL_SCOPES.get(t, frozenset())
     return frozenset(result)

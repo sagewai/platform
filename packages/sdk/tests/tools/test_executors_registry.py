@@ -7,6 +7,15 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""Sagewai tools — wrappers for using ML models and external systems as agent tools."""
-from sagewai.tools import factory  # noqa: F401  re-export module
-from sagewai.tools import registry  # noqa: F401  re-export module
+import pytest
+from sagewai.tools import executors
+
+
+def test_get_returns_callable_for_every_kind():
+    for k in ("sdk", "http", "mcp", "cli", "webhook"):
+        assert callable(executors.get(k))
+
+
+def test_get_raises_on_unknown_kind():
+    with pytest.raises(ValueError):
+        executors.get("telepathy")

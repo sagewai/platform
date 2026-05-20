@@ -132,6 +132,7 @@ test = [
     "google-cloud-storage>=2.10.0",
     "kubernetes-asyncio==35.0.1",
     "hvac==2.4.0",
+    "respx==0.23.1",
 ]
 
 [project.scripts]
