@@ -130,6 +130,9 @@ import type {
   AutopilotMissionExplain,
   AutopilotMissionTrace,
   MissionRunEvent,
+  ToolRegistryEntry,
+  ToolConnectionMetadata,
+  ToolTestResult,
 } from './types';
 
 const BASE_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL ?? 'http://localhost:8000/admin';
@@ -1932,5 +1935,36 @@ export const adminApi = {
   getAutopilotMissionTrace: (id: string) =>
     analyticsClient.get<AutopilotMissionTrace>(
       `/api/v1/autopilot/missions/${encodeURIComponent(id)}/trace`,
+    ),
+
+  /* ─── Tool connections (batch-2a) ─── */
+  listToolRegistry: () =>
+    analyticsClient.get<ToolRegistryEntry[]>(
+      '/api/v1/admin/connections/tools/registry',
+    ),
+
+  listToolConnections: () =>
+    analyticsClient.get<ToolConnectionMetadata[]>(
+      '/api/v1/admin/connections/tools',
+    ),
+
+  upsertToolConnection: (
+    toolId: string,
+    credentials: Record<string, string>,
+  ) =>
+    analyticsClient.put<ToolConnectionMetadata>(
+      `/api/v1/admin/connections/tools/${encodeURIComponent(toolId)}`,
+      { credentials },
+    ),
+
+  deleteToolConnection: (toolId: string) =>
+    analyticsClient.delete<void>(
+      `/api/v1/admin/connections/tools/${encodeURIComponent(toolId)}`,
+    ),
+
+  testToolConnection: (toolId: string) =>
+    analyticsClient.post<ToolTestResult>(
+      `/api/v1/admin/connections/tools/${encodeURIComponent(toolId)}/test`,
+      {},
     ),
 };

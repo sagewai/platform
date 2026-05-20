@@ -21,6 +21,7 @@ import {
   InferenceProviderModal,
   deleteProviderCredentials,
 } from '@/components/inference-provider-modal';
+import { ToolsTab } from '@/components/connections/tools-tab';
 import {
   CheckCircle2, AlertCircle, ExternalLink, KeyRound, RefreshCw, Trash2,
 } from 'lucide-react';
@@ -175,13 +176,7 @@ export default function ConnectionsPage() {
       )}
 
       {activeTab === 'tools' && (
-        <div className="rounded-md border border-dashed p-12 text-center text-sm text-muted-foreground mt-4">
-          <h3 className="text-base font-medium text-foreground">No tool connections yet</h3>
-          <p className="mt-2">
-            Tool connections (Stripe, GitHub, Slack, etc.) will appear here once the
-            tier-1 implementations land. See the v1.0 roadmap for the rollout schedule.
-          </p>
-        </div>
+        <ToolsTab />
       )}
 
       {editingEntry && (

@@ -170,6 +170,20 @@ def scopes_for(tool_id: str) -> frozenset[str]:
     return entry.scopes if entry is not None else frozenset()
 
 
+def required_credentials(tool_id: str) -> list[dict[str, Any]]:
+    """Return the catalog-declared credential field list for a tool.
+
+    Returns an empty list if the tool isn't catalogued OR if its setup
+    block has no ``credential_fields`` array (e.g. no-auth tools).
+    """
+    if not _loaded:
+        load()
+    entry = _entries.get(tool_id)
+    if entry is None:
+        return []
+    return list(entry.setup.get("credential_fields", []))
+
+
 __all__ = [
     "CatalogEntry",
     "CatalogError",
@@ -180,4 +194,5 @@ __all__ = [
     "list_by_tier",
     "list_by_category",
     "scopes_for",
+    "required_credentials",
 ]

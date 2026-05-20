@@ -1,0 +1,45 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: email_send
+version: 0.1.0
+title: Email send (Resend / SendGrid / Postmark)
+description: |
+  Send a transactional email. The provider is auto-detected from the API
+  key prefix: `re_*` → Resend, `SG.*` → SendGrid, otherwise → explicit
+  `EMAIL_PROVIDER` field (typically Postmark).
+category: communication
+kind: sdk
+sandbox_tier: SANDBOXED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.email:email_send
+scopes:
+  - network.outbound.fetch
+  - secrets.email_api_key
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: EMAIL_API_KEY
+      label: "API Key"
+      type: password
+      description: "Resend (re_*), SendGrid (SG.*), or Postmark UUID"
+    - name: EMAIL_PROVIDER
+      label: "Provider (required for Postmark; auto-detected for others)"
+      type: text
+      description: "One of: resend, sendgrid, postmark. Leave blank if your key starts with re_ or SG."
+  signup_url: https://resend.com
+  console_path: "resend.com or sendgrid.com or postmarkapp.com → API Keys"
+  key_format: "re_... (Resend), SG.... (SendGrid), or UUID (Postmark)"
+  body: |
+    Sagewai supports three email providers:
+
+    - **Resend** (https://resend.com): keys start with `re_`.
+    - **SendGrid** (https://sendgrid.com): keys start with `SG.`.
+    - **Postmark** (https://postmarkapp.com): keys are bare UUIDs. Set
+      `EMAIL_PROVIDER=postmark` explicitly.
+
+    1. Sign up at your chosen provider and verify a sending domain.
+    2. Generate an API key.
+    3. Paste into Sagewai → Connections → Tools → Add Email.
+    4. The "Send test" flow doesn't send a real email (intrusive) — it
+       just confirms decryption + provider detection.

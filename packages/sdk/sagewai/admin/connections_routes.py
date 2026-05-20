@@ -253,6 +253,50 @@ def _find_row(
 router = APIRouter(prefix="/api/v1/admin/connections", tags=["connections"])
 
 
+# ── Tool-connection models + helpers (declared before routes) ────────
+
+class ToolConnectionPayload(BaseModel):
+    """Request body for upserting tool credentials."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    credentials: dict[str, str] = Field(default_factory=dict)
+
+
+class ToolConnectionMetadata(BaseModel):
+    """Tool connection record without decrypted secrets."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tool_id: str
+    kind: str
+    catalogue_title: str
+    status: str | None = None
+    last_tested_at: str | None = None
+    updated_at: str | None = None
+
+
+class ToolTestResult(BaseModel):
+    ok: bool
+    status_code: int | None = None
+    body: str | None = None
+    error: str | None = None
+
+
+def _find_tool_row(
+    store: dict[str, Any], tool_id: str, project_id: str | None,
+) -> tuple[int | None, dict[str, Any] | None]:
+    rows = store.get("providers") or []
+    for i, row in enumerate(rows):
+        if (
+            row.get("kind") == "tool"
+            and row.get("tool_id") == tool_id
+            and row.get("project_id") == project_id
+        ):
+            return i, row
+    return None, None
+
+
 @router.get("/catalog")
 async def get_catalog() -> dict[str, Any]:
     """Static provider catalog — labels, schema, example pointers.
@@ -275,6 +319,265 @@ async def get_catalog() -> dict[str, Any]:
         "auth_shapes": list(_AUTH_SHAPES),
     }
 
+
+# ── Tool-connection routes (kind="tool") ────────────────────────────
+# MUST be registered before the inference /{provider} wildcard routes
+# so that GET /tools, GET /tools/registry, etc. match the static
+# "/tools" prefix rather than being swallowed by "/{provider}".
+
+@router.get("/tools/registry")
+async def list_tool_registry() -> list[dict[str, Any]]:
+    """List all ``api_key`` tier tools with their credential field requirements.
+
+    Used by the admin frontend to render a card grid without hardcoding
+    the catalog schema in TypeScript.
+    """
+    from sagewai.tools import registry as tool_registry
+    tool_registry.load()
+    out: list[dict[str, Any]] = []
+    for entry in tool_registry.list_by_tier("api_key"):
+        out.append({
+            "id": entry.id,
+            "title": entry.title,
+            "description": entry.description,
+            "category": entry.category,
+            "kind": entry.kind,
+            "credential_fields": tool_registry.required_credentials(entry.id),
+            "signup_url": entry.setup.get("signup_url"),
+            "console_path": entry.setup.get("console_path"),
+        })
+    return out
+
+
+@router.get("/tools", response_model=list[ToolConnectionMetadata])
+async def list_tool_connections(request: Request) -> list[ToolConnectionMetadata]:
+    """List all configured tool connections for the active project scope."""
+    pid = _project_scope(request)
+    async with _LOCK:
+        store = _read_store()
+    from sagewai.tools import registry as tool_registry
+    tool_registry.load()
+    out: list[ToolConnectionMetadata] = []
+    for row in store.get("providers") or []:
+        if row.get("kind") != "tool" or row.get("project_id") != pid:
+            continue
+        tool_id = row["tool_id"]
+        entry = tool_registry.lookup_or_none(tool_id)
+        out.append(ToolConnectionMetadata(
+            tool_id=tool_id,
+            kind="tool",
+            catalogue_title=entry.title if entry is not None else tool_id,
+            status=row.get("status"),
+            last_tested_at=row.get("last_tested_at"),
+            updated_at=row.get("updated_at"),
+        ))
+    return out
+
+
+@router.get("/tools/{tool_id}", response_model=ToolConnectionMetadata)
+async def get_tool_connection(tool_id: str, request: Request) -> ToolConnectionMetadata:
+    """Return a single tool connection record, or 404 if not configured."""
+    pid = _project_scope(request)
+    async with _LOCK:
+        store = _read_store()
+    _, row = _find_tool_row(store, tool_id, pid)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"tool_id": tool_id, "project_id": pid})
+    from sagewai.tools import registry as tool_registry
+    tool_registry.load()
+    entry = tool_registry.lookup_or_none(tool_id)
+    return ToolConnectionMetadata(
+        tool_id=tool_id,
+        kind="tool",
+        catalogue_title=entry.title if entry is not None else tool_id,
+        status=row.get("status"),
+        last_tested_at=row.get("last_tested_at"),
+        updated_at=row.get("updated_at"),
+    )
+
+
+@router.put("/tools/{tool_id}", response_model=ToolConnectionMetadata)
+async def upsert_tool_connection(
+    tool_id: str,
+    payload: ToolConnectionPayload,
+    request: Request,
+) -> ToolConnectionMetadata:
+    """Create or update encrypted credentials for a catalogued tool.
+
+    Rejects upsert when:
+
+    - The ``tool_id`` is not in the catalog (404).
+    - The tool has no ``credential_fields`` (no-auth tools; 400).
+    - A required credential field is absent from the payload (400).
+    """
+    from sagewai.tools import registry as tool_registry
+    tool_registry.load()
+    try:
+        entry = tool_registry.lookup(tool_id)
+    except tool_registry.ToolNotFoundError:
+        raise HTTPException(status_code=404, detail=f"tool {tool_id!r} not in catalogue")
+
+    required = tool_registry.required_credentials(tool_id)
+    if not required:
+        raise HTTPException(
+            status_code=400,
+            detail=f"tool {tool_id!r} requires no credentials and cannot be registered here",
+        )
+    missing = [f["name"] for f in required if f["name"] not in payload.credentials]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail={"missing_credential_fields": missing, "tool_id": tool_id},
+        )
+
+    try:
+        crypto = _crypto()
+    except MasterKeyMissing as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Sealed master key is not configured. Run "
+                "`sagewai admin sealed init` (or set SAGEWAI_MASTER_KEY) "
+                "before saving tool credentials. " + str(exc)
+            ),
+        ) from None
+
+    encrypted = {k: crypto.encrypt(v) for k, v in payload.credentials.items()}
+    pid = _project_scope(request)
+    now = datetime.now(timezone.utc).isoformat()
+
+    async with _LOCK:
+        store = _read_store()
+        idx, existing = _find_tool_row(store, tool_id, pid)
+        merged = dict((existing or {}).get("secrets") or {})
+        merged.update(encrypted)
+        row: dict[str, Any] = {
+            "kind": "tool",
+            "tool_id": tool_id,
+            "project_id": pid,
+            "secrets": merged,
+            "updated_at": now,
+            "status": "never_tested",
+            "last_tested_at": None,
+        }
+        if idx is None:
+            store.setdefault("providers", []).append(row)
+        else:
+            store["providers"][idx] = row
+        _write_store(store)
+
+    return ToolConnectionMetadata(
+        tool_id=tool_id,
+        kind="tool",
+        catalogue_title=entry.title,
+        status="never_tested",
+        updated_at=now,
+    )
+
+
+@router.delete("/tools/{tool_id}", status_code=204)
+async def delete_tool_connection(tool_id: str, request: Request) -> None:
+    """Remove a tool connection record.  Returns 404 if not found."""
+    pid = _project_scope(request)
+    async with _LOCK:
+        store = _read_store()
+        before = len(store.get("providers") or [])
+        store["providers"] = [
+            r for r in (store.get("providers") or [])
+            if not (r.get("kind") == "tool" and r.get("tool_id") == tool_id and r.get("project_id") == pid)
+        ]
+        if len(store["providers"]) == before:
+            raise HTTPException(
+                status_code=404, detail={"tool_id": tool_id, "project_id": pid},
+            )
+        _write_store(store)
+
+
+@router.post("/tools/{tool_id}/test", response_model=ToolTestResult)
+async def test_tool_connection(tool_id: str, request: Request) -> ToolTestResult:
+    """Probe the live API for a configured tool.
+
+    For tools that declare a ``test_endpoint`` in their catalog ``setup``
+    block, the route fires a real HTTP request using the executor
+    (mocked in tests via ``respx``).
+
+    For tools without a ``test_endpoint`` (e.g. SDK-only tools like
+    ``email_send``) the route confirms that the stored secrets can be
+    decrypted and returns ``ok=True``.
+    """
+    from sagewai.tools import registry as tool_registry
+    tool_registry.load()
+    try:
+        entry = tool_registry.lookup(tool_id)
+    except tool_registry.ToolNotFoundError:
+        raise HTTPException(status_code=404, detail=f"tool {tool_id!r} not in catalogue")
+
+    pid = _project_scope(request)
+    async with _LOCK:
+        store = _read_store()
+    idx, row = _find_tool_row(store, tool_id, pid)
+    if row is None or not row.get("secrets"):
+        raise HTTPException(
+            status_code=404,
+            detail=f"no credentials configured for tool {tool_id!r}",
+        )
+
+    try:
+        crypto = _crypto()
+        plain_creds = {k: crypto.decrypt(v) for k, v in row["secrets"].items()}
+    except (MasterKeyMissing, SecretCorrupted) as exc:
+        return ToolTestResult(ok=False, error=f"Decrypt failed: {exc}")
+
+    test_ep = entry.setup.get("test_endpoint")
+    if not test_ep:
+        # No live probe declared — just confirm decryption succeeded.
+        now = datetime.now(timezone.utc).isoformat()
+        async with _LOCK:
+            store2 = _read_store()
+            idx2, row2 = _find_tool_row(store2, tool_id, pid)
+            if row2 is not None:
+                row2["last_tested_at"] = now
+                row2["status"] = "connected"
+                store2["providers"][idx2] = row2
+                _write_store(store2)
+        return ToolTestResult(ok=True)
+
+    # Fire the declared test operation via the http executor.
+    from sagewai.tools.executors import http as http_exec
+    try:
+        result = await http_exec.run(
+            entry,
+            operation=test_ep["operation"],
+            inputs={},
+            project_id=pid or "global",
+            get_credentials=lambda **_kw: plain_creds,
+        )
+        now = datetime.now(timezone.utc).isoformat()
+        async with _LOCK:
+            store2 = _read_store()
+            idx2, row2 = _find_tool_row(store2, tool_id, pid)
+            if row2 is not None:
+                row2["last_tested_at"] = now
+                row2["status"] = "connected"
+                store2["providers"][idx2] = row2
+                _write_store(store2)
+        return ToolTestResult(ok=True, status_code=200, body=json.dumps(result)[:500])
+    except Exception as exc:  # noqa: BLE001
+        now = datetime.now(timezone.utc).isoformat()
+        async with _LOCK:
+            store2 = _read_store()
+            idx2, row2 = _find_tool_row(store2, tool_id, pid)
+            if row2 is not None:
+                row2["last_tested_at"] = now
+                row2["status"] = "test_failed"
+                store2["providers"][idx2] = row2
+                _write_store(store2)
+        return ToolTestResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+
+
+# ── Inference-provider routes ────────────────────────────────────────
+# These use /{provider} wildcard paths and MUST come AFTER the static
+# /tools/* routes above to avoid swallowing tool requests.
 
 @router.get("", response_model=list[InferenceProviderMetadata])
 async def list_providers(request: Request) -> list[InferenceProviderMetadata]:

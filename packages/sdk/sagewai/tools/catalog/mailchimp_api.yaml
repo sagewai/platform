@@ -1,0 +1,40 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: mailchimp_api
+version: 0.1.0
+title: Mailchimp — Add subscriber & send campaign
+description: |
+  Manage Mailchimp audiences and trigger pre-built campaigns. The
+  datacenter (e.g. `us21`) is parsed from the API key suffix to build
+  the base URL.
+category: communication
+kind: sdk
+sandbox_tier: SANDBOXED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.mailchimp:mailchimp_api
+scopes:
+  - network.outbound.fetch
+  - secrets.mailchimp_api_key
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: MAILCHIMP_API_KEY
+      label: "API Key"
+      type: password
+      description: "Format: <32-hex>-<datacenter>, e.g. abc123...-us21"
+  signup_url: https://login.mailchimp.com/signup/
+  console_path: "Mailchimp → Profile → Extras → API keys → Create A Key"
+  key_format: "abc123...-us21"
+  body: |
+    1. Log in at mailchimp.com.
+    2. Profile (top-right icon) → Extras → API keys → "Create A Key".
+    3. Copy the full key (includes the `-us21`/`-us20`/etc. datacenter suffix).
+    4. Paste into Sagewai → Connections → Tools → Add Mailchimp.
+
+    Operations exposed:
+    - **add_subscriber**: add an email to an audience list.
+    - **send_campaign**: trigger send on a pre-existing draft campaign.
+
+    Pick which op to call by setting `_operation` in your blueprint's
+    tool payload.

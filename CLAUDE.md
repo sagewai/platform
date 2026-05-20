@@ -423,6 +423,33 @@ with `Inference` (current providers) + `Tools` (empty scaffold) tabs.
 `url→str` registry) is still in place — a separate cleanup PR
 consolidates it after subsequent batches land.
 
+**Batch 2a (api_key tier, comms cluster) landed:** 4 new entries +
+Tools-tab CRUD:
+
+- `post_to_slack` — Slack bot token; explicit `ok:false` Slack-API
+  pattern handled (Slack returns 200 with `{ok:false}` on semantic
+  failure).
+- `discord_api` — `Authorization: Bot <token>` (not `Bearer`); 2000-char
+  content cap validated pre-HTTP; 429 retry-once-then-degrade.
+- `email_send` — Resend/SendGrid/Postmark via prefix auto-detect
+  (`re_*`, `SG.*`, else explicit `EMAIL_PROVIDER`).
+- `mailchimp_api` — datacenter parsed from the key suffix (`abc-us21`
+  → `https://us21.api.mailchimp.com/3.0`); ops `add_subscriber` +
+  `send_campaign`.
+
+Catalog gained optional `setup.credential_fields` to drive the admin
+Tools tab's dynamic form. The `sdk` executor now introspects each
+builtin's signature: it passes `project_id` + `get_credentials` only
+when the function accepts them (batch-1 builtins stay `payload`-only).
+Multi-op sdk builtins read `_operation` from the payload — the SDK
+executor re-injects it from the factory's `operation` kwarg.
+
+The Tools tab in `/connections` is real CRUD: list, add via dynamic
+modal, test via the catalog's `setup.test_endpoint`, delete. Backend at
+`/api/v1/admin/connections/tools/*` plus `/tools/registry`. Tool
+records live in the same isolated JSON store as inference records
+(`~/.sagewai/inference-providers.json`) keyed by `kind: "tool"`.
+
 ## Known issues you may encounter
 
 1. ~~`sagewai[fastapi]` extra missing `uvicorn`~~ **FIXED** in PR #48.

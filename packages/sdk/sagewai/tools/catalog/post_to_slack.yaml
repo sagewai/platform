@@ -1,0 +1,70 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: post_to_slack
+version: 0.1.0
+title: Slack — Post message
+description: |
+  Post a message to a Slack channel or thread via a bot token.
+category: communication
+kind: http
+sandbox_tier: SANDBOXED
+exec:
+  http:
+    base_url: https://slack.com/api
+    auth:
+      kind: bearer
+      header: Authorization
+      prefix: "Bearer "
+    operations:
+      post_message:
+        method: POST
+        path: /chat.postMessage
+        input_schema:
+          type: object
+          required: [channel, text]
+          properties:
+            channel:     { type: string }
+            text:        { type: string }
+            thread_ts:   { type: string }
+            blocks:      { type: array }
+            attachments: { type: array }
+        output_schema:
+          type: object
+          properties:
+            ok:      { type: boolean }
+            ts:      { type: string }
+            channel: { type: string }
+      auth_test:
+        method: POST
+        path: /auth.test
+        input_schema: { type: object }
+        output_schema:
+          type: object
+          properties:
+            ok:   { type: boolean }
+            url:  { type: string }
+            team: { type: string }
+            user: { type: string }
+scopes:
+  - network.outbound.fetch
+  - secrets.slack_token
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: SLACK_BOT_TOKEN
+      label: "Bot User OAuth Token"
+      type: password
+      description: "Starts with xoxb-..."
+  signup_url: https://slack.com/apps
+  console_path: "api.slack.com → Your Apps → (your app) → OAuth & Permissions → Bot User OAuth Token"
+  key_format: "xoxb-..."
+  test_endpoint:
+    operation: auth_test
+    expected_status: 200
+  body: |
+    1. Create a Slack app at https://api.slack.com/apps → "Create New App".
+    2. OAuth & Permissions → add the `chat:write` scope to Bot Token Scopes.
+    3. Install to your workspace.
+    4. Copy the `Bot User OAuth Token` (starts with `xoxb-`).
+    5. Paste into Sagewai → Connections → Tools → Add Slack.
+    6. Invite the bot to the channels you want it to post in (`/invite @YourBot`).

@@ -112,3 +112,51 @@ def test_seed_scopes_for_github():
     registry.load()
     assert "network.outbound.fetch" in registry.scopes_for("github")
     assert "secrets.github_token" in registry.scopes_for("github")
+
+
+def test_required_credentials_returns_field_list_for_api_key_tool(tmp_path, monkeypatch):
+    (tmp_path / "_schema.json").write_text((registry._CATALOG_DIR / "_schema.json").read_text())
+    (tmp_path / "test_tool.yaml").write_text("""
+id: test_tool
+version: 0.1.0
+title: T
+description: t
+category: test
+kind: http
+sandbox_tier: SANDBOXED
+exec:
+  http:
+    base_url: https://api.example.test
+    auth: { kind: bearer }
+    operations:
+      ping:
+        method: GET
+        path: /ping
+        input_schema: { type: object }
+        output_schema: { type: object }
+scopes: []
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - { name: API_TOKEN, label: "API Token", type: password }
+  body: x
+""")
+    monkeypatch.setattr(registry, "_CATALOG_DIR", tmp_path)
+    registry._reset()
+    registry.load()
+    fields = registry.required_credentials("test_tool")
+    assert len(fields) == 1
+    assert fields[0]["name"] == "API_TOKEN"
+    assert fields[0]["type"] == "password"
+
+
+def test_required_credentials_returns_empty_for_no_auth_tool():
+    registry._reset()
+    registry.load()
+    assert registry.required_credentials("fetch_url") == []
+
+
+def test_required_credentials_returns_empty_for_unknown_tool():
+    registry._reset()
+    registry.load()
+    assert registry.required_credentials("nope_not_real") == []

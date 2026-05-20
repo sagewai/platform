@@ -30,7 +30,21 @@
         "key_format":      { "type": "string" },
         "required_scopes": { "type": "array", "items": { "type": "string" } },
         "test_endpoint":   { "type": "object" },
-        "body":            { "type": "string" }
+        "body":            { "type": "string" },
+        "credential_fields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "label", "type"],
+            "additionalProperties": false,
+            "properties": {
+              "name":        { "type": "string", "minLength": 1 },
+              "label":       { "type": "string", "minLength": 1 },
+              "type":        { "enum": ["password", "text"] },
+              "description": { "type": "string" }
+            }
+          }
+        }
       }
     }
   },

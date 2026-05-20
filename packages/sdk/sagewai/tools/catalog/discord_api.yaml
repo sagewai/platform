@@ -1,0 +1,68 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: discord_api
+version: 0.1.0
+title: Discord — Post message
+description: |
+  Post a message to a Discord channel via a bot token. Auth uses Discord's
+  `Bot <token>` scheme (not Bearer).
+category: communication
+kind: http
+sandbox_tier: SANDBOXED
+exec:
+  http:
+    base_url: https://discord.com/api/v10
+    auth:
+      kind: bearer
+      header: Authorization
+      prefix: "Bot "
+    operations:
+      post_message:
+        method: POST
+        path: /channels/{channel_id}/messages
+        input_schema:
+          type: object
+          required: [channel_id, content]
+          properties:
+            channel_id: { type: string }
+            content:    { type: string, maxLength: 2000 }
+            embeds:     { type: array }
+            components: { type: array }
+        output_schema:
+          type: object
+          properties:
+            id:         { type: string }
+            channel_id: { type: string }
+            content:    { type: string }
+      get_me:
+        method: GET
+        path: /users/@me
+        input_schema: { type: object }
+        output_schema:
+          type: object
+          properties:
+            id:       { type: string }
+            username: { type: string }
+            bot:      { type: boolean }
+scopes:
+  - network.outbound.fetch
+  - secrets.discord_token
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: DISCORD_BOT_TOKEN
+      label: "Bot Token"
+      type: password
+      description: "From Discord Developer Portal → Bot → Reset Token"
+  signup_url: https://discord.com/developers/applications
+  console_path: "discord.com/developers/applications → (your app) → Bot → Reset Token"
+  key_format: "long opaque string"
+  test_endpoint:
+    operation: get_me
+    expected_status: 200
+  body: |
+    1. discord.com/developers/applications → New Application.
+    2. Bot → Add Bot → Reset Token → copy the token.
+    3. OAuth2 → URL Generator → scopes: `bot`; permissions: `Send Messages`.
+    4. Open the generated URL to install the bot to your server.
+    5. Paste the token into Sagewai → Connections → Tools → Add Discord.

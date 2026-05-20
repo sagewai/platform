@@ -1659,3 +1659,40 @@ export interface AutopilotMissionTrace {
   output: unknown;
   error: string | null;
 }
+
+// ── Tool connections (batch-2a) ──────────────────────────────────────────────
+
+export interface ToolCredentialField {
+  name: string;
+  label: string;
+  type: 'password' | 'text';
+  description?: string;
+}
+
+export interface ToolRegistryEntry {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  kind: string;
+  credential_fields: ToolCredentialField[];
+  signup_url?: string;
+  console_path?: string;
+}
+
+export interface ToolConnectionMetadata {
+  tool_id: string;
+  kind: 'tool';
+  catalogue_title: string;
+  status?: string;
+  last_tested_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ToolTestResult {
+  ok: boolean;
+  status_code?: number;
+  body?: string;
+  error?: string;
+  test_endpoint?: object | null;
+}
