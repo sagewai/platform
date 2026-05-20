@@ -10,7 +10,7 @@ kind: sdk
 sandbox_tier: SANDBOXED
 exec:
   sdk:
-    entrypoint: sagewai.autopilot.default_tools:fetch_url
+    entrypoint: sagewai.tools.builtins.http_parsing:fetch_url
 scopes:
   - network.outbound.fetch
 setup:

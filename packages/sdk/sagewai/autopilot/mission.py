@@ -91,6 +91,12 @@ class Mission:
         "slots",
         "_state",
         "memory",
+        # Runtime event stores — populated by the duck-typed resolver methods
+        # called from builtins (record_result, progress_track, request_approval).
+        "_step_results",
+        "_progress",
+        "_hitl_requests",
+        "_events",
     )
 
     def __init__(
@@ -110,6 +116,10 @@ class Mission:
         self.slots = slots
         self._state: MissionState = MissionState.DRAFT
         self.memory = memory
+        self._step_results: list[tuple[str, Any]] = []
+        self._progress: float = 0.0
+        self._hitl_requests: list[tuple[str, str, Any]] = []
+        self._events: list[tuple[str, Any]] = []
 
         # Scope RAG memory to this mission so per-mission branches isolate state.
         if memory is not None:
@@ -142,6 +152,31 @@ class Mission:
                 to_state=new_state.value,
             )
         self._state = new_state
+
+    # ── duck-typed methods required by the mission_state builtins ───────────
+    # These are the minimal in-memory stubs.  A production harness can
+    # subclass Mission and persist / emit externally; the builtins only care
+    # that the method names and signatures match.
+
+    def record_step_result(self, step_id: str, payload: Any) -> None:
+        """Record the output of an agent step."""
+        self._step_results.append((step_id, payload))
+
+    def record_progress(self, progress: float, *, note: str | None = None) -> None:
+        """Update the fractional progress (0.0–1.0) of this mission."""
+        self._progress = progress
+        if note is not None:
+            self._events.append(("progress.note", {"progress": progress, "note": note}))
+
+    def emit_hitl_request(
+        self, request_id: str, *, reason: str, payload: Any = None
+    ) -> None:
+        """Emit a human-in-the-loop approval request."""
+        self._hitl_requests.append((request_id, reason, payload))
+
+    def publish_event(self, topic: str, payload: Any) -> None:
+        """Publish a generic event to the mission event log."""
+        self._events.append((topic, payload))
 
     @classmethod
     def from_blueprint(

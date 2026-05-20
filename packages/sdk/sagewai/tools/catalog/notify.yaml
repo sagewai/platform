@@ -1,0 +1,34 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: notify
+version: 0.1.0
+title: Notify
+description: |
+  Emit a notification on a supported channel (structured log line or the
+  platform event bus). Useful for alerting operators when a mission reaches
+  a significant milestone.
+category: mission
+kind: sdk
+sandbox_tier: TRUSTED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.notify:notify
+scopes: []
+setup:
+  auth_complexity: none
+  body: |
+    Bundled with the SDK. Nothing to configure.
+schemas:
+  Input:
+    type: object
+    required: [channel, subject, body]
+    properties:
+      channel: { enum: [log, event_bus] }
+      subject: { type: string }
+      body: { type: string }
+      mission_id: { type: string }
+  Output:
+    type: object
+    properties:
+      delivered: { type: boolean }
+      channel: { type: string }

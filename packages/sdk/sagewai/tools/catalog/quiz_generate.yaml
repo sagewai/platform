@@ -1,0 +1,36 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: quiz_generate
+version: 0.1.0
+title: Quiz generate
+description: |
+  Generate a set of quiz questions on a given topic using the platform LLM
+  Harness. Supports multiple choice, true/false, and short-answer formats.
+category: llm
+kind: sdk
+sandbox_tier: SANDBOXED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.llm:quiz_generate
+scopes:
+  - llm.harness.invoke
+setup:
+  auth_complexity: none
+  body: |
+    Bundled with the SDK. The Harness must be configured at the platform
+    level — operators don't need to provision per-tool credentials.
+schemas:
+  Input:
+    type: object
+    required: [topic]
+    properties:
+      topic: { type: string, minLength: 1 }
+      num_questions: { type: integer, minimum: 1, maximum: 25 }
+      difficulty: { enum: [easy, medium, hard] }
+      format: { enum: [multiple_choice, true_false, short_answer] }
+  Output:
+    type: object
+    properties:
+      questions:
+        type: array
+        items: { type: object }

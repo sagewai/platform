@@ -1,0 +1,35 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: request_approval
+version: 0.1.0
+title: Request approval
+description: |
+  Pause a mission step and raise a human-in-the-loop approval request.
+  Execution resumes only after an operator approves or rejects via the
+  admin panel or API.
+category: mission
+kind: sdk
+sandbox_tier: TRUSTED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.mission_state:request_approval
+scopes:
+  - mission.state.write
+  - hitl.request
+setup:
+  auth_complexity: none
+  body: |
+    Bundled with the SDK. Nothing to configure.
+schemas:
+  Input:
+    type: object
+    required: [mission_id, reason]
+    properties:
+      mission_id: { type: string }
+      reason: { type: string }
+      payload: { type: object }
+  Output:
+    type: object
+    properties:
+      request_id: { type: string }
+      status: { const: pending }

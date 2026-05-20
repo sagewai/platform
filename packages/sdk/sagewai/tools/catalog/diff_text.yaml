@@ -1,0 +1,31 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: diff_text
+version: 0.1.0
+title: Diff text
+description: |
+  Compute a textual diff between two strings using stdlib difflib.
+category: text
+kind: sdk
+sandbox_tier: TRUSTED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.text:diff_text
+scopes: []
+setup:
+  auth_complexity: none
+  body: |
+    Bundled with the SDK. Nothing to configure.
+schemas:
+  Input:
+    type: object
+    required: [a, b]
+    properties:
+      a: { type: string }
+      b: { type: string }
+      mode: { enum: [unified, context, ndiff], default: unified }
+  Output:
+    type: object
+    properties:
+      diff: { type: string }
+      equal: { type: boolean }

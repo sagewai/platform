@@ -49,6 +49,16 @@ documented in this file.
 |---------|---------|--------|
 | (none yet) | | |
 
+## Core Dependency Additions
+
+New runtime deps added for tool-catalog batch 1 (no-auth tier tools).
+
+| Package | Version | Licence | Purpose |
+|---------|---------|---------|---------|
+| duckduckgo-search | 8.1.1 | MIT | DuckDuckGo backend for `web_search` tool |
+| pypdf | 6.11.0 | BSD-3-Clause | PDF text extraction for `pdf_parse` tool |
+| readability-lxml | 0.8.4.1 | Apache-2.0 | Main-content extraction for `web_scrape` tool |
+
 ## Optional Dependency Inventory
 
 Extras (opt-in via `pip install sagewai[<extra>]`) documented below for

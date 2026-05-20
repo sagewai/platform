@@ -1,0 +1,35 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: progress_track
+version: 0.1.0
+title: Progress track
+description: |
+  Report incremental progress on a mission step. Emits a normalised
+  progress fraction so the admin UI and operators can monitor long-running
+  work in real time.
+category: mission
+kind: sdk
+sandbox_tier: TRUSTED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.mission_state:progress_track
+scopes:
+  - mission.state.write
+setup:
+  auth_complexity: none
+  body: |
+    Bundled with the SDK. Nothing to configure.
+schemas:
+  Input:
+    type: object
+    required: [mission_id, units_done]
+    properties:
+      mission_id: { type: string }
+      units_done: { type: integer, minimum: 0 }
+      units_total: { type: integer, minimum: 1 }
+      note: { type: string }
+  Output:
+    type: object
+    properties:
+      progress: { type: number, minimum: 0, maximum: 1 }
+      note: { type: [string, "null"] }

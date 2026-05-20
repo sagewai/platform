@@ -1,0 +1,41 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: web_search
+version: 0.1.0
+title: Web search
+description: |
+  Issue a web search query and return a ranked list of results with titles,
+  URLs, and text snippets. Falls back gracefully when the upstream search
+  provider rate-limits the request.
+category: network
+kind: sdk
+sandbox_tier: SANDBOXED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.http_parsing:web_search
+scopes:
+  - network.outbound.fetch
+setup:
+  auth_complexity: none
+  body: |
+    Bundled with the SDK. The Harness must be configured at the platform
+    level — operators don't need to provision per-tool credentials.
+schemas:
+  Input:
+    type: object
+    required: [query]
+    properties:
+      query: { type: string, minLength: 1 }
+      max_results: { type: integer, minimum: 1, maximum: 25 }
+  Output:
+    type: object
+    properties:
+      results:
+        type: array
+        items:
+          type: object
+          properties:
+            title: { type: string }
+            url: { type: string }
+            snippet: { type: string }
+      rate_limited: { type: boolean }

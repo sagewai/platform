@@ -1,0 +1,36 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: web_scrape
+version: 0.1.0
+title: Web scrape
+description: |
+  Fetch a URL and extract readable text, the page title, and outbound
+  links. Returns plain text suitable for downstream LLM processing.
+category: network
+kind: sdk
+sandbox_tier: SANDBOXED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.http_parsing:web_scrape
+scopes:
+  - network.outbound.fetch
+setup:
+  auth_complexity: none
+  body: |
+    Bundled with the SDK. The Harness must be configured at the platform
+    level — operators don't need to provision per-tool credentials.
+schemas:
+  Input:
+    type: object
+    required: [url]
+    properties:
+      url: { type: string, format: uri }
+      max_chars: { type: integer, minimum: 1 }
+  Output:
+    type: object
+    properties:
+      url: { type: string }
+      status: { type: integer }
+      title: { type: [string, "null"] }
+      text: { type: string }
+      links: { type: array, items: { type: string } }

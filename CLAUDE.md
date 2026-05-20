@@ -405,6 +405,24 @@ Each record carries `kind: "inference" | "tool"`; the migration is
 JSON-level inside `AdminStateFile` — no SQL. Admin UI: `/connections`
 with `Inference` (current providers) + `Tools` (empty scaffold) tabs.
 
+**Batch 1 (no-auth tier) landed:** 11 additional entries in five clusters:
+
+- `text`: `diff_text`, `structured_write` (stdlib only, `TRUSTED`)
+- `mission_state`: `record_result`, `progress_track`, `request_approval`
+  (write through `set_mission_resolver` shim bound at autopilot startup;
+  `Mission` gained 4 minimal stub methods to satisfy the duck-typed contract)
+- `http_parsing`: `fetch_url` (re-homed from `autopilot/default_tools.py`,
+  now deleted), `web_scrape`, `web_search`, `pdf_parse` (new deps:
+  `readability-lxml==0.8.4.1`, `duckduckgo-search==8.1.1`, `pypdf==6.11.0`)
+- `llm`: `content_translate` (complexity_hint=low), `quiz_generate`
+  (complexity_hint=medium) via lazy `HarnessProxy.handle_request` with
+  inline `_DirectLiteLLMBackend` (avoids needing a running proxy server)
+- `notify` (channels: `log`, `event_bus`)
+
+`packages/sdk/sagewai/admin/autopilot_default_tools.py` (the admin-side
+`url→str` registry) is still in place — a separate cleanup PR
+consolidates it after subsequent batches land.
+
 ## Known issues you may encounter
 
 1. ~~`sagewai[fastapi]` extra missing `uvicorn`~~ **FIXED** in PR #48.

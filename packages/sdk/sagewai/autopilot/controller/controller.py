@@ -35,6 +35,7 @@ from sagewai.autopilot.blueprint import Blueprint
 from sagewai.autopilot.errors import MissionLifecycleError
 from sagewai.autopilot.mission import Mission
 from sagewai.autopilot.routing.types import AutoRouted, RoutingResult
+from sagewai.tools.builtins.mission_state import set_mission_resolver
 
 from .driver import MissionDriver
 from .types import ControllerConfig, MissionRunResult
@@ -66,6 +67,12 @@ class AutopilotController:
         self._client = client
         self.config = config or ControllerConfig()
         self.driver = driver or MissionDriver()
+        # Per-instance mission registry: mission_id → Mission.
+        # Populated by _register_mission() as each mission is created.
+        self._missions: dict[str, Mission] = {}
+        # Bind the module-level resolver so mission_state builtins can reach
+        # live Mission objects through this controller instance.
+        set_mission_resolver(self._lookup_mission_by_id)
 
     async def start_mission(self, goal: str) -> RoutingResult:
         """Route *goal* and, if auto-routed, create an APPROVED mission.
@@ -144,6 +151,21 @@ class AutopilotController:
 
     # ── private helpers ─────────────────────────────────────────────
 
+    def _lookup_mission_by_id(self, mission_id: str) -> Mission:
+        """Return the live Mission for *mission_id*, or raise KeyError."""
+        try:
+            return self._missions[mission_id]
+        except KeyError as exc:
+            raise KeyError(
+                f"unknown mission_id: {mission_id!r}. "
+                "Either the mission was not created by this controller, "
+                "or the controller instance that created it is no longer active."
+            ) from exc
+
+    def _register_mission(self, mission: Mission) -> None:
+        """Register *mission* in the instance registry (idempotent)."""
+        self._missions[mission.mission_id] = mission
+
     def _create_mission(self, result: AutoRouted) -> Mission:
         """Bind an AutoRouted result into a draft Mission."""
         blueprint = Blueprint.model_validate_json(result.ranked.blueprint_json)
@@ -161,4 +183,5 @@ class AutopilotController:
         )
         # Inject blueprint JSON after validation so MissionDriver can load the graph.
         mission.slots["__blueprint_json__"] = result.ranked.blueprint_json
+        self._register_mission(mission)
         return mission

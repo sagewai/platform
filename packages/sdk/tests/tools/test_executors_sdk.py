@@ -24,7 +24,7 @@ async def test_sdk_executor_calls_entrypoint(monkeypatch):
         called["payload"] = payload
         return {"ok": True}
 
-    import sagewai.autopilot.default_tools as dt
+    import sagewai.tools.builtins.http_parsing as dt
     monkeypatch.setattr(dt, "fetch_url", fake_fetch, raising=False)
 
     registry._reset()

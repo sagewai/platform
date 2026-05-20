@@ -1,0 +1,37 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: pdf_parse
+version: 0.1.0
+title: PDF parse
+description: |
+  Extract plain text from a PDF supplied as a URL or base64-encoded bytes.
+  Optionally truncates extraction at a maximum page count.
+category: parsing
+kind: sdk
+sandbox_tier: SANDBOXED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.http_parsing:pdf_parse
+scopes:
+  - network.outbound.fetch
+setup:
+  auth_complexity: none
+  body: |
+    Bundled with the SDK. The Harness must be configured at the platform
+    level — operators don't need to provision per-tool credentials.
+schemas:
+  Input:
+    type: object
+    oneOf:
+      - required: [url]
+      - required: [bytes_b64]
+    properties:
+      url: { type: string, format: uri }
+      bytes_b64: { type: string }
+      max_pages: { type: integer, minimum: 1 }
+  Output:
+    type: object
+    properties:
+      pages: { type: integer }
+      text: { type: string }
+      truncated: { type: boolean }

@@ -1,0 +1,33 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: record_result
+version: 0.1.0
+title: Record result
+description: |
+  Persist a step result payload into mission state. Safe to call multiple
+  times — later calls overwrite earlier ones for the same step.
+category: mission
+kind: sdk
+sandbox_tier: TRUSTED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.mission_state:record_result
+scopes:
+  - mission.state.write
+setup:
+  auth_complexity: none
+  body: |
+    Bundled with the SDK. Nothing to configure.
+schemas:
+  Input:
+    type: object
+    required: [mission_id, step_id, payload]
+    properties:
+      mission_id: { type: string }
+      step_id: { type: string }
+      payload: { type: object }
+  Output:
+    type: object
+    properties:
+      stored: { type: boolean }
+      timestamp: { type: string }

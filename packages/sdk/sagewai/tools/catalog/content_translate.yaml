@@ -1,0 +1,35 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: content_translate
+version: 0.1.0
+title: Content translate
+description: |
+  Translate a block of text to a target language using the platform LLM
+  Harness. Auto-detects the source language when not specified.
+category: llm
+kind: sdk
+sandbox_tier: SANDBOXED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.llm:content_translate
+scopes:
+  - llm.harness.invoke
+setup:
+  auth_complexity: none
+  body: |
+    Bundled with the SDK. The Harness must be configured at the platform
+    level — operators don't need to provision per-tool credentials.
+schemas:
+  Input:
+    type: object
+    required: [text, target_lang]
+    properties:
+      text: { type: string }
+      target_lang: { type: string }
+      source_lang: { type: string }
+      tone: { enum: [formal, casual] }
+  Output:
+    type: object
+    properties:
+      translated: { type: string }
+      source_lang_detected: { type: [string, "null"] }

@@ -1,0 +1,30 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: structured_write
+version: 0.1.0
+title: Structured write
+description: |
+  Shape an LLM/agent output into a structured row via {{ key }} placeholder
+  substitution.
+category: text
+kind: sdk
+sandbox_tier: TRUSTED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.text:structured_write
+scopes: []
+setup:
+  auth_complexity: none
+  body: |
+    Bundled with the SDK. Nothing to configure.
+schemas:
+  Input:
+    type: object
+    required: [template, values]
+    properties:
+      template: { type: string }
+      values: { type: object }
+  Output:
+    type: object
+    properties:
+      output: { type: object }
