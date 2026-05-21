@@ -1,0 +1,99 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: adyen_api
+version: 0.1.0
+title: Adyen — Payments and payment methods (Checkout API)
+description: |
+  Submit payments, list available payment methods, and continue 3DS/redirect
+  flows via the Adyen Checkout API. Test environment by default; live
+  environment requires an operator-specific URL prefix not yet supported
+  by the http executor (follow-up PR).
+category: payments
+kind: http
+sandbox_tier: SANDBOXED
+exec:
+  http:
+    base_url: https://checkout-test.adyen.com/v71
+    auth:
+      kind: api_key
+      header: X-API-Key
+    operations:
+      payments:
+        method: POST
+        path: /payments
+        input_schema:
+          type: object
+          required: [amount, paymentMethod, reference, merchantAccount]
+          properties:
+            amount:
+              type: object
+              required: [value, currency]
+              properties:
+                value:    { type: integer, minimum: 1 }
+                currency: { type: string, pattern: "^[A-Z]{3}$" }
+            paymentMethod:   { type: object }
+            reference:       { type: string }
+            merchantAccount: { type: string }
+        output_schema:
+          type: object
+          properties:
+            pspReference: { type: string }
+            resultCode:   { type: string }
+      payment_methods:
+        method: POST
+        path: /paymentMethods
+        input_schema:
+          type: object
+          required: [merchantAccount]
+          properties:
+            merchantAccount: { type: string }
+            amount:          { type: object }
+        output_schema:
+          type: object
+          properties:
+            paymentMethods: { type: array }
+      payment_details:
+        method: POST
+        path: /payments/details
+        input_schema:
+          type: object
+          required: [details]
+          properties:
+            details: { type: object }
+        output_schema:
+          type: object
+          properties:
+            pspReference: { type: string }
+            resultCode:   { type: string }
+scopes:
+  - network.outbound.fetch
+  - secrets.adyen_api_key
+  - payments.charge
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: ADYEN_API_KEY
+      label: "Adyen API Key"
+      type: password
+      description: "From Customer Area → Developers → API credentials"
+  signup_url: https://www.adyen.com/signup
+  console_path: "ca-test.adyen.com → Developers → API credentials → Create"
+  key_format: "long opaque string"
+  test_endpoint:
+    operation: payment_methods
+    expected_status: 200
+  body: |
+    1. ca-test.adyen.com → log in.
+    2. Developers → API credentials → Create new credential (type: server).
+    3. Generate an API Key.
+    4. Paste into Sagewai → Connections → Tools → Add Adyen.
+
+    **Test environment only in this batch.** Live operators are issued
+    a custom URL prefix during Adyen onboarding (e.g.
+    `https://acme-checkout-live.adyenpayments.com`). The Adyen catalog
+    entry currently hard-codes the test URL. Per-project base URL
+    overrides land in a follow-up PR.
+
+    The `merchantAccount` value is passed in each operation's input,
+    not in credentials — your blueprint payloads must include it. Find
+    it in Customer Area → Account → Merchant accounts.

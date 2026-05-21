@@ -1,0 +1,139 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: stripe_api
+version: 0.1.0
+title: Stripe — Payment Intents, customers, refunds
+description: |
+  Charge customers, refund payments, manage customer records via the
+  Stripe REST API using a restricted or secret key.
+category: payments
+kind: http
+sandbox_tier: SANDBOXED
+exec:
+  http:
+    base_url: https://api.stripe.com
+    auth:
+      kind: bearer
+      header: Authorization
+      prefix: "Bearer "
+    operations:
+      create_payment_intent:
+        method: POST
+        path: /v1/payment_intents
+        body_format: form
+        input_schema:
+          type: object
+          required: [amount, currency]
+          properties:
+            amount:          { type: integer, minimum: 1 }
+            currency:        { type: string, pattern: "^[a-z]{3}$" }
+            customer:        { type: string }
+            payment_method:  { type: string }
+        output_schema:
+          type: object
+          properties:
+            id:            { type: string }
+            status:        { type: string }
+            client_secret: { type: string }
+            amount:        { type: integer }
+      retrieve_payment_intent:
+        method: GET
+        path: /v1/payment_intents/{id}
+        input_schema:
+          type: object
+          required: [id]
+          properties:
+            id: { type: string }
+        output_schema:
+          type: object
+          properties:
+            id:     { type: string }
+            status: { type: string }
+            amount: { type: integer }
+      create_customer:
+        method: POST
+        path: /v1/customers
+        body_format: form
+        input_schema:
+          type: object
+          properties:
+            email:       { type: string }
+            name:        { type: string }
+            phone:       { type: string }
+            description: { type: string }
+        output_schema:
+          type: object
+          properties:
+            id:      { type: string }
+            email:   { type: string }
+            created: { type: integer }
+      list_customers:
+        method: GET
+        path: /v1/customers
+        input_schema:
+          type: object
+          properties:
+            limit: { type: integer, minimum: 1, maximum: 100 }
+            email: { type: string }
+        output_schema:
+          type: object
+          properties:
+            data:     { type: array }
+            has_more: { type: boolean }
+      create_refund:
+        method: POST
+        path: /v1/refunds
+        body_format: form
+        input_schema:
+          type: object
+          required: [payment_intent]
+          properties:
+            payment_intent: { type: string }
+            amount:         { type: integer }
+            reason:         { type: string }
+        output_schema:
+          type: object
+          properties:
+            id:     { type: string }
+            status: { type: string }
+            amount: { type: integer }
+      account_info:
+        method: GET
+        path: /v1/account
+        input_schema: { type: object }
+        output_schema:
+          type: object
+          properties:
+            id:               { type: string }
+            country:          { type: string }
+            business_profile: { type: object }
+scopes:
+  - network.outbound.fetch
+  - secrets.stripe_token
+  - payments.charge
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: STRIPE_TOKEN
+      label: "Stripe Secret Key or Restricted Key"
+      type: password
+      description: "Starts with sk_, rk_, or sk_test_"
+  signup_url: https://dashboard.stripe.com/register
+  console_path: "Stripe Dashboard → Developers → API keys"
+  key_format: "sk_*, rk_*, or sk_test_*"
+  test_endpoint:
+    operation: account_info
+    expected_status: 200
+  body: |
+    1. dashboard.stripe.com → Developers → API keys.
+    2. For Sagewai, prefer a **Restricted Key** (Create Restricted Key)
+       over the live secret key. Grant only what's needed:
+       - `Payment Intents: Write` (for create_payment_intent / retrieve)
+       - `Customers: Write` (for create_customer / list)
+       - `Refunds: Write` (for create_refund)
+    3. Reveal the key and copy it.
+    4. Paste into Sagewai → Connections → Tools → Add Stripe.
+
+    Test mode keys (`sk_test_*`) work against test data — safe for
+    initial setup. Switch to a live key (`sk_*` or `rk_*`) only when
+    moving to production.

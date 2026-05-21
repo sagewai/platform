@@ -67,7 +67,22 @@
                     "base_url": { "type": "string", "format": "uri" },
                     "auth": { "type": "object", "required": ["kind"],
                               "properties": { "kind": { "enum": ["none", "api_key", "bearer", "basic", "oauth2", "hmac", "aws_sigv4"] } } },
-                    "operations": { "type": "object", "minProperties": 1 }
+                    "operations": {
+                      "type": "object",
+                      "minProperties": 1,
+                      "additionalProperties": {
+                        "type": "object",
+                        "required": ["method", "path"],
+                        "additionalProperties": true,
+                        "properties": {
+                          "method":        { "enum": ["GET", "POST", "PUT", "DELETE", "PATCH"] },
+                          "path":          { "type": "string" },
+                          "body_format":   { "enum": ["form", "json"] },
+                          "input_schema":  { "type": "object" },
+                          "output_schema": { "type": "object" }
+                        }
+                      }
+                    }
                   }, "additionalProperties": true }
       }, "not": { "anyOf": [
         {"required": ["sdk"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["webhook"]}

@@ -1,0 +1,53 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: paypal_api
+version: 0.1.0
+title: PayPal — Orders and refunds
+description: |
+  Create orders, capture orders, refund captures via the PayPal Orders
+  API. Handles OAuth2 client-credentials token exchange internally with
+  per-project token caching (1-hour TTL, refresh on expiry).
+category: payments
+kind: sdk
+sandbox_tier: SANDBOXED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.paypal:paypal_api
+scopes:
+  - network.outbound.fetch
+  - secrets.paypal_credentials
+  - payments.charge
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: PAYPAL_CLIENT_ID
+      label: "Client ID"
+      type: password
+      description: "From developer.paypal.com → My Apps & Credentials"
+    - name: PAYPAL_SECRET
+      label: "Secret"
+      type: password
+      description: "App secret"
+    - name: PAYPAL_ENV
+      label: "Environment"
+      type: text
+      description: "One of: sandbox, live. Defaults to sandbox."
+  signup_url: https://developer.paypal.com/
+  console_path: "developer.paypal.com → My Apps & Credentials → REST API apps"
+  key_format: "client_id: opaque string; secret: opaque string"
+  body: |
+    1. developer.paypal.com → log in.
+    2. My Apps & Credentials → REST API apps → Create App or use Default
+       Application.
+    3. Copy `Client ID` and `Secret`.
+    4. Set `PAYPAL_ENV` to `sandbox` (testing) or `live` (production).
+    5. Paste into Sagewai → Connections → Tools → Add PayPal.
+
+    Operations exposed:
+    - `create_order`: start a checkout (intent: CAPTURE or AUTHORIZE).
+    - `capture_order`: capture funds on an approved order.
+    - `get_order`: retrieve order details and status.
+    - `refund_capture`: refund a captured payment.
+
+    Pick the op via `_operation`. Token exchange + caching is handled
+    automatically — the operator only registers the credential pair.

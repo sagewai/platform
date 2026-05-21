@@ -92,9 +92,12 @@ async def run(
 
     url = http_cfg["base_url"].rstrip("/") + path
     method = op["method"].upper()
+    body_format = op.get("body_format", "json")
     async with httpx.AsyncClient() as client:
         if method == "GET":
             resp = await client.get(url, headers=headers, params=extras or None)
+        elif body_format == "form":
+            resp = await client.request(method, url, headers=headers, data=extras or None)
         else:
             resp = await client.request(method, url, headers=headers, json=extras or None)
     resp.raise_for_status()

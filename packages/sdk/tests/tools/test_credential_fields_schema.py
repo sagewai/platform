@@ -86,3 +86,50 @@ def test_credential_field_requires_name_and_label():
     }
     errors = list(_validator().iter_errors(entry))
     assert errors
+
+
+def _http_entry_with_op(op_extra: dict | None = None):
+    """Build a minimal http-kind entry with one POST operation."""
+    op = {
+        "method": "POST",
+        "path": "/things",
+        "input_schema": {"type": "object"},
+        "output_schema": {"type": "object"},
+    }
+    if op_extra:
+        op.update(op_extra)
+    return _minimal_entry(
+        kind="http",
+        exec={
+            "http": {
+                "base_url": "https://api.example.com",
+                "auth": {"kind": "bearer"},
+                "operations": {"do_thing": op},
+            }
+        },
+    )
+
+
+def test_op_with_body_format_form_validates():
+    entry = _http_entry_with_op({"body_format": "form"})
+    errors = list(_validator().iter_errors(entry))
+    assert errors == [], errors
+
+
+def test_op_with_body_format_json_validates():
+    entry = _http_entry_with_op({"body_format": "json"})
+    errors = list(_validator().iter_errors(entry))
+    assert errors == [], errors
+
+
+def test_op_with_invalid_body_format_rejected():
+    entry = _http_entry_with_op({"body_format": "yaml"})
+    errors = list(_validator().iter_errors(entry))
+    assert errors
+
+
+def test_op_without_body_format_still_validates():
+    """Existing batch-1/2a/2b ops omit body_format — must still validate."""
+    entry = _http_entry_with_op(None)
+    errors = list(_validator().iter_errors(entry))
+    assert errors == [], errors

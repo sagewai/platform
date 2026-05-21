@@ -85,3 +85,107 @@ def test_basic_auth_empty_password_encodes_correctly():
     headers = _build_auth_headers(auth_cfg, creds)
     expected_b64 = base64.b64encode(b"test-api-key:").decode()
     assert headers["Authorization"] == f"Basic {expected_b64}"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_http_executor_form_encoded_body():
+    """body_format=form posts application/x-www-form-urlencoded body."""
+    from sagewai.tools.registry import CatalogEntry
+
+    entry = CatalogEntry(
+        id="form_demo",
+        version="0.1.0",
+        title="Form demo",
+        description="x",
+        category="test",
+        kind="http",
+        sandbox_tier="SANDBOXED",
+        exec_={
+            "http": {
+                "base_url": "https://api.example.test",
+                "auth": {"kind": "bearer"},
+                "operations": {
+                    "do_thing": {
+                        "method": "POST",
+                        "path": "/things",
+                        "body_format": "form",
+                        "input_schema": {"type": "object"},
+                        "output_schema": {"type": "object"},
+                    }
+                },
+            }
+        },
+        scopes=frozenset(),
+        setup={"auth_complexity": "api_key", "body": "x"},
+    )
+
+    route = respx.post("https://api.example.test/things").respond(200, json={"ok": True})
+
+    def _get_creds(*, project_id, kind, id):
+        return {"TOKEN": "bearer-tok"}
+
+    await http_exec.run(
+        entry,
+        operation="do_thing",
+        inputs={"amount": 100, "currency": "usd"},
+        project_id="p1",
+        get_credentials=_get_creds,
+    )
+
+    sent_request = route.calls.last.request
+    assert sent_request.headers.get("content-type", "").startswith("application/x-www-form-urlencoded")
+    body = sent_request.content.decode()
+    assert "amount=100" in body
+    assert "currency=usd" in body
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_http_executor_default_body_format_is_json():
+    """Existing batch-1/2a/2b ops without body_format still send JSON."""
+    from sagewai.tools.registry import CatalogEntry
+
+    entry = CatalogEntry(
+        id="json_demo",
+        version="0.1.0",
+        title="JSON demo",
+        description="x",
+        category="test",
+        kind="http",
+        sandbox_tier="SANDBOXED",
+        exec_={
+            "http": {
+                "base_url": "https://api.example.test",
+                "auth": {"kind": "bearer"},
+                "operations": {
+                    "do_thing": {
+                        "method": "POST",
+                        "path": "/things",
+                        "input_schema": {"type": "object"},
+                        "output_schema": {"type": "object"},
+                    }
+                },
+            }
+        },
+        scopes=frozenset(),
+        setup={"auth_complexity": "api_key", "body": "x"},
+    )
+
+    route = respx.post("https://api.example.test/things").respond(200, json={"ok": True})
+
+    def _get_creds(*, project_id, kind, id):
+        return {"TOKEN": "bearer-tok"}
+
+    await http_exec.run(
+        entry,
+        operation="do_thing",
+        inputs={"key": "value"},
+        project_id="p1",
+        get_credentials=_get_creds,
+    )
+
+    sent_request = route.calls.last.request
+    assert sent_request.headers.get("content-type", "").startswith("application/json")
+    body = sent_request.content.decode()
+    assert '"key"' in body and '"value"' in body

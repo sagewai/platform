@@ -1,0 +1,53 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: plaid_api
+version: 0.1.0
+title: Plaid — Bank account linking and transactions
+description: |
+  Create link tokens, exchange public tokens, fetch user's connected
+  accounts and transactions via the Plaid API. Two-header auth
+  (PLAID-CLIENT-ID + PLAID-SECRET) with env-switched base URL.
+category: payments
+kind: sdk
+sandbox_tier: SANDBOXED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.plaid:plaid_api
+scopes:
+  - network.outbound.fetch
+  - secrets.plaid_keys
+  - payments.charge
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: PLAID_CLIENT_ID
+      label: "Client ID"
+      type: password
+      description: "From dashboard.plaid.com → Team Settings → Keys"
+    - name: PLAID_SECRET
+      label: "Secret"
+      type: password
+      description: "Sandbox / Development / Production secret (per-env)"
+    - name: PLAID_ENV
+      label: "Environment"
+      type: text
+      description: "One of: sandbox, development, production. Defaults to sandbox."
+  signup_url: https://plaid.com/
+  console_path: "dashboard.plaid.com → Team Settings → Keys"
+  key_format: "client_id: long opaque string; secret: long opaque string"
+  body: |
+    1. dashboard.plaid.com → Team Settings → Keys.
+    2. Copy `client_id` and the `Sandbox secret` (or Development /
+       Production, depending on your target environment).
+    3. Set `PLAID_ENV` to match the secret type (`sandbox`,
+       `development`, `production`). **Sandbox keys do not work
+       against production and vice versa** — this is the most common
+       operator error.
+    4. Paste all three into Sagewai → Connections → Tools → Add Plaid.
+
+    Operations exposed:
+    - `link_token_create`: first step in onboarding flow.
+    - `item_public_token_exchange`: exchange the public token from
+      Plaid Link for a permanent access_token.
+    - `accounts_get`: fetch connected accounts.
+    - `transactions_get`: fetch transactions for a date range.

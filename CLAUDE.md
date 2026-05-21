@@ -472,6 +472,32 @@ records live in the same isolated JSON store as inference records
 No new top-level deps; no admin or frontend work — the Tools-tab CRUD
 from batch 2a auto-discovers new tools via `/tools/registry`.
 
+**Batch 2c (api_key tier, Payments cluster) landed:** 5 new entries:
+
+- `stripe_api` — Bearer `sk_*`/`rk_*`; form-encoded POST bodies (new
+  schema field `body_format: form|json` per http op). Ops:
+  `create_payment_intent`, `retrieve_payment_intent`, `create_customer`,
+  `list_customers`, `create_refund`, `account_info` (test).
+- `adyen_api` — `X-API-Key` header. Test environment only in this
+  batch; live URL prefix support is a follow-up PR (per-project
+  base URL override in the http executor schema).
+- `plaid_api` — `kind: sdk`. Dual-header auth (`PLAID-CLIENT-ID` +
+  `PLAID-SECRET`). Base URL switches on `PLAID_ENV`
+  (sandbox/development/production).
+- `braintree_api` — `kind: sdk`. GraphQL endpoint + dynamic merchant_id
+  in URL path. Basic auth `<public>:<private>`. Four credential fields
+  including an env switch.
+- `paypal_api` — `kind: sdk`. OAuth2 client-credentials grant with
+  in-memory token cache keyed by `(project_id, client_id)`. 1-hour
+  TTL with 60s safety buffer. Cache evicts on process restart;
+  first post-restart request re-exchanges.
+
+Schema change: optional `body_format: form|json` per http operation.
+Default `json` matches all existing tools. Only Stripe ops use `form`.
+
+Shared new scope: `payments.charge` declared on all five for "this
+tool can move money."
+
 ## Known issues you may encounter
 
 1. ~~`sagewai[fastapi]` extra missing `uvicorn`~~ **FIXED** in PR #48.

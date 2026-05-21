@@ -1,0 +1,55 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: braintree_api
+version: 0.1.0
+title: Braintree — Charge and refund via GraphQL
+description: |
+  Generate client tokens, charge payment methods, refund transactions
+  via the Braintree GraphQL API. Basic auth + merchant_id in the URL
+  path; sandbox/production via environment flag.
+category: payments
+kind: sdk
+sandbox_tier: SANDBOXED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.braintree:braintree_api
+scopes:
+  - network.outbound.fetch
+  - secrets.braintree_keys
+  - payments.charge
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: BRAINTREE_PUBLIC_KEY
+      label: "Public Key"
+      type: password
+      description: "From Braintree → Settings → API → API Keys"
+    - name: BRAINTREE_PRIVATE_KEY
+      label: "Private Key"
+      type: password
+      description: "From Braintree → Settings → API → API Keys → View"
+    - name: BRAINTREE_MERCHANT_ID
+      label: "Merchant ID"
+      type: text
+      description: "From Braintree → Settings → Business"
+    - name: BRAINTREE_ENV
+      label: "Environment"
+      type: text
+      description: "One of: sandbox, production. Defaults to sandbox."
+  signup_url: https://www.braintreepayments.com/
+  console_path: "Braintree → Settings → API → API Keys → View"
+  key_format: "Public Key: opaque string; Private Key: opaque string; Merchant ID: opaque string"
+  body: |
+    1. braintreegateway.com → Settings → API → API Keys.
+    2. View → copy `Public Key`, `Private Key`, `Merchant ID`.
+    3. Set `BRAINTREE_ENV` to `sandbox` or `production`.
+    4. Paste all four fields into Sagewai → Connections → Tools → Add
+       Braintree.
+
+    Operations exposed:
+    - `client_token_generate`: first step to launch Braintree Drop-In on
+      the frontend.
+    - `transaction_sale`: charge a payment method.
+    - `transaction_refund`: refund a transaction.
+
+    Pick the op via `_operation` in your blueprint's tool payload.
