@@ -13,9 +13,10 @@ from sagewai.autopilot import tool_scopes
 
 def test_catalogued_tool_returns_catalog_scopes():
     # github is in the catalog with scopes:
-    # network.outbound.fetch + secrets.github_token
+    # network.outbound.fetch + secrets.github_token + git.write
+    # (git.write added in batch 2b when write ops landed)
     assert tool_scopes.scopes_for_tools(["github"]) == frozenset(
-        {"network.outbound.fetch", "secrets.github_token"}
+        {"network.outbound.fetch", "secrets.github_token", "git.write"}
     )
 
 

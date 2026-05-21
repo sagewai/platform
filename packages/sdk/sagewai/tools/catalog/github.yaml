@@ -1,10 +1,11 @@
 # Copyright 2026 Ali Arda Diri, Berlin, Germany
 # Licensed under AGPL-3.0-or-later. See LICENSE.
 id: github
-version: 0.1.0
-title: GitHub API
+version: 0.2.0
+title: GitHub — Repository read + write
 description: |
-  Read repositories, issues, and pull requests via the GitHub REST API.
+  Read repositories, search code, and create issues / comments / pull
+  requests on GitHub via a fine-grained personal access token.
 category: developer_tools
 kind: http
 sandbox_tier: SANDBOXED
@@ -31,24 +32,102 @@ exec:
             id:        { type: integer }
             name:      { type: string }
             full_name: { type: string }
+      create_issue:
+        method: POST
+        path: /repos/{owner}/{repo}/issues
+        input_schema:
+          type: object
+          required: [owner, repo, title]
+          properties:
+            owner: { type: string }
+            repo:  { type: string }
+            title: { type: string }
+            body:  { type: string }
+        output_schema:
+          type: object
+          properties:
+            id:       { type: integer }
+            number:   { type: integer }
+            html_url: { type: string }
+      create_comment:
+        method: POST
+        path: /repos/{owner}/{repo}/issues/{number}/comments
+        input_schema:
+          type: object
+          required: [owner, repo, number, body]
+          properties:
+            owner:  { type: string }
+            repo:   { type: string }
+            number: { type: integer }
+            body:   { type: string }
+        output_schema:
+          type: object
+          properties:
+            id:       { type: integer }
+            html_url: { type: string }
+            body:     { type: string }
+      create_pull_request:
+        method: POST
+        path: /repos/{owner}/{repo}/pulls
+        input_schema:
+          type: object
+          required: [owner, repo, title, head, base]
+          properties:
+            owner: { type: string }
+            repo:  { type: string }
+            title: { type: string }
+            head:  { type: string }
+            base:  { type: string }
+            body:  { type: string }
+        output_schema:
+          type: object
+          properties:
+            id:       { type: integer }
+            number:   { type: integer }
+            html_url: { type: string }
+      search_code:
+        method: GET
+        path: /search/code
+        input_schema:
+          type: object
+          required: [q]
+          properties:
+            q: { type: string, minLength: 1 }
+        output_schema:
+          type: object
+          properties:
+            total_count: { type: integer }
+            items:       { type: array }
 scopes:
   - network.outbound.fetch
   - secrets.github_token
+  - git.write
 setup:
   auth_complexity: api_key
+  credential_fields:
+    - name: GITHUB_TOKEN
+      label: "Fine-grained Personal Access Token"
+      type: password
+      description: "Starts with github_pat_..."
   signup_url: https://github.com/signup
-  console_path: Settings → Developer settings → Personal access tokens → Fine-grained tokens
-  key_format: "ghp_… or github_pat_…"
-  required_scopes:
-    - "Contents: Read"
-    - "Metadata: Read"
+  console_path: "github.com → Settings → Developer settings → Personal access tokens → Fine-grained tokens"
+  key_format: "github_pat_..."
   test_endpoint:
     operation: get_repo
-    inputs: { owner: octocat, repo: hello-world }
     expected_status: 200
   body: |
-    1. Sign in at https://github.com.
-    2. Settings → Developer settings → Personal access tokens → Fine-grained tokens.
-    3. **Generate new token**; restrict to the repos you want Sagewai to read.
-    4. Grant `Contents: Read` and `Metadata: Read`. Leave everything else off.
-    5. Copy the `github_pat_…` value into Sagewai → Connections → Add → GitHub.
+    1. github.com → Settings → Developer settings → Personal access tokens
+       → Fine-grained tokens → Generate new token.
+    2. Restrict to the repositories Sagewai should access.
+    3. Grant these repository permissions:
+       - `Contents: Read` (for `get_repo`, `search_code`)
+       - `Metadata: Read` (for `get_repo`)
+       - `Issues: Write` (for `create_issue`, `create_comment`)
+       - `Pull requests: Write` (for `create_pull_request`)
+    4. Copy the `github_pat_...` token.
+    5. Paste into Sagewai → Connections → Tools → Add GitHub.
+
+    If you already registered a read-only token under an earlier batch,
+    regenerate with the broader permissions above before the write
+    operations will succeed. The "Test" button will surface a 403 if
+    your token doesn't have the right permissions.

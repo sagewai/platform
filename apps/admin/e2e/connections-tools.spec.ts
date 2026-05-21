@@ -12,7 +12,7 @@ test.describe('Connections — Tools tab CRUD', () => {
     // Pick Slack — the credential form should render its declared field
     await page
       .getByRole('combobox')
-      .selectOption({ label: /slack — post message/i });
+      .selectOption({ label: 'Slack — Post message (communication)' });
     await expect(page.getByLabel(/bot user oauth token/i)).toBeVisible();
   });
 
@@ -24,7 +24,7 @@ test.describe('Connections — Tools tab CRUD', () => {
     await page.getByRole('button', { name: /add tool connection/i }).click();
     await page
       .getByRole('combobox')
-      .selectOption({ label: /slack — post message/i });
+      .selectOption({ label: 'Slack — Post message (communication)' });
     await page.getByLabel(/bot user oauth token/i).fill('xoxb-fake-test-token');
     await page.getByRole('button', { name: /^add$/i }).click();
 

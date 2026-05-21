@@ -1,0 +1,100 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: hubspot_api
+version: 0.1.0
+title: HubSpot — Contacts and deals
+description: |
+  Search contacts, create contacts, search deals via the HubSpot CRM API
+  using a private app access token.
+category: crm
+kind: http
+sandbox_tier: SANDBOXED
+exec:
+  http:
+    base_url: https://api.hubapi.com
+    auth:
+      kind: bearer
+      header: Authorization
+      prefix: "Bearer "
+    operations:
+      search_contacts:
+        method: POST
+        path: /crm/v3/objects/contacts/search
+        input_schema:
+          type: object
+          required: [filterGroups]
+          properties:
+            filterGroups: { type: array }
+            properties:   { type: array }
+            limit:        { type: integer, minimum: 1, maximum: 100 }
+        output_schema:
+          type: object
+          properties:
+            results: { type: array }
+            total:   { type: integer }
+      create_contact:
+        method: POST
+        path: /crm/v3/objects/contacts
+        input_schema:
+          type: object
+          required: [properties]
+          properties:
+            properties: { type: object }
+        output_schema:
+          type: object
+          properties:
+            id:         { type: string }
+            properties: { type: object }
+            createdAt:  { type: string }
+      search_deals:
+        method: POST
+        path: /crm/v3/objects/deals/search
+        input_schema:
+          type: object
+          required: [filterGroups]
+          properties:
+            filterGroups: { type: array }
+            properties:   { type: array }
+            limit:        { type: integer, minimum: 1, maximum: 100 }
+        output_schema:
+          type: object
+          properties:
+            results: { type: array }
+            total:   { type: integer }
+      account_info:
+        method: GET
+        path: /account-info/v3/details
+        input_schema: { type: object }
+        output_schema:
+          type: object
+          properties:
+            portalId:    { type: integer }
+            accountType: { type: string }
+scopes:
+  - network.outbound.fetch
+  - secrets.hubspot_token
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: HUBSPOT_TOKEN
+      label: "Private App Access Token"
+      type: password
+      description: "Starts with pat-na1-..."
+  signup_url: https://www.hubspot.com/products/get-started
+  console_path: "HubSpot → Settings → Integrations → Private Apps → Create"
+  key_format: "pat-na1-..."
+  test_endpoint:
+    operation: account_info
+    expected_status: 200
+  body: |
+    1. HubSpot → Settings → Integrations → Private Apps → Create a private app.
+    2. On the Scopes tab, grant the minimum required scopes:
+       - `crm.objects.contacts.read` (for `search_contacts`)
+       - `crm.objects.contacts.write` (for `create_contact`)
+       - `crm.objects.deals.read` (for `search_deals`)
+    3. Save and copy the `pat-na1-...` access token.
+    4. Paste into Sagewai → Connections → Tools → Add HubSpot.
+
+    Note: HubSpot's search endpoints are POST with JSON body (filterGroups),
+    not GET with query string — your blueprint payloads must include
+    `filterGroups`, not URL-encoded params.

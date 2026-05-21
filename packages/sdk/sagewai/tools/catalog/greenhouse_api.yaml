@@ -1,0 +1,86 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: greenhouse_api
+version: 0.1.0
+title: Greenhouse — Candidates and jobs (Harvest API)
+description: |
+  List and create candidates, list jobs via the Greenhouse Harvest API
+  using HTTP Basic auth (API key as username, empty password).
+category: ats
+kind: http
+sandbox_tier: SANDBOXED
+exec:
+  http:
+    base_url: https://harvest.greenhouse.io/v1
+    auth:
+      kind: basic
+    operations:
+      list_candidates:
+        method: GET
+        path: /candidates
+        input_schema:
+          type: object
+          properties:
+            per_page: { type: integer, minimum: 1, maximum: 500 }
+            page:     { type: integer, minimum: 1 }
+        output_schema:
+          type: array
+          items: { type: object }
+      create_candidate:
+        method: POST
+        path: /candidates
+        input_schema:
+          type: object
+          required: [first_name, last_name, email_addresses]
+          properties:
+            first_name:      { type: string }
+            last_name:       { type: string }
+            email_addresses: { type: array }
+            applications:    { type: array }
+        output_schema:
+          type: object
+          properties:
+            id:         { type: integer }
+            first_name: { type: string }
+            last_name:  { type: string }
+      list_jobs:
+        method: GET
+        path: /jobs
+        input_schema:
+          type: object
+          properties:
+            per_page: { type: integer, minimum: 1, maximum: 500 }
+            status:   { type: string }
+        output_schema:
+          type: array
+          items: { type: object }
+scopes:
+  - network.outbound.fetch
+  - secrets.greenhouse_token
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: USERNAME
+      label: "API Key (used as Basic-auth username)"
+      type: password
+      description: "Your Harvest API key; Sagewai encodes Basic-auth with an empty password automatically."
+    - name: PASSWORD
+      label: "Password (leave blank — Greenhouse requires empty)"
+      type: text
+      description: "Greenhouse Harvest auth uses an empty password. Leave this blank."
+  signup_url: https://www.greenhouse.io/
+  console_path: "Greenhouse → Configure → Dev Center → API Credential Management → Create New API Key (Harvest)"
+  key_format: "long opaque string"
+  test_endpoint:
+    operation: list_jobs
+    expected_status: 200
+  body: |
+    1. Greenhouse → Configure → Dev Center → API Credential Management.
+    2. Create New API Key. Type: **Harvest**. Set the permissions needed:
+       - `Read candidates` (for `list_candidates`)
+       - `Create candidates` (for `create_candidate`)
+       - `Read jobs` (for `list_jobs`)
+    3. Copy the key.
+    4. Paste into Sagewai → Connections → Tools → Add Greenhouse.
+       Leave the Password field empty (Greenhouse's Harvest API uses Basic
+       auth with the key as username and an empty password).

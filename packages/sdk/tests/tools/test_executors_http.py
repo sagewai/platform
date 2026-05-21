@@ -69,3 +69,19 @@ async def test_http_executor_raises_on_unknown_operation():
             project_id="p1",
             get_credentials=_creds("ghp_abc"),
         )
+
+
+def test_basic_auth_empty_password_encodes_correctly():
+    """Greenhouse-style Basic auth: API key as username, empty password.
+
+    Confirms _build_auth_headers produces ``Authorization: Basic <b64(key:)>``
+    when password is empty (matches HTTP Basic-auth spec).
+    """
+    import base64
+    from sagewai.tools.executors.http import _build_auth_headers
+
+    auth_cfg = {"kind": "basic"}
+    creds = {"USERNAME": "test-api-key", "PASSWORD": ""}
+    headers = _build_auth_headers(auth_cfg, creds)
+    expected_b64 = base64.b64encode(b"test-api-key:").decode()
+    assert headers["Authorization"] == f"Basic {expected_b64}"

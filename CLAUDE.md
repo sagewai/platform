@@ -450,6 +450,28 @@ modal, test via the catalog's `setup.test_endpoint`, delete. Backend at
 records live in the same isolated JSON store as inference records
 (`~/.sagewai/inference-providers.json`) keyed by `kind: "tool"`.
 
+**Batch 2b (api_key tier, CRM + Devtools/Data) landed:** 3 new entries
++ extended `github`:
+
+- `hubspot_api` — Bearer `pat-na1-...`; ops: `search_contacts`,
+  `create_contact`, `search_deals`, `account_info` (test endpoint).
+  HubSpot's `/search` endpoints are POST with JSON body, not GET with
+  query string.
+- `greenhouse_api` — HTTP Basic with API key as username, **empty
+  password** (Greenhouse Harvest convention). Locked in by a one-line
+  regression test in `test_executors_http.py`.
+- `maps_route` — `kind: sdk`; Google Maps Directions API via
+  query-string `?key=...` (no header auth). Billing must be enabled
+  even at the free tier or Google returns `REQUEST_DENIED`.
+- `github` — extended with `create_issue`, `create_comment`,
+  `create_pull_request`, `search_code`; tool-level scopes broadened
+  to include `git.write`. Operators with read-only tokens registered
+  under PR #347 will hit 403 on writes until they regenerate with
+  broader `Issues: Write` + `Pull requests: Write` permissions.
+
+No new top-level deps; no admin or frontend work — the Tools-tab CRUD
+from batch 2a auto-discovers new tools via `/tools/registry`.
+
 ## Known issues you may encounter
 
 1. ~~`sagewai[fastapi]` extra missing `uvicorn`~~ **FIXED** in PR #48.

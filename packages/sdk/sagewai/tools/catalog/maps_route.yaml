@@ -1,0 +1,39 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: maps_route
+version: 0.1.0
+title: Google Maps — Directions
+description: |
+  Compute driving / walking / bicycling / transit directions between
+  two points (with optional waypoints) via the Google Maps Directions API.
+category: mapping
+kind: sdk
+sandbox_tier: SANDBOXED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.maps:maps_route
+scopes:
+  - network.outbound.fetch
+  - secrets.maps_api_key
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: MAPS_API_KEY
+      label: "Google Maps API Key"
+      type: password
+      description: "Starts with AIza..."
+  signup_url: https://console.cloud.google.com/
+  console_path: "Google Cloud Console → APIs & Services → Credentials → Create API Key"
+  key_format: "AIza..."
+  body: |
+    1. console.cloud.google.com → create or select a project.
+    2. APIs & Services → Library → enable **Directions API**.
+    3. Credentials → Create API Key. Restrict it to the Directions API.
+    4. **Enable billing on the project** — Google Maps requires billing
+       even at the free tier; unbilled keys return REQUEST_DENIED. Set
+       quota / budget alerts.
+    5. Paste the `AIza...` key into Sagewai → Connections → Tools → Add
+       Google Maps.
+
+    The "Test" button does not send a real request (it would burn quota
+    on every save). It just confirms the key decrypts.
