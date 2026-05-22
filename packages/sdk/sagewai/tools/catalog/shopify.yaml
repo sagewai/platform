@@ -1,0 +1,50 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: shopify
+version: 0.1.0
+title: Shopify — Commerce via GraphQL Admin API
+description: |
+  Browse products and orders, create products and draft orders, and
+  adjust inventory through the Shopify GraphQL Admin API. The store
+  domain and access token are operator-specific.
+category: ecommerce
+kind: sdk
+sandbox_tier: SANDBOXED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.shopify:shopify
+scopes:
+  - network.outbound.fetch
+  - secrets.shopify_token
+  - ecommerce.write
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: SHOPIFY_STORE
+      label: "Shopify Store Domain"
+      type: text
+      description: "Store domain like acme.myshopify.com (no scheme)"
+    - name: SHOPIFY_ACCESS_TOKEN
+      label: "Admin API Access Token"
+      type: password
+      description: "Admin API access token, starts with shpat_"
+    - name: SHOPIFY_API_VERSION
+      label: "GraphQL API Version (optional)"
+      type: text
+      description: "Defaults to 2025-10 if left blank"
+  signup_url: https://www.shopify.com
+  console_path: "Shopify Admin → Settings → Apps and sales channels → Develop apps"
+  key_format: "shpat_* access token"
+  body: |
+    1. In Shopify Admin, go to Settings → Apps and sales channels →
+       Develop apps → Create an app.
+    2. Configure Admin API scopes (read/write products, orders,
+       inventory), then Install the app.
+    3. Reveal and copy the Admin API access token (`shpat_...`).
+    4. Paste your store domain (e.g. `acme.myshopify.com`), the access
+       token, and optionally a GraphQL API version into Sagewai →
+       Connections → Tools → Add Shopify.
+
+    Shopify uses the GraphQL Admin API. Order creation goes through
+    `create_draft_order` (the broadly-granted programmatic path);
+    complete the draft in Shopify or via a later step to commit it.

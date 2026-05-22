@@ -532,6 +532,31 @@ compass_api all use the same `USERNAME` + `PASSWORD` fields. Operators
 currently must register each separately. A future "shared credentials"
 feature would let one registration serve multiple tools — not blocking.
 
+**Batch 2e (api_key tier, E-commerce cluster) landed:** 3 new entries:
+
+- `shopify` — `kind: sdk`. GraphQL Admin API; single endpoint
+  `POST https://{store}/admin/api/{version}/graphql.json` with the
+  `X-Shopify-Access-Token` header. Six ops (list/get + create_product,
+  create_draft_order, adjust_inventory) via per-op GraphQL query
+  templates. GraphQL returns HTTP 200 with a top-level `errors` array
+  on failure — the builtin inspects the body and raises. API version
+  defaults to `2025-10`, operator-overridable via `SHOPIFY_API_VERSION`.
+- `magento` — `kind: http`. Magento 2 REST; Bearer token; store REST
+  base URL operator-specific via `runtime_base_url_field: MAGENTO_BASE_URL`.
+  Path-keyed lookups + creates only — Magento's `searchCriteria` query
+  DSL doesn't map to the flat query-param model, so list/search ops are
+  deferred.
+- `joor_api` — `kind: http`. JOOR wholesale B2B; `x-api-key` header;
+  fixed base URL `https://api.joor.com` (no runtime override). JOOR's
+  `/v3/` paths are modeled from public API conventions — operators
+  confirm exact paths against their JOOR partner agreement.
+
+`amazon_sp_api` was deferred to its own dedicated PR (LWA token
+exchange + regional routing + Restricted Data Tokens). New shared
+scope: `ecommerce.write` on all three. No schema or executor changes —
+batch 2e reuses `runtime_base_url_field` from 2d. No admin/frontend
+work — the Tools-tab CRUD auto-discovers new tools via `/tools/registry`.
+
 ## Known issues you may encounter
 
 1. ~~`sagewai[fastapi]` extra missing `uvicorn`~~ **FIXED** in PR #48.

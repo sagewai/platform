@@ -1,0 +1,127 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: magento
+version: 0.1.0
+title: Magento 2 — Products, orders, customers
+description: |
+  Read and create products and customers, and read orders, via the
+  Magento 2 REST API. The store's REST base URL is operator-specific
+  and supplied via the MAGENTO_BASE_URL credential.
+category: ecommerce
+kind: http
+sandbox_tier: SANDBOXED
+exec:
+  http:
+    base_url: https://example.com/rest
+    runtime_base_url_field: MAGENTO_BASE_URL
+    auth:
+      kind: bearer
+      header: Authorization
+      prefix: "Bearer "
+    operations:
+      get_product:
+        method: GET
+        path: /V1/products/{sku}
+        input_schema:
+          type: object
+          required: [sku]
+          properties:
+            sku: { type: string }
+        output_schema:
+          type: object
+          properties:
+            id:   { type: integer }
+            sku:  { type: string }
+            name: { type: string }
+      create_product:
+        method: POST
+        path: /V1/products
+        input_schema:
+          type: object
+          required: [product]
+          properties:
+            product: { type: object }
+        output_schema:
+          type: object
+          properties:
+            id:  { type: integer }
+            sku: { type: string }
+      get_order:
+        method: GET
+        path: /V1/orders/{id}
+        input_schema:
+          type: object
+          required: [id]
+          properties:
+            id: { type: string }
+        output_schema:
+          type: object
+          properties:
+            entity_id: { type: integer }
+            state:     { type: string }
+            status:    { type: string }
+      get_customer:
+        method: GET
+        path: /V1/customers/{id}
+        input_schema:
+          type: object
+          required: [id]
+          properties:
+            id: { type: string }
+        output_schema:
+          type: object
+          properties:
+            id:    { type: integer }
+            email: { type: string }
+      create_customer:
+        method: POST
+        path: /V1/customers
+        input_schema:
+          type: object
+          required: [customer]
+          properties:
+            customer: { type: object }
+        output_schema:
+          type: object
+          properties:
+            id:    { type: integer }
+            email: { type: string }
+      get_store_configs:
+        method: GET
+        path: /V1/store/storeConfigs
+        input_schema: { type: object }
+        output_schema: { type: object }
+scopes:
+  - network.outbound.fetch
+  - secrets.magento_token
+  - ecommerce.write
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: MAGENTO_TOKEN
+      label: "Magento Integration Access Token"
+      type: password
+      description: "Integration access token from System → Integrations"
+    - name: MAGENTO_BASE_URL
+      label: "Magento REST Base URL"
+      type: text
+      description: "Full REST base, e.g. https://shop.example.com/rest"
+  signup_url: https://business.adobe.com/products/magento/magento-commerce.html
+  console_path: "Magento Admin → System → Integrations → New Integration"
+  key_format: "Integration access token"
+  test_endpoint:
+    operation: get_store_configs
+    expected_status: 200
+  body: |
+    1. In Magento Admin, go to System → Integrations → Add New Integration.
+    2. Name it (e.g. "Sagewai"), grant the API resources you need
+       (Catalog, Sales, Customers), then Save.
+    3. Click Activate, then Allow — Magento shows the Access Token.
+    4. Paste the access token and your store's REST base URL
+       (e.g. `https://shop.example.com/rest`) into Sagewai →
+       Connections → Tools → Add Magento.
+
+    Magento 2 uses Bearer token auth. List/search operations that rely
+    on Magento's `searchCriteria` query DSL are not exposed in this
+    release — use path-keyed lookups (`get_product` by SKU, `get_order`
+    and `get_customer` by ID).

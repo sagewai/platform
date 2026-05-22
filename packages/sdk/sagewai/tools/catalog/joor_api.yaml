@@ -1,0 +1,106 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: joor_api
+version: 0.1.0
+title: JOOR — Wholesale products and orders
+description: |
+  Browse wholesale products and read or create orders via the JOOR
+  wholesale B2B API.
+category: ecommerce
+kind: http
+sandbox_tier: SANDBOXED
+exec:
+  http:
+    base_url: https://api.joor.com
+    auth:
+      kind: api_key
+      header: x-api-key
+    operations:
+      list_products:
+        method: GET
+        path: /v3/products
+        input_schema:
+          type: object
+          properties:
+            limit:  { type: integer, minimum: 1, maximum: 200 }
+            offset: { type: integer, minimum: 0 }
+        output_schema:
+          type: object
+          properties:
+            data: { type: array }
+      get_product:
+        method: GET
+        path: /v3/products/{id}
+        input_schema:
+          type: object
+          required: [id]
+          properties:
+            id: { type: string }
+        output_schema:
+          type: object
+          properties:
+            data: { type: object }
+      list_orders:
+        method: GET
+        path: /v3/orders
+        input_schema:
+          type: object
+          properties:
+            limit:  { type: integer, minimum: 1, maximum: 200 }
+            offset: { type: integer, minimum: 0 }
+        output_schema:
+          type: object
+          properties:
+            data: { type: array }
+      get_order:
+        method: GET
+        path: /v3/orders/{id}
+        input_schema:
+          type: object
+          required: [id]
+          properties:
+            id: { type: string }
+        output_schema:
+          type: object
+          properties:
+            data: { type: object }
+      create_order:
+        method: POST
+        path: /v3/orders
+        input_schema:
+          type: object
+          required: [order]
+          properties:
+            order: { type: object }
+        output_schema:
+          type: object
+          properties:
+            data: { type: object }
+scopes:
+  - network.outbound.fetch
+  - secrets.joor_token
+  - ecommerce.write
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: JOOR_API_KEY
+      label: "JOOR API Key"
+      type: password
+      description: "API key from your JOOR partner/API agreement"
+  signup_url: https://www.joor.com
+  console_path: "Contact your JOOR account manager to obtain API access"
+  key_format: "API key string"
+  test_endpoint:
+    operation: list_products
+    expected_status: 200
+  body: |
+    1. JOOR API access is provisioned through a partner/API agreement —
+       contact your JOOR account manager.
+    2. Once provisioned, copy the API key supplied by JOOR.
+    3. Paste it into Sagewai → Connections → Tools → Add JOOR.
+
+    JOOR uses an `x-api-key` header for authentication. The endpoint
+    paths modeled here (`/v3/products`, `/v3/orders`) follow JOOR's
+    published API conventions — confirm the exact paths and version
+    against your specific JOOR API agreement, as JOOR's API surface
+    varies by partner tier.
