@@ -90,7 +90,13 @@ async def run(
     creds = get_credentials(project_id=project_id, kind="tool", id=entry.id)
     headers = _build_auth_headers(http_cfg["auth"], creds)
 
-    url = http_cfg["base_url"].rstrip("/") + path
+    base_url = http_cfg["base_url"]
+    runtime_field = http_cfg.get("runtime_base_url_field")
+    if runtime_field:
+        override = creds.get(runtime_field)
+        if override:
+            base_url = override
+    url = base_url.rstrip("/") + path
     method = op["method"].upper()
     body_format = op.get("body_format", "json")
     async with httpx.AsyncClient() as client:

@@ -1,0 +1,40 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: amplitude_api
+version: 0.1.0
+title: Amplitude — Track events and identify users
+description: |
+  Send analytics events and user identification updates via the Amplitude
+  HTTP API V2 / Identify API. API key is injected into the request body
+  by the builtin (V2 API quirk), kept out of blueprint payloads.
+category: analytics
+kind: sdk
+sandbox_tier: SANDBOXED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.amplitude:amplitude_api
+scopes:
+  - network.outbound.fetch
+  - secrets.amplitude_token
+  - observability.events
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: AMPLITUDE_API_KEY
+      label: "Amplitude API Key"
+      type: password
+      description: "From Amplitude → Settings → Projects → (your project) → General → API Keys"
+  signup_url: https://amplitude.com/get-started
+  console_path: "Amplitude → Settings → Projects → API Keys"
+  key_format: "32-char hex string"
+  body: |
+    1. amplitude.com → Settings → Projects → select your project.
+    2. General tab → API Keys → copy the API Key.
+    3. Paste into Sagewai → Connections → Tools → Add Amplitude.
+
+    Operations exposed:
+    - `track_event`: send a batch of events with `events: [...]`.
+    - `identify_user`: update user properties with `identification: [...]`.
+
+    The api_key is injected into the request body by the builtin — your
+    blueprint payloads only carry the events / identification arrays.

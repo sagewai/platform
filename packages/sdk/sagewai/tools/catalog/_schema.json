@@ -65,6 +65,7 @@
         "http": { "type": "object", "required": ["base_url", "auth", "operations"],
                   "properties": {
                     "base_url": { "type": "string", "format": "uri" },
+                    "runtime_base_url_field": { "type": "string" },
                     "auth": { "type": "object", "required": ["kind"],
                               "properties": { "kind": { "enum": ["none", "api_key", "bearer", "basic", "oauth2", "hmac", "aws_sigv4"] } } },
                     "operations": {

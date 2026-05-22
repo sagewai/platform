@@ -1,0 +1,99 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: opsgenie_api
+version: 0.1.0
+title: Opsgenie — Alerts and incidents
+description: |
+  Create, list, acknowledge, and close incident alerts via the Opsgenie
+  Alert API. Auth uses Opsgenie's `GenieKey ` prefix (not `Bearer `).
+category: incident_management
+kind: http
+sandbox_tier: SANDBOXED
+exec:
+  http:
+    base_url: https://api.opsgenie.com/v2
+    auth:
+      kind: bearer
+      header: Authorization
+      prefix: "GenieKey "
+    operations:
+      create_alert:
+        method: POST
+        path: /alerts
+        input_schema:
+          type: object
+          required: [message]
+          properties:
+            message:     { type: string }
+            description: { type: string }
+            priority:    { enum: [P1, P2, P3, P4, P5] }
+            tags:        { type: array }
+            responders:  { type: array }
+        output_schema:
+          type: object
+          properties:
+            result:    { type: string }
+            requestId: { type: string }
+      list_alerts:
+        method: GET
+        path: /alerts
+        input_schema:
+          type: object
+          properties:
+            limit:  { type: integer, minimum: 1, maximum: 100 }
+            offset: { type: integer, minimum: 0 }
+            query:  { type: string }
+        output_schema:
+          type: object
+          properties:
+            data: { type: array }
+      acknowledge_alert:
+        method: POST
+        path: /alerts/{identifier}/acknowledge
+        input_schema:
+          type: object
+          required: [identifier]
+          properties:
+            identifier: { type: string }
+        output_schema:
+          type: object
+          properties:
+            result: { type: string }
+      close_alert:
+        method: POST
+        path: /alerts/{identifier}/close
+        input_schema:
+          type: object
+          required: [identifier]
+          properties:
+            identifier: { type: string }
+        output_schema:
+          type: object
+          properties:
+            result: { type: string }
+scopes:
+  - network.outbound.fetch
+  - secrets.opsgenie_token
+  - incident.management
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: OPSGENIE_TOKEN
+      label: "Opsgenie API Key"
+      type: password
+      description: "From Settings → API key management. Note: sent as 'GenieKey <token>', not 'Bearer'."
+  signup_url: https://www.atlassian.com/software/opsgenie
+  console_path: "Opsgenie → Settings → API key management → Add new API key"
+  key_format: "long opaque string"
+  test_endpoint:
+    operation: list_alerts
+    expected_status: 200
+  body: |
+    1. Opsgenie → Settings → API key management → Add new API key.
+    2. Grant the necessary permissions (Read, Create and Update for alerts).
+    3. Copy the API key.
+    4. Paste into Sagewai → Connections → Tools → Add Opsgenie.
+
+    Opsgenie uses an unusual auth header format — `GenieKey <token>`
+    instead of `Bearer <token>`. Sagewai handles this automatically; you
+    just paste the raw token.

@@ -5,15 +5,16 @@ version: 0.1.0
 title: Adyen — Payments and payment methods (Checkout API)
 description: |
   Submit payments, list available payment methods, and continue 3DS/redirect
-  flows via the Adyen Checkout API. Test environment by default; live
-  environment requires an operator-specific URL prefix not yet supported
-  by the http executor (follow-up PR).
+  flows via the Adyen Checkout API. Test environment by default; set
+  `ADYEN_BASE_URL` to your operator-specific live URL prefix to switch to
+  production.
 category: payments
 kind: http
 sandbox_tier: SANDBOXED
 exec:
   http:
     base_url: https://checkout-test.adyen.com/v71
+    runtime_base_url_field: ADYEN_BASE_URL
     auth:
       kind: api_key
       header: X-API-Key
@@ -76,6 +77,10 @@ setup:
       label: "Adyen API Key"
       type: password
       description: "From Customer Area → Developers → API credentials"
+    - name: ADYEN_BASE_URL
+      label: "Live URL Prefix (leave blank for test mode)"
+      type: text
+      description: "Issued during Adyen onboarding, e.g. https://acme-checkout-live.adyenpayments.com/v71"
   signup_url: https://www.adyen.com/signup
   console_path: "ca-test.adyen.com → Developers → API credentials → Create"
   key_format: "long opaque string"
@@ -88,11 +93,10 @@ setup:
     3. Generate an API Key.
     4. Paste into Sagewai → Connections → Tools → Add Adyen.
 
-    **Test environment only in this batch.** Live operators are issued
-    a custom URL prefix during Adyen onboarding (e.g.
-    `https://acme-checkout-live.adyenpayments.com`). The Adyen catalog
-    entry currently hard-codes the test URL. Per-project base URL
-    overrides land in a follow-up PR.
+    **Live mode:** populate the `ADYEN_BASE_URL` field with your
+    operator-specific URL prefix issued during onboarding (e.g.
+    `https://acme-checkout-live.adyenpayments.com/v71`). Leave it blank
+    to use the test environment URL.
 
     The `merchantAccount` value is passed in each operation's input,
     not in credentials — your blueprint payloads must include it. Find

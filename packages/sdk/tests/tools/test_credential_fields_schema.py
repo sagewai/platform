@@ -133,3 +133,50 @@ def test_op_without_body_format_still_validates():
     entry = _http_entry_with_op(None)
     errors = list(_validator().iter_errors(entry))
     assert errors == [], errors
+
+
+def test_op_with_runtime_base_url_field_validates():
+    """exec.http.runtime_base_url_field: <string> is accepted."""
+    entry = _minimal_entry(
+        kind="http",
+        exec={
+            "http": {
+                "base_url": "https://default.example.com",
+                "runtime_base_url_field": "SOME_SITE",
+                "auth": {"kind": "bearer"},
+                "operations": {
+                    "do_thing": {
+                        "method": "GET",
+                        "path": "/things",
+                        "input_schema": {"type": "object"},
+                        "output_schema": {"type": "object"},
+                    }
+                },
+            }
+        },
+    )
+    errors = list(_validator().iter_errors(entry))
+    assert errors == [], errors
+
+
+def test_runtime_base_url_field_is_optional():
+    """Existing entries without the field still validate."""
+    entry = _minimal_entry(
+        kind="http",
+        exec={
+            "http": {
+                "base_url": "https://default.example.com",
+                "auth": {"kind": "bearer"},
+                "operations": {
+                    "do_thing": {
+                        "method": "GET",
+                        "path": "/things",
+                        "input_schema": {"type": "object"},
+                        "output_schema": {"type": "object"},
+                    }
+                },
+            }
+        },
+    )
+    errors = list(_validator().iter_errors(entry))
+    assert errors == [], errors

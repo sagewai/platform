@@ -1,0 +1,85 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: snyk_api
+version: 0.1.0
+title: Snyk — Vulnerability and project scanning
+description: |
+  List organizations, projects, and issues via the Snyk REST API.
+  Note: every Snyk REST call requires `version` as a query parameter.
+category: security
+kind: http
+sandbox_tier: SANDBOXED
+exec:
+  http:
+    base_url: https://api.snyk.io/rest
+    auth:
+      kind: bearer
+      header: Authorization
+      prefix: "Token "
+    operations:
+      list_orgs:
+        method: GET
+        path: /orgs
+        input_schema:
+          type: object
+          required: [version]
+          properties:
+            version: { type: string }
+        output_schema:
+          type: object
+          properties:
+            data: { type: array }
+      list_projects:
+        method: GET
+        path: /orgs/{org_id}/projects
+        input_schema:
+          type: object
+          required: [org_id, version]
+          properties:
+            org_id:  { type: string }
+            version: { type: string }
+        output_schema:
+          type: object
+          properties:
+            data: { type: array }
+      project_issues:
+        method: GET
+        path: /orgs/{org_id}/projects/{project_id}/issues
+        input_schema:
+          type: object
+          required: [org_id, project_id, version]
+          properties:
+            org_id:     { type: string }
+            project_id: { type: string }
+            version:    { type: string }
+        output_schema:
+          type: object
+          properties:
+            data: { type: array }
+scopes:
+  - network.outbound.fetch
+  - secrets.snyk_token
+  - security.scan
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: SNYK_TOKEN
+      label: "Snyk API Token"
+      type: password
+      description: "From snyk.io → Account → API token"
+  signup_url: https://snyk.io/login
+  console_path: "snyk.io → Account → API token"
+  key_format: "UUID-like opaque string"
+  test_endpoint:
+    operation: list_orgs
+    expected_status: 200
+  body: |
+    1. snyk.io → Account → click "Show" next to API Token → copy.
+    2. Paste into Sagewai → Connections → Tools → Add Snyk.
+
+    Snyk's REST API requires a `version` query parameter on every call.
+    Use a stable rolling version like `2024-10-15` (or newer per
+    https://docs.snyk.io/snyk-api/snyk-rest-api).
+
+    To find your `org_id` for the `list_projects` / `project_issues`
+    ops, call `list_orgs` first and use the `data[*].id` from the response.

@@ -1,0 +1,120 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: jira_api
+version: 0.1.0
+title: Jira Cloud — Issues and comments
+description: |
+  Search issues with JQL, read/create issues, add comments via the
+  Jira Cloud REST API. Site URL is operator-specific (e.g. `acme.atlassian.net`)
+  and provided via the `JIRA_SITE` credential.
+category: project_management
+kind: http
+sandbox_tier: SANDBOXED
+exec:
+  http:
+    base_url: https://example.atlassian.net
+    runtime_base_url_field: JIRA_SITE
+    auth:
+      kind: basic
+    operations:
+      myself:
+        method: GET
+        path: /rest/api/3/myself
+        input_schema: { type: object }
+        output_schema:
+          type: object
+          properties:
+            accountId:    { type: string }
+            displayName:  { type: string }
+            emailAddress: { type: string }
+      search_issues:
+        method: POST
+        path: /rest/api/3/search
+        input_schema:
+          type: object
+          required: [jql]
+          properties:
+            jql:        { type: string }
+            fields:     { type: array }
+            startAt:    { type: integer, minimum: 0 }
+            maxResults: { type: integer, minimum: 1, maximum: 100 }
+        output_schema:
+          type: object
+          properties:
+            issues: { type: array }
+            total:  { type: integer }
+      get_issue:
+        method: GET
+        path: /rest/api/3/issue/{key}
+        input_schema:
+          type: object
+          required: [key]
+          properties:
+            key: { type: string }
+        output_schema:
+          type: object
+          properties:
+            id:     { type: string }
+            key:    { type: string }
+            fields: { type: object }
+      create_issue:
+        method: POST
+        path: /rest/api/3/issue
+        input_schema:
+          type: object
+          required: [fields]
+          properties:
+            fields: { type: object }
+        output_schema:
+          type: object
+          properties:
+            id:   { type: string }
+            key:  { type: string }
+            self: { type: string }
+      add_comment:
+        method: POST
+        path: /rest/api/3/issue/{key}/comment
+        input_schema:
+          type: object
+          required: [key, body]
+          properties:
+            key:  { type: string }
+            body: { type: object }
+        output_schema:
+          type: object
+          properties:
+            id: { type: string }
+scopes:
+  - network.outbound.fetch
+  - secrets.atlassian_token
+  - project.management
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: USERNAME
+      label: "Atlassian Email"
+      type: text
+      description: "Your Atlassian account email"
+    - name: PASSWORD
+      label: "API Token"
+      type: password
+      description: "From id.atlassian.com/manage-profile/security/api-tokens"
+    - name: JIRA_SITE
+      label: "Jira Site URL"
+      type: text
+      description: "Full URL like https://acme.atlassian.net (no trailing slash)"
+  signup_url: https://www.atlassian.com/software/jira
+  console_path: "id.atlassian.com/manage-profile/security/api-tokens → Create API token"
+  key_format: "Email + API token + site URL"
+  test_endpoint:
+    operation: myself
+    expected_status: 200
+  body: |
+    1. Log in at id.atlassian.com → Security → API tokens → Create API token.
+    2. Copy the token (Atlassian shows it once).
+    3. Paste your email, the API token, and your Jira site URL
+       (e.g. `https://acme.atlassian.net`) into Sagewai → Connections →
+       Tools → Add Jira.
+
+    Jira Cloud uses HTTP Basic auth: `<email>:<api_token>`. Sagewai
+    encodes this automatically; you provide the components separately.

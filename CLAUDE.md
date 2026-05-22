@@ -498,6 +498,40 @@ Default `json` matches all existing tools. Only Stripe ops use `form`.
 Shared new scope: `payments.charge` declared on all five for "this
 tool can move money."
 
+**Batch 2d (api_key tier, Observability + Atlassian) landed:** 8 new
+entries + Adyen live-URL fix:
+
+- `amplitude_api` — `kind: sdk`. Amplitude HTTP V2 puts api_key in the
+  request body; builtin injects it so blueprints stay credential-free.
+- `opsgenie_api` — Bearer with `GenieKey ` prefix (not `Bearer `).
+  Same auth pattern as Discord's `Bot `.
+- `datadog_api` — `kind: sdk`. Dual-header auth (`DD-API-KEY` +
+  `DD-APPLICATION-KEY`) plus region-switched base URL (US1/EU/etc.).
+- `virustotal_api` — `x-apikey` header; 4 read ops; free-tier rate
+  limit is restrictive (4/min, 500/day).
+- `snyk_api` — Bearer with `Token ` prefix; every REST call requires
+  `version` query parameter (`2024-10-15` or newer).
+- `jira_api` — Basic auth `email:token` + site URL via the new
+  `runtime_base_url_field` extension.
+- `confluence_api` — same auth pattern as Jira; different paths.
+- `compass_api` — `kind: sdk`. GraphQL endpoint; same Atlassian token
+  works for Jira/Confluence/Compass.
+- `adyen_api` (modified) — now reads `ADYEN_BASE_URL` from credentials
+  for live operators (closes the batch-2c carry-forward).
+
+Schema change: optional `runtime_base_url_field` on `exec.http` — names
+a credential field that overrides `exec.http.base_url` at call time.
+Default behaviour unchanged for entries that don't declare it.
+
+New scopes: `observability.events`, `incident.management`,
+`security.intel`, `security.scan`, `project.management`,
+`knowledge.management`, `service.catalog`.
+
+Atlassian shared-credentials UX note: jira_api, confluence_api,
+compass_api all use the same `USERNAME` + `PASSWORD` fields. Operators
+currently must register each separately. A future "shared credentials"
+feature would let one registration serve multiple tools — not blocking.
+
 ## Known issues you may encounter
 
 1. ~~`sagewai[fastapi]` extra missing `uvicorn`~~ **FIXED** in PR #48.

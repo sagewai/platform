@@ -1,0 +1,91 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: virustotal_api
+version: 0.1.0
+title: VirusTotal — Threat intelligence lookups
+description: |
+  Look up reputation of files (by hash), URLs, IPs, and domains via the
+  VirusTotal API v3.
+category: security
+kind: http
+sandbox_tier: SANDBOXED
+exec:
+  http:
+    base_url: https://www.virustotal.com/api/v3
+    auth:
+      kind: api_key
+      header: x-apikey
+    operations:
+      file_report:
+        method: GET
+        path: /files/{hash}
+        input_schema:
+          type: object
+          required: [hash]
+          properties:
+            hash: { type: string, minLength: 32 }
+        output_schema:
+          type: object
+          properties:
+            data: { type: object }
+      url_report:
+        method: GET
+        path: /urls/{url_id}
+        input_schema:
+          type: object
+          required: [url_id]
+          properties:
+            url_id: { type: string }
+        output_schema:
+          type: object
+          properties:
+            data: { type: object }
+      ip_report:
+        method: GET
+        path: /ip_addresses/{ip}
+        input_schema:
+          type: object
+          required: [ip]
+          properties:
+            ip: { type: string }
+        output_schema:
+          type: object
+          properties:
+            data: { type: object }
+      domain_report:
+        method: GET
+        path: /domains/{domain}
+        input_schema:
+          type: object
+          required: [domain]
+          properties:
+            domain: { type: string }
+        output_schema:
+          type: object
+          properties:
+            data: { type: object }
+scopes:
+  - network.outbound.fetch
+  - secrets.virustotal_key
+  - security.intel
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: VT_API_KEY
+      label: "VirusTotal API Key"
+      type: password
+      description: "From virustotal.com → your profile → API key"
+  signup_url: https://www.virustotal.com/gui/join-us
+  console_path: "virustotal.com → log in → profile menu → API key"
+  key_format: "64-char hex string"
+  body: |
+    1. virustotal.com → Sign up / log in.
+    2. Profile menu (top right) → API key → copy.
+    3. Paste into Sagewai → Connections → Tools → Add VirusTotal.
+
+    **Free-tier rate limits:** 4 requests/minute, 500/day. Burst usage
+    from blueprint loops may return 429. Paid Premium API has higher
+    limits but uses a different base URL not currently supported here.
+
+    URL reports require a base64-url-encoded URL as `url_id`. See
+    https://docs.virustotal.com/reference/url-info for details.

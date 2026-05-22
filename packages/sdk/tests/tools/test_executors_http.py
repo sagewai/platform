@@ -189,3 +189,137 @@ async def test_http_executor_default_body_format_is_json():
     assert sent_request.headers.get("content-type", "").startswith("application/json")
     body = sent_request.content.decode()
     assert '"key"' in body and '"value"' in body
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_http_executor_runtime_base_url_override():
+    """When runtime_base_url_field is set + credential present, override exec.http.base_url."""
+    from sagewai.tools.registry import CatalogEntry
+
+    entry = CatalogEntry(
+        id="runtime_demo",
+        version="0.1.0",
+        title="Runtime URL demo",
+        description="x",
+        category="test",
+        kind="http",
+        sandbox_tier="SANDBOXED",
+        exec_={
+            "http": {
+                "base_url": "https://default.example.test",
+                "runtime_base_url_field": "MY_SITE",
+                "auth": {"kind": "bearer"},
+                "operations": {
+                    "ping": {
+                        "method": "GET",
+                        "path": "/ping",
+                        "input_schema": {"type": "object"},
+                        "output_schema": {"type": "object"},
+                    }
+                },
+            }
+        },
+        scopes=frozenset(),
+        setup={"auth_complexity": "api_key", "body": "x"},
+    )
+
+    route = respx.get("https://acme.atlassian.net/ping").respond(200, json={"ok": True})
+
+    def _creds(*, project_id, kind, id):
+        return {"TOKEN": "tok", "MY_SITE": "https://acme.atlassian.net"}
+
+    await http_exec.run(
+        entry, operation="ping", inputs={},
+        project_id="p1", get_credentials=_creds,
+    )
+    assert route.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_http_executor_runtime_base_url_strips_trailing_slash():
+    from sagewai.tools.registry import CatalogEntry
+
+    entry = CatalogEntry(
+        id="rt2",
+        version="0.1.0",
+        title="x",
+        description="x",
+        category="test",
+        kind="http",
+        sandbox_tier="SANDBOXED",
+        exec_={
+            "http": {
+                "base_url": "https://default.example.test",
+                "runtime_base_url_field": "MY_SITE",
+                "auth": {"kind": "bearer"},
+                "operations": {
+                    "ping": {
+                        "method": "GET",
+                        "path": "/ping",
+                        "input_schema": {"type": "object"},
+                        "output_schema": {"type": "object"},
+                    }
+                },
+            }
+        },
+        scopes=frozenset(),
+        setup={"auth_complexity": "api_key", "body": "x"},
+    )
+
+    route = respx.get("https://acme.atlassian.net/ping").respond(200, json={})
+
+    def _creds(*, project_id, kind, id):
+        return {"TOKEN": "tok", "MY_SITE": "https://acme.atlassian.net/"}
+
+    await http_exec.run(
+        entry, operation="ping", inputs={},
+        project_id="p1", get_credentials=_creds,
+    )
+    assert route.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_http_executor_runtime_base_url_falls_back_when_credential_empty():
+    """If credential is missing or empty, use static exec.http.base_url."""
+    from sagewai.tools.registry import CatalogEntry
+
+    entry = CatalogEntry(
+        id="rt3",
+        version="0.1.0",
+        title="x",
+        description="x",
+        category="test",
+        kind="http",
+        sandbox_tier="SANDBOXED",
+        exec_={
+            "http": {
+                "base_url": "https://default.example.test",
+                "runtime_base_url_field": "MY_SITE",
+                "auth": {"kind": "bearer"},
+                "operations": {
+                    "ping": {
+                        "method": "GET",
+                        "path": "/ping",
+                        "input_schema": {"type": "object"},
+                        "output_schema": {"type": "object"},
+                    }
+                },
+            }
+        },
+        scopes=frozenset(),
+        setup={"auth_complexity": "api_key", "body": "x"},
+    )
+
+    route = respx.get("https://default.example.test/ping").respond(200, json={})
+
+    def _creds(*, project_id, kind, id):
+        return {"TOKEN": "tok"}  # MY_SITE missing
+
+    await http_exec.run(
+        entry, operation="ping", inputs={},
+        project_id="p1", get_credentials=_creds,
+    )
+    assert route.called

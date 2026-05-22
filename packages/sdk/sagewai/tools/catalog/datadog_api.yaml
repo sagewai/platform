@@ -1,0 +1,52 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: datadog_api
+version: 0.1.0
+title: Datadog — Log search, metric submission, monitor listing
+description: |
+  Search logs, submit custom metrics, and list monitors via the Datadog
+  API. Uses dual-header auth (DD-API-KEY + DD-APPLICATION-KEY) with
+  region-switched base URL.
+category: observability
+kind: sdk
+sandbox_tier: SANDBOXED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.datadog:datadog_api
+scopes:
+  - network.outbound.fetch
+  - secrets.datadog_keys
+  - observability.events
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: DATADOG_API_KEY
+      label: "API Key"
+      type: password
+      description: "From Datadog → Organization Settings → API Keys"
+    - name: DATADOG_APPLICATION_KEY
+      label: "Application Key"
+      type: password
+      description: "From Datadog → Organization Settings → Application Keys"
+    - name: DATADOG_SITE
+      label: "Datadog Site"
+      type: text
+      description: "One of: datadoghq.com (US1), datadoghq.eu (EU), us3.datadoghq.com, us5.datadoghq.com, ap1.datadoghq.com. Defaults to datadoghq.com."
+  signup_url: https://www.datadoghq.com/free-datadog-trial/
+  console_path: "Datadog → Organization Settings → API Keys / Application Keys"
+  key_format: "API key: long opaque string; Application key: long opaque string"
+  body: |
+    1. Datadog → Organization Settings → API Keys → New Key. Copy the value.
+    2. Organization Settings → Application Keys → New Key. Copy the value.
+    3. Set `DATADOG_SITE` to match your account region (defaults to
+       `datadoghq.com` for US1).
+    4. Paste all three into Sagewai → Connections → Tools → Add Datadog.
+
+    Operations exposed:
+    - `search_logs`: query logs with a Datadog query syntax filter.
+    - `submit_metric`: ingest custom metrics into the metrics pipeline.
+    - `list_monitors`: read configured monitors.
+
+    Note: `search_logs` and `list_monitors` require both API and
+    Application keys. `submit_metric` only needs the API key but the
+    builtin sends both for simplicity.
