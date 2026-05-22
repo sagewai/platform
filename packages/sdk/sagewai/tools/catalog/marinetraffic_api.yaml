@@ -1,0 +1,40 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: marinetraffic_api
+version: 0.1.0
+title: MarineTraffic — Vessel tracking
+description: |
+  Look up vessel positions, port calls, and vessel master data via the
+  MarineTraffic API.
+category: travel
+kind: sdk
+sandbox_tier: SANDBOXED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.marinetraffic:marinetraffic
+scopes:
+  - network.outbound.fetch
+  - secrets.marinetraffic_key
+  - travel.search
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: MARINETRAFFIC_API_KEY
+      label: "MarineTraffic API Key"
+      type: password
+      description: "Per-service API key from your MarineTraffic API subscription"
+  signup_url: https://www.marinetraffic.com/en/ais-api-services
+  console_path: "MarineTraffic → My Account → API Services"
+  key_format: "API key string"
+  body: |
+    1. MarineTraffic API access is a paid subscription — purchase the
+       relevant API service at marinetraffic.com/en/ais-api-services.
+    2. Each MarineTraffic API service issues its own key. Copy the key
+       for the service you need.
+    3. Paste it into Sagewai → Connections → Tools → Add MarineTraffic.
+
+    MarineTraffic embeds the API key in the request URL path. Its API
+    surface and the available parameters vary by subscription tier —
+    confirm the colon-delimited parameters for each operation against
+    your specific MarineTraffic API documentation. Pass them via the
+    `params` object (e.g. `{"timespan": 10}` becomes `/timespan:10`).

@@ -557,6 +557,29 @@ scope: `ecommerce.write` on all three. No schema or executor changes —
 batch 2e reuses `runtime_base_url_field` from 2d. No admin/frontend
 work — the Tools-tab CRUD auto-discovers new tools via `/tools/registry`.
 
+**Batch 2f (api_key tier, Travel/logistics cluster) landed:** 4 new entries:
+
+- `duffel_api` — `kind: sdk`. Duffel Flights API; Bearer token plus a
+  required `Duffel-Version: v2` header the http executor can't add, so
+  a builtin. Ops: `search_flights` (POST `/air/offer_requests` with
+  `return_offers=true`), `list_offers`, `get_offer`. Booking deferred.
+- `liteapi` — `kind: http`. LiteAPI hotel API; `X-API-Key` header;
+  search hotels, hotel details, cities, and POST rates.
+- `transitland_api` — `kind: http`. Transitland v2 REST; `apikey`
+  header; stops, routes, operators, and stop departures.
+- `marinetraffic_api` — `kind: sdk`. MarineTraffic embeds the API key
+  as a URL path segment and takes colon-delimited path params — the
+  builtin builds the URL and injects the key. Surface is partner-gated
+  and tier-dependent; operators verify params against their plan.
+
+Vendor picks replace generic blueprint names (`flight_search`→`duffel_api`,
+`hotel_search`→`liteapi`, `transit_schedule`→`transitland_api`) —
+blueprint rewrite is a follow-up, same pattern as 2d's
+`siem_query`→`datadog_api`. Amadeus was rejected (obsolete public API).
+New shared scope: `travel.search` on all four. No schema or executor
+changes. No admin/frontend work — the Tools-tab CRUD auto-discovers new
+tools.
+
 ## Known issues you may encounter
 
 1. ~~`sagewai[fastapi]` extra missing `uvicorn`~~ **FIXED** in PR #48.

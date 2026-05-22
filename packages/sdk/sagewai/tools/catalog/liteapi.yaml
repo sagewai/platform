@@ -1,0 +1,94 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: liteapi
+version: 0.1.0
+title: LiteAPI — Hotel search and rates
+description: |
+  Search hotels, fetch hotel details, list cities, and retrieve room
+  rates via the LiteAPI hotel booking API.
+category: travel
+kind: http
+sandbox_tier: SANDBOXED
+exec:
+  http:
+    base_url: https://api.liteapi.travel
+    auth:
+      kind: api_key
+      header: X-API-Key
+    operations:
+      search_hotels:
+        method: GET
+        path: /v3.0/data/hotels
+        input_schema:
+          type: object
+          required: [countryCode]
+          properties:
+            countryCode: { type: string }
+            cityName:    { type: string }
+            limit:       { type: integer, minimum: 1, maximum: 1000 }
+        output_schema:
+          type: object
+          properties:
+            data: { type: array }
+      get_hotel_details:
+        method: GET
+        path: /v3.0/data/hotel
+        input_schema:
+          type: object
+          required: [hotelId]
+          properties:
+            hotelId: { type: string }
+        output_schema:
+          type: object
+          properties:
+            data: { type: object }
+      list_cities:
+        method: GET
+        path: /v3.0/data/cities
+        input_schema:
+          type: object
+          required: [countryCode]
+          properties:
+            countryCode: { type: string }
+        output_schema:
+          type: object
+          properties:
+            data: { type: array }
+      get_rates:
+        method: POST
+        path: /v3.0/hotels/rates
+        input_schema:
+          type: object
+          required: [hotelIds, checkin, checkout, occupancies]
+          properties:
+            hotelIds:    { type: array }
+            checkin:     { type: string }
+            checkout:    { type: string }
+            occupancies: { type: array }
+            currency:    { type: string }
+        output_schema:
+          type: object
+          properties:
+            data: { type: array }
+scopes:
+  - network.outbound.fetch
+  - secrets.liteapi_key
+  - travel.search
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: LITEAPI_KEY
+      label: "LiteAPI Key"
+      type: password
+      description: "Sandbox or production key from the LiteAPI dashboard"
+  signup_url: https://liteapi.travel
+  console_path: "LiteAPI dashboard → API Keys"
+  key_format: "API key string"
+  body: |
+    1. Sign up at liteapi.travel and open the dashboard.
+    2. API Keys → copy a sandbox key (for setup) or a production key.
+    3. Paste it into Sagewai → Connections → Tools → Add LiteAPI.
+
+    LiteAPI uses an `X-API-Key` header. The `/v3.0/` endpoint paths
+    here follow LiteAPI's published API — confirm against the current
+    LiteAPI docs if a call returns 404.

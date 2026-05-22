@@ -1,0 +1,38 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: duffel_api
+version: 0.1.0
+title: Duffel — Flight search
+description: |
+  Search flight offers, list offers, and retrieve a single offer via
+  the Duffel Flights API.
+category: travel
+kind: sdk
+sandbox_tier: SANDBOXED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.duffel:duffel
+scopes:
+  - network.outbound.fetch
+  - secrets.duffel_token
+  - travel.search
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: DUFFEL_ACCESS_TOKEN
+      label: "Duffel Access Token"
+      type: password
+      description: "Starts with duffel_test_ or duffel_live_"
+  signup_url: https://duffel.com
+  console_path: "Duffel dashboard → Developers → Access tokens"
+  key_format: "duffel_test_* or duffel_live_*"
+  body: |
+    1. Sign up at duffel.com and open the dashboard.
+    2. Developers → Access tokens → create a token.
+    3. Use a test token (`duffel_test_*`) for initial setup; switch to
+       a live token (`duffel_live_*`) for production.
+    4. Paste it into Sagewai → Connections → Tools → Add Duffel.
+
+    Duffel offers expire a few minutes after `search_flights`. Call
+    `list_offers` / `get_offer` promptly — a stale offer request
+    returns no offers.

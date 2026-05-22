@@ -1,0 +1,100 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: transitland_api
+version: 0.1.0
+title: Transitland — Public transit data
+description: |
+  Search transit stops, routes, and operators, and read scheduled
+  departures via the Transitland v2 REST API.
+category: travel
+kind: http
+sandbox_tier: SANDBOXED
+exec:
+  http:
+    base_url: https://transit.land/api/v2/rest
+    auth:
+      kind: api_key
+      header: apikey
+    operations:
+      search_stops:
+        method: GET
+        path: /stops
+        input_schema:
+          type: object
+          properties:
+            lat:       { type: number }
+            lon:       { type: number }
+            radius:    { type: integer, minimum: 0 }
+            served_by: { type: string }
+            limit:     { type: integer, minimum: 1, maximum: 100 }
+        output_schema:
+          type: object
+          properties:
+            stops: { type: array }
+      search_routes:
+        method: GET
+        path: /routes
+        input_schema:
+          type: object
+          properties:
+            lat:         { type: number }
+            lon:         { type: number }
+            radius:      { type: integer, minimum: 0 }
+            operated_by: { type: string }
+            limit:       { type: integer, minimum: 1, maximum: 100 }
+        output_schema:
+          type: object
+          properties:
+            routes: { type: array }
+      get_stop_departures:
+        method: GET
+        path: /stops/{stop_key}/departures
+        input_schema:
+          type: object
+          required: [stop_key]
+          properties:
+            stop_key: { type: string }
+        output_schema:
+          type: object
+          properties:
+            stops: { type: array }
+      search_operators:
+        method: GET
+        path: /operators
+        input_schema:
+          type: object
+          properties:
+            lat:    { type: number }
+            lon:    { type: number }
+            radius: { type: integer, minimum: 0 }
+            search: { type: string }
+            limit:  { type: integer, minimum: 1, maximum: 100 }
+        output_schema:
+          type: object
+          properties:
+            operators: { type: array }
+scopes:
+  - network.outbound.fetch
+  - secrets.transitland_key
+  - travel.search
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: TRANSITLAND_API_KEY
+      label: "Transitland API Key"
+      type: password
+      description: "From transit.land → sign in → API key"
+  signup_url: https://www.transit.land
+  console_path: "transit.land → sign in → account → API key"
+  key_format: "API key string"
+  test_endpoint:
+    operation: search_operators
+    expected_status: 200
+  body: |
+    1. Sign in at transit.land and open your account page.
+    2. Copy your API key.
+    3. Paste it into Sagewai → Connections → Tools → Add Transitland.
+
+    Transitland accepts the API key as an `apikey` HTTP header. The
+    free tier is rate-limited — burst usage from blueprint loops may
+    return 429.
