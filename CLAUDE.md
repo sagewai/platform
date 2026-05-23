@@ -716,6 +716,62 @@ migration to `get_oauth_token`; media metadata api_key tools
 absorbing all kinds + protocol-plugin interface + SOPS credentials
 backend).
 
+## Connections Platform (sub-project 2)
+
+A unified external-dependencies surface replacing the scattered
+`kind: "inference"`, `kind: "tool"`, and `kind: "oauth_client"` records
+under one `kind: "connection"` model with a protocol axis and a tag axis.
+5-PR effort following the OAuth-kickoff (PR #356) pattern. Spec at
+`sagewai/atelier:docs/superpowers/specs/2026-05-24-connections-platform-design.md`.
+
+**PR1 (foundation layer) landed:** `sagewai.connections` subpackage with
+the generic envelope and persistence layer.
+
+- `models.py`: `Connection` frozen dataclass envelope (id, protocol,
+  project_id, display_name, tags, credentials_backend, status,
+  last_tested_at, last_test_ok, is_default, created_at, updated_at,
+  last_error, protocol_data) + `ConnectionStatus` Literal + `TestResult`
+  + `HealthResult` + `valid_protocol_ids()`.
+- `errors.py`: 6-class hierarchy with stable codes —
+  `ConnectionError`, `ConnectionNotFoundError`,
+  `DuplicateDisplayNameError`, `StoreCorruptedError`,
+  `UnknownProtocolError`, `UnsupportedStoreVersionError`. Same shape as
+  the OAuth error hierarchy from PR #356.
+- `store.py`: `ConnectionStore` class with file-backed CRUD on
+  `~/.sagewai/connections.json` (`SAGEWAI_CONNECTIONS_FILE` env
+  override). `version: 2` discriminator at the top level. Atomic
+  writes via tempfile + `os.replace` + `os.chmod 0o600`. Public API:
+  `list(project_id, *, protocol?, tag?)`, `get(id)`, `create(...)`,
+  `update(id, **fields)`, `delete(id)`, `set_default(id)`,
+  `update_test_result(id, *, ok)`.
+
+**Key invariants:**
+- `(project_id, protocol, display_name)` unique.
+- At most one `is_default: true` per `(project_id, protocol,
+  default_key(protocol_data))` group. `default_key` is a per-protocol
+  extractor injected via `default_key_for={protocol_id: callable}` on
+  `ConnectionStore.__init__`. PR2's plugins inject real extractors
+  (e.g., `provider` for oauth2, `provider_key` for inference); PR1
+  default is "no key", meaning at most one default per
+  `(project_id, protocol)`.
+- `protocol_data` is opaque to the store. PR2's `ProtocolPlugin`
+  contract validates it.
+- `version: 1` files (the old inference-providers shape) raise
+  `UnsupportedStoreVersionError`. Pre-launch zero-customers policy
+  means no auto-migration; PR4 deletes the old store file when the
+  admin routes flip.
+
+**Not yet wired** — PR1 ships the foundation but nothing consumes it.
+PR2 mounts protocol plugins, PR3 layers credentials encryption, PR4
+publishes admin routes + CLI, PR5 rewrites the admin UI. Until PR4
+lands, the existing `/api/v1/admin/connections/`,
+`/api/v1/admin/connections/tools/`, `/api/v1/admin/connections/oauth/`
+routes continue to serve the legacy `inference-providers.json` file
+unchanged.
+
+**Test counts:** 44 new tests across errors (2), models (6), store (36).
+Full suite passes; smoke 39; perf unchanged.
+
 ## Known issues you may encounter
 
 1. ~~`sagewai[fastapi]` extra missing `uvicorn`~~ **FIXED** in PR #48.
