@@ -1,0 +1,46 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: terra_api
+version: 0.1.0
+title: Terra — Wearables aggregator (Fitbit, Garmin, Oura, Whoop, ...)
+description: |
+  Read daily activity, sleep, body, and workout summaries from
+  20+ wearables through a single Terra integration.
+category: health
+kind: sdk
+sandbox_tier: UNTRUSTED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.terra:terra
+scopes:
+  - network.outbound.fetch
+  - secrets.terra_key
+  - health.read
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: TERRA_API_KEY
+      label: "Terra API Key"
+      type: password
+      description: "API key from the Terra dashboard"
+    - name: TERRA_DEV_ID
+      label: "Terra Dev ID"
+      type: text
+      description: "Terra developer/account identifier (paired with the API key)"
+  signup_url: https://tryterra.co
+  console_path: "Terra dashboard → API Keys"
+  key_format: "API key + dev-id pair"
+  body: |
+    1. Sign up at tryterra.co and open the dashboard.
+    2. API Keys → copy your API key and dev-id.
+    3. Paste both into Sagewai → Connections → Tools → Add Terra.
+
+    Terra requires both `x-api-key` and `dev-id` headers on every
+    request. Webhook ingestion and OAuth user-provisioning are not
+    covered here (read-only summaries only).
+
+    ⚠️ Health and biometric data are special-category personal data under
+    GDPR Art. 9 and may be PHI under HIPAA. You are the controller (and,
+    where applicable, the covered entity) for credentials registered here.
+    Confirm your compliance posture (BAA, DPA, lawful basis, retention
+    policy) before connecting this tool.

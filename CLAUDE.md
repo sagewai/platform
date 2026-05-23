@@ -580,6 +580,54 @@ New shared scope: `travel.search` on all four. No schema or executor
 changes. No admin/frontend work — the Tools-tab CRUD auto-discovers new
 tools.
 
+**Batch 2g (api_key tier, Health/wearables cluster) landed:** 7 new entries:
+
+- `terra_api` — `kind: sdk`. Wearables aggregator (Fitbit, Garmin, Oura,
+  Whoop, ...) via dual `x-api-key` + `dev-id` headers. Five read-only
+  summary ops.
+- `vital_api` — `kind: http`. Competing wearables aggregator;
+  `x-vital-api-key` header; sandbox/production switchable via
+  `runtime_base_url_field` (`VITAL_BASE_URL`).
+- `nutritionix_api` — `kind: sdk`. Restaurant + branded food database.
+  Dual `x-app-id` + `x-app-key` headers. Read paths only
+  (no `/log/foods` writes).
+- `usda_fdc_api` — `kind: sdk`. USDA FoodData Central. Query-string
+  `?api_key=` (single field).
+- `openfda_api` — `kind: sdk`. FDA adverse events / drug labels /
+  device events / food enforcement. Query-string key is **optional**
+  — builtin omits the param when the credential is absent. Optionality
+  is documented in `description` + `setup.body` text only; the catalog
+  schema's `credential_fields` items reject extra properties so a
+  `required: false` flag couldn't be added.
+- `rxnorm_api` — `kind: http`, `auth.kind: none`. NIH/NLM drug-name
+  normalization (public service). No credential fields; no `secrets.*`
+  scope. First catalogued tool to use `auth.kind: none` end-to-end via
+  the http executor.
+- `infermedica_api` — `kind: sdk`. Clinical symptom checker; dual
+  `App-Id` + `App-Key` headers. Carries an extra `medical.advisory`
+  scope on top of `health.read`.
+
+**First batch to declare `sandbox_tier: UNTRUSTED`** — all seven entries
+opt into the strictest sandbox tier (TRUSTED=0 < SANDBOXED=1 <
+UNTRUSTED=2) to reflect that health/biometric data are special-category
+under GDPR Art. 9 / potentially PHI under HIPAA. Admin overrides remain
+downgrade-only (operators can relax to SANDBOXED per-mission, never
+silently upward).
+
+New shared scope: `health.read` on all seven; `medical.advisory`
+additionally on `infermedica_api`.
+
+**Schema reminder surfaced during 2g:** `exec.sdk` is `additionalProperties: false`
+— it accepts only `entrypoint`. Per-op `input_schema` for sdk tools
+lives in the builtin's dispatch logic, not in the YAML. (Catalog
+operations for sdk tools are addressed by `payload["_operation"]`.)
+
+No schema or executor changes. No admin/frontend work — Tools-tab CRUD
+auto-discovers new tools via `/tools/registry`. Every YAML's
+`setup.body` carries a PHI/GDPR special-category-data notice;
+`infermedica_api` additionally carries a "clinical context, not medical
+advice" disclaimer.
+
 ## Known issues you may encounter
 
 1. ~~`sagewai[fastapi]` extra missing `uvicorn`~~ **FIXED** in PR #48.

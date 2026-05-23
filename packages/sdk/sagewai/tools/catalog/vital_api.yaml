@@ -1,0 +1,97 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: vital_api
+version: 0.1.0
+title: Vital — Wearables aggregator (sandbox/production switchable)
+description: |
+  Read sleep, workouts, body, and activity summaries from
+  wearables connected through Vital. Base URL defaults to
+  sandbox; operators override via VITAL_BASE_URL for production.
+category: health
+kind: http
+sandbox_tier: UNTRUSTED
+exec:
+  http:
+    base_url: https://api.tryvital.io
+    runtime_base_url_field: VITAL_BASE_URL
+    auth:
+      kind: api_key
+      header: x-vital-api-key
+    operations:
+      list_users:
+        method: GET
+        path: /v2/user
+        input_schema: { type: object }
+      get_sleep:
+        method: GET
+        path: /v2/summary/sleep/{user_id}
+        input_schema:
+          type: object
+          required: [user_id, start_date, end_date]
+          properties:
+            user_id:    { type: string }
+            start_date: { type: string }
+            end_date:   { type: string }
+      get_workouts:
+        method: GET
+        path: /v2/summary/workouts/{user_id}
+        input_schema:
+          type: object
+          required: [user_id, start_date, end_date]
+          properties:
+            user_id:    { type: string }
+            start_date: { type: string }
+            end_date:   { type: string }
+      get_body:
+        method: GET
+        path: /v2/summary/body/{user_id}
+        input_schema:
+          type: object
+          required: [user_id, start_date, end_date]
+          properties:
+            user_id:    { type: string }
+            start_date: { type: string }
+            end_date:   { type: string }
+      get_activity:
+        method: GET
+        path: /v2/summary/activity/{user_id}
+        input_schema:
+          type: object
+          required: [user_id, start_date, end_date]
+          properties:
+            user_id:    { type: string }
+            start_date: { type: string }
+            end_date:   { type: string }
+scopes:
+  - network.outbound.fetch
+  - secrets.vital_key
+  - health.read
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: VITAL_API_KEY
+      label: "Vital API Key"
+      type: password
+      description: "Sandbox or production API key from the Vital dashboard"
+    - name: VITAL_BASE_URL
+      label: "Vital Base URL"
+      type: text
+      description: "Override base URL (default sandbox: https://api.tryvital.io; production: https://api.tryvital.io)"
+  signup_url: https://tryvital.io
+  console_path: "Vital dashboard → API Keys"
+  key_format: "API key string"
+  body: |
+    1. Sign up at tryvital.io and open the dashboard.
+    2. API Keys → copy a sandbox key for setup or a production key.
+    3. Paste it into Sagewai → Connections → Tools → Add Vital.
+    4. Leave the Base URL blank for sandbox, or set it to your
+       production region's URL.
+
+    Vital uses an `x-vital-api-key` header. Path parameters like
+    `{user_id}` are substituted from the call payload.
+
+    ⚠️ Health and biometric data are special-category personal data under
+    GDPR Art. 9 and may be PHI under HIPAA. You are the controller (and,
+    where applicable, the covered entity) for credentials registered here.
+    Confirm your compliance posture (BAA, DPA, lawful basis, retention
+    policy) before connecting this tool.

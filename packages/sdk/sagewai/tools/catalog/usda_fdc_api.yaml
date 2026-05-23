@@ -1,0 +1,42 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: usda_fdc_api
+version: 0.1.0
+title: USDA FoodData Central — Public food & nutrient database
+description: |
+  Search and retrieve detailed food and nutrient records from the
+  USDA FoodData Central API.
+category: health
+kind: sdk
+sandbox_tier: UNTRUSTED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.usda_fdc:usda_fdc
+scopes:
+  - network.outbound.fetch
+  - secrets.usda_fdc_key
+  - health.read
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: USDA_FDC_API_KEY
+      label: "USDA FDC API Key"
+      type: password
+      description: "Free API key from api.data.gov / FoodData Central signup"
+  signup_url: https://fdc.nal.usda.gov/api-key-signup.html
+  console_path: "api.data.gov signup form (key delivered by email)"
+  key_format: "API key string"
+  body: |
+    1. Visit https://fdc.nal.usda.gov/api-key-signup.html and request
+       a free key (delivered by email).
+    2. Paste the key into Sagewai → Connections → Tools → Add USDA FDC.
+
+    USDA FDC takes the key as a `?api_key=` query-string parameter
+    on every request (no header support). Free, no rate-limit
+    headers — burst loops may get IP-throttled by api.data.gov.
+
+    ⚠️ Health and biometric data are special-category personal data under
+    GDPR Art. 9 and may be PHI under HIPAA. You are the controller (and,
+    where applicable, the covered entity) for credentials registered here.
+    Confirm your compliance posture (BAA, DPA, lawful basis, retention
+    policy) before connecting this tool.

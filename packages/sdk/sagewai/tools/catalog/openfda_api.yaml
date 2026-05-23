@@ -1,0 +1,44 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: openfda_api
+version: 0.1.0
+title: OpenFDA — Adverse events, drug labels, recalls
+description: |
+  Query FDA adverse-event reports, drug labels, device events,
+  and food enforcement actions. API key is optional (free,
+  higher rate limit when provided).
+category: health
+kind: sdk
+sandbox_tier: UNTRUSTED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.openfda:openfda
+scopes:
+  - network.outbound.fetch
+  - secrets.openfda_key
+  - health.read
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: OPENFDA_API_KEY
+      label: "OpenFDA API Key (optional)"
+      type: password
+      description: "Optional free key for higher rate limits. Leave blank to call OpenFDA unauthenticated (low rate limit)."
+  signup_url: https://open.fda.gov/apis/authentication/
+  console_path: "OpenFDA API key request form"
+  key_format: "API key string"
+  body: |
+    1. (Optional) Request a free OpenFDA API key at
+       https://open.fda.gov/apis/authentication/ for higher
+       rate limits (1000/day → 120k/day).
+    2. Paste the key into Sagewai → Connections → Tools → Add OpenFDA,
+       or leave the field blank to call the public unauthenticated tier.
+
+    OpenFDA takes the key as a `?api_key=` query-string parameter
+    when provided.
+
+    ⚠️ Health and biometric data are special-category personal data under
+    GDPR Art. 9 and may be PHI under HIPAA. You are the controller (and,
+    where applicable, the covered entity) for credentials registered here.
+    Confirm your compliance posture (BAA, DPA, lawful basis, retention
+    policy) before connecting this tool.

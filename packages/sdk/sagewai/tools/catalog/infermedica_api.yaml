@@ -1,0 +1,51 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: infermedica_api
+version: 0.1.0
+title: Infermedica — Clinical symptom checker
+description: |
+  Parse symptom mentions, suggest follow-up questions, generate
+  ranked condition lists, and triage acuity for clinical
+  decision-support workflows.
+category: health
+kind: sdk
+sandbox_tier: UNTRUSTED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.infermedica:infermedica
+scopes:
+  - network.outbound.fetch
+  - secrets.infermedica_key
+  - health.read
+  - medical.advisory
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: INFERMEDICA_APP_ID
+      label: "Infermedica App ID"
+      type: text
+      description: "App ID from the Infermedica developer portal"
+    - name: INFERMEDICA_APP_KEY
+      label: "Infermedica App Key"
+      type: password
+      description: "App key paired with the App ID"
+  signup_url: https://developer.infermedica.com
+  console_path: "Infermedica developer portal → Applications"
+  key_format: "App ID + App key pair"
+  body: |
+    1. Sign up at developer.infermedica.com.
+    2. Applications → create an app → copy the App ID and App key.
+    3. Paste both into Sagewai → Connections → Tools → Add Infermedica.
+
+    Infermedica requires both `App-Id` and `App-Key` headers on every
+    request.
+
+    ⚠️ Infermedica's `diagnose` / `triage` outputs provide clinical
+    context for triage workflows. They are not medical advice. Do not
+    surface raw triage outputs to end users without clinician review.
+
+    ⚠️ Health and biometric data are special-category personal data under
+    GDPR Art. 9 and may be PHI under HIPAA. You are the controller (and,
+    where applicable, the covered entity) for credentials registered here.
+    Confirm your compliance posture (BAA, DPA, lawful basis, retention
+    policy) before connecting this tool.

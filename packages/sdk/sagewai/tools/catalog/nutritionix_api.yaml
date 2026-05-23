@@ -1,0 +1,45 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: nutritionix_api
+version: 0.1.0
+title: Nutritionix — Restaurant & branded food database
+description: |
+  Search restaurant and branded food items, parse natural-language
+  meal descriptions into structured nutrient breakdowns.
+category: health
+kind: sdk
+sandbox_tier: UNTRUSTED
+exec:
+  sdk:
+    entrypoint: sagewai.tools.builtins.nutritionix:nutritionix
+scopes:
+  - network.outbound.fetch
+  - secrets.nutritionix_key
+  - health.read
+setup:
+  auth_complexity: api_key
+  credential_fields:
+    - name: NUTRITIONIX_APP_ID
+      label: "Nutritionix App ID"
+      type: text
+      description: "App ID from the Nutritionix developer dashboard"
+    - name: NUTRITIONIX_APP_KEY
+      label: "Nutritionix App Key"
+      type: password
+      description: "App key paired with the App ID"
+  signup_url: https://developer.nutritionix.com
+  console_path: "Nutritionix dashboard → My Apps"
+  key_format: "App ID + App key pair"
+  body: |
+    1. Sign up at developer.nutritionix.com.
+    2. My Apps → create an app → copy the App ID and App key.
+    3. Paste both into Sagewai → Connections → Tools → Add Nutritionix.
+
+    Nutritionix requires both `x-app-id` and `x-app-key` headers.
+    Read-only this batch (no `/log/foods` writes).
+
+    ⚠️ Health and biometric data are special-category personal data under
+    GDPR Art. 9 and may be PHI under HIPAA. You are the controller (and,
+    where applicable, the covered entity) for credentials registered here.
+    Confirm your compliance posture (BAA, DPA, lawful basis, retention
+    policy) before connecting this tool.

@@ -1,0 +1,69 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: rxnorm_api
+version: 0.1.0
+title: RxNorm — NIH/NLM drug name normalization
+description: |
+  Look up RxCUI (drug concept IDs), drug properties, search by
+  name, and inspect drug-drug interactions via the public
+  RxNav REST API. No authentication required.
+category: health
+kind: http
+sandbox_tier: UNTRUSTED
+exec:
+  http:
+    base_url: https://rxnav.nlm.nih.gov/REST
+    auth:
+      kind: none
+    operations:
+      get_rxcui:
+        method: GET
+        path: /rxcui.json
+        input_schema:
+          type: object
+          required: [name]
+          properties:
+            name: { type: string }
+      get_drug_info:
+        method: GET
+        path: /rxcui/{rxcui}/properties.json
+        input_schema:
+          type: object
+          required: [rxcui]
+          properties:
+            rxcui: { type: string }
+      search_drugs:
+        method: GET
+        path: /drugs.json
+        input_schema:
+          type: object
+          required: [name]
+          properties:
+            name: { type: string }
+      get_interactions:
+        method: GET
+        path: /interaction/interaction.json
+        input_schema:
+          type: object
+          required: [rxcui]
+          properties:
+            rxcui: { type: string }
+scopes:
+  - network.outbound.fetch
+  - health.read
+setup:
+  auth_complexity: none
+  signup_url: https://lhncbc.nlm.nih.gov/RxNav/APIs/RxNormAPIs.html
+  console_path: "No signup required (public NIH service)"
+  key_format: "n/a"
+  body: |
+    RxNorm/RxNav is a free public service from NIH/NLM. No API key,
+    no signup. Just add it to your project to enable.
+
+    There are no rate-limit headers; bursty loops may get IP-throttled
+    by NLM. Mirror locally if you need high throughput.
+
+    ⚠️ Health and biometric data are special-category personal data under
+    GDPR Art. 9 and may be PHI under HIPAA. Even with a public API like
+    RxNorm, your queries can themselves reveal patient context — handle
+    request logs accordingly.
