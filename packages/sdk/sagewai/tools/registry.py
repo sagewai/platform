@@ -109,13 +109,26 @@ def load() -> None:
         seen_ids[tool_id] = path
         parsed.append((path, raw))
 
-    # Pass 2: filename-must-match-id check
+    # Pass 2: filename-must-match-id check + oauth2 cross-checks
     new: dict[str, CatalogEntry] = {}
     for path, raw in parsed:
         if path.stem != raw["id"]:
             raise CatalogError(
                 f"{path.name}: id {raw['id']!r} does not match filename stem {path.stem!r}"
             )
+        # oauth2: setup.oauth_provider must equal exec.http.auth.oauth_provider
+        # when both are present. Schema enforces presence of setup.oauth_provider
+        # for auth_complexity=oauth2; here we lock the two to the same value.
+        if raw.get("setup", {}).get("auth_complexity") == "oauth2":
+            setup_prov = raw["setup"].get("oauth_provider")
+            http_prov = (
+                raw.get("exec", {}).get("http", {}).get("auth", {}).get("oauth_provider")
+            )
+            if http_prov is not None and setup_prov is not None and http_prov != setup_prov:
+                raise CatalogError(
+                    f"{path.name}: setup.oauth_provider ({setup_prov!r}) must equal "
+                    f"exec.http.auth.oauth_provider ({http_prov!r})"
+                )
         new[raw["id"]] = CatalogEntry(
             id=raw["id"],
             version=raw["version"],

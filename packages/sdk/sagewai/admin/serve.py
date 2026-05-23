@@ -523,6 +523,12 @@ def create_admin_serve_app(
 
     connections_routes.register(app)
 
+    # OAuth admin routes — provider listing, client CRUD, authorize/callback,
+    # refresh, revoke, set-default (Batch 3 — oauth2 tier).
+    from sagewai.admin import oauth_routes  # noqa: E402
+
+    oauth_routes.register(app, sf)
+
     @app.api_route(
         "/api/v1/admin/inference-providers{rest:path}",
         methods=["GET", "POST", "PUT", "DELETE", "PATCH"],

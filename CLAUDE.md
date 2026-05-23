@@ -628,6 +628,94 @@ auto-discovers new tools via `/tools/registry`. Every YAML's
 `infermedica_api` additionally carries a "clinical context, not medical
 advice" disclaimer.
 
+**Batch 3 (oauth2 tier kickoff) landed:** OAuth2 authorization-code
+lifecycle + 2 validator tools (catalog: 48 → 50):
+
+- `spotify` — `kind: http`, `auth.kind: oauth2`, PKCE S256. 8 ops
+  (search, get_track, get_artist, current_user_playlists,
+  create_playlist, add_tracks_to_playlist, currently_playing,
+  recommendations). Required scopes: 6.
+- `gmail` — `kind: http`, `auth.kind: oauth2`, Google PKCE. 6 ops
+  (search_messages, get_message, send_message, create_draft,
+  list_labels, modify_message_labels). Required scopes: 2.
+
+Infrastructure shipped alongside the tools:
+
+- New `sagewai.oauth` subpackage: `providers.py` (registry with
+  `spotify` + `google` seeded; OAuthProvider dataclass declares
+  authorize_url, token_url, revoke_url, PKCE policy, scope separator,
+  token auth style, default scopes), `errors.py` (OAuthError +
+  5 subclasses with stable `code` attributes), `pkce.py` (S256
+  verifier + challenge), `pending_auth.py` (in-process state map
+  with 10-min TTL, single-use pop), `vault.py` (`oauth_client` record
+  CRUD on the existing connections store with `is_default`
+  uniqueness per `(project, provider)`), `exchange.py` (async
+  `exchange_code` + `refresh_access_token` against vendor token URLs;
+  handles basic-vs-body auth styles).
+- New `kind: "oauth_client"` connection record in the existing vault
+  alongside `inference` and `tool`. Project-scoped. Sealed.Crypto
+  encryption for `client_secret`, `tokens.access_token`,
+  `tokens.refresh_token`. API responses mask them.
+- Admin routes under `/api/v1/admin/connections/oauth/`: `providers`,
+  `list`/`create`/`get`/`delete`, `start`, `callback` (HTML),
+  `refresh`, `revoke`, `set-default`. Wired in `serve.py` via
+  `oauth_routes.register(app, sf)`.
+- Admin UI: third tab on `/connections` ("OAuth") with add wizard,
+  status pills (5 states), scopes hovercard, default-star toggle,
+  per-row actions menu (Authorize/Re-authorize/Refresh/Revoke/Delete).
+- CLI: `sagewai oauth {providers, list, status, add, refresh, revoke,
+  delete, reauthorize, set-default}`. `add` runs a loopback HTTP
+  listener on `127.0.0.1:53682` (override with `--redirect-port`).
+  Shares the vault with the admin.
+- Executor: `exec.http.auth.kind: oauth2` now real in `executors/http.py`.
+  Eager pre-refresh (60s safety window) + reactive refresh-once-on-401.
+  Insufficient-scope 401 (per RFC 6750 `WWW-Authenticate`) raises
+  `OAuthScopeMissingError` without attempting refresh. Typed errors
+  (`OAuthNotConfiguredError`, `OAuthNotAuthorizedError`,
+  `OAuthScopeMissingError`, `OAuthRefreshError`, `OAuthCallbackError`)
+  surface to mission logs with stable codes.
+- Schema additions: `setup.oauth_provider` (new property) and
+  `setup.required_scopes` (becomes required) when
+  `auth_complexity == "oauth2"`; `exec.http.auth.oauth_provider`
+  (new property); cross-check in `registry.py` post-validation pass
+  locks the two `oauth_provider` values to the same string.
+- Docs: `apps/docs/app/docs/connections/oauth/{page.mdx, spotify/page.mdx, google/page.mdx}` — lifecycle overview + per-provider setup guides.
+
+**Tier 3 kickoff invariants:**
+- One **default** OAuth client per `(project, provider)`. Tools use
+  the default unless overridden (overrides out of scope for kickoff).
+- **Both redirect URIs** must be registered in the vendor console: the
+  admin's `{SAGEWAI_PUBLIC_URL}/api/v1/admin/connections/oauth/callback`
+  AND the CLI's `http://127.0.0.1:53682/callback`. The setup docs spell
+  this out — most failed first-time authorizations are due to omitting
+  one of these.
+- Spotify refresh tokens don't expire absent revocation. Google refresh
+  tokens may rotate (Testing mode: every 7 days) or be invalidated
+  after 6 months of inactivity. Surface as `OAuthRefreshError`; UI
+  prompts re-authorize.
+- The pending-auth state map is in-process (single-instance admin).
+  Multi-instance deployments swap to Redis following the same pattern
+  as Sealed-iii.A (out of scope for kickoff).
+
+**Test counts:** ~52 new tests (5 providers + 2 errors + 4 pkce + 4
+pending_auth + 6 vault + 5 exchange + 8 executor + 1 batch3_load + 6
+batch3_factory + 16 admin routes + 11 CLI = 68; some unit + executor +
+factory tests overlap). Existing suite unchanged.
+
+**Carried forward (queued):** additional Google services
+(Calendar/Drive/YouTube — cheap follow-ups; batch 3a); enterprise CRM
+OAuth (Salesforce, HubSpot OAuth flavor — batch 3b); communications
+OAuth (Slack/Zoom/Microsoft Teams — batch 3c, Microsoft is the second
+multi-service provider); media OAuth (Twitch, Vimeo, Trakt — batch 3d);
+wearables OAuth (Fitbit/Oura/Whoop/Garmin — batch 3e, all UNTRUSTED tier
+per 2g canon); `oauth2_webhook` tier (Slack events, Stripe webhook
+signing, GitHub webhook secrets); Apple Music JWT auth (its own
+dedicated `exec.http.auth.kind: jwt_signed`); PayPal client-credentials
+migration to `get_oauth_token`; media metadata api_key tools
+(TMDb/OMDb/TVmaze); unified **Connections Platform** (next-major-project
+absorbing all kinds + protocol-plugin interface + SOPS credentials
+backend).
+
 ## Known issues you may encounter
 
 1. ~~`sagewai[fastapi]` extra missing `uvicorn`~~ **FIXED** in PR #48.

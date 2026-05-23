@@ -22,15 +22,17 @@ import {
   deleteProviderCredentials,
 } from '@/components/inference-provider-modal';
 import { ToolsTab } from '@/components/connections/tools-tab';
+import { OAuthTab } from '@/components/connections/oauth-tab';
 import {
   CheckCircle2, AlertCircle, ExternalLink, KeyRound, RefreshCw, Trash2,
 } from 'lucide-react';
 
-type ConnectionTab = 'inference' | 'tools';
+type ConnectionTab = 'inference' | 'tools' | 'oauth';
 
 const TABS = [
   { id: 'inference', label: 'Inference' },
   { id: 'tools', label: 'Tools' },
+  { id: 'oauth', label: 'OAuth' },
 ] as const;
 
 export default function ConnectionsPage() {
@@ -178,6 +180,8 @@ export default function ConnectionsPage() {
       {activeTab === 'tools' && (
         <ToolsTab />
       )}
+
+      {activeTab === 'oauth' && <OAuthTab />}
 
       {editingEntry && (
         <InferenceProviderModal

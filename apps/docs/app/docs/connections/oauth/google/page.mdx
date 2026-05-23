@@ -1,0 +1,100 @@
+export const metadata = {
+  title: "Google OAuth setup",
+  description:
+    "Register a Google OAuth client and authorize Sagewai against Gmail (plus future Google services).",
+};
+
+# Google
+
+The Google OAuth client is shared across all Google services Sagewai
+catalogues — Gmail today, Calendar/Drive/YouTube next. You register
+one OAuth client in Google Cloud Console, authorize once, and tools
+draw on the same access + refresh tokens.
+
+## Create the OAuth client
+
+1. Go to [console.cloud.google.com](https://console.cloud.google.com/) and pick or create a project.
+2. **APIs & Services → Library** → search **Gmail API** → **Enable**.
+   (Repeat for Calendar / Drive / YouTube as you add those tools.)
+3. **APIs & Services → OAuth consent screen.**
+   - Choose **External** unless your operators are all in a Google
+     Workspace — in which case Internal is cleaner.
+   - Fill in the required fields (app name, support email, developer
+     contact).
+   - In **Testing** mode, add yourself (and any other authorizing
+     operators) to **Test users**. While in Testing, refresh tokens
+     rotate every 7 days. **Publish** the app for refresh tokens that
+     last 6 months.
+4. **APIs & Services → Credentials → Create Credentials → OAuth client
+   ID.**
+   - Application type: **Web application**.
+   - **Authorized redirect URIs** — add **both**:
+     - `{SAGEWAI_PUBLIC_URL}/api/v1/admin/connections/oauth/callback`
+     - `http://127.0.0.1:53682/callback` (for the `sagewai oauth` CLI)
+5. Copy the **Client ID** and **Client Secret**.
+
+## Register in Sagewai
+
+### Admin UI
+
+1. Sagewai → **Connections** → **OAuth** → **Add OAuth Client**.
+2. Provider: **Google**.
+3. Paste Client ID + Client Secret. The default scopes
+   (`openid email`) are the OAuth client's baseline — the bundled
+   `gmail` tool adds Gmail-specific scopes on top.
+4. **Save and Authorize**. A popup opens to Google's consent screen —
+   approve. The OAuth tab updates to `authorized`.
+
+### CLI
+
+```bash
+sagewai oauth add google
+# Prompts: display_name, client_id, client_secret
+```
+
+## Scopes used by the bundled `gmail` tool
+
+| Scope | What it grants |
+|---|---|
+| `https://www.googleapis.com/auth/gmail.modify` | Read + label + archive messages. |
+| `https://www.googleapis.com/auth/gmail.send` | Send mail as you. |
+
+The `gmail.modify` scope is intentionally broader than `gmail.readonly`
+— it covers labeling, archiving, and marking-as-read, which are common
+agent operations. If you only need read access, you can override
+`required_scopes` per project (advanced; out of scope for the kickoff).
+
+When you later add other Google tools (Calendar, Drive), Sagewai
+detects the additional scopes they need and prompts a single
+**Re-authorize** — Google's consent screen shows the union of scopes
+across all your Google tools.
+
+## Token lifetime
+
+- **Access tokens** expire after **1 hour**. Auto-refreshed.
+- **Refresh tokens** may be invalidated:
+  - **Testing mode**: rotate every 7 days (until you publish).
+  - **Published**: last indefinitely, unless the user revokes access
+    via their Google account → Security → Third-party apps, or after
+    6 months of total inactivity (per Google's policy).
+  - On any of these, the OAuth client flips to `expired` — re-authorize.
+
+## Common errors
+
+**`redirect_uri_mismatch`**  \
+The URI Sagewai sent doesn't exactly match what you registered. Most
+common cause: protocol (`http` vs `https`), trailing slash, or port
+mismatch. Re-check both URIs character-for-character.
+
+**`access_denied`**  \
+You declined the consent screen. The OAuth client stays `pending`;
+click Authorize again from the OAuth tab.
+
+**`invalid_grant` on refresh**  \
+The refresh token has been invalidated (likely by user revocation or
+Testing-mode rotation). Client flips to `expired`; re-authorize to
+reconnect.
+
+**`unauthorized_client` on token exchange**  \
+The OAuth client isn't of type Web application, or it's been deleted
+in Google Cloud Console. Re-check Credentials.

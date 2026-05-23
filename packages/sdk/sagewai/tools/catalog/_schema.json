@@ -29,6 +29,7 @@
         "console_path":    { "type": "string" },
         "key_format":      { "type": "string" },
         "required_scopes": { "type": "array", "items": { "type": "string" } },
+        "oauth_provider":  { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
         "test_endpoint":   { "type": "object" },
         "body":            { "type": "string" },
         "credential_fields": {
@@ -67,7 +68,10 @@
                     "base_url": { "type": "string", "format": "uri" },
                     "runtime_base_url_field": { "type": "string" },
                     "auth": { "type": "object", "required": ["kind"],
-                              "properties": { "kind": { "enum": ["none", "api_key", "bearer", "basic", "oauth2", "hmac", "aws_sigv4"] } } },
+                              "properties": {
+                                "kind": { "enum": ["none", "api_key", "bearer", "basic", "oauth2", "hmac", "aws_sigv4"] },
+                                "oauth_provider": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+                              } },
                     "operations": {
                       "type": "object",
                       "minProperties": 1,
@@ -115,6 +119,15 @@
       }, "not": { "anyOf": [
         {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["cli"]}
       ]} } } }
+    },
+    {
+      "if": { "properties": { "setup": { "properties": { "auth_complexity": { "const": "oauth2" } }, "required": ["auth_complexity"] } } },
+      "then": { "properties": { "setup": {
+        "required": ["oauth_provider", "required_scopes"],
+        "properties": {
+          "required_scopes": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+        }
+      } } }
     }
   ]
 }

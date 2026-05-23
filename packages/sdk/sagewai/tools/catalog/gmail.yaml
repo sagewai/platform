@@ -1,0 +1,132 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: gmail
+version: 0.1.0
+title: Gmail — Mail read, send, and label management
+description: |
+  Search threads and messages, send mail, create drafts, and manage
+  labels on the authorized Google account via the Gmail v1 API.
+  OAuth2 authorization-code via the shared Google OAuth client.
+category: communications
+kind: http
+sandbox_tier: SANDBOXED
+exec:
+  http:
+    base_url: https://gmail.googleapis.com/gmail/v1
+    auth:
+      kind: oauth2
+      oauth_provider: google
+    operations:
+      search_messages:
+        method: GET
+        path: /users/me/messages
+        input_schema:
+          type: object
+          properties:
+            q:                  { type: string, description: "Gmail search query, e.g. 'from:foo subject:bar'" }
+            labelIds:           { type: string, description: "Comma-separated label IDs to filter on" }
+            maxResults:         { type: integer, minimum: 1, maximum: 500 }
+            pageToken:          { type: string }
+            includeSpamTrash:   { type: boolean }
+      get_message:
+        method: GET
+        path: /users/me/messages/{id}
+        input_schema:
+          type: object
+          required: [id]
+          properties:
+            id:     { type: string }
+            format: { type: string, description: "minimal, full, raw, metadata" }
+      send_message:
+        method: POST
+        path: /users/me/messages/send
+        body_format: json
+        input_schema:
+          type: object
+          required: [raw]
+          properties:
+            raw:      { type: string, description: "RFC 2822 message, base64url-encoded" }
+            threadId: { type: string }
+      create_draft:
+        method: POST
+        path: /users/me/drafts
+        body_format: json
+        input_schema:
+          type: object
+          required: [message]
+          properties:
+            message:
+              type: object
+              required: [raw]
+              properties:
+                raw:      { type: string, description: "RFC 2822 message, base64url-encoded" }
+                threadId: { type: string }
+      list_labels:
+        method: GET
+        path: /users/me/labels
+        input_schema:
+          type: object
+      modify_message_labels:
+        method: POST
+        path: /users/me/messages/{id}/modify
+        body_format: json
+        input_schema:
+          type: object
+          required: [id]
+          properties:
+            id:             { type: string }
+            addLabelIds:    { type: array, items: { type: string } }
+            removeLabelIds: { type: array, items: { type: string } }
+scopes:
+  - network.outbound.fetch
+  - secrets.oauth.google
+  - email.user.read
+  - email.user.write
+setup:
+  auth_complexity: oauth2
+  oauth_provider: google
+  required_scopes:
+    - https://www.googleapis.com/auth/gmail.modify
+    - https://www.googleapis.com/auth/gmail.send
+  signup_url: https://console.cloud.google.com/
+  console_path: "console.cloud.google.com → APIs & Services → Credentials → Create OAuth Client ID (Web application)"
+  body: |
+    OAuth2 authorization-code flow via the Google OAuth client.
+    Operators authorize Sagewai once via Connections → OAuth → Add → Google.
+    Sagewai stores access and refresh tokens encrypted in the vault,
+    refreshes pre-emptively before expiry, and reactively retries once
+    on 401.
+
+    Required redirect URIs to register in your Google Cloud OAuth
+    client (both, to cover admin-UI and CLI-driven authorize flows):
+
+      - Admin:  {SAGEWAI_PUBLIC_URL}/api/v1/admin/connections/oauth/callback
+      - CLI:    http://127.0.0.1:53682/callback
+
+    Setup steps:
+    1. console.cloud.google.com → APIs & Services → Library → search
+       "Gmail API" → Enable.
+    2. APIs & Services → OAuth consent screen → configure (External or
+       Internal). For External in Testing mode, add yourself + any
+       authorizing operator email to the Test users list.
+    3. APIs & Services → Credentials → Create Credentials → OAuth client
+       ID → Web application. Add both redirect URIs above to the
+       Authorized redirect URIs list.
+    4. Download the JSON or copy Client ID + Client Secret.
+    5. Sagewai → Connections → OAuth → Add → Google → paste the pair
+       → Authorize. Approve the consent screen.
+
+    Operations exposed:
+    - `search_messages`: list message IDs matching a Gmail search query.
+    - `get_message`: full message body + headers + attachments metadata.
+    - `send_message`: send an RFC 2822 message (base64url-encoded `raw`).
+    - `create_draft`: save a message as a draft without sending.
+    - `list_labels`: enumerate labels on the account.
+    - `modify_message_labels`: add or remove labels from a message
+      (the canonical way to archive, star, mark read/unread).
+
+    Google access tokens expire after 1 hour. Refresh tokens may be
+    revoked by the user, may expire after 6 months of inactivity, or
+    may be invalidated if the OAuth client is in Testing mode (rotates
+    every 7 days). Production-grade deployments should publish the
+    OAuth consent screen.

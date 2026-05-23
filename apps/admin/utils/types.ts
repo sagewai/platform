@@ -1696,3 +1696,15 @@ export interface ToolTestResult {
   error?: string;
   test_endpoint?: object | null;
 }
+
+// ── OAuth clients (batch-3) ──────────────────────────────────────────────────
+
+export type {
+  OAuthClient,
+  OAuthClientStatus,
+  OAuthClientTokensMeta,
+  OAuthCreatePayload,
+  OAuthCreateResponse,
+  OAuthProviderMeta,
+  OAuthStartResponse,
+} from './oauth-types';

@@ -1,0 +1,146 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+# Licensed under AGPL-3.0-or-later. See LICENSE.
+id: spotify
+version: 0.1.0
+title: Spotify — Music catalog and user library
+description: |
+  Search the Spotify catalog and operate on the connected user's
+  library (playlists, recently played, recommendations) via the Web API.
+  OAuth2 authorization-code with PKCE; operator authorizes once via
+  Sagewai → Connections → OAuth → Add Spotify.
+category: music
+kind: http
+sandbox_tier: SANDBOXED
+exec:
+  http:
+    base_url: https://api.spotify.com/v1
+    auth:
+      kind: oauth2
+      oauth_provider: spotify
+    operations:
+      search:
+        method: GET
+        path: /search
+        input_schema:
+          type: object
+          required: [q, type]
+          properties:
+            q:      { type: string, minLength: 1 }
+            type:   { type: string, description: "Comma-separated: track,album,artist,playlist,show,episode" }
+            limit:  { type: integer, minimum: 1, maximum: 50 }
+            offset: { type: integer, minimum: 0 }
+            market: { type: string }
+      get_track:
+        method: GET
+        path: /tracks/{id}
+        input_schema:
+          type: object
+          required: [id]
+          properties:
+            id:     { type: string }
+            market: { type: string }
+      get_artist:
+        method: GET
+        path: /artists/{id}
+        input_schema:
+          type: object
+          required: [id]
+          properties:
+            id: { type: string }
+      current_user_playlists:
+        method: GET
+        path: /me/playlists
+        input_schema:
+          type: object
+          properties:
+            limit:  { type: integer, minimum: 1, maximum: 50 }
+            offset: { type: integer, minimum: 0 }
+      create_playlist:
+        method: POST
+        path: /users/{user_id}/playlists
+        body_format: json
+        input_schema:
+          type: object
+          required: [user_id, name]
+          properties:
+            user_id:        { type: string }
+            name:           { type: string, minLength: 1 }
+            public:         { type: boolean }
+            collaborative:  { type: boolean }
+            description:    { type: string }
+      add_tracks_to_playlist:
+        method: POST
+        path: /playlists/{playlist_id}/tracks
+        body_format: json
+        input_schema:
+          type: object
+          required: [playlist_id, uris]
+          properties:
+            playlist_id: { type: string }
+            uris:        { type: array, items: { type: string }, minItems: 1, maxItems: 100 }
+            position:    { type: integer, minimum: 0 }
+      currently_playing:
+        method: GET
+        path: /me/player/currently-playing
+        input_schema:
+          type: object
+          properties:
+            market: { type: string }
+      recommendations:
+        method: GET
+        path: /recommendations
+        input_schema:
+          type: object
+          properties:
+            seed_artists: { type: string, description: "Comma-separated artist IDs (max 5)" }
+            seed_genres:  { type: string, description: "Comma-separated genre names (max 5)" }
+            seed_tracks:  { type: string, description: "Comma-separated track IDs (max 5)" }
+            limit:        { type: integer, minimum: 1, maximum: 100 }
+            market:       { type: string }
+scopes:
+  - network.outbound.fetch
+  - secrets.oauth.spotify
+  - music.user.read
+  - music.user.write
+setup:
+  auth_complexity: oauth2
+  oauth_provider: spotify
+  required_scopes:
+    - user-read-private
+    - playlist-read-private
+    - playlist-modify-private
+    - playlist-modify-public
+    - user-read-currently-playing
+    - user-top-read
+  signup_url: https://developer.spotify.com/
+  console_path: "developer.spotify.com → Dashboard → Create app"
+  body: |
+    OAuth2 authorization-code flow. Operators authorize Sagewai once
+    via Connections → OAuth → Add → Spotify. Sagewai stores access
+    and refresh tokens encrypted in the vault, refreshes pre-emptively
+    before expiry, and reactively retries once on 401.
+
+    Required redirect URIs to register in your Spotify app (both, to
+    cover admin-UI and CLI-driven authorize flows):
+
+      - Admin:  {SAGEWAI_PUBLIC_URL}/api/v1/admin/connections/oauth/callback
+      - CLI:    http://127.0.0.1:53682/callback
+
+    Setup steps:
+    1. developer.spotify.com → Dashboard → Create app.
+    2. Add both redirect URIs above to the app's Redirect URIs list.
+    3. Copy Client ID + Client Secret.
+    4. Sagewai → Connections → OAuth → Add → Spotify → paste the pair
+       → Authorize. Approve the consent screen in the popup.
+
+    Operations exposed:
+    - `search`: catalog search across tracks, albums, artists, playlists.
+    - `get_track`, `get_artist`: detail by id.
+    - `current_user_playlists`: list authorized user's playlists.
+    - `create_playlist`: create a playlist on the user's account.
+    - `add_tracks_to_playlist`: append up to 100 track URIs.
+    - `currently_playing`: what the user is listening to right now.
+    - `recommendations`: track recommendations from seed artists/genres/tracks.
+
+    Spotify access tokens expire after 1 hour; refresh tokens do not
+    expire absent revocation (rotate them in the dashboard if leaked).

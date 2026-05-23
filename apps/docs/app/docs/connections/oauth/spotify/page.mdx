@@ -1,0 +1,79 @@
+export const metadata = {
+  title: "Spotify OAuth setup",
+  description:
+    "Register a Spotify OAuth client and authorize Sagewai against your Spotify Developer account.",
+};
+
+# Spotify
+
+## Create the OAuth client
+
+1. Go to [developer.spotify.com](https://developer.spotify.com/) and sign in.
+2. **Dashboard → Create app.**
+3. Fill in name + description (these show on the consent screen).
+4. Under **Redirect URIs**, add **both**:
+   - `{SAGEWAI_PUBLIC_URL}/api/v1/admin/connections/oauth/callback` (e.g. `http://localhost:8080/api/v1/admin/connections/oauth/callback` for local dev)
+   - `http://127.0.0.1:53682/callback` (for the `sagewai oauth` CLI)
+5. Select the Web API scope (default).
+6. Save. Copy the **Client ID** and **Client Secret** from the app's
+   Settings page.
+
+## Register in Sagewai
+
+### Admin UI
+
+1. Sagewai → **Connections** → **OAuth** → **Add OAuth Client**.
+2. Provider: **Spotify**.
+3. Paste Client ID + Client Secret. Optionally edit the requested
+   scopes (defaults work for the bundled `spotify` tool).
+4. **Save and Authorize**. A popup opens to the Spotify consent
+   screen — approve. Sagewai polls in the background; the modal
+   closes once status flips to `authorized`.
+
+### CLI
+
+```bash
+sagewai oauth add spotify
+# Prompts: display_name, client_id, client_secret
+# Prints the authorize URL and opens it in your browser
+# Waits up to 5 minutes for the callback on 127.0.0.1:53682
+```
+
+## Scopes used by the bundled `spotify` tool
+
+| Scope | What it grants |
+|---|---|
+| `user-read-private` | Read your account profile (email, country). |
+| `playlist-read-private` | Read your private playlists. |
+| `playlist-modify-private` | Create / modify your private playlists. |
+| `playlist-modify-public` | Create / modify your public playlists. |
+| `user-read-currently-playing` | Read what you're playing right now. |
+| `user-top-read` | Read your top artists and tracks. |
+
+If a tool you add later requires more scopes, the OAuth tab surfaces a
+"Re-authorize" prompt with the broader set — re-running the consent
+screen grants them in one step.
+
+## Token lifetime
+
+- **Access tokens** expire after **1 hour**. Sagewai refreshes
+  pre-emptively when they're within 60 seconds of expiry, and
+  reactively on a 401 response.
+- **Refresh tokens** don't expire unless you (the operator) revoke
+  access in Spotify's account settings. If that happens, the OAuth
+  client flips to `expired` — re-authorize from the UI or CLI.
+
+## Common errors
+
+**`INVALID_CLIENT: Invalid redirect URI`**  \
+The redirect URI Sagewai sent doesn't exactly match what you registered
+in the Spotify app. Check both — admin URL and `127.0.0.1:53682` — are
+present, character-for-character.
+
+**`INVALID_CLIENT: Invalid client`**  \
+Client ID typo, or the app was deleted. Re-check Settings in the
+Spotify dashboard.
+
+**`INVALID_SCOPE`**  \
+Requested a scope Spotify no longer supports. Check the [scopes
+reference](https://developer.spotify.com/documentation/web-api/concepts/scopes).
