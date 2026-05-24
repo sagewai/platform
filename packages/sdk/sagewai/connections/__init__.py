@@ -9,10 +9,18 @@
 # See COMMERCIAL-LICENSE.md for details.
 """Connections Platform — unified external-dependencies model.
 
-PR1 ships the foundation layer: ``Connection`` dataclass envelope and
-``ConnectionStore`` with generic CRUD. Subsequent PRs add protocol
-plugins (PR2), credentials backends (PR3), admin routes + CLI (PR4),
-and the unified admin UI (PR5).
+PR1 shipped the foundation layer: ``Connection`` dataclass envelope and
+``ConnectionStore`` with generic CRUD.
+
+PR2 ships the protocol plugin layer: ``ProtocolPlugin`` contract,
+``PluginContext`` service-locator, and 5 plugins (http, oauth2, mcp,
+inference, sdk). Plugins are registered but not yet mounted on admin
+routes / CLI (PR4 does that). Legacy admin/CLI surfaces continue to
+serve traffic.
+
+Subsequent PRs: PR3 (credentials backends — local/env/sops), PR4
+(generic CRUD admin routes + CLI, removes legacy per-kind routes), PR5
+(admin UI rewrite + examples update + docs).
 """
 from sagewai.connections.errors import (
     ConnectionError,
@@ -29,6 +37,14 @@ from sagewai.connections.models import (
     TestResult,
     valid_protocol_ids,
 )
+from sagewai.connections.protocols import (
+    DEFAULT_KEY_FOR,
+    PROTOCOLS,
+    PluginContext,
+    ProtocolPlugin,
+    all_protocols,
+    get_protocol,
+)
 from sagewai.connections.store import ConnectionStore, DefaultKeyExtractor
 
 __all__ = [
@@ -37,12 +53,18 @@ __all__ = [
     "ConnectionNotFoundError",
     "ConnectionStatus",
     "ConnectionStore",
+    "DEFAULT_KEY_FOR",
     "DefaultKeyExtractor",
     "DuplicateDisplayNameError",
     "HealthResult",
+    "PROTOCOLS",
+    "PluginContext",
+    "ProtocolPlugin",
     "StoreCorruptedError",
     "TestResult",
     "UnknownProtocolError",
     "UnsupportedStoreVersionError",
+    "all_protocols",
+    "get_protocol",
     "valid_protocol_ids",
 ]

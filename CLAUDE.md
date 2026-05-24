@@ -772,6 +772,85 @@ unchanged.
 **Test counts:** 44 new tests across errors (2), models (6), store (36).
 Full suite passes; smoke 39; perf unchanged.
 
+**PR2 (protocol plugin layer) landed:** `sagewai.connections.protocols`
+subpackage with the plugin contract + 5 plugins.
+
+- `base.py`: `ProtocolPlugin` Protocol (runtime-checkable) + frozen
+  `PluginContext` dataclass + `TestResult` re-export. Plugin contract
+  methods: `protocol_data_schema()`, `public_view()`,
+  `on_create()`/`on_update()`/`on_delete()` lifecycle hooks, `test()`,
+  `extra_routes()` returning a FastAPI `APIRouter`, `extra_cli()`
+  returning a list of `click.Command`. `PluginContext` carries `store`,
+  `creds` (None in PR2; PR3 wires CredentialsBackendRouter),
+  `project_id`, `request`.
+- `__init__.py`: static `PROTOCOLS` tuple — 5 plugins in declaration
+  order (http, sdk, mcp, inference, oauth2) — plus `get_protocol(id)`,
+  `all_protocols()`, and `DEFAULT_KEY_FOR` mapping
+  (`oauth2 → oauth2_default_key`, `inference → inference_default_key`).
+  Uses the canonical `UnknownProtocolError` from
+  `sagewai.connections.errors` for unknown-id lookups.
+- `http.py`: `HttpProtocolPlugin`. Validates catalog-entry shape
+  (`base_url`, `auth: {kind, ...}`, `runtime_base_url_field?`,
+  `operations_ref?`/`operations?`). `sensitive_fields = ()`. `test()`
+  HEADs `base_url`. No extra routes/CLI.
+- `sdk.py`: `SdkProtocolPlugin`. Validates `{entrypoint,
+  credential_fields, secrets}`. `public_view` masks any `secrets[name]`
+  where `credential_fields` declares `type: "password"`. `test()` is
+  a no-op success. No extra routes/CLI.
+- `mcp.py`: `McpProtocolPlugin`. Validates `{transport: stdio|http|sse,
+  command?, args?, url?}` with model-level validator (stdio requires
+  `command`, http/sse require `url`). `test()` attempts a connection
+  via an `MCPClient` adapter wrapping `sagewai.mcp.client.McpClient`'s
+  classmethod factories as an async context manager. One CLI command:
+  `probe`.
+- `inference.py`: `InferenceProtocolPlugin`. Wraps the existing
+  `sagewai.admin.connections_routes.PROVIDER_KEYS` constant and
+  `sagewai.admin.provider_probes` dispatch.
+  `protocol_data: {provider_key, base_url?, model_name?, secrets}`.
+  `public_view` masks all `secrets.*` values. `test()` dispatches to
+  `probe_<provider_key>` if present, else falls back to
+  `test_cloud_provider(provider_key, {base_url, api_key})` and
+  normalizes the returned dict shape. `inference_default_key` exported
+  for the registry's `DEFAULT_KEY_FOR`.
+- `oauth2.py`: `OAuth2ProtocolPlugin`. Wraps the `sagewai.oauth`
+  subpackage from PR #356. Schema mirrors today's `oauth_client` record
+  body exactly. `sensitive_fields = ("client_secret",
+  "tokens.access_token", "tokens.refresh_token")`. `extra_routes()`
+  returns an `APIRouter` with 4 sub-routes
+  (`/{connection_id}/start`, `/callback`, `/{connection_id}/refresh`,
+  `/{connection_id}/revoke`); route bodies are `NotImplementedError`
+  stubs in PR2 and get filled in by PR4 when the routes are mounted.
+  `extra_cli()` returns 5 commands (`start`, `refresh`, `revoke`,
+  `reauthorize`, `providers`); bodies stub-print until PR4 wires the
+  generic CLI. `oauth2_default_key` exported for `DEFAULT_KEY_FOR`.
+
+**Plugin contract key invariants:**
+- Plugins are stateless singletons; per-request state arrives via
+  `PluginContext`.
+- `protocol_data` is validated by the plugin's
+  `protocol_data_schema()` (Pydantic v2). The store stays opaque.
+- `public_view(data, *, include_secrets=False)` is the masking entry
+  point; `include_secrets=True` is reserved for internal executor +
+  refresh paths.
+- Lifecycle hooks (`on_create`/`on_update`/`on_delete`) are pass-through
+  by default; plugins that need to react (oauth2 on delete, etc.) hook
+  in. `on_delete` runs BEFORE the store removes the record.
+- `extra_routes()` returns an `APIRouter` with paths RELATIVE to the
+  per-protocol mount point. PR4 mounts each at
+  `/api/v1/admin/connections/<plugin.id>/`.
+- `extra_cli()` returns Click commands. PR4 groups them under
+  `sagewai connections <plugin.id> ...`.
+
+**Not yet wired** — same caveat as PR1. The legacy
+`/api/v1/admin/connections/{,tools/,oauth/}` routes + the
+`sagewai oauth`/`sagewai provider` CLI groups continue to serve
+traffic from `~/.sagewai/inference-providers.json` untouched. PR4
+deletes those surfaces and mounts the plugin-returned routes/commands
+on top of the new `connections.json` store.
+
+**Test counts:** ~75 new tests across protocols/base + 5 plugin test
+modules + registry conformance + integration. Full suite passes.
+
 ## Known issues you may encounter
 
 1. ~~`sagewai[fastapi]` extra missing `uvicorn`~~ **FIXED** in PR #48.
