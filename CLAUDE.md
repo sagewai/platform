@@ -851,6 +851,97 @@ on top of the new `connections.json` store.
 **Test counts:** ~75 new tests across protocols/base + 5 plugin test
 modules + registry conformance + integration. Full suite passes.
 
+**PR3 (credentials backend abstraction) landed:**
+`sagewai.connections.credentials` subpackage with the
+`CredentialsBackend` Protocol + 3 backends + the
+`CredentialsBackendRouter`.
+
+- `base.py`: `CredentialsBackend` runtime-checkable Protocol (id,
+  display_name, `encrypt_fields`, `decrypt_fields`, `health`,
+  `validate_config`) + private `_get_path`/`_set_path` helpers
+  (dotted-path JSON-pointer-ish walking; set is conservative —
+  only updates existing leaves, never creates new keys).
+- `errors.py`: 6-class hierarchy with stable codes —
+  `CredentialsError` (`credentials_error`), `UnknownBackendError`
+  (`credentials_unknown_backend`), `MissingEnvVarError`
+  (`credentials_missing_env_var`), `SopsDecryptError`
+  (`credentials_sops_decrypt_failed`), `BackendUnhealthyError`
+  (`credentials_backend_unhealthy`), `InvalidBackendConfigError`
+  (`credentials_invalid_config`).
+- `local.py`: `LocalBackend`. Wraps `sagewai.sealed.crypto.Crypto`
+  (Fernet). `backend_config={}`. Ciphertexts stored in-place with the
+  `fernet:` prefix. Default platform backend.
+- `env.py`: `EnvBackend`. `backend_config={"field_to_env":
+  {<path>: <ENV_VAR_NAME>}}`. Stores `{"$env": "<NAME>"}` markers;
+  the original plaintext is NEVER stored. `decrypt` reads
+  `os.environ[<NAME>]` at call time, raises `MissingEnvVarError` if
+  unset. Works naturally with `.env` files loaded at admin startup.
+- `sops.py`: `SopsBackend`. `backend_config={"file": "...",
+  "key": "...", "key_path"?: "..."}`. Stores `{"$sops": {"file": ...,
+  "key": ...}}` markers; the platform does NOT touch the SOPS file
+  (operators manage encryption via `sops edit <file>`). `decrypt`
+  shells out to `sops --decrypt <file>`, parses YAML, extracts the
+  key. **Path sandbox**: `file` resolves against `SAGEWAI_SOPS_ROOT`
+  (default `~/.sagewai/sops/`); any path outside raises
+  `SopsDecryptError`. **Per-(file, mtime) in-process cache** — one
+  subprocess call per file-decrypt per request.
+- `router.py`: `CredentialsBackendRouter`.
+  `__init__(default_backend="local")` validates default at
+  construction time. `get_backend_for(connection_creds)` resolves
+  per-connection backend or falls back to platform default.
+  `encrypt`/`decrypt` dispatch through the selected backend.
+  `swap(...)` re-encrypts under a new backend
+  (decrypt-old → encrypt-new) for the backend-change flow PR4 mounts
+  on `PATCH /api/v1/admin/connections/{id}`.
+- `__init__.py`: `BACKENDS` tuple, `get_backend(id)`,
+  `all_backends()`.
+
+**Top-level `sagewai.connections` re-exports** (with aliasing to
+avoid collisions with PR2's `PROTOCOLS` and `UnknownProtocolError`):
+`CREDENTIALS_BACKENDS`, `CredentialsBackend`,
+`CredentialsBackendRouter`, `CredentialsError`,
+`UnknownCredentialsBackendError`, plus the rest of the error
+hierarchy. Inside the `credentials/` package the names remain
+`BACKENDS` and `UnknownBackendError`.
+
+**`AdminStateFile.default_credentials_backend`:** new field
+(`get_default_credentials_backend()` + `set_default_credentials_backend()`).
+Defaults to `"local"` for pre-PR3 state files (backward-compatible
+read). Setter validates the id via `get_backend()` (local import to
+avoid pulling the connections package into admin module-load).
+
+**Key invariants:**
+- Backends are stateless singletons in `BACKENDS`. Routers can be
+  many — PR4 constructs one per request inside `PluginContext`.
+- `encrypt_fields` is idempotent: re-encrypting a leaf that already
+  carries the backend's storage form (e.g., `fernet:`-prefixed
+  string, `{"$env": ...}` dict) is a no-op.
+- `decrypt_fields` pass-through for leaves that AREN'T in the
+  backend's storage form — operators can have mixed-state records
+  during a backend swap, no exceptions.
+- `_set_path` (and therefore every backend) only updates existing
+  leaves. A pending oauth2 record without `tokens.access_token` is
+  not given a synthesized one during encryption.
+- SOPS file paths are sandboxed under `SAGEWAI_SOPS_ROOT`. Any
+  resolved path outside the root after symlink resolution raises
+  `SopsDecryptError`.
+- SOPS decryption caches per `(file, mtime)` in-process. Cache
+  survives across requests for the same admin process; restart
+  invalidates.
+
+**Not yet wired** — same as PR1/PR2 caveat. The legacy
+`/api/v1/admin/connections/{,tools/,oauth/}` routes + the
+`sagewai oauth`/`sagewai provider` CLI groups continue to serve
+traffic from `~/.sagewai/inference-providers.json` untouched. PR4
+constructs the `CredentialsBackendRouter` at admin-route startup,
+populates `PluginContext.creds` with it, and calls
+`router.encrypt`/`decrypt` around `ConnectionStore` operations.
+
+**Test counts:** ~65 new tests across errors (2), path helpers (9),
+local (9), env (10), sops (13), router (12), integration (5),
+AdminStateFile field (5). Full SDK suite: 5293 passed (5228 PR2
+baseline + 65 new), 0 failed.
+
 ## Known issues you may encounter
 
 1. ~~`sagewai[fastapi]` extra missing `uvicorn`~~ **FIXED** in PR #48.

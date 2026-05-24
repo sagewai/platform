@@ -152,6 +152,30 @@ class AdminStateFile:
             state["sandbox_pool"] = dict(cfg)
         self._mutate(_apply)
 
+    def get_default_credentials_backend(self) -> str:
+        """Return the platform-wide default credentials backend.
+
+        Defaults to ``"local"`` for state files that pre-date the
+        Connections Platform PR3. PR3 introduced this field.
+        """
+        return self._read().get("default_credentials_backend", "local")
+
+    def set_default_credentials_backend(self, backend_id: str) -> None:
+        """Set the platform-wide default credentials backend.
+
+        Validates against the registry; raises ``UnknownBackendError`` on
+        unknown ids.
+        """
+        # Local import to avoid pulling the connections package into
+        # admin module-load (state_file.py is imported very early).
+        from sagewai.connections.credentials import get_backend
+
+        get_backend(backend_id)  # raises UnknownBackendError if absent
+
+        def _apply(state: dict[str, Any]) -> None:
+            state["default_credentials_backend"] = backend_id
+        self._mutate(_apply)
+
     def get_kubernetes_backend_config(self) -> dict[str, Any]:
         """Return sandbox_backends.kubernetes sub-tree with safe defaults."""
         state = self._read()
