@@ -152,7 +152,7 @@ from sagewai.cli.init_cmd import init  # noqa: E402
 from sagewai.cli.mcp import mcp  # noqa: E402
 from sagewai.cli.memory_cmd import memory  # noqa: E402
 from sagewai.cli.model import model  # noqa: E402
-from sagewai.cli.oauth import oauth as _oauth_cmd  # noqa: E402
+from sagewai.cli.connections import connections as _connections_cmd  # noqa: E402
 from sagewai.cli.prompt import prompt  # noqa: E402
 from sagewai.cli.run import run_group, _start_agent_repl  # noqa: E402, F401
 from sagewai.cli.safety import safety  # noqa: E402
@@ -162,7 +162,6 @@ from sagewai.cli.status import (  # noqa: E402, F401
     _check_tcp_connection,
     _resolve_host_port,
 )
-from sagewai.cli.provider import provider  # noqa: E402
 from sagewai.cli.strategy import strategy  # noqa: E402
 from sagewai.cli.token import token  # noqa: E402
 from sagewai.cli.workflow import workflow  # noqa: E402
@@ -171,8 +170,7 @@ cli.add_command(agent)
 cli.add_command(workflow)
 cli.add_command(mcp)
 cli.add_command(model)
-cli.add_command(_oauth_cmd)
-cli.add_command(provider)
+cli.add_command(_connections_cmd)
 cli.add_command(prompt)
 cli.add_command(token)
 cli.add_command(status)

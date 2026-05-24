@@ -22,6 +22,10 @@ Subsequent PRs: PR3 (credentials backends — local/env/sops), PR4
 (generic CRUD admin routes + CLI, removes legacy per-kind routes), PR5
 (admin UI rewrite + examples update + docs).
 """
+from sagewai.connections.bootstrap import (
+    ConnectionsContext,
+    build_connections_context,
+)
 from sagewai.connections.credentials import (
     BACKENDS as CREDENTIALS_BACKENDS,
     BackendUnhealthyError,
@@ -66,6 +70,7 @@ __all__ = [
     "ConnectionNotFoundError",
     "ConnectionStatus",
     "ConnectionStore",
+    "ConnectionsContext",
     "CredentialsBackend",
     "CredentialsBackendRouter",
     "CredentialsError",
@@ -85,6 +90,7 @@ __all__ = [
     "UnknownProtocolError",
     "UnsupportedStoreVersionError",
     "all_protocols",
+    "build_connections_context",
     "get_protocol",
     "valid_protocol_ids",
 ]

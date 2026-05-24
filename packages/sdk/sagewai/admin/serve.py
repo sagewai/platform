@@ -518,16 +518,13 @@ def create_admin_serve_app(
 
     artifact_destination_routes.register(app)
 
-    # Connections credential vault (formerly inference-providers, Gap #10)
-    from sagewai.admin import connections_routes  # noqa: E402
+    # Connections Platform PR4: generic CRUD admin routes delegating
+    # to protocol plugins. Replaces the legacy connections_routes
+    # (per-kind inference + tools) and oauth_routes (per-provider OAuth)
+    # in one unified surface at /api/v1/admin/connections/*.
+    from sagewai.admin import connections_v2_routes  # noqa: E402
 
-    connections_routes.register(app)
-
-    # OAuth admin routes — provider listing, client CRUD, authorize/callback,
-    # refresh, revoke, set-default (Batch 3 — oauth2 tier).
-    from sagewai.admin import oauth_routes  # noqa: E402
-
-    oauth_routes.register(app, sf)
+    connections_v2_routes.register(app, sf)
 
     @app.api_route(
         "/api/v1/admin/inference-providers{rest:path}",

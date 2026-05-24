@@ -9,13 +9,12 @@
 # See COMMERCIAL-LICENSE.md for details.
 """Inference provider plugin.
 
-Wraps the existing inference-provider logic from
-:mod:`sagewai.admin.connections_routes` (PROVIDER_KEYS, PROVIDER_SCHEMA)
-and :mod:`sagewai.admin.provider_probes` (per-provider test probes).
+Owns the inference provider registry. Per-provider test probes come
+from :mod:`sagewai.admin.provider_probes`.
 
-PR4 deletes the old admin route handlers once the new generic routes
-mount this plugin. PR2 keeps the old routes serving traffic; the plugin
-exists in isolation for testing.
+(PR4 removed the legacy ``sagewai.admin.connections_routes`` module
+that previously housed ``PROVIDER_KEYS`` — the constant now lives
+here as the single source of truth.)
 """
 from __future__ import annotations
 
@@ -25,9 +24,13 @@ import click
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from sagewai.admin.connections_routes import PROVIDER_KEYS
 from sagewai.connections.models import Connection, TestResult
 from sagewai.connections.protocols.base import PluginContext
+
+
+# The set of provider_key values the inference plugin accepts.
+# Operators register a connection per (provider_key, project_id).
+PROVIDER_KEYS: tuple[str, ...] = ("runpod", "modal", "vastai", "colab", "custom")
 
 
 def inference_default_key(protocol_data: dict[str, Any]) -> str | None:

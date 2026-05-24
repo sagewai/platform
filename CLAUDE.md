@@ -942,6 +942,89 @@ local (9), env (10), sops (13), router (12), integration (5),
 AdminStateFile field (5). Full SDK suite: 5293 passed (5228 PR2
 baseline + 65 new), 0 failed.
 
+**PR4 (generic CRUD + cutover) landed:** The unified admin routes and
+`sagewai connections` CLI go live; legacy per-kind routes + the
+`sagewai oauth`/`sagewai provider` CLI groups are deleted. The
+platform now has ONE external-dependencies surface.
+
+- New `sagewai.connections.bootstrap` — `ConnectionsContext`
+  dataclass + `build_connections_context(sf)` factory. Constructs
+  the `(ConnectionStore, CredentialsBackendRouter)` triplet with all
+  5 plugins' allowed protocols + per-protocol default-key
+  extractors + the platform-default credentials backend. Exposes
+  `make_plugin_context(project_id, request) → PluginContext`.
+  New `default_admin_state_path()` helper in
+  `sagewai.admin.state_file` so admin routes + CLI both resolve the
+  same on-disk file.
+- New `sagewai.admin.connections_v2_routes` — 10 generic routes at
+  `/api/v1/admin/connections/`: `GET /protocols`, `GET /backends`,
+  `GET /`, `POST /`, `GET /{id}`, `PATCH /{id}`, `DELETE /{id}`,
+  `POST /{id}/test`, `POST /{id}/set-default`. Plus mounts each
+  plugin's `extra_routes()` at `/<plugin.id>/`. PATCH detects
+  `credentials_backend` changes and calls `router.swap()`. All
+  responses go through `plugin.public_view()` for masking.
+- New `sagewai.cli.connections` — `sagewai connections` Click group
+  with 8 generic subcommands (`protocols`, `backends`, `list`,
+  `get`, `add`, `update`, `delete`, `test`, `set-default`) + plugin
+  `extra_cli()` sub-groups. `sagewai connections list --protocol
+  oauth2 --tag music --json` is the canonical query shape.
+- OAuth2 plugin: 4 route bodies + 5 CLI bodies that were
+  `NotImplementedError` stubs in PR2 are now real implementations
+  operating on the generic store + router. Added
+  `OAuth2ProtocolPlugin.get_default_access_token(store, router,
+  project_id, provider) → (access_token, connection_dict)` static
+  helper that consolidates default-lookup + decrypt + pre-emptive
+  refresh (within 60s of expiry) into one call. Context injection
+  for routes uses a module-level `_INJECTED_CTX` singleton; PR4
+  admin wiring sets it at app construction, CLI sets it per
+  invocation, tests use `_test_inject_context(ctx)` /
+  `_test_inject_context(None)`.
+- HTTP executor migrated: `_resolve_oauth_token` now calls
+  `OAuth2ProtocolPlugin.get_default_access_token(...)` instead of
+  `sagewai.oauth.vault.find_default_client(...)`. Reactive 401
+  refresh path uses a new `_refresh_via_plugin(...)` helper. The
+  legacy `_resolve_store_path` / `_resolve_crypto` /
+  `_refresh_and_persist` seams are gone. The legacy
+  `sagewai.oauth.vault` module is deleted.
+- Inference plugin: `PROVIDER_KEYS = ("runpod", "modal", "vastai",
+  "colab", "custom")` moved inline from the deleted
+  `connections_routes.py` to
+  `sagewai/connections/protocols/inference.py` (single source of
+  truth).
+
+**Deletions (the cutover):**
+- `packages/sdk/sagewai/admin/connections_routes.py` (1167 lines —
+  legacy inference + tools admin routes)
+- `packages/sdk/sagewai/admin/oauth_routes.py` (605 lines — PR #356
+  OAuth admin routes)
+- `packages/sdk/sagewai/cli/oauth.py` (762 lines — PR #356 CLI)
+- `packages/sdk/sagewai/cli/provider.py` (146 lines — legacy
+  inference CLI)
+- `packages/sdk/sagewai/oauth/vault.py` (385 lines — replaced by
+  `ConnectionStore` + `CredentialsBackendRouter`)
+- Their test modules — `test_oauth_routes.py` (522 lines),
+  `test_oauth_cli.py` (313 lines), `test_vault.py` (224 lines),
+  `test_connections_tools_routes.py`, `test_connections_redirect.py`,
+  `test_state_file_connections_migration.py`,
+  `test_admin_inference_provider_routes.py`. Behavior coverage
+  migrated to `test_protocols_oauth2_bodies.py` and
+  `test_connections_v2_routes.py`.
+
+**Pre-PR5 caveat:** The admin frontend still calls the OLD
+`adminApi.connections.oauth.*` shapes (URLs like
+`/api/v1/admin/connections/oauth/...`). Those endpoints no longer
+exist — the oauth2 plugin's extra_routes mount at
+`/api/v1/admin/connections/oauth2/...` (the plugin id is `oauth2`,
+not `oauth`). The /connections page will 404 on most operations
+until PR5 rewrites the frontend. tsc still passes (the types are
+unchanged at the API-client surface; only the runtime URLs moved).
+
+**Test counts:** ~67 new tests (7 bootstrap + 24 oauth2 bodies + 21
+generic routes + 21 generic CLI − 6 batch3 rewrites that moved
+internally) − ~60 legacy tests deleted. Full SDK suite: 5300 passed
+(5293 PR3 baseline + 67 new − 60 deleted = net +7), 360 skipped,
+2 xfailed, 0 failed.
+
 ## Known issues you may encounter
 
 1. ~~`sagewai[fastapi]` extra missing `uvicorn`~~ **FIXED** in PR #48.

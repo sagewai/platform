@@ -9,9 +9,10 @@
 # See COMMERCIAL-LICENSE.md for details.
 """End-to-end batch-3 tests through ``build_callables``.
 
-Each test seeds an authorized OAuth client in a tmp vault, mocks the
-vendor REST endpoint with ``respx``, and runs the catalogued tool via
-``factory.build_callables`` exactly as the autopilot would.
+Each test seeds an authorized OAuth connection in a tmp store (the PR4
+Connections Platform store), mocks the vendor REST endpoint with
+``respx``, and runs the catalogued tool via ``factory.build_callables``
+exactly as the autopilot would.
 """
 from __future__ import annotations
 
@@ -24,48 +25,70 @@ import pytest
 import respx
 from cryptography.fernet import Fernet
 
-from sagewai.oauth import vault
-from sagewai.sealed.crypto import Crypto
+from sagewai.connections.bootstrap import build_connections_context
+from sagewai.connections.protocols.oauth2 import OAuth2ProtocolPlugin
 from sagewai.tools import factory, registry
-from sagewai.tools.executors import http as http_executor
 
 
 @pytest.fixture
 def store_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    path = tmp_path / "store.json"
-    monkeypatch.setattr(vault, "_store_path", lambda: path)
-    monkeypatch.setattr(http_executor, "_resolve_store_path", lambda: path)
+    """Point the connections store + admin state at tmp_path; provide master key."""
+    monkeypatch.setenv("SAGEWAI_MASTER_KEY", Fernet.generate_key().decode())
+    path = tmp_path / "connections.json"
+    monkeypatch.setenv("SAGEWAI_CONNECTIONS_FILE", str(path))
+    monkeypatch.setenv("SAGEWAI_ADMIN_STATE_FILE", str(tmp_path / "admin-state.json"))
     return path
 
 
 @pytest.fixture
-def crypto(monkeypatch: pytest.MonkeyPatch) -> Crypto:
-    key = Fernet.generate_key()
-    monkeypatch.setenv("SAGEWAI_MASTER_KEY", key.decode())
-    crypto = Crypto(key)
-    monkeypatch.setattr(http_executor, "_resolve_crypto", lambda: crypto)
-    return crypto
+def crypto():
+    """Backwards-compat placeholder fixture — not used after PR4 migration."""
+    return None
 
 
 def _seed_client(
     store_path: Path,
-    crypto: Crypto,
+    crypto,  # unused; kept for fixture-signature compat
     *,
     provider: str,
     granted_scopes: list[str],
     project_id: str = "default",
 ) -> str:
-    rec = vault.create_client(
-        store_path, crypto,
-        provider=provider, project_id=project_id, display_name=f"{provider} test",
-        client_id="CID", client_secret="SEC",
-        redirect_uri="http://localhost/cb",
-        requested_scopes=list(granted_scopes),
+    """Create + authorize an oauth2 connection via the generic store."""
+    from sagewai.admin.state_file import AdminStateFile
+    sf = AdminStateFile(store_path.parent / "admin-state.json")
+    ctx = build_connections_context(sf)
+    pd = {
+        "provider": provider,
+        "client_id": "CID",
+        "client_secret": "SEC",
+        "redirect_uri": "http://localhost/cb",
+        "requested_scopes": list(granted_scopes),
+        "granted_scopes": list(granted_scopes),
+        "tokens": None,
+    }
+    encrypted_pd = ctx.router.encrypt(
+        pd,
+        sensitive_field_paths=OAuth2ProtocolPlugin.sensitive_fields,
+        connection_credentials_backend=None,
+    )
+    conn = ctx.store.create(
+        protocol="oauth2",
+        project_id=project_id,
+        display_name=f"{provider} test",
+        tags=[],
+        protocol_data=encrypted_pd,
     )
     now = datetime.now(timezone.utc)
-    vault.update_tokens(
-        store_path, crypto, rec["id"],
-        tokens={
+    decrypted_pd = ctx.router.decrypt(
+        conn.protocol_data,
+        sensitive_field_paths=OAuth2ProtocolPlugin.sensitive_fields,
+        connection_credentials_backend=None,
+    )
+    pd_with_tokens = {
+        **decrypted_pd,
+        "granted_scopes": list(granted_scopes),
+        "tokens": {
             "access_token": "AT-LIVE",
             "refresh_token": "RT-LIVE",
             "token_type": "Bearer",
@@ -73,10 +96,14 @@ def _seed_client(
             "obtained_at": now.isoformat(),
             "last_refreshed_at": None,
         },
-        granted_scopes=list(granted_scopes),
-        status="authorized",
+    }
+    encrypted_with_tokens = ctx.router.encrypt(
+        pd_with_tokens,
+        sensitive_field_paths=OAuth2ProtocolPlugin.sensitive_fields,
+        connection_credentials_backend=None,
     )
-    return rec["id"]
+    ctx.store.update(conn.id, protocol_data=encrypted_with_tokens, status="authorized")
+    return conn.id
 
 
 @pytest.fixture(autouse=True)

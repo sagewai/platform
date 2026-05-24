@@ -41,6 +41,19 @@ from sagewai.sealed.directives.policies import DirectivesConfig, seed_defaults_i
 _DEFAULT_STATE_DIR = Path.home() / ".sagewai"
 _DEFAULT_STATE_FILE = _DEFAULT_STATE_DIR / "admin-state.json"
 
+
+def default_admin_state_path() -> Path:
+    """Resolve the on-disk admin-state path with env override.
+
+    ``SAGEWAI_ADMIN_STATE_FILE`` overrides; default is
+    ``~/.sagewai/admin-state.json``. Used by PR4 connections bootstrap
+    so admin routes and CLI both resolve the same file.
+    """
+    override = os.environ.get("SAGEWAI_ADMIN_STATE_FILE")
+    if override:
+        return Path(override)
+    return _DEFAULT_STATE_FILE
+
 _PBKDF2_ITERATIONS = 600_000
 # Every /auth/refresh rotates the token and appends a new one. The full e2e
 # suite fires ~30+ refreshes in one run, which would otherwise evict the
