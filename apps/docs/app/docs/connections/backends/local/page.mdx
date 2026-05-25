@@ -1,0 +1,94 @@
+export const metadata = {
+  title: "Local credentials backend",
+  description:
+    "Default credentials backend — encrypt sensitive fields on disk using the Sealed master key. No external dependency.",
+};
+
+# Local credentials backend
+
+The `local` backend is the default for fresh installs. Sensitive fields
+declared by each protocol plugin are encrypted using the Sealed master
+key and written to disk alongside the connection record. No external
+secret store, no network calls — everything stays on the box running
+Sagewai.
+
+## What it does
+
+When a connection is created with `credentials_backend.kind === "local"`,
+the connections router:
+
+1. Pulls sensitive field paths from the protocol plugin's
+   `sensitive_fields` list (e.g. `client_secret`,
+   `tokens.access_token`).
+2. Encrypts each value using the Sealed master key (XChaCha20-Poly1305
+   via `sagewai.sealed.crypto`).
+3. Persists the ciphertext in the connection record's `protocol_data`.
+4. Replaces the value in API responses with `"***"` so even the
+   operator can't read it back.
+
+Reads decrypt on demand inside the executor — values never round-trip
+through the admin UI or CLI.
+
+## When to pick it
+
+- Single-host deployments (laptop dev, single-VM production).
+- You don't have an external secret manager configured.
+- You want secrets backed up alongside the rest of the platform state
+  (one rsync covers everything).
+
+For multi-host setups where credentials need to live outside the box,
+pick [SOPS](../sops) or roll a custom backend (HashiCorp Vault, AWS
+Secrets Manager, …).
+
+## Configure
+
+There's nothing to configure on the connection — the `local` backend
+takes empty `config`:
+
+```json
+"credentials_backend": { "kind": "local", "config": {} }
+```
+
+Behind the scenes, the master key resolves in this order:
+
+1. `SAGEWAI_MASTER_KEY` environment variable (32-byte base64).
+2. The vault file at `~/.sagewai/sealed-vault.json` (auto-generated on
+   first setup).
+3. The `AdminStateFile`'s embedded master key (fallback).
+
+The setup wizard generates the master key on first run; operators who
+want to bring their own can set `SAGEWAI_MASTER_KEY` before running
+`sagewai admin serve`.
+
+## Security considerations
+
+- **Key material is local.** The master key lives on the same disk as
+  the encrypted blobs. If the disk is compromised, both are exposed.
+  For high-stakes deployments, layer a disk-encryption tool (FileVault,
+  LUKS, BitLocker) underneath.
+- **Backups encrypt blobs but not the key.** A `~/.sagewai/` tarball
+  is safe to back up only if the master key lives elsewhere (HSM,
+  cloud KMS, password manager). Otherwise the backup is plaintext-
+  equivalent.
+- **Key rotation requires re-encrypt.** Changing the master key
+  re-encrypts every connection blob — currently a manual operation;
+  automation is on the [follow-up](../..) list.
+
+## Common errors
+
+| Code | Cause | Fix |
+|------|-------|-----|
+| `local_master_key_missing` | No master key resolvable from env, vault, or AdminStateFile. | Re-run the setup wizard or set `SAGEWAI_MASTER_KEY`. |
+| `local_decrypt_failed` | Ciphertext doesn't match the current master key. | The master key changed; restore the prior key or re-register credentials. |
+
+## Anti-patterns
+
+1. **Committing `~/.sagewai/` to git.** The directory holds plaintext
+   master keys. It belongs in `.gitignore` everywhere — never in any
+   repo, public or private.
+2. **Sharing the same master key across environments.** Dev and prod
+   should hold distinct master keys so a dev-machine compromise doesn't
+   leak production credentials.
+3. **Pretending `local` is a secret manager.** It's a single-host
+   convenience. For multi-host, multi-tenant, or audited deployments
+   you want a real secret manager.

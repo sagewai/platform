@@ -12,8 +12,8 @@ export const metadata = {
 2. **Dashboard → Create app.**
 3. Fill in name + description (these show on the consent screen).
 4. Under **Redirect URIs**, add **both**:
-   - `{SAGEWAI_PUBLIC_URL}/api/v1/admin/connections/oauth/callback` (e.g. `http://localhost:8080/api/v1/admin/connections/oauth/callback` for local dev)
-   - `http://127.0.0.1:53682/callback` (for the `sagewai oauth` CLI)
+   - `{SAGEWAI_PUBLIC_URL}/api/v1/admin/connections/oauth2/callback` (e.g. `http://localhost:8080/api/v1/admin/connections/oauth2/callback` for local dev)
+   - `http://127.0.0.1:53682/callback` (for the `sagewai connections oauth2` CLI)
 5. Select the Web API scope (default).
 6. Save. Copy the **Client ID** and **Client Secret** from the app's
    Settings page.
@@ -22,21 +22,26 @@ export const metadata = {
 
 ### Admin UI
 
-1. Sagewai → **Connections** → **OAuth** → **Add OAuth Client**.
-2. Provider: **Spotify**.
-3. Paste Client ID + Client Secret. Optionally edit the requested
-   scopes (defaults work for the bundled `spotify` tool).
-4. **Save and Authorize**. A popup opens to the Spotify consent
-   screen — approve. Sagewai polls in the background; the modal
-   closes once status flips to `authorized`.
+1. Sagewai → **/connections** → **+ Add Connection**.
+2. Step 1: pick **OAuth 2.0**.
+3. Step 2: pick provider **Spotify**, paste Client ID + Client Secret.
+   Optionally edit the requested scopes (defaults work for the bundled
+   `spotify` tool).
+4. Step 3: pick credentials backend (Local is the default) and tags
+   (e.g. `music`).
+5. Submit. A popup opens to the Spotify consent screen — approve.
+   Sagewai polls in the background; the modal closes once status flips
+   to `ready`.
 
 ### CLI
 
 ```bash
-sagewai oauth add spotify
+sagewai connections add oauth2 --provider spotify
 # Prompts: display_name, client_id, client_secret
+# Then:
+sagewai connections oauth2 start <connection-id>
 # Prints the authorize URL and opens it in your browser
-# Waits up to 5 minutes for the callback on 127.0.0.1:53682
+# Waits up to 10 minutes for the callback on 127.0.0.1:53682
 ```
 
 ## Scopes used by the bundled `spotify` tool
@@ -50,9 +55,9 @@ sagewai oauth add spotify
 | `user-read-currently-playing` | Read what you're playing right now. |
 | `user-top-read` | Read your top artists and tracks. |
 
-If a tool you add later requires more scopes, the OAuth tab surfaces a
-"Re-authorize" prompt with the broader set — re-running the consent
-screen grants them in one step.
+If a tool you add later requires more scopes, the connection row's
+actions menu surfaces a "Re-authorize" item with the broader set —
+re-running the consent screen grants them in one step.
 
 ## Token lifetime
 
@@ -60,8 +65,8 @@ screen grants them in one step.
   pre-emptively when they're within 60 seconds of expiry, and
   reactively on a 401 response.
 - **Refresh tokens** don't expire unless you (the operator) revoke
-  access in Spotify's account settings. If that happens, the OAuth
-  client flips to `expired` — re-authorize from the UI or CLI.
+  access in Spotify's account settings. If that happens, the
+  connection flips to `expired` — re-authorize from the UI or CLI.
 
 ## Common errors
 

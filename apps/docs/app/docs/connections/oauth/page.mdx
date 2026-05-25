@@ -24,15 +24,16 @@ tool acts as the operator's Spotify account.
 register → authorize → use → refresh → revoke
 ```
 
-1. **Register an OAuth client.** Operator goes to Connections → OAuth →
-   Add → picks a provider, pastes their `client_id` and `client_secret`
-   from the vendor console (Spotify Developer Dashboard, Google Cloud
-   Console, …). Status: `pending`.
+1. **Register an OAuth client.** Operator goes to `/connections` →
+   **+ Add Connection** → picks the **OAuth 2.0** protocol → picks the
+   provider, pastes their `client_id` and `client_secret` from the
+   vendor console (Spotify Developer Dashboard, Google Cloud Console,
+   …). Status: `pending`.
 
-2. **Authorize.** Operator clicks Authorize; Sagewai opens the vendor's
-   consent screen in a new tab. After approval, the vendor redirects
-   back to Sagewai's callback. Sagewai exchanges the authorization code
-   for access + refresh tokens. Status: `authorized`.
+2. **Authorize.** The wizard immediately opens the vendor's consent
+   screen in a new tab. After approval, the vendor redirects back to
+   Sagewai's callback. Sagewai exchanges the authorization code for
+   access + refresh tokens. Status: `ready`.
 
 3. **Use.** Any catalogued tool whose YAML declares `oauth_provider:
    <id>` automatically uses the authorized client. Tokens are looked up
@@ -41,46 +42,45 @@ register → authorize → use → refresh → revoke
 
 4. **Refresh.** Refresh happens automatically. If the vendor rejects
    the refresh (operator revoked access, refresh token expired), the
-   client flips to `expired` and Sagewai prompts re-authorization.
+   connection flips to `expired` and Sagewai prompts re-authorization.
 
 5. **Revoke.** Operator can revoke at any time. If the provider has a
    revoke endpoint (Google does; Spotify doesn't), Sagewai calls it.
-   Tokens are cleared from the vault. The OAuth client record persists
-   in `revoked` state so the operator can re-authorize without
-   re-pasting credentials.
+   Tokens are cleared from the vault. The OAuth connection record
+   persists in `revoked` state so the operator can re-authorize
+   without re-pasting credentials.
 
 ## Two surfaces
 
 OAuth clients are managed identically from the **admin UI** and the
-**CLI**. Both share the same encrypted vault file, so a client added
-in one surface is immediately usable from the other.
+**CLI**. Both share the same encrypted store, so a client added in one
+surface is immediately usable from the other.
 
 ### Admin UI
 
-Connections → OAuth tab. Provides an Add wizard, a list view with
-status pills, per-row Authorize / Re-authorize / Refresh / Revoke /
-Delete actions, and a default-toggle (one client per `(project,
-provider)` is the default; tools use the default).
+The `/connections` page. The single filterable list shows every
+connection across all protocols; filter by the **OAuth 2.0** chip to
+narrow to OAuth clients only. Per-row actions menu carries the
+OAuth-specific flow (Authorize / Re-authorize / Refresh tokens /
+Revoke) plus the universal Test / Delete / Set-default.
 
 ### CLI
 
 ```bash
-sagewai oauth providers              # list supported providers
-sagewai oauth add spotify            # interactive add + authorize via loopback
-sagewai oauth list                   # list registered clients in the current project
-sagewai oauth status <id>            # detail view
-sagewai oauth refresh <id>           # force a refresh now
-sagewai oauth revoke <id>            # vendor revoke + clear tokens
-sagewai oauth set-default <id>       # mark this client default for (project, provider)
-sagewai oauth reauthorize <id>       # re-run authorize for an existing record
-sagewai oauth delete <id>            # remove the record entirely
+sagewai connections list --protocol oauth2          # list OAuth connections in current project
+sagewai connections add oauth2 --provider spotify   # interactive add (prompts for client_id, client_secret)
+sagewai connections get <id>                        # detail view
+sagewai connections oauth2 start <id>               # open authorize URL
+sagewai connections oauth2 refresh <id>             # force a refresh now
+sagewai connections oauth2 revoke <id>              # vendor revoke + clear tokens
+sagewai connections set-default <id>                # mark default
+sagewai connections delete <id>                     # remove the record entirely
 ```
 
-The `add` and `reauthorize` flows bind a local listener on
-`127.0.0.1:53682` (overridable with `--redirect-port`), open the
-authorize URL in your browser, and wait for the callback. Used on a
-headless server, copy the printed URL and open it on a machine that
-has a browser.
+The `start` flow binds a local listener on `127.0.0.1:53682`
+(overridable with `--redirect-port`), opens the authorize URL in your
+browser, and waits for the callback. Used on a headless server, copy
+the printed URL and open it on a machine that has a browser.
 
 ## Redirect URIs
 
@@ -88,12 +88,19 @@ Each provider's console requires you to register the exact redirect
 URI Sagewai will use. **Register both** so the same OAuth client works
 from the admin UI and the CLI:
 
-- **Admin:** `{SAGEWAI_PUBLIC_URL}/api/v1/admin/connections/oauth/callback`  \
+- **Admin:** `{SAGEWAI_PUBLIC_URL}/api/v1/admin/connections/oauth2/callback`  \
   (`SAGEWAI_PUBLIC_URL` is the URL on which the admin is reachable — for local dev that's typically `http://localhost:8080`.)
 - **CLI:** `http://127.0.0.1:53682/callback`
 
 Without both, the corresponding surface fails at the callback step with
 a "redirect URI mismatch" error from the vendor.
+
+> **Migration note.** Before the Connections Platform shipped, the
+> admin callback path was `/api/v1/admin/connections/oauth/callback`
+> (singular `oauth`). The new path adds the `2` —
+> `/api/v1/admin/connections/oauth2/callback`. Operators who had OAuth
+> clients registered against the old path must update each vendor
+> console to the new URL.
 
 ## Security posture
 
@@ -101,8 +108,10 @@ a "redirect URI mismatch" error from the vendor.
   Every OAuth client represents one operator-controlled identity at the
   provider.
 - **Encrypted at rest.** `client_secret`, `access_token`, `refresh_token`
-  are encrypted via the Sealed master key before being written to disk.
-  API responses mask them entirely (even to the operator).
+  are routed through the connection's chosen credentials backend
+  ([local](../backends/local), [env](../backends/env), or
+  [SOPS](../backends/sops)). API responses mask them entirely (even to
+  the operator).
 - **Project-scoped.** OAuth clients live inside a project (the
   `X-Project-ID` header). Projects are isolation boundaries; a Spotify
   client in project A is invisible to agents in project B.
@@ -120,7 +129,7 @@ a "redirect URI mismatch" error from the vendor.
 | Status | Meaning |
 |---|---|
 | `pending` | Registered but not yet authorized. Click Authorize. |
-| `authorized` | Tokens present, ready for use. |
+| `ready` | Tokens present, ready for use. |
 | `expired` | Refresh failed. Click Re-authorize. |
 | `revoked` | Operator revoked. Click Re-authorize to reconnect. |
 | `error` | Last authorize attempt failed. Inspect `last_error` and try again. |

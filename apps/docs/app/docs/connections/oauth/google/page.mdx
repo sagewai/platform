@@ -29,27 +29,31 @@ draw on the same access + refresh tokens.
    ID.**
    - Application type: **Web application**.
    - **Authorized redirect URIs** — add **both**:
-     - `{SAGEWAI_PUBLIC_URL}/api/v1/admin/connections/oauth/callback`
-     - `http://127.0.0.1:53682/callback` (for the `sagewai oauth` CLI)
+     - `{SAGEWAI_PUBLIC_URL}/api/v1/admin/connections/oauth2/callback`
+     - `http://127.0.0.1:53682/callback` (for the `sagewai connections oauth2` CLI)
 5. Copy the **Client ID** and **Client Secret**.
 
 ## Register in Sagewai
 
 ### Admin UI
 
-1. Sagewai → **Connections** → **OAuth** → **Add OAuth Client**.
-2. Provider: **Google**.
-3. Paste Client ID + Client Secret. The default scopes
-   (`openid email`) are the OAuth client's baseline — the bundled
-   `gmail` tool adds Gmail-specific scopes on top.
-4. **Save and Authorize**. A popup opens to Google's consent screen —
-   approve. The OAuth tab updates to `authorized`.
+1. Sagewai → **/connections** → **+ Add Connection**.
+2. Step 1: pick **OAuth 2.0**.
+3. Step 2: pick provider **Google**, paste Client ID + Client Secret.
+   The default scopes (`openid email`) are the connection's baseline —
+   the bundled `gmail` tool adds Gmail-specific scopes on top.
+4. Step 3: pick credentials backend (Local is the default) and tags
+   (e.g. `email`).
+5. Submit. A popup opens to Google's consent screen — approve. The
+   connection flips to `ready` once the callback lands.
 
 ### CLI
 
 ```bash
-sagewai oauth add google
+sagewai connections add oauth2 --provider google
 # Prompts: display_name, client_id, client_secret
+# Then:
+sagewai connections oauth2 start <connection-id>
 ```
 
 ## Scopes used by the bundled `gmail` tool
@@ -77,7 +81,7 @@ across all your Google tools.
   - **Published**: last indefinitely, unless the user revokes access
     via their Google account → Security → Third-party apps, or after
     6 months of total inactivity (per Google's policy).
-  - On any of these, the OAuth client flips to `expired` — re-authorize.
+  - On any of these, the connection flips to `expired` — re-authorize.
 
 ## Common errors
 
@@ -87,13 +91,13 @@ common cause: protocol (`http` vs `https`), trailing slash, or port
 mismatch. Re-check both URIs character-for-character.
 
 **`access_denied`**  \
-You declined the consent screen. The OAuth client stays `pending`;
-click Authorize again from the OAuth tab.
+You declined the consent screen. The connection stays `pending`;
+click Authorize from the row actions menu to retry.
 
 **`invalid_grant` on refresh**  \
 The refresh token has been invalidated (likely by user revocation or
-Testing-mode rotation). Client flips to `expired`; re-authorize to
-reconnect.
+Testing-mode rotation). The connection flips to `expired`;
+re-authorize to reconnect.
 
 **`unauthorized_client` on token exchange**  \
 The OAuth client isn't of type Web application, or it's been deleted

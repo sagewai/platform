@@ -1,0 +1,105 @@
+export const metadata = {
+  title: "Env vars credentials backend",
+  description:
+    "Read sensitive fields from environment variables at runtime — the connection record stores only the variable name, never the value.",
+};
+
+# Env vars credentials backend
+
+The `env` backend reads sensitive fields from environment variables at
+call time. The connection record stores only the variable name (e.g.,
+`STRIPE_API_KEY`), not the value. The actual secret lives wherever you
+inject env vars — a `.env` file loaded by `direnv`, a Docker `--env`
+flag, a Kubernetes Secret mounted as env, a CI/CD vault, etc.
+
+## What it does
+
+When a connection is created with `credentials_backend.kind === "env"`,
+the connections router records a `field_to_env` map under `config`. At
+call time, the executor looks up each sensitive field's value by
+reading `os.environ[<env_name>]`. Missing env vars surface as a
+clear error.
+
+## When to pick it
+
+- 12-factor / container workflows where every secret already comes
+  through env.
+- Multi-host deployments where the same connection record runs across
+  many machines with per-machine secrets injected.
+- Audited environments where credential values must live in an
+  external secret manager that exposes its secrets as env vars
+  (Kubernetes Secrets, Doppler injectors, …).
+
+For single-host laptop dev, [local](../local) is simpler.
+
+## Configure
+
+The `config` field maps each sensitive field path to the env var name
+that holds its value:
+
+```json
+"credentials_backend": {
+  "kind": "env",
+  "config": {
+    "field_to_env": {
+      "client_secret": "SPOTIFY_CLIENT_SECRET",
+      "tokens.access_token": "SPOTIFY_ACCESS_TOKEN"
+    }
+  }
+}
+```
+
+In the admin UI's Add Connection wizard, the env-backend form renders
+one input per sensitive field where the operator types the env var
+name. The platform doesn't read the env var at registration — only at
+call time.
+
+You can use the special `$env:VARNAME` marker for the same effect in
+catalog YAML — the connections platform treats `"$env:VARNAME"` and
+`{kind: "env", field_to_env: {field: "VARNAME"}}` interchangeably.
+
+## Loading env vars
+
+The platform doesn't load env files automatically. Use your favourite
+loader:
+
+- **direnv** — `.envrc` in the project root, auto-loads on `cd`.
+- **dotenv** — `python-dotenv` reads `.env` into `os.environ` at start.
+- **Container runtime** — `docker run --env-file .env ...` or
+  Kubernetes `envFrom: secretRef`.
+- **systemd** — `EnvironmentFile=/etc/sagewai/secrets.env` in the
+  service unit.
+
+## Security considerations
+
+- **Env vars are visible in `/proc/<pid>/environ`.** Any process with
+  the same UID can read them. For multi-tenant hosts, prefer SOPS or a
+  real secret manager.
+- **Shell history leaks.** Never `export FOO=secret` interactively —
+  use a file with restrictive permissions.
+- **Docker layers cache env values.** Don't bake secrets into
+  Dockerfiles via `ENV`; pass them at run time.
+- **Audit logs.** The platform logs the env var name (not its value)
+  every time a connection is read; check your secret manager's audit
+  log for value-level access.
+
+## Common errors
+
+| Code | Cause | Fix |
+|------|-------|-----|
+| `env_var_missing` | The named env var isn't set in the process. | Load your env file before starting `sagewai admin serve`. |
+| `env_var_empty` | The env var is set but empty. | Populate it; the platform treats empty as missing. |
+| `env_value_invalid` | The plugin rejected the value's format (e.g., not a valid base64 key). | Re-check the value at the source. |
+
+## Anti-patterns
+
+1. **Hardcoding the env name across all environments.** Use per-env
+   naming (`STRIPE_API_KEY_DEV` vs `STRIPE_API_KEY_PROD`) so accidents
+   don't cross-contaminate.
+2. **Mixing env-backed and local-backed connections in the same
+   project without intent.** Pick a backend per-environment and stick
+   with it; mixing is fine when intentional but easy to get wrong.
+3. **Reading env vars in agent code.** The connection store is the
+   abstraction. Agent code references the connection by id; the
+   executor reads env. Bypassing the store breaks audit, rotation,
+   and project isolation.

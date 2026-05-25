@@ -1,0 +1,88 @@
+export const metadata = {
+  title: "SDK builtin connections",
+  description:
+    "Register credentials for SDK builtin tools — Python helpers shipped with Sagewai that hold per-vendor logic in-process (PayPal, Plaid, Braintree, …).",
+};
+
+# SDK builtin connections
+
+The `sdk` protocol registers credentials for an SDK builtin — a Python
+function shipped with Sagewai that holds vendor-specific logic
+in-process. The builtin's entrypoint declares which credential fields
+it needs; the operator registers values for those fields against a
+credentials backend.
+
+Use this protocol when the vendor's API surface is too complex for the
+generic HTTP executor to handle cleanly — multi-step auth flows,
+GraphQL mutations, dynamic URL construction, OAuth2 client-credentials
+grants with per-call token caching, etc.
+
+## When to pick it
+
+- Catalog YAML uses `kind: sdk` (not `kind: http`).
+- The builtin needs Python logic to talk to the vendor — not just a
+  URL + headers.
+- The vendor's quirks (dual headers, environment-switched URLs,
+  dynamic merchant ids in paths, …) are too messy for declarative HTTP
+  config.
+
+Canonical examples: PayPal (OAuth2 client-credentials + token cache),
+Plaid (dual-header auth + environment URL), Braintree (GraphQL +
+merchant_id in path), MarineTraffic (key embedded in path segments).
+
+If the catalog declares `kind: http`, register an [HTTP](../http)
+connection instead.
+
+## `protocol_data` schema
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `entrypoint` | string | yes | Dotted path or `module:function` of the builtin, e.g. `sagewai.tools.executors.sdk:paypal_api`. |
+| `credential_fields` | array | yes | Declared by the catalog; each has `name`, `label`, `type` (`password` &#124; `text`), and optional `description`. |
+| `secrets` | map | optional | Operator-registered values for the declared fields (masked in API responses). |
+
+`credential_fields` is read from the catalog YAML the builtin is
+catalogued against — the operator doesn't author it, the admin UI just
+renders the form per the declaration.
+
+## Setup in the admin UI
+
+1. `/connections` → **+ Add Connection**.
+2. Step 1: pick **SDK builtin**.
+3. Step 2: enter the entrypoint (or pick from the catalogued list if
+   one's offered). The form for credential fields appears, one input
+   per declared field.
+4. Step 3: pick the credentials backend and tags.
+5. Submit. The Test action invokes the builtin's optional
+   `test_endpoint` (declared in the catalog YAML) to verify the
+   credentials work end-to-end.
+
+## CLI equivalent
+
+```bash
+sagewai connections add sdk \
+  --display-name "PayPal prod" \
+  --entrypoint sagewai.tools.executors.sdk:paypal_api \
+  --tags payments \
+  --backend local
+# Prompts for credential values per the catalog's credential_fields.
+```
+
+## Common errors
+
+| Code | Cause | Fix |
+|------|-------|-----|
+| `sdk_entrypoint_not_found` | Entrypoint path doesn't resolve. | Re-check the dotted path / install the SDK extra holding the builtin. |
+| `sdk_credential_missing` | A declared `credential_field` has no value. | Register the credential via your chosen backend. |
+| `sdk_vendor_auth_failed` | Builtin called the vendor and got 401. | Rotate the credential; re-test. |
+
+## Anti-patterns
+
+1. **Re-implementing an HTTP catalog entry as an SDK builtin.** If the
+   vendor is happy with the HTTP executor's auth schemes, save the
+   keystroke — declarative HTTP is easier to maintain. SDK is the
+   fallback for vendors where declarative HTTP can't capture the
+   contract.
+2. **Storing secrets in the builtin source.** The builtin should
+   accept `get_credentials` as a kwarg and let the backend resolve
+   values per call. Never bake credentials into the Python code.

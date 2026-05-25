@@ -1,0 +1,105 @@
+export const metadata = {
+  title: "MCP server connections",
+  description:
+    "Register Model Context Protocol servers — stdio, http, or sse transports — as connections that agents can call tools against.",
+};
+
+# MCP server connections
+
+The `mcp` protocol registers a Model Context Protocol server as a
+connection. MCP is the open standard for exposing tools, resources, and
+prompts to language models; once an MCP server is registered, every
+agent in the project can discover and invoke its tools.
+
+Sagewai supports three MCP transports: stdio (local process), http
+(remote endpoint), and sse (Server-Sent Events streaming endpoint).
+
+## When to pick it
+
+- You have a community or vendor-published MCP server you want to wire
+  into Sagewai's tool discovery.
+- You want to expose an internal tool surface as MCP so the same server
+  can drive Sagewai, Claude Desktop, Cursor, and any other MCP host.
+- Your tool needs streaming back to the LLM (use `sse`).
+
+If your tool is just a REST API, use [HTTP](../http) — MCP buys you
+nothing extra for stateless request-response.
+
+## `protocol_data` schema
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `transport` | enum | yes | `stdio` &#124; `http` &#124; `sse`. |
+| `command` | string[] | conditional | When `transport === "stdio"`: argv[0] of the server process. |
+| `args` | string[] | optional | Args passed after `command`. |
+| `url` | string (URL) | conditional | When `transport !== "stdio"`: server URL. |
+
+For stdio servers, the command runs inside the platform sandbox tier
+declared by the catalog entry (or `TRUSTED` if registered ad-hoc).
+For http / sse, the URL is fetched as a regular HTTP request — no
+ambient sandboxing applies.
+
+## Setup in the admin UI
+
+1. `/connections` → **+ Add Connection**.
+2. Step 1: pick **MCP server**.
+3. Step 2: pick the transport and fill in either the command (stdio) or
+   the URL (http / sse).
+4. Step 3: pick credentials backend (most MCP servers don't have
+   credentials; pick Local with empty config) and tags.
+5. Submit. The connection lands in `ready` once the server responds to
+   its initial handshake.
+
+## CLI equivalent
+
+```bash
+# stdio
+sagewai connections add mcp \
+  --display-name "filesystem" \
+  --transport stdio \
+  --command "npx -y @modelcontextprotocol/server-filesystem /tmp" \
+  --tags media --backend local
+
+# http
+sagewai connections add mcp \
+  --display-name "vendor-tool" \
+  --transport http \
+  --url "https://mcp.vendor.com/v1" \
+  --tags crm --backend env
+```
+
+The Test action sends a `tools/list` request and reports back the
+server's declared tool names.
+
+## Capability discovery
+
+MCP capability discovery — listing the tools, resources, and prompts
+the server exposes — is a follow-up feature. The PR5 surface treats an
+MCP connection as a black box, registering the transport + connection
+metadata; deeper discovery (and rendering tools in the catalog) lands
+in a subsequent release.
+
+Until then, MCP tools are invoked by name via the existing MCP
+runtime; the connection record holds the wiring.
+
+## Common errors
+
+| Code | Cause | Fix |
+|------|-------|-----|
+| `mcp_handshake_failed` | Server didn't respond to initialize. | Check the command path / URL; run the server manually first. |
+| `mcp_transport_error` | Stdio process exited; HTTP returned non-200. | Inspect `last_error`; tail the server's stderr. |
+| `mcp_tool_not_found` | Catalog references a tool name the server doesn't expose. | Re-run discovery (or remove the catalog binding). |
+
+## Anti-patterns
+
+1. **Stdio MCP servers writing to the same TMPDIR as the agent.**
+   Sandbox tiers isolate filesystem state per-mission; an MCP server
+   that spawns from outside the sandbox shouldn't write into
+   sandbox-visible paths. Use vendor-suggested data directories.
+2. **Using stdio for production multi-agent loads.** Each stdio
+   connection means a forked process per call. For high-concurrency
+   workloads, prefer an http transport with a long-running server.
+3. **Confusing MCP transport health with MCP tool correctness.** The
+   Test action probes the handshake — a green test means the server
+   answers, not that its tools work. Run a real tool call once after
+   registration to verify end-to-end.

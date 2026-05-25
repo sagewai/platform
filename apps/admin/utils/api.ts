@@ -133,12 +133,8 @@ import type {
   ToolRegistryEntry,
   ToolConnectionMetadata,
   ToolTestResult,
-  OAuthClient,
-  OAuthCreatePayload,
-  OAuthCreateResponse,
-  OAuthProviderMeta,
-  OAuthStartResponse,
 } from './types';
+import { createConnectionsApi } from './connections-api';
 
 const BASE_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL ?? 'http://localhost:8000/admin';
 const ANALYTICS_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL
@@ -152,6 +148,9 @@ const analyticsClient = createFetchClient(ANALYTICS_URL, clientOpts);
 
 
 export const adminApi = {
+  /* ─── Unified connections (PR5) — talks to /api/v1/admin/connections/... ─── */
+  connections: createConnectionsApi(analyticsClient),
+
   /* ─── Core admin endpoints ─── */
   listAgents: () => client.get<AgentSummary[]>('/agents'),
 
@@ -1973,54 +1972,6 @@ export const adminApi = {
       {},
     ),
 
-  /* ─── OAuth clients (batch-3) ─── */
-  oauthClients: {
-    providers: () =>
-      analyticsClient.get<OAuthProviderMeta[]>(
-        '/api/v1/admin/connections/oauth/providers',
-      ),
-
-    list: () =>
-      analyticsClient.get<OAuthClient[]>('/api/v1/admin/connections/oauth/'),
-
-    get: (id: string) =>
-      analyticsClient.get<OAuthClient>(
-        `/api/v1/admin/connections/oauth/${encodeURIComponent(id)}`,
-      ),
-
-    create: (payload: OAuthCreatePayload) =>
-      analyticsClient.post<OAuthCreateResponse>(
-        '/api/v1/admin/connections/oauth/',
-        payload,
-      ),
-
-    delete: (id: string) =>
-      analyticsClient.delete<void>(
-        `/api/v1/admin/connections/oauth/${encodeURIComponent(id)}`,
-      ),
-
-    start: (id: string) =>
-      analyticsClient.post<OAuthStartResponse>(
-        `/api/v1/admin/connections/oauth/${encodeURIComponent(id)}/start`,
-        {},
-      ),
-
-    refresh: (id: string) =>
-      analyticsClient.post<OAuthClient>(
-        `/api/v1/admin/connections/oauth/${encodeURIComponent(id)}/refresh`,
-        {},
-      ),
-
-    revoke: (id: string) =>
-      analyticsClient.post<OAuthClient>(
-        `/api/v1/admin/connections/oauth/${encodeURIComponent(id)}/revoke`,
-        {},
-      ),
-
-    setDefault: (id: string) =>
-      analyticsClient.post<OAuthClient>(
-        `/api/v1/admin/connections/oauth/${encodeURIComponent(id)}/set-default`,
-        {},
-      ),
-  },
+  // Legacy adminApi.oauthClients was deleted by Connections Platform PR5.
+  // Use adminApi.connections (filtered by protocol="oauth2") instead.
 };

@@ -1,0 +1,146 @@
+export const metadata = {
+  title: "SOPS credentials backend",
+  description:
+    "Read sensitive fields from Mozilla SOPS-encrypted files in a sandboxed directory — credentials live at rest in age / KMS / PGP, decrypted on demand.",
+};
+
+# SOPS credentials backend
+
+The `sops` backend reads sensitive fields from
+[Mozilla SOPS](https://github.com/getsops/sops) files in a sandboxed
+directory. SOPS encrypts each value at rest using your choice of KMS
+(AWS / GCP / Azure), age, or PGP keys; the platform invokes `sops
+decrypt` on demand and never persists plaintext.
+
+This is the recommended backend for production multi-host deployments
+where credentials need to live outside Sagewai's filesystem and survive
+machine churn.
+
+## What it does
+
+When a connection is created with `credentials_backend.kind === "sops"`,
+the `config` field records:
+
+- The path to a SOPS-encrypted file (relative to `SAGEWAI_SOPS_ROOT`).
+- A field-to-key map (which key inside the SOPS file holds each
+  sensitive value).
+
+At call time, the executor:
+
+1. Resolves the file path against `SAGEWAI_SOPS_ROOT` (the path
+   sandbox — see below).
+2. Shells out to `sops decrypt --extract '["<key>"]'` for each field.
+3. Returns plaintext to the plugin; the plaintext never lives outside
+   the call frame.
+
+The plaintext doesn't touch disk, log files, or the API surface.
+
+## When to pick it
+
+- Production deployments where audit / rotation / KMS-managed
+  credentials are required.
+- Multi-host setups where the credentials store lives in a git repo
+  (encrypted) and propagates via deployment tooling.
+- Compliance environments (SOC 2 / ISO 27001) that mandate at-rest
+  encryption with key separation.
+
+For single-host dev, [local](../local) is faster to set up.
+
+## Configure
+
+Two pieces:
+
+### 1. `SAGEWAI_SOPS_ROOT` environment variable
+
+Path to the directory holding your SOPS-encrypted files. The
+connections backend refuses to read files outside this root (the path
+sandbox) — even if the connection record claims an absolute path. This
+prevents a compromised connection record from exfiltrating arbitrary
+files.
+
+```bash
+export SAGEWAI_SOPS_ROOT=/etc/sagewai/sops
+```
+
+### 2. Per-connection config
+
+```json
+"credentials_backend": {
+  "kind": "sops",
+  "config": {
+    "file": "stripe/prod.yaml",
+    "field_to_key": {
+      "client_secret": "stripe_client_secret",
+      "api_key": "stripe_api_key"
+    }
+  }
+}
+```
+
+The `file` is resolved as `${SAGEWAI_SOPS_ROOT}/stripe/prod.yaml`. The
+`field_to_key` mapping says which top-level key in the SOPS file holds
+each sensitive field.
+
+## Editing SOPS files
+
+SOPS files are edited with the `sops` CLI:
+
+```bash
+sops edit /etc/sagewai/sops/stripe/prod.yaml
+```
+
+SOPS decrypts in-place into your `$EDITOR`, re-encrypts on save. Don't
+manually `cat | sed | gpg` — the SOPS metadata in the file's footer
+needs to be regenerated for the file to round-trip correctly.
+
+Repo layout convention:
+
+```
+${SAGEWAI_SOPS_ROOT}/
+├── .sops.yaml                  # creation_rules per directory
+├── stripe/
+│   ├── prod.yaml
+│   └── dev.yaml
+└── slack/
+    └── workspace-a.yaml
+```
+
+The `.sops.yaml` file at the root configures which KMS / age / PGP
+keys encrypt which subdirectories — see the SOPS docs.
+
+## Security considerations
+
+- **Key management is your job.** SOPS doesn't hold keys — it calls
+  KMS / age / GPG agents to encrypt and decrypt. Pick a key strategy
+  that matches your compliance posture (AWS KMS for SOC 2; age for
+  air-gapped; PGP for legacy).
+- **Path sandbox is strict.** Files outside `SAGEWAI_SOPS_ROOT` are
+  rejected. Symlinks pointing outside are also rejected.
+- **Decryption shells out.** Every credential read invokes the `sops`
+  binary; expect ~50–100ms latency per cold call. The platform caches
+  per-call to amortize across multi-field reads.
+- **Audit trail.** SOPS doesn't log decryption events on its own. For
+  audit, layer KMS-side logging (AWS CloudTrail captures every KMS
+  Decrypt call).
+
+## Common errors
+
+| Code | Cause | Fix |
+|------|-------|-----|
+| `sops_root_missing` | `SAGEWAI_SOPS_ROOT` not set. | Set the env var; restart admin. |
+| `sops_path_escape` | `config.file` resolves outside `SAGEWAI_SOPS_ROOT`. | Fix the relative path. |
+| `sops_binary_not_found` | `sops` not on `PATH`. | `brew install sops` or `apt install sops` on the host. |
+| `sops_decrypt_failed` | KMS / age / PGP rejected. | Check your key access; SOPS error in `last_error`. |
+| `sops_key_not_in_file` | `field_to_key` references a key SOPS doesn't expose. | Re-check the file structure with `sops --decrypt --output-type json <file>`. |
+
+## Anti-patterns
+
+1. **Committing un-encrypted YAML beside encrypted ones.** A
+   `.sops.yaml` rule says which files get encrypted; respect it. A
+   plaintext leak inside the same directory is a leak.
+2. **Symlinking SOPS files from outside the sandbox.** The sandbox
+   resolves symlinks and rejects anything outside the root. Move the
+   real file inside instead.
+3. **Sharing the same SOPS root between environments.** Same reasoning
+   as env vars: dev and prod should each get their own root + their
+   own keys.

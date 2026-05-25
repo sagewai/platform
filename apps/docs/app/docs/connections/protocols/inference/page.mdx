@@ -1,0 +1,107 @@
+export const metadata = {
+  title: "Inference provider connections",
+  description:
+    "Register LLM inference endpoints — RunPod, Modal, Vast.ai, Colab, or any OpenAI-compatible custom endpoint — that agents can route requests to.",
+};
+
+# Inference provider connections
+
+The `inference` protocol covers LLM inference endpoints — the things
+that actually answer model calls. Sagewai supports the canonical cloud
+GPU vendors (RunPod, Modal, Vast.ai) plus Colab and a generic `custom`
+slot for any OpenAI-compatible endpoint (Ollama, LM Studio, vLLM,
+self-hosted, …).
+
+The Harness routes per-call traffic across registered inference
+connections based on classifier output. Setting an inference connection
+as default makes it the fallback when no policy claims a request.
+
+## When to pick it
+
+- You're standing up a hosted inference endpoint (RunPod, Modal,
+  Vast.ai) and want Sagewai to point the Harness at it.
+- You're running a local OpenAI-compatible server (Ollama, LM Studio,
+  vLLM) and want agents to use it.
+- You're testing a fine-tuned model via Colab and want a free-tier
+  endpoint.
+
+For ad-hoc one-off testing, the `custom` provider_key is the catch-all.
+
+## `protocol_data` schema
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `provider_key` | enum | yes | `runpod` &#124; `modal` &#124; `vastai` &#124; `colab` &#124; `custom`. |
+| `base_url` | string (URL) | optional | OpenAI-compatible base URL, e.g. `https://api.modal.run/v1`. |
+| `model_name` | string | optional | Model identifier the endpoint accepts. |
+| `secrets` | map | optional | Credential names with masked values (e.g. `{"api_key": "***"}`). |
+
+For `custom`, `base_url` is required. For the named providers, the URL
+either defaults (Modal) or comes from the operator's region (RunPod);
+the wizard fills the right default.
+
+## Setup in the admin UI
+
+1. `/connections` → **+ Add Connection**.
+2. Step 1: pick **Inference provider**.
+3. Step 2: pick the `provider_key`, paste the base URL (if custom) and
+   the model name.
+4. Step 3: pick the credentials backend and tags (typically none — the
+   inference protocol is project-wide).
+5. Submit. The Test action issues an empty completion request and
+   reports back token cost + latency.
+
+## CLI equivalent
+
+```bash
+# RunPod
+sagewai connections add inference \
+  --display-name "RunPod llama-70b" \
+  --provider-key runpod \
+  --model qwen2.5:70b \
+  --tags --backend env  # api_key reads from RUNPOD_API_KEY
+
+# Custom (Ollama local)
+sagewai connections add inference \
+  --display-name "Local Ollama" \
+  --provider-key custom \
+  --base-url http://localhost:11434/v1 \
+  --model qwen2.5:14b \
+  --backend local
+```
+
+## Setting the project default
+
+The Harness picks an inference connection per request via per-team
+policies. The connection marked as default for `(project, inference,
+default_key=null)` is the fallback:
+
+```bash
+sagewai connections set-default <connection-id>
+```
+
+Or in the admin UI: click the empty star icon in the Default column.
+Only one inference connection per project is the default at a time;
+clicking the icon swaps the previous default's pin to your selection.
+
+## Common errors
+
+| Code | Cause | Fix |
+|------|-------|-----|
+| `inference_no_response` | Endpoint didn't reply. | Check the base URL; confirm the pod / process is running. |
+| `inference_auth_failed` | API key wrong or missing. | Rotate the key at the vendor; update the credential. |
+| `inference_model_not_found` | Endpoint accepted the request but doesn't know the model. | Pull / load the model on the endpoint, or correct `model_name`. |
+| `inference_rate_limited` | Vendor returned 429. | Add a second connection on a different vendor + rotate via Harness policy. |
+
+## Anti-patterns
+
+1. **One mega-default for all model classes.** The Harness's whole
+   point is routing simple tasks to cheap models. Register a
+   `provider_key: custom` Ollama endpoint for Haiku-class work and a
+   RunPod / Modal endpoint for Sonnet / Opus-class — then write a
+   policy that routes by complexity.
+2. **Putting the API key in `base_url`.** URLs leak in logs; the
+   `secrets` field exists for credentials.
+3. **Hard-coding the inference URL in code.** Reference the connection
+   by id (or rely on the default-flag) so rotating endpoints doesn't
+   touch agent code.

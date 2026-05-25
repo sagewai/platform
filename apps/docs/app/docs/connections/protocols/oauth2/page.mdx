@@ -1,0 +1,149 @@
+export const metadata = {
+  title: "OAuth 2.0 connections",
+  description:
+    "Authorize Sagewai against vendors that use OAuth2 authorization-code flow with PKCE — Spotify, Google, GitHub, Salesforce, Slack.",
+};
+
+# OAuth 2.0 connections
+
+The `oauth2` protocol covers vendors where authentication happens via
+the user-consent dance: register a client at the vendor console, walk
+through the consent screen, exchange the resulting code for access +
+refresh tokens. Once Sagewai holds those tokens, every catalogued tool
+declaring `oauth_provider: <id>` can call the vendor on the operator's
+behalf.
+
+This is **machine OAuth**, not end-user OAuth. The operator is the
+authorized identity; every agent in the project uses the operator's
+vendor account.
+
+## When to pick it
+
+- The vendor requires authorization-code flow (almost every consumer-y
+  API: Spotify, Google, Microsoft Graph, Slack, GitHub Apps, …).
+- You want refresh tokens managed automatically (with pre-emptive
+  refresh + reactive retry on 401).
+- The token lives at the operator scope, not per-end-user.
+
+If the vendor accepts a simple bearer token or API key, use [HTTP](../http)
+instead — much less moving parts.
+
+## The lifecycle
+
+```
+register → authorize → use → refresh → revoke
+```
+
+The `register → use` flow from the [overview](../..) gains an
+`authorize` step:
+
+1. **Register.** Operator pastes `client_id` + `client_secret` from
+   the vendor console. Status: `pending`.
+2. **Authorize.** Operator clicks Authorize; Sagewai opens the vendor's
+   consent screen. After approval, the vendor redirects to Sagewai's
+   callback. Sagewai exchanges the code for tokens. Status: `ready`.
+3. **Use.** Catalogued tools transparently use the tokens, refreshing
+   pre-emptively within 60s of expiry.
+4. **Refresh.** Automatic. If the vendor rejects the refresh (operator
+   revoked at the vendor, refresh token expired), the connection flips
+   to `expired`.
+5. **Revoke.** Operator can revoke at any time. If the vendor has a
+   revoke endpoint (Google does; Spotify doesn't), Sagewai calls it.
+   Tokens cleared; the connection persists in `revoked` state so the
+   operator can re-authorize without re-pasting credentials.
+
+## `protocol_data` schema
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `provider` | string | yes | Provider id from the OAuth provider registry — `spotify`, `google`, etc. |
+| `client_id` | string | yes | From the vendor console. Public. |
+| `client_secret` | string (masked) | yes | From the vendor console. Sensitive. |
+| `redirect_uri` | string | auto | Computed from `provider` + admin base URL. |
+| `requested_scopes` | string[] | yes | Scopes requested at authorize time. |
+| `granted_scopes` | string[] | auto | Filled after the consent screen. |
+| `tokens.access_token` | string (masked) | auto | Set by callback. |
+| `tokens.refresh_token` | string (masked) | auto | Set by callback (if vendor issues one). |
+| `tokens.expires_at` | datetime | auto | ISO-8601 timestamp. |
+
+## Setup in the admin UI
+
+1. `/connections` → **+ Add Connection**.
+2. Step 1: pick **OAuth 2.0**.
+3. Step 2: pick the provider (Spotify, Google, …), enter the display
+   name, paste `client_id` and `client_secret`.
+4. Step 3: pick the credentials backend and tags.
+5. Submit. The wizard immediately opens the vendor consent screen and
+   polls until the connection flips to `ready`.
+
+If the consent popup closes before the operator approves, the
+connection persists in `pending`; the row's **Authorize** action
+restarts the flow.
+
+## CLI equivalent
+
+```bash
+sagewai connections add oauth2 \
+  --provider spotify \
+  --display-name "Spotify prod" \
+  --client-id <id> --client-secret <secret> \
+  --tags music --backend local
+# then:
+sagewai connections oauth2 start <connection-id>   # opens browser
+sagewai connections oauth2 refresh <connection-id> # force a refresh
+sagewai connections oauth2 revoke <connection-id>  # clear tokens
+```
+
+The `start` flow binds a local listener on `127.0.0.1:53682`
+(overridable with `--redirect-port`), opens the authorize URL in your
+browser, and waits for the callback. On a headless server, copy the
+printed URL and open it on a machine that has a browser.
+
+## Redirect URIs
+
+Each vendor's console requires you to register the exact redirect URI
+Sagewai will use. **Register both** so the same OAuth client works
+from the admin UI and the CLI:
+
+- **Admin:** `{SAGEWAI_PUBLIC_URL}/api/v1/admin/connections/oauth2/callback`
+  (`SAGEWAI_PUBLIC_URL` is the URL on which the admin is reachable —
+  for local dev that's typically `http://localhost:8080`.)
+- **CLI:** `http://127.0.0.1:53682/callback`
+
+Without both, the corresponding surface fails at the callback step
+with a "redirect URI mismatch" error from the vendor.
+
+> **Migration note.** Before PR5 (the Connections Platform UI rewrite),
+> the admin callback path was `/api/v1/admin/connections/oauth/callback`
+> (singular `oauth`). The new path is `/api/v1/admin/connections/oauth2/callback`
+> (`oauth2`). If you had OAuth clients registered against the old path,
+> update each vendor console to the new URL.
+
+## Per-provider guides
+
+- [Spotify](../../oauth/spotify) — music catalog + user library
+- [Google](../../oauth/google) — Gmail + (future) Calendar, Drive, YouTube
+
+## Common errors
+
+| Code | Cause | Fix |
+|------|-------|-----|
+| `oauth_not_configured` | No connection registered for this provider. | Register one via Add Connection. |
+| `oauth_not_authorized` | Status is `pending` or `revoked`. | Click Authorize / Re-authorize. |
+| `oauth_scope_missing` | A tool needs a scope not in `granted_scopes`. | Re-authorize with the missing scope added to `requested_scopes`. |
+| `oauth_refresh_failed` | Vendor refused refresh (revoked, expired refresh token). | Re-authorize. |
+| `oauth_callback_error` | Vendor returned an error to the callback. | Inspect `last_error`; usually a redirect-URI mismatch. |
+
+## Anti-patterns
+
+1. **Sharing a single OAuth client across projects.** OAuth clients
+   carry the operator's identity at the vendor. Project isolation
+   means each project needs its own client even if they hit the same
+   vendor — register one client per project.
+2. **Registering client_secret in env vars and the connection.** The
+   credentials backend handles that. Pick one — set the backend on the
+   connection and let the platform route the read at call time.
+3. **Skipping the test ping after authorize.** Always Test once after
+   the consent flow lands. A successful callback only proves token
+   exchange worked, not that the granted scopes match what your tools
+   need.

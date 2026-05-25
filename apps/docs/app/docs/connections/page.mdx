@@ -1,0 +1,168 @@
+export const metadata = {
+  title: "Connections",
+  description:
+    "Sagewai's unified model for external dependencies — LLM providers, OAuth clients, MCP servers, HTTP tools, SDK builtins — all share one record shape, one admin surface, one CLI.",
+};
+
+# Connections
+
+A **connection** is Sagewai's record of an external dependency. The same
+envelope holds an LLM provider key, an OAuth client, an MCP server
+config, an HTTP API token, and an SDK builtin's credentials. Every
+connection lives in one store, surfaces on one admin page, and answers
+to one CLI namespace. Differences live in the per-protocol plugin —
+shape of the credentials, lifecycle (an OAuth client gets authorized;
+an HTTP tool doesn't), how the test ping works.
+
+This page is the orientation. Pick a protocol page for setup walkthroughs.
+
+## What it replaces
+
+Before the Connections Platform shipped, Sagewai had three parallel
+stores: `inference-providers.json` for LLM providers, a tools-CRUD
+backend for catalog tools, and a separate OAuth vault. Each had its own
+admin tab, its own CLI, its own envelope. The Connections Platform
+collapsed all three into a single record shape backed by one store and
+exposed through one set of admin routes — `/api/v1/admin/connections/`.
+
+## The lifecycle
+
+```
+register → use → test → update / set-default → delete
+```
+
+1. **Register.** Operator creates a connection — admin UI wizard or
+   `sagewai connections add <protocol> ...`. The plugin validates the
+   shape; the credentials backend encrypts sensitive fields.
+2. **Use.** Catalogued tools and agent runtime look up the right
+   connection by protocol + tag + project + default flag. The connection
+   is opaque to consumers; the plugin owns the "how do you actually
+   talk to this thing" details.
+3. **Test.** Operator can ping a connection at any time. Each plugin
+   implements `test()` — for OAuth it's a userinfo call, for HTTP it's a
+   GET against the catalogued health endpoint, for MCP it's a probe.
+4. **Update / set-default.** Display name, tags, default flag, even the
+   credentials backend can be changed in place. One connection per
+   (project, protocol, default_key) is the default; tools without an
+   explicit `connection_id` use the default.
+5. **Delete.** Removes the record and clears credentials from whichever
+   backend stored them. Out-of-band external state — vendor-registered
+   tokens, OAuth grants — needs separate revocation; the admin UI's
+   Revoke action handles that for OAuth.
+
+## The two axes
+
+Every connection is positioned along two axes:
+
+**Protocol** (how Sagewai talks to it):
+- `http` — REST APIs (catalogued or ad-hoc operations)
+- `oauth2` — OAuth 2.0 authorization-code flow
+- `mcp` — Model Context Protocol servers (stdio / http / sse)
+- `inference` — LLM inference providers (Modal, RunPod, Vast.ai, …)
+- `sdk` — Python builtins shipped with the SDK that need credentials
+  (PayPal client, Plaid, …)
+
+**Tag** (what it's for):
+- Canonical tags shipped with the platform: `payments`, `crm`, `comms`,
+  `observability`, `music`, `email`, `health`, `ecommerce`, `travel`,
+  `media`. Tags follow the catalog's `category` taxonomy.
+- Operator-defined free-form tags. Add any string; the admin UI
+  surfaces both canonical and custom in the tag filter.
+
+The single record is searched, filtered, and routed along both axes.
+A `payments`-tagged Stripe `http` connection coexists in the same list
+with a `payments`-tagged Plaid `sdk` connection.
+
+## Surfaces
+
+Connections are managed from two places. Both share the same store, so
+a connection added in one surface is immediately usable from the other.
+
+### Admin UI
+
+Navigate to `/connections`. One filterable list shows every connection
+across all protocols. Filter chips at the top narrow by protocol; tag
+chips narrow further; the Search input free-text-matches name, id, and
+tags. Click a row to open the detail drawer (plugin-supplied content).
+The Add Connection button opens a 3-step wizard: pick protocol →
+configure → choose credentials backend + tags.
+
+### CLI
+
+```bash
+sagewai connections list                          # all connections in project
+sagewai connections list --protocol oauth2        # filter by protocol
+sagewai connections list --tag payments           # filter by tag
+sagewai connections add http ...                  # add a connection
+sagewai connections get <id>                      # detail view
+sagewai connections test <id>                     # ping the upstream
+sagewai connections update <id> ...               # change metadata
+sagewai connections delete <id>                   # remove
+sagewai connections set-default <id>              # mark default
+sagewai connections oauth2 start <id>             # open the consent URL
+sagewai connections oauth2 refresh <id>           # force a token refresh
+sagewai connections oauth2 revoke <id>            # revoke + clear tokens
+```
+
+Per-protocol sub-commands live under `sagewai connections <protocol>`.
+Today only `oauth2` has sub-commands; others may grow them.
+
+## Credentials backends
+
+The `credentials_backend` field on a connection picks **where** the
+secret values live. The backend is per-connection, so one project can
+hold a SOPS-backed prod Stripe key alongside a local-encrypted dev
+Stripe key.
+
+- [Local](./backends/local) — encrypted on disk via the Sealed master
+  key. Default for fresh installs. No external dependency.
+- [Env vars](./backends/env) — credentials read from environment
+  variables at runtime. Connection stores only the variable name. Best
+  for 12-factor / container workflows.
+- [SOPS](./backends/sops) — Mozilla SOPS files in a sandboxed directory.
+  Encrypted at rest by SOPS; the operator manages the key (KMS, age, …).
+
+Operators can write their own backend by implementing the
+`CredentialsBackend` Protocol. Production secret managers (HashiCorp
+Vault, AWS Secrets Manager, Doppler, …) are community-contribution
+territory; see the [SOPS](./backends/sops) page for the reference
+implementation.
+
+## Protocols
+
+- [HTTP / REST](./protocols/http) — REST APIs with any auth scheme. Catalogued tools use this for stable per-vendor operations.
+- [OAuth 2.0](./protocols/oauth2) — Authorization-code flow with PKCE. The lifecycle adds an Authorize step before Use.
+- [MCP server](./protocols/mcp) — Model Context Protocol; stdio / http / sse transports.
+- [Inference provider](./protocols/inference) — LLM inference endpoints (Modal, RunPod, Vast.ai, Colab, custom).
+- [SDK builtin](./protocols/sdk) — Python tools shipped with the SDK that hold credentials in-process.
+
+## Status
+
+Every connection carries one of five statuses:
+
+| Status   | Meaning |
+|----------|---------|
+| `ready`  | Connection is configured and verified usable. |
+| `pending` | Registered but waiting on a setup step — typically OAuth authorize. |
+| `expired` | Credentials are stale. Refresh or re-authorize. |
+| `revoked` | Operator revoked. Record persists so credentials can be re-added. |
+| `error`  | Last operation failed. Inspect `last_error` and retry. |
+
+The `last_error` field carries a stable code, human message, and
+timestamp. Common codes per protocol live on each protocol page.
+
+## Anti-patterns
+
+1. **Hard-coding API keys in agent code.** That bypasses the connection
+   store entirely — secrets leak into git, credentials can't be rotated
+   without redeploy. Always register a connection and reference it from
+   the catalog tool YAML.
+2. **One mega-connection per service.** If a single tool needs three
+   different scopes of OAuth access (e.g., one OAuth client for read,
+   one for write), register them as three separate connections with
+   different tags / default flags. The store's tag and default
+   semantics are how you fan out.
+3. **Using tags for organizational structure instead of canonical
+   taxonomy.** Tags are routing primitives — they decide which
+   connection a tool picks up. Use the project_id field for
+   organizational isolation; tags are for capability matching.

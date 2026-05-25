@@ -1697,14 +1697,10 @@ export interface ToolTestResult {
   test_endpoint?: object | null;
 }
 
-// ── OAuth clients (batch-3) ──────────────────────────────────────────────────
-
-export type {
-  OAuthClient,
-  OAuthClientStatus,
-  OAuthClientTokensMeta,
-  OAuthCreatePayload,
-  OAuthCreateResponse,
-  OAuthProviderMeta,
-  OAuthStartResponse,
-} from './oauth-types';
+// ── OAuth clients ───────────────────────────────────────────────────────────
+//
+// Legacy types (OAuthClient/OAuthClientStatus/OAuthClientTokensMeta/
+// OAuthCreatePayload/OAuthCreateResponse/OAuthProviderMeta/OAuthStartResponse)
+// were removed by the Connections Platform PR5 alongside oauth-types.ts.
+// The unified replacements live in `./connection-types` (Connection,
+// ConnectionStatus, OAuth2StartResponse, ...).

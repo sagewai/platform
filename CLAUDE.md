@@ -1025,6 +1025,74 @@ internally) − ~60 legacy tests deleted. Full SDK suite: 5300 passed
 (5293 PR3 baseline + 67 new − 60 deleted = net +7), 360 skipped,
 2 xfailed, 0 failed.
 
+**PR5 (admin UI rewrite + examples sweep + docs) landed:** The frontend
+goes live on the unified surface. Examples and docs are updated. **The
+Connections Platform is complete.**
+
+- **Admin UI** at `/connections` rewritten as a single filterable list.
+  Top bar: protocol-chip filter + tag multi-select (canonicals first
+  + operator free-form) + free-text search + Add Connection button.
+  Mixed protocol rows with Status pill, Backend pill, Default toggle,
+  and per-row actions menu (Test / Delete + protocol-specific actions
+  for oauth2: Authorize / Re-authorize / Refresh tokens / Revoke).
+  Slide-in Detail drawer with plugin-supplied body panels (one
+  React component per protocol at
+  `apps/admin/components/connections/protocols/<id>-panel.tsx`).
+- **Add Connection wizard** — 3 steps: pick protocol → configure
+  (plugin-specific form fields inlined for the kickoff) → pick
+  credentials backend + tag. On oauth2 submit: opens vendor consent
+  in a popup, polls `GET /api/v1/admin/connections/{id}` every 2s for
+  up to 10 min until status flips to `ready`.
+- **Frontend deletions:** `oauth-tab.tsx`, `add-oauth-client-modal.tsx`
+  (both from PR #356), `tools-tab.tsx`, `inference-provider-modal.tsx`,
+  `oauth-types.ts`, `e2e/oauth.spec.ts`, `e2e/connections-tabs.spec.ts`,
+  `e2e/connections-tools.spec.ts`. Coverage migrated into the new
+  `e2e/connections.spec.ts` (1 happy-path test). Legacy
+  `adminApi.oauthClients` namespace + OAuth* type re-exports also
+  removed from `utils/api.ts` and `utils/types.ts`.
+- **Examples swept:** example 25 (`25_training_data_pipeline.py`)
+  re-pointed at the unified `sagewai connections` CLI + the new
+  `/connections` admin surface. Examples 23/24/26/28/29 were already
+  free of legacy references.
+- **Docs added:** `apps/docs/app/docs/connections/page.mdx` (unified
+  overview), `connections/protocols/{http,oauth2,mcp,inference,sdk}/page.mdx`,
+  `connections/backends/{local,env,sops}/page.mdx`. The existing
+  `connections/oauth/{page,spotify,google}/page.mdx` from PR #356
+  retain content; their setup steps now reference the unified admin
+  UI + the `sagewai connections oauth2 ...` CLI surface.
+- **Callback URL changed:** the OAuth2 plugin's admin callback now
+  lives at `/api/v1/admin/connections/oauth2/callback` (PR4 mount
+  path), NOT the old `/api/v1/admin/connections/oauth/callback`.
+  Docs flag this prominently in each provider's setup page — operators
+  with vendor consoles registered against the old path must update
+  to the new URL.
+- **`useToast` ref-pinning lesson:** `useToast()` returns a fresh
+  object each render; passing `toast` directly through a `useCallback`
+  dependency triggers a React-Strict-Mode "maximum update depth" loop.
+  Stabilize via `const toastRef = useRef(toast); toastRef.current = toast;`
+  + reference `toastRef.current` from handlers. (Captured during the
+  PR5 e2e debugging.)
+
+**The Connections Platform is now end-to-end on one model.** SDK
+(PR1) → plugins (PR2) → credentials backends (PR3) → admin API + CLI
+(PR4) → admin UI + examples + docs (PR5). Memory canon
+`project-connections-platform-followup` is superseded by
+`project-connections-platform-landed`.
+
+**Follow-up specs (not in this 5-PR effort):**
+- MCP servers as first-class connection records with capability
+  discovery, transport health, credentials. Own spec.
+- New protocols (MQTT, gRPC, WebSocket, CoAP, Modbus, OPC UA) —
+  per-customer; each = one PR adding one plugin.
+- Production-grade external secret backends (HashiCorp Vault, AWS
+  Secrets Manager, Doppler, Infisical, Bitwarden Secrets Manager) —
+  community-contributed via the `CredentialsBackend` Protocol.
+- Connection import/export (YAML / Terraform).
+- Auto-rotation of secrets.
+
+**Test counts:** No new SDK tests (PR5 is frontend / examples / docs);
+1 new e2e replaces the 2 deleted legacy `connections-*` specs.
+
 ## Known issues you may encounter
 
 1. ~~`sagewai[fastapi]` extra missing `uvicorn`~~ **FIXED** in PR #48.

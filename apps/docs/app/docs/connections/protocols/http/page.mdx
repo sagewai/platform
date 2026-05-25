@@ -1,0 +1,103 @@
+export const metadata = {
+  title: "HTTP / REST connections",
+  description:
+    "Register REST API endpoints with any auth scheme — catalogued for stable per-vendor tools, ad-hoc for one-off integrations.",
+};
+
+# HTTP / REST connections
+
+The `http` protocol wraps any HTTP-speaking REST API. Most third-party
+SaaS tools you'll wire up (Stripe, Slack, GitHub, Datadog, …) land
+here. The protocol's job is to hold the base URL, auth credentials, and
+either a reference to a catalogued operation set or an inline operations
+map.
+
+## When to pick it
+
+- The vendor exposes a stable REST API.
+- You want catalogued operations (`stripe.create_payment_intent`,
+  `slack.post_message`) so agents can call them by name.
+- You don't need the OAuth2 authorization-code dance — a static API key
+  or Bearer token is enough.
+
+If the vendor requires an OAuth2 user consent flow, use the
+[OAuth2](../oauth2) protocol instead.
+
+## `protocol_data` schema
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `base_url` | string (URL) | yes | Vendor API root, e.g. `https://api.stripe.com/v1`. |
+| `auth.kind` | enum | yes | One of `bearer`, `header`, `basic`, `query`, `none`. |
+| `auth.header` | string | conditional | When `auth.kind === "header"`, the header name (e.g. `X-API-Key`). |
+| `auth.prefix` | string | optional | Prefix prepended to credential, e.g. `Bearer `, `Token `, `GenieKey `. |
+| `runtime_base_url_field` | string | optional | Name of a credential field that overrides `base_url` at call time. Used for Jira / Magento / Vital where the URL is per-operator. |
+| `operations_ref` | string | conditional | YAML catalog reference, e.g. `stripe`. Mutually exclusive with `operations`. |
+| `operations` | map | conditional | Inline operations map: `{ "name": { method, path } }`. |
+
+Sensitive fields (credential values registered against `credential_fields`)
+are masked in API responses. They're stored in the connection's
+configured credentials backend, not in `protocol_data`.
+
+## Setup in the admin UI
+
+1. `/connections` → **+ Add Connection**.
+2. Step 1: pick **HTTP / REST**.
+3. Step 2: enter the display name and base URL.
+4. Step 3: pick the credentials backend (Local / Env / SOPS) and tags
+   (e.g. `payments` for a Stripe connection).
+5. Submit. The connection lands in `ready` status if the operations
+   reference resolves; otherwise it's `error` with the catalog miss.
+
+After creation, the row's **Test** action calls the catalogued health
+endpoint (when one is declared) to verify the credentials hit the
+vendor cleanly.
+
+## CLI equivalent
+
+```bash
+sagewai connections add http \
+  --display-name "Stripe prod" \
+  --base-url "https://api.stripe.com/v1" \
+  --auth-kind bearer \
+  --operations-ref stripe \
+  --tags payments \
+  --backend local
+```
+
+Per-field credential prompts follow if `--backend local`. For env-backed
+connections, set the values in your environment before registering and
+pass `--backend env`.
+
+## Catalogued vs ad-hoc
+
+The catalog at `packages/sdk/sagewai/tools/catalog/` ships operation
+sets for ~40 SaaS vendors. Setting `operations_ref: <vendor>` plugs
+your connection into that catalog — agents call
+`stripe.create_payment_intent(amount=1000, currency="usd")` and the
+HTTP executor expands it via the catalog's operation declaration.
+
+For one-off internal APIs that don't warrant a catalog entry, set
+`operations` inline:
+
+```yaml
+operations:
+  list_widgets: { method: GET,  path: /widgets }
+  get_widget:   { method: GET,  path: /widgets/{id} }
+  make_widget:  { method: POST, path: /widgets }
+```
+
+The inline form is fine for internal tools where stability across
+upgrades isn't a concern. For public vendors, prefer adding a catalog
+entry so all operators on the same vendor share the same operation
+shapes.
+
+## Common errors
+
+| Code | Cause | Fix |
+|------|-------|-----|
+| `http_4xx_unauthorized` | Credentials wrong / expired. | Re-paste or rotate the API key; re-test. |
+| `http_4xx_forbidden` | Token lacks the scope for this operation. | Regenerate the token with the right vendor scope. |
+| `http_5xx` | Vendor is down or rate-limited. | Check vendor status page; reduce concurrency. |
+| `runtime_base_url_missing` | `runtime_base_url_field` declared but the credential isn't set. | Register the credential value via your chosen backend. |
+| `catalog_op_not_found` | Operation name unknown to the catalog. | Confirm the catalog YAML defines the operation, or move to inline `operations`. |
