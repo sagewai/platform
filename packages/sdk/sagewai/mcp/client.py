@@ -94,9 +94,10 @@ class _StdioTransport:
 class _SseTransport:
     """JSON-RPC transport over HTTP + SSE."""
 
-    def __init__(self, base_url: str) -> None:
+    def __init__(self, base_url: str, headers: dict[str, str] | None = None) -> None:
         self._base_url = base_url.rstrip("/")
-        self._client = httpx.AsyncClient(timeout=30.0)
+        self._headers = dict(headers or {})
+        self._client = httpx.AsyncClient(timeout=30.0, headers=self._headers)
         self._request_id = 0
 
     async def request(self, method: str, params: dict[str, Any] | None = None) -> Any:
@@ -402,13 +403,16 @@ class McpClient:
             raise
 
     @classmethod
-    async def connect_sse(cls, url: str) -> list[ToolSpec]:
+    async def connect_sse(
+        cls, url: str, headers: dict[str, str] | None = None
+    ) -> list[ToolSpec]:
         """Connect to an MCP server via HTTP+SSE and return its tools.
 
         Args:
             url: Base URL of the MCP server's JSON-RPC endpoint.
+            headers: Optional extra HTTP headers (e.g. for authentication).
         """
-        transport = _SseTransport(url)
+        transport = _SseTransport(url, headers=headers)
         try:
             return await cls._discover_tools(transport)
         except Exception:

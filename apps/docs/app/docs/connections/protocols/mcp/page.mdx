@@ -1,7 +1,7 @@
 export const metadata = {
   title: "MCP server connections",
   description:
-    "Register Model Context Protocol servers — stdio, http, or sse transports — as connections that agents can call tools against.",
+    "Register Model Context Protocol servers — pick from the built-in registry of 7 reference servers, or wire a custom one. Credentials are encrypted and injected as env vars or HTTP headers; discovered tools are cached on the record.",
 };
 
 # MCP server connections
@@ -11,95 +11,211 @@ connection. MCP is the open standard for exposing tools, resources, and
 prompts to language models; once an MCP server is registered, every
 agent in the project can discover and invoke its tools.
 
-Sagewai supports three MCP transports: stdio (local process), http
-(remote endpoint), and sse (Server-Sent Events streaming endpoint).
+Sagewai ships **two paths** for registering an MCP server:
+
+1. **Pick from the built-in registry** — 7 reference servers shipped via
+   `npx -y @modelcontextprotocol/server-<id>`. The registry declares the
+   default command, the credentials each server needs, and where to
+   inject them (subprocess env vars for stdio servers; HTTP headers for
+   http/sse servers).
+2. **Custom (free-form)** — for vendor or self-built MCP servers not in
+   the registry. You supply the command (stdio) or URL (http/sse)
+   directly; credentials are env-injected by default.
 
 ## When to pick it
 
-- You have a community or vendor-published MCP server you want to wire
-  into Sagewai's tool discovery.
-- You want to expose an internal tool surface as MCP so the same server
-  can drive Sagewai, Claude Desktop, Cursor, and any other MCP host.
+- You want a community or vendor-published MCP server wired into
+  Sagewai's tool discovery.
+- You want one tool surface that drives Sagewai, Claude Desktop, Cursor,
+  and any other MCP host without copy-pasting integration code.
 - Your tool needs streaming back to the LLM (use `sse`).
 
 If your tool is just a REST API, use [HTTP](../http) — MCP buys you
 nothing extra for stateless request-response.
 
+## The registry
+
+| id | Server | Transport | Credentials | npm |
+|----|--------|-----------|-------------|-----|
+| `filesystem` | Filesystem | stdio | — | `@modelcontextprotocol/server-filesystem` |
+| `github` | GitHub | stdio | `GITHUB_TOKEN` | `@modelcontextprotocol/server-github` |
+| `fetch` | Fetch (HTTP) | stdio | — | `@modelcontextprotocol/server-fetch` |
+| `postgres` | PostgreSQL | stdio | `DATABASE_URL` | `@modelcontextprotocol/server-postgres` |
+| `sqlite` | SQLite | stdio | — | `@modelcontextprotocol/server-sqlite` |
+| `brave-search` | Brave Search | stdio | `BRAVE_API_KEY` | `@modelcontextprotocol/server-brave-search` |
+| `slack` | Slack | stdio | `SLACK_BOT_TOKEN` + `SLACK_TEAM_ID` | `@modelcontextprotocol/server-slack` |
+
+Every registry entry's docs URL links straight to the upstream server's
+README. The list is canonical — adding a new server is a one-line
+registry change in `sagewai.mcp.servers` (and is reviewed alongside the
+tools that need it).
+
+For the full list at runtime:
+
+```bash
+sagewai connections mcp servers
+```
+
+Or via the admin API:
+
+```bash
+curl -s http://localhost:8080/api/v1/admin/connections/mcp/servers | jq .
+```
+
+## Picking a server in the Add wizard
+
+1. `/connections` → **+ Add Connection**.
+2. Step 1: pick **MCP server**.
+3. Step 2: pick the **Server** dropdown.
+   - To use a registry entry: pick a row (e.g., "GitHub"). The wizard
+     pre-fills the command and renders an input for each credential the
+     server declares.
+   - To register a custom MCP server: pick "Custom (free-form)" and
+     enter the transport + command (stdio) or URL (http/sse).
+4. For `filesystem` and `sqlite`, the wizard prompts for an extra path
+   argument (the chrooted root / database file).
+5. Step 3: pick a credentials backend (defaults to **Local**) and tags.
+6. Submit. The connection lands in `ready` once the first
+   **Refresh tools** call succeeds.
+
 ## `protocol_data` schema
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `server_ref` | string | optional | Registry entry id (e.g. `github`). When set, missing required credentials fail validation. |
 | `transport` | enum | yes | `stdio` &#124; `http` &#124; `sse`. |
-| `command` | string[] | conditional | When `transport === "stdio"`: argv[0] of the server process. |
+| `command` | string[] | conditional | When `transport === "stdio"`: argv[0] of the server process. Defaults to the registry entry's command when `server_ref` is set. |
 | `args` | string[] | optional | Args passed after `command`. |
 | `url` | string (URL) | conditional | When `transport !== "stdio"`: server URL. |
+| `credentials` | dict | optional | Env-var or header values keyed by credential name. Password-typed fields are masked in public views and encrypted at rest. |
+| `discovered_tools` | object[] | populated by `test`/`refresh` | Capability cache — `{name, description, input_schema}` per tool. |
+| `last_discovered_at` | ISO-8601 string | populated by `test`/`refresh` | UTC timestamp of the last successful discovery. |
 
-For stdio servers, the command runs inside the platform sandbox tier
-declared by the catalog entry (or `TRUSTED` if registered ad-hoc).
-For http / sse, the URL is fetched as a regular HTTP request — no
-ambient sandboxing applies.
+## Credentials
 
-## Setup in the admin UI
+Each registry entry declares its credentials as a `credential_fields`
+list. Every field has:
 
-1. `/connections` → **+ Add Connection**.
-2. Step 1: pick **MCP server**.
-3. Step 2: pick the transport and fill in either the command (stdio) or
-   the URL (http / sse).
-4. Step 3: pick credentials backend (most MCP servers don't have
-   credentials; pick Local with empty config) and tags.
-5. Submit. The connection lands in `ready` once the server responds to
-   its initial handshake.
+- **`name`**: the env var or header key (e.g. `GITHUB_TOKEN`).
+- **`type`**: `password` (masked in UI, encrypted at rest) or `text`
+  (preserved verbatim — e.g. Slack's `SLACK_TEAM_ID`).
+- **`injection`**: `env` for stdio (passed as a subprocess env var) or
+  `header` for http/sse (passed as an HTTP header). The 7 seed servers
+  all use `env`; header-injection is reserved for future entries.
+
+Password fields are encrypted at rest via the connection's credentials
+backend (Local, Env, or SOPS — see
+[Credentials backends](../../credentials)). The plain values never
+appear in API responses (`***` in the masked view) and never appear in
+admin logs.
+
+For free-form connections (no `server_ref`), every credential is
+treated as sensitive defensively and injected as an env var.
+
+## Capability discovery
+
+Each MCP connection caches the tools the server reports via
+`tools/list`. The cache lives at `protocol_data.discovered_tools` with
+a `last_discovered_at` UTC timestamp.
+
+**The cache refreshes on two triggers:**
+
+1. **Test action** — when you click **Test** in the admin UI or run
+   `sagewai connections test &lt;id&gt;`, the plugin runs the MCP handshake
+   plus `tools/list`, then writes the result back to the record.
+2. **Refresh tools** — the McpPanel exposes a dedicated **Refresh tools**
+   button; the equivalent CLI is
+   `sagewai connections mcp refresh &lt;id&gt;`. The button does the same
+   work as Test but is labeled for the day-to-day "what tools does this
+   server have right now?" use case.
+
+There is **no TTL-based auto-refresh** in Bundle A — the cache is the
+record's source of truth until explicitly refreshed. (Background
+continuous probing lands in Bundle B.)
+
+To read the cache without re-discovery:
+
+```bash
+sagewai connections mcp tools &lt;id&gt;
+```
+
+## Custom (free-form) MCP servers
+
+For servers not in the registry, pick **Custom (free-form)** in the Add
+wizard, or pass `--data` without `--server-ref`:
+
+```bash
+# Custom stdio server
+sagewai connections add mcp \
+  --display-name "my-vendor-mcp" \
+  --data '{
+    "transport": "stdio",
+    "command": ["python", "-m", "my_vendor_mcp"],
+    "credentials": {"VENDOR_API_KEY": "vd_xxx"}
+  }'
+
+# Custom http server
+sagewai connections add mcp \
+  --display-name "remote-tool" \
+  --data '{
+    "transport": "http",
+    "url": "https://mcp.vendor.com/v1"
+  }'
+```
+
+Custom connections accept the same `discovered_tools` cache flow as
+registry-backed ones — Test or Refresh tools both populate it.
 
 ## CLI equivalent
 
 ```bash
-# stdio
-sagewai connections add mcp \
-  --display-name "filesystem" \
-  --transport stdio \
-  --command "npx -y @modelcontextprotocol/server-filesystem /tmp" \
-  --tags media --backend local
+# List registry entries
+sagewai connections mcp servers
 
-# http
+# Add via the registry (prompts for GITHUB_TOKEN)
 sagewai connections add mcp \
-  --display-name "vendor-tool" \
-  --transport http \
-  --url "https://mcp.vendor.com/v1" \
-  --tags crm --backend env
+  --display-name "GitHub Prod" \
+  --server-ref github
+
+# Add a registry-backed server with a path arg (filesystem, sqlite)
+sagewai connections add mcp \
+  --display-name "Workspace FS" \
+  --server-ref filesystem
+# Prompted: GitHub Personal Access Token? *****
+# Prompted: Filesystem requires a path argument: /tmp/safe-root
+
+# Refresh the capability cache
+sagewai connections mcp refresh &lt;id&gt;
+
+# Read the cached tools
+sagewai connections mcp tools &lt;id&gt;
 ```
-
-The Test action sends a `tools/list` request and reports back the
-server's declared tool names.
-
-## Capability discovery
-
-MCP capability discovery — listing the tools, resources, and prompts
-the server exposes — is a follow-up feature. The PR5 surface treats an
-MCP connection as a black box, registering the transport + connection
-metadata; deeper discovery (and rendering tools in the catalog) lands
-in a subsequent release.
-
-Until then, MCP tools are invoked by name via the existing MCP
-runtime; the connection record holds the wiring.
 
 ## Common errors
 
 | Code | Cause | Fix |
 |------|-------|-----|
-| `mcp_handshake_failed` | Server didn't respond to initialize. | Check the command path / URL; run the server manually first. |
-| `mcp_transport_error` | Stdio process exited; HTTP returned non-200. | Inspect `last_error`; tail the server's stderr. |
-| `mcp_tool_not_found` | Catalog references a tool name the server doesn't expose. | Re-run discovery (or remove the catalog binding). |
+| `mcp_handshake_failed` | Server didn't respond to `initialize`. | Check the command path / URL; run the server manually first. |
+| `mcp_transport_error` | Stdio process exited; HTTP returned non-200. | Inspect `last_error`; tail the server's stderr. Refresh tools to re-probe. |
+| `unknown MCP server_ref` | Picked a `server_ref` that's not in the registry. | Run `sagewai connections mcp servers` to see the canonical list. |
+| `missing required credentials` | Required credential field absent at write time. | Pass every `credential_fields` entry from the registry; the schema validator enforces it. |
 
 ## Anti-patterns
 
-1. **Stdio MCP servers writing to the same TMPDIR as the agent.**
+1. **Hardcoding `mcp_servers: ["filesystem", "github"]` in agent templates.**
+   The Bundle A surface replaces the old fixture list with a live read
+   from registered connections — agent templates should reference real
+   connection IDs at deploy time, not hardcoded server names.
+2. **Stdio MCP servers writing to the same TMPDIR as the agent.**
    Sandbox tiers isolate filesystem state per-mission; an MCP server
    that spawns from outside the sandbox shouldn't write into
    sandbox-visible paths. Use vendor-suggested data directories.
-2. **Using stdio for production multi-agent loads.** Each stdio
-   connection means a forked process per call. For high-concurrency
-   workloads, prefer an http transport with a long-running server.
-3. **Confusing MCP transport health with MCP tool correctness.** The
-   Test action probes the handshake — a green test means the server
-   answers, not that its tools work. Run a real tool call once after
-   registration to verify end-to-end.
+3. **Storing credentials in `--data` JSON outside the registry path.**
+   Free-form connections are supported but lose the registry validator
+   that catches typos in credential names. Prefer `--server-ref` when
+   the server is in the registry.
+4. **Confusing MCP transport health with MCP tool correctness.** The
+   Test action probes the handshake plus `tools/list` — a green test
+   means the server answers and reports tools, not that any specific
+   tool works end-to-end. Run a real tool call once after registration
+   to verify.

@@ -191,6 +191,7 @@ export default function ConnectionsPage() {
         connection={selected}
         protocolNames={protocolNames}
         onClose={() => setSelectedId(null)}
+        onRefresh={reload}
       />
 
       <AddConnectionModal

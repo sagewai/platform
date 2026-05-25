@@ -266,6 +266,166 @@ def test_oauth2_subgroup_providers_works():
     assert "google" in result.output
 
 
+# ── MCP subgroup (sagewai connections mcp ...) ─────────────────────
+
+
+def test_mcp_subgroup_servers_lists_registry():
+    """`sagewai connections mcp servers` prints the 7 seeded entries."""
+    result = _runner().invoke(connections, ["mcp", "servers"])
+    assert result.exit_code == 0, result.output
+    for sid in [
+        "filesystem", "github", "fetch", "postgres",
+        "sqlite", "brave-search", "slack",
+    ]:
+        assert sid in result.output
+
+
+def test_mcp_subgroup_servers_json():
+    result = _runner().invoke(connections, ["mcp", "servers", "--json"])
+    assert result.exit_code == 0, result.output
+    body = json.loads(result.output)
+    ids = {e["id"] for e in body}
+    assert "github" in ids
+    assert len(body) == 7
+
+
+def test_mcp_subgroup_tools_404_for_missing():
+    result = _runner().invoke(connections, ["mcp", "tools", "conn_nope"])
+    assert result.exit_code != 0
+    assert "not found" in result.output.lower()
+
+
+def test_mcp_subgroup_tools_prints_empty_when_no_cache():
+    add_data = json.dumps({
+        "transport": "stdio",
+        "command": ["echo", "hi"],
+    })
+    add_result = _runner().invoke(
+        connections,
+        ["add", "mcp", "--display-name", "X", "--data", add_data, "--json"],
+    )
+    assert add_result.exit_code == 0, add_result.output
+    cid = json.loads(add_result.output)["id"]
+    result = _runner().invoke(connections, ["mcp", "tools", cid])
+    assert result.exit_code == 0, result.output
+    assert "no tools discovered" in result.output
+
+
+def test_mcp_subgroup_refresh_404_for_missing():
+    result = _runner().invoke(connections, ["mcp", "refresh", "conn_nope"])
+    assert result.exit_code != 0
+    assert "not found" in result.output.lower()
+
+
+# ── --server-ref flag on connections add ───────────────────────────
+
+
+def test_connections_add_with_server_ref_for_non_mcp_protocol_rejects():
+    """--server-ref is rejected when protocol != mcp."""
+    result = _runner().invoke(
+        connections,
+        [
+            "add", "http", "--display-name", "X",
+            "--server-ref", "github",
+            "--data", "{}",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "--server-ref" in result.output.lower() or "server-ref" in result.output.lower()
+
+
+def test_connections_add_mcp_without_data_or_server_ref_fails():
+    result = _runner().invoke(
+        connections,
+        ["add", "mcp", "--display-name", "X"],
+    )
+    assert result.exit_code != 0
+
+
+def test_connections_add_mcp_with_server_ref_unknown_fails():
+    result = _runner().invoke(
+        connections,
+        [
+            "add", "mcp", "--display-name", "X",
+            "--server-ref", "not-a-real-server",
+        ],
+        input="anything\n",
+    )
+    assert result.exit_code != 0
+    assert "unknown mcp server_ref" in result.output
+
+
+def test_connections_add_mcp_with_server_ref_github_prompts_for_token():
+    """--server-ref github prompts for GITHUB_TOKEN; masks in output."""
+    result = _runner().invoke(
+        connections,
+        [
+            "add", "mcp", "--display-name", "GH",
+            "--server-ref", "github", "--json",
+        ],
+        input="ghp_super_secret\n",
+    )
+    assert result.exit_code == 0, result.output
+    # The prompt line + JSON payload are mixed in output; extract the JSON tail.
+    json_start = result.output.find("{")
+    body = json.loads(result.output[json_start:])
+    assert body["protocol"] == "mcp"
+    assert body["protocol_data"]["server_ref"] == "github"
+    # Password masked in the public view.
+    assert body["protocol_data"]["credentials"]["GITHUB_TOKEN"] == "***"
+
+
+def test_connections_add_mcp_with_server_ref_filesystem_prompts_for_path():
+    """--server-ref filesystem prompts for path (no credentials)."""
+    result = _runner().invoke(
+        connections,
+        [
+            "add", "mcp", "--display-name", "FS",
+            "--server-ref", "filesystem", "--json",
+        ],
+        input="/tmp/safe-root\n",
+    )
+    assert result.exit_code == 0, result.output
+    json_start = result.output.find("{")
+    body = json.loads(result.output[json_start:])
+    assert body["protocol_data"]["server_ref"] == "filesystem"
+    assert "/tmp/safe-root" in body["protocol_data"]["args"]
+
+
+def test_connections_add_mcp_with_server_ref_slack_prompts_for_both_creds():
+    result = _runner().invoke(
+        connections,
+        [
+            "add", "mcp", "--display-name", "SL",
+            "--server-ref", "slack", "--json",
+        ],
+        input="xoxb-secret\nT123\n",
+    )
+    assert result.exit_code == 0, result.output
+    json_start = result.output.find("{")
+    body = json.loads(result.output[json_start:])
+    creds = body["protocol_data"]["credentials"]
+    assert creds["SLACK_BOT_TOKEN"] == "***"  # masked (password)
+    assert creds["SLACK_TEAM_ID"] == "T123"   # text — not masked
+    # The plaintext token never appears in stdout.
+    assert "xoxb-secret" not in result.output
+
+
+def test_connections_add_mcp_without_server_ref_uses_free_form():
+    """No --server-ref → existing --data path still works."""
+    data = json.dumps({
+        "transport": "stdio", "command": ["my-custom-mcp"],
+    })
+    result = _runner().invoke(
+        connections,
+        ["add", "mcp", "--display-name", "FF",
+         "--data", data, "--json"],
+    )
+    assert result.exit_code == 0, result.output
+    body = json.loads(result.output)
+    assert body["protocol_data"].get("server_ref") in (None, "")
+
+
 def test_oauth2_subgroup_start_404_for_missing():
     result = _runner().invoke(connections, ["oauth2", "start", "nope"])
     assert result.exit_code != 0

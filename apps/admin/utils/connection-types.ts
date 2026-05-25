@@ -94,3 +94,35 @@ export type OAuth2StartResponse = {
   authorize_url: string;
   state: string;
 };
+
+// MCP sub-route response shapes
+
+export type McpCredentialFieldMeta = {
+  name: string;
+  label: string;
+  type: 'password' | 'text';
+  injection: 'env' | 'header';
+  description: string | null;
+};
+
+export type McpServerMeta = {
+  id: string;
+  display_name: string;
+  transport: 'stdio' | 'http' | 'sse';
+  default_command: string[] | null;
+  default_args: string[] | null;
+  credential_fields: McpCredentialFieldMeta[];
+  docs_url: string;
+  description: string;
+};
+
+export type McpToolMeta = {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+};
+
+export type McpToolsResponse = {
+  tools: McpToolMeta[];
+  last_discovered_at: string | null;
+};

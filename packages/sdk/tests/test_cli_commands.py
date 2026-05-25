@@ -506,32 +506,10 @@ class TestEvalAPICommands:
 
 
 # ---------------------------------------------------------------------------
-# MCP API commands (M3)
+# MCP API commands (M3) — DELETED in MCP-as-first-class Bundle A.
+# Equivalent functionality lives under ``sagewai connections mcp ...``
+# (see ``packages/sdk/tests/cli/test_connections_cli.py``).
 # ---------------------------------------------------------------------------
-
-
-class TestMcpAPICommands:
-    def test_mcp_api_servers(self, httpx_mock: HTTPXMock):
-        httpx_mock.add_response(
-            url=f"{ADMIN_BASE}/api/v1/mcp/servers",
-            json=[
-                {"name": "knowledge", "path": "mcp-servers/knowledge", "status": "configured"},
-            ],
-        )
-        result = runner.invoke(cli, ["mcp", "api-servers"])
-        assert result.exit_code == 0
-        assert "knowledge" in result.output
-
-    def test_mcp_call(self, httpx_mock: HTTPXMock):
-        httpx_mock.add_response(
-            url=f"{ADMIN_BASE}/api/v1/mcp/call",
-            method="POST",
-            json={"tool_name": "search", "arguments": {}, "result": {"answer": "42"}},
-        )
-        result = runner.invoke(cli, ["mcp", "call", "python -m mcp_knowledge", "--tool", "search"])
-        assert result.exit_code == 0
-        assert "search" in result.output
-        assert "42" in result.output
 
 
 # ---------------------------------------------------------------------------

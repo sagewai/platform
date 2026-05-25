@@ -1093,6 +1093,67 @@ Connections Platform is complete.**
 **Test counts:** No new SDK tests (PR5 is frontend / examples / docs);
 1 new e2e replaces the 2 deleted legacy `connections-*` specs.
 
+## MCP-as-first-class (sub-project 3 — Bundle A)
+
+Bundle A landed: registered MCP server connections with capability
+discovery, credential injection, and autopilot CapabilityCatalog
+integration.
+
+- `sagewai.mcp.servers` registry — 7 seeded entries (filesystem,
+  github, fetch, postgres, sqlite, brave-search, slack). Each entry
+  declares default command/args + `credential_fields` with injection
+  axis (`env` vs `header`). Header-injection schema supported but no
+  seed exercises it.
+- `McpProtocolPlugin` extended in `sagewai.connections.protocols.mcp`
+  with `server_ref` schema field, `credentials` dict, `discovered_tools`
+  capability cache, `last_discovered_at` timestamp. `test()` now
+  connects, calls `tools/list`, and persists the tools to the record.
+- New `ProtocolPlugin` Protocol method `sensitive_field_paths_for(connection)`
+  with a module-level `get_sensitive_field_paths_for(plugin, conn)` helper
+  that falls back to the static ClassVar for plugins that don't override.
+- 3 new sub-routes mounted at `/api/v1/admin/connections/mcp/`:
+  `GET /servers` (registry), `POST /{id}/refresh` (re-discover + persist),
+  `GET /{id}/tools` (read cached list).
+- 3 new CLI commands under `sagewai connections mcp`: `servers`, `refresh`, `tools`.
+- `--server-ref <id>` flag on `sagewai connections add mcp` (prompts for
+  every credential field the registry entry declares; passwords hidden).
+- Admin UI: extended McpPanel shows discovered tools list with Refresh
+  button + registry pill; Add wizard gains a server-picker dropdown +
+  per-server credential inputs.
+- Autopilot `CapabilityCatalog.mcp_servers` now reads from registered
+  MCP connections (project-aware via `X-Project-ID`), replacing the
+  hardcoded `["filesystem", "github"]` strings in serve.py.
+- **Legacy `sagewai mcp` CLI deleted** — `packages/sdk/sagewai/cli/mcp.py`
+  removed; the `tests/test_cli.py::test_mcp_*` + `test_cli_commands.py::TestMcpAPICommands`
+  tests are gone.
+
+**Key invariants:**
+- Registry `credential_fields` is the single source of truth for what
+  credentials a server needs. The Pydantic model validator enforces
+  presence at write time.
+- `sensitive_fields` ClassVar stays empty `()` for MCP; per-record
+  dispatch via `sensitive_field_paths_for` derives the actual paths
+  from the resolved registry entry. Other 4 plugins unchanged.
+- Capability cache refreshes only on `test()` or the explicit `refresh`
+  route/CLI. No background refresh, no TTL.
+- Free-form (no `server_ref`) connections default to env injection;
+  every credential is treated as sensitive defensively.
+- `MCPClient` adapter forwards `env` only to stdio and `headers` only
+  to http/sse — the other axis is silently ignored.
+- Stdio env vars merge with `os.environ` (the subprocess inherits the
+  parent's env on top of the per-record credentials).
+
+**Not in this PR (Bundle B follow-up):**
+- Long-lived connection pool with `ResilientMcpConnection` (each tool
+  call still spawns a fresh subprocess).
+- Background continuous health probing.
+- Per-server detail mdx pages (one per of the 7 seeded servers).
+- TTL-based auto-refresh of the capability cache.
+
+**Test counts:** ~50 new SDK tests (12 registry, 19 plugin schema +
+public_view, 8 routes via TestClient, 13 CLI mcp subgroup + --server-ref,
+4 capabilities project-aware) for a total of ~5350 SDK tests passing.
+
 ## Known issues you may encounter
 
 1. ~~`sagewai[fastapi]` extra missing `uvicorn`~~ **FIXED** in PR #48.

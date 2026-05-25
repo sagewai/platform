@@ -14,7 +14,12 @@ import { McpPanel } from './protocols/mcp-panel';
 import { Oauth2Panel } from './protocols/oauth2-panel';
 import { SdkPanel } from './protocols/sdk-panel';
 
-const PANELS: Record<string, (props: { connection: Connection }) => JSX.Element> = {
+type PanelProps = {
+  connection: Connection;
+  onRefresh?: () => void | Promise<void>;
+};
+
+const PANELS: Record<string, (props: PanelProps) => JSX.Element> = {
   http: HttpPanel,
   oauth2: Oauth2Panel,
   mcp: McpPanel,
@@ -26,9 +31,11 @@ type Props = {
   connection: Connection | null;
   protocolNames: Record<string, string>;
   onClose: () => void;
+  /** Triggered by plugin-specific actions (e.g. McpPanel "Refresh tools"). */
+  onRefresh?: () => void | Promise<void>;
 };
 
-export function DetailDrawer({ connection, protocolNames, onClose }: Props) {
+export function DetailDrawer({ connection, protocolNames, onClose, onRefresh }: Props) {
   if (!connection) return null;
   const Panel = PANELS[connection.protocol];
   return (
@@ -75,7 +82,7 @@ export function DetailDrawer({ connection, protocolNames, onClose }: Props) {
           </div>
         </header>
         <div className="p-4">
-          {Panel ? <Panel connection={connection} /> : (
+          {Panel ? <Panel connection={connection} onRefresh={onRefresh} /> : (
             <p className="text-sm text-text-tertiary">
               No detail panel registered for protocol {connection.protocol}.
             </p>

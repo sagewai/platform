@@ -49,6 +49,7 @@ from sagewai.connections.errors import (
     UnknownProtocolError,
 )
 from sagewai.connections.protocols import all_protocols, get_protocol
+from sagewai.connections.protocols import mcp as mcp_module
 from sagewai.connections.protocols import oauth2 as oauth2_module
 
 
@@ -60,9 +61,42 @@ def _get_ctx():
     """Build a fresh ConnectionsContext + inject it for plugin extra_cli."""
     sf = AdminStateFile(default_admin_state_path())
     ctx = build_connections_context(sf)
-    # Plugins (oauth2) read this for their extra_cli command bodies.
+    # Plugins (oauth2, mcp) read this for their extra_cli command bodies.
     oauth2_module._test_inject_context(ctx)
+    mcp_module._test_inject_context(ctx)
     return ctx
+
+
+def _sensitive_paths_for_temp(
+    plugin, protocol: str, protocol_data: dict[str, Any]
+) -> tuple[str, ...]:
+    """Compute sensitive field paths for a not-yet-persisted protocol_data.
+
+    Plugins that implement per-record sensitive paths (mcp) need a
+    Connection-like object. We build a minimal stand-in from the
+    provided protocol_data; other plugins fall through to the ClassVar.
+    """
+    from sagewai.connections.models import Connection
+    from sagewai.connections.protocols.base import get_sensitive_field_paths_for
+
+    temp = Connection(
+        id="conn_pending",
+        kind="connection",
+        protocol=protocol,
+        project_id=None,
+        display_name="pending",
+        tags=(),
+        credentials_backend=None,
+        status="pending",
+        last_tested_at=None,
+        last_test_ok=None,
+        is_default=False,
+        created_at="pending",
+        updated_at="pending",
+        last_error=None,
+        protocol_data=protocol_data,
+    )
+    return get_sensitive_field_paths_for(plugin, temp)
 
 
 def _serialize(record, *, plugin_public_view) -> dict[str, Any]:
@@ -217,7 +251,9 @@ def get_cmd(connection_id: str, as_json: bool) -> None:
 @click.argument("protocol")
 @click.option("--display-name", required=True, help="Human-readable name")
 @click.option("--project", default=None, help="Project scope ($SAGEWAI_PROJECT or 'default')")
-@click.option("--data", required=True, help="protocol_data as JSON string or @path/to/file.json")
+@click.option("--data", default=None, help="protocol_data as JSON string or @path/to/file.json")
+@click.option("--server-ref", default=None,
+              help="(mcp only) Pin to an MCP registry entry; prompts for its credential fields.")
 @click.option("--tags", default="", help="Comma-separated tags")
 @click.option("--credentials-backend", "credentials_backend_json", default=None,
               help="Per-connection credentials backend as JSON")
@@ -226,24 +262,72 @@ def add_cmd(
     protocol: str,
     display_name: str,
     project: str | None,
-    data: str,
+    data: str | None,
+    server_ref: str | None,
     tags: str,
     credentials_backend_json: str | None,
     as_json: bool,
 ) -> None:
-    """Add a connection (JSON-driven via --data)."""
+    """Add a connection (JSON-driven via --data, or registry-driven via --server-ref for mcp)."""
+    if server_ref is not None and protocol != "mcp":
+        click.echo(
+            f"  ✗ --server-ref is only valid for mcp protocol (got {protocol})",
+            err=True,
+        )
+        raise click.exceptions.Exit(2)
+    if server_ref is None and not data:
+        click.echo("  ✗ either --data or --server-ref is required", err=True)
+        raise click.exceptions.Exit(2)
+
     pid = project or _default_project()
     ctx = _get_ctx()
-    # Read data
-    if data.startswith("@"):
-        with open(data[1:], "r", encoding="utf-8") as f:
-            protocol_data = json.load(f)
-    else:
+
+    # ── --server-ref path: registry-driven prompting ────────────────
+    if server_ref is not None:
+        from sagewai.mcp.servers import UnknownMcpServerError, get_server
+
         try:
-            protocol_data = json.loads(data)
-        except json.JSONDecodeError as exc:
-            click.echo(f"  ✗ --data is not valid JSON: {exc}", err=True)
+            entry = get_server(server_ref)
+        except UnknownMcpServerError:
+            click.echo(f"  ✗ unknown mcp server_ref {server_ref!r}", err=True)
             raise click.exceptions.Exit(2)
+
+        # Prompt for each credential field (passwords hidden).
+        credentials: dict[str, str] = {}
+        for f in entry.credential_fields:
+            value = click.prompt(
+                f"{f.label} ({f.name})",
+                hide_input=(f.type == "password"),
+            )
+            credentials[f.name] = value
+
+        protocol_data = {
+            "server_ref": entry.id,
+            "transport": entry.transport,
+            "command": list(entry.default_command or []),
+            "args": list(entry.default_args or []),
+            "credentials": credentials,
+        }
+        # Filesystem + sqlite need a path argument.
+        if entry.id in {"filesystem", "sqlite"}:
+            path_arg = click.prompt(
+                f"{entry.display_name} requires a path argument", type=str,
+            )
+            protocol_data["args"] = list(protocol_data["args"]) + [path_arg]
+        # Fall through to common create path.
+        data = None  # signal we already have protocol_data
+    else:
+        # Read data
+        assert data is not None
+        if data.startswith("@"):
+            with open(data[1:], "r", encoding="utf-8") as f:
+                protocol_data = json.load(f)
+        else:
+            try:
+                protocol_data = json.loads(data)
+            except json.JSONDecodeError as exc:
+                click.echo(f"  ✗ --data is not valid JSON: {exc}", err=True)
+                raise click.exceptions.Exit(2)
     credentials_backend = None
     if credentials_backend_json:
         try:
@@ -262,9 +346,12 @@ def add_cmd(
     except ValidationError as exc:
         click.echo(f"  ✗ protocol_data validation failed: {exc}", err=True)
         raise click.exceptions.Exit(2)
+    # Build a temp Connection so plugins (mcp) that derive sensitive
+    # paths from the record's protocol_data can return the right set.
+    sensitive_paths = _sensitive_paths_for_temp(plugin, protocol, protocol_data)
     encrypted_pd = ctx.router.encrypt(
         protocol_data,
-        sensitive_field_paths=plugin.sensitive_fields,
+        sensitive_field_paths=sensitive_paths,
         connection_credentials_backend=credentials_backend,
     )
     try:

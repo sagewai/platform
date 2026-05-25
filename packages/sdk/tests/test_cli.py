@@ -62,21 +62,9 @@ def test_workflow_resume_help():
 
 
 # -- mcp ----------------------------------------------------------------------
-
-
-def test_mcp_list():
-    result = runner.invoke(cli, ["mcp", "list"])
-    assert result.exit_code == 0
-
-
-def test_mcp_start_help():
-    result = runner.invoke(cli, ["mcp", "start", "--help"])
-    assert result.exit_code == 0
-
-
-def test_mcp_tools_help():
-    result = runner.invoke(cli, ["mcp", "tools", "--help"])
-    assert result.exit_code == 0
+# Legacy `sagewai mcp` CLI group was deleted in MCP-as-first-class Bundle A.
+# Equivalent commands now live under `sagewai connections mcp ...` and are
+# covered by `tests/cli/test_connections_cli.py`.
 
 
 # -- admin --------------------------------------------------------------------

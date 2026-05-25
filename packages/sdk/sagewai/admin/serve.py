@@ -73,12 +73,10 @@ _CAPABILITIES = {
         {"id": "send_email", "name": "Send Email", "description": "Send an email via configured provider (Resend/SendGrid/Postmark). Args: to, subject, body."},
         {"id": "send_slack", "name": "Send Slack Message", "description": "Post a message to a Slack channel via webhook. Args: message, channel (optional)."},
     ],
-    "mcp_servers": [
-        {"id": "filesystem", "name": "Filesystem", "description": "Read/write local files via MCP."},
-        {"id": "github", "name": "GitHub", "description": "Interact with GitHub repos, issues, PRs."},
-        {"id": "postgres", "name": "PostgreSQL", "description": "Query Postgres databases."},
-        {"id": "slack", "name": "Slack", "description": "Send and read Slack messages."},
-    ],
+    # mcp_servers is computed at request time from registered MCP connections
+    # (see ``playground_capabilities``); the empty default here is a safety net
+    # if the live lookup fails.
+    "mcp_servers": [],
     "memory": [
         {"id": "vector", "name": "Vector Memory", "description": "Semantic search over past conversations."},
         {"id": "graph", "name": "Knowledge Graph", "description": "Entity and relationship storage."},
@@ -129,7 +127,7 @@ def _load_templates() -> list[dict[str, Any]]:
                 "description": "Connect to any MCP server and use its tools. Universal tool standard.",
                 "system_prompt": "You are an agent connected to external MCP tool servers. Discover and use tools to fulfill requests.",
                 "model": "gpt-4o", "temperature": 0.3, "strategy": "react",
-                "tools": [], "mcp_servers": ["filesystem", "github"],
+                "tools": [], "mcp_servers": [],
                 "memory_backends": [], "guardrails": [],
                 "category": "MCP Integration",
             },
@@ -867,8 +865,39 @@ def create_admin_serve_app(
         return JSONResponse([s["id"] for s in _STRATEGIES])
 
     @app.get("/playground/capabilities")
-    async def playground_capabilities() -> JSONResponse:
-        return JSONResponse(_CAPABILITIES)
+    async def playground_capabilities(request: Request) -> JSONResponse:
+        """CapabilityCatalog with MCP servers sourced from registered connections.
+
+        MCP servers are derived from the project's connections at request
+        time (project-aware via ``X-Project-ID``), replacing the legacy
+        hardcoded fixture list. Other capability buckets (tools, memory,
+        guardrails, strategies) stay constant for now.
+        """
+        from sagewai.admin.state_file import default_admin_state_path
+        from sagewai.connections.bootstrap import build_connections_context
+
+        pid = _project_id(request)
+        try:
+            ctx = build_connections_context(
+                AdminStateFile(default_admin_state_path())
+            )
+            mcp_connections = ctx.store.list(pid, protocol="mcp")
+        except Exception:
+            mcp_connections = []
+        body = dict(_CAPABILITIES)
+        body["mcp_servers"] = [
+            {
+                "id": c.id,
+                "name": c.display_name,
+                "description": (
+                    f"{c.protocol_data.get('server_ref') or 'custom'} via "
+                    f"{c.protocol_data.get('transport', '?')} — "
+                    f"{len(c.protocol_data.get('discovered_tools', []))} tools"
+                ),
+            }
+            for c in mcp_connections
+        ]
+        return JSONResponse(body)
 
     @app.get("/playground/presets")
     async def playground_presets() -> JSONResponse:

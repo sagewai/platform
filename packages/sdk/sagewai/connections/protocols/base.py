@@ -152,4 +152,27 @@ class ProtocolPlugin(Protocol):
         """
 
 
-__all__ = ["PluginContext", "ProtocolPlugin", "TestResult"]
+def get_sensitive_field_paths_for(
+    plugin: "ProtocolPlugin", connection: Connection
+) -> tuple[str, ...]:
+    """Resolve sensitive field paths for a connection.
+
+    Returns the result of ``plugin.sensitive_field_paths_for(connection)``
+    if the plugin implements it; otherwise falls back to the static
+    ``plugin.sensitive_fields`` ClassVar. This indirection lets plugins
+    declare per-record sensitive paths (the MCP plugin uses this to derive
+    sensitive paths from each connection's resolved registry entry) while
+    other plugins continue using their static ClassVar.
+    """
+    fn = getattr(plugin, "sensitive_field_paths_for", None)
+    if callable(fn):
+        return fn(connection)
+    return plugin.sensitive_fields
+
+
+__all__ = [
+    "PluginContext",
+    "ProtocolPlugin",
+    "TestResult",
+    "get_sensitive_field_paths_for",
+]

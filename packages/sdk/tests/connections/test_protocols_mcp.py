@@ -86,14 +86,20 @@ def test_public_view_passes_through():
     assert p.public_view(data) == data
 
 
-def test_extra_routes_empty():
-    assert McpProtocolPlugin().extra_routes().routes == []
+def test_extra_routes_has_three_subroutes():
+    """Bundle A: extra_routes mounts servers/refresh/tools."""
+    router = McpProtocolPlugin().extra_routes()
+    paths = {r.path for r in router.routes}
+    assert "/servers" in paths
+    assert "/{connection_id}/refresh" in paths
+    assert "/{connection_id}/tools" in paths
 
 
-def test_extra_cli_has_probe_command():
+def test_extra_cli_has_servers_refresh_tools_commands():
+    """Bundle A: replaces probe stub with servers/refresh/tools."""
     cmds = McpProtocolPlugin().extra_cli()
     names = {c.name for c in cmds}
-    assert "probe" in names
+    assert names == {"servers", "refresh", "tools"}
 
 
 @pytest.mark.asyncio
@@ -117,10 +123,19 @@ async def test_test_method_returns_ok_when_client_connects(monkeypatch, tmp_path
 
     monkeypatch.setattr("sagewai.connections.protocols.mcp.MCPClient", _StubClient)
     store = ConnectionStore(tmp_path / "s.json")
+    # test() now persists discovered tools onto the record; the connection
+    # must exist in the store.
+    conn = store.create(
+        protocol="mcp", project_id="default", display_name="test",
+        tags=[], protocol_data={"transport": "http", "url": "http://localhost:9000/mcp"},
+    )
     ctx = PluginContext(store=store, creds=None, project_id="default", request=None)
-    conn = _conn({"transport": "http", "url": "http://localhost:9000/mcp"})
     result = await p.test(conn, ctx=ctx)
     assert result.ok is True
+    refreshed = store.get(conn.id)
+    assert refreshed.protocol_data.get("discovered_tools") == [
+        {"name": "stub_tool", "description": "", "input_schema": {}},
+    ]
 
 
 @pytest.mark.asyncio
@@ -139,3 +154,119 @@ async def test_test_method_returns_not_ok_on_connect_failure(monkeypatch, tmp_pa
     result = await p.test(conn, ctx=ctx)
     assert result.ok is False
     assert "server down" in (result.message or "")
+
+
+# ── MCPClient adapter — env + headers parameters (Task 2) ──────────
+
+
+@pytest.mark.asyncio
+async def test_mcp_client_adapter_accepts_env_for_stdio(monkeypatch):
+    """Stdio path: env dict is forwarded to McpClient.connect_managed."""
+    from sagewai.connections.protocols.mcp import MCPClient
+
+    captured: dict = {}
+
+    class _FakeConn:
+        tools: list = []
+
+        async def close(self):
+            pass
+
+    async def _fake_connect_managed(cmd, env=None):
+        captured["cmd"] = cmd
+        captured["env"] = env
+        return _FakeConn()
+
+    monkeypatch.setattr(
+        "sagewai.connections.protocols.mcp.McpClient.connect_managed",
+        _fake_connect_managed,
+    )
+    async with MCPClient(
+        transport="stdio",
+        command=["echo"],
+        args=["hi"],
+        env={"FOO": "bar"},
+    ):
+        pass
+    assert captured["cmd"] == ["echo", "hi"]
+    # env merges with os.environ, so check just the FOO override survives.
+    assert captured["env"] is not None
+    assert captured["env"].get("FOO") == "bar"
+
+
+@pytest.mark.asyncio
+async def test_mcp_client_adapter_accepts_headers_for_http(monkeypatch):
+    """HTTP path: headers dict is forwarded to McpClient.connect_http."""
+    from sagewai.connections.protocols.mcp import MCPClient
+
+    captured: dict = {}
+
+    async def _fake_connect_http(url, headers=None):
+        captured["url"] = url
+        captured["headers"] = headers
+        return []  # empty tools list
+
+    monkeypatch.setattr(
+        "sagewai.connections.protocols.mcp.McpClient.connect_http",
+        _fake_connect_http,
+    )
+    async with MCPClient(
+        transport="http",
+        url="http://localhost:9000/mcp",
+        headers={"Authorization": "Bearer tok"},
+    ):
+        pass
+    assert captured["url"] == "http://localhost:9000/mcp"
+    assert captured["headers"] == {"Authorization": "Bearer tok"}
+
+
+@pytest.mark.asyncio
+async def test_mcp_client_adapter_ignores_headers_for_stdio(monkeypatch):
+    """Stdio path: passing headers is silently ignored (or just unused)."""
+    from sagewai.connections.protocols.mcp import MCPClient
+
+    async def _fake_connect_managed(cmd, env=None):
+        class _C:
+            tools: list = []
+
+            async def close(self):
+                pass
+
+        return _C()
+
+    monkeypatch.setattr(
+        "sagewai.connections.protocols.mcp.McpClient.connect_managed",
+        _fake_connect_managed,
+    )
+    async with MCPClient(
+        transport="stdio",
+        command=["echo"],
+        env={"X": "1"},
+        headers={"Y": "2"},  # ignored
+    ):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_mcp_client_adapter_sse_accepts_headers(monkeypatch):
+    """SSE path: headers dict is forwarded to McpClient.connect_sse."""
+    from sagewai.connections.protocols.mcp import MCPClient
+
+    captured: dict = {}
+
+    async def _fake_connect_sse(url, headers=None):
+        captured["url"] = url
+        captured["headers"] = headers
+        return []
+
+    monkeypatch.setattr(
+        "sagewai.connections.protocols.mcp.McpClient.connect_sse",
+        _fake_connect_sse,
+    )
+    async with MCPClient(
+        transport="sse",
+        url="http://localhost:9000/sse",
+        headers={"X-Token": "abc"},
+    ):
+        pass
+    assert captured["headers"] == {"X-Token": "abc"}

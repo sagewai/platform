@@ -20,6 +20,8 @@ import type {
   Connection,
   ConnectionListParams,
   CreateConnectionPayload,
+  McpServerMeta,
+  McpToolsResponse,
   OAuth2StartResponse,
   ProtocolMeta,
   TestConnectionResponse,
@@ -82,6 +84,20 @@ export function createConnectionsApi(client: FetchClient) {
           {},
         ),
     },
+
+    // MCP plugin sub-routes (mounted at /api/v1/admin/connections/mcp/...)
+    mcp: {
+      servers: () => client.get<McpServerMeta[]>(`${ROOT}/mcp/servers`),
+      refresh: (id: string) =>
+        client.post<Record<string, unknown>>(
+          `${ROOT}/mcp/${encodeURIComponent(id)}/refresh`,
+          {},
+        ),
+      listTools: (id: string) =>
+        client.get<McpToolsResponse>(
+          `${ROOT}/mcp/${encodeURIComponent(id)}/tools`,
+        ),
+    },
   };
 }
 
@@ -96,6 +112,10 @@ export type {
   CreateConnectionPayload,
   CredentialsBackendConfig,
   CredentialsBackendKind,
+  McpCredentialFieldMeta,
+  McpServerMeta,
+  McpToolMeta,
+  McpToolsResponse,
   OAuth2StartResponse,
   ProtocolMeta,
   TestConnectionResponse,
