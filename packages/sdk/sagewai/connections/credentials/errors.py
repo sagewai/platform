@@ -54,11 +54,73 @@ class InvalidBackendConfigError(CredentialsError):
     code = "credentials_invalid_config"
 
 
+# ── Vault backend ────────────────────────────────────────────────────
+
+
+class VaultError(CredentialsError):
+    """Base class for Vault backend failures."""
+
+    code = "credentials_vault_error"
+
+
+class VaultAuthError(VaultError):
+    """Vault token / AppRole authentication failed."""
+
+    code = "credentials_vault_auth_failed"
+
+
+class VaultReadError(VaultError):
+    """Vault KV read failed (missing path, missing key, permission denied)."""
+
+    code = "credentials_vault_read_failed"
+
+
+class VaultConfigError(InvalidBackendConfigError):
+    """VaultBackendConfig validation failed."""
+
+    code = "credentials_vault_invalid_config"
+
+
+# ── Doppler backend ──────────────────────────────────────────────────
+
+
+class DopplerError(CredentialsError):
+    """Base class for Doppler backend failures."""
+
+    code = "credentials_doppler_error"
+
+
+class DopplerAuthError(DopplerError):
+    """Doppler service-token auth failed (401)."""
+
+    code = "credentials_doppler_auth_failed"
+
+
+class DopplerApiError(DopplerError):
+    """Doppler API call failed (4xx/5xx other than 401, or missing key)."""
+
+    code = "credentials_doppler_api_failed"
+
+
+class DopplerConfigError(InvalidBackendConfigError):
+    """DopplerBackendConfig validation failed."""
+
+    code = "credentials_doppler_invalid_config"
+
+
 __all__ = [
     "BackendUnhealthyError",
     "CredentialsError",
+    "DopplerApiError",
+    "DopplerAuthError",
+    "DopplerConfigError",
+    "DopplerError",
     "InvalidBackendConfigError",
     "MissingEnvVarError",
     "SopsDecryptError",
     "UnknownBackendError",
+    "VaultAuthError",
+    "VaultConfigError",
+    "VaultError",
+    "VaultReadError",
 ]

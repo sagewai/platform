@@ -17,14 +17,26 @@ construction time and calls ``router.encrypt`` before
 ``store.get``/``store.list``.
 """
 from sagewai.connections.credentials.base import CredentialsBackend
+from sagewai.connections.credentials.doppler import (
+    DopplerBackend,
+    DopplerBackendConfig,
+)
 from sagewai.connections.credentials.env import EnvBackend
 from sagewai.connections.credentials.errors import (
     BackendUnhealthyError,
     CredentialsError,
+    DopplerApiError,
+    DopplerAuthError,
+    DopplerConfigError,
+    DopplerError,
     InvalidBackendConfigError,
     MissingEnvVarError,
     SopsDecryptError,
     UnknownBackendError,
+    VaultAuthError,
+    VaultConfigError,
+    VaultError,
+    VaultReadError,
 )
 from sagewai.connections.credentials.local import LocalBackend
 from sagewai.connections.credentials.router import (
@@ -34,6 +46,10 @@ from sagewai.connections.credentials.router import (
     get_backend,
 )
 from sagewai.connections.credentials.sops import SopsBackend
+from sagewai.connections.credentials.vault import (
+    VaultBackend,
+    VaultBackendConfig,
+)
 
 
 __all__ = [
@@ -42,6 +58,12 @@ __all__ = [
     "CredentialsBackend",
     "CredentialsBackendRouter",
     "CredentialsError",
+    "DopplerApiError",
+    "DopplerAuthError",
+    "DopplerBackend",
+    "DopplerBackendConfig",
+    "DopplerConfigError",
+    "DopplerError",
     "EnvBackend",
     "InvalidBackendConfigError",
     "LocalBackend",
@@ -49,6 +71,12 @@ __all__ = [
     "SopsBackend",
     "SopsDecryptError",
     "UnknownBackendError",
+    "VaultAuthError",
+    "VaultBackend",
+    "VaultBackendConfig",
+    "VaultConfigError",
+    "VaultError",
+    "VaultReadError",
     "all_backends",
     "get_backend",
 ]

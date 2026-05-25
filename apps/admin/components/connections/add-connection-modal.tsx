@@ -5,6 +5,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { BackendConfigFields } from '@/components/connections/backends/backend-config-fields';
 import { Button } from '@/components/ui/legacy';
 import { adminApi } from '@/utils/api';
 import type {
@@ -557,7 +558,11 @@ function Step3BackendAndTags(props: {
         <span className="text-sm font-medium">Credentials backend</span>
         <select
           value={props.backendKind}
-          onChange={e => props.setBackendKind(e.target.value as CredentialsBackendKind)}
+          onChange={e => {
+            props.setBackendKind(e.target.value as CredentialsBackendKind);
+            // Reset backend config when kind changes — schemas differ per backend
+            props.setBackendConfig({});
+          }}
           className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 text-sm"
           data-testid="backend-select"
         >
@@ -566,7 +571,12 @@ function Step3BackendAndTags(props: {
           ))}
         </select>
       </label>
-      <label className="mb-3 block">
+      <BackendConfigFields
+        backend={props.backendKind}
+        config={props.backendConfig}
+        setConfig={props.setBackendConfig}
+      />
+      <label className="mb-3 mt-3 block">
         <span className="text-sm font-medium">Tags (comma-separated)</span>
         <input
           type="text"

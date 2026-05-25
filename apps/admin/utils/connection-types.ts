@@ -16,11 +16,30 @@ export type ConnectionStatus =
   | 'revoked'
   | 'error';
 
-export type CredentialsBackendKind = 'local' | 'env' | 'sops';
+export type CredentialsBackendKind = 'local' | 'env' | 'sops' | 'vault' | 'doppler';
 
 export type CredentialsBackendConfig = {
   kind: CredentialsBackendKind;
   config: Record<string, unknown>;
+};
+
+export type VaultBackendConfig = {
+  url: string;
+  namespace?: string | null;
+  mount?: string;
+  base_path: string;
+  auth:
+    | { mode: 'token'; token: string }
+    | { mode: 'approle'; role_id: string; secret_id: string };
+  verify_tls?: boolean;
+};
+
+export type DopplerBackendConfig = {
+  service_token: string;
+  project: string;
+  config: string;
+  name_prefix: string;
+  base_url?: string;
 };
 
 export type ProtocolMeta = {

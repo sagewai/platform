@@ -161,3 +161,21 @@ def test_constructor_accepts_alternate_default():
 def test_constructor_rejects_unknown_default():
     with pytest.raises(UnknownBackendError):
         CredentialsBackendRouter(default_backend="not-a-backend")
+
+
+def test_all_5_backends_registered():
+    from sagewai.connections.credentials import all_backends
+    ids = {b.id for b in all_backends()}
+    assert ids == {"local", "env", "sops", "vault", "doppler"}
+
+
+def test_get_vault_backend():
+    from sagewai.connections.credentials import VaultBackend, get_backend
+    b = get_backend("vault")
+    assert isinstance(b, VaultBackend)
+
+
+def test_get_doppler_backend():
+    from sagewai.connections.credentials import DopplerBackend, get_backend
+    b = get_backend("doppler")
+    assert isinstance(b, DopplerBackend)

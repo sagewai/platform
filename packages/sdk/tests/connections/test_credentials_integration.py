@@ -193,6 +193,138 @@ def test_swap_local_to_env_oauth2(monkeypatch):
     assert decrypted == _OAUTH2_DATA
 
 
+import httpx
+import respx
+
+
+@respx.mock
+def test_doppler_round_trip_with_realistic_oauth2_record():
+    """Full encrypt+decrypt cycle through CredentialsBackendRouter with doppler."""
+    config = {
+        "kind": "doppler",
+        "config": {
+            "service_token": "dp.st.dev.x",
+            "project": "sagewai", "config": "prd",
+            "name_prefix": "SPOTIFY_MARKETING",
+        },
+    }
+    respx.get("https://api.doppler.com/v3/configs/config/secrets").mock(
+        return_value=httpx.Response(200, json={"secrets": {
+            "SPOTIFY_MARKETING_CLIENT_SECRET": {"computed": "csec-real"},
+            "SPOTIFY_MARKETING_TOKENS_ACCESS_TOKEN": {"computed": "AT-real"},
+            "SPOTIFY_MARKETING_TOKENS_REFRESH_TOKEN": {"computed": "RT-real"},
+        }}),
+    )
+    router = CredentialsBackendRouter()
+    data = {
+        "client_secret": "csec-real",
+        "tokens": {
+            "access_token": "AT-real",
+            "refresh_token": "RT-real",
+            "token_type": "Bearer",
+        },
+    }
+    paths = ("client_secret", "tokens.access_token", "tokens.refresh_token")
+    encrypted = router.encrypt(
+        data, sensitive_field_paths=paths,
+        connection_credentials_backend=config,
+    )
+    # Markers only, no plaintext
+    assert encrypted["client_secret"] == {"$doppler": {"name": "SPOTIFY_MARKETING_CLIENT_SECRET"}}
+    import json as _json
+    assert "csec-real" not in _json.dumps(encrypted)
+    # Round-trip
+    decrypted = router.decrypt(
+        encrypted, sensitive_field_paths=paths,
+        connection_credentials_backend=config,
+    )
+    assert decrypted["client_secret"] == "csec-real"
+    assert decrypted["tokens"]["access_token"] == "AT-real"
+
+
+def test_vault_round_trip_with_realistic_oauth2_record(monkeypatch):
+    """Full encrypt+decrypt cycle through router with vault (stubbed hvac)."""
+
+    # Build a fake hvac module
+    class _FakeKvV2:
+        def read_secret_version(self, *, path, mount_point):
+            return {"data": {"data": {
+                "client_secret": "csec",
+                "access_token": "AT",
+                "refresh_token": "RT",
+            }}}
+
+    class _FakeClient:
+        def __init__(self, **kw):
+            self.token = None
+            self.secrets = type("S", (), {"kv": type("K", (), {"v2": _FakeKvV2()})})()
+
+    class _FakeHvacModule:
+        Client = _FakeClient
+
+    monkeypatch.setattr(
+        "sagewai.connections.credentials.vault._lazy_import_hvac",
+        lambda: _FakeHvacModule,
+    )
+
+    config = {
+        "kind": "vault",
+        "config": {
+            "url": "https://vault.x",
+            "base_path": "sagewai/spotify",
+            "auth": {"mode": "token", "token": "hvs.stub"},
+        },
+    }
+    router = CredentialsBackendRouter()
+    data = {
+        "client_secret": "csec",
+        "tokens": {"access_token": "AT", "refresh_token": "RT", "token_type": "Bearer"},
+    }
+    paths = ("client_secret", "tokens.access_token", "tokens.refresh_token")
+    encrypted = router.encrypt(
+        data, sensitive_field_paths=paths,
+        connection_credentials_backend=config,
+    )
+    assert encrypted["client_secret"] == {"$vault": {
+        "path": "sagewai/spotify", "key": "client_secret",
+    }}
+    decrypted = router.decrypt(
+        encrypted, sensitive_field_paths=paths,
+        connection_credentials_backend=config,
+    )
+    assert decrypted["client_secret"] == "csec"
+
+
+def test_swap_local_to_doppler(monkeypatch):
+    """Local-encrypted record → swap → Doppler markers."""
+    monkeypatch.setenv("SAGEWAI_MASTER_KEY", Fernet.generate_key().decode())
+
+    router = CredentialsBackendRouter()
+    data = {"client_secret": "real-secret"}
+    paths = ("client_secret",)
+    # Encrypt with local
+    local_encrypted = router.encrypt(
+        data, sensitive_field_paths=paths,
+        connection_credentials_backend=None,
+    )
+    assert local_encrypted["client_secret"].startswith("fernet:")
+    # Swap to doppler (only requires marker write — no HTTP)
+    doppler_config = {
+        "kind": "doppler",
+        "config": {
+            "service_token": "dp.st.dev.x",
+            "project": "p", "config": "c", "name_prefix": "PFX",
+        },
+    }
+    swapped = router.swap(
+        local_encrypted,
+        sensitive_field_paths=paths,
+        old_credentials_backend=None,
+        new_credentials_backend=doppler_config,
+    )
+    assert swapped["client_secret"] == {"$doppler": {"name": "PFX_CLIENT_SECRET"}}
+
+
 def test_top_level_re_exports_resolve():
     """sagewai.connections re-exports the credentials surface."""
     from sagewai.connections import (
@@ -202,7 +334,7 @@ def test_top_level_re_exports_resolve():
         CredentialsError,
         UnknownCredentialsBackendError,
     )
-    assert len(CREDENTIALS_BACKENDS) == 3
+    assert len(CREDENTIALS_BACKENDS) == 5
     assert issubclass(UnknownCredentialsBackendError, CredentialsError)
     r = CredentialsBackendRouter()  # constructable
     backend, _ = r.get_backend_for(None)

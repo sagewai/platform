@@ -7,9 +7,11 @@
 import type { CredentialsBackendKind } from '@/utils/connection-types';
 
 const BACKEND_STYLES: Record<CredentialsBackendKind, { label: string; cls: string }> = {
-  local: { label: 'local', cls: 'bg-bg-subtle text-text-secondary border-border' },
-  env:   { label: 'env',   cls: 'bg-info/10 text-info border-info/30' },
-  sops:  { label: 'sops',  cls: 'bg-accent/10 text-accent border-accent/30' },
+  local:   { label: 'local',   cls: 'bg-bg-subtle text-text-secondary border-border' },
+  env:     { label: 'env',     cls: 'bg-info/10 text-info border-info/30' },
+  sops:    { label: 'sops',    cls: 'bg-accent/10 text-accent border-accent/30' },
+  vault:   { label: 'vault',   cls: 'bg-amber-100 text-amber-800 border-amber-300' },
+  doppler: { label: 'doppler', cls: 'bg-rose-100 text-rose-800 border-rose-300' },
 };
 
 export function BackendPill({ kind }: { kind: CredentialsBackendKind | null }) {

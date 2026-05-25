@@ -54,12 +54,12 @@ def test_protocols_json():
 # ── backends ───────────────────────────────────────────────────────
 
 
-def test_backends_lists_3():
+def test_backends_lists_5():
     result = _runner().invoke(connections, ["backends", "--json"])
     assert result.exit_code == 0, result.output
     body = json.loads(result.output)
     ids = {b["id"] for b in body}
-    assert ids == {"local", "env", "sops"}
+    assert ids == {"local", "env", "sops", "vault", "doppler"}
 
 
 # ── list ────────────────────────────────────────────────────────────

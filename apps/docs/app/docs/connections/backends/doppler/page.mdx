@@ -1,0 +1,172 @@
+export const metadata = {
+  title: "Doppler credentials backend",
+  description:
+    "Read sensitive fields from Doppler's SaaS secrets store — service-token auth, bulk-read on every decrypt, no extra deps.",
+};
+
+# Doppler credentials backend
+
+The `doppler` backend reads sensitive fields from
+[Doppler](https://doppler.com), a SaaS secrets management platform.
+Connections record markers — `{"$doppler": {"name"}}` — in place of
+plaintext; the platform calls Doppler's REST API at decrypt time via
+the existing `httpx` client (no new SDK dependency).
+
+This is the easiest production-grade backend to set up: sign up for
+Doppler, paste a service token, done.
+
+## Choosing between SOPS, Vault, Doppler
+
+[SOPS](../sops) is the OSS default for git-committed encrypted secrets.
+Pick Doppler when:
+
+- You want SaaS-managed secrets — no servers to run, no key files to
+  protect.
+- Your team is small enough that one shared dashboard works.
+- You're already on Doppler for application secrets and want a single
+  source of truth.
+
+Pick [Vault](../vault) instead if you already run Vault, need
+fine-grained policies per workload, or have compliance constraints
+that rule out third-party SaaS.
+
+## Prerequisites
+
+No extra dependencies. Doppler uses the existing `httpx` already in
+core Sagewai.
+
+Provisioning is operator-side:
+
+1. Sign up at [doppler.com](https://doppler.com) (free tier is
+   sufficient for small teams).
+2. Create a project (e.g., `sagewai`).
+3. Create one or more configs inside the project (e.g., `dev`, `prd`).
+4. From the Doppler dashboard, generate a **service token** scoped to
+   one `(project, config)` pair. Service tokens start with `dp.st.`.
+
+## What it does
+
+When a connection is created with `credentials_backend.kind ===
+"doppler"`, the `config` field records the service token, the
+project, the config, and a name prefix.
+
+Sensitive leaves are stored as markers:
+
+```json
+{
+  "client_secret": {"$doppler": {"name": "SPOTIFY_MARKETING_CLIENT_SECRET"}},
+  "tokens": {
+    "access_token": {"$doppler": {"name": "SPOTIFY_MARKETING_TOKENS_ACCESS_TOKEN"}}
+  }
+}
+```
+
+The marker `name` auto-derives from the sensitive field path:
+
+```
+&lt;name_prefix&gt;_&lt;FIELD_PATH_AS_UPPER_SNAKE&gt;
+```
+
+So `tokens.access_token` with `name_prefix=SPOTIFY_MARKETING` becomes
+`SPOTIFY_MARKETING_TOKENS_ACCESS_TOKEN`.
+
+At call time, the backend issues a **single** bulk HTTP request:
+
+```
+GET /v3/configs/config/secrets?project=&lt;p&gt;&config=&lt;c&gt;
+Authorization: Bearer dp.st.dev.XXXX
+```
+
+The response includes every secret in the config. The backend matches
+markers against the response and returns plaintext leaves to the
+plugin. Three sensitive fields = one HTTPS round-trip.
+
+Doppler returns both `raw` and `computed` for each secret. The backend
+uses `computed`, which resolves Doppler's `{{secrets.OTHER}}` reference
+syntax.
+
+## Service-token scope
+
+Doppler service tokens are scoped to one `(project, config)` pair. To
+switch projects or configs, **register a new connection with a fresh
+token** — you cannot reuse a single connection across multiple Doppler
+configs. This is intentional; it keeps blast radius small if a token
+leaks.
+
+## `backend_config` reference
+
+| Field           | Required | Default                       | Notes |
+|-----------------|----------|-------------------------------|-------|
+| `service_token` | yes      | —                             | Doppler service token (`dp.st.` prefix). |
+| `project`       | yes      | —                             | Doppler project name. |
+| `config`        | yes      | —                             | Doppler config name (e.g., `prd`, `dev`). |
+| `name_prefix`   | yes      | —                             | UPPER_SNAKE prefix for derived secret names. |
+| `base_url`      | no       | `https://api.doppler.com`     | Override for Doppler Enterprise self-host. |
+
+## Operator workflow
+
+In the Doppler dashboard, create secrets with the derived names:
+
+```
+SPOTIFY_MARKETING_CLIENT_SECRET = ...
+SPOTIFY_MARKETING_TOKENS_ACCESS_TOKEN = ...
+SPOTIFY_MARKETING_TOKENS_REFRESH_TOKEN = ...
+```
+
+Or via the Doppler CLI:
+
+```bash
+doppler secrets set SPOTIFY_MARKETING_CLIENT_SECRET=... \
+                    SPOTIFY_MARKETING_TOKENS_ACCESS_TOKEN=...
+```
+
+Add the connection through the admin UI's Add wizard (Step 3 picks
+the backend) or via the CLI:
+
+```bash
+sagewai connections create \
+  --protocol oauth2 \
+  --display-name "Spotify Marketing" \
+  --backend-kind doppler \
+  --backend-config '{"service_token":"dp.st.prd.XXXX","project":"sagewai","config":"prd","name_prefix":"SPOTIFY_MARKETING"}'
+```
+
+## Common errors
+
+| Code | Cause | Fix |
+|------|-------|-----|
+| `credentials_doppler_error` | Generic Doppler failure (network, parse). | Check Doppler's status page; inspect last_error. |
+| `credentials_doppler_auth_failed` | Service token rejected (401). | Regenerate from the Doppler dashboard; update the connection record. |
+| `credentials_doppler_api_failed` | 4xx/5xx other than 401, or a derived `name` not present in the config. | Verify the secret name exists in the right `(project, config)`. |
+| `credentials_doppler_invalid_config` | Pydantic schema rejected `backend_config`. | Token must start with `dp.st.`; `name_prefix` must be UPPER_SNAKE. |
+
+## Security considerations
+
+- **Service-token rotation.** Doppler tokens are revocable from the
+  dashboard at any time. Build a rotation pipeline (e.g., monthly) and
+  update the connection record on rotation. Pair with [SOPS](../sops)
+  at the meta-layer if you want the token itself rotated through your
+  existing secret-store pipeline.
+- **Per-config service tokens.** Don't share one token across
+  environments. Each `(project, config)` should have its own token,
+  scoped to its own access policy in Doppler.
+- **`base_url` for self-host.** Doppler Enterprise customers can point
+  this at their self-hosted API. Default points at Doppler SaaS.
+- **No write API.** The platform never modifies Doppler. Operators
+  manage secret contents via the Doppler UI / CLI / Terraform; the
+  platform reads.
+
+## Anti-patterns
+
+1. **Sharing one token across many connections.** Generate one
+   service token per `(project, config)`; pin each connection to its
+   own. Tokens are cheap; blast radius is not.
+2. **Embedding Doppler refs in `name_prefix`.** The `name_prefix` is a
+   simple UPPER_SNAKE string — Doppler's `{{secrets.OTHER}}` reference
+   syntax goes inside secret VALUES (which Doppler resolves before we
+   read), never in the prefix.
+3. **Treating the bulk-read as cached.** Each `decrypt_fields` call
+   hits Doppler — the cache is per-call, not per-process. For
+   high-volume callers, consider populating environment variables
+   from Doppler at process start and using the [env](../env) backend
+   instead.

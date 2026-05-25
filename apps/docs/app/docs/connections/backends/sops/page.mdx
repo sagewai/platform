@@ -16,6 +16,24 @@ This is the recommended backend for production multi-host deployments
 where credentials need to live outside Sagewai's filesystem and survive
 machine churn.
 
+## Choosing between SOPS, Vault, Doppler
+
+|                | SOPS                                  | Vault                            | Doppler                |
+|----------------|---------------------------------------|----------------------------------|------------------------|
+| Hosting        | Files in your git repo                | Self-host or HCP Cloud           | SaaS                   |
+| Cost           | Free                                  | Free (self-host) or paid         | Free tier + paid       |
+| Best for       | Teams using git for ops state         | Enterprise with existing Vault   | Teams wanting SaaS     |
+| Encryption     | Operator-managed (age/PGP/KMS)        | Vault-internal                   | Doppler-internal       |
+| Auth           | Local key material                    | Token / AppRole / cloud IAM      | Service token          |
+| Per-call cost  | One `sops` subprocess                 | One HTTPS to Vault               | One HTTPS to Doppler   |
+
+**Most teams should start with SOPS** unless you already have HashiCorp
+Vault infrastructure or want Doppler's SaaS-managed model. SOPS is the
+canonical OSS choice for git-committed encrypted secrets — no
+third-party service, no service-token lifecycle to manage.
+
+See also: [Vault](../vault) · [Doppler](../doppler).
+
 ## What it does
 
 When a connection is created with `credentials_backend.kind === "sops"`,

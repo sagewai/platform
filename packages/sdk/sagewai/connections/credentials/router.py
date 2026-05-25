@@ -21,10 +21,12 @@ from __future__ import annotations
 from typing import Any
 
 from sagewai.connections.credentials.base import CredentialsBackend
+from sagewai.connections.credentials.doppler import DopplerBackend
 from sagewai.connections.credentials.env import EnvBackend
 from sagewai.connections.credentials.errors import UnknownBackendError
 from sagewai.connections.credentials.local import LocalBackend
 from sagewai.connections.credentials.sops import SopsBackend
+from sagewai.connections.credentials.vault import VaultBackend
 from sagewai.connections.models import HealthResult
 
 
@@ -32,6 +34,8 @@ BACKENDS: tuple[CredentialsBackend, ...] = (
     LocalBackend(),
     EnvBackend(),
     SopsBackend(),
+    VaultBackend(),
+    DopplerBackend(),
 )
 _BY_ID: dict[str, CredentialsBackend] = {b.id: b for b in BACKENDS}
 

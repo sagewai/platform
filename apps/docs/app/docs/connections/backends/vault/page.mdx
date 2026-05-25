@@ -1,0 +1,209 @@
+export const metadata = {
+  title: "HashiCorp Vault credentials backend",
+  description:
+    "Read sensitive fields from HashiCorp Vault's KV v2 secrets engine — centralized rotation, fine-grained policies, full audit trail.",
+};
+
+# HashiCorp Vault credentials backend
+
+The `vault` backend reads sensitive fields from a HashiCorp Vault
+cluster's KV v2 secrets engine. Connections record markers — `{"$vault":
+{"path", "key"}}` — in place of plaintext; the platform calls
+Vault at decrypt time via the [`hvac`](https://github.com/hvac/hvac)
+Python client.
+
+This is the recommended backend for teams that already operate
+HashiCorp Vault, want centralized rotation, or need a single audit
+trail across many connections.
+
+## Choosing between SOPS, Vault, Doppler
+
+[SOPS](../sops) is the OSS default for git-committed encrypted secrets.
+Pick Vault when:
+
+- Your org already runs Vault Enterprise, HCP Vault, or self-hosted
+  Vault and you want one source of truth for application secrets.
+- You need fine-grained policies per workload (AppRole) or per cloud
+  account (cloud-IAM auth) instead of single keyholders.
+- You need a built-in audit log (Vault writes an audit entry for every
+  read) and centralized rotation workflows.
+
+Pick [Doppler](../doppler) instead if you want SaaS-managed secrets
+without running Vault infrastructure.
+
+## Prerequisites
+
+Vault is an optional extra:
+
+```bash
+pip install 'sagewai[vault]'
+```
+
+This pulls in `hvac==2.4.0`. Without the extra, attempting to decrypt a
+Vault-backed connection raises `VaultError("hvac not installed. Run:
+pip install sagewai[vault]")`.
+
+The platform expects:
+
+- A reachable Vault cluster (URL).
+- A **KV v2** secrets engine mounted somewhere (default mount: `secret`).
+- Secrets pre-populated at `&lt;mount&gt;/data/&lt;base_path&gt;` by operators
+  via `vault kv put`, Terraform, or the Vault UI. The platform never
+  writes to Vault.
+
+## What it does
+
+When a connection is created with `credentials_backend.kind === "vault"`,
+the `config` field records the cluster URL, mount, base path, auth
+mode, and credentials.
+
+Sensitive leaves are stored as markers:
+
+```json
+{
+  "client_secret": {"$vault": {"path": "sagewai/spotify-marketing", "key": "client_secret"}},
+  "tokens": {
+    "access_token": {"$vault": {"path": "sagewai/spotify-marketing", "key": "access_token"}}
+  }
+}
+```
+
+The marker `path` is set to `config.base_path` and `key` is the last
+segment of the sensitive field path (e.g., `tokens.access_token` →
+`access_token`).
+
+At call time, the backend:
+
+1. Builds an `hvac.Client(url, namespace, verify=verify_tls)`.
+2. Authenticates per `config.auth.mode` (see below).
+3. Reads `&lt;mount&gt;/data/&lt;path&gt;` via `secrets.kv.v2.read_secret_version`.
+4. Returns plaintext leaves to the plugin.
+
+Multiple sensitive fields pointing at the same `(mount, path)` share a
+single read — the per-call cache amortizes one KV read across all
+fields that target the same secret.
+
+## Auth modes
+
+Two auth modes ship in Phase 1:
+
+### Token auth (development)
+
+```json
+"credentials_backend": {
+  "kind": "vault",
+  "config": {
+    "url": "https://vault.example.com:8200",
+    "base_path": "sagewai/spotify-marketing",
+    "auth": {
+      "mode": "token",
+      "token": "hvs.CAESIJabc123..."
+    }
+  }
+}
+```
+
+Best for local dev and CI where you have a short-lived root token. In
+production you want AppRole instead — long-lived tokens shouldn't sit
+in connection records.
+
+### AppRole auth (production)
+
+```json
+"credentials_backend": {
+  "kind": "vault",
+  "config": {
+    "url": "https://vault.example.com:8200",
+    "base_path": "sagewai/spotify-marketing",
+    "auth": {
+      "mode": "approle",
+      "role_id": "abc-123",
+      "secret_id": "secret-456"
+    }
+  }
+}
+```
+
+AppRole is Vault's recommended pattern for machine-to-machine auth.
+The `role_id` is non-secret and binds to a policy; the `secret_id` is
+the credential. Rotate `secret_id` via your standard Vault workflow;
+update the connection record (or the upstream secret store that backs
+the connection record) on rotation.
+
+Other modes — Kubernetes, AWS/GCP IAM, JWT-OIDC, userpass — are
+planned per customer demand in follow-up PRs.
+
+## `backend_config` reference
+
+| Field          | Required | Default                    | Notes |
+|----------------|----------|----------------------------|-------|
+| `url`          | yes      | —                          | `https://` (or `http://` for dev only). |
+| `namespace`    | no       | `null`                     | HCP Vault / Vault Enterprise namespace (e.g., `admin/team-a`). |
+| `mount`        | no       | `secret`                   | KV v2 mount point. |
+| `base_path`    | yes      | —                          | The path under the mount where this connection's secrets live. |
+| `auth.mode`    | yes      | —                          | `token` or `approle`. |
+| `auth.token`   | when mode=token | —                  | The Vault token. |
+| `auth.role_id` / `auth.secret_id` | when mode=approle | — | AppRole credentials. |
+| `verify_tls`   | no       | `true`                     | Set to `false` ONLY for self-signed dev clusters. |
+
+## Operator workflow
+
+Populate secrets with the `vault` CLI:
+
+```bash
+vault kv put secret/sagewai/spotify-marketing \
+  client_secret=real-secret \
+  access_token=AT-real \
+  refresh_token=RT-real
+```
+
+Or with Terraform's `vault_kv_secret_v2` resource, or via the Vault
+UI. The platform reads — it never writes.
+
+Add the connection through the admin UI's Add wizard (Step 3 picks
+the backend; per-backend fields render dynamically) or via the CLI:
+
+```bash
+sagewai connections create \
+  --protocol oauth2 \
+  --display-name "Spotify Marketing" \
+  --backend-kind vault \
+  --backend-config '{"url":"https://vault.example.com:8200","base_path":"sagewai/spotify-marketing","auth":{"mode":"approle","role_id":"...","secret_id":"..."}}'
+```
+
+## Common errors
+
+| Code | Cause | Fix |
+|------|-------|-----|
+| `credentials_vault_error` | Generic Vault failure (most often: `hvac` not installed). | `pip install sagewai[vault]`. |
+| `credentials_vault_auth_failed` | Token rejected or AppRole login failed (bad role_id/secret_id). | Verify credentials; check Vault audit log. |
+| `credentials_vault_read_failed` | Path not found, key not in the secret, or permission denied. | `vault kv get &lt;mount&gt;/&lt;base_path&gt;` to inspect. |
+| `credentials_vault_invalid_config` | Pydantic schema rejected `backend_config`. | Check missing `url`, `base_path`, or `auth.mode`. |
+
+## Security considerations
+
+- **`verify_tls: false` is dev-only.** The admin UI warns when you
+  uncheck it. Production should always pin to a trusted CA bundle.
+- **Token rotation.** Vault tokens are long-lived in this PR — the
+  connection record stores the token verbatim. Pair with the
+  [SOPS](../sops) or [env](../env) backend at the meta-layer if you
+  want the Vault token itself rotated via your existing secret-store
+  pipeline.
+- **AppRole `secret_id` expiry.** AppRole `secret_id`s can be
+  configured with a TTL in Vault. Build a rotation workflow that
+  updates the connection record before the TTL elapses.
+- **Namespace isolation.** Set `namespace` for HCP Vault or Vault
+  Enterprise to keep team-A connections out of team-B's secret space.
+- **Audit trail.** Vault writes an audit entry for every KV read.
+  Combine with Sagewai's own connection-action logs for end-to-end
+  traceability.
+
+## Anti-patterns
+
+1. **Storing the same token across many connections.** Use AppRole;
+   each connection (or each environment) gets its own `secret_id`.
+2. **Setting `base_path` to a top-level Vault mount.** Pick a
+   per-connection sub-path; multiple connections in the same path
+   defeat the per-(mount, path) cache and inflate Vault reads.
+3. **Re-using dev tokens in prod.** The token-auth mode is for local
+   testing. Production wants AppRole, even if it's "just one machine."

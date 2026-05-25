@@ -205,4 +205,129 @@ test.describe('Connections page', () => {
     // New row visible after reload
     await expect(page.getByText('New Google')).toBeVisible({ timeout: 5000 });
   });
+
+  test('add connection with vault backend', async ({ page }) => {
+    // Register the broad catch-all FIRST so the more-specific protocols/backends
+    // routes (registered after) take precedence — Playwright tries routes LIFO.
+    let createdBody: Record<string, unknown> | null = null;
+    await page.route('**/api/v1/admin/connections/**', async (route, req) => {
+      const url = req.url();
+      const method = req.method();
+      if (method === 'POST' && /\/connections\/(\?.*)?$/.test(url)) {
+        createdBody = JSON.parse(req.postData() ?? '{}');
+        await route.fulfill({
+          json: {
+            id: 'conn_test', kind: 'connection', protocol: 'http',
+            project_id: 'default',
+            display_name: 'Test Vault', tags: [],
+            credentials_backend: { kind: 'vault', config: {} },
+            status: 'ready',
+            last_tested_at: null, last_test_ok: null, is_default: false,
+            created_at: '2026-05-25T00:00:00+00:00',
+            updated_at: '2026-05-25T00:00:00+00:00',
+            last_error: null, protocol_data: {},
+          },
+        });
+        return;
+      }
+      // List, get, etc. — return empty
+      await route.fulfill({ json: [] });
+    });
+    // Specific routes registered LAST so they win (Playwright LIFO).
+    await page.route('**/api/v1/admin/connections/protocols', route =>
+      route.fulfill({
+        json: [{ id: 'http', display_name: 'HTTP / REST', sensitive_fields: [] }],
+      }));
+    await page.route('**/api/v1/admin/connections/backends', route =>
+      route.fulfill({
+        json: [
+          { id: 'local', display_name: 'Local encrypted file' },
+          { id: 'vault', display_name: 'HashiCorp Vault' },
+        ],
+      }));
+
+    await page.goto('/connections');
+    await page.getByTestId('add-connection-btn').click();
+    await page.getByTestId('protocol-pick-http').click();
+    await page.getByTestId('display-name-input').fill('Test Vault');
+    await page.getByTestId('base-url-input').fill('https://api.example.com');
+    await page.getByTestId('step-2').getByRole('button', { name: 'Next' }).click();
+    // Step 3: pick vault backend
+    await page.getByTestId('backend-select').selectOption('vault');
+    await page.getByTestId('vault-url').fill('https://vault.example.com:8200');
+    await page.getByTestId('vault-base-path').fill('sagewai/test');
+    await page.getByTestId('vault-token').fill('hvs.stub');
+    await page.getByTestId('submit-add-connection').click();
+
+    // Modal closes after successful create
+    await expect(page.getByTestId('add-connection-modal')).not.toBeVisible({ timeout: 10_000 });
+
+    // Verify the create payload had the right shape
+    expect(createdBody).not.toBeNull();
+    const body = createdBody as unknown as { credentials_backend: { kind: string; config: Record<string, unknown> } };
+    expect(body.credentials_backend.kind).toBe('vault');
+    expect(body.credentials_backend.config.url).toBe('https://vault.example.com:8200');
+    expect(body.credentials_backend.config.base_path).toBe('sagewai/test');
+    expect((body.credentials_backend.config.auth as { mode: string }).mode).toBe('token');
+  });
+
+
+  test('add connection with doppler backend', async ({ page }) => {
+    let createdBody: Record<string, unknown> | null = null;
+    await page.route('**/api/v1/admin/connections/**', async (route, req) => {
+      const url = req.url();
+      const method = req.method();
+      if (method === 'POST' && /\/connections\/(\?.*)?$/.test(url)) {
+        createdBody = JSON.parse(req.postData() ?? '{}');
+        await route.fulfill({
+          json: {
+            id: 'conn_test', kind: 'connection', protocol: 'http',
+            project_id: 'default',
+            display_name: 'Test Doppler', tags: [],
+            credentials_backend: { kind: 'doppler', config: {} },
+            status: 'ready',
+            last_tested_at: null, last_test_ok: null, is_default: false,
+            created_at: '2026-05-25T00:00:00+00:00',
+            updated_at: '2026-05-25T00:00:00+00:00',
+            last_error: null, protocol_data: {},
+          },
+        });
+        return;
+      }
+      await route.fulfill({ json: [] });
+    });
+    // Specific routes registered LAST so they win (Playwright LIFO).
+    await page.route('**/api/v1/admin/connections/protocols', route =>
+      route.fulfill({
+        json: [{ id: 'http', display_name: 'HTTP / REST', sensitive_fields: [] }],
+      }));
+    await page.route('**/api/v1/admin/connections/backends', route =>
+      route.fulfill({
+        json: [
+          { id: 'local', display_name: 'Local encrypted file' },
+          { id: 'doppler', display_name: 'Doppler' },
+        ],
+      }));
+
+    await page.goto('/connections');
+    await page.getByTestId('add-connection-btn').click();
+    await page.getByTestId('protocol-pick-http').click();
+    await page.getByTestId('display-name-input').fill('Test Doppler');
+    await page.getByTestId('base-url-input').fill('https://api.example.com');
+    await page.getByTestId('step-2').getByRole('button', { name: 'Next' }).click();
+    await page.getByTestId('backend-select').selectOption('doppler');
+    await page.getByTestId('doppler-service-token').fill('dp.st.dev.abc123');
+    await page.getByTestId('doppler-project').fill('sagewai');
+    await page.getByTestId('doppler-config').fill('prd');
+    await page.getByTestId('doppler-name-prefix').fill('SPOTIFY_MARKETING');
+    await page.getByTestId('submit-add-connection').click();
+
+    await expect(page.getByTestId('add-connection-modal')).not.toBeVisible({ timeout: 10_000 });
+
+    expect(createdBody).not.toBeNull();
+    const body = createdBody as unknown as { credentials_backend: { kind: string; config: Record<string, unknown> } };
+    expect(body.credentials_backend.kind).toBe('doppler');
+    expect(body.credentials_backend.config.project).toBe('sagewai');
+    expect(body.credentials_backend.config.name_prefix).toBe('SPOTIFY_MARKETING');
+  });
 });

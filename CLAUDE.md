@@ -1093,6 +1093,60 @@ Connections Platform is complete.**
 **Test counts:** No new SDK tests (PR5 is frontend / examples / docs);
 1 new e2e replaces the 2 deleted legacy `connections-*` specs.
 
+**Phase 1 secret-backend additions landed:** Two new production-grade
+backends added alongside the local/env/sops trio.
+
+- `VaultBackend` (`sagewai.connections.credentials.vault`) —
+  HashiCorp Vault KV v2. Token + AppRole auth modes. Optional extra
+  `sagewai[vault]` adds `hvac==2.4.0`. Per-call client construction.
+  Marker `{"$vault": {"path", "key"}}` auto-derived: path = base_path,
+  key = last segment of sensitive field path. Per-(mount, path) cache
+  within a single `decrypt_fields` call. Read-only.
+- `DopplerBackend` (`sagewai.connections.credentials.doppler`) —
+  Doppler SaaS via HTTP API (no new dep; uses existing httpx).
+  Service-token auth. Bulk-read on first decrypt (one HTTPS per
+  `decrypt_fields` regardless of sensitive field count). Marker
+  `{"$doppler": {"name"}}` auto-derived as
+  `<name_prefix>_<FIELD_PATH_AS_UPPER_SNAKE>`. Uses Doppler's
+  `computed` value (resolves `{{secrets.X}}` refs).
+- `BACKENDS` = `(LocalBackend(), EnvBackend(), SopsBackend(),
+  VaultBackend(), DopplerBackend())`. Five-backend ecosystem.
+- 8 new error subclasses: `VaultError`/`VaultAuthError`/`VaultReadError`/
+  `VaultConfigError`, `DopplerError`/`DopplerAuthError`/
+  `DopplerApiError`/`DopplerConfigError`. Each carries a stable
+  `code` attribute.
+- Admin UI: backend-pill colors (vault=amber, doppler=rose). Add wizard
+  Step 3 mounts `<BackendConfigFields>` dispatch — 5 per-backend
+  config form components.
+- Docs: new `connections/backends/vault/page.mdx` and
+  `connections/backends/doppler/page.mdx`. SOPS page gains a small
+  "Choosing between SOPS, Vault, Doppler" comparison subsection near
+  the top.
+
+**SOPS positioning stays prominent.** SOPS code is untouched. Both new
+backend docs explicitly cross-reference SOPS as the recommended OSS
+default if operators don't already have Vault or Doppler.
+
+**Key invariants:**
+- Both new backends are read-only. Platform never writes to Vault or
+  Doppler. Operators manage secret contents via vendor tooling.
+- `hvac` is an optional extra. Module imports raise a clear
+  `VaultError("pip install sagewai[vault]")` if missing.
+- Auto-derived marker paths: Vault uses `base_path` from
+  backend_config; Doppler uses `name_prefix` + leaf field name as
+  UPPER_SNAKE. Both predictable, both per-connection.
+- Per-call HTTP/SDK client construction; no pooling. Per-call caching
+  for both (Vault: per-(mount, path); Doppler: bulk per call).
+- `verify_tls: false` on Vault is dev-only — UI warns when set.
+
+**Phase 2 candidates (queued):** AWS Secrets Manager, GCP Secret
+Manager, Azure Key Vault as a cloud-secrets family.
+
+**Phase 3 candidates (queued):** Infisical, Bitwarden Secrets Manager.
+
+**Test deltas:** +47 new SDK tests across vault (20), doppler (18),
+integration (3), router (3), errors (3) — plus 2 new e2e scenarios.
+
 ## MCP-as-first-class (sub-project 3 — Bundle A)
 
 Bundle A landed: registered MCP server connections with capability

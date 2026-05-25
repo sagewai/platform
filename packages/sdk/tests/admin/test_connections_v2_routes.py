@@ -87,12 +87,12 @@ def test_get_protocols_lists_5(client: TestClient):
     assert ids == {"http", "sdk", "mcp", "inference", "oauth2"}
 
 
-def test_get_backends_lists_3(client: TestClient):
+def test_get_backends_lists_5(client: TestClient):
     resp = client.get("/api/v1/admin/connections/backends")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     ids = {b["id"] for b in body}
-    assert ids == {"local", "env", "sops"}
+    assert ids == {"local", "env", "sops", "vault", "doppler"}
 
 
 # ── /list ────────────────────────────────────────────────────────────
