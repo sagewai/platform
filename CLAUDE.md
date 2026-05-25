@@ -1197,6 +1197,70 @@ plugin matching the existing 5-plugin contract verbatim.
 executor + 4 tool-catalog executor + 2 registration) for a total of
 ~5430 SDK tests passing.
 
+## New protocols Phase A — PR2 (Modbus) landed
+
+Second Phase A protocol plugin shipped: Modbus/TCP per the Modbus
+Application Protocol V1.1b3.
+
+- `sagewai.connections.protocols.modbus` — `ModbusProtocolData` schema +
+  `ModbusProtocolPlugin` + error hierarchy (`ModbusError`,
+  `ModbusNotInstalledError`, `ModbusConnectionError`,
+  `ModbusTimeoutError`, `ModbusProtocolError`) + `_run_op` executor for
+  8 builtin function codes. No auth (`sensitive_fields=()`) — standard
+  Modbus/TCP doesn't define any. Per-call lifecycle. Test endpoint:
+  `read_holding_registers(0, 1)` with exception code 2 ("Illegal Data
+  Address") accepted as success.
+- `PROTOCOLS` tuple now has 7 entries: `(http, sdk, mcp, inference,
+  oauth2, coap, modbus)`.
+- `sagewai.tools.executors.connections._runners()` gains a `modbus` entry
+  alongside `coap`. The shared executor decrypts before dispatch; for
+  Modbus this is a no-op (empty `sensitive_fields`) but the path runs
+  uniformly for all Phase A kinds.
+- New `kind: modbus` in the tool-catalog schema with `not.anyOf`
+  mutual-exclusion against the other 6 kinds (and each existing kind's
+  `not.anyOf` block retrofit to also exclude `modbus`).
+- Registered in `sagewai.tools.executors._REGISTRY` (`modbus →
+  connections.run`).
+- Seed catalog entry `industrial_pump.yaml`.
+- Admin UI: `ModbusPanel` (read-only 8-op table) + `ModbusConfigureFields`
+  inline in `add-connection-modal.tsx` (4 fields: host, port, unit_id,
+  default timeout).
+- Docs: `apps/docs/app/docs/connections/protocols/modbus/page.mdx` +
+  overview row in `connections/page.mdx`.
+- New optional extra `sagewai[modbus]` (`pymodbus==3.13.0`); also added
+  to `[dependency-groups] test`.
+
+**Key invariants:**
+- Per-call lifecycle: no connection pooling. Each op opens an
+  `AsyncModbusTcpClient`, sends one request, awaits one response, and
+  calls sync `close()` in a `finally`.
+- Default sandbox tier `UNTRUSTED` — industrial OT blast radius
+  (valves, pumps, drives, breakers). Per-connection override is
+  downgrade-only.
+- 8 builtin ops only (FC 0x01–0x06, 0x0F, 0x10). No custom ops surface.
+- `unit_id` per-op arg overrides `protocol_data.unit_id` (multi-drop
+  serial-over-TCP gateway use case).
+- pymodbus 3.13.0 uses `device_id=<int>` kwarg (older 3.x used `slave`,
+  even older used `unit`). The executor pins to `device_id=` — bumping
+  pymodbus past 3.13 likely just works; bumping down requires adapting
+  the kwarg name.
+- pymodbus 3.13.0's `AsyncModbusTcpClient.close()` is sync (returns
+  None); older 3.x had async close(). The executor's finally block
+  awaits only when `close()` returns an awaitable, so both shapes work.
+
+**Not in this PR (Phase B):**
+- Modbus RTU-over-TCP and serial transports.
+- Connection pooling.
+- Background health probing.
+
+**Test deltas:** +41 new SDK tests (16 schema/errors/identity + 21
+executor + 4 tool-catalog executor) plus 3 baseline test updates
+(`test_all_6_protocols_registered` → `test_all_7_protocols_registered`,
+`test_get_protocols_lists_6` → `test_get_protocols_lists_7`, and the
+CLI `test_protocols_json` 6-set → 7-set) and 1 CoAP test updated to
+use `opcua` as the still-unwired kind. Full SDK: 5480 passed
+(5439 PR1 baseline + 41 net new), 360 skipped, 0 failed.
+
 ## MCP-as-first-class (sub-project 3 — Bundle A)
 
 Bundle A landed: registered MCP server connections with capability

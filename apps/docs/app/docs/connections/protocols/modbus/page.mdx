@@ -1,0 +1,119 @@
+# Modbus
+
+The Modbus plugin connects to industrial PLCs and field devices speaking Modbus/TCP (Modbus Application Protocol V1.1b3). It exposes eight builtin operations corresponding to the standard Modbus function codes — read/write coils and registers in single or multiple form. Modbus has no authentication in the protocol; operators are expected to firewall/VPN-gate device access.
+
+## Install
+
+Modbus support ships behind an optional extra:
+
+```bash
+pip install sagewai[modbus]
+```
+
+The library underneath is [`pymodbus`](https://pymodbus.readthedocs.io/), the de facto Python Modbus client.
+
+## Configuration
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `host` | string (required) | — | IP address or hostname of the PLC. |
+| `port` | int | `502` | Modbus/TCP standard port. |
+| `transport` | `tcp` | `tcp` | Phase A is TCP-only. RTU-over-TCP and serial are deferred. |
+| `unit_id` | int (0-247) | `1` | Modbus slave/unit ID. Overridable per call. |
+| `default_timeout_seconds` | float | `3.0` | Per-rpc timeout. |
+| `sandbox_tier_override` | `TRUSTED`, `SANDBOXED`, `UNTRUSTED`, or null | `null` | Override the default `UNTRUSTED` tier. |
+
+## Sandbox tier
+
+Default: **`UNTRUSTED`**. Modbus writes drive industrial equipment — valves, pumps, drives, breakers. The defensive default reflects this real-world blast radius. Downgrade per-connection only after careful operator review of what the device controls.
+
+## Operations (builtin)
+
+Eight standard Modbus function codes, exposed by canonical name.
+
+### Read operations
+
+#### `read_coils` (FC 0x01)
+- **Args:** `address: int`, `count: int`, `unit_id: int | None = None`
+- **Returns:** `list[bool]`
+
+#### `read_discrete_inputs` (FC 0x02)
+- **Args:** `address: int`, `count: int`, `unit_id: int | None = None`
+- **Returns:** `list[bool]`
+
+#### `read_holding_registers` (FC 0x03)
+- **Args:** `address: int`, `count: int`, `unit_id: int | None = None`
+- **Returns:** `list[int]`
+
+#### `read_input_registers` (FC 0x04)
+- **Args:** `address: int`, `count: int`, `unit_id: int | None = None`
+- **Returns:** `list[int]`
+
+### Write operations
+
+#### `write_single_coil` (FC 0x05)
+- **Args:** `address: int`, `value: bool`, `unit_id: int | None = None`
+- **Returns:** `{ok: true}`
+
+#### `write_single_register` (FC 0x06)
+- **Args:** `address: int`, `value: int`, `unit_id: int | None = None`
+- **Returns:** `{ok: true}`
+
+#### `write_multiple_coils` (FC 0x0F)
+- **Args:** `address: int`, `values: list[bool]`, `unit_id: int | None = None`
+- **Returns:** `{ok: true}`
+
+#### `write_multiple_registers` (FC 0x10)
+- **Args:** `address: int`, `values: list[int]`, `unit_id: int | None = None`
+- **Returns:** `{ok: true}`
+
+`unit_id` defaults to the connection's `protocol_data.unit_id`. Per-call override is useful for multi-drop serial-over-TCP setups.
+
+## Test endpoint
+
+Clicking **Test** issues `read_holding_registers(address=0, count=1, unit_id=<default>)`.
+
+- Successful read &rarr; pass.
+- **Exception code 2 ("Illegal Data Address") &rarr; pass.** This means the connection works end-to-end; the device just doesn't have a register mapped at address 0. Common for many PLCs.
+- Any other exception code, connection refused, or timeout &rarr; fail.
+
+## Common gotchas
+
+1. **No authentication.** Modbus/TCP has no auth in the protocol. Firewall/VPN-gate the PLC to trusted networks only.
+2. **Register address vs PLC register number.** Some vendors use 1-based register numbers (40001, 40002, &hellip;); the protocol is 0-based. A vendor's "register 40001" is `address=0` on the wire. Check the device manual.
+3. **Holding vs input registers.** Two different address spaces. `read_holding_registers` (FC 0x03) is not the same as `read_input_registers` (FC 0x04).
+4. **`unit_id` matters even on TCP.** Some gateways multiplex multiple Modbus/RTU devices behind one TCP endpoint; `unit_id` selects which device. For direct Modbus/TCP devices it's usually 1.
+5. **Coil vs discrete input.** Coils are read/write; discrete inputs are read-only. Choose the right op based on whether you need to write.
+
+## Tool catalog example
+
+```yaml
+id: pump_status
+version: "1.0.0"
+title: "Read pump status register"
+description: Reads register 100 from a Modbus pump controller.
+category: industrial
+kind: modbus
+sandbox_tier: UNTRUSTED
+scopes:
+  - industrial.read
+exec:
+  modbus:
+    connection_ref: pump-controller-floor-3
+    operation: read_holding_registers
+    args:
+      address: 100
+      count: 1
+setup:
+  auth_complexity: connection_ref
+  body: |
+    Register the pump controller as a Modbus connection.
+```
+
+## Phase A / Phase B
+
+This release ships Modbus/TCP as a request/response plugin (Phase A). Future Phase B work may add:
+
+- Modbus RTU-over-TCP and serial transports.
+- Connection pooling (one persistent TCP socket per connection).
+- Background health probing.

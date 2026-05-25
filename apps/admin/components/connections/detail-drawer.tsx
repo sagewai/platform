@@ -12,6 +12,7 @@ import { CoapPanel } from './protocols/coap-panel';
 import { HttpPanel } from './protocols/http-panel';
 import { InferencePanel } from './protocols/inference-panel';
 import { McpPanel } from './protocols/mcp-panel';
+import { ModbusPanel } from './protocols/modbus-panel';
 import { Oauth2Panel } from './protocols/oauth2-panel';
 import { SdkPanel } from './protocols/sdk-panel';
 
@@ -27,6 +28,7 @@ const PANELS: Record<string, (props: PanelProps) => JSX.Element> = {
   inference: InferencePanel,
   sdk: SdkPanel,
   coap: CoapPanel,
+  modbus: ModbusPanel,
 };
 
 type Props = {

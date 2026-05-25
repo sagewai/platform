@@ -69,9 +69,9 @@ from sagewai.connections.protocols import (
 )
 
 
-def test_all_6_protocols_registered():
+def test_all_7_protocols_registered():
     ids = {p.id for p in all_protocols()}
-    assert ids == {"http", "oauth2", "mcp", "inference", "sdk", "coap"}
+    assert ids == {"http", "oauth2", "mcp", "inference", "sdk", "coap", "modbus"}
 
 
 def test_get_protocol_unknown_raises():

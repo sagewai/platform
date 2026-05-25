@@ -74,6 +74,9 @@ memory = [
 coap = [
     "aiocoap==0.4.13",
 ]
+modbus = [
+    "pymodbus==3.13.0",
+]
 fastapi = [
     "fastapi==0.136.1",
     "sse-starlette==3.4.4",
@@ -140,6 +143,7 @@ test = [
     "hvac==2.4.0",
     "respx==0.23.1",
     "aiocoap==0.4.13",
+    "pymodbus==3.13.0",
 ]
 
 [project.scripts]

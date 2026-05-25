@@ -155,3 +155,13 @@ export type CoapProtocolData = {
   default_timeout_seconds: number;
   sandbox_tier_override: 'TRUSTED' | 'SANDBOXED' | null;
 };
+
+// Modbus/TCP protocol-data shape (Modbus Application Protocol V1.1b3) — Phase A PR2.
+export type ModbusProtocolData = {
+  host: string;
+  port: number;
+  transport: 'tcp';
+  unit_id: number;
+  default_timeout_seconds: number;
+  sandbox_tier_override: 'TRUSTED' | 'SANDBOXED' | 'UNTRUSTED' | null;
+};

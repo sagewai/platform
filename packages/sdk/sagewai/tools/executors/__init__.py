@@ -17,6 +17,7 @@ _REGISTRY = {
     "cli":     cli.run,
     "webhook": webhook.run,
     "coap":    connections.run,
+    "modbus":  connections.run,
 }
 
 

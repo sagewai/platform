@@ -254,6 +254,9 @@ function Step2Configure(props: {
       {props.protocol.id === 'coap' && (
         <CoapConfigureFields data={props.protocolData} setData={props.setProtocolData} />
       )}
+      {props.protocol.id === 'modbus' && (
+        <ModbusConfigureFields data={props.protocolData} setData={props.setProtocolData} />
+      )}
       <div className="mt-4 flex justify-between">
         <Button onClick={props.onBack} variant="secondary">Back</Button>
         <Button onClick={props.onNext}>Next</Button>
@@ -617,6 +620,83 @@ function CoapConfigureFields({
           data-testid="coap-timeout"
         />
       </label>
+    </>
+  );
+}
+
+function ModbusConfigureFields({
+  data, setData,
+}: {
+  data: Record<string, unknown>;
+  setData: (d: Record<string, unknown>) => void;
+}) {
+  const update = (next: Record<string, unknown>) =>
+    setData({
+      host: '',
+      port: 502,
+      transport: 'tcp',
+      unit_id: 1,
+      default_timeout_seconds: 3,
+      sandbox_tier_override: null,
+      ...data,
+      ...next,
+    });
+  return (
+    <>
+      <label className="mb-2 block">
+        <span className="text-sm">Host</span>
+        <input
+          type="text"
+          value={(data.host as string) ?? ''}
+          onChange={e => update({ host: e.target.value })}
+          className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 font-mono text-sm"
+          data-testid="modbus-host"
+          placeholder="192.168.1.50 or plc.example.com"
+          required
+        />
+      </label>
+      <label className="mb-2 block">
+        <span className="text-sm">Port</span>
+        <input
+          type="number"
+          min={1}
+          max={65535}
+          value={(data.port as number) ?? 502}
+          onChange={e => update({ port: Number(e.target.value) || 502 })}
+          className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 text-sm"
+          data-testid="modbus-port"
+        />
+      </label>
+      <label className="mb-2 block">
+        <span className="text-sm">Unit ID (slave address)</span>
+        <input
+          type="number"
+          min={0}
+          max={247}
+          value={(data.unit_id as number) ?? 1}
+          onChange={e => update({ unit_id: Number(e.target.value) || 0 })}
+          className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 text-sm"
+          data-testid="modbus-unit-id"
+        />
+        <span className="mt-1 block text-xs text-text-tertiary">
+          Modbus device address (0-247). Override per-call if needed.
+        </span>
+      </label>
+      <label className="mb-2 block">
+        <span className="text-sm">Default timeout (seconds)</span>
+        <input
+          type="number"
+          min={0.5}
+          step={0.5}
+          value={(data.default_timeout_seconds as number) ?? 3}
+          onChange={e => update({ default_timeout_seconds: Number(e.target.value) || 3 })}
+          className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 text-sm"
+          data-testid="modbus-timeout"
+        />
+      </label>
+      <p className="mt-2 rounded bg-warning/10 px-3 py-2 text-xs text-warning">
+        Modbus/TCP has no authentication. Firewall/VPN-gate the device to trusted networks only.
+      </p>
     </>
   );
 }

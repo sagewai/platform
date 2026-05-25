@@ -1,0 +1,34 @@
+id: industrial_pump
+version: "1.0.0"
+title: "Industrial pump start command"
+description: |
+  Issues a write_single_register to a Modbus/TCP pump controller to
+  start the pump. Address 100 is the canonical start/stop register on
+  many SCADA-grade pumps (operators verify against their specific
+  device manual).
+
+  Requires a Modbus connection registered via the Connections admin.
+category: industrial
+kind: modbus
+sandbox_tier: UNTRUSTED
+scopes:
+  - industrial.write
+exec:
+  modbus:
+    connection_ref: REPLACE_ME_WITH_YOUR_MODBUS_CONNECTION_DISPLAY_NAME
+    operation: write_single_register
+    args:
+      address: 100
+      # `value` is supplied at agent-call time (e.g., 1 = start, 0 = stop).
+setup:
+  auth_complexity: connection_ref
+  body: |
+    Register the pump controller as a Modbus connection in the
+    Connections admin first (`/connections`, "Add Connection", pick
+    Modbus). Then edit this file's `connection_ref` to match the
+    connection's display name. Verify the start register address
+    against your pump's manual — 100 is a common but not universal
+    default.
+
+    Modbus writes have no authentication in the protocol. Operators
+    are expected to firewall the PLC to trusted networks only.
