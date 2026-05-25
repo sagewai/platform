@@ -35,11 +35,11 @@ def _runner() -> CliRunner:
 # ── protocols ──────────────────────────────────────────────────────
 
 
-def test_protocols_lists_5():
+def test_protocols_lists_all():
     result = _runner().invoke(connections, ["protocols"])
     assert result.exit_code == 0, result.output
-    # Plain text table has 5 protocol ids
-    for pid in ["http", "sdk", "mcp", "inference", "oauth2"]:
+    # Plain text table has all protocol ids
+    for pid in ["http", "sdk", "mcp", "inference", "oauth2", "coap"]:
         assert pid in result.output
 
 
@@ -48,7 +48,7 @@ def test_protocols_json():
     assert result.exit_code == 0, result.output
     body = json.loads(result.output)
     ids = {p["id"] for p in body}
-    assert ids == {"http", "sdk", "mcp", "inference", "oauth2"}
+    assert ids == {"http", "sdk", "mcp", "inference", "oauth2", "coap"}
 
 
 # ── backends ───────────────────────────────────────────────────────

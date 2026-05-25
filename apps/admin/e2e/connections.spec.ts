@@ -272,6 +272,178 @@ test.describe('Connections page', () => {
   });
 
 
+  test('coap: add → test (mocked) → delete', async ({ page }) => {
+    let connections: Array<Record<string, unknown>> = [];
+    let createdBody: Record<string, unknown> | null = null;
+
+    // Broad catch-all FIRST so specific routes registered LATER win (Playwright LIFO).
+    await page.route('**/api/v1/admin/connections/**', async (route, req) => {
+      const url = req.url();
+      const method = req.method();
+      // Per-id GET
+      const idMatch = url.match(/\/connections\/(conn_coap_[a-z0-9]+)$/);
+      if (method === 'GET' && idMatch) {
+        const found = connections.find(c => c.id === idMatch[1]);
+        if (found) {
+          await route.fulfill({ json: found });
+        } else {
+          await route.fulfill({ status: 404, json: {} });
+        }
+        return;
+      }
+      // Per-id DELETE (catch-all — narrower handler added later wins).
+      if (method === 'DELETE' && idMatch) {
+        connections = connections.filter(c => c.id !== idMatch[1]);
+        await route.fulfill({ json: null, status: 200 });
+        return;
+      }
+      // Per-id /test (POST)
+      const testMatch = url.match(/\/connections\/(conn_coap_[a-z0-9]+)\/test$/);
+      if (method === 'POST' && testMatch) {
+        await route.fulfill({
+          json: { ok: true, status_code: null, message: 'coap discovery returned 2.05' },
+        });
+        return;
+      }
+      // List endpoint
+      if (method === 'GET' && /\/connections\/(\?.*)?$/.test(url)) {
+        await route.fulfill({ json: connections });
+        return;
+      }
+      // Create endpoint
+      if (method === 'POST' && /\/connections\/(\?.*)?$/.test(url)) {
+        createdBody = JSON.parse(req.postData() ?? '{}');
+        const created = {
+          id: 'conn_coap_abc123',
+          kind: 'connection',
+          protocol: 'coap',
+          project_id: 'default',
+          display_name: 'e2e-coap-thermostat',
+          tags: ['iot'],
+          credentials_backend: { kind: 'local', config: {} },
+          status: 'ready',
+          last_tested_at: null,
+          last_test_ok: null,
+          is_default: true,
+          created_at: '2026-05-25T00:00:00+00:00',
+          updated_at: '2026-05-25T00:00:00+00:00',
+          last_error: null,
+          protocol_data: {
+            base_uri: 'coap://thermostat.example.com:5683',
+            use_dtls: false,
+            psk_identity: '',
+            psk_key: '',
+            default_timeout_seconds: 10,
+            sandbox_tier_override: null,
+          },
+        };
+        connections.push(created);
+        await route.fulfill({ json: created });
+        return;
+      }
+      await route.continue();
+    });
+
+    // Specific routes registered LAST so they win (Playwright LIFO).
+    await page.route('**/api/v1/admin/connections/protocols', route =>
+      route.fulfill({
+        json: [
+          { id: 'http', display_name: 'HTTP / REST', sensitive_fields: [] },
+          { id: 'coap', display_name: 'CoAP', sensitive_fields: ['psk_key'] },
+        ],
+      }));
+    await page.route('**/api/v1/admin/connections/backends', route =>
+      route.fulfill({
+        json: [{ id: 'local', display_name: 'Local encrypted file' }],
+      }));
+
+    await page.goto('/connections');
+    await expect(page.getByTestId('filter-bar')).toBeVisible({ timeout: 10_000 });
+
+    // Open Add modal
+    await page.getByTestId('add-connection-btn').click();
+    await expect(page.getByTestId('add-connection-modal')).toBeVisible();
+
+    // Step 1: pick CoAP
+    await page.getByTestId('protocol-pick-coap').click();
+
+    // Step 2: fill the form
+    await page.getByTestId('display-name-input').fill('e2e-coap-thermostat');
+    await page.getByTestId('coap-base-uri').fill('coap://thermostat.example.com:5683');
+    await page.getByTestId('step-2').getByRole('button', { name: 'Next' }).click();
+
+    // Step 3: defaults are fine
+    await page.getByTestId('tags-input').fill('iot');
+    await page.getByTestId('submit-add-connection').click();
+
+    // Modal closes
+    await expect(page.getByTestId('add-connection-modal')).not.toBeVisible({ timeout: 10_000 });
+
+    // New row visible
+    await expect(page.getByText('e2e-coap-thermostat')).toBeVisible();
+
+    // Verify the create payload shape
+    expect(createdBody).not.toBeNull();
+    const body = createdBody as unknown as { protocol: string; protocol_data: Record<string, unknown> };
+    expect(body.protocol).toBe('coap');
+    expect(body.protocol_data.base_uri).toBe('coap://thermostat.example.com:5683');
+    expect(body.protocol_data.use_dtls).toBe(false);
+
+    // ── Test action ────────────────────────────────────────────────
+    // Track POST /test invocations so we can assert it ran.
+    let testCalls = 0;
+    await page.route(
+      '**/api/v1/admin/connections/conn_coap_abc123/test',
+      async (route) => {
+        testCalls += 1;
+        await route.fulfill({
+          json: {
+            ok: true,
+            status_code: null,
+            message: 'coap discovery returned 2.05',
+          },
+        });
+      },
+    );
+
+    // Open the row's actions menu (the ⋯ details) and click Test.
+    const row = page.getByTestId('connection-row-conn_coap_abc123');
+    await row.getByLabel('row actions').click();
+    await row.getByRole('button', { name: 'Test' }).click();
+    // The Test action triggers a reload(); wait for the toast to settle.
+    await expect.poll(() => testCalls).toBeGreaterThan(0);
+
+    // ── Delete action ──────────────────────────────────────────────
+    let deleteCalls = 0;
+    await page.route(
+      '**/api/v1/admin/connections/conn_coap_abc123',
+      async (route, req) => {
+        if (req.method() === 'DELETE') {
+          deleteCalls += 1;
+          connections = connections.filter(c => c.id !== 'conn_coap_abc123');
+          // The fetch client's .json() chokes on a truly-empty 204 body, so
+          // return null-JSON instead (real server replies are funnelled
+          // through the same code path during e2e).
+          await route.fulfill({ json: null, status: 200 });
+          return;
+        }
+        await route.continue();
+      },
+    );
+
+    // The Delete handler calls window.confirm(); auto-accept it.
+    page.once('dialog', d => d.accept());
+    // Re-open the actions menu (it auto-closed after Test) and click Delete.
+    await row.getByLabel('row actions').click();
+    await row.getByRole('button', { name: 'Delete' }).click();
+    await expect.poll(() => deleteCalls).toBeGreaterThan(0);
+    // Row should disappear after the reload (use the row-id testid to avoid
+    // toast-text false matches on the display name).
+    await expect(
+      page.getByTestId('connection-row-conn_coap_abc123'),
+    ).not.toBeVisible({ timeout: 10_000 });
+  });
+
   test('add connection with doppler backend', async ({ page }) => {
     let createdBody: Record<string, unknown> | null = null;
     await page.route('**/api/v1/admin/connections/**', async (route, req) => {

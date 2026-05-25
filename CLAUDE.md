@@ -1147,6 +1147,56 @@ Manager, Azure Key Vault as a cloud-secrets family.
 **Test deltas:** +47 new SDK tests across vault (20), doppler (18),
 integration (3), router (3), errors (3) — plus 2 new e2e scenarios.
 
+## New protocols Phase A — PR1 (CoAP) landed
+
+First Phase A protocol plugin shipped: CoAP (RFC 7252) as a request/response
+plugin matching the existing 5-plugin contract verbatim.
+
+- `sagewai.connections.protocols.coap` — `CoapProtocolData` schema +
+  `CoapProtocolPlugin` + error hierarchy + `_run_op` executor (4 builtin
+  verbs: get/post/put/delete). DTLS-PSK auth supported via `coaps://`
+  scheme + `psk_identity`/`psk_key`. Per-call lifecycle (open Context,
+  one request, shutdown). Test endpoint: `GET /.well-known/core` per
+  RFC 7252 §7.2.
+- `PROTOCOLS` tuple now has 6 entries: `(http, sdk, mcp, inference,
+  oauth2, coap)`. `DEFAULT_KEY_FOR` unchanged.
+- `sagewai.tools.executors.connections` — shared executor module for all
+  four Phase A protocol kinds. PR1 wires `coap`; Modbus/OPC UA/WebSocket
+  PRs append to the per-kind runner table. New `auth_complexity:
+  connection_ref` value in the catalog schema. New `kind: coap`
+  conditional block in `_schema.json`. Registered in
+  `sagewai.tools.executors._REGISTRY`.
+- Seed catalog entry `coap_device_discovery.yaml`.
+- Admin UI: `CoapPanel` (read-only ops table — 4 verbs displayed) +
+  `CoapConfigureFields` (inline in `add-connection-modal.tsx`, matches
+  the existing pattern; conditional PSK fields when `coaps://`).
+- Docs: `apps/docs/app/docs/connections/protocols/coap/page.mdx`.
+- New optional extra `sagewai[coap]` (`aiocoap==0.4.13`); `aiocoap` also
+  added to `[dependency-groups] test`.
+
+**Key invariants:**
+- Per-call lifecycle: no connection pooling. Each op opens an aiocoap
+  Context, sends one request, awaits one response, tears down.
+- DTLS-PSK only when `base_uri` starts with `coaps://` AND
+  `psk_identity`/`psk_key` are populated. Plain `coap://` skips DTLS.
+- Sandbox tier defaults to `SANDBOXED`; per-connection override is
+  downgrade-only via the existing Plan J route.
+- 4 builtin ops only. No custom ops surface — operators reference verbs
+  from tool-catalog entries.
+- The connections executor uses a `_runners()` lookup (not a frozen
+  module-level dict) so tests can patch the per-kind runner function
+  name on this module. Phase A PR2/3/4 add their runner attributes
+  here in the same shape.
+
+**Not in this PR (Phase B):**
+- CoAP Observe pattern (server-pushed resource-change notifications).
+- Raw public key / certificate DTLS.
+- DTLS session resumption across calls (paired with connection pooling).
+
+**Test deltas:** +30 new SDK tests (14 schema/errors/identity + 10
+executor + 4 tool-catalog executor + 2 registration) for a total of
+~5430 SDK tests passing.
+
 ## MCP-as-first-class (sub-project 3 — Bundle A)
 
 Bundle A landed: registered MCP server connections with capability

@@ -23,6 +23,7 @@ from sagewai.connections.protocols.base import (
     ProtocolPlugin,
     TestResult,
 )
+from sagewai.connections.protocols.coap import CoapProtocolPlugin
 from sagewai.connections.protocols.http import HttpProtocolPlugin
 from sagewai.connections.protocols.inference import (
     InferenceProtocolPlugin,
@@ -42,6 +43,7 @@ PROTOCOLS: tuple[ProtocolPlugin, ...] = (
     McpProtocolPlugin(),
     InferenceProtocolPlugin(),
     OAuth2ProtocolPlugin(),
+    CoapProtocolPlugin(),
 )
 _BY_ID: dict[str, ProtocolPlugin] = {p.id: p for p in PROTOCOLS}
 
@@ -68,6 +70,7 @@ def all_protocols() -> tuple[ProtocolPlugin, ...]:
 
 
 __all__ = [
+    "CoapProtocolPlugin",
     "DEFAULT_KEY_FOR",
     "HttpProtocolPlugin",
     "InferenceProtocolPlugin",

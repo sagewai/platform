@@ -71,6 +71,9 @@ memory = [
     "pymilvus==2.6.14",
     "nebula3-python==3.8.3",
 ]
+coap = [
+    "aiocoap==0.4.13",
+]
 fastapi = [
     "fastapi==0.136.1",
     "sse-starlette==3.4.4",
@@ -136,6 +139,7 @@ test = [
     "kubernetes-asyncio==35.0.1",
     "hvac==2.4.0",
     "respx==0.23.1",
+    "aiocoap==0.4.13",
 ]
 
 [project.scripts]

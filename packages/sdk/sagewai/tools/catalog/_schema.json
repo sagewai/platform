@@ -11,7 +11,7 @@
     "title":       { "type": "string", "minLength": 1 },
     "description": { "type": "string", "minLength": 1 },
     "category":    { "type": "string", "minLength": 1 },
-    "kind":        { "enum": ["sdk", "http", "mcp", "cli", "webhook"] },
+    "kind":        { "enum": ["sdk", "http", "mcp", "cli", "webhook", "coap"] },
     "sandbox_tier":{ "enum": ["TRUSTED", "SANDBOXED", "UNTRUSTED"] },
     "scopes": {
       "type": "array",
@@ -24,7 +24,7 @@
       "required": ["auth_complexity", "body"],
       "additionalProperties": true,
       "properties": {
-        "auth_complexity": { "enum": ["none", "api_key", "oauth2", "oauth2_webhook"] },
+        "auth_complexity": { "enum": ["none", "api_key", "oauth2", "oauth2_webhook", "connection_ref"] },
         "signup_url":      { "type": "string", "format": "uri" },
         "console_path":    { "type": "string" },
         "key_format":      { "type": "string" },
@@ -57,7 +57,7 @@
                  "properties": { "entrypoint": { "type": "string", "pattern": "^[a-zA-Z0-9_.]+:[a-zA-Z0-9_]+$" } },
                  "additionalProperties": false }
       }, "not": { "anyOf": [
-        {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["webhook"]}
+        {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["webhook"]}, {"required": ["coap"]}
       ]} } } }
     },
     {
@@ -90,7 +90,7 @@
                     }
                   }, "additionalProperties": true }
       }, "not": { "anyOf": [
-        {"required": ["sdk"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["webhook"]}
+        {"required": ["sdk"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["webhook"]}, {"required": ["coap"]}
       ]} } } }
     },
     {
@@ -99,7 +99,7 @@
         "mcp": { "type": "object", "required": ["server_ref"],
                  "properties": { "server_ref": { "type": "string" }, "tool_name": { "type": "string" } } }
       }, "not": { "anyOf": [
-        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["cli"]}, {"required": ["webhook"]}
+        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["cli"]}, {"required": ["webhook"]}, {"required": ["coap"]}
       ]} } } }
     },
     {
@@ -108,7 +108,7 @@
         "cli": { "type": "object", "required": ["binary", "argv_template"],
                  "properties": { "binary": { "type": "string" }, "argv_template": { "type": "array", "items": { "type": "string" } } } }
       }, "not": { "anyOf": [
-        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["webhook"]}
+        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["webhook"]}, {"required": ["coap"]}
       ]} } } }
     },
     {
@@ -117,7 +117,21 @@
         "webhook": { "type": "object", "required": ["url"],
                      "properties": { "url": { "type": "string", "format": "uri" }, "callback_topic": { "type": "string" } } }
       }, "not": { "anyOf": [
-        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["cli"]}
+        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["coap"]}
+      ]} } } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "coap" } } },
+      "then": { "properties": { "exec": { "required": ["coap"], "properties": {
+        "coap": { "type": "object", "required": ["connection_ref", "operation"],
+                  "properties": {
+                    "connection_ref": { "type": "string", "minLength": 1 },
+                    "operation":      { "enum": ["get", "post", "put", "delete"] },
+                    "args":           { "type": "object" }
+                  },
+                  "additionalProperties": false }
+      }, "not": { "anyOf": [
+        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["webhook"]}
       ]} } } }
     },
     {

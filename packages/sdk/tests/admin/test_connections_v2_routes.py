@@ -79,12 +79,12 @@ def client(sf: AdminStateFile, token: str, master_key: str) -> TestClient:
 # ── /protocols, /backends ───────────────────────────────────────────
 
 
-def test_get_protocols_lists_5(client: TestClient):
+def test_get_protocols_lists_6(client: TestClient):
     resp = client.get("/api/v1/admin/connections/protocols")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     ids = {p["id"] for p in body}
-    assert ids == {"http", "sdk", "mcp", "inference", "oauth2"}
+    assert ids == {"http", "sdk", "mcp", "inference", "oauth2", "coap"}
 
 
 def test_get_backends_lists_5(client: TestClient):

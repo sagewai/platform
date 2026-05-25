@@ -8,7 +8,7 @@
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
 """Tool executors — one module per CatalogEntry.kind."""
-from sagewai.tools.executors import cli, http, mcp, sdk, webhook
+from sagewai.tools.executors import cli, connections, http, mcp, sdk, webhook
 
 _REGISTRY = {
     "sdk":     sdk.run,
@@ -16,6 +16,7 @@ _REGISTRY = {
     "mcp":     mcp.run,
     "cli":     cli.run,
     "webhook": webhook.run,
+    "coap":    connections.run,
 }
 
 
@@ -27,4 +28,4 @@ def get(kind: str):
         raise ValueError(f"unknown executor kind: {kind!r}") from exc
 
 
-__all__ = ["get", "sdk", "http", "mcp", "cli", "webhook"]
+__all__ = ["get", "sdk", "http", "mcp", "cli", "webhook", "connections"]

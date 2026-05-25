@@ -1,0 +1,148 @@
+export const metadata = {
+  title: "CoAP connections",
+  description:
+    "Talk to IoT devices speaking CoAP (RFC 7252) — four builtin verbs (GET/POST/PUT/DELETE) over UDP, with optional DTLS-PSK auth.",
+};
+
+# CoAP connections
+
+The CoAP plugin connects to devices speaking the Constrained Application
+Protocol (RFC 7252). It's HTTP-like — four verbs, request/response —
+over UDP, designed for IoT devices on constrained networks. DTLS
+pre-shared-key (PSK) is supported for the `coaps://` scheme.
+
+## Install
+
+CoAP support ships behind an optional extra:
+
+```bash
+pip install sagewai[coap]
+```
+
+The library underneath is [`aiocoap`](https://aiocoap.readthedocs.io/),
+an asyncio-native CoAP implementation. Without this extra, attempting
+to use a CoAP connection raises `CoapNotInstalledError` with an install
+hint.
+
+## When to pick it
+
+- You're integrating with low-power IoT devices (thermostats, sensors,
+  actuators) that speak CoAP natively.
+- Your device sits on a constrained network where UDP is allowed but
+  the overhead of TCP+TLS is too high.
+- You need the request/response side of CoAP. The async **Observe**
+  pattern (server-pushed notifications) is queued for Phase B.
+
+## `protocol_data` schema
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `base_uri` | string (required) | — | Must start with `coap://` or `coaps://`. Includes host + port. |
+| `use_dtls` | boolean | (auto) | Auto-derived from scheme. Must equal `base_uri.startswith("coaps://")` — mismatched values are rejected. |
+| `psk_identity` | string | `""` | DTLS-PSK identity. Required when using `coaps://` with PSK. |
+| `psk_key` | string (sensitive) | `""` | DTLS-PSK key. Stored encrypted via the connection's credentials backend. |
+| `default_timeout_seconds` | float | `10.0` | Per-operation timeout. Must be positive. |
+| `sandbox_tier_override` | `TRUSTED` &#124; `SANDBOXED` &#124; null | `null` | Per-connection downgrade. CoAP defaults to `SANDBOXED`. |
+
+## Operations (builtin)
+
+CoAP exposes four fixed verbs. Operators do not declare custom
+operations — they reference the verbs by name from a tool-catalog entry.
+
+### `get`
+
+Read a CoAP resource.
+
+- **Args:** `path: str`, `query: dict[str, str] = {}`, `accept: str | None = None`
+- **Returns:** `{code: str, payload: bytes, content_format: int | None}`
+
+### `post`
+
+Create or invoke a resource.
+
+- **Args:** `path: str`, `payload: bytes | str | None = None`, `content_format: str | None = None`
+- **Returns:** `{code: str, payload: bytes, content_format: int | None, location: str | None}`
+- `location` is set from the response's `Location-Path` option when present.
+
+### `put`
+
+Update a resource.
+
+- **Args:** `path: str`, `payload: bytes | str`, `content_format: str | None = None`
+- **Returns:** `{code: str, payload: bytes, content_format: int | None}`
+
+### `delete`
+
+Remove a resource.
+
+- **Args:** `path: str`
+- **Returns:** `{code: str}`
+
+## Test endpoint
+
+Clicking **Test** in the admin issues `GET /.well-known/core` per
+RFC 7252 §7.2 — the standardized resource-discovery path. Any 2.xx
+response counts as success. Failure cases:
+
+- **Connection refused** — device isn't reachable; check the firewall.
+- **DTLS handshake failed** — PSK identity or key is wrong, or the
+  device doesn't support PSK.
+- **Timeout** — exceed `default_timeout_seconds`; raise the timeout or
+  check the path.
+
+## Sandbox tier
+
+Default: `SANDBOXED`. CoAP devices vary widely in capability — a
+thermostat is low-risk, a programmable industrial controller is much
+higher. Downgrade to `TRUSTED` per-connection only when you've verified
+the specific device.
+
+## Common gotchas
+
+1. **UDP firewall holes.** CoAP runs on UDP/5683 (or UDP/5684 for
+   `coaps://`). Outbound TCP-only firewalls block it silently.
+2. **PSK vs raw public key.** Only PSK is supported in this release.
+   If your device requires raw public key (RFC 7250) or
+   certificate-based DTLS, file an issue.
+3. **`use_dtls` is auto-derived from the scheme.** Setting
+   `use_dtls=true` with `base_uri="coap://..."` (or the reverse) is
+   rejected by the schema — the validator enforces consistency. Omit
+   `use_dtls` and the schema fills it in from the scheme; the admin
+   Add-wizard form already does this automatically.
+4. **Content-format strings vs ids.** Pass content_format by name
+   (`"application/json"`, `"text/plain"`). The plugin maps to the
+   RFC 7252 integer ids.
+5. **Hex-encoded vs ASCII PSK.** The plugin auto-detects hex keys; raw
+   ASCII keys are also accepted.
+
+## Tool catalog example
+
+```yaml
+id: thermostat_read_temperature
+version: "1.0.0"
+title: "Read thermostat temperature"
+description: |
+  Reads the current temperature reading from a CoAP thermostat.
+category: iot
+kind: coap
+sandbox_tier: SANDBOXED
+scopes:
+  - iot.read
+exec:
+  coap:
+    connection_ref: thermostat-living-room
+    operation: get
+    args:
+      path: /sensors/temperature
+setup:
+  auth_complexity: connection_ref
+  body: |
+    Register the thermostat as a CoAP connection first.
+```
+
+## Phase A / Phase B
+
+This release ships CoAP as a request/response plugin (Phase A). The
+async **CoAP Observe** pattern — server-pushed notifications on
+resource changes — is queued for Phase B alongside MQTT, gRPC streams,
+and OPC UA subscriptions.

@@ -251,6 +251,9 @@ function Step2Configure(props: {
       {props.protocol.id === 'sdk' && (
         <SdkConfigureFields data={props.protocolData} setData={props.setProtocolData} />
       )}
+      {props.protocol.id === 'coap' && (
+        <CoapConfigureFields data={props.protocolData} setData={props.setProtocolData} />
+      )}
       <div className="mt-4 flex justify-between">
         <Button onClick={props.onBack} variant="secondary">Back</Button>
         <Button onClick={props.onNext}>Next</Button>
@@ -538,6 +541,83 @@ function SdkConfigureFields({
         placeholder="sagewai.tools.executors.sdk:paypal_api"
       />
     </label>
+  );
+}
+
+function CoapConfigureFields({
+  data, setData,
+}: {
+  data: Record<string, unknown>;
+  setData: (d: Record<string, unknown>) => void;
+}) {
+  const baseUri = (data.base_uri as string) ?? '';
+  const isCoaps = baseUri.startsWith('coaps://');
+  const update = (next: Record<string, unknown>) =>
+    setData({
+      use_dtls: false,
+      psk_identity: '',
+      psk_key: '',
+      default_timeout_seconds: 10,
+      sandbox_tier_override: null,
+      ...data,
+      ...next,
+    });
+  return (
+    <>
+      <label className="mb-2 block">
+        <span className="text-sm">Base URI</span>
+        <input
+          type="text"
+          value={baseUri}
+          onChange={e => update({ base_uri: e.target.value, use_dtls: e.target.value.startsWith('coaps://') })}
+          className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 font-mono text-sm"
+          data-testid="coap-base-uri"
+          placeholder="coap://device.example.com:5683"
+        />
+        <span className="mt-1 block text-xs text-text-tertiary">
+          Use <code>coaps://</code> for DTLS; firewall must allow UDP.
+        </span>
+      </label>
+      {isCoaps && (
+        <>
+          <label className="mb-2 block">
+            <span className="text-sm">PSK identity</span>
+            <input
+              type="text"
+              value={(data.psk_identity as string) ?? ''}
+              onChange={e => update({ psk_identity: e.target.value })}
+              className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 font-mono text-sm"
+              data-testid="coap-psk-identity"
+            />
+          </label>
+          <label className="mb-2 block">
+            <span className="text-sm">PSK key</span>
+            <input
+              type="password"
+              value={(data.psk_key as string) ?? ''}
+              onChange={e => update({ psk_key: e.target.value })}
+              className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 font-mono text-sm"
+              data-testid="coap-psk-key"
+            />
+            <span className="mt-1 block text-xs text-text-tertiary">
+              Hex-encoded or ASCII. Stored encrypted via the credentials backend.
+            </span>
+          </label>
+        </>
+      )}
+      <label className="mb-2 block">
+        <span className="text-sm">Default timeout (seconds)</span>
+        <input
+          type="number"
+          min={1}
+          step={0.5}
+          value={(data.default_timeout_seconds as number) ?? 10}
+          onChange={e => update({ default_timeout_seconds: Number(e.target.value) })}
+          className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 text-sm"
+          data-testid="coap-timeout"
+        />
+      </label>
+    </>
   );
 }
 

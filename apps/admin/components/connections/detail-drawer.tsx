@@ -8,6 +8,7 @@ import type { JSX } from 'react';
 import type { Connection } from '@/utils/connection-types';
 import { BackendPill } from './backend-pill';
 import { StatusPill } from './status-pill';
+import { CoapPanel } from './protocols/coap-panel';
 import { HttpPanel } from './protocols/http-panel';
 import { InferencePanel } from './protocols/inference-panel';
 import { McpPanel } from './protocols/mcp-panel';
@@ -25,6 +26,7 @@ const PANELS: Record<string, (props: PanelProps) => JSX.Element> = {
   mcp: McpPanel,
   inference: InferencePanel,
   sdk: SdkPanel,
+  coap: CoapPanel,
 };
 
 type Props = {

@@ -145,3 +145,13 @@ export type McpToolsResponse = {
   tools: McpToolMeta[];
   last_discovered_at: string | null;
 };
+
+// CoAP protocol-data shape (RFC 7252) — Phase A PR1.
+export type CoapProtocolData = {
+  base_uri: string;
+  use_dtls: boolean;
+  psk_identity: string;
+  psk_key: string; // server returns '***' when populated
+  default_timeout_seconds: number;
+  sandbox_tier_override: 'TRUSTED' | 'SANDBOXED' | null;
+};

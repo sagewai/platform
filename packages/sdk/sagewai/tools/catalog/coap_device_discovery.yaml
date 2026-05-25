@@ -1,0 +1,27 @@
+id: coap_device_discovery
+version: "1.0.0"
+title: "CoAP device resource discovery"
+description: |
+  Probes a CoAP device for its supported resources by issuing
+  GET /.well-known/core per RFC 7252 §7.2. Returns the link-format
+  payload describing available resource paths and their attributes.
+
+  Requires a CoAP connection registered via the Connections admin.
+category: iot
+kind: coap
+sandbox_tier: SANDBOXED
+scopes:
+  - iot.read
+exec:
+  coap:
+    connection_ref: REPLACE_ME_WITH_YOUR_COAP_CONNECTION_DISPLAY_NAME
+    operation: get
+    args:
+      path: /.well-known/core
+setup:
+  auth_complexity: connection_ref
+  body: |
+    Register a CoAP connection in the Connections admin first
+    (`/connections`, click "Add Connection", pick CoAP).
+    Then edit this file's `connection_ref` to match the connection's
+    display name.
