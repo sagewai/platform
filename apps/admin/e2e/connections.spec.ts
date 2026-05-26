@@ -831,4 +831,162 @@ test.describe('Connections page', () => {
     expect(body.credentials_backend.config.project).toBe('sagewai');
     expect(body.credentials_backend.config.name_prefix).toBe('SPOTIFY_MARKETING');
   });
+
+  test('websocket: add → test (mocked) → delete', async ({ page }) => {
+    let connections: Array<Record<string, unknown>> = [];
+    let createdBody: Record<string, unknown> | null = null;
+
+    // Broad catch-all FIRST so specific routes registered LATER win (Playwright LIFO).
+    await page.route('**/api/v1/admin/connections/**', async (route, req) => {
+      const url = req.url();
+      const method = req.method();
+      const idMatch = url.match(/\/connections\/(conn_websocket_[a-z0-9]+)$/);
+      if (method === 'GET' && idMatch) {
+        const found = connections.find(c => c.id === idMatch[1]);
+        if (found) {
+          await route.fulfill({ json: found });
+        } else {
+          await route.fulfill({ status: 404, json: {} });
+        }
+        return;
+      }
+      if (method === 'DELETE' && idMatch) {
+        connections = connections.filter(c => c.id !== idMatch[1]);
+        await route.fulfill({ json: null, status: 200 });
+        return;
+      }
+      const testMatch = url.match(/\/connections\/(conn_websocket_[a-z0-9]+)\/test$/);
+      if (method === 'POST' && testMatch) {
+        await route.fulfill({
+          json: { ok: true, status_code: null, message: 'websocket handshake complete' },
+        });
+        return;
+      }
+      if (method === 'GET' && /\/connections\/(\?.*)?$/.test(url)) {
+        await route.fulfill({ json: connections });
+        return;
+      }
+      if (method === 'POST' && /\/connections\/(\?.*)?$/.test(url)) {
+        createdBody = JSON.parse(req.postData() ?? '{}');
+        const created = {
+          id: 'conn_websocket_xyz789',
+          kind: 'connection',
+          protocol: 'websocket',
+          project_id: 'default',
+          display_name: 'e2e-websocket-market-data',
+          tags: ['finance'],
+          credentials_backend: { kind: 'local', config: {} },
+          status: 'ready',
+          last_tested_at: null,
+          last_test_ok: null,
+          is_default: true,
+          created_at: '2026-05-26T00:00:00+00:00',
+          updated_at: '2026-05-26T00:00:00+00:00',
+          last_error: null,
+          protocol_data: {
+            url: 'wss://gateway.example.com/ws',
+            headers: {},
+            auth_header_name: 'Authorization',
+            auth_header_value: '',
+            default_timeout_seconds: 30,
+            operations: [],
+            sandbox_tier_override: null,
+          },
+        };
+        connections.push(created);
+        await route.fulfill({ json: created });
+        return;
+      }
+      await route.continue();
+    });
+
+    // Specific routes registered LAST so they win (Playwright LIFO).
+    await page.route('**/api/v1/admin/connections/protocols', route =>
+      route.fulfill({
+        json: [
+          { id: 'http', display_name: 'HTTP / REST', sensitive_fields: [] },
+          { id: 'websocket', display_name: 'WebSocket', sensitive_fields: ['auth_header_value'] },
+        ],
+      }));
+    await page.route('**/api/v1/admin/connections/backends', route =>
+      route.fulfill({
+        json: [{ id: 'local', display_name: 'Local encrypted file' }],
+      }));
+
+    await page.goto('/connections');
+    await expect(page.getByTestId('filter-bar')).toBeVisible({ timeout: 10_000 });
+
+    // Open Add modal
+    await page.getByTestId('add-connection-btn').click();
+    await expect(page.getByTestId('add-connection-modal')).toBeVisible();
+
+    // Step 1: pick WebSocket
+    await page.getByTestId('protocol-pick-websocket').click();
+
+    // Step 2: fill the form (no auth — keeps the e2e simple)
+    await page.getByTestId('display-name-input').fill('e2e-websocket-market-data');
+    await page.getByTestId('websocket-url').fill('wss://gateway.example.com/ws');
+    await page.getByTestId('step-2').getByRole('button', { name: 'Next' }).click();
+
+    // Step 3: defaults are fine
+    await page.getByTestId('tags-input').fill('finance');
+    await page.getByTestId('submit-add-connection').click();
+
+    // Modal closes
+    await expect(page.getByTestId('add-connection-modal')).not.toBeVisible({ timeout: 10_000 });
+
+    // New row visible
+    await expect(page.getByText('e2e-websocket-market-data')).toBeVisible();
+
+    // Verify the create payload shape
+    expect(createdBody).not.toBeNull();
+    const body = createdBody as unknown as { protocol: string; protocol_data: Record<string, unknown> };
+    expect(body.protocol).toBe('websocket');
+    expect(body.protocol_data.url).toBe('wss://gateway.example.com/ws');
+    expect(body.protocol_data.auth_header_name).toBe('Authorization');
+
+    // ── Test action ────────────────────────────────────────────────
+    let testCalls = 0;
+    await page.route(
+      '**/api/v1/admin/connections/conn_websocket_xyz789/test',
+      async (route) => {
+        testCalls += 1;
+        await route.fulfill({
+          json: {
+            ok: true,
+            status_code: null,
+            message: 'websocket handshake complete',
+          },
+        });
+      },
+    );
+
+    const row = page.getByTestId('connection-row-conn_websocket_xyz789');
+    await row.getByLabel('row actions').click();
+    await row.getByRole('button', { name: 'Test' }).click();
+    await expect.poll(() => testCalls).toBeGreaterThan(0);
+
+    // ── Delete action ──────────────────────────────────────────────
+    let deleteCalls = 0;
+    await page.route(
+      '**/api/v1/admin/connections/conn_websocket_xyz789',
+      async (route, req) => {
+        if (req.method() === 'DELETE') {
+          deleteCalls += 1;
+          connections = connections.filter(c => c.id !== 'conn_websocket_xyz789');
+          await route.fulfill({ json: null, status: 200 });
+          return;
+        }
+        await route.continue();
+      },
+    );
+
+    page.once('dialog', d => d.accept());
+    await row.getByLabel('row actions').click();
+    await row.getByRole('button', { name: 'Delete' }).click();
+    await expect.poll(() => deleteCalls).toBeGreaterThan(0);
+    await expect(
+      page.getByTestId('connection-row-conn_websocket_xyz789'),
+    ).not.toBeVisible({ timeout: 10_000 });
+  });
 });

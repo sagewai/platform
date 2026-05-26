@@ -260,6 +260,9 @@ function Step2Configure(props: {
       {props.protocol.id === 'opcua' && (
         <OpcuaConfigureFields data={props.protocolData} setData={props.setProtocolData} />
       )}
+      {props.protocol.id === 'websocket' && (
+        <WebsocketConfigureFields data={props.protocolData} setData={props.setProtocolData} />
+      )}
       <div className="mt-4 flex justify-between">
         <Button onClick={props.onBack} variant="secondary">Back</Button>
         <Button onClick={props.onNext}>Next</Button>
@@ -792,6 +795,88 @@ function OpcuaConfigureFields({
       <p className="mt-2 text-xs text-text-tertiary">
         Operations are declared after creating the connection — open the connection
         from the list to add read operations with their node IDs.
+      </p>
+    </>
+  );
+}
+
+function WebsocketConfigureFields({
+  data, setData,
+}: {
+  data: Record<string, unknown>;
+  setData: (d: Record<string, unknown>) => void;
+}) {
+  const update = (next: Record<string, unknown>) =>
+    setData({
+      url: '',
+      headers: {},
+      auth_header_name: 'Authorization',
+      auth_header_value: '',
+      default_timeout_seconds: 30,
+      operations: [],
+      sandbox_tier_override: null,
+      ...data,
+      ...next,
+    });
+  return (
+    <>
+      <label className="mb-2 block">
+        <span className="text-sm">URL</span>
+        <input
+          type="text"
+          value={(data.url as string) ?? ''}
+          onChange={e => update({ url: e.target.value })}
+          placeholder="wss://gateway.example.com/ws"
+          className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 font-mono text-sm"
+          data-testid="websocket-url"
+          required
+        />
+        <span className="mt-1 block text-xs text-text-tertiary">
+          Use <code>wss://</code> for TLS-secured connections.
+        </span>
+      </label>
+      <label className="mb-2 block">
+        <span className="text-sm">Auth header name</span>
+        <input
+          type="text"
+          value={(data.auth_header_name as string) ?? 'Authorization'}
+          onChange={e => update({ auth_header_name: e.target.value })}
+          className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 font-mono text-sm"
+          data-testid="websocket-auth-header-name"
+        />
+      </label>
+      <label className="mb-2 block">
+        <span className="text-sm">Auth header value</span>
+        <input
+          type="password"
+          value={(data.auth_header_value as string) ?? ''}
+          onChange={e => update({ auth_header_value: e.target.value })}
+          placeholder="Bearer <token>"
+          className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 font-mono text-sm"
+          data-testid="websocket-auth-header-value"
+        />
+        <span className="mt-1 block text-xs text-text-tertiary">
+          Stored encrypted via the connection's credentials backend. Leave empty for
+          public endpoints.
+        </span>
+      </label>
+      <label className="mb-2 block">
+        <span className="text-sm">Default timeout (seconds)</span>
+        <input
+          type="number"
+          min={1}
+          step={1}
+          value={(data.default_timeout_seconds as number) ?? 30}
+          onChange={e =>
+            update({ default_timeout_seconds: Number(e.target.value) || 30 })
+          }
+          className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 text-sm"
+          data-testid="websocket-timeout"
+        />
+      </label>
+      <p className="mt-2 text-xs text-text-tertiary">
+        Operations are declared after creating the connection — open the connection
+        from the list to add send-and-receive operations with message templates.
       </p>
     </>
   );

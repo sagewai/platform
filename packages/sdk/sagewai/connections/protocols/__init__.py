@@ -37,6 +37,7 @@ from sagewai.connections.protocols.oauth2 import (
 )
 from sagewai.connections.protocols.opcua import OpcuaProtocolPlugin
 from sagewai.connections.protocols.sdk import SdkProtocolPlugin
+from sagewai.connections.protocols.websocket import WebsocketProtocolPlugin
 
 
 PROTOCOLS: tuple[ProtocolPlugin, ...] = (
@@ -48,6 +49,7 @@ PROTOCOLS: tuple[ProtocolPlugin, ...] = (
     CoapProtocolPlugin(),
     ModbusProtocolPlugin(),
     OpcuaProtocolPlugin(),
+    WebsocketProtocolPlugin(),  # ← new — Phase A complete
 )
 _BY_ID: dict[str, ProtocolPlugin] = {p.id: p for p in PROTOCOLS}
 
@@ -88,6 +90,7 @@ __all__ = [
     "SdkProtocolPlugin",
     "TestResult",
     "UnknownProtocolError",
+    "WebsocketProtocolPlugin",
     "all_protocols",
     "get_protocol",
     "inference_default_key",

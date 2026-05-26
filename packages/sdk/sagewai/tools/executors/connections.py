@@ -10,10 +10,11 @@
 """Shared executor for the Phase A new-protocol kinds.
 
 One executor, four kinds. Dispatches by ``_kind`` into the matching
-protocol plugin's ``_run_op`` callable. PR1-3 wire ``coap`` + ``modbus``
-+ ``opcua``. PR4 will add ``websocket``. The ``_runners()`` callable
-rebuilds the runner map on each call so test patches of e.g.
-``_coap_run_op`` take effect.
+protocol plugin's ``_run_op`` callable. PR1-4 wire ``coap`` + ``modbus``
++ ``opcua`` + ``websocket``. Phase A is complete. Phase B will introduce
+subscription/streaming protocols via a new abstraction. The
+``_runners()`` callable rebuilds the runner map on each call so test
+patches of e.g. ``_coap_run_op`` take effect.
 
 The executor is invoked by the tool registry when a catalog entry has
 ``kind: coap | modbus | opcua | websocket``. Catalog entries reference
@@ -39,6 +40,7 @@ from sagewai.connections.protocols.base import get_sensitive_field_paths_for
 from sagewai.connections.protocols.coap import _run_op as _coap_run_op
 from sagewai.connections.protocols.modbus import _run_op as _modbus_run_op
 from sagewai.connections.protocols.opcua import _run_op as _opcua_run_op
+from sagewai.connections.protocols.websocket import _run_op as _websocket_run_op
 from sagewai.connections.store import ConnectionStore
 
 
@@ -50,13 +52,15 @@ def _runners() -> dict[str, Callable[..., Awaitable[Any]]]:
 
     Looking up via module globals at call time (rather than freezing
     a dict at import) lets tests patch the runner name on this module.
-    Later Phase A PRs append entries here as ``opcua`` and ``websocket``
-    runners land.
+    Phase A is complete after PR4: all four new-protocol kinds are
+    wired. Phase B will likely require a different abstraction
+    (subscription/streaming) and therefore a new executor module.
     """
     return {
         "coap": _coap_run_op,
         "modbus": _modbus_run_op,
         "opcua": _opcua_run_op,
+        "websocket": _websocket_run_op,
     }
 
 

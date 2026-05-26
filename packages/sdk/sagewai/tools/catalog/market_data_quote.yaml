@@ -1,0 +1,31 @@
+id: market_data_quote
+version: "1.0.0"
+title: "Read a market data quote via WebSocket"
+description: |
+  Sends a quote-request frame to a market data gateway over WebSocket
+  and returns the response's price field. The connection's operations[]
+  list must declare an op named `get_quote` with a message_template that
+  references {symbol}.
+
+  Requires a WebSocket connection registered via the Connections admin.
+category: finance
+kind: websocket
+sandbox_tier: SANDBOXED
+scopes:
+  - market_data.read
+exec:
+  websocket:
+    connection_ref: REPLACE_ME_WITH_YOUR_WEBSOCKET_CONNECTION_DISPLAY_NAME
+    operation: get_quote
+    args: {}
+setup:
+  auth_complexity: connection_ref
+  body: |
+    Register the market data gateway as a WebSocket connection in the
+    Connections admin first (`/connections`, "Add Connection", pick
+    WebSocket). Add an operation named `get_quote` with a
+    message_template like `{"symbol": "{symbol}"}` and a response_match
+    like `$.price`. Then edit this file's `connection_ref` to match the
+    connection's display name.
+
+    The agent supplies `{symbol}` at call time as a kwarg.

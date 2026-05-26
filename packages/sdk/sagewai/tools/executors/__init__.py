@@ -11,14 +11,15 @@
 from sagewai.tools.executors import cli, connections, http, mcp, sdk, webhook
 
 _REGISTRY = {
-    "sdk":     sdk.run,
-    "http":    http.run,
-    "mcp":     mcp.run,
-    "cli":     cli.run,
-    "webhook": webhook.run,
-    "coap":    connections.run,
-    "modbus":  connections.run,
-    "opcua":   connections.run,
+    "sdk":       sdk.run,
+    "http":      http.run,
+    "mcp":       mcp.run,
+    "cli":       cli.run,
+    "webhook":   webhook.run,
+    "coap":      connections.run,
+    "modbus":    connections.run,
+    "opcua":     connections.run,
+    "websocket": connections.run,
 }
 
 

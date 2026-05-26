@@ -1,0 +1,106 @@
+# WebSocket
+
+The WebSocket plugin connects to vendor APIs over WebSocket (RFC 6455). Phase A supports **one-shot send-and-receive operations** — operators declare per-connection operations with message templates and optional JSONPath response extraction. Persistent streaming dialogues, server push, and binary frame templating are deferred to Phase B.
+
+## Install
+
+WebSocket support ships behind an optional extra:
+
+```bash
+pip install sagewai[websocket]
+```
+
+The library underneath is [`websockets`](https://websockets.readthedocs.io/), the canonical Python WebSocket implementation. JSONPath response extraction uses [`jsonpath-ng`](https://github.com/h2non/jsonpath-ng).
+
+## Configuration
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `url` | string (required) | — | Must start with `ws://` or `wss://`. |
+| `headers` | dict[str, str] | `{}` | Static HTTP headers added to the handshake (e.g., User-Agent, Sec-WebSocket-Protocol). |
+| `auth_header_name` | string | `Authorization` | Which header to populate with the sensitive token. |
+| `auth_header_value` | string (sensitive) | `""` | Encrypted via the connection's credentials backend. Omitted from the handshake when empty. |
+| `default_timeout_seconds` | float | `30.0` | Per-rpc timeout. Overridable per op. |
+| `operations` | list of `{name, message_template, response_match?, timeout_seconds?}` | `[]` | Add via the admin panel after creation. |
+| `sandbox_tier_override` | `TRUSTED`, `SANDBOXED`, or null | `null` | Override the default `SANDBOXED` tier. |
+
+## Operations (declarative)
+
+Each operation = `{name: str, message_template: str, response_match?: str, timeout_seconds?: float}`.
+
+**`message_template`** uses simple `{key}` placeholder substitution. Placeholders are filled from the agent's tool-call kwargs at invocation time. Missing keys raise `WebsocketTemplateError`. Literal curly braces in the template (e.g., JSON `{` and `}`) pass through unchanged — only placeholders matching the pattern `{identifier}` are substituted, so JSON bodies like `{"symbol": "{symbol}"}` work as written.
+
+**`response_match`** is a [JSONPath](https://goessner.net/articles/JsonPath/) expression applied to the response frame (parsed as JSON). If the path matches once, the single value is returned. If multiple matches, a list. If no matches or the frame isn't valid JSON, `WebsocketResponseError`.
+
+**`timeout_seconds`** overrides the connection's `default_timeout_seconds` for this specific op.
+
+Example op:
+
+```json
+{
+  "name": "get_quote",
+  "message_template": "{\"symbol\": \"{symbol}\"}",
+  "response_match": "$.price",
+  "timeout_seconds": 5.0
+}
+```
+
+Agent invokes with `tool.get_quote(symbol="AAPL")`, executor sends `{"symbol": "AAPL"}`, awaits one response frame, extracts `$.price`, returns the value.
+
+If `response_match` is omitted, the executor returns `{"frame": "<raw response text>"}`.
+
+## Sandbox tier
+
+Default: `SANDBOXED`. WebSocket-exposed surfaces vary widely — internal admin tools, public chat APIs, market data feeds. Downgrade to `TRUSTED` for known-internal read-only endpoints.
+
+## Test endpoint
+
+Clicking **Test** opens the WebSocket handshake with the configured auth headers, waits for the 101 Switching Protocols upgrade, then immediately closes. No frames are sent.
+
+- Successful handshake → pass.
+- 401/403 → `WebsocketAuthError` → fail with clear "auth" message.
+- Other 4xx/5xx → `WebsocketHandshakeError` → fail.
+- DNS/TCP/TLS failure → `WebsocketConnectionError` → fail.
+
+## Common gotchas
+
+1. **`message_template` placeholders are `{key}`, not Jinja `{{ key }}`.** Only patterns matching `{identifier}` (ASCII letter or underscore, followed by letters/digits/underscores) are substituted. Literal `{` and `}` in surrounding text — including JSON braces — pass through unchanged.
+2. **One frame in, one frame out.** Phase A doesn't support multi-message dialogues. If your vendor's protocol requires a hello/init frame before the request, that doesn't fit Phase A — wait for Phase B persistent connections.
+3. **`Sec-WebSocket-Protocol` via `headers`.** Subprotocol negotiation isn't a first-class field; populate the header in the generic `headers` dict if needed.
+4. **Binary frames are returned as text via UTF-8 decode.** If your vendor sends binary frames that aren't valid UTF-8, you'll get a decode error in the raw-frame path. Binary frame handling is deferred to Phase B.
+5. **Per-call lifecycle.** Each operation opens a fresh WebSocket handshake, sends one frame, awaits one response, and closes. Connection pooling is deferred to Phase B (paired with MCP / OPC UA pooling).
+
+## Tool catalog example
+
+```yaml
+id: market_data_quote
+version: "1.0.0"
+title: "Read a market data quote"
+description: Sends a quote-request frame and returns the price field.
+category: finance
+kind: websocket
+sandbox_tier: SANDBOXED
+scopes:
+  - market_data.read
+exec:
+  websocket:
+    connection_ref: market-data-gateway
+    operation: get_quote
+    args: {}
+setup:
+  auth_complexity: connection_ref
+  body: |
+    Register the gateway as a WebSocket connection. Add an op named
+    `get_quote` with template `{"symbol": "{symbol}"}` and
+    response_match `$.price`.
+```
+
+## Phase A / Phase B
+
+This release closes **Phase A** (WebSocket one-shot send-and-receive). Phase B will introduce:
+
+- **Persistent dialogues** — multi-message conversations on a single connection (hello/init/request/response patterns).
+- **Server push / pub-sub** — agent subscribes and receives notifications via a new `SubscriptionPlugin` abstraction (parallel to MCP Bundle B's pooling work).
+- **Binary frame templating** — first-class support for `bytes` payloads with binary templating.
+- **`Sec-WebSocket-Protocol` as a first-class field** — subprotocol negotiation handled by the executor rather than operator-supplied via `headers`.
+- **Connection pooling** — paired with MCP Bundle B and OPC UA pooling.

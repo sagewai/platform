@@ -105,12 +105,14 @@ async def test_missing_connection_raises_value_error(store, router):
 
 @pytest.mark.asyncio
 async def test_unknown_kind_raises_value_error(store, router):
+    # All four Phase A kinds (coap, modbus, opcua, websocket) are wired
+    # after PR4. Use a sentinel kind that no PR will ever wire.
     payload = {
-        "_kind": "websocket",  # websocket is still un-wired (PR4)
-        "exec": {"websocket": {"connection_ref": "x", "operation": "send"}},
+        "_kind": "phase_b_subscription",
+        "exec": {"phase_b_subscription": {"connection_ref": "x", "operation": "send"}},
         "project_id": "proj-test",
     }
-    with pytest.raises(ValueError, match="'websocket' is not yet wired"):
+    with pytest.raises(ValueError, match="'phase_b_subscription' is not yet wired"):
         await connections_run(payload, store=store, router=router)
 
 

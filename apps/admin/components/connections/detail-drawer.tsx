@@ -16,6 +16,7 @@ import { ModbusPanel } from './protocols/modbus-panel';
 import { Oauth2Panel } from './protocols/oauth2-panel';
 import { OpcuaPanel } from './protocols/opcua-panel';
 import { SdkPanel } from './protocols/sdk-panel';
+import { WebsocketPanel } from './protocols/websocket-panel';
 
 type PanelProps = {
   connection: Connection;
@@ -31,6 +32,7 @@ const PANELS: Record<string, (props: PanelProps) => JSX.Element> = {
   coap: CoapPanel,
   modbus: ModbusPanel,
   opcua: OpcuaPanel,
+  websocket: WebsocketPanel,
 };
 
 type Props = {

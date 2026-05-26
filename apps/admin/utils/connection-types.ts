@@ -189,3 +189,21 @@ export type OpcuaProtocolData = {
   operations: OpcuaOperation[];
   sandbox_tier_override: 'TRUSTED' | 'SANDBOXED' | null;
 };
+
+// WebSocket (RFC 6455) protocol-data shape — Phase A PR4.
+export type WebsocketOperation = {
+  name: string;
+  message_template: string;
+  response_match?: string | null;
+  timeout_seconds?: number | null;
+};
+
+export type WebsocketProtocolData = {
+  url: string;
+  headers: Record<string, string>;
+  auth_header_name: string;
+  auth_header_value: string; // masked '***' from server responses
+  default_timeout_seconds: number;
+  operations: WebsocketOperation[];
+  sandbox_tier_override: 'TRUSTED' | 'SANDBOXED' | null;
+};

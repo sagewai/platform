@@ -2076,6 +2076,15 @@ wheels = [
 ]
 
 [[package]]
+name = "jsonpath-ng"
+version = "1.8.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/32/58/250751940d75c8019659e15482d548a4aa3b6ce122c515102a4bfdac50e3/jsonpath_ng-1.8.0.tar.gz", hash = "sha256:54252968134b5e549ea5b872f1df1168bd7defe1a52fed5a358c194e1943ddc3", size = 74513, upload-time = "2026-02-24T14:42:06.182Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/03/99/33c7d78a3fb70d545fd5411ac67a651c81602cc09c9cf0df383733f068c5/jsonpath_ng-1.8.0-py3-none-any.whl", hash = "sha256:b8dde192f8af58d646fc031fac9c99fe4d00326afc4148f1f043c601a8cfe138", size = 67844, upload-time = "2026-02-28T00:53:19.637Z" },
+]
+
+[[package]]
 name = "jsonref"
 version = "1.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4854,6 +4863,10 @@ storage = [
 vault = [
     { name = "hvac" },
 ]
+websocket = [
+    { name = "jsonpath-ng" },
+    { name = "websockets" },
+]
 
 [package.dev-dependencies]
 test = [
@@ -4866,6 +4879,7 @@ test = [
     { name = "google-cloud-storage" },
     { name = "httpx" },
     { name = "hvac" },
+    { name = "jsonpath-ng" },
     { name = "kubernetes-asyncio" },
     { name = "prometheus-client" },
     { name = "pymodbus" },
@@ -4876,6 +4890,7 @@ test = [
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "sse-starlette" },
     { name = "uvicorn" },
+    { name = "websockets" },
 ]
 
 [package.metadata]
@@ -4897,6 +4912,7 @@ requires-dist = [
     { name = "google-genai", specifier = "==2.3.0" },
     { name = "httpx", specifier = "==0.28.1" },
     { name = "hvac", marker = "extra == 'vault'", specifier = "==2.4.0" },
+    { name = "jsonpath-ng", marker = "extra == 'websocket'", specifier = "==1.8.0" },
     { name = "keyring", marker = "extra == 'keychain'", specifier = "==25.7.0" },
     { name = "kubernetes-asyncio", marker = "extra == 'kubernetes'", specifier = "==35.0.1" },
     { name = "lingua-language-detector", marker = "extra == 'intelligence'", specifier = "==2.1.1" },
@@ -4927,8 +4943,9 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'intelligence-full'", specifier = "==4.57.6" },
     { name = "tree-sitter-languages", marker = "extra == 'memory'", specifier = "==1.10.2" },
     { name = "uvicorn", marker = "extra == 'fastapi'", specifier = "==0.47.0" },
+    { name = "websockets", marker = "extra == 'websocket'", specifier = "==16.0" },
 ]
-provides-extras = ["memory", "coap", "modbus", "opcua", "fastapi", "postgres", "prometheus", "storage", "intelligence", "multimodal", "intelligence-full", "all", "sandbox", "kubernetes", "keychain", "vault"]
+provides-extras = ["memory", "coap", "modbus", "opcua", "websocket", "fastapi", "postgres", "prometheus", "storage", "intelligence", "multimodal", "intelligence-full", "all", "sandbox", "kubernetes", "keychain", "vault"]
 
 [package.metadata.requires-dev]
 test = [
@@ -4941,6 +4958,7 @@ test = [
     { name = "google-cloud-storage", specifier = ">=2.10.0" },
     { name = "httpx", specifier = ">=0.25.0" },
     { name = "hvac", specifier = "==2.4.0" },
+    { name = "jsonpath-ng", specifier = "==1.8.0" },
     { name = "kubernetes-asyncio", specifier = "==35.0.1" },
     { name = "prometheus-client", specifier = ">=0.20.0" },
     { name = "pymodbus", specifier = "==3.13.0" },
@@ -4951,6 +4969,7 @@ test = [
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.0" },
     { name = "sse-starlette", specifier = ">=3.4.4" },
     { name = "uvicorn", specifier = ">=0.47.0" },
+    { name = "websockets", specifier = "==16.0" },
 ]
 
 [[package]]

@@ -1340,6 +1340,114 @@ CLI `test_protocols_json` 7-set → 8-set) and 1 CoAP test updated to
 use `websocket` as the still-unwired kind. Full SDK: 5531 passed
 (5480 PR2 baseline + 44 new + ~7 perf), 360 skipped, 0 failed.
 
+## New protocols Phase A — PR4 (WebSocket) landed + Phase A complete
+
+Fourth and final Phase A protocol plugin shipped: WebSocket
+(RFC 6455) one-shot send-and-receive operations.
+
+- `sagewai.connections.protocols.websocket` — `WebsocketProtocolData` +
+  `WebsocketOperation` schemas + `WebsocketProtocolPlugin` + 9-class
+  error hierarchy (`WebsocketError`, `WebsocketNotInstalledError`,
+  `WebsocketConnectionError`, `WebsocketHandshakeError`,
+  `WebsocketAuthError`, `WebsocketTimeoutError`,
+  `WebsocketTemplateError`, `WebsocketResponseError`,
+  `WebsocketUnknownOperationError`) + `_run_op` executor with
+  websockets-library exception normalization. Declarative ops:
+  `{name, message_template, response_match?, timeout_seconds?}`.
+  `message_template` uses simple `{key}` regex-based substitution
+  (NOT `str.format_map`, which chokes on JSON colons in surrounding
+  text); `response_match` is JSONPath via `jsonpath-ng`.
+- `PROTOCOLS` tuple now has **9 entries — Phase A complete**:
+  `(http, sdk, mcp, inference, oauth2, coap, modbus, opcua, websocket)`.
+- `sagewai.tools.executors.connections._runners()` gains a `websocket`
+  entry. The shared executor now covers all four Phase A protocols.
+- New `kind: websocket` in the tool-catalog schema. After this PR the
+  9-protocol mutual-exclusion grid in `_schema.json` is fully consistent.
+- Registered in `sagewai.tools.executors._REGISTRY` (`websocket →
+  connections.run`).
+- Seed catalog entry `market_data_quote.yaml`.
+- Admin UI: `WebsocketPanel` with editable operations table (third
+  editable ops panel after MCP and OPC UA; 3 fields per op: name +
+  message_template + response_match) + `WebsocketConfigureFields` Add
+  wizard form. Panel re-syncs state on `connection.id` change (PR3
+  lesson applied).
+- Docs: `apps/docs/app/docs/connections/protocols/websocket/page.mdx`
+  + overview row in `connections/page.mdx`.
+- New optional extra `sagewai[websocket]` (`websockets==16.0` +
+  `jsonpath-ng==1.8.0`); both also in `[dependency-groups] test`.
+
+**Key invariants:**
+- Per-call lifecycle: `connect(url, additional_headers=...)` opened
+  via `async with` → `ws.send(rendered_template)` → `await asyncio.wait_for(ws.recv(), timeout)` → context manager auto-closes.
+  No persistent connections in Phase A.
+- Default sandbox tier `SANDBOXED`. Operator-controlled override
+  (TRUSTED downgrade only).
+- `auth_header_value` is encrypted via the connection's credentials
+  backend. Decrypt happens in the shared `connections.py::run` executor
+  — uniform decrypt-before-dispatch path
+  (`test_websocket_auth_header_value_decrypted_before_runner` guards
+  the contract).
+- websockets-library exceptions normalized to `WebsocketError`
+  subclasses inside `_normalize_websockets_exception()`:
+  `InvalidStatus` / `InvalidStatusCode` with status 401/403 →
+  `WebsocketAuthError`; same exceptions with other status →
+  `WebsocketHandshakeError`; `InvalidHandshake` /
+  `AbortHandshake` / `InvalidHeader` / `InvalidUpgrade` →
+  `WebsocketHandshakeError`; `ConnectionClosed` /
+  `ConnectionClosedError` / `ConnectionClosedOK` →
+  `WebsocketConnectionError`; `OSError` (transport) →
+  `WebsocketConnectionError`. Probe via `getattr` so the normalizer
+  keeps working on both legacy and modern releases; we wrap probes
+  in `warnings.catch_warnings()` to silence DeprecationWarning on
+  deprecated-but-still-importable names (`InvalidStatusCode`,
+  `AbortHandshake`).
+- Declarative ops: `operations[]` in `protocol_data` with unique names
+  (schema enforced via Pydantic `@model_validator`).
+- `message_template` placeholder rendering collects ALL missing keys
+  for one `WebsocketTemplateError` rather than raising on the first.
+  Regex pattern `\{([A-Za-z_][A-Za-z0-9_]*)\}` so literal `{...}` JSON
+  braces in the surrounding text pass through unchanged.
+- `test()` opens the handshake and immediately closes (`async with cm:
+  pass`). No frames are sent. Defensive `ctx.creds` decrypt mirrors
+  the CoAP / OPC UA pattern for non-admin callers.
+- websockets 16.0 verified API: `websockets.asyncio.client.connect(uri,
+  additional_headers=...)` returns an async context manager whose
+  `__aenter__` yields the `ClientConnection`. `connect` itself is a
+  class (not a coroutine function); the executor never `await`s it
+  directly.
+
+**Phase A — complete.**
+
+After 4 PRs (#364 CoAP, #365 Modbus, #366 OPC UA reads, this PR
+WebSocket), the Connections Platform now ships 9 first-class protocol
+plugins. All four new protocols share the per-call lifecycle pattern
+established in PR1, the executor-level decrypt path from the PR1 fix,
+and the library-exception normalization pattern from the PR2 fix.
+
+**Not in any Phase A PR (Phase B):**
+- Persistent / streaming / pub-sub protocols (MQTT, gRPC streams,
+  WebSocket dialogues, OPC UA subscriptions, CoAP Observe) — these
+  need a new platform abstraction (likely a `SubscriptionPlugin`
+  Protocol or `subscribe()` method).
+- OPC UA method calls + certificate auth + multi-node batch reads.
+- WebSocket binary frame templating + first-class subprotocol negotiation.
+- Modbus RTU-over-TCP and serial transports.
+- CoAP Observe pattern.
+- Connection pooling across MCP / OPC UA / WebSocket / Modbus.
+
+**Test deltas (this PR):** +51 new SDK tests (28 schema/errors/identity
++ 20 executor + 3 tool-catalog executor) plus 3 baseline test updates
+(`test_all_8_protocols_registered` → `test_all_9_protocols_registered`,
+`test_get_protocols_lists_8` → `test_get_protocols_lists_9`, and the
+CLI `test_protocols_json` 8-set → 9-set) and 1 CoAP test updated to
+swap the still-unwired sentinel from `websocket` to
+`phase_b_subscription` (a kind no future PR will wire). Full SDK:
+5584 passed (5533 PR3 baseline + 51 new), 360 skipped, 0 failed.
+
+**Test deltas (Phase A total):** ~146 new SDK tests across the four
+PRs (PR1 CoAP +26, PR2 Modbus +37, PR3 OPC UA +44, PR4 WebSocket +51).
+Full SDK suite after Phase A: 5584 passing.
+
 ## MCP-as-first-class (sub-project 3 — Bundle A)
 
 Bundle A landed: registered MCP server connections with capability
