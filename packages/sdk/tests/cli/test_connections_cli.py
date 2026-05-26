@@ -48,7 +48,7 @@ def test_protocols_json():
     assert result.exit_code == 0, result.output
     body = json.loads(result.output)
     ids = {p["id"] for p in body}
-    assert ids == {"http", "sdk", "mcp", "inference", "oauth2", "coap", "modbus"}
+    assert ids == {"http", "sdk", "mcp", "inference", "oauth2", "coap", "modbus", "opcua"}
 
 
 # ── backends ───────────────────────────────────────────────────────

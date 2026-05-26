@@ -257,6 +257,9 @@ function Step2Configure(props: {
       {props.protocol.id === 'modbus' && (
         <ModbusConfigureFields data={props.protocolData} setData={props.setProtocolData} />
       )}
+      {props.protocol.id === 'opcua' && (
+        <OpcuaConfigureFields data={props.protocolData} setData={props.setProtocolData} />
+      )}
       <div className="mt-4 flex justify-between">
         <Button onClick={props.onBack} variant="secondary">Back</Button>
         <Button onClick={props.onNext}>Next</Button>
@@ -696,6 +699,99 @@ function ModbusConfigureFields({
       </label>
       <p className="mt-2 rounded bg-warning/10 px-3 py-2 text-xs text-warning">
         Modbus/TCP has no authentication. Firewall/VPN-gate the device to trusted networks only.
+      </p>
+    </>
+  );
+}
+
+function OpcuaConfigureFields({
+  data, setData,
+}: {
+  data: Record<string, unknown>;
+  setData: (d: Record<string, unknown>) => void;
+}) {
+  const update = (next: Record<string, unknown>) =>
+    setData({
+      endpoint_url: '',
+      security_mode: 'None',
+      security_policy: 'None',
+      auth_mode: 'anonymous',
+      username: '',
+      password: '',
+      operations: [],
+      sandbox_tier_override: null,
+      ...data,
+      ...next,
+    });
+  const authMode = (data.auth_mode as string) ?? 'anonymous';
+  return (
+    <>
+      <label className="mb-2 block">
+        <span className="text-sm">Endpoint URL</span>
+        <input
+          type="text"
+          value={(data.endpoint_url as string) ?? ''}
+          onChange={e => update({ endpoint_url: e.target.value })}
+          placeholder="opc.tcp://server.example.com:4840"
+          className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 font-mono text-sm"
+          data-testid="opcua-endpoint-url"
+          required
+        />
+      </label>
+      {/*
+        Phase A: security_mode and security_policy are locked to "None,None"
+        at the schema level. Hidden in the form (rather than disabled
+        dropdowns) so operators aren't presented with options that produce
+        write-time validation errors. Phase B adds client_cert_path + client_
+        key_path and re-exposes the dropdowns. See docs/connections/protocols/
+        opcua for the deferred fields.
+      */}
+      <p className="mb-2 rounded bg-info/10 px-3 py-2 text-xs text-info">
+        Phase A transport is plain TCP (security_mode=None, security_policy=None).
+        Signed/encrypted endpoints require certificate paths — deferred to Phase B.
+      </p>
+      <label className="mb-2 block">
+        <span className="text-sm">Auth mode</span>
+        <select
+          value={authMode}
+          onChange={e => update({ auth_mode: e.target.value })}
+          className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 text-sm"
+          data-testid="opcua-auth-mode"
+        >
+          <option value="anonymous">anonymous</option>
+          <option value="username">username</option>
+        </select>
+      </label>
+      {authMode === 'username' && (
+        <>
+          <label className="mb-2 block">
+            <span className="text-sm">Username</span>
+            <input
+              type="text"
+              value={(data.username as string) ?? ''}
+              onChange={e => update({ username: e.target.value })}
+              className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 font-mono text-sm"
+              data-testid="opcua-username"
+            />
+          </label>
+          <label className="mb-2 block">
+            <span className="text-sm">Password</span>
+            <input
+              type="password"
+              value={(data.password as string) ?? ''}
+              onChange={e => update({ password: e.target.value })}
+              className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 font-mono text-sm"
+              data-testid="opcua-password"
+            />
+            <span className="mt-1 block text-xs text-text-tertiary">
+              Stored encrypted via the connection's credentials backend.
+            </span>
+          </label>
+        </>
+      )}
+      <p className="mt-2 text-xs text-text-tertiary">
+        Operations are declared after creating the connection — open the connection
+        from the list to add read operations with their node IDs.
       </p>
     </>
   );

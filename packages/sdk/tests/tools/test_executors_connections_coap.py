@@ -106,11 +106,11 @@ async def test_missing_connection_raises_value_error(store, router):
 @pytest.mark.asyncio
 async def test_unknown_kind_raises_value_error(store, router):
     payload = {
-        "_kind": "opcua",  # opcua + websocket are still un-wired (PR3/PR4)
-        "exec": {"opcua": {"connection_ref": "x", "operation": "read"}},
+        "_kind": "websocket",  # websocket is still un-wired (PR4)
+        "exec": {"websocket": {"connection_ref": "x", "operation": "send"}},
         "project_id": "proj-test",
     }
-    with pytest.raises(ValueError, match="'opcua' is not yet wired"):
+    with pytest.raises(ValueError, match="'websocket' is not yet wired"):
         await connections_run(payload, store=store, router=router)
 
 

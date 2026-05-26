@@ -1,0 +1,110 @@
+# OPC UA
+
+The OPC UA plugin connects to industrial-automation servers speaking the OPC Unified Architecture protocol (IEC 62541). Phase A supports **read operations only** — operators declare read operations per-connection (each `{name, kind: read, node_id}`), and agents invoke them by name. Method calls and subscriptions are deferred to Phase B.
+
+## Install
+
+OPC UA support ships behind an optional extra:
+
+```bash
+pip install sagewai[opcua]
+```
+
+The library underneath is [`asyncua`](https://github.com/FreeOpcUa/opcua-asyncio), the pure-async OPC UA implementation maintained by FreeOpcUa.
+
+## Configuration
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `endpoint_url` | string (required) | — | Must start with `opc.tcp://`. Includes host + port. |
+| `security_mode` | `None` | `None` | **Phase A: locked to `None`.** Sign / SignAndEncrypt require certificate paths and are deferred to Phase B. |
+| `security_policy` | `None` | `None` | **Phase A: locked to `None`.** Basic256Sha256 / Basic256 / Aes*Rsa* require certificate paths and are deferred to Phase B. |
+| `auth_mode` | `anonymous`, `username` | `anonymous` | Phase A: certificate auth deferred. |
+| `username` | string | `""` | Required when `auth_mode=username`. |
+| `password` | string (sensitive) | `""` | Encrypted via the connection's credentials backend. |
+| `operations` | list of `{name, kind: read, node_id}` | `[]` | Add via the admin panel after creation. |
+| `sandbox_tier_override` | `TRUSTED`, `SANDBOXED`, or null | `null` | Override the default `SANDBOXED` tier. |
+
+> **Phase A transport is plain TCP.** `security_mode` and `security_policy`
+> are locked to `None` at the schema level — any other combination is
+> rejected at write time with a clear "deferred to Phase B" error. Operators
+> relying on OPC UA's signed/encrypted endpoints must either wait for Phase
+> B (`client_cert_path` + `client_key_path` fields land alongside Phase B
+> method calls + subscriptions) or firewall/VPN-gate the OPC UA server to a
+> trusted network. Username/password auth still works in Phase A, but the
+> password travels in cleartext over TCP — pair with a VPN.
+
+## Operations (declarative)
+
+Unlike CoAP and Modbus, OPC UA operators **declare** their operations on the connection. Each operation is `{name: str, kind: "read", node_id: str}`. Agents invoke an operation by name.
+
+NodeId grammar (IEC 62541):
+- `ns=<n>;i=<int>` — numeric identifier
+- `ns=<n>;s=<string>` — string identifier
+- `ns=<n>;g=<guid>` — GUID identifier
+- `ns=<n>;b=<base64>` — opaque bytestring identifier
+
+The `ns=<n>;` prefix is optional and defaults to namespace 0.
+
+Each `read` operation returns:
+
+```json
+{
+  "value": "<any>",
+  "source_timestamp": "2026-05-26T12:00:00+00:00",
+  "server_timestamp": "2026-05-26T12:00:00.001+00:00",
+  "status_code": "Good"
+}
+```
+
+## Sandbox tier
+
+Default: `SANDBOXED`. OPC UA reads in Phase A — operators downgrade to `TRUSTED` for known-internal read-only sensors with low risk profile. When method calls land in Phase B, the tier bumps back up to reflect the write-capable surface.
+
+## Test endpoint
+
+Clicking **Test** issues a read against `i=2259` (`Server_ServerStatus_State`). Every compliant OPC UA server exposes this node. Returns `ok=True` on any successful read regardless of the state value.
+
+## Common gotchas
+
+1. **OPC UA server must expose a `SecurityMode=None` endpoint.** Phase A only speaks plain TCP — if the server's `None,None` endpoint is disabled in production hardening, you'll need to wait for Phase B (cert-based mutual auth) or enable a `None,None` endpoint behind a VPN.
+2. **Anonymous auth is often disabled in production.** Many OPC UA servers require username/password (or certificates) — set `auth_mode=username` and supply credentials.
+3. **NodeId grammar typos cause schema validation failures.** `ns=2;Devices/Temp` (missing identifier-type prefix) is invalid; `ns=2;s=Devices/Temp` is valid.
+4. **Per-call session overhead.** Each read opens a new asyncua Client, connects, reads, disconnects. This is slow (hundreds of ms per call). Phase B adds connection pooling.
+5. **Certificate auth is deferred.** If your OPC UA server requires X.509 certificates, you'll need to wait for Phase B or layer in client certificates outside the plugin.
+
+## Tool catalog example
+
+```yaml
+id: plant_floor_temperature
+version: "1.0.0"
+title: "Read plant floor temperature sensor"
+description: |
+  Reads the temperature sensor on the plant floor OPC UA server.
+category: industrial
+kind: opcua
+sandbox_tier: SANDBOXED
+scopes:
+  - industrial.read
+exec:
+  opcua:
+    connection_ref: plant-floor-server
+    operation: read_temperature
+    args: {}
+setup:
+  auth_complexity: connection_ref
+  body: |
+    Register the OPC UA server as a connection. Add an operation
+    named `read_temperature` pointing at the sensor's node_id.
+```
+
+## Phase A / Phase B
+
+This release ships OPC UA reads (Phase A). Future Phase B work may add:
+
+- `kind: method_call` (RPC-style invocation of OPC UA Methods)
+- `kind: subscribe` (monitored items / data-change notifications)
+- `client_cert_path` + `client_key_path` fields paired with re-enabling the `Sign` / `SignAndEncrypt` security modes and the full set of `Basic*` / `Aes*` policies
+- Multi-node batch reads (`Client.read_values([nodes])`)
+- Connection pooling (paired with MCP Bundle B)
+- Browse / auto-discovery of available nodes

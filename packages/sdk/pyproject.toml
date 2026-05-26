@@ -77,6 +77,9 @@ coap = [
 modbus = [
     "pymodbus==3.13.0",
 ]
+opcua = [
+    "asyncua==1.1.8",
+]
 fastapi = [
     "fastapi==0.136.1",
     "sse-starlette==3.4.4",
@@ -144,6 +147,7 @@ test = [
     "respx==0.23.1",
     "aiocoap==0.4.13",
     "pymodbus==3.13.0",
+    "asyncua==1.1.8",
 ]
 
 [project.scripts]

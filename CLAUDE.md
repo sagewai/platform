@@ -1261,6 +1261,85 @@ CLI `test_protocols_json` 6-set → 7-set) and 1 CoAP test updated to
 use `opcua` as the still-unwired kind. Full SDK: 5480 passed
 (5439 PR1 baseline + 41 net new), 360 skipped, 0 failed.
 
+## New protocols Phase A — PR3 (OPC UA reads) landed
+
+Third Phase A protocol plugin shipped: OPC UA (IEC 62541) read
+operations only.
+
+- `sagewai.connections.protocols.opcua` — `OpcuaProtocolData` +
+  `OpcuaOperation` schemas + `OpcuaProtocolPlugin` + 7-class error
+  hierarchy (`OpcuaError`, `OpcuaNotInstalledError`,
+  `OpcuaConnectionError`, `OpcuaAuthError`, `OpcuaSessionError`,
+  `OpcuaReadError`, `OpcuaUnknownOperationError`) + `_run_op` executor
+  with asyncua exception normalization. First declarative-ops Phase A
+  protocol — operators declare `operations[]` in `protocol_data` and
+  invoke by name. First Phase A protocol with a sensitive field
+  (`password`) — exercises the executor decrypt path end-to-end.
+- `PROTOCOLS` tuple now has 8 entries: `(http, sdk, mcp, inference,
+  oauth2, coap, modbus, opcua)`.
+- `sagewai.tools.executors.connections._runners()` gains an `opcua` entry.
+- New `kind: opcua` in the tool-catalog schema with `not.anyOf`
+  mutual-exclusion against the other 7 kinds (and each existing kind's
+  `not.anyOf` block retrofit to also exclude `opcua`).
+- Registered in `sagewai.tools.executors._REGISTRY` (`opcua →
+  connections.run`).
+- Seed catalog entry `plant_floor_sensor.yaml`.
+- Admin UI: `OpcuaPanel` with **editable** operations table (add/remove
+  rows via the panel — first protocol where the panel mutates the
+  connection record) + `OpcuaConfigureFields` Add wizard form with
+  conditional username/password section.
+- Docs: `apps/docs/app/docs/connections/protocols/opcua/page.mdx` +
+  overview row in `connections/page.mdx`.
+- New optional extra `sagewai[opcua]` (`asyncua==1.1.8`); also added to
+  `[dependency-groups] test`.
+
+**Key invariants:**
+- Per-call lifecycle: open `asyncua.Client(url=endpoint_url)` →
+  `set_security_string(...)` (when non-default) → `set_user/set_password`
+  (when `auth_mode=username`) → `connect()` → `get_node(node_id)` →
+  `read_data_value()` → `disconnect()` in a `finally`.
+- Default sandbox tier `SANDBOXED`. Phase A is reads only; method
+  calls / subscriptions bump it to `UNTRUSTED` when they land in Phase B.
+- `password` field is encrypted via the connection's credentials backend.
+  Decrypt happens in the shared `connections.py::run` executor — uniform
+  decrypt-before-dispatch path (`test_opcua_password_decrypted_before_runner`
+  guards the contract).
+- asyncua exceptions normalized to `OpcuaError` subclasses inside
+  `_normalize_asyncua_exception()`: `BadUserAccessDenied` /
+  `BadIdentityTokenInvalid` / `BadIdentityTokenRejected` →
+  `OpcuaAuthError`; `BadSessionClosed` / `BadSessionIdInvalid` /
+  `BadServerNotConnected` → `OpcuaSessionError`; other `UaError`
+  subclasses → `OpcuaReadError` with `status_code` = exception class
+  name; `OSError` (transport) → `OpcuaConnectionError`. Raw asyncua
+  exceptions never escape `_run_op`.
+- Declarative ops: `operations[]` in `protocol_data` with unique names
+  (schema enforced via Pydantic `@model_validator`). Each op =
+  `{name, kind: "read", node_id}` where `node_id` matches the IEC 62541
+  grammar `^(ns=\d+;)?[isgb]=.+$`.
+- `test()` reads `i=2259` (Server_ServerStatus_State). Every compliant
+  OPC UA server exposes this node; treat any successful read as ok.
+- `set_security_string("<policy>,<mode>,,")` only invoked when policy
+  OR mode != `None`. Cert paths empty in Phase A (cert auth deferred).
+- asyncua 1.1.8 verified API shapes: `Client(url, timeout=4,
+  watchdog_intervall=1.0)`, `Node.read_data_value(raise_on_bad_status=True)`,
+  `Client.set_user(username)`, `Client.set_password(pwd)`,
+  `Client.set_security_string(string)`.
+
+**Not in this PR (Phase B):**
+- `kind: method_call`, `kind: subscribe`.
+- Certificate-based authentication.
+- Multi-node batch reads.
+- Connection pooling.
+- Browse / auto-discovery.
+
+**Test deltas:** +44 new SDK tests (28 schema/errors/identity + 13
+executor + 3 tool-catalog executor) plus 3 baseline test updates
+(`test_all_7_protocols_registered` → `test_all_8_protocols_registered`,
+`test_get_protocols_lists_7` → `test_get_protocols_lists_8`, and the
+CLI `test_protocols_json` 7-set → 8-set) and 1 CoAP test updated to
+use `websocket` as the still-unwired kind. Full SDK: 5531 passed
+(5480 PR2 baseline + 44 new + ~7 perf), 360 skipped, 0 failed.
+
 ## MCP-as-first-class (sub-project 3 — Bundle A)
 
 Bundle A landed: registered MCP server connections with capability

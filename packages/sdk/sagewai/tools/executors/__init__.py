@@ -18,6 +18,7 @@ _REGISTRY = {
     "webhook": webhook.run,
     "coap":    connections.run,
     "modbus":  connections.run,
+    "opcua":   connections.run,
 }
 
 

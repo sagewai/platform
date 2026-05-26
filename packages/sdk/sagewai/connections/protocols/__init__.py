@@ -35,6 +35,7 @@ from sagewai.connections.protocols.oauth2 import (
     OAuth2ProtocolPlugin,
     oauth2_default_key,
 )
+from sagewai.connections.protocols.opcua import OpcuaProtocolPlugin
 from sagewai.connections.protocols.sdk import SdkProtocolPlugin
 
 
@@ -46,6 +47,7 @@ PROTOCOLS: tuple[ProtocolPlugin, ...] = (
     OAuth2ProtocolPlugin(),
     CoapProtocolPlugin(),
     ModbusProtocolPlugin(),
+    OpcuaProtocolPlugin(),
 )
 _BY_ID: dict[str, ProtocolPlugin] = {p.id: p for p in PROTOCOLS}
 
@@ -79,6 +81,7 @@ __all__ = [
     "McpProtocolPlugin",
     "ModbusProtocolPlugin",
     "OAuth2ProtocolPlugin",
+    "OpcuaProtocolPlugin",
     "PROTOCOLS",
     "PluginContext",
     "ProtocolPlugin",

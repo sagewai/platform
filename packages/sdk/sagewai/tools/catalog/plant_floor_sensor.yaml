@@ -1,0 +1,30 @@
+id: plant_floor_sensor
+version: "1.0.0"
+title: "Read plant floor sensor value"
+description: |
+  Reads a sensor value from an industrial OPC UA server (e.g., a temperature
+  or pressure sensor on a plant floor). The connection's operations[] list
+  must declare an op named `read_sensor` pointing at the right node_id.
+
+  Requires an OPC UA connection registered via the Connections admin.
+category: industrial
+kind: opcua
+sandbox_tier: SANDBOXED
+scopes:
+  - industrial.read
+exec:
+  opcua:
+    connection_ref: REPLACE_ME_WITH_YOUR_OPCUA_CONNECTION_DISPLAY_NAME
+    operation: read_sensor
+    args: {}
+setup:
+  auth_complexity: connection_ref
+  body: |
+    Register the OPC UA server as an OPC UA connection in the Connections
+    admin first (`/connections`, "Add Connection", pick OPC UA). Add an
+    operation named `read_sensor` pointing at the sensor's node_id (e.g.,
+    `ns=2;s=Devices/Sensor1/Temperature`). Then edit this file's
+    `connection_ref` to match the connection's display name.
+
+    OPC UA reads return a DataValue dict: `{value, source_timestamp,
+    server_timestamp, status_code}`.

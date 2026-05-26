@@ -165,3 +165,27 @@ export type ModbusProtocolData = {
   default_timeout_seconds: number;
   sandbox_tier_override: 'TRUSTED' | 'SANDBOXED' | 'UNTRUSTED' | null;
 };
+
+// OPC UA (IEC 62541) protocol-data shape — Phase A PR3.
+export type OpcuaOperation = {
+  name: string;
+  kind: 'read';
+  node_id: string;
+};
+
+export type OpcuaProtocolData = {
+  endpoint_url: string;
+  security_mode: 'None' | 'Sign' | 'SignAndEncrypt';
+  security_policy:
+    | 'None'
+    | 'Basic256Sha256'
+    | 'Basic256'
+    | 'Basic128Rsa15'
+    | 'Aes128_Sha256_RsaOaep'
+    | 'Aes256_Sha256_RsaPss';
+  auth_mode: 'anonymous' | 'username';
+  username: string;
+  password: string; // masked '***' from server responses
+  operations: OpcuaOperation[];
+  sandbox_tier_override: 'TRUSTED' | 'SANDBOXED' | null;
+};
