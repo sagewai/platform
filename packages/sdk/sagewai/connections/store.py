@@ -28,6 +28,7 @@ from typing import Any, Callable
 from sagewai.connections.errors import (
     ConnectionNotFoundError,
     DuplicateDisplayNameError,
+    IdCollisionError,
     StoreCorruptedError,
     UnknownProtocolError,
     UnsupportedStoreVersionError,
@@ -216,13 +217,19 @@ class ConnectionStore:
         tags: list[str],
         protocol_data: dict[str, Any],
         credentials_backend: dict[str, Any] | None = None,
+        id_override: str | None = None,
     ) -> Connection:
         """Create + persist a new connection.
 
         Raises ``UnknownProtocolError`` if ``protocol`` is not in the
         configured allowed-protocols set. Raises
         ``DuplicateDisplayNameError`` if ``(project_id, protocol,
-        display_name)`` already exists.
+        display_name)`` already exists. Raises ``IdCollisionError`` if
+        ``id_override`` is given and an existing connection already has
+        that id.
+
+        When ``id_override`` is None (the default), a fresh id is
+        generated via ``_generate_id(protocol)``.
 
         Marks the new connection ``is_default=True`` if no other
         connection in the same ``(project_id, protocol,
@@ -243,6 +250,12 @@ class ConnectionStore:
                     f"({project_id!r}, {protocol!r}, {display_name!r}) already exists"
                 )
 
+        # Id-collision check (only when id_override is supplied)
+        if id_override is not None:
+            for row in rows:
+                if row.get("id") == id_override:
+                    raise IdCollisionError(id_override)
+
         # Default-flag computation
         new_key = self._default_key_value(protocol, protocol_data)
         has_existing_default_in_group = any(
@@ -254,9 +267,10 @@ class ConnectionStore:
         )
         is_default = not has_existing_default_in_group
 
+        new_id = id_override if id_override is not None else self._generate_id(protocol)
         now = _utcnow_iso()
         row = {
-            "id": self._generate_id(protocol),
+            "id": new_id,
             "kind": "connection",
             "protocol": protocol,
             "project_id": project_id,

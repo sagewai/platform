@@ -88,6 +88,7 @@ fastapi = [
     "fastapi==0.136.1",
     "sse-starlette==3.4.4",
     "uvicorn==0.47.0",
+    "python-multipart==0.0.20",
 ]
 postgres = [
     "asyncpg==0.31.0",
@@ -139,6 +140,7 @@ test = [
     "fastapi>=0.136.1",
     "sse-starlette>=3.4.4",
     "uvicorn>=0.47.0",
+    "python-multipart==0.0.20",
     "httpx>=0.25.0",
     "asyncpg>=0.29.0",
     "sqlalchemy[asyncio]>=2.0.0",

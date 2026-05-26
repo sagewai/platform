@@ -35,6 +35,16 @@ class DuplicateDisplayNameError(ConnectionError):
     code = "connection_duplicate_display_name"
 
 
+class IdCollisionError(ConnectionError):
+    """A create() call with an explicit id_override hit an existing id."""
+
+    code = "id_collision"
+
+    def __init__(self, connection_id: str) -> None:
+        self.connection_id = connection_id
+        super().__init__(f"connection id {connection_id!r} already exists")
+
+
 class StoreCorruptedError(ConnectionError):
     """The connections.json file is unreadable or malformed."""
 
@@ -57,6 +67,7 @@ __all__ = [
     "ConnectionError",
     "ConnectionNotFoundError",
     "DuplicateDisplayNameError",
+    "IdCollisionError",
     "StoreCorruptedError",
     "UnknownProtocolError",
     "UnsupportedStoreVersionError",

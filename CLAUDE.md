@@ -1448,6 +1448,70 @@ swap the still-unwired sentinel from `websocket` to
 PRs (PR1 CoAP +26, PR2 Modbus +37, PR3 OPC UA +44, PR4 WebSocket +51).
 Full SDK suite after Phase A: 5584 passing.
 
+## Connections platform — import / export (sub-project follow-up #4)
+
+YAML-based import/export for connection records, covering ops handover /
+disaster recovery / environment cloning via three secrets modes
+(`redacted` / `encrypted` / `placeholder`) and three conflict modes
+(`create-only` / `upsert` / `skip-existing`).
+
+- `sagewai.connections.io_yaml` — `export_to_yaml(...)` +
+  `import_from_yaml(...)` in one module (they share format constants,
+  sensitive-path walking, placeholder substitution).
+- `sagewai.connections.io_errors` — 10 stable-coded error classes
+  (`ImportYamlParseError`, `ImportUnknownVersionError`,
+  `ImportUnknownProtocolError`, `ImportProtocolDataInvalidError`,
+  `ImportUnknownBackendError`, `ImportDisplayNameCollisionError`,
+  `ImportEnvVarMissingError`, `ImportIdCollisionError`,
+  `ImportDefaultCollisionError`, `ImportMasterKeyMismatchError`).
+- `ConnectionStore.create(..., id_override=None)` — optional kwarg
+  for `--preserve-ids` (DR use case). Raises `IdCollisionError` on
+  collision.
+- Admin API: `GET /api/v1/admin/connections/export` (returns YAML body
+  with `Content-Disposition: attachment`) + `POST /import` (accepts
+  raw YAML body OR multipart file upload).
+- CLI: `sagewai connections export` + `sagewai connections import`
+  with `--secrets {redacted|encrypted|placeholder}` and
+  `--mode {create-only|upsert|skip-existing}` flags.
+- Admin UI: `ExportDropdown` button + `ImportModal` (two-step:
+  pick file → optional dry-run → confirm) on the `/connections` page
+  header. Existing `/connections` e2e suite extended with 2 scenarios.
+- New dep: `python-multipart==0.0.20` added to the `[fastapi]` extra +
+  the `[dependency-groups] test` so the admin import route's multipart
+  branch can accept file uploads.
+
+**Key invariants:**
+
+- `version: 1` discriminator pinned forever; future format breaks bump to `2`.
+- Default at export = `redacted`. Default at import = `create-only`.
+  Both are the safest options.
+- Status / timestamps / last_error not exported (operational state,
+  not config).
+- `id` field omitted by default; `--include-id` + `--preserve-ids`
+  flags travel ids for DR.
+- Placeholder naming convention:
+  `${UPPER_SNAKE_DISPLAY_NAME_FIELD}`. Operators can override by
+  editing the YAML.
+- create-only mode is atomic (any error → abort with zero writes).
+  upsert and skip-existing are best-effort.
+- The /export and /import routes are declared BEFORE
+  `GET /{connection_id}` in the router so they don't get caught by the
+  catch-all id route (FastAPI matches in declaration order).
+
+**Test deltas:** +66 new SDK tests across io_errors (12), id_override
+(4), io_yaml_export (16), io_yaml_import (19), admin routes (9), CLI
+(6) — plus 2 new e2e scenarios. Full SDK suite after this PR: 5651
+passing.
+
+**Not in this PR (Phase 2 follow-ups):**
+
+- Terraform provider (Go binary, separate effort).
+- `sagewai connections diff source.yaml target.yaml`.
+- Per-connection-file output mode (`--split-output`).
+- Multi-admin / remote-store export.
+- Auto-rotation of secrets at import time (Connections Platform
+  follow-up #5).
+
 ## MCP-as-first-class (sub-project 3 — Bundle A)
 
 Bundle A landed: registered MCP server connections with capability

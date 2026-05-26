@@ -1,0 +1,192 @@
+# Connection import / export
+
+Export your connection configuration to a YAML document and import it elsewhere. Three modes cover the three common workflows:
+
+| Mode | Use case |
+|---|---|
+| **redacted** (default) | Ops handover, audit, git-committable docs. Sensitive fields are `null`. |
+| **encrypted** | Disaster recovery. Ciphertext travels. Target env needs the same master key + backend access. |
+| **placeholder** | Environment cloning (dev → staging → prod). Sensitive fields become `${ENV_VAR}` references the operator supplies at import time. |
+
+## CLI
+
+```bash
+# Export to stdout (default: redacted)
+sagewai connections export --project marketing
+
+# Export to file, encrypted for DR
+sagewai connections export -p marketing --secrets encrypted -o backup.yaml
+
+# Env-cloning template, only inference connections
+sagewai connections export -p dev --secrets placeholder --protocol inference -o staging.yaml
+
+# Import from stdin
+sagewai connections import -p staging < staging.yaml
+
+# Import with env-supplied secrets
+SPOTIFY_CLIENT_SECRET=xxx sagewai connections import -p staging -i staging.yaml
+
+# Dry-run preview
+sagewai connections import -p staging -i staging.yaml --dry-run
+
+# DR restore with id preservation
+sagewai connections export -p prod --secrets encrypted --include-id -o backup.yaml
+sagewai connections import --preserve-ids --mode upsert -i backup.yaml
+```
+
+## Format
+
+```yaml
+# Sagewai Connection Export
+version: 1
+project:
+  id: marketing
+  display_name: Marketing
+exported_at: '2026-05-26T12:34:56+00:00'
+exported_by_version: 1.0.0
+secrets_mode: redacted
+
+connections:
+  - protocol: oauth2
+    display_name: spotify-marketing
+    tags: [marketing, music]
+    credentials_backend:
+      kind: local
+    is_default: true
+    protocol_data:
+      provider: spotify
+      client_id: abc123
+      client_secret: null  # redacted
+      requested_scopes: [playlist-read-private]
+```
+
+## Secrets modes in detail
+
+### redacted (default)
+
+Sensitive fields become `null`. The default — safest, no accidental leaks. Useful for committing the YAML to a public repo or sharing with a team member for review.
+
+### encrypted
+
+Sensitive fields keep their storage-form marker (`fernet:...`, `$env:...`, `$vault:...`, etc.). Useful **only** when the target environment has the same master key and backend access — i.e., true disaster recovery within a single deployment.
+
+The importer attempts a sample decrypt at import time; if it fails, the import aborts with `import_master_key_mismatch` rather than silently importing records that would fail at first connection use.
+
+### placeholder
+
+Sensitive fields become `${UPPER_SNAKE_DISPLAY_NAME_FIELD}` references. At import time, `${VAR}` is resolved via `os.environ` (or `--env-file`). Missing env vars cause an `import_env_var_missing` error per row.
+
+**Naming convention:** for `connection.protocol_data.client_secret` on a connection with `display_name: spotify-marketing`, the placeholder is `${SPOTIFY_MARKETING_CLIENT_SECRET}`.
+
+You can edit the YAML manually to override the auto-generated placeholder names if you prefer different env var conventions.
+
+## Conflict resolution
+
+Three modes via `--mode`:
+
+| Mode | Behavior on existing `display_name` |
+|---|---|
+| **create-only** (default) | Fail-fast: abort the entire import if any row collides. Safest for env-cloning into an empty environment. |
+| **upsert** | Replace the existing connection's fields with the imported values. |
+| **skip-existing** | Leave the existing connection untouched; report the row in `skipped[]`. |
+
+## Filters
+
+`--protocol` and `--tag` are repeatable. Within a flag values OR; between flags they AND.
+
+```bash
+# Only inference connections
+sagewai connections export -p dev --protocol inference
+
+# OAuth2 OR HTTP (within-flag OR)
+sagewai connections export -p dev --protocol oauth2 --protocol http
+
+# OAuth2 AND tag=marketing
+sagewai connections export -p dev --protocol oauth2 --tag marketing
+```
+
+## Round-trip workflows
+
+### Ops handover
+
+```bash
+sagewai connections export -p prod --secrets redacted -o ops/connections.yaml
+git add ops/connections.yaml
+git commit -m "ops: capture prod connection inventory"
+```
+
+The committed YAML is safe to share — no secrets travel.
+
+### Disaster recovery
+
+```bash
+# Backup
+sagewai connections export -p prod --secrets encrypted --include-id -o backup.yaml.enc
+# Encrypt the file itself if storing offsite
+gpg --encrypt -r ops@company.com backup.yaml.enc
+
+# Restore (target env has same master key)
+gpg --decrypt backup.yaml.enc.gpg | sagewai connections import --preserve-ids --mode upsert
+```
+
+### Environment cloning (dev → staging)
+
+```bash
+# In dev: capture the shape with env var placeholders
+sagewai connections export -p dev --secrets placeholder -o staging.yaml
+# Edit staging.yaml to remove dev-only connections, rename if desired
+
+# In staging: supply secrets via env vars
+export SPOTIFY_CLIENT_SECRET=xxx
+export HUBSPOT_API_KEY=yyy
+sagewai connections import -p staging -i staging.yaml --mode create-only --dry-run
+sagewai connections import -p staging -i staging.yaml --mode create-only
+```
+
+## Admin UI
+
+The `/connections` page has two new buttons:
+
+- **Export YAML** — opens a dropdown with secrets mode + protocol filters. Click Download to receive the file.
+- **Import YAML** — opens a modal with file picker + mode select. Dry-run shows the diff before committing.
+
+The admin UI rejects `secrets_mode: placeholder` imports with a clear "use the CLI" error. Browser-side env var resolution is intentionally not supported — operators using placeholder mode use the CLI where env vars are natural.
+
+## Common gotchas
+
+1. **Master-key mismatch when importing encrypted-mode YAML.** The importer's sample-decrypt catches this at import time. Use `--secrets placeholder` for cross-environment workflows instead.
+2. **Missing env vars in placeholder mode.** Each missing variable is reported per-row. Set the env vars or supply `--env-file path/to/.env`.
+3. **Display-name collisions in create-only mode.** Aborts with zero changes. Either use `--mode upsert` to overwrite, `--mode skip-existing` to leave the existing record alone, or rename the connection in the YAML.
+4. **Status, timestamps, and last_error are NOT exported.** These are operational state, not configuration. On import the status defaults to `pending`.
+5. **The `id` field is omitted by default.** Use `--include-id` at export + `--preserve-ids` at import to round-trip ids (DR use case).
+6. **The `is_default` flag is exported verbatim.** Two rows both `is_default: true` for the same protocol → `import_default_collision`. Edit one of them to `false`.
+
+## Programmatic API
+
+```bash
+# Export
+curl -X GET 'http://localhost:8000/api/v1/admin/connections/export?project_id=prod&secrets=redacted' \
+  -H 'Cookie: sagewai_auth=...' \
+  -o connections.yaml
+
+# Import
+curl -X POST 'http://localhost:8000/api/v1/admin/connections/import?project_id=prod&mode=create-only' \
+  -H 'Cookie: sagewai_auth=...' \
+  -H 'Content-Type: application/yaml' \
+  --data-binary @connections.yaml
+```
+
+## Error codes
+
+| code | meaning |
+|---|---|
+| `import_yaml_parse_error` | YAML didn't parse |
+| `import_unknown_version` | top-level `version:` not supported |
+| `import_unknown_protocol` | `protocol:` not in the protocols registry |
+| `import_protocol_data_invalid` | plugin's schema rejected the row |
+| `import_unknown_backend` | `credentials_backend.kind` not in the backends registry |
+| `import_display_name_collision` | (create-only mode) the display_name already exists |
+| `import_env_var_missing` | (placeholder mode) `${VAR}` couldn't be resolved |
+| `import_id_collision` | (preserve_ids mode) the id already exists in target store |
+| `import_default_collision` | two rows both `is_default: true` for the same protocol/default-key |
+| `import_master_key_mismatch` | (encrypted mode) sample decrypt failed against the target's master key |

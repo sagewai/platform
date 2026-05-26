@@ -21,7 +21,9 @@ import type {
 import { AddConnectionModal } from '@/components/connections/add-connection-modal';
 import { ConnectionsTable } from '@/components/connections/connections-table';
 import { DetailDrawer } from '@/components/connections/detail-drawer';
+import { ExportDropdown } from '@/components/connections/export-dropdown';
 import { FilterBar } from '@/components/connections/filter-bar';
+import { ImportModal } from '@/components/connections/import-modal';
 
 export default function ConnectionsPage() {
   const { currentSlug } = useProject();
@@ -42,6 +44,7 @@ export default function ConnectionsPage() {
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
 
   // Default backend for the modal — for PR5 kickoff, hardcode "local".
   // A future enhancement can read this from a platform-config endpoint.
@@ -154,11 +157,27 @@ export default function ConnectionsPage() {
 
   return (
     <div className="mx-auto max-w-7xl p-6" data-testid="connections-page">
-      <header className="mb-4">
-        <h1 className="text-2xl font-bold">Connections</h1>
-        <p className="mt-1 text-sm text-text-secondary">
-          External dependencies — LLM providers, OAuth clients, MCP servers, HTTP tools.
-        </p>
+      <header className="mb-4 flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">Connections</h1>
+          <p className="mt-1 text-sm text-text-secondary">
+            External dependencies — LLM providers, OAuth clients, MCP servers, HTTP tools.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <ExportDropdown
+            projectId={currentSlug ?? 'default'}
+            availableProtocols={protocols}
+          />
+          <button
+            type="button"
+            onClick={() => setShowImportModal(true)}
+            className="rounded border border-border px-3 py-1.5 text-sm hover:bg-bg-secondary"
+            data-testid="import-yaml-button"
+          >
+            Import YAML
+          </button>
+        </div>
       </header>
 
       <FilterBar
@@ -201,6 +220,16 @@ export default function ConnectionsPage() {
         defaultBackend={defaultBackend}
         onClose={() => setShowAddModal(false)}
         onAuthorized={() => { setShowAddModal(false); void reload(); }}
+      />
+
+      <ImportModal
+        projectId={currentSlug ?? 'default'}
+        open={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        onImported={() => {
+          setShowImportModal(false);
+          void reload();
+        }}
       />
     </div>
   );

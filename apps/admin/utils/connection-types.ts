@@ -190,6 +190,48 @@ export type OpcuaProtocolData = {
   sandbox_tier_override: 'TRUSTED' | 'SANDBOXED' | null;
 };
 
+// Connection import/export — Phase 1.
+
+export interface ImportEntry {
+  id: string;
+  protocol: string;
+  display_name: string;
+}
+
+export interface ImportErrorEntry {
+  row_index: number;
+  protocol: string;
+  display_name: string;
+  code: string;
+  message: string;
+}
+
+export interface ImportResult {
+  dry_run: boolean;
+  created: ImportEntry[];
+  updated: ImportEntry[];
+  skipped: ImportEntry[];
+  errors: ImportErrorEntry[];
+}
+
+export type SecretsMode = 'redacted' | 'encrypted' | 'placeholder';
+export type ConflictMode = 'create-only' | 'upsert' | 'skip-existing';
+
+export interface ExportParams {
+  project_id?: string;
+  secrets?: SecretsMode;
+  protocols?: string[];
+  tags?: string[];
+  include_id?: boolean;
+}
+
+export interface ImportParams {
+  project_id?: string;
+  mode?: ConflictMode;
+  dry_run?: boolean;
+  preserve_ids?: boolean;
+}
+
 // WebSocket (RFC 6455) protocol-data shape — Phase A PR4.
 export type WebsocketOperation = {
   name: string;

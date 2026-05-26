@@ -155,6 +155,14 @@ Every connection carries one of five statuses:
 The `last_error` field carries a stable code, human message, and
 timestamp. Common codes per protocol live on each protocol page.
 
+## Import / export
+
+You can export your connections to a YAML document and import them
+elsewhere — for ops handover, disaster recovery, or environment cloning.
+Three secrets modes (`redacted` / `encrypted` / `placeholder`) and three
+conflict modes (`create-only` / `upsert` / `skip-existing`) cover the
+common workflows. See [Import / Export](/docs/connections/import-export).
+
 ## Anti-patterns
 
 1. **Hard-coding API keys in agent code.** That bypasses the connection

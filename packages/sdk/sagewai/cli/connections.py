@@ -572,6 +572,163 @@ def set_default_cmd(connection_id: str, as_json: bool) -> None:
         click.echo(f"  ✓ {connection_id} is now default")
 
 
+# ── export ──────────────────────────────────────────────────────────
+
+
+@connections.command("export")
+@click.option(
+    "--project",
+    "-p",
+    "project_id",
+    required=False,
+    help="Project ID to export (default: $SAGEWAI_PROJECT or 'default')",
+)
+@click.option(
+    "--output",
+    "-o",
+    "output_path",
+    type=click.Path(dir_okay=False),
+    help="Write to file (default: stdout)",
+)
+@click.option(
+    "--secrets",
+    type=click.Choice(["redacted", "encrypted", "placeholder"]),
+    default="redacted",
+    show_default=True,
+)
+@click.option(
+    "--protocol", "protocols", multiple=True, help="Filter by protocol (repeatable)"
+)
+@click.option("--tag", "tags", multiple=True, help="Filter by tag (repeatable)")
+@click.option("--include-id", is_flag=True, help="Include internal id in output")
+def export_cmd(project_id, output_path, secrets, protocols, tags, include_id):
+    """Export connections to a YAML document."""
+    from sagewai.connections.io_yaml import export_to_yaml
+
+    ctx = _get_ctx()
+    proj = project_id or _default_project()
+
+    yaml_text = export_to_yaml(
+        store=ctx.store,
+        router=ctx.router,
+        project_id=proj,
+        secrets_mode=secrets,
+        protocols=tuple(protocols) if protocols else None,
+        tags=tuple(tags) if tags else None,
+        include_id=include_id,
+    )
+
+    if output_path:
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(yaml_text)
+        click.echo(f"exported to {output_path}")
+    else:
+        click.echo(yaml_text, nl=False)
+
+
+# ── import ──────────────────────────────────────────────────────────
+
+
+@connections.command("import")
+@click.option(
+    "--project",
+    "-p",
+    "project_id",
+    required=False,
+    help="Target project ID (default: $SAGEWAI_PROJECT or 'default')",
+)
+@click.option(
+    "--input",
+    "-i",
+    "input_path",
+    type=click.Path(dir_okay=False),
+    help="Read from file (default: stdin)",
+)
+@click.option(
+    "--mode",
+    type=click.Choice(["create-only", "upsert", "skip-existing"]),
+    default="create-only",
+    show_default=True,
+)
+@click.option(
+    "--env-file",
+    "env_file",
+    type=click.Path(dir_okay=False),
+    help=".env file for placeholder resolution",
+)
+@click.option(
+    "--preserve-ids", is_flag=True, help="Honor 'id' field from YAML (DR use case)"
+)
+@click.option("--dry-run", is_flag=True, help="Validate + report, no writes")
+@click.option("--json", "as_json", is_flag=True, help="JSON output")
+def import_cmd(
+    project_id, input_path, mode, env_file, preserve_ids, dry_run, as_json
+):
+    """Import connections from a YAML document (default: stdin)."""
+    import sys as _sys
+
+    from sagewai.connections.io_yaml import import_from_yaml
+
+    if env_file:
+        try:
+            import dotenv  # type: ignore[import-not-found]
+
+            dotenv.load_dotenv(env_file, override=False)
+        except ImportError:
+            click.echo(
+                "  ⚠ --env-file given but python-dotenv is not installed; "
+                "falling back to os.environ",
+                err=True,
+            )
+
+    if input_path:
+        with open(input_path, "r", encoding="utf-8") as f:
+            yaml_text = f.read()
+    else:
+        yaml_text = _sys.stdin.read()
+
+    ctx = _get_ctx()
+    proj = project_id or _default_project()
+
+    result = import_from_yaml(
+        yaml_text=yaml_text,
+        store=ctx.store,
+        router=ctx.router,
+        project_id=proj,
+        mode=mode,
+        dry_run=dry_run,
+        preserve_ids=preserve_ids,
+    )
+
+    if as_json:
+        click.echo(json.dumps(result, indent=2, default=str))
+    else:
+        prefix = "[dry-run] " if dry_run else ""
+        click.echo(f"{prefix}created: {len(result['created'])} connections")
+        for entry in result["created"]:
+            click.echo(f"  - {entry['protocol']}: {entry['display_name']}")
+        if result["updated"]:
+            click.echo(f"{prefix}updated: {len(result['updated'])} connections")
+            for entry in result["updated"]:
+                click.echo(f"  - {entry['protocol']}: {entry['display_name']}")
+        if result["skipped"]:
+            click.echo(f"{prefix}skipped: {len(result['skipped'])} connections")
+            for entry in result["skipped"]:
+                click.echo(f"  - {entry['protocol']}: {entry['display_name']}")
+        if result["errors"]:
+            click.echo(f"{prefix}errors: {len(result['errors'])}", err=True)
+            for err in result["errors"]:
+                click.echo(
+                    f"  - row {err['row_index']} "
+                    f"({err['protocol']}:{err['display_name']}): "
+                    f"{err['code']} — {err['message']}",
+                    err=True,
+                )
+
+    if result["errors"]:
+        raise click.exceptions.Exit(1)
+
+
 # ── Plugin extra_cli sub-groups ─────────────────────────────────────
 
 

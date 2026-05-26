@@ -20,6 +20,9 @@ import type {
   Connection,
   ConnectionListParams,
   CreateConnectionPayload,
+  ExportParams,
+  ImportParams,
+  ImportResult,
   McpServerMeta,
   McpToolsResponse,
   OAuth2StartResponse,
@@ -83,6 +86,53 @@ export function createConnectionsApi(client: FetchClient) {
           `${ROOT}/oauth2/${encodeURIComponent(id)}/revoke`,
           {},
         ),
+    },
+
+    // Import / export (YAML)
+    exportYaml: async (params: ExportParams): Promise<Blob> => {
+      const search = new URLSearchParams();
+      if (params.project_id) search.set('project_id', params.project_id);
+      if (params.secrets) search.set('secrets', params.secrets);
+      if (params.include_id) search.set('include_id', 'true');
+      for (const p of params.protocols || []) search.append('protocol', p);
+      for (const t of params.tags || []) search.append('tag', t);
+
+      const resp = await fetch(
+        `${ROOT}/export?${search.toString()}`,
+        { credentials: 'include' },
+      );
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(`export failed: ${resp.status} ${text}`);
+      }
+      return resp.blob();
+    },
+
+    importYaml: async (
+      file: File,
+      params: ImportParams,
+    ): Promise<ImportResult> => {
+      const search = new URLSearchParams();
+      if (params.project_id) search.set('project_id', params.project_id);
+      if (params.mode) search.set('mode', params.mode);
+      if (params.dry_run) search.set('dry_run', 'true');
+      if (params.preserve_ids) search.set('preserve_ids', 'true');
+
+      const form = new FormData();
+      form.append('file', file);
+
+      const resp = await fetch(
+        `${ROOT}/import?${search.toString()}`,
+        {
+          method: 'POST',
+          credentials: 'include',
+          body: form,
+        },
+      );
+      // Both 200 (with errors[]) and 400 (parse/version error) return JSON
+      // bodies with the ImportResult shape.
+      const data = (await resp.json()) as ImportResult;
+      return data;
     },
 
     // MCP plugin sub-routes (mounted at /api/v1/admin/connections/mcp/...)

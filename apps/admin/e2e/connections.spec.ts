@@ -989,4 +989,198 @@ test.describe('Connections page', () => {
       page.getByTestId('connection-row-conn_websocket_xyz789'),
     ).not.toBeVisible({ timeout: 10_000 });
   });
+
+  // ── Connection import / export ──────────────────────────────────
+
+  test('export: open dropdown and download YAML (mocked)', async ({ page }) => {
+    // Minimal mocks so the page renders.
+    await page.route('**/api/v1/admin/connections/protocols', route =>
+      route.fulfill({
+        json: [{ id: 'http', display_name: 'HTTP / REST', sensitive_fields: [] }],
+      }),
+    );
+    await page.route('**/api/v1/admin/connections/backends', route =>
+      route.fulfill({
+        json: [{ id: 'local', display_name: 'Local encrypted file' }],
+      }),
+    );
+    await page.route('**/api/v1/admin/connections/?**', route =>
+      route.fulfill({ json: [] }),
+    );
+    await page.route('**/api/v1/admin/connections/', route =>
+      route.fulfill({ json: [] }),
+    );
+
+    // Mock the export endpoint
+    await page.route('**/api/v1/admin/connections/export*', route => {
+      void route.fulfill({
+        status: 200,
+        contentType: 'application/yaml; charset=utf-8',
+        headers: { 'Content-Disposition': 'attachment; filename="test.yaml"' },
+        body: 'version: 1\nsecrets_mode: redacted\nconnections: []\n',
+      });
+    });
+
+    await page.goto('/connections');
+    await page.getByTestId('export-yaml-button').click();
+    await expect(page.getByTestId('export-download-button')).toBeVisible();
+
+    // Set up download promise BEFORE clicking
+    const downloadPromise = page.waitForEvent('download');
+    await page.getByTestId('export-download-button').click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toContain('.yaml');
+  });
+
+  test('import: file upload + dry-run + confirm (mocked)', async ({ page }) => {
+    // Minimal mocks
+    await page.route('**/api/v1/admin/connections/protocols', route =>
+      route.fulfill({
+        json: [{ id: 'http', display_name: 'HTTP / REST', sensitive_fields: [] }],
+      }),
+    );
+    await page.route('**/api/v1/admin/connections/backends', route =>
+      route.fulfill({
+        json: [{ id: 'local', display_name: 'Local encrypted file' }],
+      }),
+    );
+    await page.route('**/api/v1/admin/connections/?**', route =>
+      route.fulfill({ json: [] }),
+    );
+    await page.route('**/api/v1/admin/connections/', route =>
+      route.fulfill({ json: [] }),
+    );
+
+    let importCallCount = 0;
+    await page.route('**/api/v1/admin/connections/import*', (route, request) => {
+      importCallCount++;
+      const isDryRun = request.url().includes('dry_run=true');
+      void route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          dry_run: isDryRun,
+          created: [
+            { id: 'conn-001', protocol: 'http', display_name: 'imported-http' },
+          ],
+          updated: [],
+          skipped: [],
+          errors: [],
+        }),
+      });
+    });
+
+    await page.goto('/connections');
+    await page.getByTestId('import-yaml-button').click();
+    await expect(page.getByTestId('import-modal')).toBeVisible();
+
+    const yamlContent = `version: 1
+secrets_mode: redacted
+connections:
+  - protocol: http
+    display_name: imported-http
+    tags: []
+    credentials_backend:
+      kind: local
+    is_default: true
+    protocol_data:
+      base_url: https://a.com
+      auth:
+        kind: none
+`;
+    await page.getByTestId('import-file-input').setInputFiles({
+      name: 'test.yaml',
+      mimeType: 'application/yaml',
+      buffer: Buffer.from(yamlContent),
+    });
+
+    // Dry-run
+    await page.getByTestId('import-dry-run-button').click();
+    await expect(page.getByTestId('import-result')).toBeVisible();
+    await expect(page.getByText(/1 to create/)).toBeVisible();
+
+    // Confirm
+    await page.getByTestId('import-confirm-button').click();
+    await expect.poll(() => importCallCount).toBeGreaterThanOrEqual(2);
+  });
+
+  test('import: rejects placeholder-mode YAML before submission', async ({
+    page,
+  }) => {
+    // Minimal mocks — the import call must NEVER be made when placeholder
+    // mode is detected client-side.
+    await page.route('**/api/v1/admin/connections/protocols', route =>
+      route.fulfill({
+        json: [{ id: 'http', display_name: 'HTTP / REST', sensitive_fields: [] }],
+      }),
+    );
+    await page.route('**/api/v1/admin/connections/backends', route =>
+      route.fulfill({
+        json: [{ id: 'local', display_name: 'Local encrypted file' }],
+      }),
+    );
+    await page.route('**/api/v1/admin/connections/?**', route =>
+      route.fulfill({ json: [] }),
+    );
+    await page.route('**/api/v1/admin/connections/', route =>
+      route.fulfill({ json: [] }),
+    );
+
+    let importCallCount = 0;
+    await page.route('**/api/v1/admin/connections/import*', route => {
+      importCallCount++;
+      void route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          dry_run: false,
+          created: [],
+          updated: [],
+          skipped: [],
+          errors: [],
+        }),
+      });
+    });
+
+    await page.goto('/connections');
+    await page.getByTestId('import-yaml-button').click();
+    await expect(page.getByTestId('import-modal')).toBeVisible();
+
+    const placeholderYaml = `version: 1
+secrets_mode: placeholder
+connections:
+  - protocol: oauth2
+    display_name: spotify
+    tags: []
+    credentials_backend:
+      kind: local
+    is_default: true
+    protocol_data:
+      provider: spotify
+      client_id: id
+      client_secret: \${SPOTIFY_CLIENT_SECRET}
+      redirect_uri: http://localhost/callback
+      requested_scopes: []
+      granted_scopes: []
+      tokens: null
+`;
+    await page.getByTestId('import-file-input').setInputFiles({
+      name: 'placeholder.yaml',
+      mimeType: 'application/yaml',
+      buffer: Buffer.from(placeholderYaml),
+    });
+
+    // Error banner appears with the CLI hint.
+    await expect(page.getByTestId('import-error')).toBeVisible();
+    await expect(page.getByTestId('import-error')).toContainText(
+      /placeholder-mode imports must use the cli/i,
+    );
+
+    // Both action buttons stay disabled (file was cleared).
+    await expect(page.getByTestId('import-dry-run-button')).toBeDisabled();
+    await expect(page.getByTestId('import-submit-button')).toBeDisabled();
+
+    // And no import call was made.
+    expect(importCallCount).toBe(0);
+  });
 });

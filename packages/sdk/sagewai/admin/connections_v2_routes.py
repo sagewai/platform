@@ -27,7 +27,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
+import logging
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from sagewai.admin.state_file import AdminStateFile
@@ -104,6 +108,17 @@ def _decrypted_pd(ctx: ConnectionsContext, record, plugin) -> dict[str, Any]:
         sensitive_field_paths=plugin.sensitive_fields,
         connection_credentials_backend=record.credentials_backend,
     )
+
+
+def _current_user_email(request: Request, sf: AdminStateFile) -> str | None:
+    """Return the authenticated user's email for audit-log payloads, or None."""
+    from sagewai.admin.serve import _extract_token
+
+    token = _extract_token(request)
+    if not token:
+        return None
+    user = sf.get_user_by_token(token)
+    return user.get("email") if user else None
 
 
 # ── Router factory ──────────────────────────────────────────────────
@@ -208,6 +223,160 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
             ctx.store.delete(connection.id)
             raise HTTPException(500, f"plugin.on_create failed: {exc}")
         return _serialize_connection(connection, plugin_public_view=plugin.public_view)
+
+    # ── GET /export ────────────────────────────────────────────────
+    # MUST be declared BEFORE the catch-all GET /{connection_id}.
+
+    @router.get("/export", response_model=None)
+    async def export_connections(
+        request: Request,
+        project_id: str | None = None,
+        secrets: str = "redacted",
+        protocol: list[str] = Query(default=[]),
+        tag: list[str] = Query(default=[]),
+        include_id: bool = False,
+    ) -> Any:
+        from sagewai.connections.io_yaml import _SECRETS_MODES, export_to_yaml
+
+        err = _require_auth(request, sf)
+        if err is not None:
+            return err
+        proj = project_id or request.headers.get("X-Project-ID") or _project_scope(request)
+
+        if secrets not in _SECRETS_MODES:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": f"invalid secrets mode: {secrets}"},
+            )
+
+        try:
+            yaml_text = export_to_yaml(
+                store=ctx.store,
+                router=ctx.router,
+                project_id=proj,
+                secrets_mode=secrets,  # type: ignore[arg-type]
+                protocols=tuple(protocol) if protocol else None,
+                tags=tuple(tag) if tag else None,
+                include_id=include_id,
+            )
+        except ValueError as exc:
+            return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+        date_part = datetime.now(timezone.utc).strftime("%Y%m%d")
+        filename = f"connections-{proj or 'default'}-{date_part}.yaml"
+
+        # Structured business event (best-effort).
+        try:
+            logger = logging.getLogger("sagewai.admin")
+            logger.info(
+                "Connections export: project=%s secrets=%s",
+                proj,
+                secrets,
+                extra={
+                    "event": "connections.export.completed",
+                    "project_id": proj,
+                    "secrets_mode": secrets,
+                    "connection_count": yaml_text.count("- protocol:"),
+                    "filtered_by_protocol": list(protocol),
+                    "filtered_by_tag": list(tag),
+                    "exported_by_user": _current_user_email(request, sf),
+                },
+            )
+        except Exception:  # pragma: no cover
+            pass
+
+        return Response(
+            content=yaml_text,
+            media_type="application/yaml; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+            },
+        )
+
+    # ── POST /import ───────────────────────────────────────────────
+    # MUST be declared BEFORE the catch-all POST /{connection_id}/...
+
+    @router.post("/import", response_model=None)
+    async def import_connections(
+        request: Request,
+        project_id: str | None = None,
+        mode: str = "create-only",
+        dry_run: bool = False,
+        preserve_ids: bool = False,
+    ) -> Any:
+        from sagewai.connections.io_yaml import _IMPORT_MODES, import_from_yaml
+
+        err = _require_auth(request, sf)
+        if err is not None:
+            return err
+        proj = project_id or request.headers.get("X-Project-ID") or _project_scope(request)
+
+        if mode not in _IMPORT_MODES:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": f"invalid mode: {mode}"},
+            )
+
+        # Accept both raw YAML body (Content-Type: application/yaml) and
+        # multipart file upload (admin UI file picker).
+        content_type = request.headers.get("content-type", "")
+        if "multipart" in content_type:
+            form = await request.form()
+            uploaded = form.get("file")
+            if uploaded is None:
+                return JSONResponse(
+                    status_code=400,
+                    content={"detail": "multipart missing 'file' field"},
+                )
+            yaml_text = (await uploaded.read()).decode("utf-8")  # type: ignore[union-attr]
+        else:
+            yaml_text = (await request.body()).decode("utf-8")
+
+        result = import_from_yaml(
+            yaml_text=yaml_text,
+            store=ctx.store,
+            router=ctx.router,
+            project_id=proj,
+            mode=mode,  # type: ignore[arg-type]
+            dry_run=dry_run,
+            preserve_ids=preserve_ids,
+        )
+
+        # Structured business event (best-effort).
+        try:
+            logger = logging.getLogger("sagewai.admin")
+            logger.info(
+                "Connections import: project=%s mode=%s dry_run=%s",
+                proj,
+                mode,
+                dry_run,
+                extra={
+                    "event": "connections.import.completed",
+                    "project_id": proj,
+                    "mode": mode,
+                    "dry_run": dry_run,
+                    "created_count": len(result["created"]),
+                    "updated_count": len(result["updated"]),
+                    "skipped_count": len(result["skipped"]),
+                    "error_count": len(result["errors"]),
+                    "imported_by_user": _current_user_email(request, sf),
+                },
+            )
+        except Exception:  # pragma: no cover
+            pass
+
+        # Map parse / version errors to 400; other errors → 200 with errors[].
+        # Per the spec, ``create-only`` is all-or-nothing: any error means
+        # zero writes happened, so surface that as a 400 with the result
+        # body so the caller treats the import as a failure.
+        if result["errors"]:
+            first = result["errors"][0]
+            if first["code"] in ("import_yaml_parse_error", "import_unknown_version"):
+                return JSONResponse(status_code=400, content=result)
+            if mode == "create-only":
+                return JSONResponse(status_code=400, content=result)
+
+        return JSONResponse(status_code=200, content=result)
 
     # ── GET /{id} ──────────────────────────────────────────────────
 
