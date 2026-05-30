@@ -11,7 +11,7 @@
     "title":       { "type": "string", "minLength": 1 },
     "description": { "type": "string", "minLength": 1 },
     "category":    { "type": "string", "minLength": 1 },
-    "kind":        { "enum": ["sdk", "http", "mcp", "cli", "webhook", "coap", "modbus", "opcua", "websocket", "mqtt"] },
+    "kind":        { "enum": ["sdk", "http", "mcp", "cli", "webhook", "coap", "modbus", "opcua", "websocket", "mqtt", "grpc"] },
     "sandbox_tier":{ "enum": ["TRUSTED", "SANDBOXED", "UNTRUSTED"] },
     "scopes": {
       "type": "array",
@@ -57,7 +57,7 @@
                  "properties": { "entrypoint": { "type": "string", "pattern": "^[a-zA-Z0-9_.]+:[a-zA-Z0-9_]+$" } },
                  "additionalProperties": false }
       }, "not": { "anyOf": [
-        {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["webhook"]}, {"required": ["coap"]}, {"required": ["modbus"]}, {"required": ["opcua"]}, {"required": ["websocket"]}, {"required": ["mqtt"]}
+        {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["webhook"]}, {"required": ["coap"]}, {"required": ["modbus"]}, {"required": ["opcua"]}, {"required": ["websocket"]}, {"required": ["mqtt"]}, {"required": ["grpc"]}
       ]} } } }
     },
     {
@@ -90,7 +90,7 @@
                     }
                   }, "additionalProperties": true }
       }, "not": { "anyOf": [
-        {"required": ["sdk"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["webhook"]}, {"required": ["coap"]}, {"required": ["modbus"]}, {"required": ["opcua"]}, {"required": ["websocket"]}, {"required": ["mqtt"]}
+        {"required": ["sdk"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["webhook"]}, {"required": ["coap"]}, {"required": ["modbus"]}, {"required": ["opcua"]}, {"required": ["websocket"]}, {"required": ["mqtt"]}, {"required": ["grpc"]}
       ]} } } }
     },
     {
@@ -99,7 +99,7 @@
         "mcp": { "type": "object", "required": ["server_ref"],
                  "properties": { "server_ref": { "type": "string" }, "tool_name": { "type": "string" } } }
       }, "not": { "anyOf": [
-        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["cli"]}, {"required": ["webhook"]}, {"required": ["coap"]}, {"required": ["modbus"]}, {"required": ["opcua"]}, {"required": ["websocket"]}, {"required": ["mqtt"]}
+        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["cli"]}, {"required": ["webhook"]}, {"required": ["coap"]}, {"required": ["modbus"]}, {"required": ["opcua"]}, {"required": ["websocket"]}, {"required": ["mqtt"]}, {"required": ["grpc"]}
       ]} } } }
     },
     {
@@ -108,7 +108,7 @@
         "cli": { "type": "object", "required": ["binary", "argv_template"],
                  "properties": { "binary": { "type": "string" }, "argv_template": { "type": "array", "items": { "type": "string" } } } }
       }, "not": { "anyOf": [
-        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["webhook"]}, {"required": ["coap"]}, {"required": ["modbus"]}, {"required": ["opcua"]}, {"required": ["websocket"]}, {"required": ["mqtt"]}
+        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["webhook"]}, {"required": ["coap"]}, {"required": ["modbus"]}, {"required": ["opcua"]}, {"required": ["websocket"]}, {"required": ["mqtt"]}, {"required": ["grpc"]}
       ]} } } }
     },
     {
@@ -117,7 +117,7 @@
         "webhook": { "type": "object", "required": ["url"],
                      "properties": { "url": { "type": "string", "format": "uri" }, "callback_topic": { "type": "string" } } }
       }, "not": { "anyOf": [
-        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["coap"]}, {"required": ["modbus"]}, {"required": ["opcua"]}, {"required": ["websocket"]}, {"required": ["mqtt"]}
+        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["coap"]}, {"required": ["modbus"]}, {"required": ["opcua"]}, {"required": ["websocket"]}, {"required": ["mqtt"]}, {"required": ["grpc"]}
       ]} } } }
     },
     {
@@ -131,7 +131,7 @@
                   },
                   "additionalProperties": false }
       }, "not": { "anyOf": [
-        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["webhook"]}, {"required": ["modbus"]}, {"required": ["opcua"]}, {"required": ["websocket"]}, {"required": ["mqtt"]}
+        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["webhook"]}, {"required": ["modbus"]}, {"required": ["opcua"]}, {"required": ["websocket"]}, {"required": ["mqtt"]}, {"required": ["grpc"]}
       ]} } } }
     },
     {
@@ -150,7 +150,7 @@
                     },
                     "additionalProperties": false }
       }, "not": { "anyOf": [
-        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["webhook"]}, {"required": ["coap"]}, {"required": ["opcua"]}, {"required": ["websocket"]}, {"required": ["mqtt"]}
+        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["webhook"]}, {"required": ["coap"]}, {"required": ["opcua"]}, {"required": ["websocket"]}, {"required": ["mqtt"]}, {"required": ["grpc"]}
       ]} } } }
     },
     {
@@ -164,7 +164,7 @@
                    },
                    "additionalProperties": false }
       }, "not": { "anyOf": [
-        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["webhook"]}, {"required": ["coap"]}, {"required": ["modbus"]}, {"required": ["websocket"]}, {"required": ["mqtt"]}
+        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["webhook"]}, {"required": ["coap"]}, {"required": ["modbus"]}, {"required": ["websocket"]}, {"required": ["mqtt"]}, {"required": ["grpc"]}
       ]} } } }
     },
     {
@@ -178,7 +178,7 @@
                        },
                        "additionalProperties": false }
       }, "not": { "anyOf": [
-        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["webhook"]}, {"required": ["coap"]}, {"required": ["modbus"]}, {"required": ["opcua"]}, {"required": ["mqtt"]}
+        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["webhook"]}, {"required": ["coap"]}, {"required": ["modbus"]}, {"required": ["opcua"]}, {"required": ["mqtt"]}, {"required": ["grpc"]}
       ]} } } }
     },
     {
@@ -192,7 +192,21 @@
                   },
                   "additionalProperties": false }
       }, "not": { "anyOf": [
-        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["webhook"]}, {"required": ["coap"]}, {"required": ["modbus"]}, {"required": ["opcua"]}, {"required": ["websocket"]}
+        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["webhook"]}, {"required": ["coap"]}, {"required": ["modbus"]}, {"required": ["opcua"]}, {"required": ["websocket"]}, {"required": ["grpc"]}
+      ]} } } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "grpc" } } },
+      "then": { "properties": { "exec": { "required": ["grpc"], "properties": {
+        "grpc": { "type": "object", "required": ["connection_ref", "operation"],
+                  "properties": {
+                    "connection_ref": { "type": "string", "minLength": 1 },
+                    "operation":      { "enum": ["call"] },
+                    "args":           { "type": "object" }
+                  },
+                  "additionalProperties": false }
+      }, "not": { "anyOf": [
+        {"required": ["sdk"]}, {"required": ["http"]}, {"required": ["mcp"]}, {"required": ["cli"]}, {"required": ["webhook"]}, {"required": ["coap"]}, {"required": ["modbus"]}, {"required": ["opcua"]}, {"required": ["websocket"]}, {"required": ["mqtt"]}
       ]} } } }
     },
     {

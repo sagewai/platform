@@ -21,6 +21,7 @@ _REGISTRY = {
     "opcua":     connections.run,
     "websocket": connections.run,
     "mqtt":      connections.run,
+    "grpc":      connections.run,
 }
 
 

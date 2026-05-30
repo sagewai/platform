@@ -258,8 +258,8 @@ def test_plugin_runtime_checkable_protocol():
     assert isinstance(plugin, ProtocolPlugin)
 
 
-def test_protocols_count_is_10_after_mqtt():
-    """Sentinel test — Phase A (9) + MQTT (Phase B subscription) = 10."""
+def test_protocols_count_is_11_after_grpc():
+    """Sentinel test — Phase A (9) + MQTT (Phase B subscription) + gRPC = 11."""
     from sagewai.connections.protocols import PROTOCOLS
 
-    assert len(PROTOCOLS) == 10
+    assert len(PROTOCOLS) == 11

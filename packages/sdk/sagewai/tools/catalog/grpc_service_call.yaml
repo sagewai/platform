@@ -1,0 +1,52 @@
+id: grpc_service_call
+version: "1.0.0"
+title: "gRPC unary service call (reflection-based)"
+description: |
+  Calls any unary method on a reflection-enabled gRPC server. The plugin
+  discovers the method's protobuf schema live via the server's Server
+  Reflection service — no `.proto` upload — then marshals a JSON request
+  into a protobuf message, invokes the unary RPC, and returns the decoded
+  JSON response. The agent never touches protobuf: JSON in, JSON out.
+
+  The `method` is the fully-qualified `package.Service/Method` wire path
+  (a leading `/` is accepted). The `request` is a JSON object matching the
+  method's input message (proto field names; bytes as base64; enums as
+  string names).
+
+  Requires a gRPC connection registered via the Connections admin, AND a
+  target server with Server Reflection ENABLED — reflection is how the
+  schema is discovered. Servers with reflection disabled return a clear
+  `grpc_method_error`; operator-uploaded `.proto` is a documented
+  follow-up for those.
+category: rpc
+kind: grpc
+sandbox_tier: SANDBOXED
+scopes:
+  - rpc.call
+exec:
+  grpc:
+    connection_ref: REPLACE_ME_WITH_YOUR_GRPC_CONNECTION_DISPLAY_NAME
+    operation: call
+    args:
+      method: "inventory.InventoryService/GetItem"
+      request:
+        item_id: "abc123"
+setup:
+  auth_complexity: connection_ref
+  body: |
+    Register a gRPC connection in the Connections admin first
+    (`/connections`, click "Add Connection", pick gRPC). Provide the
+    `host:port` target, the TLS mode (insecure / TLS / TLS-with-CA), and,
+    if the server requires it, a per-call metadata token (the token is
+    encrypted via the connection's credentials backend). Then edit this
+    file's `connection_ref` to match the connection's display name, and
+    set `method` + `request` to a real unary method on your server.
+
+    The target server MUST have gRPC Server Reflection enabled — that is
+    how the method's protobuf schema is discovered (no `.proto` upload).
+    Run the connection's Test action to confirm reflection works (it
+    lists the server's services). If Test reports a reflection error, the
+    server most likely has reflection disabled — the #1 first-time gotcha.
+
+    Only unary (1 request → 1 response) methods are supported. Server-
+    streaming, client-streaming, and bidirectional methods are deferred.

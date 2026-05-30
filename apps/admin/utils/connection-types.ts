@@ -291,3 +291,17 @@ export type MqttDrainResult = {
   oversized_dropped: number;
   global_pressure_dropped: number;
 };
+
+// ── gRPC unary (reflection-based) ───────────────────────────────────
+
+export type GrpcProtocolData = {
+  target: string; // "host:port"
+  tls: 'insecure' | 'tls' | 'tls_ca';
+  tls_ca_cert: string;
+  auth_mode: 'none' | 'metadata_token';
+  auth_metadata_key: string;
+  auth_token: string; // masked '***' from server responses
+  auth_token_prefix: string;
+  default_timeout_seconds: number;
+  sandbox_tier_override: 'TRUSTED' | 'SANDBOXED' | null;
+};

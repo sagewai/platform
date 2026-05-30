@@ -87,6 +87,10 @@ websocket = [
     "websockets==16.0",
     "jsonpath-ng==1.8.0",
 ]
+grpc = [
+    "grpcio==1.80.0",
+    "grpcio-reflection==1.80.0",
+]
 fastapi = [
     "fastapi==0.136.1",
     "sse-starlette==3.4.4",
@@ -160,6 +164,8 @@ test = [
     "websockets==16.0",
     "jsonpath-ng==1.8.0",
     "aiomqtt==2.5.1",
+    "grpcio==1.80.0",
+    "grpcio-reflection==1.80.0",
 ]
 
 [project.scripts]

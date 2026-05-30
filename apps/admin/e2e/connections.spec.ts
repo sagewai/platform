@@ -1157,6 +1157,166 @@ test.describe('Connections page', () => {
     await expect(page.getByTestId('mqtt-unsubscribe-sub-mock-1')).not.toBeVisible({ timeout: 5000 });
   });
 
+  test('grpc: add → test (mocked) → delete', async ({ page }) => {
+    let connections: Array<Record<string, unknown>> = [];
+    let createdBody: Record<string, unknown> | null = null;
+
+    // Broad catch-all FIRST so specific routes registered LATER win (Playwright LIFO).
+    await page.route('**/api/v1/admin/connections/**', async (route, req) => {
+      const url = req.url();
+      const method = req.method();
+      const idMatch = url.match(/\/connections\/(conn_grpc_[a-z0-9]+)$/);
+      if (method === 'GET' && idMatch) {
+        const found = connections.find(c => c.id === idMatch[1]);
+        if (found) {
+          await route.fulfill({ json: found });
+        } else {
+          await route.fulfill({ status: 404, json: {} });
+        }
+        return;
+      }
+      if (method === 'DELETE' && idMatch) {
+        connections = connections.filter(c => c.id !== idMatch[1]);
+        await route.fulfill({ json: null, status: 200 });
+        return;
+      }
+      const testMatch = url.match(/\/connections\/(conn_grpc_[a-z0-9]+)\/test$/);
+      if (method === 'POST' && testMatch) {
+        await route.fulfill({
+          json: { ok: true, status_code: null, message: 'grpc reflection ok: 2 services' },
+        });
+        return;
+      }
+      if (method === 'GET' && /\/connections\/(\?.*)?$/.test(url)) {
+        await route.fulfill({ json: connections });
+        return;
+      }
+      if (method === 'POST' && /\/connections\/(\?.*)?$/.test(url)) {
+        createdBody = JSON.parse(req.postData() ?? '{}');
+        const created = {
+          id: 'conn_grpc_abc123',
+          kind: 'connection',
+          protocol: 'grpc',
+          project_id: 'default',
+          display_name: 'e2e-grpc-inventory',
+          tags: ['rpc'],
+          credentials_backend: { kind: 'local', config: {} },
+          status: 'ready',
+          last_tested_at: null,
+          last_test_ok: null,
+          is_default: true,
+          created_at: '2026-05-29T00:00:00+00:00',
+          updated_at: '2026-05-29T00:00:00+00:00',
+          last_error: null,
+          protocol_data: {
+            target: 'inventory.example.com:443',
+            tls: 'tls',
+            tls_ca_cert: '',
+            auth_mode: 'none',
+            auth_metadata_key: 'authorization',
+            auth_token: '',
+            auth_token_prefix: 'Bearer ',
+            default_timeout_seconds: 30,
+            sandbox_tier_override: null,
+          },
+        };
+        connections.push(created);
+        await route.fulfill({ json: created });
+        return;
+      }
+      await route.continue();
+    });
+
+    // Specific routes registered LAST so they win (Playwright LIFO).
+    await page.route('**/api/v1/admin/connections/protocols', route =>
+      route.fulfill({
+        json: [
+          { id: 'http', display_name: 'HTTP / REST', sensitive_fields: [] },
+          { id: 'grpc', display_name: 'gRPC', sensitive_fields: ['auth_token'] },
+        ],
+      }));
+    await page.route('**/api/v1/admin/connections/backends', route =>
+      route.fulfill({
+        json: [{ id: 'local', display_name: 'Local encrypted file' }],
+      }));
+
+    await page.goto('/connections');
+    await expect(page.getByTestId('filter-bar')).toBeVisible({ timeout: 10_000 });
+
+    // Open Add modal
+    await page.getByTestId('add-connection-btn').click();
+    await expect(page.getByTestId('add-connection-modal')).toBeVisible();
+
+    // Step 1: pick gRPC
+    await page.getByTestId('protocol-pick-grpc').click();
+
+    // Step 2: fill the form (no auth — keeps the e2e simple)
+    await page.getByTestId('display-name-input').fill('e2e-grpc-inventory');
+    await page.getByTestId('grpc-target').fill('inventory.example.com:443');
+    await page.getByTestId('step-2').getByRole('button', { name: 'Next' }).click();
+
+    // Step 3: defaults are fine
+    await page.getByTestId('tags-input').fill('rpc');
+    await page.getByTestId('submit-add-connection').click();
+
+    // Modal closes
+    await expect(page.getByTestId('add-connection-modal')).not.toBeVisible({ timeout: 10_000 });
+
+    // New row visible
+    await expect(page.getByText('e2e-grpc-inventory')).toBeVisible();
+
+    // Verify the create payload shape
+    expect(createdBody).not.toBeNull();
+    const body = createdBody as unknown as { protocol: string; protocol_data: Record<string, unknown> };
+    expect(body.protocol).toBe('grpc');
+    expect(body.protocol_data.target).toBe('inventory.example.com:443');
+    expect(body.protocol_data.tls).toBe('tls');
+
+    // ── Test action ────────────────────────────────────────────────
+    let testCalls = 0;
+    await page.route(
+      '**/api/v1/admin/connections/conn_grpc_abc123/test',
+      async (route) => {
+        testCalls += 1;
+        await route.fulfill({
+          json: {
+            ok: true,
+            status_code: null,
+            message: 'grpc reflection ok: 2 services',
+          },
+        });
+      },
+    );
+
+    const row = page.getByTestId('connection-row-conn_grpc_abc123');
+    await row.getByLabel('row actions').click();
+    await row.getByRole('button', { name: 'Test' }).click();
+    await expect.poll(() => testCalls).toBeGreaterThan(0);
+
+    // ── Delete action ──────────────────────────────────────────────
+    let deleteCalls = 0;
+    await page.route(
+      '**/api/v1/admin/connections/conn_grpc_abc123',
+      async (route, req) => {
+        if (req.method() === 'DELETE') {
+          deleteCalls += 1;
+          connections = connections.filter(c => c.id !== 'conn_grpc_abc123');
+          await route.fulfill({ json: null, status: 200 });
+          return;
+        }
+        await route.continue();
+      },
+    );
+
+    page.once('dialog', d => d.accept());
+    await row.getByLabel('row actions').click();
+    await row.getByRole('button', { name: 'Delete' }).click();
+    await expect.poll(() => deleteCalls).toBeGreaterThan(0);
+    await expect(
+      page.getByTestId('connection-row-conn_grpc_abc123'),
+    ).not.toBeVisible({ timeout: 10_000 });
+  });
+
   // ── Connection import / export ──────────────────────────────────
 
   test('export: open dropdown and download YAML (mocked)', async ({ page }) => {

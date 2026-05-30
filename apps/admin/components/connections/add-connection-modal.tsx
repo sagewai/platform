@@ -266,6 +266,9 @@ function Step2Configure(props: {
       {props.protocol.id === 'mqtt' && (
         <MqttConfigureFields data={props.protocolData} setData={props.setProtocolData} />
       )}
+      {props.protocol.id === 'grpc' && (
+        <GrpcConfigureFields data={props.protocolData} setData={props.setProtocolData} />
+      )}
       <div className="mt-4 flex justify-between">
         <Button onClick={props.onBack} variant="secondary">Back</Button>
         <Button onClick={props.onNext}>Next</Button>
@@ -998,6 +1001,138 @@ function MqttConfigureFields({
         list to subscribe to topic filters and drain buffered messages. PR2 ships
         the <code>drop_oldest</code> overflow policy only.
       </p>
+    </>
+  );
+}
+
+function GrpcConfigureFields({
+  data, setData,
+}: {
+  data: Record<string, unknown>;
+  setData: (d: Record<string, unknown>) => void;
+}) {
+  const tls = (data.tls as string) ?? 'tls';
+  const authMode = (data.auth_mode as string) ?? 'none';
+  const update = (next: Record<string, unknown>) =>
+    setData({
+      tls: 'tls',
+      tls_ca_cert: '',
+      auth_mode: 'none',
+      auth_metadata_key: 'authorization',
+      auth_token: '',
+      auth_token_prefix: 'Bearer ',
+      default_timeout_seconds: 30,
+      sandbox_tier_override: null,
+      ...data,
+      ...next,
+    });
+  return (
+    <>
+      <label className="mb-2 block">
+        <span className="text-sm">Target (host:port)</span>
+        <input
+          type="text"
+          value={(data.target as string) ?? ''}
+          onChange={e => update({ target: e.target.value })}
+          className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 font-mono text-sm"
+          data-testid="grpc-target"
+          placeholder="api.example.com:443"
+        />
+        <span className="mt-1 block text-xs text-text-tertiary">
+          The server must have gRPC Server Reflection enabled.
+        </span>
+      </label>
+      <label className="mb-2 block">
+        <span className="text-sm">TLS</span>
+        <select
+          value={tls}
+          onChange={e => update({ tls: e.target.value })}
+          className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 text-sm"
+          data-testid="grpc-tls"
+        >
+          <option value="tls">TLS (system trust store)</option>
+          <option value="tls_ca">TLS (custom CA cert)</option>
+          <option value="insecure">Insecure (plaintext)</option>
+        </select>
+      </label>
+      {tls === 'tls_ca' && (
+        <label className="mb-2 block">
+          <span className="text-sm">CA certificate (PEM)</span>
+          <textarea
+            value={(data.tls_ca_cert as string) ?? ''}
+            onChange={e => update({ tls_ca_cert: e.target.value })}
+            className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 font-mono text-xs"
+            rows={4}
+            data-testid="grpc-tls-ca-cert"
+            placeholder="-----BEGIN CERTIFICATE-----"
+          />
+        </label>
+      )}
+      <label className="mb-2 block">
+        <span className="text-sm">Auth mode</span>
+        <select
+          value={authMode}
+          onChange={e => update({ auth_mode: e.target.value })}
+          className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 text-sm"
+          data-testid="grpc-auth-mode"
+        >
+          <option value="none">None</option>
+          <option value="metadata_token">Metadata token</option>
+        </select>
+      </label>
+      {authMode === 'metadata_token' && (
+        <>
+          <label className="mb-2 block">
+            <span className="text-sm">Metadata key</span>
+            <input
+              type="text"
+              value={(data.auth_metadata_key as string) ?? 'authorization'}
+              onChange={e => update({ auth_metadata_key: e.target.value })}
+              className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 font-mono text-sm"
+              data-testid="grpc-auth-metadata-key"
+            />
+          </label>
+          <label className="mb-2 block">
+            <span className="text-sm">Token prefix</span>
+            <input
+              type="text"
+              value={(data.auth_token_prefix as string) ?? 'Bearer '}
+              onChange={e => update({ auth_token_prefix: e.target.value })}
+              className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 font-mono text-sm"
+              data-testid="grpc-auth-token-prefix"
+              placeholder="Bearer "
+            />
+            <span className="mt-1 block text-xs text-text-tertiary">
+              Use an empty prefix for <code>x-api-key</code>-style headers.
+            </span>
+          </label>
+          <label className="mb-2 block">
+            <span className="text-sm">Token</span>
+            <input
+              type="password"
+              value={(data.auth_token as string) ?? ''}
+              onChange={e => update({ auth_token: e.target.value })}
+              className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 font-mono text-sm"
+              data-testid="grpc-auth-token"
+            />
+            <span className="mt-1 block text-xs text-text-tertiary">
+              Stored encrypted via the credentials backend.
+            </span>
+          </label>
+        </>
+      )}
+      <label className="mb-2 block">
+        <span className="text-sm">Default timeout (seconds)</span>
+        <input
+          type="number"
+          min={1}
+          step={0.5}
+          value={(data.default_timeout_seconds as number) ?? 30}
+          onChange={e => update({ default_timeout_seconds: Number(e.target.value) })}
+          className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 text-sm"
+          data-testid="grpc-timeout"
+        />
+      </label>
     </>
   );
 }

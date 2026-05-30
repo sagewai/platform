@@ -140,6 +140,7 @@ implementation.
 - [OPC UA](./protocols/opcua) — Industrial-automation servers (IEC 62541). Declarative read operations; username/password auth. Requires `pip install sagewai[opcua]`.
 - [WebSocket](./protocols/websocket) — Real-time gateways speaking RFC 6455. Declarative send-and-receive operations with `{key}` message templates and optional JSONPath response extraction. Requires `pip install sagewai[websocket]`.
 - [MQTT](./protocols/mqtt) — Subscribe to MQTT broker topics (3.1.1 / 5.0) and buffer inbound messages for the agent to drain. The first subscription-capable protocol; memory is provably bounded via a `drop_oldest` ring. Requires `pip install sagewai[mqtt]`.
+- [gRPC](./protocols/grpc) — Call any unary method on a reflection-enabled gRPC server. Schemas are discovered live via server reflection (no `.proto` upload); JSON in, JSON out. Requires `pip install sagewai[grpc]`.
 
 ## Status
 

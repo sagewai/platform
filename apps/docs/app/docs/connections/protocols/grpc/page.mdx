@@ -1,0 +1,216 @@
+export const metadata = {
+  title: "gRPC connections",
+  description:
+    "Call any unary method on a reflection-enabled gRPC server — schemas discovered live via server reflection, JSON in and JSON out, no .proto upload.",
+};
+
+# gRPC connections
+
+The gRPC plugin is a **reflection-based generic client**. You register a
+gRPC target; an agent calls any unary method the server exposes with a
+JSON request and gets a JSON response back. The plugin discovers the
+method's protobuf schema live through the server's **Server Reflection**
+service, builds a descriptor pool, and marshals JSON to and from protobuf
+dynamically. No `.proto` upload, no compiled stubs — the agent never
+touches protobuf.
+
+This release ships **unary** (1 request, 1 response) only. Server-,
+client-, and bidirectional-streaming are deferred (see
+[Deferrals](#deferrals)).
+
+## Install
+
+gRPC support ships behind an optional extra:
+
+```bash
+pip install sagewai[grpc]
+```
+
+The libraries underneath are [`grpcio`](https://grpc.io/) and
+`grpcio-reflection`. Without this extra, attempting to use a gRPC
+connection raises `GrpcNotInstalledError` with an install hint.
+
+## When to pick it
+
+- You're integrating with an internal microservice that speaks gRPC and
+  has server reflection enabled.
+- You want JSON ergonomics over a protobuf API without compiling stubs
+  or maintaining `.proto` files.
+- The method is **unary**. Streaming methods are deferred.
+
+## The reflection requirement (the #1 gotcha)
+
+**The target server MUST have gRPC Server Reflection enabled.** That is
+how the plugin learns each method's protobuf schema — there is no proto
+upload. Reflection is opt-in on most servers and frequently disabled in
+production for surface-reduction reasons.
+
+If reflection is disabled, the plugin returns a clear `grpc_method_error`
+("server reflection is not enabled; reflection-based gRPC requires it")
+rather than crashing. The admin **Test** action lists the server's
+services precisely so you can confirm reflection works before wiring up
+a call. Operator-uploaded `.proto` for non-reflection servers is a
+documented follow-up.
+
+## `protocol_data` schema
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `target` | string (required) | — | `host:port` of the gRPC server. |
+| `tls` | `insecure` &#124; `tls` &#124; `tls_ca` | `tls` | Channel credentials. `insecure` is plaintext; `tls` uses the system trust store; `tls_ca` uses a custom CA. |
+| `tls_ca_cert` | string | `""` | PEM CA bundle. Required when `tls` is `tls_ca`. |
+| `auth_mode` | `none` &#124; `metadata_token` | `none` | Per-call auth. |
+| `auth_metadata_key` | string | `authorization` | Metadata header name for the token. |
+| `auth_token` | string (sensitive) | `""` | Stored encrypted via the connection's credentials backend. |
+| `auth_token_prefix` | string | `Bearer ` | Prepended to the token. Use `""` for `x-api-key`-style headers. |
+| `default_timeout_seconds` | float | `30.0` | Per-call timeout. Must be positive. |
+| `sandbox_tier_override` | `TRUSTED` &#124; `SANDBOXED` &#124; null | `null` | Per-connection downgrade. gRPC defaults to `SANDBOXED`. |
+
+### TLS
+
+- `insecure` — `grpc.aio.insecure_channel(target)` (plaintext; dev only).
+- `tls` — `grpc.aio.secure_channel(target, ssl_channel_credentials())`
+  (system trust store).
+- `tls_ca` — `ssl_channel_credentials(root_certificates=<tls_ca_cert PEM>)`.
+
+mTLS client certificates and dynamic per-call credentials plugins are
+deferred. Server-side TLS plus a metadata token is the common case.
+
+### Auth
+
+- `none` — no auth metadata.
+- `metadata_token` — injects `(auth_metadata_key, auth_token_prefix + auth_token)`
+  into the call metadata. Covers `authorization: Bearer <t>` and, with an
+  empty prefix, `x-api-key: <t>`.
+
+## The `call` operation
+
+gRPC methods are arbitrary and reflection-discovered, so there is one
+generic op:
+
+```yaml
+exec:
+  grpc:
+    connection_ref: inventory-service
+    operation: call
+    args:
+      method: "inventory.InventoryService/GetItem"   # fully-qualified; leading "/" accepted
+      request: { item_id: "abc123" }
+      metadata: { x-request-id: "..." }               # optional, merged with auth metadata
+      timeout_seconds: 10                             # optional per-call override
+```
+
+Returns the decoded response as a JSON dict.
+
+- `method` is the fully-qualified `package.Service/Method` wire path. A
+  leading `/` is accepted and normalized.
+- **Request marshalling** uses `json_format.ParseDict`. Unknown or
+  mistyped fields raise `GrpcMarshalError` with the exact field name —
+  they are never silently dropped.
+- **Response marshalling** uses
+  `json_format.MessageToDict(preserving_proto_field_name=True)` — proto
+  field names, enum string names.
+
+## JSON and protobuf mapping
+
+The plugin uses protobuf's canonical proto3 JSON mapping:
+
+- **Field names** are the proto field names (not camelCase).
+- **Enums** appear as their string names.
+- **Bytes** fields are base64-encoded strings in JSON.
+- **Well-known types** (`Timestamp`, `Duration`, `Struct`, `Any`,
+  wrappers) use protobuf's built-in JSON representations.
+- **`int64` / `uint64`** are strings in JSON (proto3 convention) to avoid
+  precision loss.
+
+## Reflection caching
+
+The descriptor pool built from reflection is cached per `target`:
+
+- The first `call` or `test` to a target fetches reflection and builds
+  the pool; subsequent calls reuse it with no extra round-trip.
+- The cache is **process-lifetime** — cleared on admin restart. A schema
+  change on the server is picked up after a restart. TTL-based
+  invalidation is a follow-up.
+- The cache is **LRU-bounded** (64 targets) so target sprawl can't grow
+  memory unbounded.
+
+This mirrors the MCP capability-cache behaviour (cache on first use, no
+background refresh, no TTL).
+
+## Test endpoint
+
+Clicking **Test** opens the channel and lists the server's services via a
+reflection probe. It proves channel, TLS, and reflection without invoking
+a real method, returning the service count on success. Failure cases:
+
+1. **Reflection disabled.** The most common first-time failure — the
+   server is reachable but reflection is off. Enable it server-side.
+2. **`UNAVAILABLE`.** Transport, DNS, or TLS failure — check the target
+   and TLS mode.
+3. **`UNAUTHENTICATED` / `PERMISSION_DENIED`.** The server requires a
+   metadata token; set `auth_mode` to `metadata_token`.
+
+## Error model
+
+`grpc.aio` raises `AioRpcError` carrying a `StatusCode`. The plugin
+normalizes these, preserving the status name:
+
+| Error | code | Maps from |
+|---|---|---|
+| `GrpcNotInstalledError` | `grpc_not_installed` | lazy-import failure |
+| `GrpcConnectionError` | `grpc_connection_error` | `UNAVAILABLE`, transport/DNS/TLS |
+| `GrpcAuthError` | `grpc_auth_error` | `UNAUTHENTICATED`, `PERMISSION_DENIED` |
+| `GrpcMethodError` | `grpc_method_error` | `UNIMPLEMENTED`, `NOT_FOUND`, method not in reflection, reflection disabled |
+| `GrpcMarshalError` | `grpc_marshal_error` | request build / response decode failure |
+| `GrpcDeadlineError` | `grpc_deadline_exceeded` | `DEADLINE_EXCEEDED` |
+| `GrpcCallError` | `grpc_call_error` | any other non-OK status (carries the status name + server details) |
+
+## Sandbox tier
+
+Default: `SANDBOXED`. gRPC calls reach internal services that vary widely
+in risk. Downgrade to `TRUSTED` per-connection only for a specific server
+you've verified.
+
+## Tool catalog example
+
+```yaml
+id: inventory_get_item
+version: "1.0.0"
+title: "Get inventory item"
+description: |
+  Reads an item from the inventory gRPC service.
+category: rpc
+kind: grpc
+sandbox_tier: SANDBOXED
+scopes:
+  - rpc.call
+exec:
+  grpc:
+    connection_ref: inventory-service
+    operation: call
+    args:
+      method: "inventory.InventoryService/GetItem"
+      request:
+        item_id: "abc123"
+setup:
+  auth_complexity: connection_ref
+  body: |
+    Register the inventory service as a gRPC connection first, with
+    server reflection enabled on the target.
+```
+
+## Deferrals
+
+This release ships gRPC **unary** only. Deferred to their own specs or
+follow-ups:
+
+- **Server-streaming** (1 request, N responses) — the natural next gRPC
+  step, riding the subscription foundation (subscribe, buffer, drain).
+- **Client-streaming and bidirectional** — need an "agent pushes a
+  request stream" abstraction the platform doesn't have yet.
+- **Operator-uploaded `.proto` / `FileDescriptorSet`** — for servers
+  with reflection disabled.
+- **mTLS client certificates** and dynamic per-call credentials plugins.
+- **Reflection-cache TTL / invalidation** — process-lifetime plus
+  restart-to-refresh for now.

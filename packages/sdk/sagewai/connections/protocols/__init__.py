@@ -24,6 +24,7 @@ from sagewai.connections.protocols.base import (
     TestResult,
 )
 from sagewai.connections.protocols.coap import CoapProtocolPlugin
+from sagewai.connections.protocols.grpc import GrpcProtocolPlugin
 from sagewai.connections.protocols.http import HttpProtocolPlugin
 from sagewai.connections.protocols.inference import (
     InferenceProtocolPlugin,
@@ -52,6 +53,7 @@ PROTOCOLS: tuple[ProtocolPlugin, ...] = (
     OpcuaProtocolPlugin(),
     WebsocketProtocolPlugin(),  # ← Phase A complete
     MqttProtocolPlugin(),  # ← Phase B — first subscription-capable protocol
+    GrpcProtocolPlugin(),  # ← gRPC unary (reflection-based; request/response)
 )
 _BY_ID: dict[str, ProtocolPlugin] = {p.id: p for p in PROTOCOLS}
 
@@ -80,6 +82,7 @@ def all_protocols() -> tuple[ProtocolPlugin, ...]:
 __all__ = [
     "CoapProtocolPlugin",
     "DEFAULT_KEY_FOR",
+    "GrpcProtocolPlugin",
     "HttpProtocolPlugin",
     "InferenceProtocolPlugin",
     "McpProtocolPlugin",

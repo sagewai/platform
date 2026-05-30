@@ -38,6 +38,7 @@ from sagewai.connections.credentials import CredentialsBackendRouter
 from sagewai.connections.protocols import get_protocol
 from sagewai.connections.protocols.base import get_sensitive_field_paths_for
 from sagewai.connections.protocols.coap import _run_op as _coap_run_op
+from sagewai.connections.protocols.grpc import _run_op as _grpc_run_op
 from sagewai.connections.protocols.modbus import _run_op as _modbus_run_op
 from sagewai.connections.protocols.mqtt import MqttProtocolPlugin
 from sagewai.connections.protocols.opcua import _run_op as _opcua_run_op
@@ -63,6 +64,7 @@ def _runners() -> dict[str, Callable[..., Awaitable[Any]]]:
         "modbus": _modbus_run_op,
         "opcua": _opcua_run_op,
         "websocket": _websocket_run_op,
+        "grpc": _grpc_run_op,
     }
 
 

@@ -1706,6 +1706,81 @@ slate), gRPC (own spec).
 emit, lifespan, executor dispatch, admin routes) + 1 e2e. Full SDK
 suite: ~5760.
 
+## gRPC unary (reflection-based) landed
+
+gRPC ships as a **first-class request/response connection protocol** — a
+reflection-based generic client. `PROTOCOLS` is now **11**. Implements
+`ProtocolPlugin` only (NOT `SubscriptionPlugin` — unary, no streaming).
+
+- `sagewai.connections.protocols.grpc` — `GrpcProtocolData`,
+  the 8-class error hierarchy (`GrpcError`/`GrpcNotInstalledError`/
+  `GrpcConnectionError`/`GrpcAuthError`/`GrpcMethodError`/
+  `GrpcMarshalError`/`GrpcDeadlineError`/`GrpcCallError`, each with a
+  stable `code`), the reflection client + `_DescriptorPoolCache`,
+  JSON↔protobuf marshalling, `_run_op`, and `GrpcProtocolPlugin`.
+- **The generic gRPC client flow:** open a `grpc.aio` channel → drive the
+  bidi **Server Reflection** stream
+  (`ServerReflectionStub(channel).ServerReflectionInfo(...)`,
+  `file_containing_symbol` request →
+  `file_descriptor_response.file_descriptor_proto` bytes) → build a
+  `DescriptorPool` → resolve the `MethodDescriptor` →
+  `message_factory.GetMessageClass` → `json_format.ParseDict` (request) /
+  `MessageToDict(preserving_proto_field_name=True)` (response). The agent
+  never touches protobuf: JSON in, JSON out.
+- **Single `call` op** — `args: {method: "pkg.Service/Method", request,
+  metadata?, timeout_seconds?}`. Method path normalized to the wire form
+  `/pkg.Service/Method` (leading `/` accepted). gRPC methods are
+  arbitrary + reflection-discovered, so one generic op (not declarative
+  methods like OPC UA).
+- **Reflection is the #1 gotcha.** Servers with reflection DISABLED →
+  clear `GrpcMethodError`, never a crash. `test()` lists the server's
+  services as a reflection probe. Operator-uploaded `.proto` for
+  non-reflection servers is a documented follow-up.
+- **Descriptor-pool cache** keyed by `target`, process-lifetime,
+  **LRU-bounded (64)** — mirrors the MCP capability-cache canon (cache on
+  first use, no TTL, restart-to-refresh). Topo-add of FDPs (deps before
+  dependents; de-dup by file name).
+- **Status-code normalization** (library-exception canon):
+  `grpc.aio.AioRpcError.code()` → the `GrpcError` hierarchy, preserving
+  the status name + `details`. `UNAVAILABLE`→connection,
+  `UNAUTHENTICATED`/`PERMISSION_DENIED`→auth,
+  `UNIMPLEMENTED`/`NOT_FOUND`→method, `DEADLINE_EXCEEDED`→deadline, else
+  `GrpcCallError`.
+- **Auth:** server-side TLS channel credentials (`insecure`/`tls`/
+  `tls_ca`) + per-call `metadata_token` (`(auth_metadata_key,
+  auth_token_prefix + auth_token)`, key lowercased). `auth_token` is the
+  sole sensitive field — encrypted via the credentials backends,
+  decrypted in the **standard stateless `_run_op` executor path**
+  (`tools/executors/connections.py::_runners()` → `"grpc": _grpc_run_op`;
+  decrypt-before-dispatch). NOT MQTT's stateful subscription dispatch.
+- **Wiring:** `PROTOCOLS` (11); `tools/executors/__init__.py` `_REGISTRY`
+  `grpc → connections.run`; `_schema.json` `grpc` kind + the 11-kind
+  `not.anyOf` grid; seed `grpc_service_call.yaml`.
+- **Admin UI:** `grpc-panel.tsx` (display-oriented like CoAP/Modbus —
+  target/TLS/auth/timeout + builtin-`call` op + a reflection note);
+  `GrpcConfigureFields` in the Add wizard; `GrpcProtocolData` type;
+  registered in `detail-drawer.tsx` PANELS. 1 e2e (add → test → delete).
+- **Docs:** `connections/protocols/grpc/page.mdx` (install, config, the
+  `call` op + method-path format, the reflection requirement + disabled
+  gotcha, JSON↔protobuf mapping, deferrals) + overview row.
+
+**Dependency note:** `sagewai[grpc]` = `grpcio==1.80.0` +
+`grpcio-reflection==1.80.0`. **grpcio-reflection 1.80.0 requires
+protobuf<7.0.0**, so adding it resolves protobuf **7.34.1 → 6.33.6**
+transitively. No package requires protobuf>=7 (all consumers cap at
+`<8.0.0`); the full SDK suite passes on 6.33.6.
+
+**Deferred (own specs / follow-ups):** server-streaming gRPC (the natural
+next step — rides the subscription foundation: subscribe → buffer →
+drain); client-streaming + bidirectional (need an "agent pushes a request
+stream" abstraction); operator-uploaded `.proto`/`FileDescriptorSet` (for
+reflection-disabled servers); mTLS client certs + dynamic per-call
+credentials plugins; reflection-cache TTL/invalidation.
+
+**Test deltas:** ~42 new SDK tests (11 schema/errors/identity + 5
+cache/marshal + 13 reflection/call/test + 3 executor decrypt + 4 baseline
+bumps reused) + 1 e2e. Full SDK suite: ~5800.
+
 ## MCP-as-first-class (sub-project 3 — Bundle A)
 
 Bundle A landed: registered MCP server connections with capability
