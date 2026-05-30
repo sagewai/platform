@@ -252,7 +252,7 @@ async def test_dead_task_reaper_marks_failed_after_reconnect_exhaustion(
     # Run the dead-task reaper enough times to exhaust reconnects. Each tick
     # respawns; the respawn crashes again during _settle().
     for _ in range(5):
-        await mgr._reap_dead_once(None)
+        await mgr._reap_dead_once()
         await _settle()
     st = mgr.stats(sub_id)
     assert st.status == "failed"
@@ -272,7 +272,7 @@ async def test_dead_task_reaper_recovers_when_open_succeeds(
     assert mgr.stats(sub_id).status == "reconnecting"
     # The next respawn succeeds (broker came back).
     fake_plugin.crash_on_open = False
-    await mgr._reap_dead_once(None)
+    await mgr._reap_dead_once()
     await _settle()
     # The respawned task is now running (blocked on the feed), not failed.
     st = mgr.stats(sub_id)
@@ -302,3 +302,47 @@ async def test_aclose_cancels_all_and_clears(fake_plugin, fake_clock, fake_conne
         mgr.stats(s1)
     with pytest.raises(SubscriptionNotFoundError):
         mgr.stats(s2)
+
+
+# ── reaper respawns with the subscribe-time ctx (issue #378) ───────────
+
+
+@pytest.mark.asyncio
+async def test_dead_task_reaper_respawns_with_subscription_ctx(fake_clock, fake_connection):
+    """Issue #378: the dead-task reaper respawns a crashed subscriber with
+    the SAME ctx captured at subscribe time (stored on ``ActiveSubscription``).
+    Without this, a subscriber that crashes-and-reconnects would lose its
+    credential context and re-emit ciphertext onto the wire."""
+    from pydantic import BaseModel, ConfigDict
+
+    seen_ctx: list = []
+    sentinel = object()  # a stand-in for the real PluginContext
+
+    class _CtxRecordingPlugin:
+        def subscription_spec_schema(self):
+            class _S(BaseModel):
+                model_config = ConfigDict(extra="forbid")
+                name: str = "x"
+
+            return _S
+
+        async def open_subscription(self, connection, *, spec, emit, ctx):
+            seen_ctx.append(ctx)
+            raise RuntimeError("synthetic crash to force a reaper respawn")
+
+        async def close_subscription(self, connection, *, spec):
+            return None
+
+    mgr = SubscriptionManager(time_source=fake_clock, max_reconnect_attempts=3)
+    sub_id = await mgr.subscribe(
+        plugin=_CtxRecordingPlugin(), connection=fake_connection,
+        spec={"name": "x"}, ctx=sentinel,
+    )
+    await _settle()  # first run crashes
+    assert mgr.stats(sub_id).status == "reconnecting"
+    await mgr._reap_dead_once()  # respawn
+    await _settle()
+
+    assert len(seen_ctx) >= 2  # first run + at least one respawn
+    assert all(c is sentinel for c in seen_ctx)  # same ctx every time
+    await mgr.aclose()

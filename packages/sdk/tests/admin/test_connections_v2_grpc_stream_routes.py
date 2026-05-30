@@ -137,6 +137,30 @@ def test_subscribe_route(client: TestClient):
     assert isinstance(kwargs["plugin"], grpc_module.GrpcProtocolPlugin)
 
 
+def test_subscribe_route_passes_router_bearing_ctx(client: TestClient):
+    """Issue #378: the subscribe route must hand the manager a ctx carrying
+    the credentials router (so the subscriber task can decrypt ``auth_token``
+    for ``auth_mode: metadata_token``), NOT ``ctx=None``."""
+    from sagewai.connections.credentials import CredentialsBackendRouter
+
+    conn_id = _create_grpc_connection(client)
+    fake_mgr = MagicMock()
+    fake_mgr.subscribe = AsyncMock(return_value="sub-abc")
+    with patch(
+        "sagewai.connections.protocols.grpc.get_subscription_manager",
+        return_value=fake_mgr,
+    ):
+        resp = client.post(
+            f"/api/v1/admin/connections/grpc/{conn_id}/subscribe",
+            json={"method": "echo.EchoService/EchoStream"},
+        )
+    assert resp.status_code == 200, resp.text
+    ctx = fake_mgr.subscribe.await_args.kwargs["ctx"]
+    assert ctx is not None
+    assert isinstance(ctx.creds, CredentialsBackendRouter)
+    assert ctx.request is None  # long-lived subscription: no pinned Request
+
+
 def test_subscribe_route_unknown_connection(client: TestClient):
     fake_mgr = MagicMock()
     with patch(

@@ -350,6 +350,11 @@ class MqttProtocolPlugin:
         failures onto the :class:`MqttError` hierarchy (the dead-task reaper
         handles crashes).
         """
+        # Decrypt ``password`` via ``ctx.creds`` before connecting. The
+        # subscriber task is long-lived and bypasses the executor's uniform
+        # decrypt, so this defensive decrypt is the ONLY one on the streaming
+        # path (issue #378). No-op when ``ctx`` lacks a real router.
+        connection = self._maybe_decrypt(connection, ctx)
         pd = connection.protocol_data
         topic_filter = spec["topic_filter"]
         qos = int(spec.get("qos", 0))
@@ -448,12 +453,19 @@ async def _subscribe_route(connection_id: str, body: dict):
     except ValidationError as exc:
         raise HTTPException(422, detail=exc.errors())
     mgr = get_subscription_manager()
+    # Build a decrypt context carrying the process-global credentials router
+    # so the subscriber task can decrypt ``password`` (issue #378). The
+    # subscription is long-lived, so pass ``request=None`` — only ``creds``
+    # is consumed by the plugin's defensive decrypt.
+    plugin_ctx = _get_ctx().make_plugin_context(
+        project_id=record.project_id, request=None
+    )
     try:
         sub_id = await mgr.subscribe(
             plugin=MqttProtocolPlugin(),
             connection=record,
             spec=spec.model_dump(),
-            ctx=None,
+            ctx=plugin_ctx,
         )
     except SubscriptionLimitExceededError as exc:
         raise HTTPException(409, str(exc))

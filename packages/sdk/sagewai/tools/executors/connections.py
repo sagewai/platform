@@ -36,7 +36,10 @@ from typing import Any, Awaitable, Callable, Mapping
 
 from sagewai.connections.credentials import CredentialsBackendRouter
 from sagewai.connections.protocols import get_protocol
-from sagewai.connections.protocols.base import get_sensitive_field_paths_for
+from sagewai.connections.protocols.base import (
+    PluginContext,
+    get_sensitive_field_paths_for,
+)
 from sagewai.connections.protocols.coap import _run_op as _coap_run_op
 from sagewai.connections.protocols.grpc import GrpcProtocolPlugin
 from sagewai.connections.protocols.grpc import _run_op as _grpc_run_op
@@ -102,7 +105,12 @@ def _resolve_connection(store, kind, project_id, connection_ref):
     return matches[0]
 
 
-async def _mqtt_dispatch(payload: Mapping[str, Any], *, store: ConnectionStore) -> Any:
+async def _mqtt_dispatch(
+    payload: Mapping[str, Any],
+    *,
+    store: ConnectionStore,
+    router: CredentialsBackendRouter | None = None,
+) -> Any:
     """Stateful MQTT dispatch — routes to the process-wide SubscriptionManager.
 
     Unlike the four Phase A kinds, MQTT does NOT use the ``_run_op``
@@ -111,10 +119,11 @@ async def _mqtt_dispatch(payload: Mapping[str, Any], *, store: ConnectionStore) 
     MQTT plugin to the manager; ``drain`` / ``unsubscribe`` operate on a
     subscription id alone (no connection lookup, no decrypt). The
     SubscriptionManager calls the plugin's ``open_subscription`` as its
-    background task, where credentials decryption is the executor's concern
-    — but PR2's MQTT subscribe path leaves decryption to the plugin's own
-    defensive decrypt against ``ctx.creds`` (None here; in-process agents +
-    admin pass plaintext or a real router as the foundation matures).
+    background task, where the plugin's defensive decrypt against
+    ``ctx.creds`` decrypts ``password``. We thread a ``PluginContext``
+    carrying the process-global ``router`` so that decrypt is live (issue
+    #378). ``request=None`` — the subscription is long-lived and only
+    ``creds`` is consumed.
     """
     exec_block = payload["exec"]["mqtt"]
     operation = exec_block["operation"]
@@ -126,8 +135,14 @@ async def _mqtt_dispatch(payload: Mapping[str, Any], *, store: ConnectionStore) 
         connection = _resolve_connection(
             store, "mqtt", project_id, exec_block["connection_ref"]
         )
+        # Build the router lazily — only this op decrypts.
+        if router is None:
+            router = _build_default_router()
+        ctx = PluginContext(
+            store=store, creds=router, project_id=project_id, request=None
+        )
         sub_id = await mgr.subscribe(
-            plugin=MqttProtocolPlugin(), connection=connection, spec=args, ctx=None
+            plugin=MqttProtocolPlugin(), connection=connection, spec=args, ctx=ctx
         )
         return {"subscription_id": sub_id}
     if operation == "drain":
@@ -142,7 +157,10 @@ async def _mqtt_dispatch(payload: Mapping[str, Any], *, store: ConnectionStore) 
 
 
 async def _grpc_stream_dispatch(
-    payload: Mapping[str, Any], *, store: ConnectionStore
+    payload: Mapping[str, Any],
+    *,
+    store: ConnectionStore,
+    router: CredentialsBackendRouter | None = None,
 ) -> Any:
     """Stateful gRPC server-streaming dispatch → the SubscriptionManager.
 
@@ -150,9 +168,11 @@ async def _grpc_stream_dispatch(
     ``_grpc_run_op`` decrypt-then-call path (#376, unchanged); the three
     streaming ops route here. ``subscribe`` resolves the connection + hands
     the gRPC plugin to the manager (the plugin's ``open_subscription`` does
-    the defensive decrypt against ``ctx.creds`` — None here, mirroring MQTT);
+    the defensive decrypt against ``ctx.creds`` to decrypt ``auth_token``);
     ``drain`` / ``unsubscribe`` operate on a subscription id alone (no
-    connection lookup, no decrypt). Mirrors ``_mqtt_dispatch``.
+    connection lookup, no decrypt). We thread a ``PluginContext`` carrying
+    the process-global ``router`` so that decrypt is live (issue #378).
+    Mirrors ``_mqtt_dispatch``.
     """
     exec_block = payload["exec"]["grpc"]
     operation = exec_block["operation"]
@@ -164,8 +184,14 @@ async def _grpc_stream_dispatch(
         connection = _resolve_connection(
             store, "grpc", project_id, exec_block["connection_ref"]
         )
+        # Build the router lazily — only this op decrypts.
+        if router is None:
+            router = _build_default_router()
+        ctx = PluginContext(
+            store=store, creds=router, project_id=project_id, request=None
+        )
         sub_id = await mgr.subscribe(
-            plugin=GrpcProtocolPlugin(), connection=connection, spec=args, ctx=None
+            plugin=GrpcProtocolPlugin(), connection=connection, spec=args, ctx=ctx
         )
         return {"subscription_id": sub_id}
     if operation == "drain":
@@ -200,11 +226,18 @@ async def run(
     """
     kind = payload.get("_kind")
 
+    # Pass the (possibly-None) injected ``router`` through to the streaming
+    # dispatches. They build the default LAZILY — and ONLY on the ``subscribe``
+    # op, which is the only op that decrypts. ``drain`` / ``unsubscribe``
+    # operate on a subscription id alone and must NOT build (let alone require)
+    # the credentials router — building it eagerly would make a backend
+    # misconfiguration raise on a teardown op that never touches credentials.
+
     # MQTT is STATEFUL — it routes subscribe/drain/unsubscribe to the
     # process-wide SubscriptionManager rather than the stateless
     # decrypt-then-call runner path the four Phase A kinds use.
     if kind == "mqtt":
-        return await _mqtt_dispatch(payload, store=store)
+        return await _mqtt_dispatch(payload, store=store, router=router)
 
     # gRPC is DUAL-MODE: server-streaming subscribe/drain/unsubscribe route
     # to the SubscriptionManager; the unary `call` op falls through to the
@@ -212,7 +245,7 @@ async def run(
     if kind == "grpc":
         op = payload.get("exec", {}).get("grpc", {}).get("operation")
         if op in ("subscribe", "drain", "unsubscribe"):
-            return await _grpc_stream_dispatch(payload, store=store)
+            return await _grpc_stream_dispatch(payload, store=store, router=router)
         # else (op == "call") → fall through to the standard _run_op path
 
     runners = _runners()

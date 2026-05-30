@@ -787,12 +787,19 @@ async def _subscribe_route(connection_id: str, body: dict):
     except ValidationError as exc:
         raise HTTPException(422, detail=exc.errors())
     mgr = get_subscription_manager()
+    # Build a decrypt context carrying the process-global credentials router
+    # so the subscriber task can decrypt ``auth_token`` for
+    # ``auth_mode: metadata_token`` (issue #378). Long-lived subscription, so
+    # ``request=None`` — only ``creds`` is consumed by ``_maybe_decrypt``.
+    plugin_ctx = _get_ctx().make_plugin_context(
+        project_id=record.project_id, request=None
+    )
     try:
         sub_id = await mgr.subscribe(
             plugin=GrpcProtocolPlugin(),
             connection=record,
             spec=spec.model_dump(),
-            ctx=None,
+            ctx=plugin_ctx,
         )
     except SubscriptionLimitExceededError as exc:
         raise HTTPException(409, str(exc))

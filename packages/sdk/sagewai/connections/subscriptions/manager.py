@@ -71,6 +71,11 @@ class ActiveSubscription:
     oversized_dropped: int = 0
     global_pressure_dropped: int = 0
     reconnect_attempts: int = 0
+    # The decrypt context (a PluginContext carrying ``creds``) captured at
+    # subscribe time. Stored here so the dead-task reaper respawns the
+    # subscriber with the SAME context as the first run — the single source
+    # of truth for credential decryption on the streaming path (issue #378).
+    ctx: Any = None
 
 
 class SubscriptionManager:
@@ -130,9 +135,10 @@ class SubscriptionManager:
             max_event_bytes=eff_max_bytes,
             created_at=self._now(),
             last_drain_at=self._now(),
+            ctx=ctx,
         )
         self._subs[sub_id] = sub
-        sub.task = asyncio.ensure_future(self._run_subscriber(sub, ctx))
+        sub.task = asyncio.ensure_future(self._run_subscriber(sub))
         return sub_id
 
     async def drain(self, subscription_id: str, max_events: int) -> DrainResult:
@@ -250,15 +256,19 @@ class SubscriptionManager:
 
         return emit
 
-    async def _run_subscriber(self, sub: ActiveSubscription, ctx) -> None:
+    async def _run_subscriber(self, sub: ActiveSubscription) -> None:
         """Background task: drive the plugin's open_subscription with the
         manager-owned emit. A crash (any non-cancellation exception) flips
         the subscription to ``reconnecting`` and returns; the dead-task
-        reaper handles the bounded restart-or-fail."""
+        reaper handles the bounded restart-or-fail.
+
+        The decrypt context is read from ``sub.ctx`` (captured at subscribe
+        time) so the first run AND every reaper respawn use the same
+        credential context (issue #378)."""
         emit = self._make_emit(sub)
         try:
             await sub.plugin.open_subscription(
-                sub.connection, spec=sub.spec, emit=emit, ctx=ctx
+                sub.connection, spec=sub.spec, emit=emit, ctx=sub.ctx
             )
         except asyncio.CancelledError:
             raise
@@ -299,9 +309,10 @@ class SubscriptionManager:
                 },
             )
 
-    async def _reap_dead_once(self, ctx) -> None:
+    async def _reap_dead_once(self) -> None:
         """Restart crashed subscriber tasks (bounded); mark ``failed`` on
-        exhaustion."""
+        exhaustion. Respawns read ``sub.ctx`` — the same decrypt context the
+        first run used (issue #378)."""
         for sub in list(self._subs.values()):
             if sub.task is None or not sub.task.done():
                 continue
@@ -321,9 +332,9 @@ class SubscriptionManager:
                 continue
             sub.reconnect_attempts += 1
             sub.status = "reconnecting"
-            sub.task = asyncio.ensure_future(self._run_subscriber(sub, ctx))
+            sub.task = asyncio.ensure_future(self._run_subscriber(sub))
 
-    async def _reaper_loop(self, ctx, interval_seconds: float = 60.0) -> None:
+    async def _reaper_loop(self, interval_seconds: float = 60.0) -> None:
         """Periodic reaper. Started by ``start_reaper``, cancelled by aclose.
 
         Scheduling is intentionally separate from reaper logic: the
@@ -334,17 +345,21 @@ class SubscriptionManager:
             try:
                 await asyncio.sleep(interval_seconds)
                 await self._reap_idle_once()
-                await self._reap_dead_once(ctx)
+                await self._reap_dead_once()
             except asyncio.CancelledError:
                 raise
             except Exception:  # pragma: no cover — never let the loop die
                 logger.exception("subscription reaper tick failed")
 
-    def start_reaper(self, ctx=None, *, interval_seconds: float = 60.0) -> None:
-        """Start the periodic reaper loop (called by admin lifespan in PR2)."""
+    def start_reaper(self, *, interval_seconds: float = 60.0) -> None:
+        """Start the periodic reaper loop (called by admin lifespan).
+
+        No ``ctx`` param: each subscription carries its own decrypt context
+        (``ActiveSubscription.ctx``), so respawns need nothing from here
+        (issue #378, Approach A)."""
         if self._reaper_task is None:
             self._reaper_task = asyncio.ensure_future(
-                self._reaper_loop(ctx, interval_seconds=interval_seconds)
+                self._reaper_loop(interval_seconds=interval_seconds)
             )
 
     async def _teardown(self, sub: ActiveSubscription) -> None:
