@@ -33,30 +33,42 @@ The hosted blueprint service (`sagewai-llm`) handles goal-to-blueprint translati
 
 ## Architecture
 
-```
-User goal (plain text)
-        │
-        ▼
-  ┌─────────────┐   retrieve_blueprints()   ┌──────────────────────┐
-  │  GoalRouter │ ────────────────────────► │ SagewaiLLMClient     │
-  │             │ ◄──── ranked candidates ─ │ (hosted service)     │
-  └──────┬──────┘                           └──────────────────────┘
-         │ ConfidenceConfig gates the result
-         │
-   ┌─────┴──────────────┐
-   │                    │                   │
-AutoRouted         PickerNeeded      SynthesisNeeded
-   │                    │                   │
-   │             User picks one     Service generates new blueprint
-   │                    │
-   ▼                    ▼
-AutopilotController (approve → schedule)
-         │
-         ▼
-   MissionDriver  →  AgentGraph  →  AgentExecutor (LiteLLM)
-         │
-         ▼
-      Curator  →  TrainingDataset  →  FineTuneJob
+```mermaid
+flowchart TD
+    User["User goal (plain text)"]
+    Router["GoalRouter"]
+    LLM["SagewaiLLMClient<br/>(hosted service)"]
+    Gate{"ConfidenceConfig"}
+    Auto["AutoRouted"]
+    Picker["PickerNeeded<br/>(user picks one)"]
+    Synth["SynthesisNeeded<br/>(service generates new blueprint)"]
+    Ctrl["AutopilotController<br/>(approve → schedule)"]
+    Driver["MissionDriver"]
+    Graph["AgentGraph"]
+    Exec["AgentExecutor (LiteLLM)"]
+    Curator["Curator"]
+    Dataset["TrainingDataset"]
+    Tune["FineTuneJob"]
+
+    User --> Router
+    Router -- "retrieve_blueprints()" --> LLM
+    LLM -- "ranked candidates" --> Router
+    Router --> Gate
+    Gate --> Auto
+    Gate --> Picker
+    Gate --> Synth
+    Auto --> Ctrl
+    Picker --> Ctrl
+    Synth --> Ctrl
+    Ctrl --> Driver
+    Driver --> Graph
+    Graph --> Exec
+    Exec --> Curator
+    Curator --> Dataset
+    Dataset --> Tune
+
+    style LLM fill:#fef3c7,stroke:#d97706
+    style Tune fill:#dcfce7,stroke:#16a34a
 ```
 
 ---
