@@ -300,17 +300,11 @@ Are all credentials needed at start known at enqueue time?
 
 ## Cost, security, and capability trade-offs
 
-```
-       ┌────────────────────────────────────────────────────┐
-       │                                                    │
-       │  in-process ────────────────► CLI-agent + JIT      │
-       │                                                    │
-       │  cheaper                              more capable │
-       │  faster                            more isolated   │
-       │  less secure                       more auditable  │
-       │  fewer features                    more complex    │
-       │                                                    │
-       └────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    L["in-process<br/>cheaper · faster · less secure · fewer features"]
+    R["CLI-agent + JIT<br/>more capable · more isolated · more auditable · more complex"]
+    L --> R
 ```
 
 | Dimension | in-process | sandboxed | identity-scoped | CLI-agent | CLI-agent + JIT |

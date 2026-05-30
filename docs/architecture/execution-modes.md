@@ -217,17 +217,11 @@ Are all credentials needed at start known at enqueue time?
 
 ## Cost / security / capability trade-offs
 
-```
-       ┌────────────────────────────────────────────────────┐
-       │                                                    │
-       │  Mode 0 ────────────────────────────────► Mode 3b  │
-       │                                                    │
-       │  cheaper                              more capable │
-       │  faster                            more isolated   │
-       │  less secure                       more auditable  │
-       │  fewer features                    more complex    │
-       │                                                    │
-       └────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    L["Mode 0<br/>cheaper · faster · less secure · fewer features"]
+    R["Mode 3b<br/>more capable · more isolated · more auditable · more complex"]
+    L --> R
 ```
 
 | Dimension | Mode 0 | Mode 1 | Mode 2 | Mode 3 | Mode 3b |

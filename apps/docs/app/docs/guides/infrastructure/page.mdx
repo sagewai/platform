@@ -13,16 +13,15 @@ This guide covers the full lifecycle of Sagewai's infrastructure services: start
 
 Services start in dependency order. If a dependency is not healthy, downstream services will not start correctly.
 
-```
-PostgreSQL (standalone)        Redis (standalone)
-
-etcd ──► MinIO ──► Milvus
-
-nebula-metad ──► nebula-storaged ──► nebula-graphd
-
-OTel Collector ──► Loki ──► Grafana
-                   Tempo ──► Grafana
-Prometheus ──────────────► Grafana
+```mermaid
+flowchart LR
+    PG["PostgreSQL (standalone)"]
+    Redis["Redis (standalone)"]
+    etcd["etcd"] --> MinIO["MinIO"] --> Milvus["Milvus"]
+    nmetad["nebula-metad"] --> nstoraged["nebula-storaged"] --> ngraphd["nebula-graphd"]
+    OTel["OTel Collector"] --> Loki["Loki"] --> Grafana["Grafana"]
+    OTel --> Tempo["Tempo"] --> Grafana
+    Prom["Prometheus"] --> Grafana
 ```
 
 PostgreSQL and Redis have no dependencies and start independently. Milvus requires etcd and MinIO to be healthy first. NebulaGraph services must start in order: metad, then storaged, then graphd. All observability data flows into Grafana.

@@ -255,32 +255,18 @@ and pool-reset event is recorded.
 
 ## What happened
 
-```
-[control plane: admin server]              [your terminal]
-    workflow_runs.status='pending'   ←── enqueue
-              │
-              ▼
-[worker fleet: 1 worker]                    Tier-1: ORCHESTRATION_OPENAI_KEY
-    claims run; resolves Identity
-              │
-              ▼
-[Sagewai Agent on worker host]
-    plan step (Mode 0) — Tier-1 LLM
-              │
-              ▼
-[Docker sandbox]                            Tier-2: ANTHROPIC_API_KEY,
-    Identity env injected                            GITHUB_TOKEN
-              │
-              ▼
-[tool runner spawns Claude Code]
-    Claude Code → Anthropic API → /workspace
-              │
-              ▼
-[git push to your repo]                     artifact destination
-              │
-              ▼
-[control plane: admin server]
-    workflow_runs.status='completed'
+```mermaid
+flowchart TD
+    Term["your terminal"]
+    CP1["control plane: admin server<br/>workflow_runs.status='pending'"]
+    WF["worker fleet: 1 worker<br/>claims run; resolves Identity<br/>(Tier-1: ORCHESTRATION_OPENAI_KEY)"]
+    SA["Sagewai Agent on worker host<br/>plan step (Mode 0) — Tier-1 LLM"]
+    SB["Docker sandbox<br/>Identity env injected<br/>(Tier-2: ANTHROPIC_API_KEY, GITHUB_TOKEN)"]
+    TR["tool runner spawns Claude Code<br/>Claude Code → Anthropic API → /workspace"]
+    GP["git push to your repo<br/>→ artifact destination"]
+    CP2["control plane: admin server<br/>workflow_runs.status='completed'"]
+    Term -->|enqueue| CP1
+    CP1 --> WF --> SA --> SB --> TR --> GP --> CP2
 ```
 
 Three things to note:

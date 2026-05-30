@@ -57,34 +57,13 @@ MAX_TOKENS=8000              ← behavior knob
 
 ## Visual: who sees what
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│  CONTROL PLANE   (admin server)                                       │
-│  Sees: Tier-1 NEVER. Tier-2 NEVER (just key NAMES via Sealed audit).  │
-│  Postgres rows know: profile_ref + effective_*_keys (NAMES).          │
-└──────────────────────────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────────────────────────┐
-│  WORKER HOST                                                          │
-│  Sees: Tier-1 (its own process env). Tier-2 NEVER (only NAMES).       │
-│  Sagewai Agent reads Tier-1 to make ITS LLM calls.                    │
-│  Sagewai Agent NEVER decrypts Tier-2 — that work happens at the       │
-│  Sealed Identity ↔ sandbox boundary, never traversing the host.       │
-└──────────────────────────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────────────────────────┐
-│  SANDBOX  (Mode 1+)                                                   │
-│  Sees: Tier-2 only, in os.environ.                                    │
-│  Tool runner + CLI agents read os.environ for their LLM keys + creds. │
-│  No Tier-1 access (sandbox env is wiped of host vars at start).       │
-└──────────────────────────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────────────────────────┐
-│  LLM INFERENCE POINT  (external)                                      │
-│  Sees: prompts + tool schemas only.                                   │
-│  Never sees: secret VALUES (unless a poorly-written agent embeds      │
-│  them in a prompt — that's Sealed-iii.B's redaction concern).         │
-└──────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    CP["<b>CONTROL PLANE</b> (admin server)<br/>Sees: Tier-1 NEVER. Tier-2 NEVER (just key NAMES via Sealed audit).<br/>Postgres rows know: profile_ref + effective_*_keys (NAMES)."]
+    WH["<b>WORKER HOST</b><br/>Sees: Tier-1 (its own process env). Tier-2 NEVER (only NAMES).<br/>Sagewai Agent reads Tier-1 to make ITS LLM calls.<br/>Sagewai Agent NEVER decrypts Tier-2 — that work happens at the<br/>Sealed Identity ↔ sandbox boundary, never traversing the host."]
+    SB["<b>SANDBOX</b> (Mode 1+)<br/>Sees: Tier-2 only, in os.environ.<br/>Tool runner + CLI agents read os.environ for their LLM keys + creds.<br/>No Tier-1 access (sandbox env is wiped of host vars at start)."]
+    LLM["<b>LLM INFERENCE POINT</b> (external)<br/>Sees: prompts + tool schemas only.<br/>Never sees: secret VALUES (unless a poorly-written agent embeds<br/>them in a prompt — that's Sealed-iii.B's redaction concern)."]
+    CP ~~~ WH ~~~ SB ~~~ LLM
 ```
 
 ---

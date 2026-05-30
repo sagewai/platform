@@ -59,115 +59,46 @@ This is what lets one worker fleet serve many tenants safely. A bug or compromis
 
 ## Topology
 
+```mermaid
+flowchart TD
+    subgraph CP["CONTROL PLANE — admin server"]
+        PG["postgres:<br/>• workflow_runs queue<br/>• revocation registry<br/>• audit-event store<br/>• projects, agents, tokens, …"]
+        API["REST API: /api/v1/admin/* (Next.js admin UI consumes this)<br/>CLI: sagewai admin status / sealed / profiles / …<br/>Autopilot: plans + dispatches; never executes itself"]
+        RULE["This plane never runs a workflow step."]
+    end
+    subgraph WF["WORKER FLEET — the data plane; the only place execution happens (≥1 active worker required)"]
+        subgraph WP["WORKER PROCESS (host / k8s pod / VM) — Tier-1 LLM keys live HERE in process env"]
+            SA["SAGEWAI AGENT (in worker process)<br/>uses Tier-1 keys for its OWN LLM calls (e.g. step planning);<br/>does NOT call user-task LLMs — those happen inside the sandbox with Tier-2 keys"]
+            subgraph SB["SANDBOX (sandboxed modes only) — Backend: Docker, Kubernetes, Lambda, or Null"]
+                TR["TOOL RUNNER (daemon)<br/>RPC server; accepts dispatches from Sagewai Agent on host;<br/>spawns tools / CLI subprocesses; streams stdout/stderr;<br/>in JIT mode only: serves callback requests from CLI agent to host"]
+                CLI["CLI AGENT(S) — full CLI agent mode<br/>Claude Code, Codex, Gemini, custom;<br/>read Tier-2 keys from os.environ; call LLM inference points directly;<br/>produce artifacts in /workspace"]
+                WS["/workspace volume<br/>CLI artifacts staged here, then pushed to artifact destination<br/>(GitHub repo, S3, …)"]
+            end
+        end
+    end
+    LLM["LLM inference point<br/>Anthropic / OpenAI / Ollama / vLLM / etc.<br/>External, OpenAI-compatible API."]
+    CP -->|"enqueue(run, mode) + claim(run) — fleet pulls"| WF
+    SA -.->|"bare mode stops here; sandboxed modes enter the sandbox"| SB
+    WF -->|"network egress (subject to NetworkPolicy)"| LLM
 ```
-┌────────────────────────────────────────────────────────────────────┐
-│                       CONTROL PLANE                                │
-│                       (admin server)                               │
-│                                                                    │
-│  postgres                                                          │
-│  ├── workflow_runs queue                                           │
-│  ├── revocation registry                                           │
-│  ├── audit-event store                                             │
-│  └── projects, agents, tokens, …                                   │
-│                                                                    │
-│  REST API:  /api/v1/admin/* (Next.js admin UI consumes this)       │
-│  CLI:       sagewai admin status / sealed / profiles / …           │
-│  Autopilot: plans + dispatches; never executes itself              │
-│                                                                    │
-│  This plane never runs a workflow step.                            │
-└───────────────────────────────┬────────────────────────────────────┘
-                                │ enqueue(run, mode, …)
-                                │ claim(run)        ← fleet pulls
-                                ▼
-┌────────────────────────────────────────────────────────────────────┐
-│                         WORKER FLEET                               │
-│                                                                    │
-│  • The data plane. The only place execution happens.               │
-│  • At least 1 active worker is required to do work.                │
-│  • Workers register, get approved, advertise capability labels     │
-│    (sandbox.backend, models_supported, project_id, …),             │
-│    and pull runs whose requirements they match.                    │
-│                                                                    │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │  WORKER PROCESS (host / k8s pod / VM)                       │   │
-│  │                                                             │   │
-│  │  Tier-1 LLM keys live HERE in process env.                  │   │
-│  │  ORCHESTRATION_OPENAI_KEY=… (or local Ollama URL etc.)      │   │
-│  │  These are the operator's keys for the orchestration brain. │   │
-│  │                                                             │   │
-│  │  ┌─────────────────────────────────────────────────────┐    │   │
-│  │  │  SAGEWAI AGENT  (in worker process)                 │    │   │
-│  │  │                                                     │    │   │
-│  │  │  1. Claims run; reads execution mode                │    │   │
-│  │  │  2. Resolves the Identity cascade IF the mode       │    │   │
-│  │  │     needs customer credentials. Persists key NAMES  │    │   │
-│  │  │     on the run row. Never sees plaintext values.    │    │   │
-│  │  │  3. Acquires a sandbox from the pool IF the mode    │    │   │
-│  │  │     needs isolation                                 │    │   │
-│  │  │  4. Runs the agent loop appropriate to the mode:    │    │   │
-│  │  │     • bare:        inline on worker                 │    │   │
-│  │  │     • sandboxed:   via tool runner in sandbox       │    │   │
-│  │  │     • + identity:  + customer keys in sandbox env   │    │   │
-│  │  │     • + CLI agent: + Claude Code / Codex / …        │    │   │
-│  │  │     • + JIT:       + bidirectional callback for     │    │   │
-│  │  │                      just-in-time credentials       │    │   │
-│  │  │  5. Persists audit + step state                     │    │   │
-│  │  │  6. Releases sandbox (cleanup scrubs env)           │    │   │
-│  │  │                                                     │    │   │
-│  │  │  LLM calls Sagewai Agent makes for ITSELF (e.g.     │    │   │
-│  │  │  step planning) use Tier-1 keys from worker env.    │    │   │
-│  │  │  Sagewai Agent does NOT call user-task LLMs — that  │    │   │
-│  │  │  happens inside the sandbox using Tier-2 keys.      │    │   │
-│  │  └─────────────────────────────────────────────────────┘    │   │
-│  │                                                             │   │
-│  │  ◀──────────── bare mode stops here ─────────────────────▶  │   │
-│  │                                                             │   │
-│  │  ┌─────────────────────────────────────────────────────┐    │   │
-│  │  │  SANDBOX  (sandboxed modes only)                    │    │   │
-│  │  │  Backend: Docker | Kubernetes | Lambda | Null       │    │   │
-│  │  │  See sandbox-backends.                              │    │   │
-│  │  │                                                     │    │   │
-│  │  │  sandboxed:        empty env, isolation only        │    │   │
-│  │  │  + identity:       + Tier-2 keys, behavior knobs    │    │   │
-│  │  │  + CLI agent:      + CLI agent runtime + creds      │    │   │
-│  │  │                                                     │    │   │
-│  │  │  ┌───────────────────────────────────────────────┐  │    │   │
-│  │  │  │  TOOL RUNNER (daemon)                         │  │    │   │
-│  │  │  │  • RPC server; accepts dispatches from        │  │    │   │
-│  │  │  │    Sagewai Agent on host                      │  │    │   │
-│  │  │  │  • Spawns tools / CLI agent subprocesses      │  │    │   │
-│  │  │  │  • Streams stdout/stderr back                 │  │    │   │
-│  │  │  │  • In JIT mode only: also serves callback     │  │    │   │
-│  │  │  │    requests FROM CLI agent TO host            │  │    │   │
-│  │  │  └───────────────────────────────────────────────┘  │    │   │
-│  │  │                                                     │    │   │
-│  │  │  ┌───────────────────────────────────────────────┐  │    │   │
-│  │  │  │  CLI AGENT(S) — full CLI agent mode           │  │    │   │
-│  │  │  │  Claude Code, Codex, Gemini, custom           │  │    │   │
-│  │  │  │  • Read TIER-2 keys from os.environ           │  │    │   │
-│  │  │  │  • Call LLM inference points directly         │  │    │   │
-│  │  │  │  • Produce artifacts in /workspace            │  │    │   │
-│  │  │  └───────────────────────────────────────────────┘  │    │   │
-│  │  │                                                     │    │   │
-│  │  │  ┌───────────────────────────────────────────────┐  │    │   │
-│  │  │  │  /workspace volume                            │  │    │   │
-│  │  │  │  CLI artifacts staged here, then pushed to    │  │    │   │
-│  │  │  │  artifact destination (GitHub repo, S3, …)    │  │    │   │
-│  │  │  └───────────────────────────────────────────────┘  │    │   │
-│  │  └─────────────────────────────────────────────────────┘    │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-└────────────────────────────────────────────────────────────────────┘
-                                  │ network egress
-                                  │ (subject to NetworkPolicy)
-                                  ▼
-                       ┌─────────────────────────┐
-                       │  LLM inference point    │
-                       │  Anthropic / OpenAI /   │
-                       │  Ollama / vLLM / etc.   │
-                       │  External, OpenAI-      │
-                       │  compatible API.        │
-                       └─────────────────────────┘
-```
+
+Workers register, get approved, advertise capability labels (`sandbox.backend`, `models_supported`, `project_id`, …), and pull runs whose requirements they match.
+
+**Inside the Sagewai Agent (per claimed run):**
+
+1. Claims run; reads execution mode.
+2. Resolves the Identity cascade IF the mode needs customer credentials. Persists key NAMES on the run row. Never sees plaintext values.
+3. Acquires a sandbox from the pool IF the mode needs isolation.
+4. Runs the agent loop appropriate to the mode:
+   - **bare** — inline on worker
+   - **sandboxed** — via tool runner in sandbox (empty env, isolation only)
+   - **+ identity** — + customer keys in sandbox env (Tier-2 keys, behavior knobs)
+   - **+ CLI agent** — + Claude Code / Codex / … (CLI agent runtime + creds)
+   - **+ JIT** — + bidirectional callback for just-in-time credentials
+5. Persists audit + step state.
+6. Releases sandbox (cleanup scrubs env).
+
+LLM calls the Sagewai Agent makes for ITSELF (e.g. step planning) use Tier-1 keys from the worker env; it does NOT call user-task LLMs — those happen inside the sandbox using Tier-2 keys.
 
 ## Components
 

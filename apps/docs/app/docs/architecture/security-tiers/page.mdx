@@ -73,34 +73,13 @@ Tier 2 is governed end-to-end by Sagewai's Sealed Identity layer: profile manage
 
 ## Visual: who sees what
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│  CONTROL PLANE   (admin server)                                      │
-│  Sees: Tier-1 NEVER. Tier-2 NEVER (just key NAMES, via audit).       │
-│  Postgres rows know: profile_ref + effective_*_keys (NAMES).         │
-└──────────────────────────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────────────────────────┐
-│  WORKER HOST                                                         │
-│  Sees: Tier-1 (its own process env). Tier-2 NEVER (only NAMES).      │
-│  Sagewai Agent reads Tier-1 to make ITS LLM calls.                   │
-│  Sagewai Agent NEVER decrypts Tier-2 — that work happens at the      │
-│  Sealed Identity ↔ sandbox boundary, never traversing the host.      │
-└──────────────────────────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────────────────────────┐
-│  SANDBOX  (sandboxed modes only)                                     │
-│  Sees: Tier-2 only, in os.environ.                                   │
-│  Tool runner + CLI agents read os.environ for their LLM keys + creds.│
-│  No Tier-1 access (sandbox env is wiped of host vars at start).      │
-└──────────────────────────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────────────────────────┐
-│  LLM INFERENCE POINT  (external)                                     │
-│  Sees: prompts + tool schemas only.                                  │
-│  Never sees: secret VALUES — unless an agent embeds one in a prompt, │
-│  in which case the redaction layer catches it before egress.         │
-└──────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    CP["<b>CONTROL PLANE</b> (admin server)<br/>Sees: Tier-1 NEVER. Tier-2 NEVER (just key NAMES, via audit).<br/>Postgres rows know: profile_ref + effective_*_keys (NAMES)."]
+    WH["<b>WORKER HOST</b><br/>Sees: Tier-1 (its own process env). Tier-2 NEVER (only NAMES).<br/>Sagewai Agent reads Tier-1 to make ITS LLM calls.<br/>Sagewai Agent NEVER decrypts Tier-2 — that work happens at the<br/>Sealed Identity ↔ sandbox boundary, never traversing the host."]
+    SB["<b>SANDBOX</b> (sandboxed modes only)<br/>Sees: Tier-2 only, in os.environ.<br/>Tool runner + CLI agents read os.environ for their LLM keys + creds.<br/>No Tier-1 access (sandbox env is wiped of host vars at start)."]
+    LLM["<b>LLM INFERENCE POINT</b> (external)<br/>Sees: prompts + tool schemas only.<br/>Never sees: secret VALUES — unless an agent embeds one in a prompt,<br/>in which case the redaction layer catches it before egress."]
+    CP ~~~ WH ~~~ SB ~~~ LLM
 ```
 
 ## Operator vs end customer

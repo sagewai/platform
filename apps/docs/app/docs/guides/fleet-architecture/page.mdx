@@ -24,40 +24,25 @@ For the operator how-to (deploy workers, enrollment steps, pool configuration), 
 
 ## System overview
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Sagewai Cloud                            │
-│                                                                 │
-│  ┌──────────────┐    ┌─────────────────┐    ┌───────────────┐  │
-│  │ Admin Panel  │    │  Fleet REST API  │    │  Task Queue   │  │
-│  │ (approval,   │◄──►│  /api/v1/fleet/  │◄──►│ (Postgres     │  │
-│  │  monitoring) │    │                 │    │  SKIP LOCKED) │  │
-│  └──────────────┘    └────────┬────────┘    └───────┬───────┘  │
-│                               │                     │          │
-│                    ┌──────────▼──────────┐           │          │
-│                    │   FleetRegistry     │           │          │
-│                    │  (worker state,     │           │          │
-│                    │   enrollment keys,  │           │          │
-│                    │   approval FSM)     │           │          │
-│                    └──────────┬──────────┘           │          │
-│                               │                     │          │
-│                    ┌──────────▼──────────┐  ┌────────▼───────┐ │
-│                    │   WRTTokenManager   │  │ FleetDispatcher│ │
-│                    │  (JWT issuance,     │  │ (long-poll,    │ │
-│                    │   JTI revocation)   │  │  encryption,   │ │
-│                    └─────────────────────┘  │  audit)        │ │
-│                                             └────────┬───────┘ │
-└──────────────────────────────────────────────────────┼─────────┘
-                                                       │ HTTPS / WRT
-                              ─────────────────────────┤
-                             │                         │
-               ┌─────────────▼──────┐    ┌─────────────▼──────┐
-               │   Worker A          │    │   Worker B          │
-               │   pool: gpu-prod    │    │   pool: default     │
-               │   models: llama3    │    │   models: gpt-4o    │
-               │   labels: gpu=true  │    │   labels: env=prod  │
-               │   (your data center)│    │   (your K8s cluster)│
-               └─────────────────────┘    └─────────────────────┘
+```mermaid
+flowchart TD
+    subgraph Cloud["Sagewai Cloud"]
+        Admin["Admin Panel<br/>(approval, monitoring)"]
+        API["Fleet REST API<br/>/api/v1/fleet/"]
+        Queue["Task Queue<br/>(Postgres SKIP LOCKED)"]
+        Reg["FleetRegistry<br/>(worker state, enrollment keys, approval FSM)"]
+        WRT["WRTTokenManager<br/>(JWT issuance, JTI revocation)"]
+        Disp["FleetDispatcher<br/>(long-poll, encryption, audit)"]
+        Admin <--> API
+        API <--> Queue
+        API --> Reg
+        Reg --> WRT
+        Queue --> Disp
+    end
+    WorkerA["Worker A<br/>pool: gpu-prod · models: llama3<br/>labels: gpu=true · (your data center)"]
+    WorkerB["Worker B<br/>pool: default · models: gpt-4o<br/>labels: env=prod · (your K8s cluster)"]
+    Disp -->|"HTTPS / WRT"| WorkerA
+    Disp -->|"HTTPS / WRT"| WorkerB
 ```
 
 ---
@@ -79,32 +64,16 @@ For the operator how-to (deploy workers, enrollment steps, pool configuration), 
 
 ## Enrollment flow
 
-```
-Worker starts
-    │
-    ▼
-Read ENROLLMENT_KEY env var (wrt-1.eyJ...)
-    │
-    ▼
-POST /api/v1/fleet/register
-  body: { pool, labels, models, capabilities }
-    │
-    ▼
-FleetRegistry.register_worker()
-  → store worker record with status=PENDING
-  → emit WORKER_REGISTERED audit event
-    │
-    ▼
-Admin sees worker in panel (status: PENDING)
-    │
-    ▼
-Admin approves → PATCH /api/v1/fleet/workers/{id}/approve
-  → FleetRegistry transitions: PENDING → APPROVED
-  → WRTTokenManager issues short-lived task token
-  → emit WORKER_APPROVED audit event
-    │
-    ▼
-Worker polls for tasks (approved status required)
+```mermaid
+flowchart TD
+    S1["Worker starts"]
+    S2["Read ENROLLMENT_KEY env var (wrt-1.eyJ...)"]
+    S3["POST /api/v1/fleet/register<br/>body: { pool, labels, models, capabilities }"]
+    S4["FleetRegistry.register_worker()<br/>→ store worker record with status=PENDING<br/>→ emit WORKER_REGISTERED audit event"]
+    S5["Admin sees worker in panel (status: PENDING)"]
+    S6["Admin approves → PATCH /api/v1/fleet/workers/{id}/approve<br/>→ FleetRegistry transitions: PENDING → APPROVED<br/>→ WRTTokenManager issues short-lived task token<br/>→ emit WORKER_APPROVED audit event"]
+    S7["Worker polls for tasks (approved status required)"]
+    S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7
 ```
 
 **Approval states**: `PENDING` → `APPROVED` → `REVOKED` (one-way; revoked workers cannot re-register with the same key).
@@ -113,33 +82,15 @@ Worker polls for tasks (approved status required)
 
 ## Task dispatch flow
 
-```
-Workflow step ready for execution
-    │
-    ▼
-FleetDispatcher.claim_task()
-  SELECT ... FOR UPDATE SKIP LOCKED
-  WHERE pool = $target_pool
-    AND labels @> $target_labels      (JSONB containment)
-    AND models_canonical @> $model    (GIN index on TEXT[])
-    │
-    ▼
-Task payload encrypted with org's Fernet key
-  → only workers in that org can decrypt
-    │
-    ▼
-Worker receives encrypted task over HTTPS long-poll
-  → decrypts payload
-  → injects worker credentials into ContextVar
-  → UniversalAgent reads credentials, overrides model/api_key
-    │
-    ▼
-Worker executes task, reports result
-  → POST /api/v1/fleet/tasks/{id}/complete
-  → emit TASK_COMPLETED audit event
-    │
-    ▼
-WorkflowMonitor marks step complete, continues workflow
+```mermaid
+flowchart TD
+    D1["Workflow step ready for execution"]
+    D2["FleetDispatcher.claim_task()<br/>SELECT ... FOR UPDATE SKIP LOCKED<br/>WHERE pool = $target_pool<br/>AND labels @> $target_labels (JSONB containment)<br/>AND models_canonical @> $model (GIN index on TEXT[])"]
+    D3["Task payload encrypted with org's Fernet key<br/>→ only workers in that org can decrypt"]
+    D4["Worker receives encrypted task over HTTPS long-poll<br/>→ decrypts payload<br/>→ injects worker credentials into ContextVar<br/>→ UniversalAgent reads credentials, overrides model/api_key"]
+    D5["Worker executes task, reports result<br/>→ POST /api/v1/fleet/tasks/{id}/complete<br/>→ emit TASK_COMPLETED audit event"]
+    D6["WorkflowMonitor marks step complete, continues workflow"]
+    D1 --> D2 --> D3 --> D4 --> D5 --> D6
 ```
 
 ### Three dimensions of matching
@@ -160,27 +111,14 @@ WorkflowMonitor marks step complete, continues workflow
 
 Workers send a heartbeat every **30 seconds** to signal liveness:
 
-```
-Worker heartbeat loop
-    │
-    ▼
-POST /api/v1/fleet/workers/{id}/heartbeat
-  body: { timestamp, tasks_completed, tasks_failed }
-    │
-    ▼
-FleetRegistry updates last_heartbeat_at
-    │
-    ▼
-FleetAnomalyDetector checks (runs every 60s):
-  - missed_heartbeats > 3 → HEARTBEAT_TIMEOUT anomaly
-  - failure_rate > threshold → EXCESSIVE_FAILURES anomaly
-  - model mismatch → MODEL_MISMATCH anomaly
-  - request_rate spike → RATE_ANOMALY anomaly
-    │
-    ▼
-If 2+ anomaly types → auto-revoke worker
-  → emit WORKER_REVOKED audit event
-  → admin alerted via notification channel
+```mermaid
+flowchart TD
+    H1["Worker heartbeat loop"]
+    H2["POST /api/v1/fleet/workers/{id}/heartbeat<br/>body: { timestamp, tasks_completed, tasks_failed }"]
+    H3["FleetRegistry updates last_heartbeat_at"]
+    H4["FleetAnomalyDetector checks (runs every 60s):<br/>• missed_heartbeats > 3 → HEARTBEAT_TIMEOUT anomaly<br/>• failure_rate > threshold → EXCESSIVE_FAILURES anomaly<br/>• model mismatch → MODEL_MISMATCH anomaly<br/>• request_rate spike → RATE_ANOMALY anomaly"]
+    H5["If 2+ anomaly types → auto-revoke worker<br/>→ emit WORKER_REVOKED audit event<br/>→ admin alerted via notification channel"]
+    H1 --> H2 --> H3 --> H4 --> H5
 ```
 
 ---

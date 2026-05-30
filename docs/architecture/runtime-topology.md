@@ -22,115 +22,46 @@ These three statements are non-negotiable. Everything in the platform is structu
 
 ## Topology
 
+```mermaid
+flowchart TD
+    subgraph CP["CONTROL PLANE — admin server"]
+        PG["postgres:<br/>• workflow_runs queue<br/>• sealed_revocations<br/>• sealed_audit_events<br/>• projects, agents, tokens, …"]
+        API["REST API: /api/v1/admin/* (Next.js admin UI consumes this)<br/>CLI: sagewai admin status / sealed / profiles / …<br/>Autopilot: plans + dispatches; never executes itself"]
+        RULE["RULE: this plane never runs a workflow step."]
+    end
+    subgraph WF["WORKER FLEET — the data plane; the only place execution happens (≥1 active worker required)"]
+        subgraph WP["WORKER PROCESS (host / k8s pod / VM) — Tier-1 LLM keys live HERE in process env"]
+            SA["SAGEWAI AGENT (in worker process)<br/>uses Tier-1 keys for its OWN LLM calls (e.g. step planning);<br/>does NOT call user-task LLMs — those run in the sandbox with Tier-2 keys"]
+            subgraph SB["SANDBOX (Mode 1+) — Backend: Docker, Kubernetes, Lambda, or Null"]
+                TR["TOOL RUNNER (daemon)<br/>RPC server; accepts dispatches from Sagewai Agent on host;<br/>spawns tools / CLI subprocesses; streams stdout/stderr;<br/>Mode 3b only: serves callback requests from CLI agent to host"]
+                CLI["CLI AGENT(S) — Mode 3+<br/>Claude Code, Codex, Gemini, custom;<br/>read Tier-2 keys from os.environ; call LLM inference points directly;<br/>produce artifacts in /workspace"]
+                WS["/workspace volume<br/>CLI artifacts staged, then pushed to artifact destination<br/>(Mode 3+: GitHub repo, S3 bucket, mounted folder)"]
+            end
+        end
+    end
+    LLM["LLM inference point (external)<br/>Anthropic / OpenAI / Ollama / vLLM / etc.<br/>External, OpenAI-compatible API."]
+    CP -->|"enqueue(run, mode) + claim(run) — fleet pulls"| WF
+    SA -.->|"Mode 0 stops here; Mode 1+ enters the sandbox"| SB
+    WF -->|"network egress (subject to NetworkPolicy)"| LLM
 ```
-┌────────────────────────────────────────────────────────────────────┐
-│                       CONTROL PLANE                                 │
-│                       (admin server)                                │
-│                                                                     │
-│  postgres                                                           │
-│  ├── workflow_runs queue                                            │
-│  ├── sealed_revocations                                             │
-│  ├── sealed_audit_events                                            │
-│  └── projects, agents, tokens, …                                    │
-│                                                                     │
-│  REST API:  /api/v1/admin/* (Next.js admin UI consumes this)        │
-│  CLI:       sagewai admin status / sealed / profiles / …            │
-│  Autopilot: plans + dispatches; never executes itself               │
-│                                                                     │
-│  RULE: this plane never runs a workflow step.                       │
-└────────────────────────────────┬───────────────────────────────────┘
-                                 │ enqueue(run, mode={0|1|2|3|3b}, …)
-                                 │ claim(run)        ← fleet pulls
-                                 ▼
-┌────────────────────────────────────────────────────────────────────┐
-│                         WORKER FLEET                                │
-│                                                                     │
-│  • The data plane. The only place execution happens.                │
-│  • At least 1 active worker is required for Sagewai to do work.     │
-│  • Workers register with the fleet registry, get approved,          │
-│    advertise capability labels (sandbox.backend, models_supported,  │
-│    project_id, …), and pull runs whose requirements they match.     │
-│                                                                     │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │  WORKER PROCESS (host / k8s pod / VM)                       │   │
-│  │                                                             │   │
-│  │  Tier-1 LLM keys live HERE in process env.                  │   │
-│  │  ORCHESTRATION_OPENAI_KEY=… (or local Ollama URL etc.)      │   │
-│  │  These are the operator's keys for the orchestration brain. │   │
-│  │                                                             │   │
-│  │  ┌─────────────────────────────────────────────────────┐    │   │
-│  │  │  SAGEWAI AGENT  (in worker process)                 │    │   │
-│  │  │                                                     │    │   │
-│  │  │  1. Claims run; reads execution mode from row       │    │   │
-│  │  │  2. Resolves Security Identity (Sealed cascade) IF  │    │   │
-│  │  │     mode ≥ 2. Persists effective_*_keys (NAMES)     │    │   │
-│  │  │     on the run row. Never sees plaintext values.    │    │   │
-│  │  │  3. Acquires sandbox from pool IF mode ≥ 1          │    │   │
-│  │  │  4. Runs the agent loop appropriate to the mode:    │    │   │
-│  │  │     • Mode 0:  inline on worker                     │    │   │
-│  │  │     • Mode 1:  via tool runner in sandbox           │    │   │
-│  │  │     • Mode 2:  + identity in sandbox env            │    │   │
-│  │  │     • Mode 3:  + CLI agent (Claude Code, Codex, …)  │    │   │
-│  │  │     • Mode 3b: + bidirectional callback for JIT     │    │   │
-│  │  │                 credentials (Sealed-iv)             │    │   │
-│  │  │  5. Persists audit + step state                     │    │   │
-│  │  │  6. Releases sandbox (cleanup_run scrubs env)       │    │   │
-│  │  │                                                     │    │   │
-│  │  │  LLM calls Sagewai Agent makes for ITSELF (e.g.     │    │   │
-│  │  │  step planning) use Tier-1 keys from worker env.    │    │   │
-│  │  │  Sagewai Agent does NOT call user-task LLMs — that  │    │   │
-│  │  │  happens inside the sandbox using Tier-2 keys.      │    │   │
-│  │  └─────────────────────────────────────────────────────┘    │   │
-│  │                                                             │   │
-│  │  ◀──────────── Mode 0 stops here ────────────────────────▶  │   │
-│  │                                                             │   │
-│  │  ┌─────────────────────────────────────────────────────┐    │   │
-│  │  │  SANDBOX  (Mode 1+)                                 │    │   │
-│  │  │  Backend: Docker | Kubernetes | Lambda | Null       │    │   │
-│  │  │  See execution-backends.md.                         │    │   │
-│  │  │                                                     │    │   │
-│  │  │  Mode 1: empty env, isolation only                  │    │   │
-│  │  │  Mode 2: + identity (Tier-2 keys, behavior knobs)   │    │   │
-│  │  │  Mode 3: + CLI agent runtime + artifact creds       │    │   │
-│  │  │                                                     │    │   │
-│  │  │  ┌───────────────────────────────────────────────┐  │    │   │
-│  │  │  │  TOOL RUNNER (daemon)                         │  │    │   │
-│  │  │  │  • RPC server; accepts dispatches from        │  │    │   │
-│  │  │  │    Sagewai Agent on host                      │  │    │   │
-│  │  │  │  • Spawns tools / CLI agent subprocesses      │  │    │   │
-│  │  │  │  • Streams stdout/stderr back                 │  │    │   │
-│  │  │  │  • In Mode 3b only: also serves callback      │  │    │   │
-│  │  │  │    requests FROM CLI agent TO host            │  │    │   │
-│  │  │  └───────────────────────────────────────────────┘  │    │   │
-│  │  │                                                     │    │   │
-│  │  │  ┌───────────────────────────────────────────────┐  │    │   │
-│  │  │  │  CLI AGENT(S) — Mode 3+ only                  │  │    │   │
-│  │  │  │  Claude Code, Codex, Gemini, custom           │  │    │   │
-│  │  │  │  • Read TIER-2 keys from os.environ           │  │    │   │
-│  │  │  │  • Call LLM inference points directly         │  │    │   │
-│  │  │  │  • Produce artifacts in /workspace            │  │    │   │
-│  │  │  └───────────────────────────────────────────────┘  │    │   │
-│  │  │                                                     │    │   │
-│  │  │  ┌───────────────────────────────────────────────┐  │    │   │
-│  │  │  │  /workspace volume                            │  │    │   │
-│  │  │  │  CLI artifacts staged here, then pushed to    │  │    │   │
-│  │  │  │  artifact destination (Mode 3+: GitHub repo,  │  │    │   │
-│  │  │  │  S3 bucket, mounted folder)                   │  │    │   │
-│  │  │  └───────────────────────────────────────────────┘  │    │   │
-│  │  └─────────────────────────────────────────────────────┘    │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-└────────────────────────────────────────────────────────────────────┘
-                                  │ network egress
-                                  │ (subject to NetworkPolicy)
-                                  ▼
-                       ┌─────────────────────────┐
-                       │  LLM inference point    │
-                       │  Anthropic / OpenAI /   │
-                       │  Ollama / vLLM / etc.   │
-                       │  External, OpenAI-      │
-                       │  compatible API.        │
-                       └─────────────────────────┘
-```
+
+Workers register with the fleet registry, get approved, advertise capability labels (`sandbox.backend`, `models_supported`, `project_id`, …), and pull runs whose requirements they match.
+
+**Inside the Sagewai Agent (per claimed run):**
+
+1. Claims run; reads execution mode from the row.
+2. Resolves Security Identity (Sealed cascade) IF mode ≥ 2. Persists `effective_*_keys` (NAMES) on the run row. Never sees plaintext values.
+3. Acquires a sandbox from the pool IF mode ≥ 1.
+4. Runs the agent loop appropriate to the mode:
+   - **Mode 0** — inline on worker
+   - **Mode 1** — via tool runner in sandbox (empty env, isolation only)
+   - **Mode 2** — + identity in sandbox env (Tier-2 keys, behavior knobs)
+   - **Mode 3** — + CLI agent (Claude Code, Codex, …) + artifact creds
+   - **Mode 3b** — + bidirectional callback for JIT credentials (Sealed-iv)
+5. Persists audit + step state.
+6. Releases sandbox (`cleanup_run` scrubs env).
+
+LLM calls the Sagewai Agent makes for ITSELF (e.g. step planning) use Tier-1 keys from the worker env; it does NOT call user-task LLMs — those happen inside the sandbox using Tier-2 keys.
 
 ---
 
