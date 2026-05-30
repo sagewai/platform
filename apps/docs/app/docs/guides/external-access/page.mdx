@@ -13,20 +13,17 @@ The Sagewai gateway exposes `/v1/chat/completions` and `/v1/models` — the same
 
 The gateway maps each registered agent to a model name. When a chat completion request arrives, it resolves the model name to the agent and runs it.
 
-```
-External Tool (Cursor, OpenAI SDK, etc.)
-    |
-    v
-POST /v1/chat/completions  { "model": "my-agent", ... }
-    |
-    v
-Sagewai Gateway  -->  resolve "my-agent"  -->  AgentRegistry
-    |
-    v
-UniversalAgent.chat(message)
-    |
-    v
-OpenAI-compatible JSON response
+```mermaid
+flowchart TD
+    ET["External Tool (Cursor, OpenAI SDK, etc.)"]
+    POST["POST /v1/chat/completions { 'model': 'my-agent', ... }"]
+    GW["Sagewai Gateway"]
+    REG["AgentRegistry"]
+    UA["UniversalAgent.chat(message)"]
+    RESP["OpenAI-compatible JSON response"]
+    ET --> POST --> GW
+    GW -->|"resolve 'my-agent'"| REG
+    REG --> UA --> RESP
 ```
 
 ## Starting the gateway

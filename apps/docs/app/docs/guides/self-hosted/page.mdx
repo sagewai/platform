@@ -46,19 +46,24 @@ Once up:
 
 ## Architecture overview
 
-```
-+---------------------------------------------------------+
-|                Reverse Proxy (nginx / caddy)             |
-|                TLS termination                           |
-+-------------+--------------+----------------------------+
-|  Admin UI   |  Admin API   |  Fleet Gateway             |
-|  :3008      |  :8000       |  :8000/api/v1/fleet        |
-+-------------+--------------+----------------------------+
-|                                                         |
-|   PostgreSQL :5432    Redis :6379                        |
-|   Milvus :19530       NebulaGraph :9669                 |
-|                                                         |
-+---------------------------------------------------------+
+```mermaid
+flowchart TD
+    RP["Reverse Proxy (nginx / caddy)<br/>TLS termination"]
+    subgraph SVC["Services"]
+        UI["Admin UI · :3008"]
+        API["Admin API · :8000"]
+        FG["Fleet Gateway · :8000/api/v1/fleet"]
+    end
+    subgraph DATA["Datastores"]
+        PG["PostgreSQL · :5432"]
+        RD["Redis · :6379"]
+        MV["Milvus · :19530"]
+        NG["NebulaGraph · :9669"]
+    end
+    RP --> UI & API & FG
+    UI --> DATA
+    API --> DATA
+    FG --> DATA
 ```
 
 | Service | Purpose | Port |

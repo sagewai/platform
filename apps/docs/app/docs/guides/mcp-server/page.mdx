@@ -20,17 +20,16 @@ The MCP agent server uses the built-in `McpServer` from the SDK. You do not need
 
 The server connects to your running Sagewai gateway, discovers registered agents, and exposes each one as an MCP tool. When a client invokes a tool, the server forwards the call to the corresponding agent via the OpenAI-compatible API and returns the response.
 
-```
-MCP Client (Claude Code, Cursor, ...)
-    |
-    v
-sagewai.mcp.agent_server  (stdio transport)
-    |
-    v
-POST /v1/chat/completions  { "model": "<agent>", ... }
-    |
-    v
-Sagewai Gateway  -->  AgentRegistry  -->  Agent response
+```mermaid
+flowchart TD
+    MC["MCP Client (Claude Code, Cursor, ...)"]
+    AS["sagewai.mcp.agent_server (stdio transport)"]
+    POST["POST /v1/chat/completions { 'model': '&lt;agent&gt;', ... }"]
+    GW["Sagewai Gateway"]
+    REG["AgentRegistry"]
+    RESP["Agent response"]
+    MC --> AS --> POST --> GW
+    GW --> REG --> RESP
 ```
 
 ## Setup

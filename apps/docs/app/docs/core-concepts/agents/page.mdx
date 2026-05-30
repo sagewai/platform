@@ -27,33 +27,24 @@ An agent is Sagewai's core building block: it wraps an LLM with a tool-calling l
 
 ### Architecture
 
-```
-User Message
-    |
-    v
-BaseAgent.chat(message)
-    |
-    v
-[Build Messages] --> [Inject Memory Context]
-    |
-    v
-[Check Input Guardrails]
-    |
-    v
-[ExecutionStrategy.execute()]
-    |
-    +---> [_call_llm()] --> LLM Response
-    |         |
-    |         v
-    |    Has tool_calls?
-    |    YES --> [Execute Tools] --> Loop back
-    |    NO  --> Return text response
-    |
-    v
-[Check Output Guardrails]
-    |
-    v
-Return response text
+```mermaid
+flowchart TD
+    UM["User Message"]
+    Chat["BaseAgent.chat(message)"]
+    BM["Build Messages"]
+    IM["Inject Memory Context"]
+    IG["Check Input Guardrails"]
+    EX["ExecutionStrategy.execute()"]
+    CL["_call_llm()"]
+    LR["LLM Response"]
+    TC{"Has tool_calls?"}
+    ET["Execute Tools"]
+    RT["Return text response"]
+    OG["Check Output Guardrails"]
+    RR["Return response text"]
+    UM --> Chat --> BM --> IM --> IG --> EX --> CL --> LR --> TC
+    TC -->|YES| ET --> CL
+    TC -->|NO| RT --> OG --> RR
 ```
 
 ### Constructor Parameters

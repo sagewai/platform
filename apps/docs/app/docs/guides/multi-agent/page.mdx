@@ -77,20 +77,14 @@ print(result)
 
 ### Data flow
 
-```
-"Write about renewable energy"
-    |
-    v
-[researcher] --> "Research notes: Solar efficiency increased 25% in 2025..."
-    |
-    v
-[writer] --> "# The Future of Renewable Energy\n\nSolar power has seen..."
-    |
-    v
-[editor] --> "# The Future of Renewable Energy\n\n## Introduction\n\nSolar..."
-    |
-    v
-Final polished article
+```mermaid
+flowchart TD
+    IN["'Write about renewable energy'"]
+    R["researcher<br/>→ 'Research notes: Solar efficiency increased 25% in 2025...'"]
+    W["writer<br/>→ '# The Future of Renewable Energy ... Solar power has seen...'"]
+    E["editor<br/>→ '# The Future of Renewable Energy ... ## Introduction ... Solar...'"]
+    OUT["Final polished article"]
+    IN --> R --> W --> E --> OUT
 ```
 
 Each agent receives the previous agent's output as its input message. Execution is fully deterministic — agents always run in the order you specify.
@@ -189,11 +183,13 @@ print(result)
 
 ### Loop execution
 
-```
-Iteration 1: "Write email validator" --> First draft of code
-Iteration 2: First draft --> Improved version with edge cases
-Iteration 3: Improved version --> "APPROVED" final version
-Loop exits because stop_condition is True
+```mermaid
+flowchart TD
+    I1["Iteration 1<br/>'Write email validator' → first draft of code"]
+    I2["Iteration 2<br/>first draft → improved version with edge cases"]
+    I3["Iteration 3<br/>improved version → 'APPROVED' final version"]
+    EXIT["Loop exits because stop_condition is True"]
+    I1 --> I2 --> I3 --> EXIT
 ```
 
 Always set `max_iterations`. Without a ceiling the loop runs indefinitely if the stop condition is never satisfied.

@@ -11,16 +11,13 @@ The Model Context Protocol (MCP) is an open standard for connecting AI agents to
 
 ## Overview
 
-```
-+----------------+       MCP Protocol       +----------------+
-|   Sagewai      | <---------------------> |   MCP Server   |
-|   Agent        |   (stdio / SSE / HTTP)   |   (tools)      |
-|                |                          |                |
-|  McpClient     |  -- tools/list -->       |  Stripe tools  |
-|                |  <-- tool specs --       |  Email tools   |
-|                |  -- tools/call -->       |  Calendar      |
-|                |  <-- result --           |  Documents     |
-+----------------+                          +----------------+
+```mermaid
+flowchart LR
+    Agent["Sagewai Agent<br/>(McpClient)"]
+    Server["MCP Server<br/>(Stripe · Email · Calendar · Documents tools)"]
+    Agent <-->|"MCP Protocol<br/>(stdio / SSE / HTTP)"| Server
+    Agent -->|"tools/list, tools/call"| Server
+    Server -->|"tool specs, results"| Agent
 ```
 
 ---

@@ -23,24 +23,20 @@ Memory gives agents access to information beyond the current conversation. Sagew
 
 ## Architecture Overview
 
-```
-User Query
-    |
-    v
-ContextEngine / RAGEngine (orchestrator)
-    |
-    +---> Vector search (semantic similarity)
-    +---> BM25 search (keyword matching)
-    +---> Graph search (relationship traversal)
-    |
-    v
-Reciprocal Rank Fusion (merge results)
-    |
-    v
-Optional re-ranking (cross-encoder)
-    |
-    v
-Retrieved context injected into agent messages
+```mermaid
+flowchart TD
+    Q["User Query"]
+    O["ContextEngine / RAGEngine (orchestrator)"]
+    V["Vector search (semantic similarity)"]
+    B["BM25 search (keyword matching)"]
+    G["Graph search (relationship traversal)"]
+    RRF["Reciprocal Rank Fusion (merge results)"]
+    RE["Optional re-ranking (cross-encoder)"]
+    INJ["Retrieved context injected into agent messages"]
+    Q --> O
+    O --> V & B & G
+    V & B & G --> RRF
+    RRF --> RE --> INJ
 ```
 
 Memory integrates directly into `BaseAgent`. When you set the `memory` parameter, the agent retrieves relevant context and injects it before each LLM call — no extra code on your side.

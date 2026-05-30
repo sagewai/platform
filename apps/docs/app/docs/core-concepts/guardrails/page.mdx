@@ -20,24 +20,24 @@ Guardrails protect your agents at the input and output boundaries. They run auto
 
 ## How Guardrails Work
 
-```
-User Message
-    |
-    v
-[Input Guardrails] --block--> GuardrailViolationError
-    |
-    pass
-    |
-    v
-[Agent Loop / LLM]
-    |
-    v
-[Output Guardrails] --block--> GuardrailViolationError
-    |
-    pass
-    |
-    v
-Response to User
+```mermaid
+flowchart TD
+    User["User Message"]
+    Input{"Input Guardrails"}
+    LLM["Agent Loop / LLM"]
+    Output{"Output Guardrails"}
+    Response["Response to User"]
+    InputErr["GuardrailViolationError"]
+    OutputErr["GuardrailViolationError"]
+    User --> Input
+    Input -- block --> InputErr
+    Input -- pass --> LLM
+    LLM --> Output
+    Output -- block --> OutputErr
+    Output -- pass --> Response
+    style InputErr fill:#fee2e2,stroke:#dc2626
+    style OutputErr fill:#fee2e2,stroke:#dc2626
+    style Response fill:#dcfce7,stroke:#16a34a
 ```
 
 Each guardrail has three possible actions:

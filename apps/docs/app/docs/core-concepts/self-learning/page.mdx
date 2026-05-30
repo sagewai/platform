@@ -202,27 +202,19 @@ The learning pipeline emits events through the SDK's event system. Hook into `on
 
 ## How It All Fits Together
 
-```
-User Message
-    |
-    v
-Agent receives message
-    |
-    +---> [Retrieve] Search context + episodes + graph
-    |         |
-    |         v
-    |     Inject relevant memories into prompt
-    |
-    v
-LLM generates response
-    |
-    +---> [Learn] MemoryBridge extracts facts (every N turns)
-    |         |
-    |         v
-    |     Store facts + build graph + update episodes
-    |
-    v
-Return response to user
+```mermaid
+flowchart TD
+    UM["User Message"]
+    AR["Agent receives message"]
+    RET["[Retrieve] Search context + episodes + graph"]
+    INJ["Inject relevant memories into prompt"]
+    LLM["LLM generates response"]
+    LRN["[Learn] MemoryBridge extracts facts (every N turns)"]
+    STO["Store facts + build graph + update episodes"]
+    RR["Return response to user"]
+    UM --> AR --> RET --> INJ --> LLM
+    LLM --> LRN --> STO
+    LLM --> RR
 ```
 
 The retrieve-then-learn cycle runs automatically when `auto_learn=True`. No additional code is needed beyond the agent constructor.

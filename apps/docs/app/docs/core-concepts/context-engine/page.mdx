@@ -24,40 +24,32 @@ The Context Engine implements the `MemoryProvider` protocol, so it plugs directl
 
 ## Architecture
 
-```
-Documents / Text / URLs / Directories
-    |
-    v
-IngestionPipeline
-    |
-    +---> Docling (PDF, DOCX, HTML, images)
-    +---> tree-sitter (source code: Python, JS, Go, ...)
-    +---> URL fetcher (with SSRF protection)
-    |
-    v
-Chunking (recursive, with semantic dedup)
-    |
-    v
-Embedding (OpenAI, configurable)
-    |
-    +---> Vector Store (Milvus or in-memory)
-    +---> Metadata Store (Postgres or in-memory)
-    +---> Graph Store (NebulaGraph, optional)
-    |
-    v
-Multi-Strategy Retrieval
-    +---> Vector search (semantic similarity)
-    +---> BM25 search (keyword matching)
-    +---> Graph search (relationship traversal)
-    |
-    v
-Reciprocal Rank Fusion (RRF) merge
-    |
-    v
-Optional cross-encoder re-ranking
-    |
-    v
-Deduplicated, scored results
+```mermaid
+flowchart TD
+    SRC["Documents / Text / URLs / Directories"]
+    IP["IngestionPipeline"]
+    DOC["Docling (PDF, DOCX, HTML, images)"]
+    TS["tree-sitter (source code: Python, JS, Go, ...)"]
+    URL["URL fetcher (with SSRF protection)"]
+    CHUNK["Chunking (recursive, with semantic dedup)"]
+    EMB["Embedding (OpenAI, configurable)"]
+    VS["Vector Store (Milvus or in-memory)"]
+    MS["Metadata Store (Postgres or in-memory)"]
+    GS["Graph Store (NebulaGraph, optional)"]
+    MSR["Multi-Strategy Retrieval"]
+    VSe["Vector search (semantic similarity)"]
+    BM["BM25 search (keyword matching)"]
+    GSe["Graph search (relationship traversal)"]
+    RRF["Reciprocal Rank Fusion (RRF) merge"]
+    RE["Optional cross-encoder re-ranking"]
+    OUT["Deduplicated, scored results"]
+    SRC --> IP
+    IP --> DOC & TS & URL
+    DOC & TS & URL --> CHUNK --> EMB
+    EMB --> VS & MS & GS
+    VS & MS & GS --> MSR
+    MSR --> VSe & BM & GSe
+    VSe & BM & GSe --> RRF --> RE --> OUT
 ```
 
 ## Quick Start

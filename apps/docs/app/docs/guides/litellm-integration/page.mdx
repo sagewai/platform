@@ -15,31 +15,23 @@ This guide shows you how to run LiteLLM Proxy as a shared gateway and point Sage
 
 ## Architecture
 
-```
-+----------------------------------------------------+
-|                  Your Organization                  |
-|                                                     |
-|  +---------+  +---------+  +------------------+    |
-|  | Claude  |  | Cursor  |  | Sagewai Agents   |    |
-|  | Code    |  |         |  | (orchestration)  |    |
-|  +----+----+  +----+----+  +--------+---------+    |
-|       |            |                |               |
-|       +------------+----------------+               |
-|                    |                                |
-|          +---------v----------+                     |
-|          |  LiteLLM Proxy     | <-- Virtual Keys    |
-|          |  (AI Gateway)      |     Budget Limits   |
-|          |                    |     Model Routing   |
-|          +---------+----------+                     |
-|                    |                                |
-+--------------------+--------------------------------+
-                     |
-         +-----------+-----------+
-         v           v           v
-    +---------+ +---------+ +---------+
-    | OpenAI  | | Claude  | | Gemini  |
-    | GPT-4o  | | Sonnet  | | Flash   |
-    +---------+ +---------+ +---------+
+```mermaid
+flowchart TD
+    subgraph Org["Your Organization"]
+        CC["Claude Code"]
+        CUR["Cursor"]
+        SA["Sagewai Agents<br/>(orchestration)"]
+        PROXY["LiteLLM Proxy (AI Gateway)<br/>Virtual Keys · Budget Limits · Model Routing"]
+        CC --> PROXY
+        CUR --> PROXY
+        SA --> PROXY
+    end
+    OAI["OpenAI<br/>GPT-4o"]
+    CLA["Claude<br/>Sonnet"]
+    GEM["Gemini<br/>Flash"]
+    PROXY --> OAI
+    PROXY --> CLA
+    PROXY --> GEM
 ```
 
 Sagewai uses LiteLLM as its inference backend via `litellm.acompletion`. Pointing agents at a LiteLLM Proxy requires only setting `api_base` — no code changes beyond that.
