@@ -20,6 +20,7 @@ type Oauth2ProtocolData = {
     expires_at: string;
     obtained_at: string;
     last_refreshed_at: string | null;
+    refresh_count: number;
   } | null;
 };
 
@@ -70,6 +71,10 @@ export function Oauth2Panel({ connection }: { connection: Connection }) {
           <div>
             <dt className="text-text-secondary">Last refreshed</dt>
             <dd>{pd.tokens.last_refreshed_at ?? 'never'}</dd>
+          </div>
+          <div>
+            <dt className="text-text-secondary">Refresh count</dt>
+            <dd data-testid="oauth2-refresh-count">{pd.tokens.refresh_count ?? 0}</dd>
           </div>
         </>
       )}

@@ -1512,6 +1512,58 @@ passing.
 - Auto-rotation of secrets at import time (Connections Platform
   follow-up #5).
 
+## OAuth2 refresh polish (Connections Platform follow-up #5 — final)
+
+Surfaces the existing OAuth2 reactive eager-refresh-on-call as audit
+events + a persisted refresh counter. No new refresh policy, no
+background task, no Vault changes.
+
+- `_Tokens.refresh_count: int` — new field (default 0), bumped on every
+  successful refresh. Joins the existing `last_refreshed_at` field on
+  the token record.
+- `_emit_refresh_event(...)` — shared audit helper emitting
+  `oauth2.token.refreshed` / `oauth2.token.refresh_failed` via the
+  canonical `logger.info(extra={"event": ...})` pattern (PR #368 canon).
+- Both refresh paths instrumented:
+  - `get_default_access_token(..., trigger="api_call")` — reactive
+    eager-refresh (≤60s before expiry). New `trigger` kwarg labels the
+    call context (`api_call` default; `test`/`explicit` canonical;
+    free-form str tolerates unknowns).
+  - `_refresh` route/CLI (`POST /{id}/refresh`) — force-refresh; emits
+    with `trigger="explicit"`.
+- Admin UI: OAuth2 detail panel gains a "Refresh count" row (the "Last
+  refreshed" row already existed).
+- CLI: no changes — `get`/`list` already dump full `protocol_data`, so
+  `refresh_count` appears automatically.
+- Import/export: `refresh_count` + `last_refreshed_at` are non-sensitive
+  metadata; they travel through all three secrets modes.
+
+**Key invariants:**
+- Failed refresh emits `oauth2.token.refresh_failed` and does NOT bump
+  `refresh_count` or `last_refreshed_at` (those reflect successes only).
+- The `trigger` parameter is a plain `str`, not an enum — unknown values
+  pass through to the audit payload verbatim.
+- `refresh_count` lives on `_Tokens` (alongside `last_refreshed_at`), NOT
+  on `OAuth2ProtocolData`. It resets to 0 when a connection re-authorizes
+  (new token block).
+- `plugin.test()` is NOT rewired to refresh in this PR — the `"test"`
+  trigger value is reserved/defined but no production caller passes it
+  (rewiring `test()` to refresh would be a behavior change beyond polish).
+
+**Not in this PR (deferred to future specs):**
+- Vault dynamic-secret engines + lease renewal (~1000 LOC; wait for demand).
+- Manual rotation trigger UX (`POST /{id}/rotate`).
+- Background poll task for proactive rotation.
+- Per-connection rotation policy (`auto_rotate`, custom safety window).
+- Refresh-event history page.
+
+**This closes the Connections Platform follow-up sequence** (items
+#1 MCP-first-class, #3 secret backends, #2 new protocols Phase A,
+#4 import/export, #5 this).
+
+**Test deltas:** 16 new SDK tests in
+`test_protocols_oauth2_refresh_audit.py`. Full SDK suite: ~5679 passing.
+
 ## MCP-as-first-class (sub-project 3 — Bundle A)
 
 Bundle A landed: registered MCP server connections with capability

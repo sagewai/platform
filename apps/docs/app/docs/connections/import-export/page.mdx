@@ -160,6 +160,7 @@ The admin UI rejects `secrets_mode: placeholder` imports with a clear "use the C
 4. **Status, timestamps, and last_error are NOT exported.** These are operational state, not configuration. On import the status defaults to `pending`.
 5. **The `id` field is omitted by default.** Use `--include-id` at export + `--preserve-ids` at import to round-trip ids (DR use case).
 6. **The `is_default` flag is exported verbatim.** Two rows both `is_default: true` for the same protocol → `import_default_collision`. Edit one of them to `false`.
+7. **OAuth2 refresh metadata travels with the export.** The `last_refreshed_at` and `refresh_count` fields on OAuth2 connections reflect the source environment's refresh history at export time. They're non-sensitive metadata and survive all three secrets modes. When cloning to a clean environment, edit the YAML to remove them (or accept that the target will show the source's history until the first local refresh).
 
 ## Programmatic API
 

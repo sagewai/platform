@@ -22,6 +22,7 @@ the persistence-touching code is re-pointed at ``ctx.store`` +
 from __future__ import annotations
 
 import json as _json
+import logging
 import secrets
 import urllib.parse
 from datetime import datetime, timedelta, timezone
@@ -45,9 +46,62 @@ from sagewai.oauth.errors import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 def oauth2_default_key(protocol_data: dict[str, Any]) -> str | None:
     """Default-key extractor: one default per (project, "oauth2", provider)."""
     return protocol_data.get("provider") if isinstance(protocol_data, dict) else None
+
+
+def _emit_refresh_event(
+    *,
+    success: bool,
+    connection_id: str,
+    project_id: str | None,
+    provider: str | None,
+    trigger: str,
+    old_expires_at: str | None = None,
+    new_expires_at: str | None = None,
+    error_code: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    """Emit a structured audit event for an OAuth2 token refresh.
+
+    Uses the canonical ``logger.info(extra=...)`` pattern (PR #368) so the
+    OTel pipeline ships the event to whatever audit sink is wired. A failed
+    refresh is logged at INFO level (not ERROR) — the caller still receives
+    the typed exception; the audit event is informational.
+
+    ``trigger`` is a free-form string (``api_call`` | ``test`` | ``explicit``
+    canonically) so callers can label the call context.
+    """
+    if success:
+        logger.info(
+            "oauth2 token refreshed",
+            extra={
+                "event": "oauth2.token.refreshed",
+                "connection_id": connection_id,
+                "project_id": project_id,
+                "provider": provider,
+                "trigger": trigger,
+                "old_expires_at": old_expires_at,
+                "new_expires_at": new_expires_at,
+            },
+        )
+    else:
+        logger.info(
+            "oauth2 token refresh failed",
+            extra={
+                "event": "oauth2.token.refresh_failed",
+                "connection_id": connection_id,
+                "project_id": project_id,
+                "provider": provider,
+                "trigger": trigger,
+                "error_code": error_code,
+                "error_message": error_message,
+            },
+        )
 
 
 class _Tokens(BaseModel):
@@ -59,6 +113,7 @@ class _Tokens(BaseModel):
     expires_at: str
     obtained_at: str
     last_refreshed_at: str | None = None
+    refresh_count: int = Field(default=0, ge=0)
 
 
 class OAuth2ProtocolData(BaseModel):
@@ -371,11 +426,21 @@ async def _refresh(connection_id: str) -> dict:
             status="expired",
             last_error={"code": exc.code, "message": str(exc), "at": _utcnow_iso()},
         )
+        _emit_refresh_event(
+            success=False,
+            connection_id=record.id,
+            project_id=record.project_id,
+            provider=decrypted_pd.get("provider"),
+            trigger="explicit",
+            error_code=exc.code,
+            error_message=str(exc),
+        )
         raise HTTPException(
             400, detail={"code": exc.code, "message": str(exc)},
         )
 
     now = datetime.now(timezone.utc)
+    old_expires_at = tokens.get("expires_at")
     new_access = response.get("access_token") or tokens.get("access_token")
     new_refresh = response.get("refresh_token") or refresh_token_value
     expires_in = response.get("expires_in", 3600)
@@ -383,6 +448,7 @@ async def _refresh(connection_id: str) -> dict:
         expires_in_int = int(expires_in)
     except (TypeError, ValueError):
         expires_in_int = 3600
+    new_expires_at = (now + timedelta(seconds=expires_in_int)).isoformat()
     scope_str = response.get("scope")
     if scope_str:
         granted_scopes = [s for s in scope_str.split(provider.scope_separator) if s]
@@ -395,9 +461,10 @@ async def _refresh(connection_id: str) -> dict:
             "access_token": new_access,
             "refresh_token": new_refresh,
             "token_type": response.get("token_type", tokens.get("token_type", "Bearer")),
-            "expires_at": (now + timedelta(seconds=expires_in_int)).isoformat(),
+            "expires_at": new_expires_at,
             "obtained_at": tokens.get("obtained_at") or now.isoformat(),
             "last_refreshed_at": now.isoformat(),
+            "refresh_count": int(tokens.get("refresh_count", 0)) + 1,
         },
     }
     encrypted_pd = ctx.router.encrypt(
@@ -406,6 +473,15 @@ async def _refresh(connection_id: str) -> dict:
         connection_credentials_backend=record.credentials_backend,
     )
     updated = ctx.store.update(record.id, protocol_data=encrypted_pd, status="authorized")
+    _emit_refresh_event(
+        success=True,
+        connection_id=record.id,
+        project_id=record.project_id,
+        provider=decrypted_pd.get("provider"),
+        trigger="explicit",
+        old_expires_at=old_expires_at,
+        new_expires_at=new_expires_at,
+    )
     # Return the masked view (don't leak fresh tokens back to caller).
     plugin = OAuth2ProtocolPlugin()
     return {
@@ -700,6 +776,7 @@ class OAuth2ProtocolPlugin:
         router,
         project_id: str | None,
         provider: str,
+        trigger: str = "api_call",
     ) -> tuple[str, dict[str, Any]]:
         """Find the default oauth2 connection for ``(project_id, provider)`` and return its access token.
 
@@ -767,16 +844,28 @@ class OAuth2ProtocolPlugin:
                             "at": _utcnow_iso(),
                         },
                     )
+                    _emit_refresh_event(
+                        success=False,
+                        connection_id=connection.id,
+                        project_id=connection.project_id,
+                        provider=provider,
+                        trigger=trigger,
+                        error_code=exc.code,
+                        error_message=str(exc),
+                    )
                     raise
                 now = datetime.now(timezone.utc)
+                old_expires_at = tokens.get("expires_at")
                 expires_in = int(response.get("expires_in", 3600))
+                new_expires_at = (now + timedelta(seconds=expires_in)).isoformat()
                 new_tokens = {
                     "access_token": response["access_token"],
                     "refresh_token": response.get("refresh_token") or tokens.get("refresh_token"),
                     "token_type": response.get("token_type", "Bearer"),
-                    "expires_at": (now + timedelta(seconds=expires_in)).isoformat(),
+                    "expires_at": new_expires_at,
                     "obtained_at": tokens.get("obtained_at") or now.isoformat(),
                     "last_refreshed_at": now.isoformat(),
+                    "refresh_count": int(tokens.get("refresh_count", 0)) + 1,
                 }
                 new_pd = {**decrypted_pd, "tokens": new_tokens}
                 encrypted_pd = router.encrypt(
@@ -785,6 +874,15 @@ class OAuth2ProtocolPlugin:
                     connection_credentials_backend=connection.credentials_backend,
                 )
                 store.update(connection.id, protocol_data=encrypted_pd, status="authorized")
+                _emit_refresh_event(
+                    success=True,
+                    connection_id=connection.id,
+                    project_id=connection.project_id,
+                    provider=provider,
+                    trigger=trigger,
+                    old_expires_at=old_expires_at,
+                    new_expires_at=new_expires_at,
+                )
                 return new_tokens["access_token"], {
                     "id": connection.id,
                     "protocol_data": new_pd,
