@@ -27,6 +27,20 @@ agent, and summarise the result in-process again — each step picks the
 cheapest mode that still satisfies the isolation and capability it
 needs.
 
+> **Status note — Sealed runtime enforcement.** This page describes the
+> designed behaviour of the identity-scoped, CLI-agent, and JIT-credential
+> modes. The pieces that depend on Sealed *runtime* enforcement — live
+> secret injection into a running sandbox, redaction at the tool-runner
+> boundary, per-key / per-CLI ACL filtering, replay-safe injection, and
+> mid-run (hard-revoke) abort — are **experimental and maturing**: they are
+> built and tested but are not yet wired into the default worker path
+> (`SealedSecretProvider` is `None` by default). What ships today is the
+> per-workload identity model, an external secret backend (HashiCorp Vault),
+> admin profile/secret controls, enqueue-time cascade resolution, and
+> fail-closed revocation checks at enqueue. See the
+> [v1.0 status](https://github.com/sagewai/platform#v10-status) for the full
+> shipped-vs-experimental breakdown.
+
 ## Before you start
 
 - Have a worker running. If not, see [Quickstart](/docs/get-started/quickstart).
@@ -139,9 +153,14 @@ a typical 1–3 level cascade against the built-in backend; ~100ms+
 for external backends like Vault).
 
 **Security:** all of sandboxed-mode plus per-customer credential
-scoping. Every key injection, every cascade resolution, and every
-revocation interaction is audited. With no CLI agent in the picture,
-no LLM keys leave the sandbox unless a tool you wrote calls one.
+scoping. By design, every key injection, every cascade resolution, and
+every revocation interaction is audited; with no CLI agent in the
+picture, no LLM keys leave the sandbox unless a tool you wrote calls
+one. Cascade resolution and fail-closed revocation checks run at
+enqueue today; the runtime side of this — injecting the resolved
+identity into a live sandbox and auditing each injection — is part of
+Sealed's experimental runtime enforcement (see the status note above),
+not yet wired into the default worker path.
 
 **Use it for:**
 
@@ -192,10 +211,14 @@ Sandbox
 Claude Code on a complex prompt can take 5–30 minutes). LLM API costs
 are charged to the customer's keys, not the operator's.
 
-**Security:** the CLI runs inside the sandbox boundary. Its LLM keys
-are sandbox-only. Its filesystem access is `/workspace` (or wherever
-the image variant configures). Network policy applies — typically
-`egress_only` to the LLM provider plus the artifact destination.
+**Security:** the CLI runs inside the sandbox boundary. By design its
+LLM keys are sandbox-only, its filesystem access is `/workspace` (or
+wherever the image variant configures), and network policy applies —
+typically `egress_only` to the LLM provider plus the artifact
+destination. The sandbox-only credential guarantee depends on Sealed's
+experimental runtime enforcement (live injection plus redaction at the
+tool-runner boundary), which is maturing and not yet wired into the
+default worker path — see the status note above.
 
 **Use it for:**
 
@@ -223,6 +246,12 @@ need at the time you enqueue the run. The CLI agent or the tool
 runner can request a credential it doesn't have, and the Sagewai
 agent on the host evaluates the request against your policy
 (auto-approve, deny, or human-in-the-loop).
+
+This mode builds on Sealed's experimental runtime enforcement — live
+injection into a running sandbox plus the JIT human-in-the-loop
+credential path — which is built and tested but not yet wired into the
+default worker path. Treat the behaviour described here as the designed
+contract; see the status note above for what ships today.
 
 The tool runner channel is bidirectional in this mode: the host
 dispatches into the sandbox as before, *and* the sandbox can call back

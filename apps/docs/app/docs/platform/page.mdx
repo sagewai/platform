@@ -28,7 +28,7 @@ Bootstrap on Opus or GPT-5, capture the answers via the Curator, fine-tune a sma
 
 ### [Security](/docs/platform/security)
 
-Per-CLI workload identity, vault-backed secrets with just-in-time resolution, prompt and tool-output redaction at the host RPC seam, replay-safe audit, per-key access control, just-in-time human-in-the-loop on high-privilege actions. Customer credentials live in the sandbox only — encrypted at rest, scrubbed on release. The control surface a security review signs.
+Per-workload identity, an external secret backend (HashiCorp Vault) with enqueue-time cascade resolution, and admin profile/secret controls — the identity model, the Vault backend, and the admin controls ship today. Runtime enforcement is the designed control surface a security review signs: live secret injection into the running sandbox, prompt and tool-output redaction at the host RPC seam, replay-safe audit, per-key access control, just-in-time human-in-the-loop on high-privilege actions, and mid-run revocation — so customer credentials live in the sandbox only, encrypted at rest and scrubbed on release. That runtime enforcement is experimental and still maturing — built and tested, but not yet wired into the default worker path (`SealedSecretProvider` is `None` by default). See the [v1.0 status](https://github.com/sagewai/platform#v10-status) for what ships today versus what is maturing.
 
 ## How to read each product page
 

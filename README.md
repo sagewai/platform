@@ -8,11 +8,9 @@
 
   <p><strong>Sagewai is the autonomous agent platform: describe the goal, we design the agents, run them in production, and fine-tune local models so every run gets cheaper.</strong></p>
 
-  <p><em>Five pillars hold up the platform; one spine runs through all of them — that's what makes the agent platform safe to give a credit card.</em></p>
-
   [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](./LICENSE)
   [![PyPI](https://img.shields.io/pypi/v/sagewai.svg)](https://pypi.org/project/sagewai/)
-  [![GHCR](https://img.shields.io/badge/ghcr.io-sagewai%2Fbackend-blue)](https://github.com/sagewai/platform/pkgs/container/backend)
+  [![Status: alpha](https://img.shields.io/badge/status-early%20(alpha)-orange)](#v10-status)
   [![ci-sdk](https://github.com/sagewai/platform/actions/workflows/ci-sdk.yml/badge.svg)](https://github.com/sagewai/platform/actions/workflows/ci-sdk.yml)
   [![ci-admin](https://github.com/sagewai/platform/actions/workflows/ci-admin.yml/badge.svg)](https://github.com/sagewai/platform/actions/workflows/ci-admin.yml)
   [![ci-docs](https://github.com/sagewai/platform/actions/workflows/ci-docs.yml/badge.svg)](https://github.com/sagewai/platform/actions/workflows/ci-docs.yml)
@@ -20,48 +18,36 @@
   <p>
     <a href="https://sagewai.ai">Website</a> ·
     <a href="https://docs.sagewai.ai">Docs</a> ·
-    <a href="./docs/positioning/one-pager.md">One-pager</a> ·
-    <a href="#60-second-quickstart">Quickstart</a> ·
-    <a href="#learn-in-5-examples">5-Example Tour</a> ·
+    <a href="#quickstart">Quickstart</a> ·
+    <a href="#repository-map">Repository map</a> ·
+    <a href="#examples">Examples</a> ·
     <a href="https://sagewai.ai/commercial">Commercial license</a>
   </p>
 </div>
 
 ---
 
-## What is Sagewai?
+## What is Sagewai
 
-**Sagewai is the autonomous agent platform for developers.** You describe the
-goal; autopilot designs the agent graph, the fleet runs it in production,
-and the training loop fine-tunes local models from the outcomes so runs get
-cheaper over time.
+Sagewai is an open-source platform for building and running AI agents in production. You write an agent in a few lines of Python, give it tools and memory, and run it — on your machine or as a fleet of workers on your own hardware. One interface reaches 100+ models (OpenAI, Anthropic, Google, Mistral, local Ollama via LiteLLM), so you are not locked to a provider.
 
-We built it for one specific person: a senior engineer at a 50-500 person SaaS who's been told to "add AI to the product" this quarter, has a budget under $500/month, and a CFO who's going to ask hard questions in three months. The platform walks them through the whole arc:
+In practice that means you can:
 
-| Quarter | What they need | What Sagewai ships |
-|---|---|---|
-| **Q1: ship the AI feature** | Working agent on Opus or GPT-5; deadline met | SDK + tools + memory + workflows |
-| **Q2: explain the cost** | "Why did the API bill quadruple?" | Observatory — per-model, per-team, per-feature breakdown |
-| **Q3: cost-down** | "Cut it 50% without an ML PhD" | Training loop — Curator captures runs, fine-tune on free Colab or rented GPU, deploy via Ollama. End-to-end under $5 |
-| **Q4: the strategic question** | "If Anthropic raised prices 10×, how badly would we hurt?" | "We'd be fine, we already have our own model" |
+- **Build** an agent with the **SDK** — multi-model, tools over MCP, typed memory, and guardrails in one import.
+- **Run** it across your own machines with **Fleet** — capability-based dispatch, project isolation, and sandboxed execution (Docker or Kubernetes).
+- **Keep secrets scoped** with **Sealed** — per-workload identity and external secret backends (e.g. HashiCorp Vault), with redaction, per-key ACLs, and just-in-time credentials. *(The identity model, the Vault backend, and the admin controls ship today; runtime enforcement is still maturing — see [v1.0 status](#v10-status).)*
+- **See what it costs** with **Observatory** — OpenTelemetry traces, metrics, and a per-model / per-team spend breakdown.
+- **Drive the cost down** with the **Training Loop** — capture good production runs and fine-tune a local model from them. *(v1.0 ships run capture; the end-to-end capture → fine-tune → deploy loop is on the [v1.1 roadmap](#v10-status).)*
 
-Unlike frameworks that stop at `agent.run()`, Sagewai ships the whole loop:
+**Autopilot** sits on top: describe a goal in plain English and it assembles and runs the agent for you. *(v1.0 runs linear plans; branched/conditional plans are in progress.)*
 
-- **SDK** — Python-native runtime with multi-model providers, tools via MCP gateway, typed memory with extraction strategies and per-mission branching and checkpoint save/restore, guardrails, and LLM proxy in one import
-- **Autopilot** — state the goal in plain English; autopilot designs the agent graph, extracts the slots, previews the plan, runs the mission, and heals on failure
-- **Fleet** — distributed workers with capability-based dispatch, project isolation, enrollment keys, and isolated execution sandboxes (image families, Kubernetes backend, AgentCore-runtime backend, pooling)
-- **Observatory** — OpenTelemetry tracing, VictoriaMetrics metrics, Grafana dashboards, cost tracking, audit trail
-- **Training Loop — from juggernauts to your own model.** Start with Opus or GPT-5. Capture their answers as training data via the Curator. Fine-tune your own SLM on free Colab CUDA, on $0.30/hr Spheron bare-metal, on serverless Modal, or on whatever GPU you can rent. Deploy locally via Ollama. Cost-down isn't an optimisation — it's an exit clause.
+All AGPL-3.0. Install with one `pip install sagewai`, or run the full stack with `docker compose up`. Self-hostable on your own hardware.
 
-**Plus one spine — Sealed.** A defense-in-depth security model that runs across all five pillars: per-CLI workload identity, externalised secret backends with JIT credentials, redaction at the RPC boundary, replay safety, per-CLI ACL, JIT-HITL callbacks, reactive directives. The security model agent platforms have been ignoring.
-
-All AGPL-3.0. All one `pip install` or `docker compose up`. All self-hostable on your own hardware, forever.
-
-See the [full one-pager](./docs/positioning/one-pager.md) for competitor comparison and who it's for.
+> **Sagewai is early software.** The `sagewai` package is published as `0.1.1` (alpha). The [v1.0 status](#v10-status) section is explicit about what ships today, what is experimental, and what is on the v1.1 roadmap — so you can decide what to rely on.
 
 ---
 
-## 60-second quickstart
+## Quickstart
 
 ```bash
 # Full stack (postgres + redis + backend + admin UI)
@@ -80,7 +66,7 @@ export OPENAI_API_KEY=sk-...   # or ANTHROPIC_API_KEY
 sagewai admin serve --port 8000
 ```
 
-Hello world in three lines:
+A first agent in a few lines:
 
 ```python
 from sagewai.engines.universal import UniversalAgent
@@ -92,106 +78,73 @@ print(asyncio.run(agent.chat("Explain event loops in one paragraph.")))
 
 ---
 
-## Learn in 5 examples
+## Repository map
 
-A progressive tour of the SDK. Each example is a complete, runnable Python
-file at [`packages/sdk/sagewai/examples/`](./packages/sdk/sagewai/examples/).
-Run them in order — they build on each other.
+Sagewai is a monorepo. The packages and apps:
 
-### 1. Hello, agent &nbsp;—&nbsp; [`01_hello_agent.py`](./packages/sdk/sagewai/examples/01_hello_agent.py)
+| Path | What it is | Published as |
+|---|---|---|
+| [`packages/sdk`](./packages/sdk) | The `sagewai` Python package | `pip install sagewai` |
+| [`apps/admin`](./apps/admin) | Next.js admin UI — agents, workflows, traces | `ghcr.io/sagewai/admin` |
+| [`apps/backend`](./apps/backend) | Docker image wrapping the SDK (`sagewai admin serve`) | `ghcr.io/sagewai/backend` |
+| [`apps/docs`](./apps/docs) | Docs site (Next.js, deployed to Cloudflare) | [docs.sagewai.ai](https://docs.sagewai.ai) |
+| [`apps/vscode-extension`](./apps/vscode-extension) | VS Code extension | VS Code Marketplace |
 
-The simplest possible agent. Create it, ask it something, get a response.
+Inside the SDK — [`packages/sdk/sagewai/`](./packages/sdk/sagewai) — the subpackages you'll read most:
 
-```python
-from sagewai.engines.universal import UniversalAgent
-import asyncio
+| Subpackage | Responsibility |
+|---|---|
+| `cli` | The `sagewai` command-line entrypoints |
+| `engines` | Agent runtimes (`UniversalAgent`, workflows) |
+| `autopilot` | Goal → agent-graph planning and missions |
+| `fleet` | Distributed workers, dispatch, enrollment |
+| `sandbox` | Isolated execution backends (Docker, Kubernetes) |
+| `sealed` | Workload identity, secret backends, redaction |
+| `gateway` | Multi-model LLM proxy and routing |
+| `harness` | Cost-aware proxy for AI coding tools |
+| `mcp` | Model Context Protocol client and server |
+| `connections` | External protocols and credential backends |
+| `memory` | Typed memory, RAG, extraction strategies |
+| `safety` | Guardrails, PII redaction, content filters |
+| `examples` | Runnable end-to-end examples |
 
-async def main():
-    agent = UniversalAgent(name="hello", model="gpt-4o-mini")
-    response = await agent.chat("What are the 5 pillars of Sagewai?")
-    print(response)
-
-asyncio.run(main())
-```
-
-```bash
-export OPENAI_API_KEY=sk-...
-python packages/sdk/sagewai/examples/01_hello_agent.py
-```
-
-### 2. Give it tools &nbsp;—&nbsp; [`02_tool_agent.py`](./packages/sdk/sagewai/examples/02_tool_agent.py)
-
-Decorate a Python function with `@tool` and the agent can call it. No JSON
-schema gymnastics — Sagewai reads your docstring and type hints.
-
-```python
-from sagewai.models.tool import tool
-from sagewai.engines.universal import UniversalAgent
-
-@tool
-def get_weather(city: str) -> str:
-    """Get current weather for a city."""
-    return f"{city}: 18°C, partly cloudy"
-
-agent = UniversalAgent(name="assistant", model="gpt-4o-mini", tools=[get_weather])
-# The agent will call get_weather() when the user asks about weather.
-```
-
-### 3. Multi-stage workflows &nbsp;—&nbsp; [`05_workflow.py`](./packages/sdk/sagewai/examples/05_workflow.py)
-
-Chain agents. Each stage has its own system prompt, model, and tools. The
-output of one feeds into the next.
-
-```python
-researcher = UniversalAgent(name="researcher", model="gpt-4o-mini",
-    system_prompt="Produce 5 key findings with supporting evidence.")
-writer = UniversalAgent(name="writer", model="gpt-4o-mini",
-    system_prompt="Turn findings into a polished 300-word summary.")
-
-findings = await researcher.chat(f"Research: {topic}")
-summary  = await writer.chat(f"Write about these findings: {findings}")
-```
-
-### 4. Guardrails &nbsp;—&nbsp; [`06_guardrails.py`](./packages/sdk/sagewai/examples/06_guardrails.py)
-
-Add PII redaction, content filters, and budget caps to an agent. They run
-before every LLM call — no plumbing, just pass them at construction.
-
-```python
-from sagewai.safety.guardrails import ContentFilter
-from sagewai.safety.pii import PIIGuard
-
-agent = UniversalAgent(
-    name="safe-agent",
-    model="gpt-4o-mini",
-    guardrails=[
-        PIIGuard(action="redact"),
-        ContentFilter(blocked_terms=["confidential"], action="block"),
-    ],
-)
-```
-
-### 5. Production fleet &nbsp;—&nbsp; [`20_fleet_workers.py`](./packages/sdk/sagewai/examples/20_fleet_workers.py)
-
-When you're ready to scale, register remote workers to a dispatcher. Jobs
-fan out across a pool; each worker runs in its own process or node with
-mTLS, capability labels, and approval gates.
-
-```python
-from sagewai.fleet import FleetDispatcher, InMemoryFleetRegistry, InMemoryTaskStore
-
-registry = InMemoryFleetRegistry()
-dispatcher = FleetDispatcher(store=InMemoryTaskStore(), poll_timeout=2.0)
-# Workers register and pull jobs. The dispatcher handles routing,
-# retries, and worker health.
-```
+All packages release together on one `vX.Y.Z` tag — see [`.changeset/README.md`](./.changeset/README.md).
 
 ---
 
-## More examples — feature matrix
+## Developing
 
-Every major subsystem has a dedicated runnable example. Drop into any of
-them when you're ready to go deeper.
+```bash
+git clone git@github.com:sagewai/platform.git
+cd platform
+./scripts/bootstrap.sh          # installs uv + pnpm, syncs the workspace
+```
+
+Common tasks (run `just` for the full list):
+
+| Recipe | What it runs |
+|---|---|
+| `just smoke` | Fast smoke tests (no LLM, no services) |
+| `just test` | Full SDK unit suite |
+| `just dev-all` | Backend + admin UI on localhost |
+| `just compose-up` | Full stack (postgres + redis + backend + admin) |
+| `just build` | sdk wheel + admin + docs + vscode builds |
+
+Package-scoped variants exist for targeted work: `just sdk-test`, `just admin-dev`, `just docs-dev`, and more. See [DEVELOPMENT.md](./DEVELOPMENT.md) for prerequisites and [CONTRIBUTING.md](./CONTRIBUTING.md) for the PR flow.
+
+---
+
+## Examples
+
+Every example is a complete, runnable file in [`packages/sdk/sagewai/examples/`](./packages/sdk/sagewai/examples/). Start here:
+
+- [`01_hello_agent.py`](./packages/sdk/sagewai/examples/01_hello_agent.py) — a minimal agent in five lines.
+- [`02_tool_agent.py`](./packages/sdk/sagewai/examples/02_tool_agent.py) — give an agent a Python function as a tool with `@tool`.
+- [`05_workflow.py`](./packages/sdk/sagewai/examples/05_workflow.py) — chain agents into a multi-stage workflow.
+- [`06_guardrails.py`](./packages/sdk/sagewai/examples/06_guardrails.py) — PII redaction, content filters, and budget caps.
+- [`20_fleet_workers.py`](./packages/sdk/sagewai/examples/20_fleet_workers.py) — run agents across a worker fleet with a dispatcher.
+
+The full set:
 
 | # | File | What it shows |
 |---|---|---|
@@ -217,181 +170,88 @@ them when you're ready to go deeper.
 | 20 | [`20_fleet_workers.py`](./packages/sdk/sagewai/examples/20_fleet_workers.py) | Distributed worker fleet with dispatcher |
 | 21 | [`21_full_stack.py`](./packages/sdk/sagewai/examples/21_full_stack.py) | Backend + admin UI + agents end-to-end |
 | 23 | [`23_harness_proxy.py`](./packages/sdk/sagewai/examples/23_harness_proxy.py) | LLM harness as proxy for all AI calls |
-| 24 | [`24_harness_agent.py`](./packages/sdk/sagewai/examples/24_harness_agent.py) | Agents running under harness with full audit trail |
+| 24 | [`24_harness_agent.py`](./packages/sdk/sagewai/examples/24_harness_agent.py) | Agents running under the harness with a full audit trail |
+
+A guided video series is in production — see the [video guide](https://docs.sagewai.ai/docs/guides/video-tutorials). Every episode maps to an example above.
 
 ---
 
-## Video tutorials
+## v1.0 status
 
-Video topics are scripted and staged in
-[`apps/docs/app/docs/guides/video-tutorials/`](./apps/docs/app/docs/guides/video-tutorials/page.mdx).
-Recordings are rolling out on YouTube and the docs site; URLs will be
-wired in as each episode ships.
+Sagewai is early software — the `sagewai` package is published as `0.1.1` (alpha). Here is what is real today, what is experimental, and what is coming, so you know what to rely on.
 
-### Start here (first 3 videos)
+**Shipped**
+- **SDK** — agents, `@tool` calling, 100+ models via LiteLLM, typed memory, guardrails, and multi-stage workflows.
+- **Autopilot** for **linear** plans — designs and runs the agent graph end-to-end.
+- **Fleet** — capability-based dispatch with project isolation; **Docker** (default) and **Kubernetes** sandbox backends.
+- **Observatory** — OpenTelemetry traces, metrics, and per-model / per-team cost tracking.
+- **Training Loop — capture** (the Curator) and run-level execution modes.
+- **Sealed** — the workload-identity model, an external secret backend (HashiCorp Vault), and admin profile/secret controls.
 
-| # | Title | Length | What you'll learn |
-|---|---|---|---|
-| 1 | **Sagewai in 5 minutes: your first AI agent** | 5 min | Install sagewai, create a 4-line agent, add a custom tool, run it. Zero to working agent. |
-| 2 | **Run AI agents for free with Ollama + Sagewai** | 8 min | Install Ollama, pull `llama3.1`, create an agent with `providers.ollama()`. No API keys, no cloud costs, 100% local. |
-| 3 | **Sagewai vs LangChain vs CrewAI: an honest comparison** | 12 min | Build the same research agent in all three frameworks. See where Sagewai is different — cost control, fleet, local inference. |
+**Experimental** — built and tested, not yet wired into the default run path
+- Autopilot **branched / conditional** plans (today the entry node runs; full routing is in progress).
+- Automatic **healing** — the engine surfaces recommended actions; it does not yet act on them.
+- Sealed **runtime enforcement** — live secret injection, redaction, per-key ACL, and mid-run revocation.
 
-### Core features (next 5)
+**Roadmap → v1.1** (target ~2026-07)
+- The **closed cost-down loop** — fine-tune a promoted local model and deploy it via Ollama.
+- Per-step execution modes; branch-filtered memory retrieval; durable Fleet persistence.
+- Additional sandbox backends (e.g. AWS Lambda).
 
-| # | Title | Length |
-|---|---|---|
-| 4 | Building a research agent with memory | 10 min |
-| 5 | RAG in 10 minutes: PDF Q&A with the context engine | 10 min |
-| 6 | Multi-agent workflows: researcher, analyst, writer | 12 min |
-| 7 | Sagewai directives: the prompt preprocessor | 8 min |
-| 8 | Safety & guardrails: PII, hallucination, budget | 10 min |
-
-**Full 20-episode playlist:** [`apps/docs/app/docs/guides/video-tutorials/`](./apps/docs/app/docs/guides/video-tutorials/page.mdx) — covers VS Code extension, MCP server, K8s deployment, fine-tuning with Unsloth, durable workflows, self-learning agents, full-stack apps, and more.
+We would rather tell you this plainly than have you find it out in production.
 
 ---
 
-## Local development
-
-```bash
-git clone git@github.com:sagewai/platform.git
-cd platform
-./scripts/bootstrap.sh          # installs uv + pnpm + syncs everything
-```
-
-### Task runner (justfile)
-
-Every task has its own `just` recipe. Run `just` to see them all; the
-ones you'll reach for every day:
-
-| Recipe | What it runs | Expected duration |
-|---|---|---|
-| `just smoke` | 29 fast smoke tests (no LLM, no services). Pre-commit sanity check. | ~0.1 s |
-| `just test` | Full SDK unit test suite — 2904 tests, all mocks. | ~10 s |
-| `just perf` | Performance micro-benchmarks with fixed time budgets. Catches 10x regressions in hot paths. | ~0.1 s |
-| `just build` | Build sdk wheel + admin + docs + vscode-extension. | ~2 min |
-| `just dev-all` | Run backend (FastAPI) + admin UI concurrently on localhost. | — (long-running) |
-| `just compose-up` | Full stack via root `docker-compose.yml` (postgres + redis + backend + admin). | — (long-running) |
-| `just prereqs` | Check all development tools are installed. | instant |
-
-Package-scoped variants exist for targeted iteration: `just sdk-test`, `just sdk-smoke`, `just sdk-perf`, `just sdk-build`, `just sdk-lint`, `just admin-dev`, `just admin-build`, `just docs-dev`, `just docs-build`, `just vscode-build`, `just backend-build`.
-
-See [DEVELOPMENT.md](DEVELOPMENT.md) for full setup instructions and prerequisites.
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full flow.
-
----
-
-## Why Sagewai vs. the alternatives?
+## Sagewai vs. the alternatives
 
 | | Sagewai | LangChain / LangGraph | CrewAI | OpenAI Agents SDK |
 |---|---|---|---|---|
 | Self-hostable backend + admin UI | ✅ | ❌ (library only) | ❌ | ❌ |
-| Production worker fleet with mTLS | ✅ | ❌ | ❌ | ❌ |
-| Budget, guardrails, analytics built-in | ✅ | Partial (LangSmith = SaaS) | ❌ | ❌ |
-| Any-model, any-provider | ✅ | ✅ | ✅ | OpenAI-first |
-| One-command full stack (compose) | ✅ | ❌ | ❌ | ❌ |
-| License for embedding in proprietary product | Commercial | MIT | MIT | Apache |
+| Worker fleet on your own hardware | ✅ | ❌ | ❌ | ❌ |
+| Built-in budget, guardrails, cost analytics | ✅ | Partial (LangSmith = SaaS) | ❌ | ❌ |
+| Any model, any provider | ✅ | ✅ | ✅ | OpenAI-first |
+| One-command full stack (`docker compose`) | ✅ | ❌ | ❌ | ❌ |
+| License for embedding in a proprietary product | Commercial | MIT | MIT | Apache |
 
-Sagewai is the answer when "I want LangSmith but self-hosted, with the
-admin UI, the worker fleet, and no vendor lock-in."
+Sagewai is the answer to "I want a self-hosted agent platform with the admin UI, the worker fleet, and no vendor lock-in."
 
 ---
 
-## Monorepo map
+## Client wrappers
 
-| Package | What it is | Published as |
-|---|---|---|
-| [`packages/sdk`](./packages/sdk) | The `sagewai` Python package. Includes `cli`, `mcp`, `admin` (FastAPI), `gateway`, `fleet`, `core`, `engines` as internal subpackages. | `pip install sagewai` |
-| [`apps/admin`](./apps/admin) | Next.js admin panel — web UI for agents, workflows, traces. | `ghcr.io/sagewai/admin:<version>` |
-| [`apps/backend`](./apps/backend) | Thin Docker image bundling the SDK + a minimal Python runtime, entrypoint = `sagewai admin serve`. | `ghcr.io/sagewai/backend:<version>` |
-| [`apps/docs`](./apps/docs) | Next.js docs site deployed to Cloudflare. | [docs.sagewai.ai](https://docs.sagewai.ai) |
-| [`apps/vscode-extension`](./apps/vscode-extension) | VS Code extension for directive syntax highlighting and snippets. | VS Code Marketplace |
-
-All five packages ship together on one unified `vX.Y.Z` tag. See
-[`.changeset/README.md`](./.changeset/README.md) for the release flow.
-
-### Client wrappers (separate repos)
-
-Thin language-idiomatic clients that talk to a running Sagewai backend over
-HTTP — for teams where the stack isn't Python. They're standalone so each
-language has its own release cadence and packaging ecosystem.
-
-| Language | Repo |
-|---|---|
-| Python (standalone client) | [sagewai/sagewai-python](https://github.com/sagewai/sagewai-python) |
-| TypeScript / JavaScript | [sagewai/sagewai-ts](https://github.com/sagewai/sagewai-ts) |
-| Go | [sagewai/sagewai-go](https://github.com/sagewai/sagewai-go) |
-| Rust | [sagewai/sagewai-rs](https://github.com/sagewai/sagewai-rs) |
-| Java | [sagewai/sagewai-java](https://github.com/sagewai/sagewai-java) |
-| Kotlin | [sagewai/sagewai-kotlin](https://github.com/sagewai/sagewai-kotlin) |
-| C# / .NET | [sagewai/sagewai-dotnet](https://github.com/sagewai/sagewai-dotnet) |
-| Scala | [sagewai/sagewai-scala](https://github.com/sagewai/sagewai-scala) |
-| Ruby | [sagewai/sagewai-ruby](https://github.com/sagewai/sagewai-ruby) |
-| PHP | [sagewai/sagewai-php](https://github.com/sagewai/sagewai-php) |
-| Swift | [sagewai/sagewai-swift](https://github.com/sagewai/sagewai-swift) |
-| C / C++ | [sagewai/sagewai-cpp](https://github.com/sagewai/sagewai-cpp) |
-| Dart | [sagewai/sagewai-dart](https://github.com/sagewai/sagewai-dart) |
-| Flutter | [sagewai/sagewai-flutter](https://github.com/sagewai/sagewai-flutter) |
-| React Native | [sagewai/sagewai-react-native](https://github.com/sagewai/sagewai-react-native) |
-| Elixir | [sagewai/sagewai-elixir](https://github.com/sagewai/sagewai-elixir) |
-| Perl | [sagewai/sagewai-perl](https://github.com/sagewai/sagewai-perl) |
-
-The Python wrapper is for apps that don't want to pull in the full SDK
-dependency tree — the monorepo `packages/sdk` remains the primary Python
-surface for agent authoring.
+Thin, language-idiomatic clients talk to a running Sagewai backend over HTTP, for teams whose stack isn't Python: TypeScript/JavaScript, Go, Rust, Java, Kotlin, C#/.NET, Scala, Ruby, PHP, Swift, C/C++, Dart, Flutter, React Native, Elixir, and Perl — plus a standalone Python client. See the [client wrappers guide](https://docs.sagewai.ai/docs/guides/client-wrappers). The monorepo `packages/sdk` remains the primary Python surface for authoring agents.
 
 ---
 
 ## Contributing
 
-Pull requests are welcome on bug fixes, docs, and small features. For
-larger changes, open a GitHub Discussion first so we can align on scope
-before you write code.
+Pull requests are welcome for bug fixes, docs, and small features. For larger changes, open a GitHub Discussion first so we can align on scope before you write code.
 
-By contributing, you agree to the [Contributor License Agreement](./CLA.md).
-This is a **Copyright License Grant** — you keep copyright of your
-contribution while granting Ali Arda Diri a broad license to use and
-relicense it under AGPL-3.0 and commercial terms. This is the same model
-used by Ghost, Cal.com, and MariaDB to maintain a sustainable dual-license
-OSS business.
+By contributing you agree to the [Contributor License Agreement](./CLA.md): you keep copyright of your contribution while granting the maintainer a broad license to use and relicense it under AGPL-3.0 and commercial terms — the same dual-license model used by Ghost, Cal.com, and MariaDB.
 
-See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for coding conventions and the
-PR flow, and [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md) for community
-expectations.
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for coding conventions and the PR flow, and [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md) for community expectations.
 
 ## Roadmap
 
-Roadmap lives on the public [Sagewai Roadmap board](https://github.com/orgs/sagewai/projects)
-(read-only for visitors, maintainer-write for the core team). Anything
-not on the board is not planned.
+The roadmap lives on the public [Sagewai Roadmap board](https://github.com/orgs/sagewai/projects) (read-only for visitors). Anything not on the board is not planned.
 
 ## Governance
 
-Sagewai uses a closed-governance model: branch protection, CODEOWNERS
-review requirements, and a maintainer-gated issue tracker. Community
-input flows through GitHub Discussions; Issues are used as an internal
-worklist by the maintainer team. This is the same model used by Bun,
-Deno, and Tauri for commercial-OSS projects.
+Sagewai uses a closed-governance model: branch protection, CODEOWNERS review, and a maintainer-gated issue tracker. Community input flows through GitHub Discussions; Issues are the maintainer team's worklist. This is the same model Bun, Deno, and Tauri use for commercial-OSS projects.
 
 ## License
 
-Sagewai is licensed under the **GNU Affero General Public License v3.0 or
-later** ([LICENSE](./LICENSE)).
+Sagewai is licensed under the **GNU Affero General Public License v3.0 or later** ([LICENSE](./LICENSE)).
 
 A **commercial license** is available for organizations that need to:
-- Embed Sagewai in proprietary software without AGPL-3.0 obligations
-- Offer Sagewai as a managed service (SaaS) without sharing platform code
-- White-label or remove Sagewai branding
+- embed Sagewai in proprietary software without AGPL-3.0 obligations,
+- offer Sagewai as a managed service (SaaS) without sharing platform code, or
+- white-label or remove Sagewai branding.
 
-See [`COMMERCIAL-LICENSE.md`](./COMMERCIAL-LICENSE.md) and contact
-[licensing@sagewai.ai](mailto:licensing@sagewai.ai) for terms.
-
-For the rationale behind the dual-license model and the distinction
-between *using* Sagewai vs. *modifying* it, see
-[`LICENSE_FAQ.md`](./LICENSE_FAQ.md).
+See [`COMMERCIAL-LICENSE.md`](./COMMERCIAL-LICENSE.md) and contact [licensing@sagewai.ai](mailto:licensing@sagewai.ai) for terms. For the rationale behind the dual-license model, see [`LICENSE_FAQ.md`](./LICENSE_FAQ.md).
 
 ---
 
 <div align="center">
-  <sub>Built in Berlin by <a href="https://github.com/sagecurator">Ali Arda Diri</a>. Sagewai is a trademark of Ali Arda Diri.</sub>
+  <sub>Built in Berlin. Sagewai is a trademark of its maintainer.</sub>
 </div>

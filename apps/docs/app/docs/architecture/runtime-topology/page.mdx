@@ -31,7 +31,7 @@ Sagewai is a **control plane** plus a **worker fleet** plus a **sandbox** per ru
 
 - The control plane plans, persists, queries, and dispatches. It never runs a workflow step.
 - The worker fleet executes. Workers register, advertise capabilities, claim runs, and run the agent loop.
-- The sandbox is the trust boundary in any mode beyond `bare` — secrets and CLI agents live inside it, the worker host doesn't see them in cleartext.
+- The sandbox is the trust boundary in any mode beyond `bare` — by design, secrets and CLI agents live inside it and the worker host never sees them in cleartext. Sandbox isolation and the CLI-agent path ship today; the Sealed runtime secret-injection path that places Tier-2 values inside the sandbox is experimental and not yet wired into the default worker (see the Sealed status note under property 3).
 
 The sections below detail each box and the contracts between them.
 
@@ -53,9 +53,11 @@ You don't pay sandbox cost for a cheap planning step, and you don't lose isolati
 
 ### 3. The sandbox is the trust boundary (when present)
 
-When a step runs in any sandboxed mode, the container is the security boundary. Secret values exist inside it, env-injected from the Identity backend at sandbox-start. The worker host knows secret KEY NAMES (persisted on the run row) but never holds plaintext values. The control plane has access to neither plaintext secrets nor the running sandbox.
+When a step runs in any sandboxed mode, the container is the security boundary. By design, secret values exist inside it, env-injected from the Identity backend at sandbox-start; the worker host knows secret KEY NAMES (persisted on the run row) but never holds plaintext values, and the control plane has access to neither plaintext secrets nor the running sandbox. Today the worker resolves the Sealed Identity cascade and persists those key names at enqueue time — that part ships. The runtime step that injects the resolved Tier-2 values into a live sandbox is the experimental Sealed runtime path: the `SealedSecretProvider` is `None` on the default worker, so live injection (and the redaction, per-key ACL filtering, replay-safe injection, and mid-run revocation that build on it) is not yet wired into the default execution path.
 
-This is what lets one worker fleet serve many tenants safely. A bug or compromise inside a sandbox is bounded to the sandbox; it cannot reach the worker process, the control plane, or another tenant's sandbox (modulo backend-escape vulnerabilities, which are the backend vendor's problem). The per-run cleanup hook scrubs the env when a sandbox is released to the warm-pool, and the pool discards any sandbox where cleanup fails. The full credential model is in [Security tiers](/docs/architecture/security-tiers).
+> **Sealed runtime enforcement status.** The per-workload identity model, the external secret backend (HashiCorp Vault), admin profile/secret controls, enqueue-time cascade resolution, and fail-closed revocation checks at enqueue all ship today. Live secret injection into the running sandbox, redaction at the RPC boundary, per-key/per-CLI ACL filtering, replay-safe injection, and mid-run (hard-revoke) abort exist as tested components but do not run in the default worker path — treat them as experimental / maturing. The trust-boundary properties below describe the designed end-state, not a shipped runtime guarantee.
+
+This is what the design lets one worker fleet do: serve many tenants safely. A bug or compromise inside a sandbox is bounded to the sandbox; it cannot reach the worker process, the control plane, or another tenant's sandbox (modulo backend-escape vulnerabilities, which are the backend vendor's problem). The per-run cleanup hook scrubs the env when a sandbox is released to the warm-pool, and the pool discards any sandbox where cleanup fails. The full credential model is in [Security tiers](/docs/architecture/security-tiers).
 
 ## Topology
 
@@ -87,14 +89,14 @@ Workers register, get approved, advertise capability labels (`sandbox.backend`, 
 **Inside the Sagewai Agent (per claimed run):**
 
 1. Claims run; reads execution mode.
-2. Resolves the Identity cascade IF the mode needs customer credentials. Persists key NAMES on the run row. Never sees plaintext values.
+2. Resolves the Identity cascade IF the mode needs customer credentials. Persists key NAMES on the run row. Never sees plaintext values. (Cascade resolution and key-name persistence ship today.)
 3. Acquires a sandbox from the pool IF the mode needs isolation.
 4. Runs the agent loop appropriate to the mode:
    - **bare** — inline on worker
    - **sandboxed** — via tool runner in sandbox (empty env, isolation only)
-   - **+ identity** — + customer keys in sandbox env (Tier-2 keys, behavior knobs)
+   - **+ identity** — designed to add customer keys to the sandbox env (Tier-2 keys, behavior knobs); this runtime injection is the experimental Sealed path and is not wired into the default worker yet
    - **+ CLI agent** — + Claude Code / Codex / … (CLI agent runtime + creds)
-   - **+ JIT** — + bidirectional callback for just-in-time credentials
+   - **+ JIT** — designed to add a bidirectional callback for just-in-time credentials; experimental Sealed path, not in the default worker
 5. Persists audit + step state.
 6. Releases sandbox (cleanup scrubs env).
 
@@ -125,11 +127,11 @@ What changes per mode:
 
 - **Sandboxed (no identity)** — the agent acquires a sandbox from the warm-pool with empty env, dispatches tool calls via the tool runner's RPC, and pipes outputs back to Postgres. The sandbox provides isolation only — there are no Tier-2 keys, so the step cannot reach customer systems. Right shape for untrusted code or network-isolated computation.
 
-- **Sandboxed + identity** — the agent re-resolves the Identity cascade at sandbox-start so any rotation between enqueue and dispatch is picked up. Tier-2 env is injected when the container starts; tools read `os.environ` for credentials. The sandbox can call the customer's systems with their keys; the worker host still never sees plaintext.
+- **Sandboxed + identity** — the agent re-resolves the Identity cascade at sandbox-start so any rotation between enqueue and dispatch is picked up. In the designed runtime path, Tier-2 env is injected when the container starts and tools read `os.environ` for credentials, so the sandbox can call the customer's systems with their keys while the worker host still never sees plaintext. The cascade resolution ships; the live injection step is the experimental Sealed runtime path (`SealedSecretProvider` is `None` on the default worker) and is not yet enabled by default.
 
-- **Full CLI agent** — same as the previous mode plus the tool runner spawns a CLI agent (Claude Code, Codex, Gemini, or a custom variant) as a subprocess inside the sandbox. The CLI agent reads its LLM key from sandbox env, calls the inference point directly, writes artifacts to `/workspace`, and the artifact upload (`git push`, `aws s3 sync`, mounted-folder copy) runs at the end with credentials that are also sandbox-side.
+- **Full CLI agent** — same as the previous mode plus the tool runner spawns a CLI agent (Claude Code, Codex, Gemini, or a custom variant) as a subprocess inside the sandbox. The CLI agent reads its LLM key from sandbox env, calls the inference point directly, writes artifacts to `/workspace`, and the artifact upload (`git push`, `aws s3 sync`, mounted-folder copy) runs at the end with credentials that are also sandbox-side. The CLI-agent and artifact path ship; the Sealed-driven injection of Tier-2 credentials into that sandbox is the same experimental runtime path noted above.
 
-- **Full CLI agent + JIT callback** — adds a bidirectional channel back to the host. The CLI agent or tool runner can request a credential it doesn't have ("I need write access to repo X"); the Sagewai Agent on the host evaluates the request against policy, auto-approves, denies, or surfaces a human-in-the-loop gate, and approved credentials are env-injected at runtime. See [Just-in-time credential callback](/docs/architecture/execution-modes#mode-3b--full-with-jit-credential-callback).
+- **Full CLI agent + JIT callback** — adds a bidirectional channel back to the host. By design, the CLI agent or tool runner can request a credential it doesn't have ("I need write access to repo X"); the Sagewai Agent on the host evaluates the request against policy, auto-approves, denies, or surfaces a human-in-the-loop gate, and approved credentials are env-injected at runtime. This JIT-credential flow is an experimental Sealed component, not wired into the default worker. See [Just-in-time credential callback](/docs/architecture/execution-modes#mode-3b--full-with-jit-credential-callback).
 
 The run-level lifecycle (enqueue, claim, agent dispatches by mode, audit + step state persists, sandbox returns to pool, status flips to terminal) is identical across all five modes — only the body of the execution step changes. For the per-mode walkthrough, see [Execution modes](/docs/architecture/execution-modes).
 
@@ -157,7 +159,7 @@ Decoupling planning from execution gives Sagewai its operational characteristics
 - **Execution is bounded.** Worker count caps concurrency, capability labels route work to capable executors, and a worker pool can scale via Kubernetes without touching the admin server.
 - **Security is bounded.** The sandbox is where blast radius lives — secrets, tool execution, and CLI agents all run inside it, so a bug or compromise inside the sandbox cannot reach the worker host or the control plane.
 - **Observability is uniform.** Every step emits the same audit event shape regardless of mode, and logs and metrics flow through one OTel pipeline regardless of backend.
-- **Replay is decidable.** Step inputs, mode, and identity at enqueue time are persisted, so replay reproduces what was — not what is now.
+- **Replay is decidable.** Step inputs, mode, and the identity key names at enqueue time are persisted, so a replay can reproduce what was — not what is now. (Persisting this enqueue-time state ships; the replay-safe *secret injection* that rehydrates the matching values into a sandbox is part of the experimental Sealed runtime path.)
 
 ## What this page does not specify
 
@@ -165,7 +167,7 @@ This page describes the runtime structure. It does not pick:
 
 - **Which LLM Tier-1 uses.** The operator picks. Local Ollama for cheap planning is common.
 - **Which sandbox backend.** Each deployment picks one (or runs a heterogeneous fleet with capability-routed dispatch). See [Sandbox backends](/docs/architecture/sandbox-backends).
-- **Which Identity backend.** The builtin file-based store is the default; Vault, 1Password, AWS Secrets Manager, SOPS, and Bitwarden are pluggable. See [Vault backend](/docs/guides/sealed-vault).
+- **Which Identity backend.** The builtin file-based store is the default; HashiCorp Vault is the one external backend that ships today (config-gated). The backend interface is pluggable, with 1Password, AWS Secrets Manager, SOPS, and Bitwarden on the roadmap rather than implemented. See [Vault backend](/docs/guides/sealed-vault).
 - **Workflow definition syntax.** Workflows are Python-defined today (`DurableWorkflow` plus steps). YAML-defined workflows are a possible future API; the topology is unchanged.
 - **What CLI agents are available.** The image variant catalog (`sagewai/sandbox-claude-code`, `sagewai/sandbox-codex`, …) is operator-curated. New CLIs are added by extending the catalog, not the topology.
 

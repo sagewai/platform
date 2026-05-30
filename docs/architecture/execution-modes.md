@@ -6,6 +6,8 @@
 
 This document fixes the five execution modes a workflow step can run in. Modes are per-step, not per-deployment. Picking the right mode per step is what makes Sagewai both efficient and safe.
 
+> **Status note — Sealed runtime enforcement.** This document describes the designed behaviour of the identity, full, and JIT-callback modes. The pieces that depend on Sealed *runtime* enforcement — live secret injection into a running sandbox, redaction at the tool-runner RPC boundary, per-key / per-CLI ACL filtering, replay-safe injection, and mid-run (hard-revoke) abort — are **experimental and maturing**: they are built and tested but are not yet wired into the default worker path (`SealedSecretProvider` is `None` by default; the redaction/ACL handles are gated on a secret provider that the production worker does not set). What ships today is the per-workload identity model, an external secret backend (HashiCorp Vault), admin profile/secret controls, enqueue-time cascade resolution, and fail-closed revocation checks at enqueue. See `README.md` → "v1.0 status" for the shipped-vs-experimental breakdown.
+
 ---
 
 ## The five modes at a glance
@@ -95,7 +97,7 @@ Worker process
 
 **Cost:** Mode 1 cost + Sealed cascade resolution (~10-30ms for typical 1-3 level cascade against builtin backend; ~100ms+ for external backends like Vault).
 
-**Security:** all of Mode 1 plus per-customer credential scoping. Audit trail captures every key injected (`profile.injected`), every cascade resolution (`profile.cascade.resolved`), every revocation interaction. No CLI agent → no LLM keys leave the sandbox unless a generic tool calls one.
+**Security:** all of Mode 1 plus per-customer credential scoping. By design, the audit trail captures every key injected (`profile.injected`), every cascade resolution (`profile.cascade.resolved`), and every revocation interaction; with no CLI agent, no LLM keys leave the sandbox unless a generic tool calls one. Cascade resolution and fail-closed revocation checks run at enqueue today; injecting the resolved identity into a live sandbox and auditing each injection is part of Sealed's experimental runtime enforcement (see the status note above), not yet wired into the default worker path.
 
 **Examples:**
 - Step "query customer's PostgreSQL database, return summary" — needs `CUSTOMER_DB_URL` from Sealed.
@@ -134,7 +136,7 @@ Sandbox
 
 **Cost:** Mode 2 cost + CLI agent runtime (varies — Claude Code on a complex prompt can take 5-30 minutes). LLM API costs are charged to the CLI's Tier-2 key, not Sagewai's Tier-1.
 
-**Security:** the CLI runs inside the sandbox boundary. Its LLM keys are sandbox-only. Its filesystem access is `/workspace` (or wherever the image variant configures). Network policy applies — typically `EGRESS_ONLY` to LLM provider + artifact destination.
+**Security:** the CLI runs inside the sandbox boundary. By design its LLM keys are sandbox-only, its filesystem access is `/workspace` (or wherever the image variant configures), and network policy applies — typically `EGRESS_ONLY` to LLM provider + artifact destination. The sandbox-only credential guarantee depends on Sealed's experimental runtime enforcement (live injection plus redaction at the tool-runner RPC boundary), which is maturing and not yet wired into the default worker path — see the status note above.
 
 **Examples:**
 - "Build a portfolio website from this brief" → Claude Code
@@ -157,6 +159,8 @@ Sandbox
 Mode 3 plus a bidirectional channel: the CLI agent or tool runner can request credentials it doesn't have at runtime, and the Sagewai Agent on host evaluates against policy (auto-approve, deny, HITL).
 
 **This mode is Sealed-iv territory.** The tool runner RPC channel becomes bidirectional: in addition to host→sandbox dispatch, sandbox→host credential requests are honoured.
+
+This mode builds on Sealed's experimental runtime enforcement — live injection into a running sandbox plus the JIT human-in-the-loop credential path — which is built and tested but not yet wired into the default worker path. Treat the behaviour described here as the designed contract; see the status note above for what ships today.
 
 **Topology (additional flow on top of Mode 3):**
 ```
@@ -350,8 +354,8 @@ Total: 1 customer LLM bill (Step 2), 0 customer credentials touched outside the 
 | Mode-aware runner refactor — per-step (future) | All — moves `execution_mode` to the step level so a single run can mix modes |
 | Plan 1.5 (sandbox pooling) | Modes 1+ — pools the sandbox containers |
 | Plan ART (artifact destination, shipped) | Mode 3+ — formalises the artifact upload contract; ships GitHub / S3 / local uploaders + admin UI + audit pipeline. CLI-dispatch integration calls `sagewai.artifacts.runtime.apply_artifact_destination` once per-step Mode 3 dispatch lands. |
-| Sealed-iii.B (redaction) | shipped ([#191](https://github.com/sagewai/platform/pull/191)) — host-side `RedactingSandboxHandle` enforces the Tier-2 invariant |
-| Sealed-iii.C (replay safety) | All — replay reproduces step + mode + identity at original-run time |
-| Sealed-iii.D (per-key ACL) | shipped ([#191](https://github.com/sagewai/platform/pull/191)) — host-side `AclFilteringSandboxHandle` enforces per-CLI Tier-2 allowlist |
+| Sealed-iii.B (redaction) | experimental ([#191](https://github.com/sagewai/platform/pull/191)) — host-side `RedactingSandboxHandle` is built and tested but gated on a secret provider that the default worker does not set, so it does not yet enforce the Tier-2 invariant in the default path |
+| Sealed-iii.C (replay safety) | All — designed so replay reproduces step + mode + identity at original-run time; relies on the experimental runtime-injection path, not yet wired into the default worker |
+| Sealed-iii.D (per-key ACL) | experimental ([#191](https://github.com/sagewai/platform/pull/191)) — host-side `AclFilteringSandboxHandle` is built and tested but gated on the same unset secret provider, so per-CLI Tier-2 allowlist enforcement does not yet run in the default path |
 | Sealed-iv (HITL + JIT) | Mode 3b — implements the callback channel + policy engine |
 | Sealed-v (reactive directives) | All — autopilot can promote a step from Mode 1 → Mode 2 → Mode 3 based on runtime signals |

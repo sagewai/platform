@@ -33,7 +33,7 @@ export const metadata = {
     },
     {
       name: 'Trigger the workflow and watch the artifact land',
-      text: 'Run sagewai run portfolio-site. The worker dispatches Claude Code inside an isolated sandbox; credentials inject from Sealed; the result is committed back to GitHub.',
+      text: 'Run sagewai run portfolio-site. The worker dispatches Claude Code inside an isolated sandbox, resolving credentials from the Sealed Identity (live runtime injection is experimental — see the status note); the result is committed back to GitHub.',
     },
   ]}
 />
@@ -55,11 +55,20 @@ credentials, start with [Minimal Setup](/docs/get-started/minimal-setup) instead
 This page exercises the full stack.
 
 > **What happens, in one sentence:** Sagewai's worker dispatches a CLI
-> agent (Claude Code) inside an identity-isolated Docker sandbox; your
-> customer's credentials are injected at sandbox-start and never touch
-> the worker host. See
+> agent (Claude Code) inside an identity-isolated Docker sandbox, with
+> your customer's credentials resolved from their Sealed Identity. See
 > [Architecture: Execution modes — Mode 3](/docs/architecture/execution-modes#mode-3--full-cli-agent)
 > for the full topology.
+>
+> **Status note.** This quickstart walks through the *designed* Sealed
+> flow. The identity model, the Vault backend, and the admin profile
+> controls ship today, and the Identity's key names resolve at
+> enqueue time. The runtime enforcement that the prose below
+> describes — live secret injection into the running sandbox and
+> scrubbing on release — is **experimental and not yet wired into the
+> default worker path** (the secret provider is unset by default). See
+> the [Security tiers](/docs/architecture/security-tiers) page and the
+> SDK README's Sealed section for what to rely on today.
 
 ---
 

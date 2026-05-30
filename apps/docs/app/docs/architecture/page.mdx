@@ -53,9 +53,11 @@ You don't pay sandbox startup cost for cheap planning steps, and you don't lose 
 
 ### The sandbox is the trust boundary when present
 
-When a step runs in any sandboxed mode, the sandbox container is the security boundary. Customer secrets exist inside it; they're injected from your chosen identity backend at sandbox-start time and scrubbed on release.
+When a step runs in any sandboxed mode, the sandbox container is the security boundary in this design. Customer secrets are designed to exist only inside it — injected from your chosen identity backend at sandbox-start time and scrubbed on release.
 
-The worker host knows the names of secret keys (so it can dispatch the right step) but never holds plaintext values. The control plane sees neither names nor values. If you need to defend a per-customer credential, the sandbox is what's defending it.
+In the design, the worker host knows the names of secret keys (so it can dispatch the right step) but never holds plaintext values, and the control plane sees neither names nor values. This is the trust boundary the sandbox is built to defend.
+
+> **Implementation status (v1.0).** The pieces that resolve a workload's identity and secret references — the per-workload identity model, the external secret backend (HashiCorp Vault), admin profile/secret controls, enqueue-time cascade resolution, and fail-closed revocation checks at enqueue — ship today. The *runtime* enforcement described above — live secret injection into the running sandbox, redaction at the RPC boundary, per-key / per-CLI ACL filtering, replay-safe injection, and mid-run (hard-revoke) abort — is designed and partially built, but is **not wired into the default worker path** in v1.0 (`SealedSecretProvider` is `None` by default). Treat those runtime guarantees as experimental and maturing, not as a shipped runtime control. See the [v1.0 status](https://github.com/sagewai/platform#v10-status) for the full breakdown.
 
 ### Workers advertise what they can run
 
@@ -68,9 +70,9 @@ Sagewai has two pluggable backend types. They're independent — choose each one
 | Backend type | What it picks | Examples |
 |---|---|---|
 | **Sandbox backend** | Where the sandbox container, pod, or function lives | Docker, Kubernetes, Lambda |
-| **Identity backend** | Where customer credentials come from at sandbox-start time | Built-in (file-based), Vault, 1Password, AWS Secrets Manager, SOPS, Bitwarden |
+| **Identity backend** | Where customer credentials come from at sandbox-start time | Built-in (file-based), Vault — with 1Password, AWS Secrets Manager, SOPS, and Bitwarden on the roadmap |
 
-A single deployment can mix freely: Kubernetes sandbox + Vault identity, Docker sandbox + built-in identity, and so on. See [Sandbox backends](/docs/architecture/sandbox-backends) for the sandbox decision guide. Identity backend selection is covered in the [Sealed Identity guide](/docs/guides/sealed-vault).
+A single deployment can mix freely: Kubernetes sandbox + Vault identity, Docker sandbox + built-in identity, and so on. In v1.0, the identity backend that ships beyond the built-in file-based store is HashiCorp Vault; the other listed backends are designed but not yet implemented. See [Sandbox backends](/docs/architecture/sandbox-backends) for the sandbox decision guide. Identity backend selection is covered in the [Sealed Identity guide](/docs/guides/sealed-vault).
 
 ## Which chapter you need
 

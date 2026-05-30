@@ -1,15 +1,15 @@
 # Production multitenancy
 
-This walkthrough shows you what Sagewai enforces when you put it in front of multiple tenants' credentials: a healthcare worker cannot reach finance tasks at the dispatch layer, vendor credentials are injected into a containerised agent at sandbox start and scrubbed on release, and every credential resolution and pool reset lands in the audit log.
+This walkthrough shows you what Sagewai enforces when you put it in front of multiple tenants' credentials: a healthcare worker cannot reach finance tasks at the dispatch layer, each tenant's credentials live in an encrypted, per-workload Sealed profile resolved at enqueue time, and every credential resolution and pool reset lands in the audit log. Sealed's designed end state goes further — injecting vendor credentials into a containerised agent at sandbox start and scrubbing them on release so the worker host never holds them — and this page is explicit about which parts of that run today versus which are still maturing.
 
 Read this page if you are evaluating Sagewai for a production security review, or if you are building the first multi-tenant feature on top of the platform and need to map the controls to what your security team will ask about.
 
 ## Five guarantees this walkthrough exercises
 
-1. **The boundary is real, not policy.** Tenant credentials live in encrypted Sealed profiles. They are injected into the sandbox env at sandbox start and scrubbed on release. The worker host process never sees them.
+1. **The boundary is identity, not policy — and live injection is maturing.** Tenant credentials live in encrypted Sealed profiles, bound to a per-workload identity and resolved to a project-scoped dispatch at enqueue time. That much ships today. The designed end state injects those credentials into the sandbox env at sandbox start and scrubs them on release, so the worker host process never sees them — but that runtime injection/scrub-on-release is Sealed runtime enforcement, which is experimental and not yet wired into the default worker path (`SealedSecretProvider` is `None` by default). Treat the live-injection boundary as the target, not as something the default worker enforces today.
 2. **Fleet dispatch enforces scope at the boundary.** Workers register with `project_id` in their capability labels; the dispatcher matches tasks against those labels. A healthcare worker is unreachable from a finance task. Example 26 ships the dispatch matcher; Example 33 ships the full integration.
 3. **Per-CLI workload identity.** Each agent run has a verifiable, scoped identity — not a shared `OPENAI_API_KEY` lifted from the parent process.
-4. **Vault-backed credentials.** Sagewai resolves secrets from HashiCorp Vault, AWS Secrets Manager, AgentCore Identity, or the encrypted built-in store at the moment of need, not at process start.
+4. **Vault-backed credentials.** Sagewai resolves secrets from HashiCorp Vault or the encrypted built-in store. (Additional backends such as AWS Secrets Manager are on the roadmap.)
 5. **Every secret-injection event is in the audit log.** The admin **Audit** view records cascade resolutions, identity revocations, and pool resets. Compliance reads the trail directly.
 
 ## Architecture
@@ -81,7 +81,7 @@ The script seeds two tenants (healthcare, finance), registers four workers (two 
 python 39_sandbox_scoped_credentials.py
 ```
 
-Runs an agent inside a sandbox container with credentials provided by the Sealed Identity layer, calls a third-party API, and confirms the credential bytes are unreachable from the worker host. The `_smoke_test_credential_leak` block verifies the scrub.
+Exercises the Sealed runtime-injection path: it runs an agent inside a sandbox container with credentials provided by the Sealed Identity layer, calls a third-party API, and the `_smoke_test_credential_leak` block asserts the credential bytes are unreachable from the worker host. This is the experimental runtime-enforcement path, not the default worker path — it demonstrates the designed injection/scrub behaviour that is still maturing toward the default.
 
 ### Agent governance (approval flow and audit)
 
@@ -93,7 +93,7 @@ Foundation-level companion: agent approval flow with audit trail before exposing
 
 ## Where you'd use this
 
-The pattern here — Sealed profiles per tenant, capability-scoped Fleet workers, sandbox credential injection at run time, audit at the boundary — is what you reach for when your first multi-tenant feature ships and the security review starts.
+The pattern here — Sealed profiles per tenant, capability-scoped Fleet workers, enqueue-time scoped resolution with sandbox credential injection as the maturing runtime end state, audit at the boundary — is what you reach for when your first multi-tenant feature ships and the security review starts.
 
 ### Healthcare SaaS with HIPAA-bound customers
 
@@ -101,9 +101,9 @@ You serve 30 clinics. Each has a separate EHR token. PHI cannot leak across clin
 
 | Concern | How this pattern solves it |
 |---|---|
-| HIPAA forbids tenant A's PHI being readable from tenant B's process space | Each clinic has a Sealed profile; the healthcare worker pool runs only healthcare tasks; the sandbox env is per-task and scrubbed on release |
+| HIPAA forbids tenant A's PHI being readable from tenant B's process space | Each clinic has a Sealed profile and the healthcare worker pool runs only healthcare tasks (both ship today); the per-task sandbox env injected and scrubbed on release is the maturing Sealed runtime-enforcement end state |
 | BAA auditor wants to see the credential boundary | The Audit view shows every credential resolution and revocation with timestamps |
-| Compliance forbids credentials in source code or env files on the host | Credentials live encrypted at rest in `~/.sagewai/profiles.json`; resolved JIT at sandbox start; never in process memory for long |
+| Compliance forbids credentials in source code or env files on the host | Credentials live encrypted at rest in `~/.sagewai/profiles.json` and are resolved per workload at enqueue time (ships today); JIT injection at sandbox start, keeping them out of host process memory, is the maturing runtime-enforcement step |
 
 ### Multi-tenant fintech with PCI scope
 
@@ -111,8 +111,8 @@ Your AI feature runs across 50 finance customers. Each customer's Stripe and QB 
 
 | Concern | How this pattern solves it |
 |---|---|
-| PCI scope expands if any non-payment process can read the Stripe key | The Stripe key lives in the customer's Sealed profile, injected only into their sandbox; non-finance workers cannot see it |
-| You need to revoke a customer's keys instantly when they cancel | Sealed has a revocation API; future enqueues fail closed and in-flight runs abort or expire |
+| PCI scope expands if any non-payment process can read the Stripe key | The Stripe key lives in the customer's Sealed profile and only finance-pool workers are dispatched their tasks (ships today); injecting it solely into their sandbox is the maturing runtime-enforcement end state |
+| You need to revoke a customer's keys instantly when they cancel | Sealed has a revocation API and future enqueues fail closed against it today; mid-run (hard-revoke) abort of an in-flight run is part of the maturing runtime enforcement |
 | Auditor asks "show me the path of this credential from your secret store to the customer's running agent" | The [Security tiers](/docs/architecture/security-tiers) page documents the path; the Audit view records each step |
 
 ### Enterprise SaaS with customer-specific Anthropic keys
@@ -121,7 +121,7 @@ Your customer wants to bring their own Anthropic key for cost attribution. You n
 
 | Concern | How this pattern solves it |
 |---|---|
-| Customer A's `ANTHROPIC_API_KEY` must reach Claude Code in customer A's sandbox, no further | Sealed profile holds it; sandbox start injects it into env; sandbox release scrubs it |
+| Customer A's `ANTHROPIC_API_KEY` must reach Claude Code in customer A's sandbox, no further | Sealed profile holds it and it resolves to customer A's scoped dispatch today; sandbox-start injection into env and scrub on release is the maturing Sealed runtime-enforcement step |
 | Customer wants their bill to come from their own account | The Anthropic call uses customer A's key; the bill goes there |
 | Cross-customer pollution would be a critical incident | Capability labels enforce per-customer worker pools; the dispatcher refuses cross-customer claims |
 
@@ -132,7 +132,7 @@ Some of your customers run agents on their own VPC. Their credentials must never
 | Concern | How this pattern solves it |
 |---|---|
 | Customer's vendor keys must never leave their VPC | Sealed profile is on-prem; the worker on-prem reads it; the control plane sees the run, not the credentials |
-| Centralised observability without centralising secrets | The control plane receives telemetry events — redacted; secrets stay in the customer profile |
+| Centralised observability without centralising secrets | Secrets stay in the on-prem customer profile rather than in the control plane; secret redaction at the telemetry/RPC boundary is part of Sealed's maturing runtime enforcement |
 | Onboarding a new on-prem customer must not require code changes | Drop in a new Sealed profile; register a worker with the right capability labels; done |
 
 ### Internal multi-team platform

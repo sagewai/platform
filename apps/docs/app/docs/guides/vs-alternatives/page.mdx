@@ -50,8 +50,8 @@ If you need a one-off script that calls an LLM with a tool, LangChain's quicksta
 | **Guardrails** | PII, hallucination, budget, schema, content | Via guardrails integration | None | None | None | Via filters |
 | **Prompt Preprocessing** | Directive engine (@context, @memory, @agent) | None | None | None | None | None |
 | **Context Engine** | Document ingestion, 2-scope access, RAG | Via retrievers | First-class indices + query engine | Via embedchain | None | Via memory |
-| **Workload Identity** | Sealed (per-CLI workload identity, JIT secrets) | None | None | None | None | None |
-| **Sandbox Isolation** | Docker / Podman / Kubernetes / AgentCore | None | None | None | None | None |
+| **Workload Identity** | Sealed (per-workload identity + Vault secret backend; runtime JIT injection maturing) | None | None | None | None | None |
+| **Sandbox Isolation** | Docker, Kubernetes, Null (AWS Lambda on roadmap) | None | None | None | None | None |
 | **Client Libraries** | 17 languages (TS, Go, Rust, Java, C#, + 12 more) | Python, JS | Python, TS | Python | Python, .NET | Python, .NET, Java |
 | **CI/CD Integration** | GitHub Actions (run-agent, run-evals, deploy-worker) | None | None | None | None | None |
 | **Admin Console** | Built-in web dashboard | Via LangSmith (paid) | None | None | Via AutoGen Studio | None |

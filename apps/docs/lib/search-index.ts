@@ -453,8 +453,8 @@ export const SEARCH_INDEX: SearchEntry[] = [
     title: 'Sandbox Backends',
     href: '/docs/architecture/sandbox-backends',
     section: 'Architecture',
-    description: 'Docker, Kubernetes, and AgentCore sandbox backend implementations.',
-    keywords: 'sandbox backends docker kubernetes agentcore k8s container isolation',
+    description: 'Docker and Kubernetes sandbox backend implementations.',
+    keywords: 'sandbox backends docker kubernetes k8s container isolation',
   },
 
   // Reference

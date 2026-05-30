@@ -1,37 +1,37 @@
 # Sagewai
 
-> Sagewai is the open-source autonomous agent platform for senior engineers shipping AI features under budget. Bootstrap with Claude or GPT, capture training data with the Curator, fine-tune a local model in a weekend, deploy via Ollama. Never pay per-token at the limit.
+> Sagewai is the autonomous agent platform: describe the goal, we design the agents, run them in production, and fine-tune local models so every run gets cheaper.
 
-The platform is the audience-pin filter: a senior engineer at a 50-500 person SaaS, told to add AI this quarter, with a budget measured in hundreds of dollars per month. We are not for AI researchers, vibes-based founders, or FAANG ML platform teams. We are for the person whose CFO checks the AWS bill.
+Sagewai is open-source software for building and running AI agents in production. You write an agent in a few lines of Python, give it tools and memory, and run it on your own machine or as a fleet of workers on your own hardware. One interface reaches 100+ models via LiteLLM, so you are not locked to a provider. Sagewai is early software — the SDK is published as 0.1.1 (alpha); the claim notes below say what ships today versus what is on the roadmap.
 
-## Five pillars, one spine
+## What you get
 
-- **SDK** — Python-native agent runtime. Any LLM via LiteLLM (100+ models). MCP tools, typed memory, guardrails, multi-step workflows. https://docs.sagewai.ai/docs/core-concepts/agents
-- **Autopilot** — Describe the goal in plain English. We design the agents, run the mission, heal on failure. https://docs.sagewai.ai/docs/autopilot
-- **Fleet** — Distributed workers, capability-based dispatch, project isolation, isolated execution sandboxes. https://docs.sagewai.ai/docs/guides/fleet-architecture
-- **Observatory** — OpenTelemetry, VictoriaMetrics, Grafana dashboards, the Iron Man HUD. Answer "what did AI cost us?" in one click. https://docs.sagewai.ai/docs/observatory
-- **Training Loop** — Curate production runs, fine-tune local models, deploy via Ollama. Cost-down to zero per token. https://docs.sagewai.ai/docs/guides/training
+- **SDK** — Python-native agent runtime. 100+ models via LiteLLM, MCP tools, typed memory, guardrails, multi-step workflows. https://docs.sagewai.ai/docs/core-concepts/agents
+- **Autopilot** — Describe the goal in plain English and Sagewai assembles and runs the agent. Linear plans run today; branched plans and automatic healing are in progress. https://docs.sagewai.ai/docs/platform/autopilot
+- **Fleet** — Distributed workers, capability-based dispatch, project isolation, sandboxed execution (Docker, Kubernetes). https://docs.sagewai.ai/docs/platform/fleet
+- **Observatory** — OpenTelemetry, VictoriaMetrics, Grafana dashboards, per-model and per-team cost tracking. Answer "what did AI cost us?" in one place. https://docs.sagewai.ai/docs/platform/observatory
+- **Training Loop** — Capture good production runs and fine-tune a local model from them. Run capture ships today; the end-to-end fine-tune-and-deploy loop is on the v1.1 roadmap. https://docs.sagewai.ai/docs/platform/training-loop
 
-The spine is **Sealed** — defense-in-depth security across all five pillars. Per-CLI workload identity, externalised secret backends, JIT credentials, redaction at the RPC boundary, replay safety, per-CLI ACL. https://docs.sagewai.ai/docs/security
+**Sealed** is the security layer: per-workload identity, an external secret backend (HashiCorp Vault), and admin controls ship today; runtime enforcement (live secret injection, redaction, per-key ACL, mid-run revocation) is maturing. https://docs.sagewai.ai/docs/platform/security
 
 ## Quickstart
 
-- 5-minute install + first agent: https://docs.sagewai.ai/docs/getting-started
-- Minimal setup (no sandbox required): https://docs.sagewai.ai/docs/getting-started/minimal-setup
-- Build your first agent: https://docs.sagewai.ai/docs/guides/first-agent
+- Install + first agent: https://docs.sagewai.ai/docs/get-started/quickstart
+- Minimal setup (no sandbox required): https://docs.sagewai.ai/docs/get-started/minimal-setup
+- Build your first agent: https://docs.sagewai.ai/docs/get-started/first-agent
 - Architecture overview: https://docs.sagewai.ai/docs/architecture
 
-## Lighthouse use cases
+## Use cases
 
-These are the production-grade walkthroughs — each ships with a comprehensive README, real-world framing, and a runnable demo.
+End-to-end walkthroughs — each ships with a README and a runnable demo.
 
-- Customer support triage agent in 400 lines: https://docs.sagewai.ai/docs/core-concepts/agents
-- Train your own model in a weekend, $0 to $5: https://docs.sagewai.ai/docs/guides/training
-- Show your CFO where the AI money goes: https://docs.sagewai.ai/docs/observatory
-- Multi-tenant production with isolated tenants: https://docs.sagewai.ai/docs/guides/fleet-enterprise
-- Long-context conversations on 7B local LLMs: https://docs.sagewai.ai/docs/core-concepts/memory
-- Graph memory beats vector retrieval for multi-hop: https://docs.sagewai.ai/docs/core-concepts/memory
-- Production credential isolation, sandbox + Sealed: https://docs.sagewai.ai/docs/guides/sealed-vault
+- Customer support triage agent: https://docs.sagewai.ai/docs/core-concepts/agents
+- Train your own model: https://docs.sagewai.ai/docs/guides/training
+- See where the AI spend goes: https://docs.sagewai.ai/docs/platform/observatory
+- Multi-tenant production with isolated tenants: https://docs.sagewai.ai/docs/tutorials/production-multitenancy
+- Long-context conversations on local LLMs: https://docs.sagewai.ai/docs/core-concepts/memory
+- Graph memory for multi-hop retrieval: https://docs.sagewai.ai/docs/core-concepts/memory
+- Credential isolation with sandbox + Sealed: https://docs.sagewai.ai/docs/guides/sealed-vault
 
 ## Architecture
 
@@ -40,18 +40,18 @@ The platform is a control plane plus a worker fleet. The control plane plans, pe
 - Architecture overview: https://docs.sagewai.ai/docs/architecture
 - Runtime topology: https://docs.sagewai.ai/docs/architecture/runtime-topology
 - Security tiers (Tier-1, Tier-2, Tier-3): https://docs.sagewai.ai/docs/architecture/security-tiers
-- Execution modes (Mode 0–3): https://docs.sagewai.ai/docs/architecture/execution-modes
-- Sandbox backends (Docker, Podman, Kubernetes, AgentCore): https://docs.sagewai.ai/docs/architecture/sandbox-backends
+- Execution modes: https://docs.sagewai.ai/docs/architecture/execution-modes
+- Sandbox backends (Docker, Kubernetes, Null): https://docs.sagewai.ai/docs/architecture/sandbox-backends
 
 ## Inference cost-down spectrum
 
-Sagewai's positioning is the **inference spectrum** — the cost-down arc from cloud LLMs to your own local model.
+Sagewai supports a range of inference options, from cloud LLMs to your own local model.
 
 - Local inference overview (Ollama, vLLM, LM Studio): https://docs.sagewai.ai/docs/guides/local-inference
 - Training & fine-tuning: https://docs.sagewai.ai/docs/guides/training
 - Cost management: https://docs.sagewai.ai/docs/guides/cost-management
 - LiteLLM integration: https://docs.sagewai.ai/docs/guides/litellm-integration
-- Hardware requirements: https://docs.sagewai.ai/docs/guides/hardware-requirements
+- Prerequisites & hardware: https://docs.sagewai.ai/docs/get-started/prerequisites
 
 ## Core concepts
 
@@ -82,21 +82,20 @@ Sagewai's positioning is the **inference spectrum** — the cost-down arc from c
 
 ## Guides
 
-- First agent: https://docs.sagewai.ai/docs/guides/first-agent
-- Tutorials: https://docs.sagewai.ai/docs/guides/tutorials
+- First agent: https://docs.sagewai.ai/docs/get-started/first-agent
+- Tutorials: https://docs.sagewai.ai/docs/tutorials
 - Self-hosted deployment: https://docs.sagewai.ai/docs/guides/self-hosted
 - Admin panel: https://docs.sagewai.ai/docs/guides/admin-panel
 - Fleet architecture: https://docs.sagewai.ai/docs/guides/fleet-architecture
-- Fleet enterprise: https://docs.sagewai.ai/docs/guides/fleet-enterprise
-- Client wrappers (17 languages): https://docs.sagewai.ai/docs/guides/client-wrappers
+- Fleet deployment: https://docs.sagewai.ai/docs/guides/fleet-deployment
+- Client wrappers: https://docs.sagewai.ai/docs/guides/client-wrappers
 - Local inference (Ollama, vLLM, LM Studio): https://docs.sagewai.ai/docs/guides/local-inference
 - Cost management: https://docs.sagewai.ai/docs/guides/cost-management
 - PII protection: https://docs.sagewai.ai/docs/guides/pii-protection
 - Sandboxing: https://docs.sagewai.ai/docs/guides/sandboxing
 - Sealed Vault: https://docs.sagewai.ai/docs/guides/sealed-vault
-- Hardware requirements: https://docs.sagewai.ai/docs/guides/hardware-requirements
 - Multi-agent workflows: https://docs.sagewai.ai/docs/guides/multi-agent
-- Agent patterns: https://docs.sagewai.ai/docs/guides/patterns
+- Production patterns: https://docs.sagewai.ai/docs/tutorials/production-patterns
 - MCP server: https://docs.sagewai.ai/docs/guides/mcp-server
 - Training & fine-tuning: https://docs.sagewai.ai/docs/guides/training
 - LiteLLM integration: https://docs.sagewai.ai/docs/guides/litellm-integration
@@ -110,18 +109,14 @@ Sagewai's positioning is the **inference spectrum** — the cost-down arc from c
 
 ## Claim disambiguation
 
-- "Sagewai is open source" — AGPL-3.0-or-later. Commercial dual-license available. Source: https://github.com/sagewai/platform
+- "Sagewai is open source" — AGPL-3.0-or-later. Commercial dual-license available.
 - "Any LLM" — 100+ models via LiteLLM (Anthropic, OpenAI, Google, Mistral, Cohere, Meta Llama, DeepSeek, Together, Groq, Fireworks, Azure OpenAI, AWS Bedrock, Vertex AI, plus local Ollama + LM Studio).
-- "Cost-down to zero per token" — refers to fine-tuned local inference via Ollama after training-loop capture. Initial Q1 deployments run on cloud LLMs; training loop walks Q3-Q4 customers to local.
-- "Production-ready" — full Sealed security spine (workload identity, JIT secrets, redaction), OpenTelemetry instrumentation, project-scoped multi-tenancy, audit trail, and per-mission credentials.
+- "Every run gets cheaper" — the goal of the Training Loop: capture good runs, fine-tune a local model, and route to it. Run capture ships today; the end-to-end fine-tune-and-deploy loop (via Ollama) is on the v1.1 roadmap. Early deployments run on cloud LLMs.
+- "Early / alpha" — the SDK is published as 0.1.1. Shipped today: the SDK, Fleet dispatch with Docker/Kubernetes sandboxes, Autopilot for linear plans, Observatory, run capture, and Sealed's identity model + Vault backend + admin controls. Experimental or roadmap: Sealed runtime enforcement, Autopilot branched plans and healing, and the closed cost-down loop. See https://docs.sagewai.ai for the per-capability status.
 - "Autopilot" — Sagewai's describe-the-goal feature uses a hosted blueprint service (proprietary). The platform also runs without it; manual mode never disappears.
-- "Iron Man HUD" — internal name for the live operator dashboard at /hud-ironman. Reads from the same OTel telemetry as the Grafana board.
+- "Iron Man HUD" — internal name for the live operator dashboard. Reads from the same OpenTelemetry telemetry as the Grafana board.
 
 ## Links
 
 - Marketing site: https://sagewai.ai
 - Docs site: https://docs.sagewai.ai
-- GitHub: https://github.com/sagewai/platform
-- PyPI: https://pypi.org/project/sagewai/
-- Contact: hello@sagewai.ai
-- License inquiries: licensing@sagewai.ai

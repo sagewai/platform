@@ -23,13 +23,13 @@ const FEATURES = [
     icon: <Database size={28} />,
     title: 'Autopilot',
     description:
-      'State the goal in plain English. Autopilot designs the agent graph, extracts the slots, previews the plan, runs the mission, and heals on failure.',
+      'State the goal in plain English. Autopilot designs the agent graph, extracts the slots, previews the plan, and runs the mission (linear plans today; branched plans in progress).',
   },
   {
     icon: <Shield size={28} />,
     title: 'Fleet',
     description:
-      'Distributed workers with capability-based dispatch, project isolation, enrollment keys, and isolated execution sandboxes (image families, Kubernetes backend, AgentCore-runtime backend, pooling). Run agents on your hardware, in your network.',
+      'Distributed workers with capability-based dispatch, project isolation, enrollment keys, and isolated execution sandboxes (Docker and Kubernetes backends, image families, pooling). Run agents on your hardware, in your network.',
   },
   {
     icon: <BarChart3 size={28} />,
@@ -45,11 +45,11 @@ const FEATURES = [
   },
 ];
 
-const SPINE = {
+const SEALED = {
   icon: <Lock size={28} />,
   title: 'Sealed — the security layer',
   description:
-    'Per-CLI workload identity, externalised secret backends with just-in-time credentials, redaction at the RPC boundary, per-CLI access control, JIT human-in-the-loop on high-privilege actions, and replay-safe audit. Sealed is the security layer wired into every part of the platform.',
+    'Per-workload identity, external secret backends (HashiCorp Vault), and admin profile and secret controls ship today. Runtime enforcement — live secret injection, redaction, per-key ACLs, and mid-run revocation — is experimental and maturing. See the v1.0 status for what to rely on.',
 };
 
 const MODELS = [
@@ -229,9 +229,9 @@ export default function LandingPage() {
       {/* Sealed security card — visually distinct from the capability grid */}
       <section className="max-w-4xl mx-auto px-6 pb-20">
         <FeatureCard
-          icon={SPINE.icon}
-          title={SPINE.title}
-          description={SPINE.description}
+          icon={SEALED.icon}
+          title={SEALED.title}
+          description={SEALED.description}
         />
       </section>
 
@@ -302,7 +302,7 @@ export default function LandingPage() {
               },
               {
                 label: 'Autopilot',
-                items: ['Goal Router', 'Mission Driver', 'Slot Extraction', 'Plan Preview', 'Self-Healing'],
+                items: ['Goal Router', 'Mission Driver', 'Slot Extraction', 'Plan Preview', 'Healing (roadmap)'],
               },
               {
                 label: 'Fleet',

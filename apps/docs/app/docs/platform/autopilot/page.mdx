@@ -3,7 +3,7 @@ import { TechArticleJsonLd, SoftwareApplicationJsonLd } from '@/components/struc
 export const metadata = {
   title: 'Autopilot — describe the goal, ship the agent',
   description:
-    'State the goal in plain English. Autopilot designs the agent graph, extracts slots, schedules a mission, drives execution, and self-heals on failure.',
+    'State the goal in plain English. Autopilot designs the agent graph, extracts slots, schedules a mission, and drives execution. Failure handling and automatic healing are on the roadmap.',
   alternates: { canonical: 'https://docs.sagewai.ai/docs/platform/autopilot' },
   openGraph: {
     title: 'Sagewai Autopilot — describe-the-goal agent automation',
@@ -78,7 +78,7 @@ flowchart TD
 - **Hand it a goal** like *"triage support tickets, escalate the hard ones, draft replies for the easy ones"* and get back a runnable mission.
 - **Run a long-lived mission** that decomposes into steps, picks tools, captures the trace, and reports progress.
 - **Capture every answer** as JSONL training data automatically — no manual instrumentation.
-- **Heal automatically** when a mission step fails: the controller detects, isolates, and retries with adjusted parameters.
+- **See recommended actions when a step fails** — today the controller reports a failed mission and the healing engine surfaces recommended actions. Acting on them automatically (detect, isolate, retry) is on the roadmap.
 - **Trigger a fine-tune** when the captured corpus crosses a configurable size threshold.
 
 ---

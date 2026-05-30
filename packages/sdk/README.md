@@ -8,30 +8,9 @@
 
 **Sagewai is the autonomous agent platform: describe the goal, we design the agents, run them in production, and fine-tune local models so every run gets cheaper.**
 
-> *Five pillars hold up the platform; one spine runs through all of them — that's what makes the agent platform safe to give a credit card.*
+Build your agent with the SDK. Hand it goals with Autopilot. Run them across teams with Fleet. Keep every secret scoped with Sealed. Watch every dollar with Observatory. Then own the model with the Training Loop.
 
-## Built for the senior engineer who has one quarter to ship AI
-
-A SaaS engineer told to "add AI this quarter" with a tight budget and a CFO three months out. The platform walks them through the whole arc:
-
-- **Q1: ship the AI feature** — SDK, tools, memory, workflows. Deadline met.
-- **Q2: explain the cost** — Observatory breaks the bill down by model, team, and feature.
-- **Q3: cost-down** — Training loop captures successful runs, fine-tunes a local SLM, deploys via Ollama. End-to-end under $5.
-- **Q4: the strategic question** — "If Anthropic raised prices 10×, how badly would we hurt?" Answer: "We'd be fine, we already have our own model."
-
-## Five pillars
-
-| Pillar | What it does |
-|--------|-------------|
-| **SDK** | Python-native agent runtime — multi-model providers, tools via MCP gateway, typed memory with extraction strategies and per-mission branching and checkpoint save/restore, guardrails, and LLM proxy in one import |
-| **Autopilot** | State the goal in plain English. Autopilot designs the agent graph, extracts the slots, previews the plan, runs the mission, and heals on failure. The headline experience of the platform |
-| **Fleet** | Distributed workers with capability-based dispatch, project isolation, enrollment keys, and isolated execution sandboxes (image families, Kubernetes backend, AgentCore-runtime backend, pooling). Run agents on your hardware, in your network |
-| **Observatory** | OpenTelemetry tracing, VictoriaMetrics metrics, Grafana dashboards, cost tracking, audit trail. Your AI source of truth |
-| **Training Loop — from juggernauts to your own model.** | Start with Opus or GPT-5. Capture their answers as training data via the Curator. Fine-tune your own SLM on free Colab CUDA, on $0.30/hr Spheron bare-metal, on serverless Modal, or on whatever GPU you can rent. Deploy locally via Ollama. Cost-down isn't an optimisation — it's an exit clause. |
-
-## One spine — Sealed
-
-Defense-in-depth security across all five pillars: per-CLI workload identity, externalised secret backends with JIT credentials, prompt + tool-output redaction at the RPC boundary, replay safety, per-CLI ACL, JIT-HITL callbacks, reactive directives. Five phases, twelve specs — the security model agent platforms have been ignoring.
+> **Sagewai is early software.** The `sagewai` package is published as `0.1.1` (alpha). The sections below are explicit about what ships today, what is experimental, and what is on the v1.1 roadmap — so you know what to rely on.
 
 ## Quick start
 
@@ -41,13 +20,13 @@ pip install sagewai
 
 ```python
 import asyncio
-from sagewai import UniversalAgent
+from sagewai.engines.universal import UniversalAgent
 
 agent = UniversalAgent(name="hello", model="gpt-4o-mini")
 print(asyncio.run(agent.chat("What is Sagewai?")))
 ```
 
-Three lines to your first agent. Works with GPT-4o, Claude, Gemini, Mistral, Ollama, and 100+ models.
+Three lines to your first agent. One interface reaches 100+ models — OpenAI, Anthropic, Google, Mistral, and local Ollama via LiteLLM — so you are not locked to a provider.
 
 ## Install extras
 
@@ -61,16 +40,48 @@ Three lines to your first agent. Works with GPT-4o, Claude, Gemini, Mistral, Oll
 | `sagewai[storage]` | S3 (boto3) and GCS archival backends |
 | `sagewai[all]` | Everything above |
 
+## What you can build with it
+
+Sagewai is one platform with several products. Here is the honest shape of each today:
+
+- **SDK** — write an agent in a few lines of Python: multi-model providers, tools over MCP, typed memory, and guardrails in one import. Ships today.
+- **Autopilot** — describe a goal in plain English and it designs and runs the agent graph for you. Linear plans run end-to-end today; branched/conditional plans and automatic healing (recommendations only, not yet acted on) are in progress.
+- **Fleet** — run agents across your own machines with capability-based dispatch and project isolation, in Docker (default) or Kubernetes sandboxes. Ships today; durable persistence is on the roadmap.
+- **Sealed** — keep secrets out of your agents with per-workload identity, an external secret backend (HashiCorp Vault), and admin profile/secret controls. The identity model, the Vault backend, and the admin controls ship today; runtime enforcement — live injection, redaction, per-key ACL, mid-run revocation — is experimental and maturing.
+- **Observatory** — see what a run costs with OpenTelemetry traces, metrics, and a per-model / per-team spend breakdown. Ships today.
+- **Training Loop** — capture good production runs and fine-tune a local model from them. v1.0 ships run capture (the Curator); the closed capture → fine-tune → deploy-via-Ollama loop is on the v1.1 roadmap.
+
 ## Examples
 
-Examples organised under the five-pillar architecture (see [`sagewai/examples/`](sagewai/examples/)):
+Every example is a complete, runnable file in [`sagewai/examples/`](sagewai/examples/), grouped by product.
 
-- **SDK** — `01_hello_agent.py` through `08_directives.py`: agents, tools, multi-model, memory strategies, workflows, guardrails, MCP, directives (`@context`, `@memory`, `@agent`, `@transform`, `/tool`).
-- **Autopilot** — `09_*_autopilot.py` group: goal-driven missions, agent-graph design, slot extraction.
-- **Fleet** — `26_fleet_demo.py`: workers, capability dispatch, project scoping, sandbox execution.
-- **Observatory** — examples emit OTel spans and Prometheus metrics consumed by the local Grafana stack.
-- **Training Loop** — `25_training_pipeline.py`: collect, curate, export Alpaca/ShareGPT, fine-tune with Unsloth.
-- **Transform directive** — `50_incident_knowledge_graph.py`: `@transform(graphify, …)` to distil incident transcripts into `GraphMemory` across runs. `51_big_input_small_model.py`: compress a large document with `@transform(summarize, …)` so a local model can answer questions about it; demonstrates custom transform ops registered on a `TransformRegistry`.
+**SDK**
+- [`01_hello_agent.py`](sagewai/examples/01_hello_agent.py) — a minimal agent in a few lines.
+- [`02_tool_agent.py`](sagewai/examples/02_tool_agent.py) — give an agent a Python function as a tool with `@tool`.
+- [`03_multi_model.py`](sagewai/examples/03_multi_model.py) — swap models per agent (GPT, Claude, Gemini, local).
+- [`04_memory_agent.py`](sagewai/examples/04_memory_agent.py) — persistent typed memory and a knowledge graph.
+- [`05_workflow.py`](sagewai/examples/05_workflow.py) — chain agents into a multi-stage workflow.
+- [`06_guardrails.py`](sagewai/examples/06_guardrails.py) — PII redaction, content filters, and budget caps.
+- [`07_mcp_tools.py`](sagewai/examples/07_mcp_tools.py) — expose agent tools as an MCP server.
+- [`08_directives.py`](sagewai/examples/08_directives.py) — `@context`, `@memory`, and `@agent` directive syntax.
+
+**Autopilot**
+- [`28_autopilot_quickstart.py`](sagewai/examples/28_autopilot_quickstart.py) — describe a goal; Autopilot designs and runs the agent graph.
+- [`35_autopilot_hosted_service.py`](sagewai/examples/35_autopilot_hosted_service.py) — drive Autopilot missions behind a hosted service.
+
+**Fleet**
+- [`20_fleet_workers.py`](sagewai/examples/20_fleet_workers.py) — run agents across a worker fleet with a dispatcher.
+- [`26_fleet_scoped_dispatch.py`](sagewai/examples/26_fleet_scoped_dispatch.py) — capability-based dispatch with project scoping.
+- [`33_fleet_sealed_integration.py`](sagewai/examples/33_fleet_sealed_integration.py) — workers that resolve secrets through Sealed identity profiles.
+
+**Observatory**
+- [`34_observatory_cost_tracking.py`](sagewai/examples/34_observatory_cost_tracking.py) — per-model / per-team cost tracking from run telemetry.
+- [`43_observatory_live.py`](sagewai/examples/43_observatory_live.py) — emit OTel spans and metrics into the local Grafana stack.
+
+**Training Loop**
+- [`25_training_data_pipeline.py`](sagewai/examples/25_training_data_pipeline.py) — capture and curate production runs into Alpaca/ShareGPT training data.
+- [`38_unsloth_finetune.py`](sagewai/examples/38_unsloth_finetune.py) — fine-tune a local model with Unsloth.
+- [`36_autopilot_training_loop.py`](sagewai/examples/36_autopilot_training_loop.py) — an offline walkthrough of the full capture → fine-tune → deploy loop (v1.1 roadmap).
 
 ## CLI
 
@@ -84,8 +95,8 @@ sagewai admin serve --port 8000      # start the admin UI + API
 ## Documentation
 
 - [docs.sagewai.ai](https://docs.sagewai.ai) — full documentation
-- [Getting Started](https://docs.sagewai.ai/docs/getting-started) — quickstart guide
-- [Architecture](https://docs.sagewai.ai/docs/architecture) — runtime topology, security tiers, execution modes, execution backends
+- [Getting Started](https://docs.sagewai.ai/docs/get-started/quickstart) — quickstart guide
+- [Architecture](https://docs.sagewai.ai/docs/architecture) — runtime topology, security model, execution modes, execution backends
 
 ## Contributing
 
@@ -95,4 +106,4 @@ See [CONTRIBUTING.md](https://github.com/sagewai/platform/blob/main/CONTRIBUTING
 
 AGPL-3.0-or-later — see [LICENSE](https://github.com/sagewai/platform/blob/main/LICENSE). Commercial licenses available for organisations that need an alternative to AGPL. See [COMMERCIAL-LICENSE.md](https://github.com/sagewai/platform/blob/main/COMMERCIAL-LICENSE.md) for details.
 
-Built by [Ali Arda Diri](https://github.com/sagewai).
+Built in Berlin.
