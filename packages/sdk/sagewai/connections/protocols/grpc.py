@@ -39,6 +39,7 @@ and are lazy-imported with a clear ``GrpcNotInstalledError``.
 """
 from __future__ import annotations
 
+import asyncio
 import collections
 import threading
 from dataclasses import replace
@@ -54,6 +55,11 @@ from sagewai.connections.protocols.base import (
     PluginContext,
     get_sensitive_field_paths_for,
 )
+from sagewai.connections.subscriptions.errors import (
+    SubscriptionLimitExceededError,
+    SubscriptionNotFoundError,
+)
+from sagewai.connections.subscriptions.manager import get_subscription_manager
 
 
 # ── errors ────────────────────────────────────────────────────────────
@@ -157,6 +163,27 @@ class GrpcProtocolData(BaseModel):
                 "auth_mode='metadata_token' requires a non-empty auth_metadata_key"
             )
         return self
+
+
+class GrpcStreamSpec(BaseModel):
+    """Per-subscription spec for a gRPC **server-streaming** method.
+
+    Validated by the ``SubscriptionManager`` before opening the stream
+    (mirrors ``MqttSubscriptionSpec``). ``method`` is the server-streaming
+    RPC (``package.Service/StreamMethod``); ``request`` is the single request
+    message (JSON, marshalled to protobuf via #376's ``_marshal_request``);
+    each response message is emitted as JSON into the manager-owned buffer.
+
+    ``drop_oldest`` only — ``pause`` is schema-rejected/deferred (it needs a
+    ``SubscriptionPlugin`` resume-signal extension, shared with MQTT).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    method: str = Field(..., min_length=1)  # "package.Service/StreamMethod"
+    request: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, str] = Field(default_factory=dict)
+    overflow_policy: Literal["drop_oldest"] = "drop_oldest"  # pause deferred
 
 
 # ── lazy import ───────────────────────────────────────────────────────
@@ -600,10 +627,222 @@ class GrpcProtocolPlugin:
             await _aclose(channel)
 
     def extra_routes(self) -> APIRouter:
-        return APIRouter()  # v1 keeps empty (no debug routes)
+        return _grpc_router  # server-streaming subscription-management routes
 
     def extra_cli(self) -> list[click.Command]:
         return []
+
+    # ── SubscriptionPlugin half (server-streaming) ────────────────────
+    #
+    # gRPC server-streaming (1 request → N responses) fits the
+    # ``SubscriptionPlugin`` foundation (#374/#375): subscribe with a request
+    # → buffer of response items → drain. Reuses #376's reflection +
+    # marshalling wholesale; the ONLY new gRPC verb is ``channel.unary_stream``
+    # (vs ``unary_unary`` for the unary ``call`` op). The unary ``call`` op is
+    # 100% unchanged. Dual-Protocol shape mirrors ``MqttProtocolPlugin``.
+    # Client-streaming + bidirectional remain out of scope (need a new "agent
+    # pushes a request stream" abstraction).
+
+    def subscription_spec_schema(self) -> type[BaseModel]:
+        return GrpcStreamSpec
+
+    async def open_subscription(
+        self,
+        connection: Connection,
+        *,
+        spec: dict[str, Any],
+        emit,
+        ctx: Any,
+    ) -> None:
+        """Open a server-streaming RPC and emit each response message as JSON.
+
+        Runs as the manager's background task: it iterates the
+        ``unary_stream`` callable until the server closes the stream or the
+        manager cancels the task. Reflection + marshalling are #376's helpers
+        (cached descriptor pool, dynamic request/response message classes).
+
+        Defensively decrypts ``auth_token`` via ``ctx.creds`` (the MQTT
+        pattern — non-admin callers may pass an encrypted record). Re-raises
+        ``asyncio.CancelledError`` so the manager can cancel cleanly, normalizes
+        grpc errors onto the ``GrpcError`` hierarchy via ``_raise_normalized``,
+        and closes the channel in ``finally`` via ``_aclose``.
+        """
+        from google.protobuf import message_factory
+
+        connection = _maybe_decrypt(self, connection, ctx)
+        pd = connection.protocol_data
+        method = spec["method"]
+        svc, meth = _split_method(method)
+        method_path = _normalize_method_path(method)
+        metadata = _call_metadata(pd, spec.get("metadata"))
+
+        channel = _open_channel(pd)
+        try:
+            pool = _POOL_CACHE.get(pd["target"])
+            if pool is None:
+                fdps = await _fetch_descriptors_for_symbol(channel, svc)
+                pool = _POOL_CACHE.build_pool_from_fdps(pd["target"], fdps)
+            try:
+                method_desc = pool.FindServiceByName(svc).FindMethodByName(meth)
+            except GrpcError:
+                raise
+            except Exception as exc:
+                raise GrpcMethodError(
+                    f"method {method!r} not found in server reflection"
+                ) from exc
+            request_cls = message_factory.GetMessageClass(method_desc.input_type)
+            response_cls = message_factory.GetMessageClass(method_desc.output_type)
+            request_msg = _marshal_request(spec.get("request") or {}, request_cls)
+            grpc = _import_grpc()
+            callable_ = channel.unary_stream(
+                method_path,
+                request_serializer=request_cls.SerializeToString,
+                response_deserializer=response_cls.FromString,
+            )
+            try:
+                # No timeout — a server-streaming RPC runs until the server
+                # closes it or the manager cancels this task. (The connection's
+                # default_timeout_seconds is a unary concern; streams are
+                # open-ended.)
+                async for response in callable_(request_msg, metadata=metadata):
+                    emit(_unmarshal_response(response))
+            except asyncio.CancelledError:
+                raise
+            except grpc.aio.AioRpcError as exc:
+                _raise_normalized(exc, context=f"stream {method_path}")
+        except asyncio.CancelledError:
+            raise
+        finally:
+            await _aclose(channel)
+
+    async def close_subscription(
+        self, connection: Connection, *, spec: dict[str, Any]
+    ) -> None:
+        """No-op: the manager cancels the ``open_subscription`` task, whose
+        ``finally`` closes the channel. Nothing extra to do here (mirrors
+        the MQTT plugin)."""
+        return None
+
+
+# ── extra_routes (server-streaming subscription management) ────────────
+#
+# Subscription-management routes mounted at
+# ``/api/v1/admin/connections/grpc/``. They reach the process-wide
+# SubscriptionManager via ``get_subscription_manager()`` and resolve
+# connections via the injected ConnectionsContext (mirrors the MQTT / OAuth2
+# / MCP plugin context-injection pattern). Dedicated ``/grpc/`` prefix — no
+# catch-all collision with the generic CRUD routes.
+
+_INJECTED_CTX = None
+
+
+def _test_inject_context(ctx) -> None:
+    """Test/CLI hook: set the ConnectionsContext route bodies use. ``None`` clears."""
+    global _INJECTED_CTX
+    _INJECTED_CTX = ctx
+
+
+def _get_ctx():
+    """Return the active ConnectionsContext (injected, or built fresh)."""
+    if _INJECTED_CTX is not None:
+        return _INJECTED_CTX
+    from sagewai.admin.state_file import AdminStateFile, default_admin_state_path
+    from sagewai.connections.bootstrap import build_connections_context
+
+    return build_connections_context(AdminStateFile(default_admin_state_path()))
+
+
+_grpc_router = APIRouter()
+
+
+class _DrainBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    max_events: int = Field(default=100, gt=0, le=10000)
+
+
+def _resolve_grpc_connection(connection_id: str) -> Connection:
+    """Resolve + validate a gRPC connection by id, or raise the right HTTP error."""
+    from fastapi import HTTPException
+
+    ctx = _get_ctx()
+    record = ctx.store.get(connection_id)
+    if record is None:
+        raise HTTPException(404, f"connection {connection_id} not found")
+    if record.protocol != "grpc":
+        raise HTTPException(
+            400, f"connection {connection_id} is not grpc (got {record.protocol})"
+        )
+    return record
+
+
+@_grpc_router.post("/{connection_id}/subscribe")
+async def _subscribe_route(connection_id: str, body: dict):
+    """Open a server-streaming subscription. Body = GrpcStreamSpec."""
+    from fastapi import HTTPException
+    from pydantic import ValidationError
+
+    record = _resolve_grpc_connection(connection_id)
+    try:
+        spec = GrpcStreamSpec(**body)
+    except ValidationError as exc:
+        raise HTTPException(422, detail=exc.errors())
+    mgr = get_subscription_manager()
+    try:
+        sub_id = await mgr.subscribe(
+            plugin=GrpcProtocolPlugin(),
+            connection=record,
+            spec=spec.model_dump(),
+            ctx=None,
+        )
+    except SubscriptionLimitExceededError as exc:
+        raise HTTPException(409, str(exc))
+    return {"subscription_id": sub_id}
+
+
+@_grpc_router.post("/subscriptions/{subscription_id}/drain")
+async def _drain_route(subscription_id: str, body: _DrainBody | None = None):
+    """Drain up to ``max_events`` buffered stream items; returns a DrainResult."""
+    from fastapi import HTTPException
+
+    max_events = body.max_events if body is not None else 100
+    mgr = get_subscription_manager()
+    try:
+        result = await mgr.drain(subscription_id, max_events)
+    except SubscriptionNotFoundError as exc:
+        raise HTTPException(404, str(exc))
+    return result.model_dump()
+
+
+@_grpc_router.delete("/subscriptions/{subscription_id}", status_code=204)
+async def _unsubscribe_route(subscription_id: str):
+    """Tear down a subscription + cancel its background streaming task."""
+    from fastapi import HTTPException, Response
+
+    mgr = get_subscription_manager()
+    try:
+        await mgr.unsubscribe(subscription_id)
+    except SubscriptionNotFoundError as exc:
+        raise HTTPException(404, str(exc))
+    return Response(status_code=204)
+
+
+@_grpc_router.get("/subscriptions")
+async def _list_subscriptions_route():
+    """List stats for every active subscription (process-wide)."""
+    mgr = get_subscription_manager()
+    return [s.model_dump() for s in mgr.list_subscriptions()]
+
+
+@_grpc_router.get("/subscriptions/{subscription_id}")
+async def _subscription_stats_route(subscription_id: str):
+    """Observability snapshot for one subscription."""
+    from fastapi import HTTPException
+
+    mgr = get_subscription_manager()
+    try:
+        return mgr.stats(subscription_id).model_dump()
+    except SubscriptionNotFoundError as exc:
+        raise HTTPException(404, str(exc))
 
 
 __all__ = [
@@ -617,11 +856,13 @@ __all__ = [
     "GrpcNotInstalledError",
     "GrpcProtocolData",
     "GrpcProtocolPlugin",
+    "GrpcStreamSpec",
     "_DescriptorPoolCache",
     "_call_metadata",
     "_marshal_request",
     "_normalize_method_path",
     "_run_op",
     "_split_method",
+    "_test_inject_context",
     "_unmarshal_response",
 ]

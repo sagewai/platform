@@ -537,11 +537,13 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
 def register(app: FastAPI, sf: AdminStateFile) -> None:
     """Mount the generic connections router + plugin extra_routes."""
     ctx = build_connections_context(sf)
-    # Inject the context for plugin extra_routes that need it (oauth2, mqtt).
+    # Inject the context for plugin extra_routes that need it (oauth2, mqtt, grpc).
+    from sagewai.connections.protocols import grpc as grpc_module
     from sagewai.connections.protocols import mqtt as mqtt_module
     from sagewai.connections.protocols import oauth2 as oauth2_module
     oauth2_module._test_inject_context(ctx)
     mqtt_module._test_inject_context(ctx)
+    grpc_module._test_inject_context(ctx)
 
     app.include_router(_build_router(sf, ctx))
     # Mount each plugin's extra_routes at /api/v1/admin/connections/<plugin.id>/.

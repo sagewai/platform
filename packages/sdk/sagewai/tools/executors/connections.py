@@ -38,6 +38,7 @@ from sagewai.connections.credentials import CredentialsBackendRouter
 from sagewai.connections.protocols import get_protocol
 from sagewai.connections.protocols.base import get_sensitive_field_paths_for
 from sagewai.connections.protocols.coap import _run_op as _coap_run_op
+from sagewai.connections.protocols.grpc import GrpcProtocolPlugin
 from sagewai.connections.protocols.grpc import _run_op as _grpc_run_op
 from sagewai.connections.protocols.modbus import _run_op as _modbus_run_op
 from sagewai.connections.protocols.mqtt import MqttProtocolPlugin
@@ -140,6 +141,44 @@ async def _mqtt_dispatch(payload: Mapping[str, Any], *, store: ConnectionStore) 
     raise ValueError(f"unknown mqtt operation: {operation!r}")
 
 
+async def _grpc_stream_dispatch(
+    payload: Mapping[str, Any], *, store: ConnectionStore
+) -> Any:
+    """Stateful gRPC server-streaming dispatch → the SubscriptionManager.
+
+    gRPC is DUAL-MODE: the unary ``call`` op stays on the stateless
+    ``_grpc_run_op`` decrypt-then-call path (#376, unchanged); the three
+    streaming ops route here. ``subscribe`` resolves the connection + hands
+    the gRPC plugin to the manager (the plugin's ``open_subscription`` does
+    the defensive decrypt against ``ctx.creds`` — None here, mirroring MQTT);
+    ``drain`` / ``unsubscribe`` operate on a subscription id alone (no
+    connection lookup, no decrypt). Mirrors ``_mqtt_dispatch``.
+    """
+    exec_block = payload["exec"]["grpc"]
+    operation = exec_block["operation"]
+    args = dict(exec_block.get("args", {}))
+    project_id = payload.get("project_id")
+    mgr = get_subscription_manager()
+
+    if operation == "subscribe":
+        connection = _resolve_connection(
+            store, "grpc", project_id, exec_block["connection_ref"]
+        )
+        sub_id = await mgr.subscribe(
+            plugin=GrpcProtocolPlugin(), connection=connection, spec=args, ctx=None
+        )
+        return {"subscription_id": sub_id}
+    if operation == "drain":
+        result = await mgr.drain(
+            args["subscription_id"], int(args.get("max_events", 100))
+        )
+        return result.model_dump()
+    if operation == "unsubscribe":
+        await mgr.unsubscribe(args["subscription_id"])
+        return {"ok": True}
+    raise ValueError(f"unknown grpc streaming operation: {operation!r}")
+
+
 async def run(
     payload: Mapping[str, Any],
     *,
@@ -166,6 +205,15 @@ async def run(
     # decrypt-then-call runner path the four Phase A kinds use.
     if kind == "mqtt":
         return await _mqtt_dispatch(payload, store=store)
+
+    # gRPC is DUAL-MODE: server-streaming subscribe/drain/unsubscribe route
+    # to the SubscriptionManager; the unary `call` op falls through to the
+    # stateless _grpc_run_op path below (UNCHANGED from #376).
+    if kind == "grpc":
+        op = payload.get("exec", {}).get("grpc", {}).get("operation")
+        if op in ("subscribe", "drain", "unsubscribe"):
+            return await _grpc_stream_dispatch(payload, store=store)
+        # else (op == "call") → fall through to the standard _run_op path
 
     runners = _runners()
     if kind not in runners:

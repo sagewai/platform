@@ -103,13 +103,13 @@ def test_plugin_identity():
     assert p.sensitive_fields == ("auth_token",)
 
 
-def test_plugin_is_protocol_plugin_only():
+def test_plugin_implements_both_protocols():
     from sagewai.connections.protocols.base import ProtocolPlugin
     from sagewai.connections.subscriptions.base import SubscriptionPlugin
 
     p = GrpcProtocolPlugin()
     assert isinstance(p, ProtocolPlugin)
-    assert not isinstance(p, SubscriptionPlugin)  # unary only — no streaming
+    assert isinstance(p, SubscriptionPlugin)  # now dual-Protocol (server-streaming)
 
 
 def test_public_view_masks_token():

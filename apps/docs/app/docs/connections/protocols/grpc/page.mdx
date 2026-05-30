@@ -14,9 +14,12 @@ service, builds a descriptor pool, and marshals JSON to and from protobuf
 dynamically. No `.proto` upload, no compiled stubs — the agent never
 touches protobuf.
 
-This release ships **unary** (1 request, 1 response) only. Server-,
-client-, and bidirectional-streaming are deferred (see
-[Deferrals](#deferrals)).
+gRPC supports two RPC types that fit the platform: **unary** (1 request,
+1 response) and **server-streaming** (1 request, N responses). Unary uses
+the generic [`call` operation](#the-call-operation); server-streaming uses
+the [subscribe / drain / unsubscribe flow](#server-streaming) on the
+subscription foundation. Client-streaming and bidirectional RPCs need a
+different abstraction and stay out of scope (see [Deferrals](#deferrals)).
 
 ## Install
 
@@ -36,7 +39,8 @@ connection raises `GrpcNotInstalledError` with an install hint.
   has server reflection enabled.
 - You want JSON ergonomics over a protobuf API without compiling stubs
   or maintaining `.proto` files.
-- The method is **unary**. Streaming methods are deferred.
+- The method is **unary** (use `call`) or **server-streaming** (use a
+  stream subscription). Client-streaming and bidirectional are out of scope.
 
 ## The reflection requirement (the #1 gotcha)
 
@@ -110,6 +114,87 @@ Returns the decoded response as a JSON dict.
 - **Response marshalling** uses
   `json_format.MessageToDict(preserving_proto_field_name=True)` — proto
   field names, enum string names.
+
+## Server-streaming
+
+A **server-streaming** RPC sends one request and receives N responses on
+an open stream. That fits the platform's subscription model: you open a
+subscription with the request, the platform consumes the stream in the
+background and buffers each response message in a fixed-size ring, and you
+**drain** the buffer to pull the items an agent has accumulated. The same
+machinery powers MQTT — gRPC streaming reuses it wholesale; the only new
+gRPC verb is `channel.unary_stream` instead of `unary_unary`.
+
+Three operations drive a stream: `subscribe`, `drain`, and `unsubscribe`.
+
+### subscribe
+
+```yaml
+exec:
+  grpc:
+    connection_ref: prices-service
+    operation: subscribe
+    args:
+      method: "market.PriceService/StreamPrices"   # a server-streaming method
+      request: { symbol: "AAPL" }
+      metadata: { x-request-id: "..." }              # optional, merged with auth metadata
+```
+
+Returns `{ "subscription_id": "sub-..." }`. The reflection + JSON↔protobuf
+marshalling are identical to the unary `call` op — the method descriptor's
+`server_streaming` flag is what selects the streaming verb. Each response
+message is decoded to JSON (the same shape a unary `call` returns) and
+pushed into the buffer.
+
+The stream is **open-ended** — it runs until the server closes it or you
+unsubscribe. The connection's `default_timeout_seconds` is a unary concern
+and does not apply to a stream.
+
+### drain
+
+```yaml
+exec:
+  grpc:
+    connection_ref: prices-service
+    operation: drain
+    args:
+      subscription_id: "sub-..."
+      max_events: 100        # optional, default 100
+```
+
+Returns a drain result: the buffered `events` (one JSON dict per streamed
+message), how many were `returned`, how many `remaining`, plus drop
+counters. The drop counters tell you whether you saw the complete stream
+or a lossy sample.
+
+### unsubscribe
+
+```yaml
+exec:
+  grpc:
+    connection_ref: prices-service
+    operation: unsubscribe
+    args:
+      subscription_id: "sub-..."
+```
+
+Tears down the subscription and cancels the background streaming task,
+closing the channel. Returns `{ "ok": true }`.
+
+### Overflow: `drop_oldest` only
+
+The buffer is a fixed-size ring with overflow policy `drop_oldest`: once
+full, the oldest unread message is evicted to make room for a new one.
+`pause` (where the platform stops consuming and resumes when you drain) is
+schema-rejected and deferred — it needs a resume-signal extension shared
+with MQTT.
+
+### Admin panel
+
+The gRPC connection's detail drawer has a **Streams** section: a live
+table of active stream subscriptions (method, buffer depth, overflow
+count, status), a "New stream" form (method + JSON request), and per-row
+Drain / Unsubscribe. The unary `call` op is unchanged and stateless.
 
 ## JSON and protobuf mapping
 
@@ -202,15 +287,19 @@ setup:
 
 ## Deferrals
 
-This release ships gRPC **unary** only. Deferred to their own specs or
-follow-ups:
+gRPC is **finalized** for the platform's two consumption models: unary
+(`call`) and server-streaming (subscribe / drain / unsubscribe). The
+following stay out of scope or are documented follow-ups:
 
-- **Server-streaming** (1 request, N responses) — the natural next gRPC
-  step, riding the subscription foundation (subscribe, buffer, drain).
 - **Client-streaming and bidirectional** — need an "agent pushes a
-  request stream" abstraction the platform doesn't have yet.
+  request stream" abstraction the platform doesn't have. Separate (and
+  possibly never) problem.
+- **`pause` overflow mode** for streams — needs a subscription
+  resume-signal extension, shared with MQTT.
 - **Operator-uploaded `.proto` / `FileDescriptorSet`** — for servers
   with reflection disabled.
 - **mTLS client certificates** and dynamic per-call credentials plugins.
 - **Reflection-cache TTL / invalidation** — process-lifetime plus
   restart-to-refresh for now.
+- **Per-stream deadline / max-duration cap** — streams are open-ended;
+  the idle reaper and unsubscribe bound their lifetime.

@@ -1772,14 +1772,73 @@ transitively. No package requires protobuf>=7 (all consumers cap at
 
 **Deferred (own specs / follow-ups):** server-streaming gRPC (the natural
 next step — rides the subscription foundation: subscribe → buffer →
-drain); client-streaming + bidirectional (need an "agent pushes a request
-stream" abstraction); operator-uploaded `.proto`/`FileDescriptorSet` (for
-reflection-disabled servers); mTLS client certs + dynamic per-call
-credentials plugins; reflection-cache TTL/invalidation.
+drain — **NOW LANDED**, see below); client-streaming + bidirectional
+(need an "agent pushes a request stream" abstraction); operator-uploaded
+`.proto`/`FileDescriptorSet` (for reflection-disabled servers); mTLS
+client certs + dynamic per-call credentials plugins; reflection-cache
+TTL/invalidation.
 
 **Test deltas:** ~42 new SDK tests (11 schema/errors/identity + 5
 cache/marshal + 13 reflection/call/test + 3 executor decrypt + 4 baseline
 bumps reused) + 1 e2e. Full SDK suite: ~5800.
+
+## gRPC server-streaming landed — gRPC FINALIZED
+
+Server-streaming (1 request → N responses) added on the
+`SubscriptionPlugin` foundation (#374/#375). `GrpcProtocolPlugin` is now
+**dual-Protocol** — it implements BOTH `ProtocolPlugin` (unary `call`,
+unchanged) AND `SubscriptionPlugin` (server-streaming) — the exact shape
+`MqttProtocolPlugin` uses. **gRPC is finalized**: unary + server-streaming
+are the two RPC types that fit; client-streaming + bidirectional need a
+new "agent pushes a request stream" abstraction and stay out of scope.
+
+- **Reuses #376 wholesale.** `_open_channel`, `_fetch_descriptors_for_symbol`,
+  `_POOL_CACHE`, `_marshal_request`, `_unmarshal_response`, `_call_metadata`,
+  `_split_method`, `_normalize_method_path`, `_raise_normalized`, `_aclose`,
+  `_maybe_decrypt`, the error hierarchy — all reused. The ONLY new gRPC verb
+  is `channel.unary_stream` (vs `unary_unary` for `call`).
+- **`GrpcStreamSpec`** (`extra="forbid"`): `method` (min_length=1),
+  `request` (dict), `metadata` (dict[str,str]), `overflow_policy:
+  Literal["drop_oldest"]` (pause schema-rejected/deferred, like MQTT).
+- **The SubscriptionPlugin half** on `GrpcProtocolPlugin`:
+  `subscription_spec_schema()` → `GrpcStreamSpec`; `open_subscription`
+  runs as the manager's background task — defensive-decrypt via
+  `_maybe_decrypt`, reflection (cached pool), `channel.unary_stream(...)`,
+  `async for response in callable_(request_msg, metadata=...): emit(_unmarshal_response(response))`,
+  **no timeout** (streams are open-ended), re-raises `asyncio.CancelledError`,
+  normalizes grpc errors via `_raise_normalized`, closes the channel in
+  `finally` via `_aclose`. `close_subscription` is a no-op (the manager
+  cancels the task; its `finally` closes the channel).
+- **Executor is DUAL-MODE for grpc.** `run()` diverts the 3 streaming ops
+  (`subscribe`/`drain`/`unsubscribe`) to a new `_grpc_stream_dispatch`
+  (mirrors `_mqtt_dispatch`, routes to `get_subscription_manager()`); the
+  unary `call` op **falls through unchanged** to the stateless
+  `_grpc_run_op` decrypt-then-call path. A test
+  (`test_grpc_call_op_still_uses_run_op`) asserts this.
+- **Admin routes** under `/api/v1/admin/connections/grpc/` (mirror MQTT
+  exactly): `POST /{id}/subscribe`, `POST /subscriptions/{sub}/drain`,
+  `DELETE /subscriptions/{sub}`, `GET /subscriptions`,
+  `GET /subscriptions/{sub}`. `SubscriptionNotFoundError`→404,
+  `SubscriptionLimitExceededError`→409. grpc.py gained the
+  `_INJECTED_CTX`/`_get_ctx`/`_test_inject_context` module globals;
+  `connections_v2_routes.register()` wires
+  `grpc_module._test_inject_context(ctx)` alongside mqtt/oauth2.
+- **Admin UI:** `grpc-panel.tsx` gained a **Streams** section (live table
+  of stream subscriptions + a New-stream form with method + JSON-request
+  textarea + per-row Drain/Unsubscribe), mirroring the MQTT Subscriptions
+  section + `useEffect([connection.id])` re-sync. `GrpcStream` type +
+  `adminApi.connections.grpc` namespace. 1 new e2e (add → subscribe →
+  unsubscribe).
+- **Docs:** `connections/protocols/grpc/page.mdx` gained a Server-streaming
+  section (subscribe/drain/unsubscribe, drop_oldest, client-streaming/bidi
+  deferral); intro + Deferrals updated.
+- **No new deps** — reuses `sagewai[grpc]` + the MQTT subscription
+  machinery. No schema (`_schema.json`) change — `exec.grpc.operation`
+  already permits arbitrary strings.
+
+**Test deltas:** ~36 new SDK tests (10 grpc-stream plugin + 7 executor
+stream dispatch + 13 grpc-stream admin routes + 1 #376 isinstance test
+flipped + reused baseline bumps) + 1 e2e.
 
 ## MCP-as-first-class (sub-project 3 — Bundle A)
 

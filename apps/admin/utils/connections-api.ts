@@ -21,6 +21,7 @@ import type {
   ConnectionListParams,
   CreateConnectionPayload,
   ExportParams,
+  GrpcStream,
   ImportParams,
   ImportResult,
   McpServerMeta,
@@ -177,6 +178,37 @@ export function createConnectionsApi(client: FetchClient) {
           `${ROOT}/mqtt/subscriptions/${encodeURIComponent(subId)}`,
         ),
     },
+
+    // gRPC server-streaming sub-routes (mounted at
+    // /api/v1/admin/connections/grpc/...). gRPC is dual-mode: the unary
+    // `call` op is stateless; server-streaming subscriptions are long-lived
+    // buffers owned by the admin-process SubscriptionManager (same machinery
+    // as MQTT). drop_oldest only.
+    grpc: {
+      subscribe: (
+        id: string,
+        spec: { method: string; request?: Record<string, unknown>; metadata?: Record<string, string> },
+      ) =>
+        client.post<{ subscription_id: string }>(
+          `${ROOT}/grpc/${encodeURIComponent(id)}/subscribe`,
+          spec,
+        ),
+      listSubscriptions: () =>
+        client.get<GrpcStream[]>(`${ROOT}/grpc/subscriptions`),
+      stats: (subId: string) =>
+        client.get<GrpcStream>(
+          `${ROOT}/grpc/subscriptions/${encodeURIComponent(subId)}`,
+        ),
+      drain: (subId: string, maxEvents = 100) =>
+        client.post<MqttDrainResult>(
+          `${ROOT}/grpc/subscriptions/${encodeURIComponent(subId)}/drain`,
+          { max_events: maxEvents },
+        ),
+      unsubscribe: (subId: string) =>
+        client.delete<void>(
+          `${ROOT}/grpc/subscriptions/${encodeURIComponent(subId)}`,
+        ),
+    },
   };
 }
 
@@ -191,6 +223,7 @@ export type {
   CreateConnectionPayload,
   CredentialsBackendConfig,
   CredentialsBackendKind,
+  GrpcStream,
   McpCredentialFieldMeta,
   McpServerMeta,
   McpToolMeta,

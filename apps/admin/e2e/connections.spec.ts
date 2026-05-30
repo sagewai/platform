@@ -1317,6 +1317,147 @@ test.describe('Connections page', () => {
     ).not.toBeVisible({ timeout: 10_000 });
   });
 
+  test('grpc: add → open panel → stream subscribe → unsubscribe (mocked)', async ({ page }) => {
+    let connections: Array<Record<string, unknown>> = [];
+    let streams: Array<Record<string, unknown>> = [];
+    let subscribeCalls = 0;
+    let unsubscribeCalls = 0;
+
+    // Broad catch-all FIRST so specific routes registered LATER win (LIFO).
+    await page.route('**/api/v1/admin/connections/**', async (route, req) => {
+      const url = req.url();
+      const method = req.method();
+
+      // gRPC server-streaming sub-routes (handled in the catch-all to keep
+      // ordering deterministic regardless of registration order).
+      if (method === 'GET' && /\/grpc\/subscriptions(\?.*)?$/.test(url)) {
+        await route.fulfill({ json: streams });
+        return;
+      }
+      const subMatch = url.match(/\/grpc\/([a-z0-9_]+)\/subscribe$/);
+      if (method === 'POST' && subMatch) {
+        subscribeCalls++;
+        const body = JSON.parse(req.postData() ?? '{}');
+        const subId = 'sub-mock-g1';
+        streams.push({
+          subscription_id: subId,
+          connection_id: subMatch[1],
+          status: 'active',
+          buffer_depth: 0,
+          bytes_buffered: 0,
+          overflow_dropped: 0,
+          oversized_dropped: 0,
+          global_pressure_dropped: 0,
+          last_event_at: null,
+          last_drain_at: 0,
+          created_at: 0,
+          method: body.method,
+        });
+        await route.fulfill({ json: { subscription_id: subId } });
+        return;
+      }
+      const unsubMatch = url.match(/\/grpc\/subscriptions\/([a-z0-9-]+)$/);
+      if (method === 'DELETE' && unsubMatch) {
+        unsubscribeCalls++;
+        streams = streams.filter(s => s.subscription_id !== unsubMatch[1]);
+        await route.fulfill({ json: null, status: 200 });
+        return;
+      }
+
+      // Per-id GET
+      const idMatch = url.match(/\/connections\/(conn_grpc_[a-z0-9]+)$/);
+      if (method === 'GET' && idMatch) {
+        const found = connections.find(c => c.id === idMatch[1]);
+        await route.fulfill(found ? { json: found } : { status: 404, json: {} });
+        return;
+      }
+      // List endpoint
+      if (method === 'GET' && /\/connections\/(\?.*)?$/.test(url)) {
+        await route.fulfill({ json: connections });
+        return;
+      }
+      // Create endpoint
+      if (method === 'POST' && /\/connections\/(\?.*)?$/.test(url)) {
+        const created = {
+          id: 'conn_grpc_stream1',
+          kind: 'connection',
+          protocol: 'grpc',
+          project_id: 'default',
+          display_name: 'e2e-grpc-stream',
+          tags: ['rpc'],
+          credentials_backend: { kind: 'local', config: {} },
+          status: 'ready',
+          last_tested_at: null,
+          last_test_ok: null,
+          is_default: true,
+          created_at: '2026-05-29T00:00:00+00:00',
+          updated_at: '2026-05-29T00:00:00+00:00',
+          last_error: null,
+          protocol_data: {
+            target: 'stream.example.com:443',
+            tls: 'tls',
+            tls_ca_cert: '',
+            auth_mode: 'none',
+            auth_metadata_key: 'authorization',
+            auth_token: '',
+            auth_token_prefix: 'Bearer ',
+            default_timeout_seconds: 30,
+            sandbox_tier_override: null,
+          },
+        };
+        connections.push(created);
+        await route.fulfill({ json: created });
+        return;
+      }
+      await route.continue();
+    });
+
+    // Specific routes registered LAST so they win (Playwright LIFO).
+    await page.route('**/api/v1/admin/connections/protocols', route =>
+      route.fulfill({
+        json: [
+          { id: 'http', display_name: 'HTTP / REST', sensitive_fields: [] },
+          { id: 'grpc', display_name: 'gRPC', sensitive_fields: ['auth_token'] },
+        ],
+      }));
+    await page.route('**/api/v1/admin/connections/backends', route =>
+      route.fulfill({
+        json: [{ id: 'local', display_name: 'Local encrypted file' }],
+      }));
+
+    await page.goto('/connections');
+    await expect(page.getByTestId('filter-bar')).toBeVisible({ timeout: 10_000 });
+
+    // Open Add modal + create a gRPC connection.
+    await page.getByTestId('add-connection-btn').click();
+    await expect(page.getByTestId('add-connection-modal')).toBeVisible();
+    await page.getByTestId('protocol-pick-grpc').click();
+    await page.getByTestId('display-name-input').fill('e2e-grpc-stream');
+    await page.getByTestId('grpc-target').fill('stream.example.com:443');
+    await page.getByTestId('step-2').getByRole('button', { name: 'Next' }).click();
+    await page.getByTestId('tags-input').fill('rpc');
+    await page.getByTestId('submit-add-connection').click();
+    await expect(page.getByTestId('add-connection-modal')).not.toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('e2e-grpc-stream')).toBeVisible();
+
+    // Open the detail drawer (click the row) → the gRPC panel renders.
+    await page.getByTestId('connection-row-conn_grpc_stream1').click();
+    await expect(page.getByTestId('grpc-panel')).toBeVisible();
+
+    // Open a server-streaming subscription.
+    await page.getByTestId('grpc-new-method').fill('echo.EchoService/EchoStream');
+    await page.getByTestId('grpc-add-stream-button').click();
+    await expect.poll(() => subscribeCalls).toBeGreaterThan(0);
+
+    // The new stream appears in the table.
+    await expect(page.getByTestId('grpc-unsubscribe-sub-mock-g1')).toBeVisible({ timeout: 5000 });
+
+    // Unsubscribe.
+    await page.getByTestId('grpc-unsubscribe-sub-mock-g1').click();
+    await expect.poll(() => unsubscribeCalls).toBeGreaterThan(0);
+    await expect(page.getByTestId('grpc-unsubscribe-sub-mock-g1')).not.toBeVisible({ timeout: 5000 });
+  });
+
   // ── Connection import / export ──────────────────────────────────
 
   test('export: open dropdown and download YAML (mocked)', async ({ page }) => {

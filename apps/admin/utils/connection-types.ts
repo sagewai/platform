@@ -292,7 +292,7 @@ export type MqttDrainResult = {
   global_pressure_dropped: number;
 };
 
-// ── gRPC unary (reflection-based) ───────────────────────────────────
+// ── gRPC unary (reflection-based) + server-streaming ────────────────
 
 export type GrpcProtocolData = {
   target: string; // "host:port"
@@ -304,4 +304,20 @@ export type GrpcProtocolData = {
   auth_token_prefix: string;
   default_timeout_seconds: number;
   sandbox_tier_override: 'TRUSTED' | 'SANDBOXED' | null;
+};
+
+// Observability snapshot for one active gRPC server-stream subscription
+// (server-side SubscriptionStats shape, shared with MQTT). drop_oldest only.
+export type GrpcStream = {
+  subscription_id: string;
+  connection_id: string;
+  status: 'active' | 'reconnecting' | 'failed';
+  buffer_depth: number;
+  bytes_buffered: number;
+  overflow_dropped: number;
+  oversized_dropped: number;
+  global_pressure_dropped: number;
+  last_event_at: number | null;
+  last_drain_at: number;
+  created_at: number;
 };
