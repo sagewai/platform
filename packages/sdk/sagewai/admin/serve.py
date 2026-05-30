@@ -321,6 +321,18 @@ def _register_optional_backends(sf: AdminStateFile) -> None:
         set_default_scheme(default_scheme)
 
 
+def _build_subscription_manager():
+    """Construct the process-wide SubscriptionManager (admin lifespan owns it).
+
+    A factory so tests can drive the build + teardown without the full app.
+    Hard caps come from the manager's own defaults; per-connection /
+    per-subscription bounds lower them at subscribe time.
+    """
+    from sagewai.connections.subscriptions.manager import SubscriptionManager
+
+    return SubscriptionManager()
+
+
 def create_admin_serve_app(
     sf: AdminStateFile,
     *,
@@ -360,9 +372,24 @@ def create_admin_serve_app(
         app.state.scheduler_driver = driver
         app.state.scheduler_runner = runner
         await runner.start()
+
+        # Subscription foundation (PR1) → MQTT (PR2). Construct the
+        # process-wide manager, start its idle/dead-task reaper, and expose
+        # the singleton so the connections executor + the per-protocol
+        # subscription routes reach it via get_subscription_manager().
+        from sagewai.connections.subscriptions.manager import (
+            set_subscription_manager,
+        )
+
+        sub_manager = _build_subscription_manager()
+        set_subscription_manager(sub_manager)
+        sub_manager.start_reaper()
+        app.state.subscription_manager = sub_manager
         try:
             yield
         finally:
+            await sub_manager.aclose()
+            set_subscription_manager(None)
             await runner.stop()
 
     app = FastAPI(title="Sagewai Admin", version=version, lifespan=lifespan)

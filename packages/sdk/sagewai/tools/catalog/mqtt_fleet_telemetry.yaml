@@ -1,0 +1,43 @@
+id: mqtt_fleet_telemetry
+version: "1.0.0"
+title: "MQTT fleet telemetry subscription"
+description: |
+  Subscribes to a fleet telemetry topic on an MQTT broker and buffers
+  inbound messages for the agent to drain. MQTT is a STATEFUL connection
+  kind: this entry's `subscribe` op opens a long-lived subscription owned
+  by the platform's SubscriptionManager; drain + unsubscribe ops operate
+  on the returned subscription id.
+
+  Memory is provably bounded — the buffer is a fixed-size ring with the
+  `drop_oldest` overflow policy, so a fast publisher can never exhaust
+  process memory (the drop counters in each drain result tell the agent
+  whether it is seeing the complete stream or a lossy sample).
+
+  Requires an MQTT connection registered via the Connections admin.
+category: iot
+kind: mqtt
+sandbox_tier: SANDBOXED
+scopes:
+  - iot.read
+exec:
+  mqtt:
+    connection_ref: REPLACE_ME_WITH_YOUR_MQTT_CONNECTION_DISPLAY_NAME
+    operation: subscribe
+    args:
+      topic_filter: fleet/+/telemetry
+      qos: 1
+setup:
+  auth_complexity: connection_ref
+  body: |
+    Register an MQTT connection in the Connections admin first
+    (`/connections`, click "Add Connection", pick MQTT). Provide the
+    broker host/port and, if the broker requires it, a username +
+    password (the password is encrypted via the connection's credentials
+    backend). Then edit this file's `connection_ref` to match the
+    connection's display name, and set `topic_filter` to the topic your
+    fleet publishes telemetry on.
+
+    PR2 ships the `drop_oldest` overflow policy only. The `pause` policy
+    is a deferred follow-up. After subscribing, call the `drain` op to
+    pull buffered messages and the `unsubscribe` op to tear the
+    subscription down.

@@ -13,6 +13,7 @@ import { HttpPanel } from './protocols/http-panel';
 import { InferencePanel } from './protocols/inference-panel';
 import { McpPanel } from './protocols/mcp-panel';
 import { ModbusPanel } from './protocols/modbus-panel';
+import { MqttPanel } from './protocols/mqtt-panel';
 import { Oauth2Panel } from './protocols/oauth2-panel';
 import { OpcuaPanel } from './protocols/opcua-panel';
 import { SdkPanel } from './protocols/sdk-panel';
@@ -33,6 +34,7 @@ const PANELS: Record<string, (props: PanelProps) => JSX.Element> = {
   modbus: ModbusPanel,
   opcua: OpcuaPanel,
   websocket: WebsocketPanel,
+  mqtt: MqttPanel,
 };
 
 type Props = {

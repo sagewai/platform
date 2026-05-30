@@ -249,3 +249,45 @@ export type WebsocketProtocolData = {
   operations: WebsocketOperation[];
   sandbox_tier_override: 'TRUSTED' | 'SANDBOXED' | null;
 };
+
+// ── MQTT (subscription-capable) ─────────────────────────────────────
+
+export type MqttProtocolData = {
+  host: string;
+  port: number;
+  transport: 'tcp' | 'tls' | 'websockets';
+  client_id: string;
+  mqtt_version: '3.1.1' | '5.0';
+  username: string;
+  password: string; // masked '***' from server responses
+  keepalive_seconds: number;
+  tls_ca_cert: string;
+  max_events_per_subscription?: number | null;
+  max_event_bytes?: number | null;
+  sandbox_tier_override: 'TRUSTED' | 'SANDBOXED' | null;
+};
+
+// Observability snapshot for one active subscription (server-side
+// SubscriptionStats shape). PR2 ships drop_oldest only.
+export type MqttSubscription = {
+  subscription_id: string;
+  connection_id: string;
+  status: 'active' | 'reconnecting' | 'failed';
+  buffer_depth: number;
+  bytes_buffered: number;
+  overflow_dropped: number;
+  oversized_dropped: number;
+  global_pressure_dropped: number;
+  last_event_at: number | null;
+  last_drain_at: number;
+  created_at: number;
+};
+
+export type MqttDrainResult = {
+  events: Array<Record<string, unknown>>;
+  returned: number;
+  remaining: number;
+  overflow_dropped: number;
+  oversized_dropped: number;
+  global_pressure_dropped: number;
+};

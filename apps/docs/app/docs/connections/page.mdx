@@ -139,6 +139,7 @@ implementation.
 - [Modbus](./protocols/modbus) — Industrial PLCs and field devices over Modbus/TCP. Eight builtin function codes. No auth in protocol; firewall/VPN-gate access. Requires `pip install sagewai[modbus]`.
 - [OPC UA](./protocols/opcua) — Industrial-automation servers (IEC 62541). Declarative read operations; username/password auth. Requires `pip install sagewai[opcua]`.
 - [WebSocket](./protocols/websocket) — Real-time gateways speaking RFC 6455. Declarative send-and-receive operations with `{key}` message templates and optional JSONPath response extraction. Requires `pip install sagewai[websocket]`.
+- [MQTT](./protocols/mqtt) — Subscribe to MQTT broker topics (3.1.1 / 5.0) and buffer inbound messages for the agent to drain. The first subscription-capable protocol; memory is provably bounded via a `drop_oldest` ring. Requires `pip install sagewai[mqtt]`.
 
 ## Status
 

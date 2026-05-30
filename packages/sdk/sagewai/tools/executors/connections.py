@@ -39,9 +39,11 @@ from sagewai.connections.protocols import get_protocol
 from sagewai.connections.protocols.base import get_sensitive_field_paths_for
 from sagewai.connections.protocols.coap import _run_op as _coap_run_op
 from sagewai.connections.protocols.modbus import _run_op as _modbus_run_op
+from sagewai.connections.protocols.mqtt import MqttProtocolPlugin
 from sagewai.connections.protocols.opcua import _run_op as _opcua_run_op
 from sagewai.connections.protocols.websocket import _run_op as _websocket_run_op
 from sagewai.connections.store import ConnectionStore
+from sagewai.connections.subscriptions.manager import get_subscription_manager
 
 
 # Module-level kind dispatch. Tests patch the per-kind runner names
@@ -78,6 +80,64 @@ def _build_default_router() -> CredentialsBackendRouter:
     return ctx.router
 
 
+def _resolve_connection(store, kind, project_id, connection_ref):
+    """Resolve a connection by ``display_name`` within the project scope.
+
+    Shared by the stateless ``_run_op`` path and the stateful MQTT
+    subscribe path. Raises ``ValueError`` when the ref doesn't resolve.
+    """
+    matches = [
+        c
+        for c in store.list(project_id=project_id, protocol=kind)
+        if c.display_name == connection_ref
+    ]
+    if not matches:
+        raise ValueError(
+            f"connection {connection_ref!r} not found for kind={kind!r} "
+            f"in project {project_id!r}"
+        )
+    return matches[0]
+
+
+async def _mqtt_dispatch(payload: Mapping[str, Any], *, store: ConnectionStore) -> Any:
+    """Stateful MQTT dispatch — routes to the process-wide SubscriptionManager.
+
+    Unlike the four Phase A kinds, MQTT does NOT use the ``_run_op``
+    decrypt-then-call path: subscriptions are long-lived background tasks
+    the manager owns. ``subscribe`` resolves the connection + hands the
+    MQTT plugin to the manager; ``drain`` / ``unsubscribe`` operate on a
+    subscription id alone (no connection lookup, no decrypt). The
+    SubscriptionManager calls the plugin's ``open_subscription`` as its
+    background task, where credentials decryption is the executor's concern
+    — but PR2's MQTT subscribe path leaves decryption to the plugin's own
+    defensive decrypt against ``ctx.creds`` (None here; in-process agents +
+    admin pass plaintext or a real router as the foundation matures).
+    """
+    exec_block = payload["exec"]["mqtt"]
+    operation = exec_block["operation"]
+    args = dict(exec_block.get("args", {}))
+    project_id = payload.get("project_id")
+    mgr = get_subscription_manager()
+
+    if operation == "subscribe":
+        connection = _resolve_connection(
+            store, "mqtt", project_id, exec_block["connection_ref"]
+        )
+        sub_id = await mgr.subscribe(
+            plugin=MqttProtocolPlugin(), connection=connection, spec=args, ctx=None
+        )
+        return {"subscription_id": sub_id}
+    if operation == "drain":
+        result = await mgr.drain(
+            args["subscription_id"], int(args.get("max_events", 100))
+        )
+        return result.model_dump()
+    if operation == "unsubscribe":
+        await mgr.unsubscribe(args["subscription_id"])
+        return {"ok": True}
+    raise ValueError(f"unknown mqtt operation: {operation!r}")
+
+
 async def run(
     payload: Mapping[str, Any],
     *,
@@ -98,6 +158,13 @@ async def run(
     it ``None`` and the executor builds one via the platform bootstrap.
     """
     kind = payload.get("_kind")
+
+    # MQTT is STATEFUL — it routes subscribe/drain/unsubscribe to the
+    # process-wide SubscriptionManager rather than the stateless
+    # decrypt-then-call runner path the four Phase A kinds use.
+    if kind == "mqtt":
+        return await _mqtt_dispatch(payload, store=store)
+
     runners = _runners()
     if kind not in runners:
         raise ValueError(f"kind {kind!r} is not yet wired in the connections executor")
@@ -110,15 +177,7 @@ async def run(
     project_id = payload.get("project_id")
 
     # Lookup by display_name in project scope.
-    matches = [
-        c for c in store.list(project_id=project_id, protocol=kind)
-        if c.display_name == connection_ref
-    ]
-    if not matches:
-        raise ValueError(
-            f"connection {connection_ref!r} not found for kind={kind!r} in project {project_id!r}"
-        )
-    connection = matches[0]
+    connection = _resolve_connection(store, kind, project_id, connection_ref)
 
     # Decrypt sensitive fields BEFORE handing the connection to the runner.
     # The runner's contract is "plaintext only" — no protocol-specific

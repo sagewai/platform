@@ -263,6 +263,9 @@ function Step2Configure(props: {
       {props.protocol.id === 'websocket' && (
         <WebsocketConfigureFields data={props.protocolData} setData={props.setProtocolData} />
       )}
+      {props.protocol.id === 'mqtt' && (
+        <MqttConfigureFields data={props.protocolData} setData={props.setProtocolData} />
+      )}
       <div className="mt-4 flex justify-between">
         <Button onClick={props.onBack} variant="secondary">Back</Button>
         <Button onClick={props.onNext}>Next</Button>
@@ -877,6 +880,123 @@ function WebsocketConfigureFields({
       <p className="mt-2 text-xs text-text-tertiary">
         Operations are declared after creating the connection — open the connection
         from the list to add send-and-receive operations with message templates.
+      </p>
+    </>
+  );
+}
+
+function MqttConfigureFields({
+  data, setData,
+}: {
+  data: Record<string, unknown>;
+  setData: (d: Record<string, unknown>) => void;
+}) {
+  const update = (next: Record<string, unknown>) =>
+    setData({
+      host: '',
+      port: 1883,
+      transport: 'tcp',
+      client_id: '',
+      mqtt_version: '5.0',
+      username: '',
+      password: '',
+      keepalive_seconds: 60,
+      tls_ca_cert: '',
+      sandbox_tier_override: null,
+      ...data,
+      ...next,
+    });
+  return (
+    <>
+      <label className="mb-2 block">
+        <span className="text-sm">Broker host</span>
+        <input
+          type="text"
+          value={(data.host as string) ?? ''}
+          onChange={e => update({ host: e.target.value })}
+          placeholder="broker.example.com"
+          className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 font-mono text-sm"
+          data-testid="mqtt-host"
+          required
+        />
+      </label>
+      <label className="mb-2 block">
+        <span className="text-sm">Port</span>
+        <input
+          type="number"
+          min={1}
+          max={65535}
+          value={(data.port as number) ?? 1883}
+          onChange={e => update({ port: Number(e.target.value) || 1883 })}
+          className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 text-sm"
+          data-testid="mqtt-port"
+        />
+      </label>
+      <label className="mb-2 block">
+        <span className="text-sm">Transport</span>
+        <select
+          value={(data.transport as string) ?? 'tcp'}
+          onChange={e => update({ transport: e.target.value })}
+          className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 text-sm"
+          data-testid="mqtt-transport"
+        >
+          <option value="tcp">tcp</option>
+          <option value="tls">tls</option>
+          <option value="websockets">websockets</option>
+        </select>
+      </label>
+      <label className="mb-2 block">
+        <span className="text-sm">MQTT version</span>
+        <select
+          value={(data.mqtt_version as string) ?? '5.0'}
+          onChange={e => update({ mqtt_version: e.target.value })}
+          className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 text-sm"
+          data-testid="mqtt-version"
+        >
+          <option value="5.0">5.0</option>
+          <option value="3.1.1">3.1.1</option>
+        </select>
+      </label>
+      <label className="mb-2 block">
+        <span className="text-sm">Username</span>
+        <input
+          type="text"
+          value={(data.username as string) ?? ''}
+          onChange={e => update({ username: e.target.value })}
+          className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 font-mono text-sm"
+          data-testid="mqtt-username"
+        />
+      </label>
+      <label className="mb-2 block">
+        <span className="text-sm">Password</span>
+        <input
+          type="password"
+          value={(data.password as string) ?? ''}
+          onChange={e => update({ password: e.target.value })}
+          className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 font-mono text-sm"
+          data-testid="mqtt-password"
+        />
+        <span className="mt-1 block text-xs text-text-tertiary">
+          Stored encrypted via the connection's credentials backend. Leave empty
+          for anonymous brokers.
+        </span>
+      </label>
+      <label className="mb-2 block">
+        <span className="text-sm">Keepalive (seconds)</span>
+        <input
+          type="number"
+          min={1}
+          step={1}
+          value={(data.keepalive_seconds as number) ?? 60}
+          onChange={e => update({ keepalive_seconds: Number(e.target.value) || 60 })}
+          className="mt-1 block w-full rounded border border-border bg-bg px-2 py-1 text-sm"
+          data-testid="mqtt-keepalive"
+        />
+      </label>
+      <p className="mt-2 text-xs text-text-tertiary">
+        Subscriptions are managed after creating the connection — open it from the
+        list to subscribe to topic filters and drain buffered messages. PR2 ships
+        the <code>drop_oldest</code> overflow policy only.
       </p>
     </>
   );

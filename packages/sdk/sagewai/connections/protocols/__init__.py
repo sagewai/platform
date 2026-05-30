@@ -31,6 +31,7 @@ from sagewai.connections.protocols.inference import (
 )
 from sagewai.connections.protocols.mcp import McpProtocolPlugin
 from sagewai.connections.protocols.modbus import ModbusProtocolPlugin
+from sagewai.connections.protocols.mqtt import MqttProtocolPlugin
 from sagewai.connections.protocols.oauth2 import (
     OAuth2ProtocolPlugin,
     oauth2_default_key,
@@ -49,7 +50,8 @@ PROTOCOLS: tuple[ProtocolPlugin, ...] = (
     CoapProtocolPlugin(),
     ModbusProtocolPlugin(),
     OpcuaProtocolPlugin(),
-    WebsocketProtocolPlugin(),  # ← new — Phase A complete
+    WebsocketProtocolPlugin(),  # ← Phase A complete
+    MqttProtocolPlugin(),  # ← Phase B — first subscription-capable protocol
 )
 _BY_ID: dict[str, ProtocolPlugin] = {p.id: p for p in PROTOCOLS}
 
@@ -82,6 +84,7 @@ __all__ = [
     "InferenceProtocolPlugin",
     "McpProtocolPlugin",
     "ModbusProtocolPlugin",
+    "MqttProtocolPlugin",
     "OAuth2ProtocolPlugin",
     "OpcuaProtocolPlugin",
     "PROTOCOLS",

@@ -1,0 +1,146 @@
+# MQTT
+
+The MQTT plugin subscribes to topics on an MQTT broker (MQTT 3.1.1 / 5.0) and buffers inbound messages for the agent to drain. It is the first **subscription-capable** connection protocol — unlike the request/response protocols (HTTP, CoAP, Modbus, OPC UA, WebSocket), an MQTT subscription is a long-lived background task owned by the platform's `SubscriptionManager`.
+
+## Install
+
+MQTT support ships behind an optional extra:
+
+```bash
+pip install sagewai[mqtt]
+```
+
+The library underneath is [`aiomqtt`](https://aiomqtt.bo3hm.com/), an async wrapper around the canonical [`paho-mqtt`](https://github.com/eclipse/paho.mqtt.python) client.
+
+## Configuration
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `host` | string (required) | — | Broker hostname or IP. |
+| `port` | int | `1883` | `1883` for TCP, `8883` for TLS — set `transport: tls` to match. |
+| `transport` | `tcp`, `tls`, or `websockets` | `tcp` | `tls` wraps the TCP transport in an SSL context. |
+| `client_id` | string | `""` | MQTT client identifier. Empty → the broker assigns one. |
+| `mqtt_version` | `3.1.1` or `5.0` | `5.0` | Protocol version. |
+| `username` | string | `""` | Optional broker username. |
+| `password` | string (sensitive) | `""` | Encrypted via the connection's credentials backend. Omitted when empty (anonymous brokers). |
+| `keepalive_seconds` | int (&gt; 0) | `60` | MQTT keepalive interval. |
+| `tls_ca_cert` | string | `""` | PEM-encoded CA cert for `transport: tls` (when the broker uses a private CA). |
+| `max_events_per_subscription` | int or null | `null` | Per-connection buffer cap; lowers the manager's hard cap, never raises it. |
+| `max_event_bytes` | int or null | `null` | Per-connection per-event byte cap. |
+| `sandbox_tier_override` | `TRUSTED`, `SANDBOXED`, or null | `null` | Override the default `SANDBOXED` tier. |
+
+## The subscription lifecycle
+
+MQTT exposes three stateful operations that route to the `SubscriptionManager` (not the stateless request/response path the other protocols use):
+
+1. **`subscribe`** — opens a subscription on a topic filter. Returns a `subscription_id`. The manager starts a background task that connects to the broker, subscribes, and pushes each inbound message into a fixed-size ring buffer.
+2. **`drain`** — pulls up to `max_events` buffered events for the `subscription_id` and returns a `DrainResult`. Draining empties the events from the ring.
+3. **`unsubscribe`** — tears the subscription down (cancels the background task, closes the broker link).
+
+Each drained event has the shape:
+
+```json
+{
+  "topic": "fleet/truck-7/telemetry",
+  "payload": "{\"speed\": 62.5}",
+  "qos": 1,
+  "retain": false,
+  "timestamp": "2026-05-29T12:00:00.123456+00:00"
+}
+```
+
+`payload` is the message body decoded as UTF-8 (with replacement characters for invalid byte sequences — binary payloads surface, they don't crash the subscriber).
+
+## Memory is provably bounded — `drop_oldest` only
+
+A fast publisher can produce events faster than the agent drains them. To keep memory bounded, the subscription buffer is a **fixed-size ring** with the `drop_oldest` overflow policy: when the ring is full, the oldest buffered event is evicted to make room for the newest. Memory can never grow unbounded.
+
+The `DrainResult` carries three drop counters so the agent knows whether it is seeing the complete stream or a lossy sample:
+
+| Field | Meaning |
+|---|---|
+| `events` | The list of drained events (newest-eviction order preserved). |
+| `returned` | How many events this drain returned. |
+| `remaining` | How many events are still buffered. |
+| `overflow_dropped` | Cumulative count of events evicted by the `drop_oldest` ring. |
+| `oversized_dropped` | Cumulative count of events that exceeded the per-event byte cap. |
+| `global_pressure_dropped` | Cumulative count of events dropped under process-wide memory pressure. |
+
+A nonzero `overflow_dropped` means the publisher is outpacing the agent — drain more often, narrow the topic filter, or lower the publish rate.
+
+> **PR2 ships the `drop_oldest` overflow policy only.** The spec also defines a `pause` policy — where the subscriber stops consuming when the buffer is full and resumes when the agent drains. `pause` is a **deferred follow-up**: it needs a `SubscriptionPlugin` resume-signal extension validated against a real broker. A subscription spec with `overflow_policy: pause` is **rejected at validation time** with a clear "deferred" message. `drop_oldest` delivers the full subscribe/drain capability with provably-bounded memory.
+
+## Subscription spec
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `topic_filter` | string (required) | — | MQTT topic filter. Wildcards: `+` (single level), `#` (multi level). |
+| `qos` | `0`, `1`, or `2` | `0` | MQTT quality-of-service level. |
+| `overflow_policy` | `drop_oldest` | `drop_oldest` | PR2: `drop_oldest` only. `pause` is rejected. |
+| `max_events_per_subscription` | int or null | `null` | Per-subscription buffer cap. |
+| `max_event_bytes` | int or null | `null` | Per-subscription per-event byte cap. |
+
+## Sandbox tier
+
+Default: `SANDBOXED`. MQTT brokers carry varied telemetry — fleet sensors, industrial events, IoT device state. Downgrade to `TRUSTED` only for known-internal read-only brokers.
+
+## Test endpoint
+
+Clicking **Test** connects to the broker (sends CONNECT, awaits CONNACK), then immediately disconnects. It does **not** subscribe to anything.
+
+- Successful CONNACK → pass.
+- Bad username/password → `MqttAuthError` → fail with a clear "auth" message.
+- TLS handshake / certificate failure → `MqttTlsError` → fail.
+- DNS/TCP failure → `MqttConnectionError` → fail.
+
+## Single-instance constraint
+
+The `SubscriptionManager` is an admin-process singleton. The executor and the admin subscription routes reach it via the in-process manager — in-process agents work directly. Multi-instance / fleet-worker deployments reach a remote manager over HTTP. This is documented, not solved in this release.
+
+## Admin restart = clean slate
+
+Subscriptions live in process memory. Restarting the admin process drops every active subscription and its buffer — subscribe again after a restart. Subscription state is intentionally not persisted (a buffered telemetry sample has no value after a restart gap).
+
+## Common gotchas
+
+1. **Topic wildcards are `+` and `#`, not glob.** `+` matches exactly one topic level (`fleet/+/telemetry`); `#` matches the rest of the topic and must be the last character (`fleet/#`). They are not shell globs.
+2. **QoS is the subscribe QoS.** The broker may downgrade the effective QoS to the publisher's QoS. QoS 0 may lose messages on a flaky link; QoS 1/2 trade throughput for delivery guarantees.
+3. **Binary payloads are UTF-8-decoded with replacement.** Non-UTF-8 payloads surface as strings with replacement characters rather than crashing the subscriber. Decode raw bytes yourself downstream if you need them.
+4. **Idle subscriptions are reaped.** A subscription with no `drain` call within the idle TTL (10 min default) is auto-unsubscribed — nothing is consuming it, so its buffer is freed. Drain periodically to keep a subscription alive.
+5. **`drop_oldest` only — check the drop counters.** A nonzero `overflow_dropped` in a `DrainResult` means you are seeing a lossy sample, not the complete stream.
+
+## Tool catalog example
+
+```yaml
+id: mqtt_fleet_telemetry
+version: "1.0.0"
+title: "MQTT fleet telemetry subscription"
+description: Subscribes to a fleet telemetry topic and buffers messages.
+category: iot
+kind: mqtt
+sandbox_tier: SANDBOXED
+scopes:
+  - iot.read
+exec:
+  mqtt:
+    connection_ref: fleet-broker
+    operation: subscribe
+    args:
+      topic_filter: fleet/+/telemetry
+      qos: 1
+setup:
+  auth_complexity: connection_ref
+  body: |
+    Register an MQTT broker as a connection. Set `connection_ref` to its
+    display name and `topic_filter` to your fleet's telemetry topic.
+```
+
+## Phase A / Phase B
+
+MQTT lands the **first subscription-capable** protocol on the PR1 subscription foundation. Deferred follow-ups:
+
+- **`pause` overflow policy** — backpressure instead of drop, via a `SubscriptionPlugin` resume-signal extension validated against a real broker.
+- **MQTT publish** — outbound messages (this release is consume-only).
+- **mTLS client certificates** — client-cert auth alongside username/password.
+- **Subscription auto-resume / persistence** — surviving admin restarts.
+- **gRPC** — its own subscription-protocol spec.

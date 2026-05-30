@@ -1625,6 +1625,87 @@ consumer in PR2.
 **Test deltas:** 29 new SDK tests (errors, base types, manager core,
 safety/reapers/teardown, singleton). Full SDK suite: ~5708.
 
+## Async subscriptions — PR2 (MQTT) landed
+
+The MQTT plugin — the first real consumer of the PR1 subscription
+foundation — plus all production wiring. `PROTOCOLS` is now **10**.
+
+- `sagewai.connections.protocols.mqtt` — `MqttProtocolPlugin` implements
+  BOTH `ProtocolPlugin` (CRUD / schema / `test`) and the PR1
+  `SubscriptionPlugin` (`open_subscription` / `close_subscription` /
+  `subscription_spec_schema`). `MqttProtocolData`
+  (host/port/transport/client_id/mqtt_version/username/password/keepalive/
+  tls_ca_cert/bounds/tier), `MqttSubscriptionSpec`
+  (topic_filter/qos/overflow_policy/bounds), 5-class error hierarchy
+  (`MqttError` → NotInstalled/Connection/Auth/Subscribe/Tls, stable
+  `code`s). `sensitive_fields = ("password",)`.
+- **`aiomqtt==2.5.1`** — new optional `sagewai[mqtt]` extra + test-group
+  dep. 2.x API: `Client(hostname, port, *, username, password,
+  identifier, transport, keepalive, tls_context, protocol)`,
+  `await c.subscribe(topic, qos)`, `async for m in c.messages` with
+  `m.topic`/`m.payload` (bytes)/`m.qos`/`m.retain`. `transport: "tls"`
+  maps to `transport="tcp"` + an SSL context (aiomqtt's own transport
+  Literal is `tcp|websockets|unix`; TLS is the SSL ctx, not a name).
+- **DELIBERATE SCOPING DEVIATION — `drop_oldest` ONLY.**
+  `MqttSubscriptionSpec.overflow_policy = Literal["drop_oldest"]`. The
+  spec also defines `pause`, but PR1 cut its manager mechanism; a working
+  `pause` needs a `SubscriptionPlugin` resume-signal Protocol extension
+  validated against a real broker. A `pause` spec is **schema-rejected**
+  (the "Phase B feature deferral via schema rejection" canon). Deferred
+  to a focused follow-up (PR3).
+- `test()` connects + immediately disconnects (CONNACK only, NO
+  subscribe). Defensive `ctx.creds` decrypt mirrors the CoAP/Modbus/OPC
+  UA/WebSocket pattern.
+- `open_subscription` runs as the manager's background task: loops
+  forever calling `emit`, re-raises `asyncio.CancelledError`, normalizes
+  aiomqtt/transport exceptions onto the `MqttError` hierarchy.
+  `close_subscription` is a no-op (aiomqtt's `async with` closes on
+  exit; the manager cancels the task).
+- **Admin `lifespan` wiring** (`serve.py`): `_build_subscription_manager()`
+  factory + lifespan constructs the manager, `set_subscription_manager`,
+  `start_reaper()`, exposes `app.state.subscription_manager`, and
+  `aclose()` + clears the singleton on shutdown.
+- **Executor dispatch** (`tools/executors/connections.py`): MQTT is the
+  first STATEFUL kind — `run()` routes `_kind == "mqtt"` to
+  `_mqtt_dispatch`, which reaches the manager via
+  `get_subscription_manager()` (NOT the stateless `_run_op` decrypt
+  path). `subscribe` resolves the connection (shared `_resolve_connection`
+  helper) + hands `MqttProtocolPlugin()` to the manager; `drain` /
+  `unsubscribe` operate on a `subscription_id` alone. `mqtt` added to
+  `executors/__init__.py::_REGISTRY` → `connections.run`.
+- **Schema** (`tools/catalog/_schema.json`): `mqtt` kind +
+  conditional block (`exec.mqtt.{connection_ref, operation, args}`,
+  operation enum `subscribe|drain|unsubscribe`) + 10-kind `not.anyOf`
+  grid retrofit.
+- **Admin routes** (`mqtt.py::extra_routes`, mounted at
+  `/api/v1/admin/connections/mqtt/`): `POST /{id}/subscribe`,
+  `POST /subscriptions/{sub}/drain`, `DELETE /subscriptions/{sub}` (204),
+  `GET /subscriptions`, `GET /subscriptions/{sub}`. `SubscriptionLimit
+  ExceededError → 409`, `SubscriptionNotFoundError → 404`. Context
+  injected in `connections_v2_routes.register` alongside oauth2 (mqtt
+  `_test_inject_context` / `_get_ctx`).
+- **Seed catalog**: `mqtt_fleet_telemetry.yaml` (kind mqtt, SANDBOXED,
+  subscribe op, `auth_complexity: connection_ref`).
+- **Admin UI**: `mqtt-panel.tsx` (broker config + a Subscriptions section:
+  table fed by `GET /mqtt/subscriptions`, new-subscription form
+  (topic_filter + qos), per-row Drain-debug + Unsubscribe; editable-panel
+  + `useEffect([connection.id])` re-sync). Registered in detail-drawer
+  PANELS; `MqttConfigureFields` in add-connection-modal;
+  `MqttProtocolData`/`MqttSubscription`/`MqttDrainResult` types;
+  `adminApi.connections.mqtt.*` client.
+- **Docs**: `connections/protocols/mqtt/page.mdx` (install, config, the
+  subscribe/drain/unsubscribe lifecycle, DrainResult drop-counters,
+  bounded-memory `drop_oldest`-only note, gotchas) + overview row.
+
+**Deferred follow-ups:** `pause` overflow policy (+ resume-signal
+Protocol extension), MQTT publish (consume-only here), mTLS client
+certs, subscription auto-resume/persistence (admin restart = clean
+slate), gRPC (own spec).
+
+**Test deltas:** ~50 new SDK tests (schema/errors/test, open/close +
+emit, lifespan, executor dispatch, admin routes) + 1 e2e. Full SDK
+suite: ~5760.
+
 ## MCP-as-first-class (sub-project 3 — Bundle A)
 
 Bundle A landed: registered MCP server connections with capability

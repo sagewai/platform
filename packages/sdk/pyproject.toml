@@ -77,6 +77,9 @@ coap = [
 modbus = [
     "pymodbus==3.13.0",
 ]
+mqtt = [
+    "aiomqtt==2.5.1",
+]
 opcua = [
     "asyncua==1.1.8",
 ]
@@ -156,6 +159,7 @@ test = [
     "asyncua==1.1.8",
     "websockets==16.0",
     "jsonpath-ng==1.8.0",
+    "aiomqtt==2.5.1",
 ]
 
 [project.scripts]

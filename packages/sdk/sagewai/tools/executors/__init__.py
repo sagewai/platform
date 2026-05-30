@@ -20,6 +20,7 @@ _REGISTRY = {
     "modbus":    connections.run,
     "opcua":     connections.run,
     "websocket": connections.run,
+    "mqtt":      connections.run,
 }
 
 

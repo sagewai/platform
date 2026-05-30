@@ -25,6 +25,8 @@ import type {
   ImportResult,
   McpServerMeta,
   McpToolsResponse,
+  MqttDrainResult,
+  MqttSubscription,
   OAuth2StartResponse,
   ProtocolMeta,
   TestConnectionResponse,
@@ -148,6 +150,33 @@ export function createConnectionsApi(client: FetchClient) {
           `${ROOT}/mcp/${encodeURIComponent(id)}/tools`,
         ),
     },
+
+    // MQTT plugin sub-routes (mounted at /api/v1/admin/connections/mqtt/...).
+    // MQTT is the first STATEFUL kind: subscriptions are long-lived buffers
+    // owned by the admin-process SubscriptionManager. PR2 ships drop_oldest
+    // only.
+    mqtt: {
+      subscribe: (id: string, spec: { topic_filter: string; qos?: number }) =>
+        client.post<{ subscription_id: string }>(
+          `${ROOT}/mqtt/${encodeURIComponent(id)}/subscribe`,
+          spec,
+        ),
+      listSubscriptions: () =>
+        client.get<MqttSubscription[]>(`${ROOT}/mqtt/subscriptions`),
+      stats: (subId: string) =>
+        client.get<MqttSubscription>(
+          `${ROOT}/mqtt/subscriptions/${encodeURIComponent(subId)}`,
+        ),
+      drain: (subId: string, maxEvents = 100) =>
+        client.post<MqttDrainResult>(
+          `${ROOT}/mqtt/subscriptions/${encodeURIComponent(subId)}/drain`,
+          { max_events: maxEvents },
+        ),
+      unsubscribe: (subId: string) =>
+        client.delete<void>(
+          `${ROOT}/mqtt/subscriptions/${encodeURIComponent(subId)}`,
+        ),
+    },
   };
 }
 
@@ -166,6 +195,9 @@ export type {
   McpServerMeta,
   McpToolMeta,
   McpToolsResponse,
+  MqttDrainResult,
+  MqttProtocolData,
+  MqttSubscription,
   OAuth2StartResponse,
   ProtocolMeta,
   TestConnectionResponse,
