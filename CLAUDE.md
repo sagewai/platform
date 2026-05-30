@@ -1564,6 +1564,67 @@ background task, no Vault changes.
 **Test deltas:** 16 new SDK tests in
 `test_protocols_oauth2_refresh_audit.py`. Full SDK suite: ~5679 passing.
 
+## Async subscriptions foundation (Phase B — PR1 of 2)
+
+The platform's first async/streaming capability via a poll-a-buffer model.
+PR1 ships the foundation + safety machinery; PR2 (MQTT) is the first real
+consumer + the production wiring.
+
+- `sagewai.connections.subscriptions` subpackage:
+  - `base.py` — `SubscriptionPlugin` Protocol (optional second Protocol a
+    connection plugin implements alongside `ProtocolPlugin`); `EmitResult`
+    enum; `DrainResult`; `SubscriptionStats`.
+  - `errors.py` — `SubscriptionError` + `SubscriptionLimitExceededError`
+    + `SubscriptionNotFoundError` (oversized/overflow/global-pressure are
+    NON-exceptional — `EmitResult` values + counters, never raised).
+  - `manager.py` — `SubscriptionManager`: owns every subscriber task +
+    buffer. `subscribe`/`drain`/`unsubscribe`/`stats`/`list_subscriptions`/
+    `aclose`. Process-singleton via `get/set_subscription_manager`.
+
+**Memory safety (hard requirement — no config produces unbounded growth):**
+- Three nested bounds: per-event 256 KiB (reject at emit), per-subscription
+  ring `deque(maxlen=1000)` (drop-oldest), process-wide 128 MiB ceiling.
+- `max_active_subscriptions` (64) cap → `SubscriptionLimitExceededError`.
+- Per-subscription config may LOWER a bound, never RAISE past the hard cap
+  (the manager clamps via `_clamp`).
+- Overflow policy: `drop_oldest` (flat memory) is the ONLY PR1 policy. The
+  `pause` policy (opt-in, QoS 1/2, real backpressure via
+  `EmitResult.BUFFER_FULL_PAUSE`) lands in PR2 with MQTT — it needs a real
+  async consumer to validate the resume semantics. The enum value is kept in
+  PR1 as the forward contract.
+- Two reapers: idle (`_reap_idle_once` — no-drain-in-`idle_ttl` → auto-
+  unsubscribe + `subscription.idle_reaped` audit) + dead-task
+  (`_reap_dead_once` — bounded reconnect → mark `failed`). Reaper loop
+  (`start_reaper`/`_reaper_loop`) is 60s-cadence, started by admin lifespan
+  in PR2.
+- `aclose()` cancels every task + clears every buffer (total teardown).
+- Byte accounting is balanced: every `_total_bytes`/`bytes_buffered`
+  increment (append) has a matching decrement (drain pop, drop-oldest
+  eviction, teardown). Verified by an explicit balance test.
+
+**Key invariants:**
+- The manager is the SOLE owner of subscriber tasks + buffers.
+- Injectable `time_source` (default `time.monotonic`) makes reapers testable
+  without real sleeps (Python-3.10-compat canon: no `asyncio.timeout`).
+- `_event_bytes` approximates in-memory size for the byte ceilings.
+- The global-pressure ceiling check accounts for drop_oldest eviction
+  credit: a full ring's append evicts its leftmost event, so the check is on
+  the NET change (`size - evict_credit`), not gross `size`. Without this a
+  full ring goes permanently stale under modest global pressure.
+- A crashed subscriber flips to `reconnecting`; the dead-task reaper
+  restarts it up to `max_reconnect_attempts` then marks it `failed`. The
+  synthetic test plugin's `crash_on_open` flag makes the exhaustion path
+  fully deterministic (each respawn crashes on open, advancing the
+  reconnect counter every reaper tick with no feed-timing dependency).
+
+**Not in PR1 (PR2):** MQTT plugin, lifespan wiring, executor dispatch,
+admin routes, admin UI, docs page, the `aiomqtt` dep. The foundation is
+exercised here by a synthetic `FakeSubscriptionPlugin`; MQTT is the real
+consumer in PR2.
+
+**Test deltas:** 29 new SDK tests (errors, base types, manager core,
+safety/reapers/teardown, singleton). Full SDK suite: ~5708.
+
 ## MCP-as-first-class (sub-project 3 — Bundle A)
 
 Bundle A landed: registered MCP server connections with capability
