@@ -353,6 +353,16 @@ async def test_reactive_refresh_failure_does_not_bump_count(ctx):
     # Status is "expired"; refresh_count unchanged from seed (0).
     refreshed = ctx.store.get(conn.id)
     assert refreshed.status == "expired"
+    decrypted = ctx.router.decrypt(
+        refreshed.protocol_data,
+        sensitive_field_paths=OAuth2ProtocolPlugin.sensitive_fields,
+        connection_credentials_backend=None,
+    )
+    # The failure path never writes a new tokens dict — count + timestamp
+    # must reflect the pre-refresh state. The seed predates refresh_count
+    # (no key), proving the failure branch added nothing.
+    assert decrypted["tokens"].get("refresh_count", 0) == 0
+    assert decrypted["tokens"].get("last_refreshed_at") is None
 
 
 # ── _refresh route (force-refresh) instrumentation ───────────────────
