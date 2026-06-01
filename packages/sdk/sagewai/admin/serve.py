@@ -32,6 +32,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.responses import Response, StreamingResponse
 
+from sagewai import __version__ as _SDK_VERSION
 from sagewai.admin.state_file import AdminStateFile
 
 logger = logging.getLogger("sagewai.admin")
@@ -336,7 +337,7 @@ def _build_subscription_manager():
 def create_admin_serve_app(
     sf: AdminStateFile,
     *,
-    version: str = "0.1.1",
+    version: str = _SDK_VERSION,
 ) -> FastAPI:
     """Create the complete admin API server.
 

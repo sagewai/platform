@@ -1,20 +1,85 @@
 name: release-sdk
 
+# Two-channel release for the `sagewai` SDK:
+#
+#   • push to main            → build <base>.dev<run#>  → publish to TestPyPI
+#   • workflow_dispatch(bump) → bump from latest tag    → publish to PyPI (prod)
+#   • push tag vX.Y.Z         → publish that version    → PyPI (prod, manual)
+#
+# Everything lives in this one file on purpose: the PyPI / TestPyPI OIDC
+# trusted-publisher config is keyed to this workflow filename. The prod path
+# is self-contained (resolve → build → test → acceptance → publish → tag) so it
+# never relies on a CI-pushed tag triggering a second workflow.
+
 on:
   push:
+    branches: [main]
     tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Prod release version bump'
+        type: choice
+        options: [patch, minor, major]
+        default: patch
 
 permissions:
-  id-token: write
-  contents: read
-  attestations: write
+  id-token: write       # OIDC trusted publishing
+  contents: write       # push the release tag on workflow_dispatch
+  attestations: write   # build provenance attestation
 
 jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.r.outputs.version }}
+      channel: ${{ steps.r.outputs.channel }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+      - id: r
+        env:
+          EVENT: ${{ github.event_name }}
+          BUMP: ${{ inputs.bump }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            latest="$(git tag -l 'v*.*.*' | sort -V | tail -1)"
+            latest="${latest:-v0.0.0}"
+            version="$(python3 scripts/next_version.py "$latest" "$BUMP")"
+            channel="pypi"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+            channel="pypi"
+          else
+            base="$(python3 -c "import tomllib;print(tomllib.load(open('packages/sdk/pyproject.toml','rb'))['project']['version'])")"
+            base="$(printf '%s' "$base" | sed -E 's/((\.dev|rc|\.post|a|b)[0-9]+)+$//')"
+            version="${base}.dev${RUN_NUMBER}"
+            channel="testpypi"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "Resolved: version=$version channel=$channel (event=$EVENT)"
+
   build:
+    needs: resolve
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      - name: Inject release version into pyproject
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          python3 - "$VERSION" <<'PY'
+          import re, sys, pathlib
+          v = sys.argv[1]
+          p = pathlib.Path("packages/sdk/pyproject.toml")
+          p.write_text(re.sub(r'(?m)^version\s*=\s*"[^"]+"', f'version = "{v}"', p.read_text(), count=1))
+          print("pyproject version ->", v)
+          PY
       - run: uv build --package sagewai --out-dir packages/sdk/dist
       - name: Generate SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
@@ -41,9 +106,34 @@ jobs:
       - run: uv sync --all-packages --group test
       - run: uv run --package sagewai pytest packages/sdk/tests/ -m "not integration" -o "addopts="
 
-  publish-testpypi:
+  acceptance:
+    needs: [resolve, build, test]
+    if: needs.resolve.outputs.channel == 'pypi'
     runs-on: ubuntu-latest
-    needs: [build, test]
+    steps:
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: sdk-dist
+          path: dist/
+      - name: Install the built wheel in a clean venv and smoke-check
+        env:
+          EXPECTED: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          uv venv /tmp/acc --python 3.13
+          uv pip install --python /tmp/acc dist/*.whl
+          /tmp/acc/bin/python -c "import sagewai; print('import OK', sagewai.__version__)"
+          got="$(/tmp/acc/bin/sagewai --version | awk '{print $NF}')"
+          echo "sagewai --version -> $got (expected $EXPECTED)"
+          test "$got" = "$EXPECTED"
+          /tmp/acc/bin/sagewai connections protocols >/dev/null
+          echo "Acceptance gate passed."
+
+  publish-testpypi:
+    needs: [resolve, build, test]
+    if: needs.resolve.outputs.channel == 'testpypi'
+    runs-on: ubuntu-latest
     environment: testpypi
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -53,10 +143,12 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
 
   publish-pypi:
+    needs: [resolve, build, test, acceptance]
+    if: needs.resolve.outputs.channel == 'pypi'
     runs-on: ubuntu-latest
-    needs: [build, test, publish-testpypi]
     environment: pypi
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -64,3 +156,22 @@ jobs:
           name: sdk-dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # release/v1
+        with:
+          skip-existing: true
+
+  tag:
+    needs: [resolve, publish-pypi]
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Tag the released version
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "sagewai-release[bot]"
+          git config user.email "release@sagewai.ai"
+          git tag -a "v${VERSION}" -m "Release v${VERSION}"
+          git push origin "v${VERSION}"
+          echo "Tagged v${VERSION}"

@@ -41,7 +41,7 @@ def init(project_name: str, model: str) -> None:
 name = "{project_name}"
 version = "0.1.0"
 requires-python = ">=3.10"
-dependencies = ["sagewai>=0.1.1"]
+dependencies = ["sagewai>=1.0.0"]
 
 [project.scripts]
 {project_name} = "{project_name}.main:main"

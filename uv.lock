@@ -4800,12 +4800,13 @@ torch = [
 
 [[package]]
 name = "sagewai"
-version = "0.1.1"
+version = "1.0.0"
 source = { editable = "packages/sdk" }
 dependencies = [
     { name = "click" },
     { name = "cryptography" },
     { name = "duckduckgo-search" },
+    { name = "fastapi" },
     { name = "google-genai" },
     { name = "httpx" },
     { name = "litellm" },
@@ -4817,9 +4818,12 @@ dependencies = [
     { name = "pymilvus" },
     { name = "pypdf" },
     { name = "python-dotenv" },
+    { name = "python-multipart" },
     { name = "pyyaml" },
     { name = "readability-lxml" },
+    { name = "sse-starlette" },
     { name = "tenacity" },
+    { name = "uvicorn" },
 ]
 
 [package.optional-dependencies]
@@ -4828,7 +4832,6 @@ all = [
     { name = "asyncpg" },
     { name = "boto3" },
     { name = "docling" },
-    { name = "fastapi" },
     { name = "faster-whisper" },
     { name = "gliner" },
     { name = "google-cloud-storage" },
@@ -4837,22 +4840,13 @@ all = [
     { name = "pillow" },
     { name = "prometheus-client" },
     { name = "pymilvus" },
-    { name = "python-multipart" },
     { name = "sentence-transformers" },
     { name = "sqlalchemy", extra = ["asyncio"] },
-    { name = "sse-starlette" },
     { name = "tiktoken" },
     { name = "tree-sitter-languages" },
-    { name = "uvicorn" },
 ]
 coap = [
     { name = "aiocoap" },
-]
-fastapi = [
-    { name = "fastapi" },
-    { name = "python-multipart" },
-    { name = "sse-starlette" },
-    { name = "uvicorn" },
 ]
 grpc = [
     { name = "grpcio" },
@@ -4963,7 +4957,7 @@ requires-dist = [
     { name = "cryptography", specifier = "==48.0.0" },
     { name = "docling", marker = "extra == 'memory'", specifier = "==2.93.0" },
     { name = "duckduckgo-search", specifier = "==8.1.1" },
-    { name = "fastapi", marker = "extra == 'fastapi'", specifier = "==0.136.1" },
+    { name = "fastapi", specifier = "==0.136.1" },
     { name = "faster-whisper", marker = "extra == 'multimodal'", specifier = "==1.2.1" },
     { name = "gliner", marker = "extra == 'intelligence'", specifier = "==0.2.26" },
     { name = "google-cloud-storage", marker = "extra == 'storage'", specifier = "==3.10.1" },
@@ -4990,20 +4984,20 @@ requires-dist = [
     { name = "pymodbus", marker = "extra == 'modbus'", specifier = "==3.13.0" },
     { name = "pypdf", specifier = "==6.11.0" },
     { name = "python-dotenv", specifier = "==1.2.2" },
-    { name = "python-multipart", marker = "extra == 'fastapi'", specifier = "==0.0.27" },
+    { name = "python-multipart", specifier = "==0.0.27" },
     { name = "pyyaml", specifier = "==6.0.3" },
     { name = "readability-lxml", specifier = "==0.8.4.1" },
     { name = "sagewai", extras = ["intelligence", "multimodal"], marker = "extra == 'intelligence-full'" },
     { name = "sagewai", extras = ["memory", "fastapi", "postgres", "prometheus", "storage", "intelligence", "multimodal"], marker = "extra == 'all'" },
     { name = "sentence-transformers", marker = "extra == 'intelligence'", specifier = "==5.5.0" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'postgres'", specifier = "==2.0.49" },
-    { name = "sse-starlette", marker = "extra == 'fastapi'", specifier = "==3.4.4" },
+    { name = "sse-starlette", specifier = "==3.4.4" },
     { name = "tenacity", specifier = "==9.1.4" },
     { name = "tiktoken", marker = "extra == 'memory'", specifier = "==0.13.0" },
     { name = "torch", marker = "extra == 'intelligence-full'", specifier = "==2.12.0" },
     { name = "transformers", marker = "extra == 'intelligence-full'", specifier = "==4.57.6" },
     { name = "tree-sitter-languages", marker = "extra == 'memory'", specifier = "==1.10.2" },
-    { name = "uvicorn", marker = "extra == 'fastapi'", specifier = "==0.47.0" },
+    { name = "uvicorn", specifier = "==0.47.0" },
     { name = "websockets", marker = "extra == 'websocket'", specifier = "==16.0" },
 ]
 provides-extras = ["memory", "coap", "modbus", "mqtt", "opcua", "websocket", "grpc", "fastapi", "postgres", "prometheus", "storage", "intelligence", "multimodal", "intelligence-full", "all", "sandbox", "kubernetes", "keychain", "vault"]

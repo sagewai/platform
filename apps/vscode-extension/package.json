@@ -2,7 +2,7 @@
   "name": "sagewai",
   "displayName": "Sagewai",
   "description": "Directive syntax highlighting and agent scaffolding for Sagewai SDK",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "publisher": "sagewai",
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Programming Languages", "Snippets"],

@@ -217,6 +217,17 @@ doctor:
 status:
     uv run --package sagewai sagewai status
 
+# ── Release ────────────────────────────────────────────────────────────────
+# Cut a production release: dispatches the release-sdk workflow, which bumps
+# the version from the latest tag, builds, tests, runs the acceptance gate,
+# publishes to PyPI, and pushes the vX.Y.Z tag. BUMP = patch | minor | major.
+# (Every push to main already publishes a .dev build to TestPyPI automatically.)
+release BUMP="patch":
+    @test "{{BUMP}}" = "patch" -o "{{BUMP}}" = "minor" -o "{{BUMP}}" = "major" \
+        || { echo "BUMP must be patch|minor|major (got '{{BUMP}}')"; exit 1; }
+    gh workflow run release-sdk.yml -f bump={{BUMP}}
+    @echo "Dispatched prod release (bump={{BUMP}}). Follow it with: gh run watch"
+
 # ── Test ───────────────────────────────────────────────────────────────────
 # Full unit suite, e2e suite, lint / format / typecheck (CI hygiene).
 

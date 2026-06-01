@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sagewai"
-version = "0.1.1"
+version = "1.0.0"
 description = "Sagewai is the autonomous agent platform: describe the goal, we design the agents, run them in production, and fine-tune local models so every run gets cheaper."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -54,6 +54,12 @@ dependencies = [
     "duckduckgo-search==8.1.1",
     "pypdf==6.11.0",
     "readability-lxml==0.8.4.1",
+    # Web/admin server stack — base deps so `pip install sagewai` yields a
+    # working CLI and `sagewai admin serve` (the documented quickstart).
+    "fastapi==0.136.1",
+    "sse-starlette==3.4.4",
+    "uvicorn==0.47.0",
+    "python-multipart==0.0.27",
 ]
 
 [project.urls]
@@ -91,12 +97,10 @@ grpc = [
     "grpcio==1.80.0",
     "grpcio-reflection==1.80.0",
 ]
-fastapi = [
-    "fastapi==0.136.1",
-    "sse-starlette==3.4.4",
-    "uvicorn==0.47.0",
-    "python-multipart==0.0.27",
-]
+# fastapi/uvicorn/python-multipart are now base dependencies (the CLI and
+# `sagewai admin serve` require them). This extra is kept as a no-op alias so
+# `pip install "sagewai[fastapi]"` keeps working for anyone who pinned it.
+fastapi = []
 postgres = [
     "asyncpg==0.31.0",
     "sqlalchemy[asyncio]==2.0.49",
