@@ -92,6 +92,10 @@ jobs:
           name: sdk-dist
           path: packages/sdk/dist/
       - name: Attest build provenance
+        # GitHub's attestation API needs a public repo (or a paid plan); it 422s
+        # while sagewai/platform is private. Skip cleanly until the launch flip
+        # makes the repo public, at which point provenance is attested for real.
+        if: github.event.repository.visibility == 'public'
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v2
         with:
           subject-path: packages/sdk/dist/*.whl
