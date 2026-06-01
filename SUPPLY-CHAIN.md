@@ -132,7 +132,11 @@ using `gh attestation verify`.
 
 | Date | Package | Versions | Impact | Resolution |
 |------|---------|----------|--------|------------|
-| (none) | | | | |
+| 2026-05-30 | python-multipart | 0.0.20 → 0.0.27 | 3 CVEs (multipart parsing DoS) in the file-upload request path | Bumped pin in the `[fastapi]` extra + test group; re-locked, full suite green |
+| 2026-05-30 | starlette | 1.0.0 → 1.2.0 | PYSEC-2026-161 (ASGI framework) | Transitive bump via `uv lock --upgrade-package`; full suite green |
+| 2026-05-30 | idna | 3.11 → 3.17 | CVE-2026-45409 | Transitive bump via `uv lock --upgrade-package` |
+| 2026-05-30 | lxml | 6.0.3 → 6.1.1 | PYSEC-2026-87 (XML parsing) | Transitive bump via `uv lock --upgrade-package` |
+| 2026-05-30 | mako | 1.3.10 → 1.3.12 | CVE-2026-44307 | Transitive bump via `uv lock --upgrade-package` |
 
 ## Tools
 
