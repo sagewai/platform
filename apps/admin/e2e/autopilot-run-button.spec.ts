@@ -71,7 +71,11 @@ async function mockMissionDetailSequence(
     new RegExp(`/api/v1/autopilot/missions/${missionId}$`),
     (route) => {
       callCount += 1;
-      const status = callCount === 1 ? initialStatus : runningStatus;
+      // `<= 2`, not `=== 1`: under `next dev` React Strict Mode double-invokes
+      // the mount effect, so the initial detail fetch fires twice. Both must
+      // return `initialStatus` or the Run button (hidden once running) never
+      // renders. The run-triggered refetch is the 3rd call → `runningStatus`.
+      const status = callCount <= 2 ? initialStatus : runningStatus;
       route.fulfill({
         status: 200,
         contentType: 'application/json',

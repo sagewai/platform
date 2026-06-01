@@ -36,8 +36,12 @@ test.describe('autopilot nav tabs', () => {
 
   test('/autopilot/missions renders missions table', async ({ page }) => {
     await page.goto('/autopilot/missions');
-    // The page should render without error regardless of whether there are missions
-    await expect(page.getByRole('heading', { name: 'Missions' })).toBeVisible();
+    // The page should render without error regardless of whether there are missions.
+    // exact: true so we match the page <h1>Missions</h1> only — without it the
+    // substring match also hits the empty-state <h2>No missions yet.</h2>, which
+    // is always present here (this spec hits the real empty backend), tripping a
+    // strict-mode violation.
+    await expect(page.getByRole('heading', { name: 'Missions', exact: true })).toBeVisible();
   });
 });
 
