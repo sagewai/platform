@@ -41,39 +41,67 @@ In practice that means you can:
 
 **Autopilot** sits on top: describe a goal in plain English and it assembles and runs the agent for you. *(v1.0 runs linear plans; branched/conditional plans are in progress.)*
 
-All AGPL-3.0. Install with one `pip install sagewai`, or run the full stack with `docker compose up`. Self-hostable on your own hardware.
+All AGPL-3.0. Install with `uv pip install sagewai` (or `pip install sagewai` inside a virtualenv), or run the full stack with `docker compose up`. Self-hostable on your own hardware.
 
-> **Sagewai is early software.** The `sagewai` package is published as `0.1.1` (alpha). The [v1.0 status](#v10-status) section is explicit about what ships today, what is experimental, and what is on the v1.1 roadmap — so you can decide what to rely on.
+> **Sagewai is early software.** The [v1.0 status](#v10-status) section is explicit about what ships today, what is experimental, and what is on the v1.1 roadmap — so you can decide what to rely on.
 
 ---
 
 ## Quickstart
 
-```bash
-# Full stack (postgres + redis + backend + admin UI)
-curl -fsSL https://raw.githubusercontent.com/sagewai/platform/main/docker-compose.yml -o docker-compose.yml
-docker compose up -d
+Install the SDK into an isolated environment. The fastest, most reliable way is [uv](https://docs.astral.sh/uv/):
 
-# Open the admin UI
-open http://localhost:3008
+```bash
+uv venv && uv pip install sagewai
+uv run sagewai --version
 ```
 
-Or, for local Python development:
+Prefer pip? **Create a virtualenv first** — on macOS/Homebrew and many Linux distros a system-wide `pip install` is blocked with `error: externally-managed-environment`:
 
 ```bash
+python3 -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
 pip install sagewai
-export OPENAI_API_KEY=sk-...   # or ANTHROPIC_API_KEY
-sagewai admin serve --port 8000
+sagewai --version
 ```
 
-A first agent in a few lines:
+**Your first agent** — set an API key for your provider, or point at a local Ollama model:
 
 ```python
-from sagewai.engines.universal import UniversalAgent
 import asyncio
+from sagewai.engines.universal import UniversalAgent
 
+# export OPENAI_API_KEY=...  (or ANTHROPIC_API_KEY, or use model="ollama/llama3.2")
 agent = UniversalAgent(name="hello", model="gpt-4o-mini")
 print(asyncio.run(agent.chat("Explain event loops in one paragraph.")))
+```
+
+**CLI + admin API:**
+
+```bash
+sagewai doctor                     # check your environment
+sagewai admin serve --port 8000    # admin API; interactive API docs at http://localhost:8000/docs
+```
+
+**Full stack with the web admin UI.** The UI ships as a container image (not the pip package), so run everything with Docker:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sagewai/platform/main/docker-compose.yml -o docker-compose.yml
+docker compose up -d               # admin UI at http://localhost:3008
+```
+
+**Pre-release builds** live on TestPyPI (a normal `pip install sagewai` never picks these up):
+
+```bash
+uv pip install --index-strategy unsafe-best-match \
+  --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple "sagewai==X.Y.ZrcN"
+```
+
+**From source** (contributors):
+
+```bash
+git clone https://github.com/sagewai/platform && cd platform
+just bootstrap     # uv + pnpm + workspace sync
+just dev-all       # backend API + admin UI together
 ```
 
 ---
@@ -178,7 +206,7 @@ A guided video series is in production — see the [video guide](https://docs.sa
 
 ## v1.0 status
 
-Sagewai is early software — the `sagewai` package is published as `0.1.1` (alpha). Here is what is real today, what is experimental, and what is coming, so you know what to rely on.
+Sagewai is early software. Here is what is real today, what is experimental, and what is coming, so you know what to rely on.
 
 **Shipped**
 - **SDK** — agents, `@tool` calling, 100+ models via LiteLLM, typed memory, guardrails, and multi-stage workflows.

@@ -21,7 +21,7 @@ export const metadata = {
   steps={[
     {
       name: 'Install the SDK and bring up an admin server',
-      text: 'pip install sagewai[fastapi] then run sagewai admin serve to start the local control plane on http://localhost:8000.',
+      text: 'Install the SDK with uv pip install sagewai (the admin server is included in the base install), then run sagewai admin serve to start the local control plane on http://localhost:8000.',
     },
     {
       name: 'Create a Sealed Identity for your customer',
@@ -91,14 +91,18 @@ This page exercises the full stack.
 ## 1. Install Sagewai
 
 ```bash
-uv add 'sagewai[fastapi,postgres]'
-# OR with pip:
-pip install 'sagewai[fastapi,postgres]'
+# uv (recommended) — creates the environment and installs in one step:
+uv venv && uv pip install 'sagewai[postgres]'
+
+# OR with pip — create a virtualenv first (a system-wide install is blocked on
+# macOS/Homebrew and many Linux distros with 'externally-managed-environment'):
+python3 -m venv .venv && source .venv/bin/activate
+pip install 'sagewai[postgres]'
 ```
 
-The `fastapi` extra brings the admin server. The `postgres` extra
-brings durable workflow storage; SQLite works for local exploration
-but production should use Postgres.
+The admin server is part of the base install — no extra needed. The
+`postgres` extra adds durable workflow storage; SQLite works for local
+exploration but production should use Postgres.
 
 ---
 

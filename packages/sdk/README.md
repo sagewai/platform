@@ -10,35 +10,62 @@
 
 Build your agent with the SDK. Hand it goals with Autopilot. Run them across teams with Fleet. Keep every secret scoped with Sealed. Watch every dollar with Observatory. Then own the model with the Training Loop.
 
-> **Sagewai is early software.** The `sagewai` package is published as `0.1.1` (alpha). The sections below are explicit about what ships today, what is experimental, and what is on the v1.1 roadmap — so you know what to rely on.
+> **Sagewai is early software.** The sections below are explicit about what ships today, what is experimental, and what is on the v1.1 roadmap — so you know what to rely on.
 
 ## Quick start
 
+Install into an isolated environment. [uv](https://docs.astral.sh/uv/) is fastest; with plain pip, **create a virtualenv first** — a system-wide `pip install` is blocked on macOS/Homebrew and many Linux distros with `error: externally-managed-environment`:
+
 ```bash
-pip install sagewai
+uv venv && uv pip install sagewai
+# or:  python3 -m venv .venv && source .venv/bin/activate && pip install sagewai
+sagewai --version
 ```
 
 ```python
 import asyncio
 from sagewai.engines.universal import UniversalAgent
 
+# Set an API key for your provider (OPENAI_API_KEY / ANTHROPIC_API_KEY), or use model="ollama/llama3.2".
 agent = UniversalAgent(name="hello", model="gpt-4o-mini")
 print(asyncio.run(agent.chat("What is Sagewai?")))
 ```
 
-Three lines to your first agent. One interface reaches 100+ models — OpenAI, Anthropic, Google, Mistral, and local Ollama via LiteLLM — so you are not locked to a provider.
+One interface reaches 100+ models — OpenAI, Anthropic, Google, Mistral, and local Ollama via LiteLLM — so you are not locked to a provider.
+
+A `pip install sagewai` includes the **CLI** and the admin **API** (`sagewai admin serve` → `http://localhost:8000`, interactive docs at `/docs`). The web admin **UI** is a separate container image — run the full stack with `docker compose up` (see the [repository](https://github.com/sagewai/platform)).
 
 ## Install extras
+
+The base install already includes the CLI, the admin API server (FastAPI + uvicorn), and the connection protocols — `sagewai admin serve` works with no extras. Add extras for optional capabilities:
 
 | Extra | What it adds |
 |-------|-------------|
 | `sagewai[memory]` | Milvus, NebulaGraph, Docling, tiktoken |
 | `sagewai[intelligence]` | Embeddings, entity extraction, language detection |
 | `sagewai[postgres]` | asyncpg, SQLAlchemy async, Alembic |
-| `sagewai[fastapi]` | FastAPI + SSE support |
 | `sagewai[prometheus]` | Prometheus metrics exporter |
 | `sagewai[storage]` | S3 (boto3) and GCS archival backends |
 | `sagewai[all]` | Everything above |
+
+## Released vs. pre-release versions
+
+- **Stable:** `pip install sagewai` installs the latest release from PyPI. pip never selects a pre-release/dev build unless you ask for it explicitly.
+- **Release candidates** are published to TestPyPI:
+  ```bash
+  pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple "sagewai==X.Y.ZrcN"
+  # with uv, add: --index-strategy unsafe-best-match
+  ```
+  The `--extra-index-url` pulls dependencies from real PyPI while the package itself comes from TestPyPI.
+
+## Install from source
+
+```bash
+git clone https://github.com/sagewai/platform && cd platform
+just bootstrap                 # uv + pnpm + workspace sync
+# or just the SDK, editable, inside an activated venv:
+uv pip install -e packages/sdk
+```
 
 ## What you can build with it
 
@@ -89,7 +116,7 @@ Every example is a complete, runnable file in [`sagewai/examples/`](sagewai/exam
 sagewai init my-project              # scaffold a new project
 sagewai doctor                       # check environment health
 sagewai agent run my_agent.yaml      # run an agent from config
-sagewai admin serve --port 8000      # start the admin UI + API
+sagewai admin serve --port 8000      # start the admin API (web UI ships separately via Docker)
 ```
 
 ## Documentation

@@ -1,46 +1,90 @@
 # Installation
 
-Install the Sagewai SDK and verify it works before writing your first agent.
+Install the Sagewai SDK into an isolated environment and verify it works before writing your first agent.
 
 ## Install the SDK
 
-Install with pip:
+The fastest, most reliable way is [uv](https://docs.astral.sh/uv/) — it creates the environment and installs in one step, and sidesteps the system-Python restrictions below:
 
 ```bash
+uv venv && uv pip install sagewai
+uv run sagewai --version
+```
+
+### Using pip
+
+A bare `pip install` is **blocked on macOS/Homebrew and many Linux distros** with `error: externally-managed-environment` (PEP 668). Create a virtualenv first:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install sagewai
+sagewai --version
 ```
 
-Or with uv:
+> If `pip` still errors *inside* an activated venv, your shell is resolving an old `pip` from its cache — run `python -m pip install sagewai`, or use the `uv` path above.
 
-```bash
-uv add sagewai
-```
+The only hard requirement is **Python 3.10+**. See [Prerequisites](/docs/get-started/prerequisites) for the full list of software and hardware requirements.
 
-The only hard requirement is **Python 3.10+**. See [Prerequisites](/docs/get-started/prerequisites) for a full list of software and hardware requirements.
+## What a base install includes
+
+`pip install sagewai` gives you four surfaces with no extras:
+
+- **SDK** — `from sagewai.engines.universal import UniversalAgent`; build agents in Python.
+- **CLI** — `sagewai --help`, `sagewai doctor`, `sagewai init`.
+- **Admin API** — `sagewai admin serve --port 8000` starts the FastAPI control plane; interactive API docs at `http://localhost:8000/docs`.
+- **Admin UI** — the web panel is a **separate container image**, not part of the pip package. Run the full stack with `docker compose up` (UI on `http://localhost:3008`), or `just dev-all` from a source checkout.
 
 ## Extras
 
-Install optional extras when you need the platform components:
+The base install already bundles the admin API server (FastAPI + uvicorn) and the connection protocols. Add extras for optional capabilities:
 
 | Extra | What it adds |
 |---|---|
-| `sagewai[fastapi]` | Admin server + uvicorn (run `sagewai admin serve`) |
+| `sagewai[memory]` | Milvus + NebulaGraph + Docling vector/graph memory |
+| `sagewai[intelligence]` | Local embeddings, entity extraction, language detection |
 | `sagewai[postgres]` | Durable workflow storage backed by PostgreSQL |
-| `sagewai[fastapi,postgres]` | Both — the typical production installation |
+| `sagewai[storage]` | S3 / GCS archival backends |
+| `sagewai[all]` | Everything above |
 
 SQLite works for local exploration without any extra. Use Postgres for production deployments where you need persistence across restarts and multi-process access.
+
+## Released vs. pre-release versions
+
+- **Stable (recommended):** `pip install sagewai` installs the latest release from PyPI. pip never selects a pre-release/dev build unless you ask for it explicitly.
+- **Release candidates** are published to TestPyPI:
+
+  ```bash
+  pip install --index-url https://test.pypi.org/simple/ \
+              --extra-index-url https://pypi.org/simple \
+              "sagewai==X.Y.ZrcN"
+  # with uv, add: --index-strategy unsafe-best-match
+  ```
+
+  The `--extra-index-url` pulls Sagewai's dependencies from real PyPI while the package itself comes from TestPyPI.
+
+## Install from source
+
+```bash
+git clone https://github.com/sagewai/platform
+cd platform
+just bootstrap        # uv + pnpm + workspace sync (first-time setup)
+just dev-all          # run the backend API + admin UI together
+```
+
+Just the SDK, editable, inside an activated venv: `uv pip install -e packages/sdk`.
 
 ## Verify the install
 
 ```bash
-python -c "import sagewai; print(sagewai.__version__)"
+sagewai --version                                        # CLI works
+python -c "import sagewai; print(sagewai.__version__)"   # SDK imports
 ```
 
-You should see a version string. No API key is required for this check.
-
-To go further without an API key, run example `01_hello_agent.py` — it uses the no-LLM-key fallback and produces output with no external service.
+No API key is required for either check.
 
 ## Next
 
 - [Prerequisites](/docs/get-started/prerequisites) — Python version, Docker, hardware profiles.
+- [Quickstart](/docs/get-started/quickstart) — build and run a production-shape agent.
 - [Your first agent](/docs/get-started/first-agent) — write and run a minimal agent.
