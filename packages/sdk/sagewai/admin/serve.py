@@ -452,14 +452,46 @@ def create_admin_serve_app(
 
     app = FastAPI(title="Sagewai Admin", version=version, lifespan=lifespan)
 
-    # CORS — allow admin dev server
+    # Run state migrations before serving (versioned, locked, backed-up).
+    sf.run_migrations()
+
+    # Auth boundary (deny-by-default). Added BEFORE CORS so CORS is the
+    # OUTERMOST middleware and wraps even 401/403 responses with CORS headers.
+    from sagewai.admin.auth_middleware import AuthMiddleware
+    app.add_middleware(AuthMiddleware, sf=sf)
+
+    # CORS — env-driven allowlist (default: the local admin dev server, which
+    # runs on port 3008). The admin UI calls the backend cross-origin with
+    # credentials, so the origin must be allowlisted (not "*", which is unsafe
+    # with credentials). Override via SAGEWAI_ADMIN_ALLOWED_ORIGINS (e.g. e2e on
+    # 3808, or a production admin origin).
+    _allowed_origins = [
+        o.strip() for o in os.environ.get(
+            "SAGEWAI_ADMIN_ALLOWED_ORIGINS",
+            "http://localhost:3008,http://127.0.0.1:3008",
+        ).split(",") if o.strip()
+    ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=_allowed_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    from sagewai.admin.auth_middleware import csrf_token_for, _LoginThrottle, _session_token_id
+    from sagewai.admin.audit import emit_audit
+
+    _login_throttle = _LoginThrottle()
+
+    def _set_session_cookies(resp: JSONResponse, raw: str) -> None:
+        secure = os.environ.get("SAGEWAI_ADMIN_TLS", "") in {"1", "true"}
+        max_age = int(os.environ.get("SAGEWAI_ADMIN_SESSION_TTL_SECONDS", str(7 * 24 * 3600)))
+        resp.set_cookie("sagewai_auth", raw, httponly=True, samesite="lax",
+                        secure=secure, max_age=max_age, path="/")
+        token_id = _session_token_id(raw)
+        resp.set_cookie("sagewai_csrf", csrf_token_for(sf, token_id), httponly=False,
+                        samesite="lax", secure=secure, max_age=max_age, path="/")
 
     state = AdminState()
     # Use the durable SQLite-backed analytics store by default (Postgres when
@@ -719,24 +751,28 @@ def create_admin_serve_app(
     @app.post("/api/v1/auth/login")
     async def auth_login(request: Request) -> JSONResponse:
         body = await request.json()
-        result = sf.validate_login(
-            body.get("email", ""), body.get("password", "")
-        )
+        email = body.get("email", "")
+        ip = request.client.host if request.client else "?"
+        key = f"{ip}:{email}"
+        if _login_throttle.blocked(key):
+            otel_count("auth.logins", status="throttled")
+            return JSONResponse({"detail": "Too many attempts. Try again later."},
+                                status_code=429, headers={"Retry-After": "900"})
+        result = sf.validate_login(email, body.get("password", ""))
         if not result:
-            logger.warning("Login failed for email=%s", body.get("email", ""),
-                           extra={"event": "auth.login.failed", "email": body.get("email", "")})
+            _login_throttle.record_failure(key)
+            logger.warning("Login failed for email=%s", email,
+                           extra={"event": "auth.login.failed", "email": email})
             otel_count("auth.logins", status="failed")
-            return JSONResponse(
-                {"detail": "Invalid email or password"}, status_code=401
-            )
+            emit_audit(sf, event_type="auth.login.failed", actor_label=email)
+            return JSONResponse({"detail": "Invalid email or password"}, status_code=401)
+        _login_throttle.reset(key)
         logger.info("Login success for email=%s", result["user"]["email"],
-                     extra={"event": "auth.login.success", "email": result["user"]["email"]})
+                    extra={"event": "auth.login.success", "email": result["user"]["email"]})
         otel_count("auth.logins", status="success")
+        emit_audit(sf, event_type="auth.login", actor_label=email)
         resp = JSONResponse(result)
-        resp.set_cookie(
-            key="sagewai_auth", value=result["access_token"],
-            httponly=True, samesite="lax", path="/",
-        )
+        _set_session_cookies(resp, result["access_token"])
         return resp
 
     @app.post("/api/v1/auth/refresh")
@@ -754,53 +790,36 @@ def create_admin_serve_app(
             client_host = request.client.host if request.client else ""
             dev_trust = os.environ.get("SAGEWAI_DEV_TRUST_LOCAL", "").lower() in {"1", "true"}
             if dev_trust and client_host in {"127.0.0.1", "::1", "localhost"}:
-                state = sf._read()
-                admin = state.get("admin")
-                if admin:
-                    tokens = state.get("active_tokens") or []
-                    new_token = None
-                    if tokens:
-                        first = tokens[0]
-                        new_token = first if isinstance(first, str) else first.get("token")
-                    if not new_token:
-                        from sagewai.admin.state_file import _make_token  # type: ignore[attr-defined]
-                        new_token = _make_token()
-                        state["active_tokens"] = [new_token]
-                        sf._write(state)
-                    result = {
-                        "access_token": new_token,
-                        "token_type": "bearer",
-                        "user": {
-                            "id": admin.get("id", ""),
-                            "email": admin.get("email", ""),
-                            "display_name": admin.get("name", ""),
-                            "avatar_url": None,
-                            "role": admin.get("role", "admin"),
-                        },
-                    }
+                result = sf.issue_session()
         if not result:
             return JSONResponse({"detail": "No session"}, status_code=401)
         resp = JSONResponse(result)
-        resp.set_cookie(
-            key="sagewai_auth", value=result["access_token"],
-            httponly=True, samesite="lax", path="/",
-        )
+        _set_session_cookies(resp, result["access_token"])
         return resp
 
     @app.post("/api/v1/auth/logout")
-    async def auth_logout() -> JSONResponse:
+    async def auth_logout(request: Request) -> JSONResponse:
+        raw = _extract_token(request)
+        user = sf.get_user_by_token(raw) if raw else None
+        actor = user.get("email") if user else "unknown"
+        if raw:
+            sf.revoke_session_token(raw)
+        emit_audit(sf, event_type="auth.logout", actor_label=actor)
         resp = JSONResponse({"status": "ok"})
         resp.delete_cookie("sagewai_auth", path="/")
+        resp.delete_cookie("sagewai_csrf", path="/")
         return resp
 
     @app.get("/api/v1/auth/me")
     async def auth_me(request: Request) -> JSONResponse:
-        token = _extract_token(request)
-        if not token:
+        # AuthMiddleware already authenticated this (non-public) route and set
+        # request.state.principal — resolve the user from the store, not by a
+        # session-only token lookup, so API-token callers are treated the same.
+        if getattr(request.state, "principal", None) is None:
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
-        user = sf.get_user_by_token(token)
+        user = sf.get_admin_user()
         if not user:
-            return JSONResponse({"detail": "Invalid token"}, status_code=401)
+            return JSONResponse({"detail": "Not authenticated"}, status_code=401)
         return JSONResponse(user)
 
     # ── Organization ─────────────────────────────────────────────
@@ -812,7 +831,11 @@ def create_admin_serve_app(
     @app.patch("/api/v1/organization")
     async def update_org(request: Request) -> JSONResponse:
         body = await request.json()
-        return JSONResponse(sf.update_org(body))
+        result = sf.update_org(body)
+        emit_audit(sf, event_type="org.updated",
+                   actor_label=request.state.principal.actor_label,
+                   details={"patched_keys": list(body.keys())})
+        return JSONResponse(result)
 
     # ── Projects ─────────────────────────────────────────────────
 
@@ -2250,46 +2273,33 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/tokens/")
     async def list_tokens() -> JSONResponse:
-        data = sf._read()
-        return JSONResponse(data.get("api_tokens", []))
+        return JSONResponse(sf.list_api_tokens())
 
     @app.post("/api/v1/tokens/")
     async def create_token(request: Request) -> JSONResponse:
-        import secrets as _sec
         body = await request.json()
-        token_value = f"sw_{_sec.token_urlsafe(32)}"
-        entry = {
-            "id": f"tok-{_sec.token_hex(6)}",
-            "name": body.get("name", "Unnamed"),
-            "token": token_value,
-            "prefix": token_value[:12],
-            "scopes": body.get("scopes", ["read"]),
-            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "last_used": None,
-            "revoked": False,
-        }
-        data = sf._read()
-        data.setdefault("api_tokens", []).append(entry)
-        sf._write(data)
+        entry = sf.create_api_token(name=body.get("name", "Unnamed"),
+                                    scopes=body.get("scopes", ["read"]))
+        emit_audit(sf, event_type="token.created",
+                   actor_label=request.state.principal.actor_label,
+                   target=entry["id"], details={"scopes": entry["scopes"]})
         return JSONResponse(entry, status_code=201)
 
     @app.post("/api/v1/tokens/{token_id}/revoke")
-    async def revoke_token(token_id: str) -> JSONResponse:
-        data = sf._read()
-        for t in data.get("api_tokens", []):
-            if t.get("id") == token_id:
-                t["revoked"] = True
-                sf._write(data)
-                return JSONResponse({"status": "ok"})
+    async def revoke_token(token_id: str, request: Request) -> JSONResponse:
+        if sf.revoke_api_token(token_id):
+            emit_audit(sf, event_type="token.revoked",
+                       actor_label=request.state.principal.actor_label, target=token_id)
+            return JSONResponse({"status": "ok"})
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     @app.delete("/api/v1/tokens/{token_id}")
-    async def delete_token(token_id: str) -> JSONResponse:
-        data = sf._read()
-        tokens = data.get("api_tokens", [])
-        data["api_tokens"] = [t for t in tokens if t.get("id") != token_id]
-        sf._write(data)
-        return JSONResponse({"status": "ok"})
+    async def delete_token(token_id: str, request: Request) -> JSONResponse:
+        if sf.delete_api_token(token_id):
+            emit_audit(sf, event_type="token.deleted",
+                       actor_label=request.state.principal.actor_label, target=token_id)
+            return JSONResponse({"status": "ok"})
+        return JSONResponse({"detail": "Not found"}, status_code=404)
 
     # ── Fleet (real SDK integration) ────────────────────────────
     # Uses InMemoryFleetRegistry + FleetDispatcher from the SDK.
@@ -2419,30 +2429,36 @@ def create_admin_serve_app(
         })
 
     @app.post("/api/v1/fleet/workers/{worker_id}/approve")
-    async def approve_fleet_worker(worker_id: str) -> JSONResponse:
+    async def approve_fleet_worker(worker_id: str, request: Request) -> JSONResponse:
         from fastapi import HTTPException
         try:
             w = await fleet_registry.approve_worker(worker_id, approved_by="admin")
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        emit_audit(sf, event_type="fleet.worker.approved",
+                   actor_label=request.state.principal.actor_label, target=worker_id)
         return JSONResponse({"status": w.approval_status.value, "worker_id": w.id})
 
     @app.post("/api/v1/fleet/workers/{worker_id}/reject")
-    async def reject_fleet_worker(worker_id: str) -> JSONResponse:
+    async def reject_fleet_worker(worker_id: str, request: Request) -> JSONResponse:
         from fastapi import HTTPException
         try:
             w = await fleet_registry.reject_worker(worker_id)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        emit_audit(sf, event_type="fleet.worker.rejected",
+                   actor_label=request.state.principal.actor_label, target=worker_id)
         return JSONResponse({"status": w.approval_status.value, "worker_id": w.id})
 
     @app.post("/api/v1/fleet/workers/{worker_id}/revoke")
-    async def revoke_fleet_worker(worker_id: str) -> JSONResponse:
+    async def revoke_fleet_worker(worker_id: str, request: Request) -> JSONResponse:
         from fastapi import HTTPException
         try:
             w = await fleet_registry.revoke_worker(worker_id)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        emit_audit(sf, event_type="fleet.worker.revoked",
+                   actor_label=request.state.principal.actor_label, target=worker_id)
         return JSONResponse({"status": w.approval_status.value, "worker_id": w.id})
 
     @app.get("/api/v1/admin/fleet/workers/{worker_id}/pool-stats")
@@ -2482,18 +2498,22 @@ def create_admin_serve_app(
             allowed_pools=body.get("pools", [body.get("pool", "default")]),
             allowed_models=body.get("models", []),
         )
+        emit_audit(sf, event_type="fleet.enrollment_key.created",
+                   actor_label=request.state.principal.actor_label, target=key_record.id)
         return JSONResponse({
             "id": key_record.id, "key": raw_key, "name": key_record.name,
             "max_uses": key_record.max_uses,
         }, status_code=201)
 
     @app.delete("/api/v1/fleet/enrollment-keys/{key_id}")
-    async def revoke_fleet_enrollment_key(key_id: str) -> JSONResponse:
+    async def revoke_fleet_enrollment_key(key_id: str, request: Request) -> JSONResponse:
         from fastapi import HTTPException
         try:
             await fleet_registry.revoke_enrollment_key(key_id)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        emit_audit(sf, event_type="fleet.enrollment_key.revoked",
+                   actor_label=request.state.principal.actor_label, target=key_id)
         return JSONResponse({"status": "ok"})
 
     @app.get("/api/v1/fleet/audit")
@@ -2510,8 +2530,11 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/account")
     async def get_account(request: Request) -> JSONResponse:
-        token = _extract_token(request)
-        user = sf.get_user_by_token(token) if token else None
+        # Authenticated by AuthMiddleware (request.state.principal); resolve from
+        # the store so admin-scoped API tokens work, not just session cookies.
+        if getattr(request.state, "principal", None) is None:
+            return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+        user = sf.get_admin_user()
         if not user:
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
         return JSONResponse(user)
@@ -2519,31 +2542,16 @@ def create_admin_serve_app(
     @app.patch("/api/v1/account/profile")
     async def update_profile(request: Request) -> JSONResponse:
         body = await request.json()
-        data = sf._read()
-        admin = data.get("admin", {})
-        if body.get("display_name"):
-            admin["name"] = body["display_name"]
-            sf._write(data)
-        return JSONResponse({
-            "id": admin.get("id", ""),
-            "email": admin.get("email", ""),
-            "display_name": admin.get("name", ""),
-            "avatar_url": None,
-        })
+        return JSONResponse(sf.update_admin_profile(display_name=body.get("display_name")))
 
     @app.post("/api/v1/account/password")
     async def change_password(request: Request) -> JSONResponse:
         body = await request.json()
-        data = sf._read()
-        admin = data.get("admin", {})
-        from sagewai.admin.state_file import _verify_password, _hash_password
-        if not _verify_password(body.get("current_password", ""),
-                                admin.get("password_hash", ""), admin.get("password_salt", "")):
+        if not sf.change_admin_password(body.get("current_password", ""),
+                                        body.get("new_password", "")):
             return JSONResponse({"detail": "Current password is incorrect"}, status_code=400)
-        new_hash, new_salt = _hash_password(body.get("new_password", ""))
-        admin["password_hash"] = new_hash
-        admin["password_salt"] = new_salt
-        sf._write(data)
+        emit_audit(sf, event_type="account.password_changed",
+                   actor_label=request.state.principal.actor_label)
         return JSONResponse({"status": "ok"})
 
     # ── Connectors ───────────────────────────────────────────────
@@ -3118,7 +3126,7 @@ def create_admin_serve_app(
 def _extract_token(request: Request) -> str | None:
     """Get auth token from header or cookie."""
     auth = request.headers.get("authorization", "")
-    if auth.startswith("Bearer "):
+    if auth[:7].lower() == "bearer ":
         return auth[7:]
     return request.cookies.get("sagewai_auth")
 

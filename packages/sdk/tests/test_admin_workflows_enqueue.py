@@ -35,8 +35,12 @@ import pytest
 @pytest.fixture
 def state_path(tmp_path, monkeypatch):
     """Isolated admin-state.json for each test."""
+    from sagewai.admin.state_file import AdminStateFile
+
     path = tmp_path / "admin-state.json"
-    path.write_text(json.dumps({"setup_complete": True}))
+    # Complete setup so auth middleware accepts real credentials.
+    sf = AdminStateFile(path=path)
+    sf.complete_setup(org_name="Acme", admin_email="a@b.com", admin_password="pw123456")
 
     import sagewai.admin.state_file as _sf_mod
 
@@ -46,15 +50,18 @@ def state_path(tmp_path, monkeypatch):
 
 @pytest.fixture
 async def client(state_path):
-    """AsyncClient backed by the full admin app."""
+    """AsyncClient backed by the full admin app, authenticated as admin."""
     from sagewai.admin.serve import create_admin_serve_app
     from sagewai.admin.state_file import AdminStateFile
 
     sf = AdminStateFile(path=state_path)
     app = create_admin_serve_app(sf)
+    token = sf.validate_login("a@b.com", "pw123456")["access_token"]
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://test"
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {token}"},
     ) as cl:
         yield cl
 
@@ -180,27 +187,34 @@ async def test_identity_mode_without_approved_worker_returns_400(client):
 
 
 async def test_full_mode_with_system_default_and_no_workers_returns_400(
-    state_path, monkeypatch
+    tmp_path, monkeypatch
 ):
     """FULL mode passes the profile_ref check when system_profile_ref is set,
     but still requires an approved worker → 400.
     """
     import sagewai.admin.state_file as _sf_mod
-
-    # Write a state file that has a system_profile_ref configured
-    state_path.write_text(json.dumps({
-        "setup_complete": True,
-        "sealed": {"system_profile_ref": "builtin:system-default"},
-    }))
-    monkeypatch.setattr(_sf_mod, "default_admin_state_path", lambda: state_path)
-
     from sagewai.admin.serve import create_admin_serve_app
     from sagewai.admin.state_file import AdminStateFile
 
-    sf = AdminStateFile(path=state_path)
+    custom_path = tmp_path / "custom-state.json"
+    # Complete setup to enable auth, then add system_profile_ref.
+    sf = AdminStateFile(path=custom_path)
+    sf.complete_setup(org_name="Acme", admin_email="a@b.com", admin_password="pw123456")
+    # Inject the system_profile_ref via raw state update.
+    data = sf._read()
+    data.setdefault("sealed", {})["system_profile_ref"] = "builtin:system-default"
+    sf._write(data)
+
+    monkeypatch.setattr(_sf_mod, "default_admin_state_path", lambda: custom_path)
+
     app = create_admin_serve_app(sf)
+    token = sf.validate_login("a@b.com", "pw123456")["access_token"]
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as cl:
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {token}"},
+    ) as cl:
         res = await cl.post(
             "/api/v1/workflows/enqueue",
             json={"workflow_name": "test-wf", "execution_mode": "full"},

@@ -50,7 +50,11 @@ export default defineConfig({
     {
       // Backend — lightweight FastAPI with in-memory state.
       // Starts in ~2s. No Postgres/Redis required.
-      command: 'uv run --package sagewai sagewai admin serve --host 0.0.0.0 --port 8000',
+      // The admin UI (port 3808) calls the backend cross-origin with credentials,
+      // so its origin must be in the CORS allowlist.
+      command:
+        'SAGEWAI_ADMIN_ALLOWED_ORIGINS=http://localhost:3808,http://127.0.0.1:3808 ' +
+        'uv run --package sagewai sagewai admin serve --host 0.0.0.0 --port 8000',
       port: 8000,
       reuseExistingServer: !process.env.CI,
       timeout: 15_000,

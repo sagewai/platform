@@ -14,7 +14,7 @@ import time
 from collections import defaultdict, deque
 from typing import Any
 
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from sagewai.sealed.models import (
@@ -163,15 +163,19 @@ def _check_reveal_rate_limit(admin_id: str, limit_per_hour: int) -> bool:
     "/profiles/{profile_id}/reveal/{secret_key}",
     response_model=SealedRevealResponse,
 )
-async def reveal_secret(profile_id: str, secret_key: str) -> SealedRevealResponse:
-    from sagewai.admin.state_file import AdminStateFile
+async def reveal_secret(profile_id: str, secret_key: str, request: Request) -> SealedRevealResponse:
+    from sagewai.admin.audit import emit_audit
     from sagewai.sealed.backend import ProfileNotFoundError
 
-    state = AdminStateFile()
+    principal = getattr(request.state, "principal", None)
+    actor = principal.actor_label if principal else "unknown"
+    state = getattr(request.app.state, "sealed_store", None)
+    if state is None:
+        from sagewai.admin.state_file import AdminStateFile
+        state = AdminStateFile()
     rate_limit = state.get_sealed_config().get("reveal_rate_limit_per_admin_per_hour", 30)
-    admin_id = "default-admin"  # TODO: extract from auth context when integrated
 
-    if not _check_reveal_rate_limit(admin_id, rate_limit):
+    if not _check_reveal_rate_limit(actor, rate_limit):
         raise HTTPException(
             status_code=429,
             detail={"retry_after": 3600, "limit": rate_limit},
@@ -185,6 +189,8 @@ async def reveal_secret(profile_id: str, secret_key: str) -> SealedRevealRespons
     if secret_key not in full.secrets:
         raise HTTPException(status_code=404, detail={"secret_key": secret_key}) from None
 
+    emit_audit(state, event_type="sealed.reveal", actor_label=actor,
+               target=f"{profile_id}#{secret_key}")
     return SealedRevealResponse(value=full.secrets[secret_key])
 
 

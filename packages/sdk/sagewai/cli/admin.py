@@ -92,7 +92,7 @@ def admin_costs(agent_name: str | None) -> None:
 
 
 @admin.command("serve")
-@click.option("--host", default="0.0.0.0", help="Host to bind.")
+@click.option("--host", default="127.0.0.1", help="Host to bind (default: loopback).")
 @click.option("--port", default=8000, type=int, help="Port to bind.")
 def admin_serve(host: str, port: int) -> None:
     """Start the admin API server (FastAPI + uvicorn)."""
@@ -102,6 +102,13 @@ def admin_serve(host: str, port: int) -> None:
         from sagewai import home
         from sagewai.admin.serve import create_admin_serve_app
         from sagewai.admin.state_file import AdminStateFile
+
+        if host not in {"127.0.0.1", "localhost", "::1"}:
+            click.echo(
+                f"WARNING: binding to {host} exposes the admin API beyond localhost. "
+                "Ensure auth, TLS, and SAGEWAI_ADMIN_ALLOWED_ORIGINS are configured.",
+                err=True,
+            )
 
         home.migrate_home()
         sf = AdminStateFile()

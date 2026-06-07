@@ -28,12 +28,20 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import hmac
 import json
 import os
 import secrets
+import shutil
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+
+try:
+    import fcntl  # POSIX only
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
 
 from sagewai import home
 from sagewai.artifacts.models import ArtifactDestination
@@ -84,6 +92,33 @@ def _verify_password(password: str, stored_hash: str, salt: str) -> bool:
 
 def _make_token() -> str:
     return secrets.token_urlsafe(48)
+
+
+_SESSION_TTL_SECONDS = int(os.environ.get("SAGEWAI_ADMIN_SESSION_TTL_SECONDS", str(7 * 24 * 3600)))
+
+
+def _hash_token(raw: str) -> str:
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _session_record(raw: str) -> dict[str, Any]:
+    now = datetime.datetime.now(datetime.timezone.utc)
+    return {
+        "hash": _hash_token(raw),
+        "created_at": now.isoformat(),
+        "expires_at": (now + datetime.timedelta(seconds=_SESSION_TTL_SECONDS)).isoformat(),
+        "last_used": None,
+    }
+
+
+def _record_is_live(rec: dict[str, Any]) -> bool:
+    exp = rec.get("expires_at")
+    if not exp:
+        return True  # no expiry recorded → treat as live (legacy/defensive)
+    try:
+        return datetime.datetime.now(datetime.timezone.utc) < datetime.datetime.fromisoformat(exp)
+    except ValueError:
+        return False
 
 
 def _slugify(text: str) -> str:
@@ -311,11 +346,60 @@ class AdminStateFile:
             raise
 
     def _mutate(self, fn: Any) -> Any:
-        """Read → mutate → write, returning the fn result."""
-        data = self._read()
-        result = fn(data)
-        self._write(data)
+        """Locked read → mutate → write, returning the fn result."""
+        with self._file_lock():
+            data = self._read()
+            result = fn(data)
+            self._write(data)
         return result
+
+    # ── file lock ────────────────────────────────────────────────
+
+    SCHEMA_VERSION = 1  # bumped by each migration-bearing PR
+
+    @contextmanager
+    def _file_lock(self):
+        """Exclusive cross-process lock around read-modify-write.
+
+        Best-effort: a no-op on platforms without ``fcntl`` (Windows). The file
+        backend is single-host by contract; multi-process durability is the
+        Postgres roadmap path.
+        """
+        if fcntl is None:
+            yield
+            return
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self._path.with_suffix(self._path.suffix + ".lock")
+        with open(lock_path, "w") as lf:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+
+    def run_migrations(self) -> None:
+        """Versioned, backed-up, locked migration. Run once before serving."""
+        with self._file_lock():
+            data = self._read()
+            current = int(data.get("schema_version", 0))
+            if current >= self.SCHEMA_VERSION:
+                return
+            backup: Path | None = None
+            if self._path.exists():
+                stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S_%f")
+                backup = self._path.with_name(
+                    f"{self._path.name}.bak-v{current}-{stamp}-{secrets.token_hex(3)}"
+                )
+                shutil.copy2(self._path, backup)
+            try:
+                for step in _MIGRATION_STEPS[current:self.SCHEMA_VERSION]:
+                    step(data)
+                data["schema_version"] = self.SCHEMA_VERSION
+                self._write(data)
+            except Exception:
+                if backup is not None:
+                    shutil.copy2(backup, self._path)  # restore pre-migration file
+                raise
 
     # ── migration ────────────────────────────────────────────────
 
@@ -777,25 +861,41 @@ class AdminStateFile:
 
     # ── auth ─────────────────────────────────────────────────────
 
-    def validate_login(
-        self, email: str, password: str
-    ) -> dict[str, Any] | None:
-        """Validate credentials.  Returns user info + token, or None."""
+    def get_or_create_csrf_secret(self) -> str:
+        """Stable server-only secret for CSRF token signing.
+
+        Generated once and persisted; never returned over the wire (unlike the
+        admin id, which appears in login/account responses).
+        """
+        secret = self._read().get("csrf_secret")
+        if secret:
+            return secret
+
+        def _apply(d: dict[str, Any]) -> str:
+            if d.get("csrf_secret"):
+                return d["csrf_secret"]
+            d["csrf_secret"] = secrets.token_hex(32)
+            return d["csrf_secret"]
+
+        return self._mutate(_apply)
+
+    def validate_login(self, email: str, password: str) -> dict[str, Any] | None:
+        """Validate credentials. Returns user info + raw token, or None."""
         data = self._read()
         admin = data.get("admin")
         if not admin or admin.get("email") != email:
             return None
-        if not _verify_password(
-            password, admin["password_hash"], admin["password_salt"]
-        ):
+        if not _verify_password(password, admin["password_hash"], admin["password_salt"]):
             return None
-        token = _make_token()
-        tokens = data.setdefault("active_tokens", [])
-        tokens.append(token)
-        data["active_tokens"] = tokens[-_MAX_TOKENS:]
-        self._write(data)
+        raw = _make_token()
+        with self._file_lock():
+            data = self._read()
+            tokens = data.setdefault("active_tokens", [])
+            tokens.append(_session_record(raw))
+            data["active_tokens"] = tokens[-_MAX_TOKENS:]
+            self._write(data)
         return {
-            "access_token": token,
+            "access_token": raw,
             "token_type": "bearer",
             "user": {
                 "id": admin["id"],
@@ -806,13 +906,27 @@ class AdminStateFile:
             },
         }
 
+    def _find_session(self, data: dict[str, Any], raw: str) -> dict[str, Any] | None:
+        h = _hash_token(raw)
+        for rec in data.get("active_tokens", []):
+            if isinstance(rec, dict) and hmac.compare_digest(rec.get("hash", ""), h):
+                return rec
+            # Legacy plaintext record (pre-v1 migration). run_migrations() is
+            # invoked at app startup (create_admin_serve_app), so this path is
+            # transient; constant-time compare is defense-in-depth.
+            if isinstance(rec, str) and hmac.compare_digest(rec, raw):
+                # No expiry on legacy tokens until migrated (intentional policy).
+                return {"hash": h, "expires_at": None}
+        return None
+
     def validate_token(self, token: str) -> bool:
-        data = self._read()
-        return token in data.get("active_tokens", [])
+        rec = self._find_session(self._read(), token)
+        return bool(rec and _record_is_live(rec))
 
     def get_user_by_token(self, token: str) -> dict[str, Any] | None:
         data = self._read()
-        if token not in data.get("active_tokens", []):
+        rec = self._find_session(data, token)
+        if not rec or not _record_is_live(rec):
             return None
         admin = data.get("admin", {})
         return {
@@ -823,19 +937,45 @@ class AdminStateFile:
             "role": admin.get("role", "admin"),
         }
 
-    def refresh_token(self, old_token: str) -> dict[str, Any] | None:
-        """Rotate a token.  Returns new auth payload or None."""
-        data = self._read()
-        tokens = data.get("active_tokens", [])
-        if old_token not in tokens:
+    def get_admin_user(self) -> dict[str, Any] | None:
+        """Return the (single) admin user dict, or None if setup is incomplete.
+
+        The current-user view for /auth/me and /api/v1/account, resolved from the
+        authenticated principal (set by AuthMiddleware) rather than by re-looking
+        up a session token — so API-token callers are treated consistently.
+        """
+        admin = self._read().get("admin")
+        if not admin:
             return None
-        new_token = _make_token()
-        tokens.append(new_token)
-        data["active_tokens"] = tokens[-_MAX_TOKENS:]
-        self._write(data)
+        return {
+            "id": admin.get("id", ""),
+            "email": admin.get("email", ""),
+            "display_name": admin.get("name", ""),
+            "avatar_url": None,
+            "role": admin.get("role", "admin"),
+        }
+
+    def refresh_token(self, old_token: str) -> dict[str, Any] | None:
+        """Rotate a token: append a NEW token and return it.
+
+        The old token intentionally stays valid until its own TTL expires — this
+        overlap supports multiple concurrent browsers and the e2e suite, which
+        fires many refreshes against a shared storageState. The list is bounded
+        by _MAX_TOKENS. Use revoke_session_token()/logout to hard-invalidate.
+        """
+        with self._file_lock():
+            data = self._read()
+            rec = self._find_session(data, old_token)
+            if not rec or not _record_is_live(rec):
+                return None
+            raw = _make_token()
+            tokens = data.get("active_tokens", [])
+            tokens.append(_session_record(raw))
+            data["active_tokens"] = tokens[-_MAX_TOKENS:]
+            self._write(data)
         admin = data.get("admin", {})
         return {
-            "access_token": new_token,
+            "access_token": raw,
             "token_type": "bearer",
             "user": {
                 "id": admin.get("id", ""),
@@ -846,7 +986,143 @@ class AdminStateFile:
             },
         }
 
+    def revoke_session_token(self, token: str) -> bool:
+        h = _hash_token(token)
+
+        def _apply(data: dict[str, Any]) -> bool:
+            before = len(data.get("active_tokens", []))
+            data["active_tokens"] = [
+                r for r in data.get("active_tokens", [])
+                if not (isinstance(r, dict) and r.get("hash") == h)
+                and not (isinstance(r, str) and r == token)
+            ]
+            return len(data["active_tokens"]) != before
+
+        return self._mutate(_apply)
+
+    # ── API tokens ───────────────────────────────────────────────
+
+    def create_api_token(self, *, name: str, scopes: list[str]) -> dict[str, Any]:
+        raw = f"sw_{secrets.token_urlsafe(32)}"
+        entry = {
+            "id": f"tok-{secrets.token_hex(6)}",
+            "name": name or "Unnamed",
+            "token_hash": _hash_token(raw),
+            "prefix": raw[:12],
+            "scopes": scopes or ["read"],
+            "created_at": _now_iso(),
+            "last_used": None,
+            "revoked": False,
+        }
+        self._mutate(lambda d: d.setdefault("api_tokens", []).append(entry))
+        return {**{k: v for k, v in entry.items() if k != "token_hash"}, "token": raw}
+
+    def list_api_tokens(self) -> list[dict[str, Any]]:
+        return [
+            {k: v for k, v in t.items() if k not in ("token_hash", "token")}
+            for t in self._read().get("api_tokens", [])
+        ]
+
+    def find_api_token(self, raw: str) -> dict[str, Any] | None:
+        h = _hash_token(raw)
+        for t in self._read().get("api_tokens", []):
+            if t.get("token_hash") and hmac.compare_digest(t.get("token_hash", ""), h) and not t.get("revoked"):
+                return {k: v for k, v in t.items() if k not in ("token_hash", "token")}
+        return None
+
+    def revoke_api_token(self, token_id: str) -> bool:
+        def _apply(d: dict[str, Any]) -> bool:
+            for t in d.get("api_tokens", []):
+                if t.get("id") == token_id:
+                    t["revoked"] = True
+                    return True
+            return False
+        return self._mutate(_apply)
+
+    def issue_session(self) -> dict[str, Any] | None:
+        """Issue a session for the configured admin WITHOUT a password check.
+
+        Loopback dev-trust bootstrap only. Stores only the hashed token; returns
+        the same payload shape as validate_login.
+        """
+        admin = self._read().get("admin")
+        if not admin:
+            return None
+        raw = _make_token()
+        with self._file_lock():
+            data = self._read()
+            tokens = data.setdefault("active_tokens", [])
+            tokens.append(_session_record(raw))
+            data["active_tokens"] = tokens[-_MAX_TOKENS:]
+            self._write(data)
+        return {
+            "access_token": raw,
+            "token_type": "bearer",
+            "user": {
+                "id": admin.get("id", ""),
+                "email": admin.get("email", ""),
+                "display_name": admin.get("name", ""),
+                "avatar_url": None,
+                "role": admin.get("role", "admin"),
+            },
+        }
+
+    def delete_api_token(self, token_id: str) -> bool:
+        def _apply(d: dict[str, Any]) -> bool:
+            before = len(d.get("api_tokens", []))
+            d["api_tokens"] = [t for t in d.get("api_tokens", []) if t.get("id") != token_id]
+            return len(d["api_tokens"]) != before
+        return self._mutate(_apply)
+
+    def update_admin_profile(self, *, display_name: str | None) -> dict[str, Any]:
+        def _apply(data: dict[str, Any]) -> dict[str, Any]:
+            admin = data.setdefault("admin", {})
+            if display_name:
+                admin["name"] = display_name
+            return {
+                "id": admin.get("id", ""),
+                "email": admin.get("email", ""),
+                "display_name": admin.get("name", ""),
+                "avatar_url": None,
+            }
+        return self._mutate(_apply)
+
+    def change_admin_password(self, current_password: str, new_password: str) -> bool:
+        """Verify the current password and set a new one, atomically under the lock.
+
+        Returns False if the current password is incorrect.
+        """
+        with self._file_lock():
+            data = self._read()
+            admin = data.get("admin", {})
+            if not _verify_password(current_password, admin.get("password_hash", ""),
+                                    admin.get("password_salt", "")):
+                return False
+            new_hash, new_salt = _hash_password(new_password)
+            admin["password_hash"] = new_hash
+            admin["password_salt"] = new_salt
+            self._write(data)
+            return True
+
     def reset(self) -> None:
         """Delete the state file (for testing)."""
         if self._path.exists():
             self._path.unlink()
+
+
+# ── migration steps registry ─────────────────────────────────────────
+# Index ``i`` transforms schema ``vi → v(i+1)``.
+
+
+def _migrate_v0_to_v1(data: dict[str, Any]) -> None:
+    """Hash legacy plaintext session + API tokens."""
+    sessions = data.get("active_tokens", [])
+    data["active_tokens"] = [
+        _session_record(t) if isinstance(t, str) else t for t in sessions
+    ]
+    for rec in data.get("api_tokens", []):
+        if "token" in rec:
+            rec["token_hash"] = _hash_token(rec.pop("token"))
+
+
+_MIGRATION_STEPS = [_migrate_v0_to_v1]

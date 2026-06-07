@@ -21,12 +21,17 @@ def admin_app(tmp_path):
     from sagewai.admin.state_file import AdminStateFile
 
     sf = AdminStateFile(path=tmp_path / "state.json")
-    return create_admin_serve_app(sf)
+    sf.complete_setup(org_name="Acme", admin_email="a@b.com", admin_password="pw123456")
+    return create_admin_serve_app(sf), sf
 
 
 @pytest.fixture
 def client(admin_app):
-    return TestClient(admin_app)
+    app, sf = admin_app
+    c = TestClient(app)
+    token = sf.validate_login("a@b.com", "pw123456")["access_token"]
+    c.headers.update({"Authorization": f"Bearer {token}"})
+    return c
 
 
 def test_pool_stats_route_returns_404_for_unknown_worker(client):

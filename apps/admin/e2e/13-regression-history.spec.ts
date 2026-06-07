@@ -20,8 +20,19 @@ import { test, expect, type Page } from '@playwright/test';
 
 const BACKEND = 'http://localhost:8000';
 
+// The backend enforces double-submit CSRF on cookie-authenticated mutations:
+// echo the readable `sagewai_csrf` cookie as the X-CSRF-Token header.
+async function csrfHeaders(page: Page): Promise<Record<string, string>> {
+  const cookies = await page.context().cookies();
+  const csrf = cookies.find((c) => c.name === 'sagewai_csrf')?.value;
+  return csrf ? { 'X-CSRF-Token': csrf } : {};
+}
+
 async function postJson(page: Page, path: string, body: unknown) {
-  const res = await page.request.post(`${BACKEND}${path}`, { data: body });
+  const res = await page.request.post(`${BACKEND}${path}`, {
+    data: body,
+    headers: await csrfHeaders(page),
+  });
   if (!res.ok()) {
     throw new Error(`POST ${path} → ${res.status()} ${await res.text()}`);
   }
@@ -29,7 +40,7 @@ async function postJson(page: Page, path: string, body: unknown) {
 }
 
 async function del(page: Page, path: string) {
-  await page.request.delete(`${BACKEND}${path}`);
+  await page.request.delete(`${BACKEND}${path}`, { headers: await csrfHeaders(page) });
 }
 
 // Every /workflows/run call returns its run_id in the workflow_started
@@ -109,6 +120,7 @@ test.describe('Regression — Bug 2: /playground/run persists an agent_run', () 
     // body so the `finally` block flushes the agent_run to disk.
     const runRes = await page.request.post(`${BACKEND}/playground/run`, {
       data: { agent_name: agentName, message: 'hello from regression suite' },
+      headers: await csrfHeaders(page),
     });
     await runRes.body();
 

@@ -21,7 +21,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from fastapi import APIRouter, FastAPI, HTTPException, status
+from fastapi import APIRouter, FastAPI, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from sagewai.sandbox.models import (
@@ -29,6 +29,13 @@ from sagewai.sandbox.models import (
     SandboxImageVariant,
     SandboxMode,
 )
+
+
+def _actor_label(request: Request) -> str:
+    """Audit actor from the authenticated principal, or 'unknown' when this
+    router is exercised in isolation (no AuthMiddleware in the test app)."""
+    principal = getattr(request.state, "principal", None)
+    return principal.actor_label if principal else "unknown"
 
 
 class SandboxRequirementsPayload(BaseModel):
@@ -143,11 +150,12 @@ async def get_project_defaults(slug: str) -> SandboxRequirementsResponse:
     response_model=SandboxRequirementsResponse,
 )
 async def put_project_defaults(
-    slug: str, payload: SandboxRequirementsPayload
+    slug: str, payload: SandboxRequirementsPayload, request: Request
 ) -> SandboxRequirementsResponse:
+    from sagewai.admin.audit import emit_audit
     from sagewai.admin.state_file import AdminStateFile
 
-    state = AdminStateFile()
+    state = request.app.state.sandbox_store or AdminStateFile()
     data = state._read()
     projects = data.setdefault("projects", [])
     target = None
@@ -166,6 +174,9 @@ async def put_project_defaults(
         "required_secret_scopes": payload.required_secret_scopes,
     }
     state._write(data)
+    emit_audit(state, event_type="sandbox.config.updated",
+               actor_label=_actor_label(request),
+               target=f"project:{slug}/sandbox-defaults")
     return _build_response(target["default_sandbox_requirements"])
 
 
@@ -173,10 +184,11 @@ async def put_project_defaults(
     "/projects/{slug}/sandbox-defaults",
     response_model=SandboxConfigDeleteResponse,
 )
-async def delete_project_defaults(slug: str) -> SandboxConfigDeleteResponse:
+async def delete_project_defaults(slug: str, request: Request) -> SandboxConfigDeleteResponse:
+    from sagewai.admin.audit import emit_audit
     from sagewai.admin.state_file import AdminStateFile
 
-    state = AdminStateFile()
+    state = request.app.state.sandbox_store or AdminStateFile()
     project = state.get_project(slug)
     if project is None or "default_sandbox_requirements" not in project:
         return SandboxConfigDeleteResponse(cleared=False)
@@ -191,6 +203,9 @@ async def delete_project_defaults(slug: str) -> SandboxConfigDeleteResponse:
     elif isinstance(projects, dict):
         projects.get(slug, {}).pop("default_sandbox_requirements", None)
     state._write(data)
+    emit_audit(state, event_type="sandbox.config.deleted",
+               actor_label=_actor_label(request),
+               target=f"project:{slug}/sandbox-defaults")
     return SandboxConfigDeleteResponse(cleared=True)
 
 
@@ -251,11 +266,12 @@ async def get_agent_overrides(name: str) -> SandboxRequirementsResponse:
     response_model=SandboxRequirementsResponse,
 )
 async def put_agent_overrides(
-    name: str, payload: SandboxRequirementsPayload
+    name: str, payload: SandboxRequirementsPayload, request: Request
 ) -> SandboxRequirementsResponse:
+    from sagewai.admin.audit import emit_audit
     from sagewai.admin.state_file import AdminStateFile
 
-    state = AdminStateFile()
+    state = request.app.state.sandbox_store or AdminStateFile()
     data = state._read()
     target = _get_or_create_agent(data, name)
     target["sandbox_requirements_override"] = {
@@ -265,6 +281,9 @@ async def put_agent_overrides(
         "required_secret_scopes": payload.required_secret_scopes,
     }
     state._write(data)
+    emit_audit(state, event_type="sandbox.config.updated",
+               actor_label=_actor_label(request),
+               target=f"agent:{name}/sandbox-requirements")
     return _build_response(target["sandbox_requirements_override"])
 
 
@@ -272,10 +291,11 @@ async def put_agent_overrides(
     "/agents/{name}/sandbox-requirements",
     response_model=SandboxConfigDeleteResponse,
 )
-async def delete_agent_overrides(name: str) -> SandboxConfigDeleteResponse:
+async def delete_agent_overrides(name: str, request: Request) -> SandboxConfigDeleteResponse:
+    from sagewai.admin.audit import emit_audit
     from sagewai.admin.state_file import AdminStateFile
 
-    state = AdminStateFile()
+    state = request.app.state.sandbox_store or AdminStateFile()
     agent = state.get_agent(name)
     if agent is None or "sandbox_requirements_override" not in agent:
         return SandboxConfigDeleteResponse(cleared=False)
@@ -289,6 +309,9 @@ async def delete_agent_overrides(name: str) -> SandboxConfigDeleteResponse:
     elif isinstance(agents, dict):
         agents.get(name, {}).pop("sandbox_requirements_override", None)
     state._write(data)
+    emit_audit(state, event_type="sandbox.config.deleted",
+               actor_label=_actor_label(request),
+               target=f"agent:{name}/sandbox-requirements")
     return SandboxConfigDeleteResponse(cleared=True)
 
 
