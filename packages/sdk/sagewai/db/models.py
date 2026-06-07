@@ -45,10 +45,12 @@ from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     Double,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     PrimaryKeyConstraint,
@@ -1290,3 +1292,177 @@ class PendingDirectiveApprovalModel(Base):
     decided_by: Mapped[str | None] = mapped_column(Text, nullable=True)
     operator_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# Multi-tenancy / RBAC (W0): org -> projects, users, memberships, invitations.
+# Tenancy model: one ORG (shared umbrella) -> many isolated PROJECTS.
+# Tenant-scoped resources carry project_id (NULL = org-shared). The hard
+# isolation boundary is the project; cross-project access must 404.
+# See sagewai/atelier docs/superpowers/specs/2026-06-07-multitenancy-rbac-w0-rfc.md
+# ---------------------------------------------------------------------------
+
+# Reused across membership + invitation: role namespace must match project_id
+# nullability (org:* <-> org-level, project:* <-> project-level).
+_ROLE_SCOPE_CHECK = (
+    "(project_id IS NULL AND role IN ('org:owner','org:admin','org:member')) OR "
+    "(project_id IS NOT NULL AND role IN ('project:admin','project:member','project:viewer'))"
+)
+
+
+class OrgModel(Base):
+    """The single organisation (company / install) — the shared umbrella."""
+
+    __tablename__ = "org"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    slug: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    contact_email: Mapped[str | None] = mapped_column(Text, nullable=True)
+    timezone: Mapped[str] = mapped_column(Text, nullable=False, default="UTC")
+    settings: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+    master_key_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class AccountModel(Base):
+    """A user account belonging to the org (table ``user_account`` — ``user``
+    is reserved in PostgreSQL; class is ``AccountModel`` to avoid colliding
+    with the legacy unused ``UserModel``/``users`` scaffold from migration 001)."""
+
+    __tablename__ = "user_account"
+    __table_args__ = (
+        Index("ux_user_account_org_email", "org_id", "email", unique=True),
+        # Composite-FK target for membership/invitation/session (org_id, *_id).
+        UniqueConstraint("org_id", "id", name="uq_user_account_org_id"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    org_id: Mapped[str] = mapped_column(Text, ForeignKey("org.id"), nullable=False)
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    password_salt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    oidc_sub: Mapped[str | None] = mapped_column(Text, nullable=True)
+    oidc_provider: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ProjectModel(Base):
+    """An isolated project (a.k.a. department / product) under the org."""
+
+    __tablename__ = "project"
+    __table_args__ = (
+        Index("ux_project_org_slug", "org_id", "slug", unique=True),
+        UniqueConstraint("org_id", "id", name="uq_project_org_id"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    org_id: Mapped[str] = mapped_column(Text, ForeignKey("org.id"), nullable=False)
+    slug: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    environment: Mapped[str] = mapped_column(Text, nullable=False, default="production")
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
+    settings: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+    data_key_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class MembershipModel(Base):
+    """user <-> (org | project) role. project_id NULL = org-level membership."""
+
+    __tablename__ = "membership"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "user_id"], ["user_account.org_id", "user_account.id"], ondelete="CASCADE"
+        ),
+        # MATCH SIMPLE (default): NULL project_id rows (org-level) are exempt.
+        ForeignKeyConstraint(
+            ["org_id", "project_id"], ["project.org_id", "project.id"], ondelete="CASCADE"
+        ),
+        # One org-level membership per user; one membership per (user, project).
+        Index(
+            "ux_membership_org",
+            "user_id",
+            "org_id",
+            unique=True,
+            sqlite_where=text("project_id IS NULL"),
+            postgresql_where=text("project_id IS NULL"),
+        ),
+        Index(
+            "ux_membership_proj",
+            "user_id",
+            "org_id",
+            "project_id",
+            unique=True,
+            sqlite_where=text("project_id IS NOT NULL"),
+            postgresql_where=text("project_id IS NOT NULL"),
+        ),
+        CheckConstraint(_ROLE_SCOPE_CHECK, name="ck_membership_role_scope"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    org_id: Mapped[str] = mapped_column(Text, nullable=False)
+    project_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class OrgInvitationModel(Base):
+    """A pending invitation to join the org (project_id NULL) or a project.
+
+    Class is ``OrgInvitationModel`` to avoid colliding with the legacy unused
+    ``InvitationModel``/``invitations`` scaffold from migration 001."""
+
+    __tablename__ = "invitation"
+    __table_args__ = (
+        ForeignKeyConstraint(["org_id", "invited_by"], ["user_account.org_id", "user_account.id"]),
+        ForeignKeyConstraint(["org_id", "project_id"], ["project.org_id", "project.id"]),
+        Index("ux_invitation_token_hash", "token_hash", unique=True),
+        CheckConstraint(_ROLE_SCOPE_CHECK, name="ck_invitation_role_scope"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    org_id: Mapped[str] = mapped_column(Text, nullable=False)
+    project_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    invited_by: Mapped[str] = mapped_column(Text, nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class UserSessionModel(Base):
+    """A per-user auth session (token hashed at rest), for multi-tenant login."""
+
+    __tablename__ = "user_session"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "user_id"], ["user_account.org_id", "user_account.id"], ondelete="CASCADE"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    org_id: Mapped[str] = mapped_column(Text, nullable=False)
+    user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
