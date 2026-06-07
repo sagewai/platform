@@ -1,0 +1,70 @@
+name: ci-backend
+
+# Builds apps/backend/Dockerfile on every PR that touches it. Base-image bumps
+# (e.g. the Dependabot `python:3.13-slim` digest bumps in the Dockerfile)
+# previously merged with no CI that actually built the image — the apt layers,
+# COPY/entrypoint, and PyPI wheel resolution for the image's compiled deps
+# (pydantic-core, the postgres driver, …) on the new base were never exercised.
+# This builds amd64 and then imports the FastAPI server module *inside* the
+# built image, which catches the failure a base bump can silently introduce:
+# a wheel that builds but won't import on the new glibc/manylinux.
+#
+# Scope: watches apps/backend/** only. Dependency-pin bumps in
+# packages/sdk/pyproject.toml that change what the image installs are not
+# watched here — widen the paths below if you want every dep bump to rebuild
+# the backend image too.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/backend/**'
+      - '.github/workflows/ci-backend.yml'
+  pull_request:
+    paths:
+      - 'apps/backend/**'
+      - '.github/workflows/ci-backend.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-backend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      # The backend Dockerfile expects a pre-built SDK wheel in ./dist/
+      # (it falls back to PyPI otherwise). Build it from the PR's tree so the
+      # image exercises this PR's code — mirrors release-backend.yml.
+      - name: Build sdk wheel into backend build context
+        run: uv build --package sagewai --out-dir apps/backend/dist
+
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
+
+      # amd64 + load so the smoke step can `docker run` the image. The release
+      # build (release-backend.yml) is multi-arch; arm64 cross-build under QEMU
+      # is too slow for a per-PR gate, so this validates amd64 build + import.
+      - name: Build backend image (amd64, no push)
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: apps/backend
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: sagewai-backend:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Import the FastAPI server module the image runs — proves the compiled
+      # deps load on the new base. No DB/ports/boot needed.
+      - name: Smoke test — import the server module in the built image
+        run: |
+          docker run --rm --entrypoint python sagewai-backend:ci \
+            -c "import sagewai.admin.serve; print('backend image imports OK')"

@@ -22,6 +22,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     strategy:
       matrix:
         python-version: ['3.10', '3.13']
@@ -35,20 +36,25 @@ jobs:
       - run: uv run --package sagewai pytest packages/sdk/tests/ -m "not integration" -o "addopts="
 
   lint:
+    # Advisory only: the SDK isn't ruff-clean yet (~360 findings tracked
+    # separately), so this surfaces lint drift without gating the merge.
+    # Runs ruff standalone via `uvx` (no `uv sync`) so an advisory check
+    # doesn't pay for a full all-packages install. ruff is pinned for
+    # reproducibility; bump it deliberately when the cleanup lands. mypy
+    # was dropped — it was also continue-on-error (never gated) and needed
+    # the heavy install to say anything useful.
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
-        with:
-          enable-cache: true
-      - run: uv sync --all-packages
-      - run: uv run --with ruff ruff check packages/sdk/sagewai/
-        continue-on-error: true
-      - run: uv run --with mypy mypy packages/sdk/sagewai/
+      - name: Ruff (advisory)
+        run: uvx ruff@0.15.16 check packages/sdk/sagewai/
         continue-on-error: true
 
   audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
@@ -68,6 +74,7 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0

@@ -16,6 +16,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-sdk-k8s-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   k8s-tests:
     if: github.event_name == 'schedule' || contains(github.event.pull_request.labels.*.name, 'kubernetes-tests')
@@ -26,9 +30,6 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
-      # NOTE: helm/kind-action SHA needs verification before merge — pin to a
-      # specific release SHA. Use:
-      #   gh api repos/helm/kind-action/git/refs/tags/v1.10.0 | jq -r .object.sha
       - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
           version: v0.23.0
