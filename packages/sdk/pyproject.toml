@@ -137,7 +137,7 @@ sandbox = [
     "aiodocker==0.27.0",
 ]
 kubernetes = [
-    "kubernetes_asyncio==35.0.1",
+    "kubernetes_asyncio==36.1.0",
 ]
 keychain = [
     "keyring==25.7.0",
@@ -163,7 +163,7 @@ test = [
     "prometheus_client>=0.20.0",
     "boto3>=1.43.24",
     "google-cloud-storage>=3.11.0",
-    "kubernetes-asyncio==35.0.1",
+    "kubernetes-asyncio==36.1.0",
     "hvac==2.4.0",
     "respx==0.23.1",
     "aiocoap==0.4.17",
