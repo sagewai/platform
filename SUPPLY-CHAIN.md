@@ -150,6 +150,8 @@ using `gh attestation verify`.
 | 2026-05-30 | idna | 3.11 → 3.17 | CVE-2026-45409 | Transitive bump via `uv lock --upgrade-package` |
 | 2026-05-30 | lxml | 6.0.3 → 6.1.1 | PYSEC-2026-87 (XML parsing) | Transitive bump via `uv lock --upgrade-package` |
 | 2026-05-30 | mako | 1.3.10 → 1.3.12 | CVE-2026-44307 | Transitive bump via `uv lock --upgrade-package` |
+| 2026-06-07 | pyjwt | 2.12.1 → 2.13.0 | PYSEC-2026-175/177/178/179 (4 CVEs in the JWT/auth-token path) | Bumped base-dep pin; re-locked; auth/jwt/gateway/oauth suites green on the new version |
+| 2026-06-07 | aiohttp | 3.13.4 → 3.14.0 | CVE-2026-34993, CVE-2026-47265 | Transitive bump via `uv lock --upgrade-package aiohttp` (parents: litellm/aiodocker/kubernetes-asyncio); full suite green |
 
 ## Tools
 
