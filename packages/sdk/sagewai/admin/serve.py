@@ -480,6 +480,15 @@ def create_admin_serve_app(
     async def _on_permission_denied(request: Request, exc: PermissionDeniedError) -> JSONResponse:
         return JSONResponse({"detail": "Forbidden"}, status_code=403)
 
+    # W8 fail-closed: a sensitive write whose durable audit append failed is not
+    # reported as success (503; idempotent retry reconciles).
+    @app.exception_handler(_AuditUnavailableError)
+    async def _on_audit_unavailable(request: Request, exc: _AuditUnavailableError) -> JSONResponse:
+        return JSONResponse(
+            {"detail": "Audit log unavailable; operation not recorded — please retry"},
+            status_code=503,
+        )
+
     # CORS — env-driven allowlist (default: the local admin dev server, which
     # runs on port 3008). The admin UI calls the backend cross-origin with
     # credentials, so the origin must be allowlisted (not "*", which is unsafe
@@ -919,6 +928,7 @@ def create_admin_serve_app(
         elif pid:
             body["project_id"] = pid
         result = sf.upsert_provider(body)
+        await _emit_audit(request, "provider.upsert", target_type="provider", target_id=result.get("id", ""))
         logger.info("Provider configured: %s", body.get("provider_name", ""),
                      extra={"event": "provider.configured", "provider": body.get("provider_name", "")})
         return JSONResponse({"id": result.get("id", "")})
@@ -961,6 +971,7 @@ def create_admin_serve_app(
                 return JSONResponse({"detail": "Not found"}, status_code=404)
             _require_resource_write(request)
         if sf.delete_provider(provider_id):
+            await _emit_audit(request, "provider.delete", target_type="provider", target_id=provider_id)
             return JSONResponse({"status": "ok"})
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
@@ -983,6 +994,7 @@ def create_admin_serve_app(
             pid,
             extra={"event": "provider.default", "provider": result.get("provider_name", "")},
         )
+        await _emit_audit(request, "provider.set_default", target_type="provider", target_id=provider_id)
         return JSONResponse({"status": "ok", "id": result.get("id"), "default": True})
 
     @app.get("/api/v1/providers/ollama/models")
@@ -1056,6 +1068,7 @@ def create_admin_serve_app(
         _require_resource_write(request)
         pid = _project_scope(request)
         agent = sf.create_agent(body, project_id=_owner(pid))
+        await _emit_audit(request, "agent.create", target_type="agent", target_id=body.get("name", ""))
         logger.info("Agent created: %s model=%s strategy=%s",
                      body["name"], body.get("model", ""), body.get("strategy", ""),
                      extra={"event": "agent.created", "agent_name": body["name"],
@@ -1090,6 +1103,7 @@ def create_admin_serve_app(
         _require_resource_write(request)
         pid = _project_scope(request)
         if sf.delete_agent(name, project_id=pid):
+            await _emit_audit(request, "agent.delete", target_type="agent", target_id=name)
             return JSONResponse({"status": "ok"})
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
@@ -1262,6 +1276,7 @@ def create_admin_serve_app(
         def _apply(d):
             d.setdefault("prompt_logs", []).append(entry)
         sf.mutate(_apply)
+        await _emit_audit(request, "prompt_log.create", target_type="prompt_log", target_id=log_id)
         return JSONResponse({"log_id": log_id}, status_code=201)
 
     @app.get("/api/v1/prompts/logs/{log_id}")
@@ -1290,6 +1305,7 @@ def create_admin_serve_app(
             return None
         result = sf.mutate(_apply)
         if result is not None:
+            await _emit_audit(request, "prompt_log.update", target_type="prompt_log", target_id=log_id)
             return JSONResponse(result)
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
@@ -1312,6 +1328,8 @@ def create_admin_serve_app(
         sf.mutate(_apply)
         if _multi_ctx(request) is not None and not state["hit"]:
             return JSONResponse({"detail": "Not found"}, status_code=404)
+        if state["hit"]:
+            await _emit_audit(request, "prompt_log.delete", target_type="prompt_log", target_id=log_id)
         return JSONResponse({"status": "ok"})
 
     @app.post("/api/v1/prompts/replay")
@@ -3284,6 +3302,62 @@ def _in_write_scope(item_project_id: str | None, request: Request) -> bool:
     if ctx.project_id is None:
         return item_project_id in (None, "")
     return item_project_id == ctx.project_id
+
+
+# Durable W8 audit is emitted for the tenant-scoped resource routes this
+# initiative hardened: provider upsert/delete/set-default, agent create/delete,
+# prompt-log create/update/delete. Other sensitive mutators (org/project
+# settings, agent rename/run, workflow registry/run approvals, budget/guardrail,
+# API-token CRUD, fleet approvals/enrollment-keys, connector/notification/trigger
+# writes, memory ingest) still use the foundation's file audit — extending
+# durable per-tenant audit to those is the explicit W8-coverage follow-up. This
+# PR's durable-audit scope is intentionally the list above, not "all writes".
+class _AuditUnavailableError(Exception):
+    """Durable audit could not be recorded — the write fails closed (HTTP 503)."""
+
+
+async def _emit_audit(
+    request: Request,
+    action: str,
+    *,
+    target_type: str | None = None,
+    target_id: str | None = None,
+    metadata: dict | None = None,
+) -> None:
+    """Append a durable, per-tenant, hash-chained audit event for a sensitive
+    action (multi-tenant only; W8). **Fail-closed:** in multi-tenant mode a
+    sensitive write is not reported as success unless its audit event is durably
+    recorded — an append failure raises ``_AuditUnavailableError`` (-> HTTP 503)
+    so the caller retries (provider/agent/log mutations are idempotent). No-op in
+    single-org mode. Callers emit *after* the mutation, so on failure the row may
+    be persisted but the operation is reported failed; an idempotent retry
+    reconciles it (mutation no-op + audit append)."""
+    ctx = _multi_ctx(request)
+    if ctx is None:
+        return
+    store = getattr(getattr(request.app, "state", None), "tenant_audit", None)
+    if store is None:
+        from sagewai.admin.tenant_audit import TenantAuditStore
+
+        store = TenantAuditStore()
+        request.app.state.tenant_audit = store  # cache for subsequent emits
+    try:
+        await store.append(
+            ctx.org_id,
+            ctx.project_id,
+            action,
+            actor_user_id=ctx.actor.id,
+            target_type=target_type,
+            target_id=target_id,
+            metadata=metadata,
+        )
+    except Exception as exc:
+        logger.error(
+            "durable audit append failed for %s — failing the write closed",
+            action,
+            exc_info=True,
+        )
+        raise _AuditUnavailableError(action) from exc
 
 
 def _require_resource_write(request: Request) -> None:

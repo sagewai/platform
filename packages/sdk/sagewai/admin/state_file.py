@@ -969,6 +969,11 @@ class AdminStateFile:
         within the given *project_id* scope. Returns the updated record,
         or ``None`` if no matching provider exists.
         """
+        # Org-shared scope is stored as project_id None; normalize the sentinel so
+        # the lookup AND the default-flag update below operate on the same rows
+        # (otherwise an org-shared default lookup succeeds but never sets default).
+        if project_id == SHARED_ONLY:
+            project_id = None
         data = self._read()
         self._migrate(data)
         providers = data.get("providers", [])
@@ -977,10 +982,7 @@ class AdminStateFile:
                 p
                 for p in providers
                 if (p.get("id") == provider_id or p.get("provider_name") == provider_id)
-                and (
-                    p.get("project_id") == project_id
-                    or (project_id == SHARED_ONLY and p.get("project_id") in (None, ""))
-                )
+                and p.get("project_id") == project_id
             ),
             None,
         )

@@ -39,3 +39,15 @@ def test_delete_agent_shared_only_does_not_span_projects(tmp_path):
     # Project-scope delete removes only that project's copy.
     assert sf.delete_agent("same", project_id="pA") is True
     assert {a.get("project_id") for a in sf.list_agents(None)} == {"pB"}
+
+
+def test_set_default_provider_shared_only_actually_sets_flag(tmp_path):
+    # Org-shared default must really persist default=True (the sentinel is
+    # normalized to the stored None scope for the update, not just the lookup).
+    sf = AdminStateFile(path=tmp_path / "p.json")
+    sf.upsert_provider({"provider_name": "openai", "config": {}})  # org-shared
+    result = sf.set_default_provider("openai", project_id=SHARED_ONLY)
+    assert result is not None
+    assert result["default"] is True
+    persisted = sf.list_providers(SHARED_ONLY)
+    assert any(p.get("provider_name") == "openai" and p.get("default") for p in persisted)

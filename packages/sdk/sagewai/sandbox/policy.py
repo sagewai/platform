@@ -19,5 +19,14 @@ def host_exec_allowed() -> bool:
 
     Default DENY everywhere; opt in with SAGEWAI_ALLOW_HOST_EXEC=1. This protects
     any deployment (local or container) that is exposed, not just the published image.
+
+    **Multi-tenant mode forces it OFF (W7):** host-backed execution is impossible
+    for tenants, regardless of SAGEWAI_ALLOW_HOST_EXEC — a tenant must never reach
+    host bash / NullBackend / stdio MCP. The opt-in remains only for the trusted
+    single-org self-hosted operator.
     """
+    from sagewai.admin.tenancy import is_multi_tenant
+
+    if is_multi_tenant():
+        return False
     return os.environ.get("SAGEWAI_ALLOW_HOST_EXEC", "") in {"1", "true"}
