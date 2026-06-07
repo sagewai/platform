@@ -16,11 +16,15 @@ import pytest
 from sagewai.admin.authz import PermissionDeniedError
 from sagewai.admin.serve import (
     _emit_audit,
+    _enforce_run_quota,
     _in_read_scope,
     _in_write_scope,
     _owner,
     _project_scope,
+    _ProjectRunThrottle,
+    _QuotaExceededError,
     _require_resource_write,
+    _RunProjectRequiredError,
 )
 from sagewai.admin.state_file import SHARED_ONLY
 from sagewai.admin.tenancy import RequestContext, UserRef
@@ -179,3 +183,51 @@ async def test_emit_audit_fails_closed_when_append_errors():
     req = _req_with_audit(_ctx("pA", {"project:member"}), _Boom())
     with pytest.raises(_AuditUnavailableError):
         await _emit_audit(req, "agent.create", target_id="x")
+
+
+# --- W7b per-project run-rate quota ---
+
+
+def _req_with_throttle(ctx, throttle):
+    r = _req(ctx=ctx)
+    r.app = types.SimpleNamespace(state=types.SimpleNamespace(run_throttle=throttle))
+    return r
+
+
+def test_project_run_throttle_caps_per_key_and_unlimited():
+    t = _ProjectRunThrottle(limit=2, window=60)
+    assert t.allow("k") and t.allow("k")  # first two allowed
+    assert not t.allow("k")  # third over the cap
+    assert t.allow("other")  # a different project is independent
+    unlimited = _ProjectRunThrottle(limit=0, window=60)
+    assert all(unlimited.allow("k") for _ in range(10))  # limit<=0 disables
+
+
+def test_enforce_run_quota_raises_over_limit_in_multi():
+    t = _ProjectRunThrottle(limit=1, window=60)
+    req = _req_with_throttle(_ctx("pA", {"project:member"}), t)
+    _enforce_run_quota(req)  # first run allowed
+    with pytest.raises(_QuotaExceededError):
+        _enforce_run_quota(req)  # second exceeds the project's rate
+
+
+def test_enforce_run_quota_noop_in_single_mode():
+    t = _ProjectRunThrottle(limit=1, window=60)
+    req = _req_with_throttle(None, t)
+    for _ in range(5):
+        _enforce_run_quota(req)  # single mode: no per-project quota
+
+
+def test_run_quota_requires_project_for_non_admin_org_scope():
+    # An org:member omitting X-Project-ID (org scope) must select a project to run,
+    # so org-shared execution is charged to their project bucket (no org-bucket bypass).
+    t = _ProjectRunThrottle(limit=10, window=60)
+    req = _req_with_throttle(_ctx(None, {"org:member"}), t)
+    with pytest.raises(_RunProjectRequiredError):
+        _enforce_run_quota(req)
+
+
+def test_run_quota_allows_org_admin_in_org_scope():
+    # Org owners/admins may run in org scope (their own bucket); not the bypass vector.
+    t = _ProjectRunThrottle(limit=10, window=60)
+    _enforce_run_quota(_req_with_throttle(_ctx(None, {"org:admin"}), t))  # no raise

@@ -24,6 +24,8 @@ import datetime
 import json
 import logging
 import os
+import time
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -487,6 +489,24 @@ def create_admin_serve_app(
         return JSONResponse(
             {"detail": "Audit log unavailable; operation not recorded — please retry"},
             status_code=503,
+        )
+
+    # W7 per-project run-rate quota (multi-tenant): one tenant can't starve others.
+    app.state.run_throttle = _ProjectRunThrottle(_run_quota_limit(), _run_quota_window())
+
+    @app.exception_handler(_QuotaExceededError)
+    async def _on_quota_exceeded(request: Request, exc: _QuotaExceededError) -> JSONResponse:
+        return JSONResponse(
+            {"detail": "Project quota exceeded — slow down"},
+            status_code=429,
+            headers={"Retry-After": str(int(_run_quota_window()))},
+        )
+
+    @app.exception_handler(_RunProjectRequiredError)
+    async def _on_run_project_required(request: Request, exc: _RunProjectRequiredError) -> JSONResponse:
+        return JSONResponse(
+            {"detail": "Select a project (X-Project-ID) to run"},
+            status_code=409,
         )
 
     # CORS — env-driven allowlist (default: the local admin dev server, which
@@ -1130,6 +1150,7 @@ def create_admin_serve_app(
         agent_name = body.get("agent_name") or body.get("name") or ""
         message = body.get("message", "")
         pid = _project_scope(request)
+        _enforce_run_quota(request)
         agent_spec = sf.get_agent(agent_name, project_id=pid)
         run_id = f"run-{_run_sec.token_hex(6)}"
         _run_t0 = _run_time.monotonic()
@@ -1653,6 +1674,7 @@ def create_admin_serve_app(
 
         body = await request.json()
         pid = _project_scope(request)
+        _enforce_run_quota(request)
         run_id = f"wf-{_sec.token_hex(6)}"
         yaml_str = body.get("yaml", body.get("yaml_content", ""))
         message = body.get("message", body.get("input", ""))
@@ -1972,6 +1994,7 @@ def create_admin_serve_app(
 
         body = await request.json()
         pid = _project_scope(request)
+        _enforce_run_quota(request)
 
         workflow_name = body.get("workflow_name")
         if not workflow_name:
@@ -3358,6 +3381,85 @@ async def _emit_audit(
             exc_info=True,
         )
         raise _AuditUnavailableError(action) from exc
+
+
+class _QuotaExceededError(Exception):
+    """A per-project resource quota was exceeded — HTTP 429."""
+
+
+class _RunProjectRequiredError(Exception):
+    """A non-admin tried to start a run without a concrete project — HTTP 409.
+
+    Forcing run-start into a project (rather than the shared org scope) ensures
+    org-shared execution is charged to the actor's project quota bucket, closing
+    the org-bucket bypass."""
+
+
+class _ProjectRunThrottle:
+    """In-memory per-project run-start rate limiter (single-process by contract,
+    like the foundation login throttle): caps run-starts per sliding window so one
+    project cannot starve others. ``limit <= 0`` disables it (always allow)."""
+
+    def __init__(self, limit: int, window: float) -> None:
+        self.limit = limit
+        self.window = window
+        self._hits: dict[Any, deque] = defaultdict(deque)
+
+    def allow(self, key: Any) -> bool:
+        if self.limit <= 0:
+            return True
+        now = time.monotonic()
+        dq = self._hits[key]
+        while dq and dq[0] < now - self.window:
+            dq.popleft()
+        if len(dq) >= self.limit:
+            return False
+        dq.append(now)
+        return True
+
+
+def _run_quota_limit() -> int:
+    try:
+        return int(os.environ.get("SAGEWAI_PROJECT_RUN_RATE", "0"))
+    except ValueError:
+        return 0
+
+
+def _run_quota_window() -> float:
+    try:
+        return float(os.environ.get("SAGEWAI_PROJECT_RUN_WINDOW", "60"))
+    except ValueError:
+        return 60.0
+
+
+def _enforce_run_quota(request: Request) -> None:
+    """Per-project run-start rate quota (multi-tenant only; W7).
+
+    Non-admin run-start requires a concrete project context: an org:member who
+    omits X-Project-ID would otherwise land in the shared ``(org, None)`` bucket
+    and bypass their per-project rate, so we require a selected project and charge
+    org-shared execution to *that* project's bucket. Org owners/admins may run in
+    org scope (their own bucket).
+
+    **Scope:** the limiter is in-memory / single-process (like the foundation
+    login throttle) — a single-process fairness guardrail. The durable,
+    cross-replica distributed quota is W6 ("distributed rate limiting"), not this
+    PR; a multi-replica deployment needs that to fully close W7 fairness.
+
+    Raises ``_RunProjectRequiredError`` (-> 409) when a non-admin omits the
+    project, and ``_QuotaExceededError`` (-> 429) when the rate is exceeded.
+    No-op in single-org mode or when the rate is unset.
+    """
+    ctx = _multi_ctx(request)
+    if ctx is None:
+        return
+    if ctx.project_id is None and not ctx.is_org_admin:
+        raise _RunProjectRequiredError()
+    throttle = getattr(getattr(request.app, "state", None), "run_throttle", None)
+    if throttle is None:
+        return
+    if not throttle.allow((ctx.org_id, ctx.project_id)):
+        raise _QuotaExceededError("project run-rate quota exceeded")
 
 
 def _require_resource_write(request: Request) -> None:
