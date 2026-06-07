@@ -1466,3 +1466,131 @@ class UserSessionModel(Base):
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AuditEventModel(Base):
+    """A durable, hash-chained, per-tenant audit event (W8).
+
+    Each row belongs to a **per-``(org_id, project_id)`` append-only hash
+    chain** (``project_id IS NULL`` is the org-level chain). ``seq`` is the
+    event's position within its chain; ``hash = sha256(prev_hash ||
+    canonical_json(event))`` links it to its predecessor, making the chain
+    end-to-end tamper-evident (see :mod:`sagewai.admin.tenant_audit`).
+
+    **Audit does NOT inherit** the org-shared rule (W0 RFC §3): a project chain
+    read returns only ``project_id = P`` and is never combined with the org-level
+    ``project_id IS NULL`` chain — each tenant has an independent log.
+
+    Integrity at the DB (RFC §6):
+    - composite FK ``(org_id, project_id) -> project(org_id, id)`` (MATCH SIMPLE,
+      so org-level ``NULL``-project rows are exempt) keeps a row from claiming one
+      org while pointing at another org's project;
+    - NULL-safe **partial unique** sequence indexes so no two events share a
+      ``seq`` within a chain (and a chain can't fork or duplicate a position):
+      ``ux_audit_seq_proj`` over ``(org_id, project_id, seq)`` for project chains
+      and ``ux_audit_seq_org`` over ``(org_id, seq)`` for the org-level chain.
+
+    Append-only: rows are only ever inserted (no UPDATE/DELETE in the emitter).
+    PK is ``id`` (BigInteger autoincrement — BIGSERIAL on Postgres).
+    """
+
+    __tablename__ = "audit_event"
+    __table_args__ = (
+        # Composite FK: a project event must reference a project in its own org.
+        # MATCH SIMPLE (default): NULL project_id (org-level) rows are exempt.
+        ForeignKeyConstraint(["org_id", "project_id"], ["project.org_id", "project.id"]),
+        # One seq per (org, project) chain — partial so NULL project_id rows go to
+        # the org-level index instead (Postgres treats NULL as distinct, so a plain
+        # unique would let the org chain duplicate a seq).
+        Index(
+            "ux_audit_seq_proj",
+            "org_id",
+            "project_id",
+            "seq",
+            unique=True,
+            sqlite_where=text("project_id IS NOT NULL"),
+            postgresql_where=text("project_id IS NOT NULL"),
+        ),
+        Index(
+            "ux_audit_seq_org",
+            "org_id",
+            "seq",
+            unique=True,
+            sqlite_where=text("project_id IS NULL"),
+            postgresql_where=text("project_id IS NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    org_id: Mapped[str] = mapped_column(Text, ForeignKey("org.id"), nullable=False)
+    # NULL = the org-level chain; set = a project chain.
+    project_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Real acting user; nullable for system-originated events.
+    actor_user_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    target_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    target_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # JSONB on Postgres, JSON/TEXT on SQLite. "metadata" is reserved on the
+    # declarative Base, so the attribute is metadata_ -> column "metadata".
+    metadata_: Mapped[dict] = mapped_column("metadata", JSONType, nullable=False, default=dict)
+    # Position within this row's (org, project) chain (starts at 1).
+    seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    prev_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hash: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class AuditChainHeadModel(Base):
+    """The tip checkpoint for one ``(org_id, project_id)`` audit chain (W8).
+
+    Exactly one row per chain (``project_id IS NULL`` = the org-level chain),
+    holding the **last assigned ``seq``** and the **tip ``hash``**. It is the
+    authority on a chain's expected length and tip, which gives the emitter two
+    properties an in-table hash chain alone cannot:
+
+    - **Tail-deletion detection.** Deleting the last event (or the whole chain)
+      leaves no gap in ``audit_event``, so a re-walk of the surviving rows looks
+      valid. ``verify_chain`` compares the walked tip against this checkpoint and
+      flags a shorter-than-expected chain.
+    - **Append serialisation.** ``append`` advances this row under optimistic
+      concurrency (``UPDATE ... WHERE seq = <observed>``); together with the
+      per-chain unique ``seq`` index on ``audit_event`` it lets concurrent
+      writers to the same chain retry instead of losing events.
+
+    ``id`` is a surrogate PK; one-head-per-chain is enforced by NULL-safe partial
+    unique indexes (``ux_audit_head_proj`` / ``ux_audit_head_org``) mirroring the
+    ``audit_event`` sequence indexes. Composite FK keeps a head from pointing at
+    another org's project.
+    """
+
+    __tablename__ = "audit_chain_head"
+    __table_args__ = (
+        ForeignKeyConstraint(["org_id", "project_id"], ["project.org_id", "project.id"]),
+        Index(
+            "ux_audit_head_proj",
+            "org_id",
+            "project_id",
+            unique=True,
+            sqlite_where=text("project_id IS NOT NULL"),
+            postgresql_where=text("project_id IS NOT NULL"),
+        ),
+        Index(
+            "ux_audit_head_org",
+            "org_id",
+            unique=True,
+            sqlite_where=text("project_id IS NULL"),
+            postgresql_where=text("project_id IS NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    org_id: Mapped[str] = mapped_column(Text, ForeignKey("org.id"), nullable=False)
+    project_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Last assigned seq and the tip hash for this chain.
+    seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    hash: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
