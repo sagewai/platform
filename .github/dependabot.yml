@@ -28,11 +28,14 @@ updates:
           - "minor"
           - "patch"
     ignore:
-      # transformers >=5.2.0 breaks our pinned gliner==0.2.26, which caps
-      # transformers <5.2.0. Re-enable once gliner relaxes its upper bound.
+      # transformers 5.x does not resolve: docling-ibm-models (via
+      # docling-slim[standard]) requires an older transformers, and
+      # gliner==0.2.26 caps transformers <5.2.0. Both 5.9.0 (#393) and
+      # 5.1.0 (#409) failed universal resolution. Block all of 5.x until
+      # docling and gliner support it.
       - dependency-name: "transformers"
         versions:
-          - ">=5.2.0"
+          - ">=5.0.0"
       # Hold pymilvus on the stable 2.6.x line: pymilvus 3.x targets the
       # Milvus 3.0 server, but our docker-compose pins the Milvus server to
       # v2.6.17. Allow minor/patch, block majors until stable Milvus 3 ships.
@@ -141,6 +144,14 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      # Python 3.14 isn't in our CI test matrix (3.10/3.13) and no
+      # docker-build/test exercises it (#386, #407). Block 3.14+ so it stops
+      # re-proposing monthly; a future 3.13 bump (tested) is still allowed.
+      # Lift this once 3.14 is added to CI.
+      - dependency-name: "python"
+        versions:
+          - ">=3.14"
 
   # Admin Docker image
   - package-ecosystem: "docker"
