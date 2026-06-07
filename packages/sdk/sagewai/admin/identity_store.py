@@ -92,6 +92,19 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _project_record(row: Any) -> dict[str, Any]:
+    """A project dict safe to forward to callers — wrapped key material removed.
+
+    ``data_key_ref`` holds the ``fernet:``-wrapped per-project data key; per the
+    W0 secret-isolation gate, responses must never carry ``fernet:`` ciphertext,
+    so it is omitted from the generic record. Read the key only through
+    :meth:`IdentityStore.get_project_data_key` (see :mod:`sagewai.admin.tenant_keys`).
+    """
+    record = dict(row)
+    record.pop("data_key_ref", None)
+    return record
+
+
 class IdentityStore:
     """Async store for orgs, users, projects, memberships, invitations, sessions."""
 
@@ -285,7 +298,72 @@ class IdentityStore:
                 .mappings()
                 .first()
             )
-        return dict(row) if row else None
+        return _project_record(row) if row else None
+
+    async def get_project_data_key(self, org_id: str, project_id: str) -> str | None:
+        """Return the wrapped per-project data key (``project.data_key_ref``).
+
+        ``None`` when the project has no data key yet or does not exist. The
+        value is the data key encrypted under the org master key — never the raw
+        key (see :mod:`sagewai.admin.tenant_keys`).
+        """
+        async with self._engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    select(_project.c.data_key_ref).where(
+                        _project.c.org_id == org_id, _project.c.id == project_id
+                    )
+                )
+            ).first()
+        return row[0] if row else None
+
+    async def set_project_data_key(self, org_id: str, project_id: str, wrapped: str) -> None:
+        """Unconditionally persist the wrapped per-project data key (used by rotation).
+
+        Raises :class:`TenantAccessError` if the project is unknown. For
+        first-use minting use :meth:`set_project_data_key_if_absent`, which is
+        race-safe.
+        """
+        async with self._engine.begin() as conn:
+            result = await conn.execute(
+                update(_project)
+                .where(_project.c.org_id == org_id, _project.c.id == project_id)
+                .values(data_key_ref=wrapped)
+            )
+        if result.rowcount == 0:
+            raise TenantAccessError(f"unknown project {project_id!r}")
+
+    async def set_project_data_key_if_absent(
+        self, org_id: str, project_id: str, wrapped: str
+    ) -> str:
+        """Atomically set the wrapped data key only if absent; return the effective key.
+
+        Race-safe first-use minting: the conditional ``UPDATE ... WHERE
+        data_key_ref IS NULL`` means at most one of any racing callers stores its
+        key; the value is then read back inside the same transaction, so every
+        caller (winner and losers) converges on the one stored data key. Raises
+        :class:`TenantAccessError` if the project is unknown.
+        """
+        async with self._engine.begin() as conn:
+            await conn.execute(
+                update(_project)
+                .where(
+                    _project.c.org_id == org_id,
+                    _project.c.id == project_id,
+                    _project.c.data_key_ref.is_(None),
+                )
+                .values(data_key_ref=wrapped)
+            )
+            row = (
+                await conn.execute(
+                    select(_project.c.data_key_ref).where(
+                        _project.c.org_id == org_id, _project.c.id == project_id
+                    )
+                )
+            ).first()
+        if row is None:
+            raise TenantAccessError(f"unknown project {project_id!r}")
+        return row[0]
 
     async def list_projects(self, org_id: str) -> list[dict[str, Any]]:
         async with self._engine.connect() as conn:
@@ -300,7 +378,7 @@ class IdentityStore:
                 .mappings()
                 .all()
             )
-        return [dict(r) for r in rows]
+        return [_project_record(r) for r in rows]
 
     # ------------------------------------------------------------ memberships
     async def add_membership(
