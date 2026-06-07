@@ -27,6 +27,18 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      # transformers >=5.2.0 breaks our pinned gliner==0.2.26, which caps
+      # transformers <5.2.0. Re-enable once gliner relaxes its upper bound.
+      - dependency-name: "transformers"
+        versions:
+          - ">=5.2.0"
+      # Hold pymilvus on the stable 2.6.x line: pymilvus 3.x targets the
+      # Milvus 3.0 server, but our docker-compose pins the Milvus server to
+      # v2.6.17. Allow minor/patch, block majors until stable Milvus 3 ships.
+      - dependency-name: "pymilvus"
+        update-types:
+          - "version-update:semver-major"
 
   # GitHub Actions
   - package-ecosystem: "github-actions"

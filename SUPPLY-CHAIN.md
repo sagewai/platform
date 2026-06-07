@@ -16,8 +16,9 @@ integrity, and prevents supply chain attacks.
    transitive dependency tree?
 
 3. **Latest stable versions.** Dependencies are kept current through
-   weekly Dependabot PRs. Every update goes through CI (tests, audit,
-   license check) before merge.
+   monthly, grouped Dependabot PRs (minor/patch bumps are batched per
+   ecosystem; majors open individually so risky upgrades stay reviewable).
+   Every update goes through CI (tests, audit, license check) before merge.
 
 4. **SHA-pinned GitHub Actions.** All CI/CD actions are pinned to
    immutable commit SHAs, not mutable tags. A version comment is added
@@ -102,7 +103,7 @@ Every PR runs these checks automatically:
 
 ## Update Workflow
 
-### Routine Updates (weekly via Dependabot)
+### Routine Updates (monthly via Dependabot)
 
 1. Dependabot opens a PR with the version bump.
 2. CI runs tests, audit, and licence check.
