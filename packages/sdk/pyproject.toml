@@ -48,7 +48,7 @@ dependencies = [
     "opentelemetry-sdk==1.42.1",
     "pyyaml==6.0.3",
     "click>=8.4.1",
-    "pymilvus==2.6.14",
+    "pymilvus==2.6.15",
     "cryptography==48.0.0",
     "mnemonic==0.21",
     "duckduckgo-search==8.1.1",
@@ -78,7 +78,7 @@ memory = [
     "docling==2.97.0",
     "tree-sitter-languages==1.10.2",
     "tiktoken==0.13.0",
-    "pymilvus==2.6.14",
+    "pymilvus==2.6.15",
     "nebula3-python==3.8.3",
 ]
 coap = [
