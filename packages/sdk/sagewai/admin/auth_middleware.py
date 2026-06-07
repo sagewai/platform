@@ -23,6 +23,8 @@ from typing import Literal
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
+from sagewai.admin.tenancy import is_multi_tenant, single_org_context
+
 SCOPE_READ = "read"
 SCOPE_WRITE = "write"
 SCOPE_ADMIN = "admin"
@@ -151,11 +153,26 @@ def _extract(request) -> tuple[str | None, str]:
     return (cookie, "cookie") if cookie else (None, "")
 
 
+def _project_hint(request) -> str | None:
+    """The client-supplied project hint — a *hint within authorized scope*, never
+    an authorization input (multi-tenant resolves it against membership)."""
+    return request.headers.get("x-project-id") or request.query_params.get("project_id") or None
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, *, sf) -> None:
+    def __init__(self, app, *, sf, identity_store=None) -> None:
         super().__init__(app)
         self.sf = sf
+        self._identity_store = identity_store
         self.expose_docs = os.environ.get("SAGEWAI_ADMIN_EXPOSE_DOCS", "") in {"1", "true"}
+
+    def _identity(self):
+        """The multi-tenant identity store (lazy — only constructed in multi mode)."""
+        if self._identity_store is None:
+            from sagewai.admin.identity_store import IdentityStore
+
+            self._identity_store = IdentityStore()
+        return self._identity_store
 
     async def dispatch(self, request, call_next):
         method, path = request.method, request.url.path
@@ -167,9 +184,23 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if not raw:
             return JSONResponse({"detail": "Authentication required"}, status_code=401)
 
-        principal = self._resolve(raw, mech)
-        if principal is None:
-            return JSONResponse({"detail": "Invalid or expired credential"}, status_code=401)
+        if is_multi_tenant():
+            resolved = await self._resolve_multi(request, raw)
+            if isinstance(resolved, JSONResponse):
+                return resolved
+            principal, context = resolved
+        else:
+            principal = self._resolve(raw, mech)
+            if principal is None:
+                return JSONResponse({"detail": "Invalid or expired credential"}, status_code=401)
+            # Single-org: scope is organizational, not a boundary — carry the header
+            # hint so routes that read ctx behave like today's _project_id filter.
+            context = single_org_context(
+                actor_id=principal.subject_id,
+                actor_label=principal.actor_label,
+                scopes=principal.scopes,
+                project_id=_project_hint(request),
+            )
 
         need = required_scope(method, path)
         if not principal.has_scope(need):
@@ -185,7 +216,36 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 return JSONResponse({"detail": "CSRF token missing or invalid"}, status_code=403)
 
         request.state.principal = principal
+        request.state.context = context
         return await call_next(request)
+
+    async def _resolve_multi(self, request, raw: str):
+        """Multi-tenant resolution: session -> RequestContext (tenancy from the
+        session + membership, never from X-Project-ID). Returns (principal, context)
+        or a JSONResponse error. API tokens are wired in W4; sessions only here.
+        """
+        from sagewai.admin.identity_store import TenantAccessError
+
+        store = self._identity()
+        sess = await store.resolve_session(raw)
+        if sess is None:
+            return JSONResponse({"detail": "Invalid or expired credential"}, status_code=401)
+        try:
+            context = await store.build_context(
+                sess["org_id"], sess["user_id"], project_id=_project_hint(request)
+            )
+        except TenantAccessError:
+            # Forged/foreign project, or selection required — hide existence (404).
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        principal = Principal(
+            type="session",
+            subject_id=sess["user_id"],
+            token_id=_session_token_id(raw),
+            scopes=ALL_SCOPES,
+            expires_at=None,
+            actor_label=context.actor.label,
+        )
+        return principal, context
 
     def _resolve(self, raw: str, mech: str) -> Principal | None:
         user = self.sf.get_user_by_token(raw)          # session (cookie or bearer)
