@@ -30,7 +30,6 @@ Usage::
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import logging
 from enum import Enum
@@ -45,6 +44,32 @@ if TYPE_CHECKING:
     from sagewai.memory.query_router import QueryRouter
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Configurable default vector-memory factory (set by admin serve at startup)
+# ---------------------------------------------------------------------------
+
+# Callable[[str | None], MemoryProvider] | None
+# When None (the library default), RAGEngine falls back to VectorMemory —
+# pure in-process, never writes to disk, safe for tests and library usage.
+_default_vector_factory = None
+
+
+def configure_default_vector_memory(factory) -> None:  # noqa: ANN001
+    """Set (or clear) the process-wide default vector-memory factory.
+
+    Called by ``sagewai admin serve`` at startup to wire sqlite-vec for
+    durable learnings; cleared again in the lifespan ``finally`` block so
+    that in-process TestClient runs don't leak the durable default into
+    subsequent tests.
+
+    Args:
+        factory: A callable ``(project_id: str | None) -> MemoryProvider``,
+            or ``None`` to restore the safe default (in-process
+            :class:`~sagewai.memory.vector.VectorMemory`).
+    """
+    global _default_vector_factory
+    _default_vector_factory = factory
 
 
 class RetrievalStrategy(str, Enum):
@@ -90,7 +115,11 @@ class RAGEngine:
         strategies: list[MemoryStrategy] | None = None,
         branch: MemoryBranch | None = None,
     ) -> None:
-        self.vector = vector or VectorMemory(project_id=project_id)
+        self.vector = vector or (
+            _default_vector_factory(project_id)
+            if _default_vector_factory is not None
+            else VectorMemory(project_id=project_id)
+        )
         self.graph = graph or GraphMemory(project_id=project_id)
         self.strategy = strategy
         self.vector_weight = vector_weight

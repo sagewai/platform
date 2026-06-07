@@ -99,9 +99,11 @@ def admin_serve(host: str, port: int) -> None:
     try:
         import uvicorn
 
+        from sagewai import home
         from sagewai.admin.serve import create_admin_serve_app
         from sagewai.admin.state_file import AdminStateFile
 
+        home.migrate_home()
         sf = AdminStateFile()
         app = create_admin_serve_app(sf, version=_cli.VERSION)
 

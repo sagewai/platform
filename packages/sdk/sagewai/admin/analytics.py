@@ -255,11 +255,24 @@ class AnalyticsStore:
         return result
 
 
-def create_analytics_router(store: AnalyticsStore):
+async def _maybe_await(result: Any) -> Any:
+    """Await *result* if it is a coroutine/awaitable; otherwise return as-is.
+
+    This lets ``create_analytics_router`` work transparently with both the
+    synchronous in-memory ``AnalyticsStore`` and the async
+    ``PostgresAnalyticsStore`` without requiring callers to distinguish them.
+    """
+    import inspect
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+def create_analytics_router(store: Any):
     """Create a FastAPI router with analytics endpoints.
 
     Args:
-        store: AnalyticsStore instance for data access.
+        store: AnalyticsStore (sync) or PostgresAnalyticsStore (async) instance.
 
     Returns:
         A FastAPI APIRouter.
@@ -274,7 +287,7 @@ def create_analytics_router(store: AnalyticsStore):
     ) -> dict[str, Any]:
         """Get cost analytics, optionally filtered by agent."""
         pid = resolve_project_id()
-        return store.get_costs(agent_name=agent_name, project_id=pid)
+        return await _maybe_await(store.get_costs(agent_name=agent_name, project_id=pid))
 
     @router.get("/usage")
     async def get_usage(
@@ -282,7 +295,7 @@ def create_analytics_router(store: AnalyticsStore):
     ) -> dict[str, Any]:
         """Get token usage analytics."""
         pid = resolve_project_id()
-        return store.get_usage(agent_name=agent_name, project_id=pid)
+        return await _maybe_await(store.get_usage(agent_name=agent_name, project_id=pid))
 
     @router.get("/risks")
     async def get_risks(
@@ -290,18 +303,18 @@ def create_analytics_router(store: AnalyticsStore):
     ) -> dict[str, Any]:
         """Get risk analytics (PII, hallucination, content filter events)."""
         pid = resolve_project_id()
-        return store.get_risks(agent_name=agent_name, project_id=pid)
+        return await _maybe_await(store.get_risks(agent_name=agent_name, project_id=pid))
 
     @router.get("/models")
     async def get_model_comparison() -> list[dict[str, Any]]:
         """Get per-model analytics for comparison."""
         pid = resolve_project_id()
-        return store.get_model_analytics(project_id=pid)
+        return await _maybe_await(store.get_model_analytics(project_id=pid))
 
     @router.get("/agents")
     async def get_agent_analytics() -> list[dict[str, Any]]:
         """Get per-agent analytics."""
         pid = resolve_project_id()
-        return store.get_agent_analytics(project_id=pid)
+        return await _maybe_await(store.get_agent_analytics(project_id=pid))
 
     return router

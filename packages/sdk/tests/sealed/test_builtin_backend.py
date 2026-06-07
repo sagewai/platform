@@ -27,7 +27,10 @@ def fake_audit():
     fake_store = MagicMock()
     fake_store._pool = MagicMock()
     fake_store._pool.execute = AsyncMock()
-    return AuditWriter(fake_store)
+    writer = AuditWriter(fake_store)
+    # Expose the mock pool directly for assertion convenience.
+    # AuditWriter(store) detects ._pool and stores it as writer._pool.
+    return writer
 
 
 @pytest.fixture
@@ -122,11 +125,11 @@ async def test_concurrent_save_serialized(backend):
 
 @pytest.mark.asyncio
 async def test_save_emits_created_audit(backend, fake_audit):
-    fake_audit._store._pool.execute.reset_mock()
+    fake_audit._pool.execute.reset_mock()
     await backend.save_profile(ProfileWritePayload(id="acme", name="A"))
     # First call = INSERT for profile.created
-    assert fake_audit._store._pool.execute.await_count >= 1
-    args = fake_audit._store._pool.execute.await_args_list[0].args
+    assert fake_audit._pool.execute.await_count >= 1
+    args = fake_audit._pool.execute.await_args_list[0].args
     assert args[1] == "profile.created"
 
 
@@ -135,10 +138,10 @@ async def test_get_emits_per_secret_decrypt_audit(backend, fake_audit):
     await backend.save_profile(
         ProfileWritePayload(id="acme", name="A", secrets={"K1": "v1", "K2": "v2"})
     )
-    fake_audit._store._pool.execute.reset_mock()
+    fake_audit._pool.execute.reset_mock()
     await backend.get_profile("acme")
     decrypt_calls = [
-        c for c in fake_audit._store._pool.execute.await_args_list
+        c for c in fake_audit._pool.execute.await_args_list
         if c.args[1] == "secret.decrypted"
     ]
     assert len(decrypt_calls) == 2

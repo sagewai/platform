@@ -120,7 +120,83 @@ class InMemoryBackend:
         return self._counts.get(scope, 0)
 
 
-# ── 2. PostgresBackend (shared across workers) ────────────────────
+# ── 2. SqliteVecBackend (durable, single-host) ───────────────────
+
+
+class SqliteVecBackend:
+    """Durable single-host backend backed by :class:`SqliteVecMemory` per scope.
+
+    Each scope gets its own :class:`~sagewai.memory.sqlite_vec.SqliteVecMemory`
+    instance pointing at the same database file (``$SAGEWAI_HOME/db/sagewai.db``
+    by default) but using a scoped project_id for isolation.
+
+    This backend is wired automatically by ``sagewai admin serve`` when
+    sqlite-vec is available.  It is not suitable for multi-worker deployments
+    because each worker would hold an independent SQLite WAL connection; for
+    multi-worker, use :class:`PostgresBackend`.
+    """
+
+    def __init__(self) -> None:
+        from sagewai.memory.sqlite_vec import SqliteVecMemory  # noqa: PLC0415
+
+        self._SqliteVecMemory = SqliteVecMemory
+        self._stores: dict[str, Any] = {}
+        self._counts: dict[str, int] = {}
+        self._lock = asyncio.Lock()
+
+    async def _store_for(self, scope: str):
+        async with self._lock:
+            if scope not in self._stores:
+                self._stores[scope] = self._SqliteVecMemory(project_id=scope)
+                self._counts[scope] = 0
+            return self._stores[scope]
+
+    async def add(
+        self, scope: str, content: str, metadata: dict[str, Any] | None = None,
+    ) -> None:
+        store = await self._store_for(scope)
+        await store.store(content, metadata=metadata)
+        self._counts[scope] = self._counts.get(scope, 0) + 1
+
+    async def retrieve(self, scope: str, query: str, top_k: int) -> list[str]:
+        if scope not in self._stores:
+            return []
+        return await self._stores[scope].retrieve(query, top_k=top_k)
+
+    async def clear(self, scope: str) -> None:
+        if scope not in self._stores:
+            return
+        # SqliteVecMemory has no bulk clear — delete by fetching all IDs
+        # would require extra schema work.  As a pragmatic fallback we drop
+        # and recreate the connection after truncating the scope's rows directly.
+        import sqlite3  # noqa: PLC0415
+
+        def _sync_clear(db_path: str, table: str, pid: str) -> None:
+            conn = sqlite3.connect(db_path, check_same_thread=False)
+            conn.enable_load_extension(True)
+            import sqlite_vec as _sv  # noqa: PLC0415
+
+            _sv.load(conn)
+            conn.enable_load_extension(False)
+            conn.execute(f"DELETE FROM {table} WHERE project_id = ?", (pid,))
+            conn.commit()
+            conn.close()
+
+        import asyncio as _asyncio  # noqa: PLC0415
+
+        s = self._stores[scope]
+        # Close the store's own connection before we open a second one
+        await s.close()
+        await _asyncio.to_thread(_sync_clear, s._db_path, s._table, scope)
+        # Invalidate the store so the next add reopens a clean connection
+        del self._stores[scope]
+        self._counts[scope] = 0
+
+    async def count(self, scope: str) -> int:
+        return self._counts.get(scope, 0)
+
+
+# ── 3. PostgresBackend (shared across workers) ────────────────────
 
 
 class PostgresBackend:

@@ -9,7 +9,7 @@
 # See COMMERCIAL-LICENSE.md for details.
 """File-backed admin state store.
 
-Reads and writes ``~/.sagewai/admin-state.json``.  All mutations are
+Reads and writes ``$SAGEWAI_HOME/config/admin-state.json``.  All mutations are
 atomic (write-to-tmp + rename) and process-safe (``fcntl.flock`` on
 platforms that support it).  The file stores:
 
@@ -35,24 +35,22 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from sagewai import home
 from sagewai.artifacts.models import ArtifactDestination
 from sagewai.sealed.directives.policies import DirectivesConfig, seed_defaults_if_empty
-
-_DEFAULT_STATE_DIR = Path.home() / ".sagewai"
-_DEFAULT_STATE_FILE = _DEFAULT_STATE_DIR / "admin-state.json"
 
 
 def default_admin_state_path() -> Path:
     """Resolve the on-disk admin-state path with env override.
 
     ``SAGEWAI_ADMIN_STATE_FILE`` overrides; default is
-    ``~/.sagewai/admin-state.json``. Used by PR4 connections bootstrap
-    so admin routes and CLI both resolve the same file.
+    ``$SAGEWAI_HOME/config/admin-state.json``. Used by PR4 connections
+    bootstrap so admin routes and CLI both resolve the same file.
     """
     override = os.environ.get("SAGEWAI_ADMIN_STATE_FILE")
     if override:
         return Path(override)
-    return _DEFAULT_STATE_FILE
+    return home.config_dir() / "admin-state.json"
 
 _PBKDF2_ITERATIONS = 600_000
 # Every /auth/refresh rotates the token and appends a new one. The full e2e
@@ -104,16 +102,11 @@ class AdminStateFile:
     ----------
     path:
         Path to the JSON state file.  Defaults to
-        ``~/.sagewai/admin-state.json``.
+        ``$SAGEWAI_HOME/config/admin-state.json``.
     """
 
     def __init__(self, path: str | Path | None = None) -> None:
-        if path is not None:
-            self._path = Path(path)
-        elif "SAGEWAI_ADMIN_STATE_FILE" in os.environ:
-            self._path = Path(os.environ["SAGEWAI_ADMIN_STATE_FILE"])
-        else:
-            self._path = _DEFAULT_STATE_FILE
+        self._path = Path(path) if path is not None else default_admin_state_path()
 
     # ── low-level I/O ────────────────────────────────────────────
 

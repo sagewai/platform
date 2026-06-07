@@ -18,6 +18,7 @@ from sagewai.sealed.master_key import (
     KEYRING_SERVICE,
     KEYRING_USERNAME,
     MasterKeyMissing,
+    default_key_path,
     resolve_master_key,
     store_master_key,
 )
@@ -45,8 +46,8 @@ def test_resolve_from_keychain(monkeypatch):
     with patch("sagewai.sealed.master_key.keyring", _FakeKeyring()):
         # Make file path not exist for this test
         monkeypatch.setattr(
-            "sagewai.sealed.master_key.DEFAULT_KEY_PATH",
-            Path("/tmp/nonexistent-sagewai-key-test"),
+            "sagewai.sealed.master_key.default_key_path",
+            lambda: Path("/tmp/nonexistent-sagewai-key-test"),
         )
         key, source = resolve_master_key()
     assert key == fake_key
@@ -60,7 +61,7 @@ def test_resolve_from_file(tmp_path, monkeypatch):
     key_path = tmp_path / "master.key"
     key_path.write_text(fake_key.decode("ascii"))
     key_path.chmod(0o600)
-    monkeypatch.setattr("sagewai.sealed.master_key.DEFAULT_KEY_PATH", key_path)
+    monkeypatch.setattr("sagewai.sealed.master_key.default_key_path", lambda: key_path)
 
     key, source = resolve_master_key()
     assert key == fake_key
@@ -74,7 +75,7 @@ def test_file_loose_perms_refused(tmp_path, monkeypatch):
     key_path = tmp_path / "master.key"
     key_path.write_text(fake_key.decode("ascii"))
     key_path.chmod(0o644)  # group + other readable
-    monkeypatch.setattr("sagewai.sealed.master_key.DEFAULT_KEY_PATH", key_path)
+    monkeypatch.setattr("sagewai.sealed.master_key.default_key_path", lambda: key_path)
 
     with pytest.raises(MasterKeyMissing, match="insecure permissions"):
         resolve_master_key()
@@ -83,7 +84,7 @@ def test_file_loose_perms_refused(tmp_path, monkeypatch):
 def test_nothing_configured_raises(tmp_path, monkeypatch):
     monkeypatch.delenv("SAGEWAI_MASTER_KEY", raising=False)
     monkeypatch.setattr("sagewai.sealed.master_key.keyring", None)
-    monkeypatch.setattr("sagewai.sealed.master_key.DEFAULT_KEY_PATH", tmp_path / "nope.key")
+    monkeypatch.setattr("sagewai.sealed.master_key.default_key_path", lambda: tmp_path / "nope.key")
 
     with pytest.raises(MasterKeyMissing, match="No SAGEWAI_MASTER_KEY"):
         resolve_master_key()
@@ -115,8 +116,8 @@ def test_keychain_invalid_key_length_propagates(monkeypatch):
 
     monkeypatch.setattr("sagewai.sealed.master_key.keyring", _BadKeyring())
     monkeypatch.setattr(
-        "sagewai.sealed.master_key.DEFAULT_KEY_PATH",
-        Path("/tmp/nonexistent-sagewai-key-test-bad-keychain"),
+        "sagewai.sealed.master_key.default_key_path",
+        lambda: Path("/tmp/nonexistent-sagewai-key-test-bad-keychain"),
     )
     with pytest.raises(MasterKeyMissing, match="must be 44 chars"):
         resolve_master_key()
@@ -136,7 +137,7 @@ def test_keychain_backend_error_falls_through_to_file(tmp_path, monkeypatch):
     key_path = tmp_path / "master.key"
     key_path.write_text(fake_key.decode("ascii"))
     key_path.chmod(0o600)
-    monkeypatch.setattr("sagewai.sealed.master_key.DEFAULT_KEY_PATH", key_path)
+    monkeypatch.setattr("sagewai.sealed.master_key.default_key_path", lambda: key_path)
 
     key, source = resolve_master_key()
     assert key == fake_key

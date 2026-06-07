@@ -11,9 +11,25 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import timedelta
+from pathlib import Path
 
 import click
+
+
+def resolve_admin_state_path() -> Path:
+    """Admin-state path for CLI commands.
+
+    Precedence: ``SAGEWAI_ADMIN_STATE`` (CLI-only legacy alias) →
+    ``SAGEWAI_ADMIN_STATE_FILE`` → ``$SAGEWAI_HOME/config/admin-state.json``.
+    """
+    # SAGEWAI_ADMIN_STATE: short CLI-only alias; the admin server and other
+    # SDK entry points use SAGEWAI_ADMIN_STATE_FILE (via default_admin_state_path).
+    if raw := os.environ.get("SAGEWAI_ADMIN_STATE"):
+        return Path(raw)
+    from sagewai.admin.state_file import default_admin_state_path
+    return default_admin_state_path()
 
 
 @click.group("sandbox")
@@ -44,16 +60,9 @@ def sandbox_doctor() -> None:
 
         # Kubernetes — Plan SBX-K8S
         try:
-            import os
-            from pathlib import Path
-
             from sagewai.admin.state_file import AdminStateFile
 
-            state_path = Path(
-                os.environ.get("SAGEWAI_ADMIN_STATE")
-                or os.environ.get("SAGEWAI_ADMIN_STATE_FILE")
-                or (Path.home() / ".sagewai" / "admin-state.json")
-            )
+            state_path = resolve_admin_state_path()
             sf = AdminStateFile(path=state_path)
             cfg = sf.get_kubernetes_backend_config()
             from sagewai.sandbox.kubernetes_backend import KubernetesBackend
@@ -101,17 +110,10 @@ def sandbox_config_k8s(
     use_in_cluster: bool,
     verify: bool,
 ) -> None:
-    """Write KubernetesBackend config to ~/.sagewai/admin-state.json."""
-    import os
-    from pathlib import Path
-
+    """Write KubernetesBackend config to the admin-state file (see resolve_admin_state_path)."""
     from sagewai.admin.state_file import AdminStateFile
 
-    state_path = Path(
-        os.environ.get("SAGEWAI_ADMIN_STATE")
-        or os.environ.get("SAGEWAI_ADMIN_STATE_FILE")
-        or (Path.home() / ".sagewai" / "admin-state.json")
-    )
+    state_path = resolve_admin_state_path()
     state_path.parent.mkdir(parents=True, exist_ok=True)
 
     cidrs = [c.strip() for c in egress_allowlist.split(",") if c.strip()]
@@ -227,9 +229,7 @@ def sandbox_validate(image: str) -> None:
       - /workspace is writable
       - env scrub: host HOST_SECRET is not visible in the sandbox
     """
-    import os
     import tempfile
-    from pathlib import Path
 
     async def _run() -> None:
         from sagewai.sandbox.docker_backend import DockerBackend, SandboxError

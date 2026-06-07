@@ -20,8 +20,8 @@ from cryptography.fernet import Fernet
 from mnemonic import Mnemonic
 
 from sagewai.sealed.master_key import (
-    DEFAULT_KEY_PATH,
     MasterKeyMissing,
+    default_key_path,
     resolve_master_key,
     store_master_key,
 )
@@ -46,7 +46,7 @@ def sealed_init() -> None:
     click.echo("  Where should it live?")
     click.echo("    1) Environment variable SAGEWAI_MASTER_KEY  (containers, CI)")
     click.echo("    2) OS keychain (recommended for workstations)")
-    click.echo(f"    3) {DEFAULT_KEY_PATH} file (mode 0600)")
+    click.echo(f"    3) {default_key_path()} file (mode 0600)")
     choice = click.prompt("\n  Choose [1/2/3]", type=click.Choice(["1", "2", "3"]))
 
     new_key = Fernet.generate_key()
@@ -145,7 +145,7 @@ def sealed_restore() -> None:
     click.echo("\n  Where should the recovered key live?")
     click.echo("    1) Env var instructions")
     click.echo("    2) OS keychain")
-    click.echo("    3) ~/.sagewai/master.key file")
+    click.echo(f"    3) {default_key_path()} file (mode 0600)")
     choice = click.prompt("Choose [1/2/3]", type=click.Choice(["1", "2", "3"]))
     destination = {"1": "env-var", "2": "keychain", "3": "file"}[choice]
     store_master_key(new_key, destination)

@@ -110,6 +110,18 @@ Every example is a complete, runnable file in [`sagewai/examples/`](sagewai/exam
 - [`38_unsloth_finetune.py`](sagewai/examples/38_unsloth_finetune.py) — fine-tune a local model with Unsloth.
 - [`36_autopilot_training_loop.py`](sagewai/examples/36_autopilot_training_loop.py) — an offline walkthrough of the full capture → fine-tune → deploy loop (v1.1 roadmap).
 
+## Persistence
+
+Sagewai persists all state across restarts with no setup required. On first start it creates `~/.sagewai/` (override with `SAGEWAI_HOME`):
+
+| Path | What lives there |
+|------|-----------------|
+| `~/.sagewai/config/` | `admin-state.json`, `connections.json` — human-readable, durable |
+| `~/.sagewai/db/sagewai.db` | SQLite: sessions, runs, workflow checkpoints, analytics, vector learnings |
+| `~/.sagewai/secrets/` | `master.key`, `profiles.json` — mode 0700 |
+
+For production scale or multi-process deployments, set `SAGEWAI_DATABASE_URL=postgresql+asyncpg://…` and install `sagewai[postgres]`. See the [Persistence guide](https://docs.sagewai.ai/docs/guides/persistence) for details.
+
 ## CLI
 
 ```bash

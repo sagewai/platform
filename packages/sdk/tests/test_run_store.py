@@ -7,18 +7,19 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""Tests for RunStore — PostgreSQL-backed agent run persistence."""
+"""Tests for RunStore — SQLAlchemy Core agent run persistence (SQLite + PostgreSQL)."""
 
 from __future__ import annotations
 
-import os
-
 import pytest
+import pytest_asyncio
 
 from sagewai.admin.store import RunRecord, RunStore
+from sagewai.db.engine import create_engine
+from sagewai.db.models import Base
 
 # ---------------------------------------------------------------------------
-# RunRecord
+# RunRecord (pure-Python, no DB needed)
 # ---------------------------------------------------------------------------
 
 
@@ -43,48 +44,58 @@ class TestRunRecord:
 
 
 # ---------------------------------------------------------------------------
-# RunStore — init and teardown
+# SQLite-backed store fixture — no external services needed
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-async def store():
-    """RunStore connected to the local dev PostgreSQL.
+@pytest_asyncio.fixture
+async def store(tmp_path):
+    """RunStore backed by a temporary SQLite database.
 
-    Requires: make dev-up (or a running PostgreSQL on localhost:5432).
-    Cleans up after each test.
+    Replaces the former asyncpg fixture; exercises the same public API on an
+    in-process database so these tests run without any external dependencies.
     """
-    url = os.environ.get(
-        "SAGEWAI_DATABASE_URL",
-        "postgresql://sagecurator:sagecurator_password@localhost:5432/sagecurator",
-    )
-    s = RunStore(url)
-    await s.init()
-    await s.clear()  # Start clean
+    engine = create_engine(f"sqlite+aiosqlite:///{tmp_path / 'test_runs.db'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    s = RunStore(engine=engine)
     yield s
-    await s.clear()  # Clean up
-    await s.close()
+    await engine.dispose()
 
 
-@pytest.mark.integration
+# ---------------------------------------------------------------------------
+# Init and lifecycle
+# ---------------------------------------------------------------------------
+
+
 class TestInit:
     @pytest.mark.asyncio
-    async def test_init_postgres(self):
-        url = os.environ.get(
-            "SAGEWAI_DATABASE_URL",
-            "postgresql://sagecurator:sagecurator_password@localhost:5432/sagecurator",
-        )
-        store = RunStore(url)
-        await store.init()
+    async def test_is_connected_after_construct(self, store):
+        """is_connected is True immediately after construction."""
         assert store.is_connected
-        await store.close()
-        assert not store.is_connected
 
     @pytest.mark.asyncio
-    async def test_not_connected_raises(self):
-        store = RunStore("postgresql://localhost/test")
-        with pytest.raises(RuntimeError, match="not initialized"):
-            await store.save_run(agent_name="test")
+    async def test_init_is_idempotent(self, store):
+        """Calling init() twice on SQLite is safe (create_all is idempotent)."""
+        await store.init()
+        await store.init()
+        assert store.is_connected
+
+    @pytest.mark.asyncio
+    async def test_close_is_noop(self, store):
+        """close() is a no-op; is_connected stays True (engine owned by caller)."""
+        await store.close()
+        assert store.is_connected
+
+    @pytest.mark.asyncio
+    async def test_str_url_constructor(self, tmp_path):
+        """Positional string URL is still accepted (back-compat with old callers)."""
+        db = tmp_path / "compat.db"
+        s = RunStore(f"sqlite+aiosqlite:///{db}")
+        await s.init()
+        assert s.is_connected
+        rid = await s.save_run(agent_name="test")
+        assert rid
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +103,6 @@ class TestInit:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.integration
 class TestSaveAndRetrieve:
     @pytest.mark.asyncio
     async def test_save_run(self, store):
@@ -173,7 +183,6 @@ class TestSaveAndRetrieve:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.integration
 class TestListAndFilter:
     @pytest.mark.asyncio
     async def test_list_all(self, store):
@@ -242,7 +251,6 @@ class TestListAndFilter:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.integration
 class TestDeleteAndCount:
     @pytest.mark.asyncio
     async def test_count(self, store):
@@ -273,7 +281,6 @@ class TestDeleteAndCount:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.integration
 class TestEventHook:
     @pytest.mark.asyncio
     async def test_create_event_hook(self, store):

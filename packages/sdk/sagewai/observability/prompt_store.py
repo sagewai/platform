@@ -12,8 +12,10 @@
 Captures every LLM call's full prompt messages and response, enabling
 prompt iteration and debugging of multi-turn agent loops.
 
-Mirrors the :class:`~sagewai.admin.store.RunStore` pattern: PostgreSQL-backed
-with Alembic-managed schema, event-hook integration, and JSONL export.
+Backed by SQLAlchemy Core — works on both SQLite (default) and PostgreSQL.
+Mirrors the :class:`~sagewai.admin.store.RunStore` pattern: engine-injected
+constructor, ``init()`` creates the schema on SQLite (no-op on Postgres),
+and all JSON columns receive Python objects directly.
 
 Usage::
 
@@ -45,9 +47,19 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import insert, select
+from sqlalchemy import update as sa_update
+from sqlalchemy.ext.asyncio import AsyncEngine
+
 from sagewai.core.context import resolve_project_id
+from sagewai.db import factory
+from sagewai.db.engine import create_engine
+from sagewai.db.models import Base, PromptLog
 
 logger = logging.getLogger(__name__)
+
+_tbl = PromptLog.__table__
 
 
 @dataclass
@@ -101,42 +113,55 @@ class PromptLogRecord:
 
 
 class PromptStore:
-    """PostgreSQL-backed per-step prompt log store.
+    """SQLAlchemy Core per-step prompt log store — SQLite (default) or PostgreSQL.
 
-    Schema is managed by Alembic migrations. Run ``alembic upgrade head``
-    before starting the application.
+    Constructor forms (all equivalent from the caller's perspective):
 
-    Parameters
-    ----------
-    database_url:
-        PostgreSQL connection string: ``"postgresql://user:pass@host/db"``.
+    * ``PromptStore()``
+        Uses the process-wide engine from :func:`sagewai.db.factory.get_engine`.
+    * ``PromptStore("postgresql://user:pass@host/db")``
+        Positional URL string — back-compat with existing callers.
+    * ``PromptStore(engine=my_async_engine)``
+        Injected engine; used by tests and DI containers.
+    * ``PromptStore(database_url="...")``
+        Keyword URL — also supported.
+
+    On SQLite, :meth:`init` creates the schema via ``create_all``.
+    On PostgreSQL, :meth:`init` is a no-op (Alembic owns the schema).
     """
 
-    def __init__(self, database_url: str) -> None:
-        self._url = database_url
-        self._pool: Any = None
+    def __init__(
+        self,
+        engine_or_url: AsyncEngine | str | None = None,
+        *,
+        database_url: str | None = None,
+        engine: AsyncEngine | None = None,
+    ) -> None:
+        # Priority: engine= > positional AsyncEngine > positional str > database_url= > factory
+        if engine is not None:
+            self._engine: AsyncEngine = engine
+        elif isinstance(engine_or_url, AsyncEngine):
+            self._engine = engine_or_url
+        elif isinstance(engine_or_url, str):
+            self._engine = create_engine(engine_or_url)
+        elif database_url is not None:
+            self._engine = create_engine(database_url)
+        else:
+            self._engine = factory.get_engine()
 
     @property
     def is_connected(self) -> bool:
-        return self._pool is not None
+        """True once the engine is available (immediately after construction)."""
+        return self._engine is not None
 
     async def init(self) -> None:
-        """Initialize the connection pool."""
-        try:
-            import asyncpg
-        except ImportError as exc:
-            raise ImportError(
-                "asyncpg is required for PostgreSQL. "
-                "Install with: uv add 'sagewai[postgres]'"
-            ) from exc
-
-        self._pool = await asyncpg.create_pool(self._url, min_size=1, max_size=5)
+        """Bootstrap the schema on SQLite; no-op on PostgreSQL (Alembic owns it)."""
+        if self._engine.dialect.name == "sqlite":
+            async with self._engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
 
     async def close(self) -> None:
-        """Close the connection pool."""
-        if self._pool is not None:
-            await self._pool.close()
-            self._pool = None
+        """No-op — the factory or caller owns the engine lifecycle."""
 
     async def save_prompt_log(
         self,
@@ -168,49 +193,42 @@ class PromptStore:
         # Empty run_id → NULL to satisfy FK constraint
         effective_run_id = run_id if run_id else None
 
-        sql = """
-        INSERT INTO prompt_logs
-        (log_id, run_id, agent_name, step_index, model,
-         prompt_messages, response_message, input_tokens, output_tokens,
-         cost_usd, duration_ms, strategy, metadata, created_at,
-         is_example, tags, source, input_text, output_text, project_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                $15, $16, $17, $18, $19, $20)
-        """
-        async with self._pool.acquire() as conn:
-            await conn.execute(
-                sql,
-                log_id,
-                effective_run_id,
-                agent_name,
-                step_index,
-                model,
-                json.dumps(prompt_messages or []),
-                json.dumps(response_message or {}),
-                input_tokens,
-                output_tokens,
-                cost_usd,
-                duration_ms,
-                strategy,
-                json.dumps(metadata or {}),
-                now,
-                is_example,
-                json.dumps(tags or []),
-                source,
-                input_text,
-                output_text,
-                pid,
-            )
+        # Note: ORM attr is `metadata_` but column name is "metadata".
+        # `tags` is a Text column (JSON string), not JSONType — must encode explicitly.
+        stmt = insert(_tbl).values(
+            log_id=log_id,
+            run_id=effective_run_id,
+            agent_name=agent_name,
+            step_index=step_index,
+            model=model,
+            prompt_messages=prompt_messages or [],
+            response_message=response_message or {},
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=cost_usd,
+            duration_ms=duration_ms,
+            strategy=strategy,
+            metadata=metadata or {},
+            created_at=now,
+            is_example=is_example,
+            tags=json.dumps(tags or []),
+            source=source,
+            input_text=input_text,
+            output_text=output_text,
+            project_id=pid,
+        )
+        async with self._engine.begin() as conn:
+            await conn.execute(stmt)
         return log_id
 
     async def get_prompt_log(self, log_id: str) -> PromptLogRecord | None:
         """Get a prompt log by ID."""
         self._check_connected()
-        async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT * FROM prompt_logs WHERE log_id = $1", log_id
-            )
-        if not row:
+        stmt = select(_tbl).where(_tbl.c.log_id == log_id)
+        async with self._engine.connect() as conn:
+            result = await conn.execute(stmt)
+            row = result.mappings().first()
+        if row is None:
             return None
         return self._row_to_record(row)
 
@@ -227,32 +245,21 @@ class PromptStore:
         """List prompt logs with optional filtering."""
         self._check_connected()
         pid = resolve_project_id(project_id)
-        conditions: list[str] = [f"project_id = $1"]
-        params: list[Any] = [pid]
-        idx = 2
+
+        stmt = select(_tbl).where(_tbl.c.project_id == pid)
 
         if run_id:
-            conditions.append(f"run_id = ${idx}")
-            params.append(run_id)
-            idx += 1
+            stmt = stmt.where(_tbl.c.run_id == run_id)
         if agent_name:
-            conditions.append(f"agent_name ILIKE ${idx}")
-            params.append(f"%{agent_name}%")
-            idx += 1
+            stmt = stmt.where(_tbl.c.agent_name.ilike(f"%{agent_name}%"))
         if model:
-            conditions.append(f"model ILIKE ${idx}")
-            params.append(f"%{model}%")
-            idx += 1
+            stmt = stmt.where(_tbl.c.model.ilike(f"%{model}%"))
 
-        where = " AND ".join(conditions)
-        sql = (
-            f"SELECT * FROM prompt_logs WHERE {where} "
-            f"ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx + 1}"
-        )
-        params.extend([limit, offset])
+        stmt = stmt.order_by(_tbl.c.created_at.desc()).limit(limit).offset(offset)
 
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(sql, *params)
+        async with self._engine.connect() as conn:
+            result = await conn.execute(stmt)
+            rows = result.mappings().all()
         return [self._row_to_record(row) for row in rows]
 
     async def update_prompt_log(
@@ -264,42 +271,29 @@ class PromptStore:
     ) -> PromptLogRecord | None:
         """Update tags or is_example flag on an existing prompt log."""
         self._check_connected()
-        sets: list[str] = []
-        params: list[Any] = []
-        idx = 1
+        updates: dict[str, Any] = {}
 
         if tags is not None:
-            sets.append(f"tags = ${idx}")
-            params.append(json.dumps(tags))
-            idx += 1
+            updates["tags"] = json.dumps(tags)
         if is_example is not None:
-            sets.append(f"is_example = ${idx}")
-            params.append(is_example)
-            idx += 1
+            updates["is_example"] = is_example
 
-        if not sets:
+        if not updates:
             return await self.get_prompt_log(log_id)
 
-        sql = (
-            f"UPDATE prompt_logs SET {', '.join(sets)} "
-            f"WHERE log_id = ${idx} RETURNING *"
-        )
-        params.append(log_id)
+        stmt = sa_update(_tbl).where(_tbl.c.log_id == log_id).values(**updates)
+        async with self._engine.begin() as conn:
+            await conn.execute(stmt)
 
-        async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(sql, *params)
-        if not row:
-            return None
-        return self._row_to_record(row)
+        return await self.get_prompt_log(log_id)
 
     async def delete_prompt_log(self, log_id: str) -> bool:
         """Delete a prompt log record. Returns True if deleted."""
         self._check_connected()
-        async with self._pool.acquire() as conn:
-            result = await conn.execute(
-                "DELETE FROM prompt_logs WHERE log_id = $1", log_id
-            )
-        return result == "DELETE 1"
+        stmt = sa_delete(_tbl).where(_tbl.c.log_id == log_id)
+        async with self._engine.begin() as conn:
+            result = await conn.execute(stmt)
+        return result.rowcount == 1
 
     async def list_examples(
         self,
@@ -311,13 +305,19 @@ class PromptStore:
         """List prompt logs marked as examples for a specific agent."""
         self._check_connected()
         pid = resolve_project_id(project_id)
-        sql = (
-            "SELECT * FROM prompt_logs "
-            "WHERE project_id = $1 AND agent_name = $2 AND is_example = true "
-            "ORDER BY created_at DESC LIMIT $3"
+        stmt = (
+            select(_tbl)
+            .where(
+                _tbl.c.project_id == pid,
+                _tbl.c.agent_name == agent_name,
+                _tbl.c.is_example == True,  # noqa: E712
+            )
+            .order_by(_tbl.c.created_at.desc())
+            .limit(limit)
         )
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(sql, pid, agent_name, limit)
+        async with self._engine.connect() as conn:
+            result = await conn.execute(stmt)
+            rows = result.mappings().all()
         return [self._row_to_record(row) for row in rows]
 
     def export_jsonl(self, records: list[PromptLogRecord]) -> str:
@@ -375,15 +375,30 @@ class PromptStore:
     # Internal
     # ------------------------------------------------------------------
 
-    def _row_to_record(self, row: Any) -> PromptLogRecord:
-        """Convert an asyncpg Record to a PromptLogRecord."""
+    @staticmethod
+    def _row_to_record(row: Any) -> PromptLogRecord:
+        """Convert a SQLAlchemy row mapping to a PromptLogRecord."""
         # Convert datetime created_at to float timestamp for the dataclass
         created_at = row["created_at"]
         if isinstance(created_at, datetime):
             created_at = created_at.timestamp()
 
-        tags_raw = row.get("tags", "[]")
-        tags = json.loads(tags_raw) if isinstance(tags_raw, str) else (tags_raw or [])
+        # tags is a Text column storing a JSON string
+        tags_raw = row["tags"]
+        if isinstance(tags_raw, str):
+            tags = json.loads(tags_raw)
+        else:
+            tags = tags_raw or []
+
+        # JSON columns (prompt_messages, response_message, metadata) are
+        # returned as Python objects by SQLAlchemy's JSONType on both dialects.
+        # Defensive str fallback handles any legacy string values.
+        def _json(val: Any, default: Any) -> Any:
+            if val is None:
+                return default
+            if isinstance(val, str):
+                return json.loads(val)
+            return val
 
         return PromptLogRecord(
             log_id=row["log_id"],
@@ -391,34 +406,22 @@ class PromptStore:
             agent_name=row["agent_name"],
             step_index=row["step_index"],
             model=row["model"],
-            prompt_messages=(
-                json.loads(row["prompt_messages"])
-                if isinstance(row["prompt_messages"], str)
-                else row["prompt_messages"]
-            ),
-            response_message=(
-                json.loads(row["response_message"])
-                if isinstance(row["response_message"], str)
-                else row["response_message"]
-            ),
+            prompt_messages=_json(row["prompt_messages"], []),
+            response_message=_json(row["response_message"], {}),
             input_tokens=row["input_tokens"],
             output_tokens=row["output_tokens"],
             cost_usd=row["cost_usd"],
             duration_ms=row["duration_ms"],
             strategy=row["strategy"],
-            metadata=(
-                json.loads(row["metadata"])
-                if isinstance(row["metadata"], str)
-                else row["metadata"]
-            ),
+            metadata=_json(row["metadata"], {}),
             created_at=created_at,
-            is_example=row.get("is_example", False),
+            is_example=row["is_example"] or False,
             tags=tags,
-            source=row.get("source", "playground"),
-            input_text=row.get("input_text", ""),
-            output_text=row.get("output_text", ""),
+            source=row["source"] or "playground",
+            input_text=row["input_text"] or "",
+            output_text=row["output_text"] or "",
         )
 
     def _check_connected(self) -> None:
-        if self._pool is None:
+        if self._engine is None:
             raise RuntimeError("PromptStore not initialized. Call init() first.")

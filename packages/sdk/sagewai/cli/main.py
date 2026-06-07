@@ -544,16 +544,10 @@ def register_commands(
             # Wire kubernetes-backend config from admin state (Plan SBX-K8S, T31)
             sandbox_kubernetes_config: dict | None = None
             if sandbox_backend == "kubernetes":
-                import os as _os
-                from pathlib import Path as _Path
-
                 from sagewai.admin.state_file import AdminStateFile
+                from sagewai.cli.sandbox import resolve_admin_state_path
 
-                _state_path = _Path(
-                    _os.environ.get("SAGEWAI_ADMIN_STATE")
-                    or _os.environ.get("SAGEWAI_ADMIN_STATE_FILE")
-                    or (_Path.home() / ".sagewai" / "admin-state.json")
-                )
+                _state_path = resolve_admin_state_path()
                 if _state_path.exists():
                     sandbox_kubernetes_config = AdminStateFile(
                         path=_state_path,

@@ -9,31 +9,45 @@
 # See COMMERCIAL-LICENSE.md for details.
 """Async SQLAlchemy engine factory.
 
+Supports both PostgreSQL (via asyncpg) and SQLite (via aiosqlite).
 Used by Alembic's env.py for schema diffing. Stores can optionally
 use this for connection pooling in the future.
 """
 
 from __future__ import annotations
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 
 def create_engine(database_url: str, **kwargs) -> AsyncEngine:
-    """Create an async SQLAlchemy engine.
+    """Create an async engine for Postgres (asyncpg) or SQLite (aiosqlite).
 
-    Args:
-        database_url: PostgreSQL connection string.
-            Must use the ``postgresql+asyncpg://`` scheme.
+    - ``postgresql://`` → ``postgresql+asyncpg://`` with a connection pool
+      (``pool_size``/``max_overflow`` kwargs apply here).
+    - ``sqlite://`` / ``sqlite+aiosqlite://`` → aiosqlite engine with WAL,
+      foreign keys, and a busy timeout. Only ``echo`` is honored; pool
+      kwargs are ignored (SQLite uses aiosqlite's default pool).
     """
-    # Normalize the URL scheme for SQLAlchemy
     if database_url.startswith("postgresql://"):
         database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    elif database_url.startswith("sqlite://") and "+aiosqlite" not in database_url:
+        database_url = database_url.replace("sqlite://", "sqlite+aiosqlite://", 1)
 
-    defaults = {
-        "pool_size": 5,
-        "max_overflow": 10,
-        "echo": False,
-    }
+    if database_url.startswith("sqlite+aiosqlite://"):
+        engine = create_async_engine(database_url, echo=kwargs.get("echo", False))
+
+        @event.listens_for(engine.sync_engine, "connect")
+        def _set_sqlite_pragmas(dbapi_conn, _record):  # noqa: ANN001
+            cur = dbapi_conn.cursor()
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA foreign_keys=ON")
+            cur.execute("PRAGMA busy_timeout=5000")
+            cur.close()
+
+        return engine
+
+    defaults = {"pool_size": 5, "max_overflow": 10, "echo": False}
     defaults.update(kwargs)
     return create_async_engine(database_url, **defaults)
 

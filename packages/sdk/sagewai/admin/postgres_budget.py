@@ -7,10 +7,11 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""PostgreSQL-backed budget manager for per-agent spend tracking.
+"""Budget manager backed by SQLAlchemy Core — works on both SQLite and PostgreSQL.
 
-Drop-in replacement for the in-memory BudgetManager. Uses asyncpg
-connection pool for safe concurrent access.
+One implementation replaces the former asyncpg-only PostgresBudgetManager.
+The class name and all public method signatures are unchanged so callers
+require no modification.
 
 Usage::
 
@@ -26,11 +27,23 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import func, insert, select
+from sqlalchemy.ext.asyncio import AsyncEngine
+
 from sagewai.core.context import get_current_project
+from sagewai.db import factory
+from sagewai.db.dialect import upsert
+from sagewai.db.engine import create_engine
+from sagewai.db.models import Base, BudgetLimitModel, BudgetSpend
 
 logger = logging.getLogger(__name__)
+
+_limit_tbl = BudgetLimitModel.__table__
+_spend_tbl = BudgetSpend.__table__
 
 
 def _resolve_project(project_id: str | None = None) -> str:
@@ -42,34 +55,54 @@ def _resolve_project(project_id: str | None = None) -> str:
 
 
 class PostgresBudgetManager:
-    """PostgreSQL-backed budget manager.
+    """Budget manager using SQLAlchemy Core — SQLite (default) or PostgreSQL.
 
     Tables ``budget_limits`` and ``budget_spend`` must exist
-    (created by Alembic migration 005).
+    (created by Alembic migration 005, or via ``Base.metadata.create_all``
+    on SQLite).
+
+    Parameters
+    ----------
+    database_url:
+        Connection string passed to :func:`sagewai.db.engine.create_engine`.
+        Ignored when *engine* is supplied.  Accepted for backward-compat
+        with callers that previously passed the URL as the only argument.
+    engine:
+        Pre-built :class:`AsyncEngine`.  When supplied, *database_url* is
+        ignored.
     """
 
-    def __init__(self, database_url: str) -> None:
-        self._url = database_url
-        self._pool: Any = None
+    def __init__(
+        self,
+        database_url: str | None = None,
+        *,
+        engine: AsyncEngine | None = None,
+    ) -> None:
+        if engine is not None:
+            self._engine: AsyncEngine = engine
+        elif database_url is not None:
+            self._engine = create_engine(database_url)
+        else:
+            self._engine = factory.get_engine()
 
     async def init(self) -> None:
-        """Open a connection pool."""
-        import asyncpg
+        """Bootstrap schema on SQLite; no-op on PostgreSQL (Alembic owns it).
 
-        self._pool = await asyncpg.create_pool(self._url, min_size=1, max_size=5)
+        Kept for API back-compat with the asyncpg version.
+        """
+        if self._engine.dialect.name == "sqlite":
+            async with self._engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
 
     async def close(self) -> None:
-        """Close the connection pool."""
-        if self._pool is not None:
-            await self._pool.close()
-            self._pool = None
+        """Dispose the engine (compat with asyncpg version that closed the pool)."""
+        await self._engine.dispose()
 
     async def clear(self) -> None:
         """Delete all records (for testing)."""
-        self._check()
-        async with self._pool.acquire() as conn:
-            await conn.execute("DELETE FROM budget_spend")
-            await conn.execute("DELETE FROM budget_limits")
+        async with self._engine.begin() as conn:
+            await conn.execute(sa_delete(_spend_tbl))
+            await conn.execute(sa_delete(_limit_tbl))
 
     # ------------------------------------------------------------------
     # Limits CRUD
@@ -86,54 +119,66 @@ class PostgresBudgetManager:
         project_id: str | None = None,
     ) -> None:
         """Add or update a budget limit for an agent (upsert)."""
-        self._check()
         resolved_project = _resolve_project(project_id)
         chain_json = json.dumps(fallback_chain) if fallback_chain else None
-        async with self._pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO budget_limits"
-                " (agent_name, project_id, max_daily_usd, max_monthly_usd, action, fallback_chain)"
-                " VALUES ($1, $2, $3, $4, $5, $6)"
-                " ON CONFLICT (agent_name, project_id) DO UPDATE SET"
-                " max_daily_usd = EXCLUDED.max_daily_usd,"
-                " max_monthly_usd = EXCLUDED.max_monthly_usd,"
-                " action = EXCLUDED.action,"
-                " fallback_chain = EXCLUDED.fallback_chain,"
-                " updated_at = NOW()",
-                agent_name,
-                resolved_project,
-                max_daily_usd,
-                max_monthly_usd,
-                action,
-                chain_json,
-            )
+        now = datetime.now(timezone.utc)
+        values = {
+            "agent_name": agent_name,
+            "project_id": resolved_project,
+            "max_daily_usd": max_daily_usd,
+            "max_monthly_usd": max_monthly_usd,
+            "action": action,
+            "fallback_chain": chain_json,
+            "created_at": now,
+            "updated_at": now,
+        }
+        stmt = upsert(
+            _limit_tbl,
+            values,
+            index_elements=["agent_name", "project_id"],
+            set_={
+                "max_daily_usd": max_daily_usd,
+                "max_monthly_usd": max_monthly_usd,
+                "action": action,
+                "fallback_chain": chain_json,
+                "updated_at": now,
+            },
+            dialect=self._engine.dialect.name,
+        )
+        async with self._engine.begin() as conn:
+            await conn.execute(stmt)
 
     async def remove_limit(
         self, agent_name: str, *, project_id: str | None = None
     ) -> None:
         """Remove a budget limit for an agent."""
-        self._check()
         resolved_project = _resolve_project(project_id)
-        async with self._pool.acquire() as conn:
-            await conn.execute(
-                "DELETE FROM budget_limits WHERE agent_name = $1 AND project_id = $2",
-                agent_name,
-                resolved_project,
-            )
+        stmt = sa_delete(_limit_tbl).where(
+            _limit_tbl.c.agent_name == agent_name,
+            _limit_tbl.c.project_id == resolved_project,
+        )
+        async with self._engine.begin() as conn:
+            await conn.execute(stmt)
 
     async def list_limits(
         self, *, project_id: str | None = None
     ) -> list[dict[str, Any]]:
         """List all configured budget limits for a project."""
-        self._check()
         resolved_project = _resolve_project(project_id)
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT agent_name, project_id, max_daily_usd, max_monthly_usd,"
-                " action, fallback_chain"
-                " FROM budget_limits WHERE project_id = $1 ORDER BY agent_name",
-                resolved_project,
+        stmt = (
+            select(
+                _limit_tbl.c.agent_name,
+                _limit_tbl.c.project_id,
+                _limit_tbl.c.max_daily_usd,
+                _limit_tbl.c.max_monthly_usd,
+                _limit_tbl.c.action,
+                _limit_tbl.c.fallback_chain,
             )
+            .where(_limit_tbl.c.project_id == resolved_project)
+            .order_by(_limit_tbl.c.agent_name)
+        )
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(stmt)).mappings().all()
         return [
             {
                 "agent_name": r["agent_name"],
@@ -142,9 +187,7 @@ class PostgresBudgetManager:
                 "max_monthly_usd": float(r["max_monthly_usd"]),
                 "action": r["action"],
                 "fallback_chain": (
-                    json.loads(r["fallback_chain"])
-                    if r["fallback_chain"]
-                    else []
+                    json.loads(r["fallback_chain"]) if r["fallback_chain"] else []
                 ),
             }
             for r in rows
@@ -158,42 +201,46 @@ class PostgresBudgetManager:
         self, *, agent_name: str, cost_usd: float, project_id: str | None = None
     ) -> None:
         """Record a cost event for an agent."""
-        self._check()
         resolved_project = _resolve_project(project_id)
-        async with self._pool.acquire() as conn:
+        now = datetime.now(timezone.utc)
+        async with self._engine.begin() as conn:
             await conn.execute(
-                "INSERT INTO budget_spend (agent_name, project_id, cost_usd)"
-                " VALUES ($1, $2, $3)",
-                agent_name,
-                resolved_project,
-                cost_usd,
+                insert(_spend_tbl).values(
+                    agent_name=agent_name,
+                    project_id=resolved_project,
+                    cost_usd=cost_usd,
+                    created_at=now,
+                )
             )
 
     async def get_budget_status(
         self, agent_name: str, *, project_id: str | None = None
     ) -> dict[str, Any]:
         """Get current budget status for an agent."""
-        self._check()
         resolved_project = _resolve_project(project_id)
-        async with self._pool.acquire() as conn:
-            limit = await conn.fetchrow(
-                "SELECT max_daily_usd, max_monthly_usd"
-                " FROM budget_limits WHERE agent_name = $1 AND project_id = $2",
-                agent_name,
-                resolved_project,
-            )
+        limit_stmt = select(
+            _limit_tbl.c.max_daily_usd,
+            _limit_tbl.c.max_monthly_usd,
+        ).where(
+            _limit_tbl.c.agent_name == agent_name,
+            _limit_tbl.c.project_id == resolved_project,
+        )
+        async with self._engine.connect() as conn:
+            limit_row = (await conn.execute(limit_stmt)).mappings().first()
             daily = await self._daily_spend(conn, agent_name, resolved_project)
             monthly = await self._monthly_spend(conn, agent_name, resolved_project)
 
+        max_daily = float(limit_row["max_daily_usd"]) if limit_row else None
+        max_monthly = float(limit_row["max_monthly_usd"]) if limit_row else None
         return {
             "agent_name": agent_name,
             "project_id": resolved_project,
             "daily_spend_usd": daily,
             "monthly_spend_usd": monthly,
-            "max_daily_usd": float(limit["max_daily_usd"]) if limit else None,
-            "max_monthly_usd": (
-                float(limit["max_monthly_usd"]) if limit else None
-            ),
+            "max_daily_usd": max_daily,
+            "max_monthly_usd": max_monthly,
+            "daily_remaining_usd": (max_daily - daily) if max_daily is not None else None,
+            "monthly_remaining_usd": (max_monthly - monthly) if max_monthly is not None else None,
         }
 
     # ------------------------------------------------------------------
@@ -204,40 +251,43 @@ class PostgresBudgetManager:
         self, agent_name: str, *, project_id: str | None = None
     ) -> dict[str, Any]:
         """Check if an agent is within budget."""
-        self._check()
         resolved_project = _resolve_project(project_id)
-        async with self._pool.acquire() as conn:
-            limit = await conn.fetchrow(
-                "SELECT max_daily_usd, max_monthly_usd, action"
-                " FROM budget_limits WHERE agent_name = $1 AND project_id = $2",
-                agent_name,
-                resolved_project,
-            )
-            if limit is None:
+        limit_stmt = select(
+            _limit_tbl.c.max_daily_usd,
+            _limit_tbl.c.max_monthly_usd,
+            _limit_tbl.c.action,
+        ).where(
+            _limit_tbl.c.agent_name == agent_name,
+            _limit_tbl.c.project_id == resolved_project,
+        )
+        async with self._engine.connect() as conn:
+            limit_row = (await conn.execute(limit_stmt)).mappings().first()
+            if limit_row is None:
                 return {"allowed": True, "action": "allow"}
-
             daily = await self._daily_spend(conn, agent_name, resolved_project)
             monthly = await self._monthly_spend(conn, agent_name, resolved_project)
 
-        if daily > float(limit["max_daily_usd"]):
+        max_daily = float(limit_row["max_daily_usd"])
+        max_monthly = float(limit_row["max_monthly_usd"])
+        action = limit_row["action"]
+
+        if daily > max_daily:
             return {
                 "allowed": False,
-                "action": limit["action"],
+                "action": action,
                 "reason": (
-                    f"Daily budget exceeded: ${daily:.4f}"
-                    f" > ${float(limit['max_daily_usd']):.4f}"
+                    f"Daily budget exceeded: ${daily:.4f} > ${max_daily:.4f}"
                 ),
                 "daily_spend": daily,
                 "monthly_spend": monthly,
             }
 
-        if monthly > float(limit["max_monthly_usd"]):
+        if monthly > max_monthly:
             return {
                 "allowed": False,
-                "action": limit["action"],
+                "action": action,
                 "reason": (
-                    f"Monthly budget exceeded: ${monthly:.4f}"
-                    f" > ${float(limit['max_monthly_usd']):.4f}"
+                    f"Monthly budget exceeded: ${monthly:.4f} > ${max_monthly:.4f}"
                 ),
                 "daily_spend": daily,
                 "monthly_spend": monthly,
@@ -254,60 +304,56 @@ class PostgresBudgetManager:
         self, agent_name: str, current_model: str, *, project_id: str | None = None
     ) -> str | None:
         """Get the fallback model for an over-budget agent."""
-        self._check()
         resolved_project = _resolve_project(project_id)
-        async with self._pool.acquire() as conn:
-            limit = await conn.fetchrow(
-                "SELECT fallback_chain FROM budget_limits"
-                " WHERE agent_name = $1 AND project_id = $2",
-                agent_name,
-                resolved_project,
-            )
-        if limit is None or not limit["fallback_chain"]:
+        limit_stmt = select(_limit_tbl.c.fallback_chain).where(
+            _limit_tbl.c.agent_name == agent_name,
+            _limit_tbl.c.project_id == resolved_project,
+        )
+        async with self._engine.connect() as conn:
+            row = (await conn.execute(limit_stmt)).mappings().first()
+        if row is None or not row["fallback_chain"]:
             return None
 
         result = await self.check_budget(agent_name, project_id=resolved_project)
         if result["allowed"]:
             return None
 
-        chain = json.loads(limit["fallback_chain"])
+        chain = json.loads(row["fallback_chain"])
         for model in chain:
             if model != current_model:
                 return model
         return None
 
     # ------------------------------------------------------------------
-    # Internal
+    # Internal helpers — portable date-range spend queries
     # ------------------------------------------------------------------
 
     @staticmethod
-    async def _daily_spend(conn: Any, agent_name: str, project_id: str = "default") -> float:
-        """Calculate today's spend via SQL."""
-        row = await conn.fetchrow(
-            "SELECT COALESCE(SUM(cost_usd), 0) AS total"
-            " FROM budget_spend"
-            " WHERE agent_name = $1 AND project_id = $2"
-            " AND created_at >= DATE_TRUNC('day', NOW())",
-            agent_name,
-            project_id,
+    async def _daily_spend(conn: Any, agent_name: str, project_id: str) -> float:
+        """Calculate today's spend (since midnight UTC) via SQLAlchemy Core."""
+        now = datetime.now(timezone.utc)
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        stmt = select(
+            func.coalesce(func.sum(_spend_tbl.c.cost_usd), 0).label("total")
+        ).where(
+            _spend_tbl.c.agent_name == agent_name,
+            _spend_tbl.c.project_id == project_id,
+            _spend_tbl.c.created_at >= day_start,
         )
+        row = (await conn.execute(stmt)).mappings().first()
         return float(row["total"])
 
     @staticmethod
-    async def _monthly_spend(conn: Any, agent_name: str, project_id: str = "default") -> float:
-        """Calculate last-30-days spend via SQL."""
-        row = await conn.fetchrow(
-            "SELECT COALESCE(SUM(cost_usd), 0) AS total"
-            " FROM budget_spend"
-            " WHERE agent_name = $1 AND project_id = $2"
-            " AND created_at >= NOW() - INTERVAL '30 days'",
-            agent_name,
-            project_id,
+    async def _monthly_spend(conn: Any, agent_name: str, project_id: str) -> float:
+        """Calculate last-30-days spend via SQLAlchemy Core."""
+        now = datetime.now(timezone.utc)
+        month_start = now - timedelta(days=30)
+        stmt = select(
+            func.coalesce(func.sum(_spend_tbl.c.cost_usd), 0).label("total")
+        ).where(
+            _spend_tbl.c.agent_name == agent_name,
+            _spend_tbl.c.project_id == project_id,
+            _spend_tbl.c.created_at >= month_start,
         )
+        row = (await conn.execute(stmt)).mappings().first()
         return float(row["total"])
-
-    def _check(self) -> None:
-        if self._pool is None:
-            raise RuntimeError(
-                "PostgresBudgetManager not initialized. Call init() first."
-            )

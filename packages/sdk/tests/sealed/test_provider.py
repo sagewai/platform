@@ -73,7 +73,7 @@ async def test_sealed_levels_resolves_and_injects(monkeypatch, tmp_path):
 
     # profile.injected emitted (search audit calls)
     inj_calls = [
-        c for c in audit._store._pool.execute.await_args_list
+        c for c in audit._pool.execute.await_args_list
         if c.args[1] == "profile.injected"
     ]
     assert len(inj_calls) == 1
@@ -116,7 +116,7 @@ async def test_drift_detection_emits_event(monkeypatch, tmp_path):
         sealed_levels=[CascadeLevel(name="user", profile_ref="acme", overrides=None)],
     )
     drift_calls = [
-        c for c in audit._store._pool.execute.await_args_list
+        c for c in audit._pool.execute.await_args_list
         if c.args[1] == "profile.drift_at_injection"
     ]
     assert len(drift_calls) == 1

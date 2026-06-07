@@ -19,8 +19,8 @@ def test_status_no_key(monkeypatch, tmp_path):
     monkeypatch.delenv("SAGEWAI_MASTER_KEY", raising=False)
     monkeypatch.setattr("sagewai.sealed.master_key.keyring", None)
     monkeypatch.setattr(
-        "sagewai.sealed.master_key.DEFAULT_KEY_PATH",
-        tmp_path / "nope.key",
+        "sagewai.sealed.master_key.default_key_path",
+        lambda: tmp_path / "nope.key",
     )
     monkeypatch.setenv("SAGEWAI_ADMIN_STATE_FILE", str(tmp_path / "admin-state.json"))
     (tmp_path / "admin-state.json").write_text(json.dumps({}))

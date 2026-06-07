@@ -62,6 +62,7 @@ if TYPE_CHECKING:
     from sagewai.core.stores.postgres import PostgresStore
     from sagewai.models.worker import WorkerCredentials
 
+from sagewai import home as _home
 from sagewai.fleet.normalizer import ModelNormalizer
 from sagewai.sandbox.backend import SandboxBackend
 from sagewai.sandbox.fallback import apply_fallback
@@ -328,7 +329,7 @@ class WorkflowWorker:
         self._sandbox_backend_override = sandbox_backend
         self._sandbox_config = sandbox_config or SandboxConfig()
         self._sandbox_scratch_root = (
-            sandbox_scratch_root or Path.home() / ".sagewai" / "workers"
+            sandbox_scratch_root or _home.data_dir() / "workers"
         )
         self._kubernetes_config = sandbox_kubernetes_config
         self._project_environment = project_environment

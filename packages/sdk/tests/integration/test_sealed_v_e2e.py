@@ -29,16 +29,15 @@ pytestmark = pytest.mark.skipif(
 async def test_audit_writer_persists_directive_evaluated_event() -> None:
     """End-to-end: emit a directive.evaluated event, then list it via admin
     adapter. Demonstrates the audit path that the worker integration uses."""
-    import asyncpg
-
+    from sagewai.db.engine import create_engine
     from sagewai.sealed.directives.audit import DirectiveAuditWriter
     from sagewai.sealed.directives.postgres_adapters import (
         DirectiveEvaluationsAdapter,
     )
 
-    pool = await asyncpg.create_pool(os.environ["SAGEWAI_DATABASE_URL"])
+    engine = create_engine(os.environ["SAGEWAI_DATABASE_URL"])
     try:
-        adapter = DirectiveEvaluationsAdapter(pool)
+        adapter = DirectiveEvaluationsAdapter(engine=engine)
         writer = DirectiveAuditWriter(store=adapter)
 
         run_id = f"r-e2e-{int(datetime.now(tz=timezone.utc).timestamp())}"
@@ -67,21 +66,20 @@ async def test_audit_writer_persists_directive_evaluated_event() -> None:
         filtered = await adapter.list_filtered(run_id=run_id, limit=10)
         assert any(r["decision_id"] == "dec-e2e-1" for r in filtered)
     finally:
-        await pool.close()
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
 async def test_approval_lifecycle_round_trip() -> None:
     """End-to-end: insert a pending approval, approve it, fetch by run."""
-    import asyncpg
-
+    from sagewai.db.engine import create_engine
     from sagewai.sealed.directives.postgres_adapters import (
         ApprovalsPostgresAdapter,
     )
 
-    pool = await asyncpg.create_pool(os.environ["SAGEWAI_DATABASE_URL"])
+    engine = create_engine(os.environ["SAGEWAI_DATABASE_URL"])
     try:
-        adapter = ApprovalsPostgresAdapter(pool)
+        adapter = ApprovalsPostgresAdapter(engine=engine)
         now = datetime.now(tz=timezone.utc)
         decision_id = f"dec-e2e-{int(now.timestamp())}"
         run_id = f"r-e2e-{int(now.timestamp())}"
@@ -118,4 +116,4 @@ async def test_approval_lifecycle_round_trip() -> None:
         approved = await adapter.fetch_approved_for_run(run_id)
         assert any(r["decision_id"] == decision_id for r in approved)
     finally:
-        await pool.close()
+        await engine.dispose()

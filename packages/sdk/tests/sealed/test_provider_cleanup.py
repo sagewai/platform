@@ -54,7 +54,7 @@ async def test_cleanup_run_emits_pool_sandbox_reset_audit():
         effective_secret_keys=[],
         security_profile_ref="acme",
     )
-    types = [c.args[1] for c in audit._store._pool.execute.await_args_list
+    types = [c.args[1] for c in audit._pool.execute.await_args_list
              if c.args and len(c.args) > 1]
     assert "pool.sandbox.reset" in types
 

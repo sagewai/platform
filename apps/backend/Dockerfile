@@ -39,9 +39,9 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 RUN if ls /build/dist/sagewai-*.whl >/dev/null 2>&1; then \
-        pip install "/build/dist/$(basename /build/dist/sagewai-*.whl)[fastapi]"; \
+        pip install "/build/dist/$(basename /build/dist/sagewai-*.whl)[fastapi,postgres]"; \
     else \
-        pip install "sagewai[fastapi]"; \
+        pip install "sagewai[fastapi,postgres]"; \
     fi
 
 # ── Stage 2: runtime ────────────────────────────────────────────────────────

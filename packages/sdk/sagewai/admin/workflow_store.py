@@ -9,15 +9,24 @@
 # See COMMERCIAL-LICENSE.md for details.
 """Saved workflow store — persistent storage for workflow registry.
 
-Provides a PostgreSQL-backed store for saved workflow definitions with CRUD
-operations, versioning, and project-scoped isolation.
+Backed by SQLAlchemy Core, compatible with both SQLite (default) and
+PostgreSQL. The class name and all public method signatures are
+unchanged so callers require no modification.
 
 Usage::
 
     from sagewai.admin.workflow_store import SavedWorkflowStore
 
+    # Default engine (SQLite or $SAGEWAI_DATABASE_URL):
+    store = SavedWorkflowStore()
+    await store.init()
+
+    # Explicit URL (old positional form — still supported):
     store = SavedWorkflowStore("postgresql://user:pass@host/db")
     await store.init()
+
+    # Injected engine (test / DI form):
+    store = SavedWorkflowStore(engine=my_async_engine)
 
     wf_id = await store.save(
         name="research-pipeline",
@@ -30,16 +39,25 @@ Usage::
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import insert, select, update
+from sqlalchemy.ext.asyncio import AsyncEngine
+
 from sagewai.core.context import get_current_project
+from sagewai.db import factory
+from sagewai.db.engine import create_engine
+from sagewai.db.models import Base, SavedWorkflowModel, SavedWorkflowVersionModel
 
 logger = logging.getLogger(__name__)
+
+_wf_tbl = SavedWorkflowModel.__table__
+_ver_tbl = SavedWorkflowVersionModel.__table__
 
 
 def _resolve_project(project_id: str | None = None) -> str:
@@ -48,6 +66,17 @@ def _resolve_project(project_id: str | None = None) -> str:
         return project_id
     ctx = get_current_project()
     return ctx.project_id if ctx else "default"
+
+
+def _dt_to_ts(val: Any) -> float:
+    """Convert a datetime (or existing float) to a Unix timestamp."""
+    if val is None:
+        return 0.0
+    if isinstance(val, datetime):
+        return val.timestamp()
+    if isinstance(val, (int, float)):
+        return float(val)
+    return 0.0
 
 
 @dataclass
@@ -82,36 +111,54 @@ class SavedWorkflow:
 
 
 class SavedWorkflowStore:
-    """PostgreSQL-backed store for saved workflow definitions.
+    """SQLAlchemy Core store for saved workflow definitions — SQLite or PostgreSQL.
 
-    Schema is managed by Alembic migrations. Run ``alembic upgrade head``
-    before starting the application.
+    Constructor forms (all equivalent from caller perspective):
+
+    * ``SavedWorkflowStore()``
+        Uses the process-wide engine from :func:`sagewai.db.factory.get_engine`.
+    * ``SavedWorkflowStore("postgresql://user:pass@host/db")``
+        Positional URL string — back-compat with old callers.
+    * ``SavedWorkflowStore(engine=my_engine)``
+        Injected engine; used by tests and DI containers.
+    * ``SavedWorkflowStore(database_url="...")``
+        Keyword URL — also supported.
+
+    On SQLite, :meth:`init` creates the schema via ``create_all``.
+    On PostgreSQL, :meth:`init` is a no-op (Alembic owns the schema).
     """
 
-    def __init__(self, database_url: str) -> None:
-        self._url = database_url
-        self._pool: Any = None
+    def __init__(
+        self,
+        database_url: str | None = None,
+        *,
+        engine: AsyncEngine | None = None,
+    ) -> None:
+        if engine is not None:
+            self._engine: AsyncEngine = engine
+        elif database_url is not None:
+            self._engine = create_engine(database_url)
+        else:
+            self._engine = factory.get_engine()
 
     @property
     def is_connected(self) -> bool:
-        return self._pool is not None
+        """True once the engine is available (immediately after construction)."""
+        return self._engine is not None
 
     async def init(self) -> None:
-        """Initialize the connection pool."""
-        try:
-            import asyncpg
-        except ImportError as exc:
-            raise ImportError(
-                "asyncpg is required for PostgreSQL. " "Install with: uv add 'sagewai[postgres]'"
-            ) from exc
+        """Bootstrap the schema on SQLite; no-op on PostgreSQL (Alembic owns it)."""
+        if self._engine.dialect.name == "sqlite":
+            async with self._engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
 
-        self._pool = await asyncpg.create_pool(self._url, min_size=1, max_size=5)
+    # kept for back-compat (old code called initialize())
+    async def initialize(self) -> None:
+        """Alias for :meth:`init`."""
+        await self.init()
 
     async def close(self) -> None:
-        """Close the connection pool."""
-        if self._pool is not None:
-            await self._pool.close()
-            self._pool = None
+        """No-op — the factory or caller owns the engine lifecycle."""
 
     async def save(
         self,
@@ -123,109 +170,103 @@ class SavedWorkflowStore:
         project_id: str | None = None,
     ) -> str:
         """Save or update a workflow. Auto-bumps version on update. Returns workflow id."""
-        self._check_connected()
         resolved_project = _resolve_project(project_id)
 
         # Check if workflow with this name already exists
         existing = await self.get_by_name(name, project_id=resolved_project)
 
         if existing:
-            # Update existing — bump version
+            # Update existing — bump version atomically:
+            # 1. Insert a new version row.
+            # 2. Update the parent record's version/yaml/description.
+            # Both steps happen inside a single engine.begin() transaction.
             new_version = existing.version + 1
-
-            # Save version history + update main record atomically
             version_id = uuid.uuid4().hex[:12]
-            async with self._pool.acquire() as conn:
-                async with conn.transaction():
-                    await conn.execute(
-                        """
-                        INSERT INTO saved_workflow_versions
-                        (id, workflow_id, version, yaml_content)
-                        VALUES ($1, $2, $3, $4)
-                        """,
-                        version_id,
-                        existing.id,
-                        new_version,
-                        yaml_content,
-                    )
+            now = datetime.now(timezone.utc)
 
-                    # Update the main record
-                    await conn.execute(
-                        """
-                        UPDATE saved_workflows
-                        SET yaml_content = $1, description = $2, version = $3,
-                            updated_at = NOW()
-                        WHERE id = $4 AND project_id = $5
-                        """,
-                        yaml_content,
-                        description,
-                        new_version,
-                        existing.id,
-                        resolved_project,
+            async with self._engine.begin() as conn:
+                await conn.execute(
+                    insert(_ver_tbl).values(
+                        id=version_id,
+                        workflow_id=existing.id,
+                        version=new_version,
+                        yaml_content=yaml_content,
                     )
+                )
+                await conn.execute(
+                    update(_wf_tbl)
+                    .where(
+                        _wf_tbl.c.id == existing.id,
+                        _wf_tbl.c.project_id == resolved_project,
+                    )
+                    .values(
+                        yaml_content=yaml_content,
+                        description=description,
+                        version=new_version,
+                        updated_at=now,
+                    )
+                )
             return existing.id
 
-        # Create new workflow
+        # Create new workflow + version 1, all in one transaction.
         workflow_id = uuid.uuid4().hex[:12]
-        async with self._pool.acquire() as conn:
-            async with conn.transaction():
-                await conn.execute(
-                    """
-                    INSERT INTO saved_workflows
-                    (id, project_id, name, description, yaml_content, version,
-                     is_active, created_by)
-                    VALUES ($1, $2, $3, $4, $5, 1, TRUE, $6)
-                    """,
-                    workflow_id,
-                    resolved_project,
-                    name,
-                    description,
-                    yaml_content,
-                    created_by,
-                )
+        version_id = uuid.uuid4().hex[:12]
+        now = datetime.now(timezone.utc)
 
-                # Also save as version 1
-                version_id = uuid.uuid4().hex[:12]
-                await conn.execute(
-                    """
-                    INSERT INTO saved_workflow_versions
-                    (id, workflow_id, version, yaml_content)
-                    VALUES ($1, $2, 1, $3)
-                    """,
-                    version_id,
-                    workflow_id,
-                    yaml_content,
+        async with self._engine.begin() as conn:
+            await conn.execute(
+                insert(_wf_tbl).values(
+                    id=workflow_id,
+                    project_id=resolved_project,
+                    name=name,
+                    description=description,
+                    yaml_content=yaml_content,
+                    version=1,
+                    is_active=True,
+                    created_by=created_by,
+                    created_at=now,
+                    updated_at=now,
                 )
+            )
+            await conn.execute(
+                insert(_ver_tbl).values(
+                    id=version_id,
+                    workflow_id=workflow_id,
+                    version=1,
+                    yaml_content=yaml_content,
+                )
+            )
 
         return workflow_id
 
     async def get(self, workflow_id: str, *, project_id: str | None = None) -> SavedWorkflow | None:
         """Get a workflow by ID, scoped to project."""
-        self._check_connected()
         resolved_project = _resolve_project(project_id)
-        async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT * FROM saved_workflows WHERE id = $1 AND project_id = $2",
-                workflow_id,
-                resolved_project,
-            )
-        if not row:
+        stmt = select(_wf_tbl).where(
+            _wf_tbl.c.id == workflow_id,
+            _wf_tbl.c.project_id == resolved_project,
+        )
+        async with self._engine.connect() as conn:
+            result = await conn.execute(stmt)
+            row = result.mappings().first()
+        if row is None:
             return None
         return self._row_to_record(row)
 
     async def get_by_name(
         self, name: str, *, project_id: str | None = None
     ) -> SavedWorkflow | None:
-        """Get a workflow by name, scoped to project."""
-        self._check_connected()
+        """Get an active workflow by name, scoped to project."""
         resolved_project = _resolve_project(project_id)
-        async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT * FROM saved_workflows WHERE name = $1 AND project_id = $2",
-                name,
-                resolved_project,
-            )
-        if not row:
+        stmt = select(_wf_tbl).where(
+            _wf_tbl.c.name == name,
+            _wf_tbl.c.project_id == resolved_project,
+            _wf_tbl.c.is_active == True,  # noqa: E712
+        )
+        async with self._engine.connect() as conn:
+            result = await conn.execute(stmt)
+            row = result.mappings().first()
+        if row is None:
             return None
         return self._row_to_record(row)
 
@@ -239,78 +280,73 @@ class SavedWorkflowStore:
         project_id: str | None = None,
     ) -> list[SavedWorkflow]:
         """List saved workflows with optional filtering, scoped to project."""
-        self._check_connected()
         resolved_project = _resolve_project(project_id)
-        conditions: list[str] = []
-        params: list[Any] = []
-        idx = 1
-
-        conditions.append(f"project_id = ${idx}")
-        params.append(resolved_project)
-        idx += 1
+        stmt = select(_wf_tbl).where(_wf_tbl.c.project_id == resolved_project)
 
         if is_active is not None:
-            conditions.append(f"is_active = ${idx}")
-            params.append(is_active)
-            idx += 1
+            stmt = stmt.where(_wf_tbl.c.is_active == is_active)
 
         if search:
-            conditions.append(f"(name ILIKE ${idx} OR description ILIKE ${idx})")
-            params.append(f"%{search}%")
-            idx += 1
+            search_lower = search.lower()
+            # Use LIKE for portable case-insensitive substring match.
+            # SQLite LIKE is case-insensitive for ASCII; Postgres ILIKE would be
+            # ideal but isn't portable. Lower() + LIKE covers both.
+            from sqlalchemy import func as sa_func
+            stmt = stmt.where(
+                sa_func.lower(_wf_tbl.c.name).like(f"%{search_lower}%")
+                | sa_func.lower(_wf_tbl.c.description).like(f"%{search_lower}%")
+            )
 
-        where = " AND ".join(conditions)
-        sql = (
-            f"SELECT * FROM saved_workflows WHERE {where} "
-            f"ORDER BY updated_at DESC LIMIT ${idx} OFFSET ${idx + 1}"
-        )
-        params.extend([limit, offset])
+        stmt = stmt.order_by(_wf_tbl.c.updated_at.desc()).limit(limit).offset(offset)
 
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(sql, *params)
+        async with self._engine.connect() as conn:
+            result = await conn.execute(stmt)
+            rows = result.mappings().all()
+
         return [self._row_to_record(row) for row in rows]
 
     async def delete(self, workflow_id: str, *, project_id: str | None = None) -> bool:
-        """Soft-delete a workflow (set is_active=false)."""
-        self._check_connected()
+        """Soft-delete a workflow (set is_active=False). Returns True if a row was updated."""
         resolved_project = _resolve_project(project_id)
-        async with self._pool.acquire() as conn:
-            result = await conn.execute(
-                """
-                UPDATE saved_workflows
-                SET is_active = FALSE, updated_at = NOW()
-                WHERE id = $1 AND project_id = $2
-                """,
-                workflow_id,
-                resolved_project,
+        now = datetime.now(timezone.utc)
+        stmt = (
+            update(_wf_tbl)
+            .where(
+                _wf_tbl.c.id == workflow_id,
+                _wf_tbl.c.project_id == resolved_project,
             )
-        return "UPDATE 1" in result
+            .values(is_active=False, updated_at=now)
+        )
+        async with self._engine.begin() as conn:
+            result = await conn.execute(stmt)
+        return result.rowcount > 0
 
     async def list_versions(
         self, workflow_id: str, *, project_id: str | None = None
     ) -> list[dict[str, Any]]:
-        """List version history for a workflow, scoped to project."""
-        self._check_connected()
+        """List version history for a workflow, scoped to project (newest first)."""
         resolved_project = _resolve_project(project_id)
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT v.id, v.workflow_id, v.version, v.yaml_content, v.created_at
-                FROM saved_workflow_versions v
-                JOIN saved_workflows w ON w.id = v.workflow_id
-                WHERE v.workflow_id = $1 AND w.project_id = $2
-                ORDER BY v.version DESC
-                """,
-                workflow_id,
-                resolved_project,
+        # Join to parent to enforce project scope.
+        stmt = (
+            select(_ver_tbl)
+            .join(_wf_tbl, _wf_tbl.c.id == _ver_tbl.c.workflow_id)
+            .where(
+                _ver_tbl.c.workflow_id == workflow_id,
+                _wf_tbl.c.project_id == resolved_project,
             )
+            .order_by(_ver_tbl.c.version.desc())
+        )
+        async with self._engine.connect() as conn:
+            result = await conn.execute(stmt)
+            rows = result.mappings().all()
+
         return [
             {
                 "id": row["id"],
                 "workflow_id": row["workflow_id"],
                 "version": row["version"],
                 "yaml_content": row["yaml_content"],
-                "created_at": row["created_at"].timestamp() if row["created_at"] else 0,
+                "created_at": _dt_to_ts(row["created_at"]),
             }
             for row in rows
         ]
@@ -319,54 +355,58 @@ class SavedWorkflowStore:
         self, workflow_id: str, version: int, *, project_id: str | None = None
     ) -> str | None:
         """Get yaml_content for a specific version, scoped to project."""
-        self._check_connected()
         resolved_project = _resolve_project(project_id)
-        async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT v.yaml_content FROM saved_workflow_versions v
-                JOIN saved_workflows w ON w.id = v.workflow_id
-                WHERE v.workflow_id = $1 AND v.version = $2 AND w.project_id = $3
-                """,
-                workflow_id,
-                version,
-                resolved_project,
+        stmt = (
+            select(_ver_tbl.c.yaml_content)
+            .join(_wf_tbl, _wf_tbl.c.id == _ver_tbl.c.workflow_id)
+            .where(
+                _ver_tbl.c.workflow_id == workflow_id,
+                _ver_tbl.c.version == version,
+                _wf_tbl.c.project_id == resolved_project,
             )
-        return row["yaml_content"] if row else None
+        )
+        async with self._engine.connect() as conn:
+            result = await conn.execute(stmt)
+            row = result.first()
+        return row[0] if row else None
 
     async def count(self, *, project_id: str | None = None) -> int:
-        """Count active saved workflows."""
-        self._check_connected()
+        """Count active saved workflows in a project."""
+        from sqlalchemy import func as sa_func
+
         resolved_project = _resolve_project(project_id)
-        async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT COUNT(*) as cnt FROM saved_workflows WHERE project_id = $1 AND is_active = TRUE",
-                resolved_project,
-            )
-        return row["cnt"] if row else 0
+        stmt = select(sa_func.count()).select_from(_wf_tbl).where(
+            _wf_tbl.c.project_id == resolved_project,
+            _wf_tbl.c.is_active == True,  # noqa: E712
+        )
+        async with self._engine.connect() as conn:
+            result = await conn.execute(stmt)
+            val = result.scalar()
+        return val or 0
 
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 
-    def _row_to_record(self, row: Any) -> SavedWorkflow:
-        """Convert an asyncpg Record to a SavedWorkflow."""
+    @staticmethod
+    def _row_to_record(row: Any) -> SavedWorkflow:
+        """Convert a SQLAlchemy row mapping to a SavedWorkflow."""
         return SavedWorkflow(
             id=row["id"],
-            project_id=row.get("project_id", "default"),
+            project_id=row["project_id"],
             name=row["name"],
-            description=row.get("description", ""),
+            description=row.get("description") or "",
             yaml_content=row["yaml_content"],
-            version=row.get("version", 1),
-            is_active=row.get("is_active", True),
+            version=row.get("version") or 1,
+            is_active=bool(row.get("is_active", True)),
             created_by=row.get("created_by"),
-            created_at=row["created_at"].timestamp() if row.get("created_at") else 0,
-            updated_at=row["updated_at"].timestamp() if row.get("updated_at") else 0,
+            created_at=_dt_to_ts(row.get("created_at")),
+            updated_at=_dt_to_ts(row.get("updated_at")),
         )
 
     def _check_connected(self) -> None:
-        if self._pool is None:
-            raise RuntimeError("SavedWorkflowStore not initialized. Call init() first.")
+        if self._engine is None:
+            raise RuntimeError("SavedWorkflowStore not initialized.")
 
 
 class InMemorySavedWorkflowStore:

@@ -7,19 +7,55 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""Postgres bindings for directive_evaluations + pending_directive_approvals."""
+"""SQLAlchemy Core adapters for directive_evaluations + pending_directive_approvals.
+
+Both adapters are engine-only (SQLAlchemy Core) and accept an optional
+``engine=`` keyword argument (defaults to ``factory.get_engine()``).
+
+Constructor:
+    DirectiveEvaluationsAdapter(engine=engine)
+    ApprovalsPostgresAdapter(engine=engine)
+"""
 from __future__ import annotations
 
 import json
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncEngine
+
 
 class DirectiveEvaluationsAdapter:
-    """Writes/queries directive_evaluations rows."""
+    """Writes/queries directive_evaluations rows via SQLAlchemy Core.
 
-    def __init__(self, pool: Any) -> None:
-        self._pool = pool
+    Parameters
+    ----------
+    engine:
+        SQLAlchemy async engine.  Defaults to ``factory.get_engine()``.
+    database_url:
+        Convenience alternative to *engine*: creates an engine from the URL.
+    """
+
+    def __init__(
+        self,
+        *,
+        engine: AsyncEngine | None = None,
+        database_url: str | None = None,
+    ) -> None:
+        if engine is not None:
+            self._engine: AsyncEngine | None = engine
+        elif database_url is not None:
+            from sagewai.db.engine import create_engine
+            self._engine = create_engine(database_url)
+        else:
+            self._engine = None
+
+    def _get_engine(self) -> AsyncEngine:
+        if self._engine is not None:
+            return self._engine
+        from sagewai.db import factory
+        return factory.get_engine()
 
     async def insert_directive_evaluation(
         self,
@@ -34,48 +70,35 @@ class DirectiveEvaluationsAdapter:
         severity: str | None,
         details: dict[str, Any],
     ) -> None:
-        async with self._pool.acquire() as conn:
+        from sagewai.db.models import DirectiveEvaluationModel
+        tbl = DirectiveEvaluationModel.__table__
+        async with self._get_engine().begin() as conn:
             await conn.execute(
-                """
-                INSERT INTO directive_evaluations
-                    (event_type, decision_id, run_id, project_id, workflow_name,
-                     policy_id, signal_kind, severity, details)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
-                """,
-                event_type, decision_id, run_id, project_id, workflow_name,
-                policy_id, signal_kind, severity, json.dumps(details),
+                tbl.insert().values(
+                    event_type=event_type,
+                    decision_id=decision_id,
+                    run_id=run_id,
+                    project_id=project_id,
+                    workflow_name=workflow_name,
+                    policy_id=policy_id,
+                    signal_kind=signal_kind,
+                    severity=severity,
+                    details=details,
+                )
             )
 
     async def list_for_run(self, *, run_id: str, limit: int = 200) -> list[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT id, event_type, decision_id, run_id, project_id,
-                       workflow_name, policy_id, signal_kind, severity,
-                       details, created_at
-                FROM directive_evaluations
-                WHERE run_id = $1
-                ORDER BY created_at DESC
-                LIMIT $2
-                """,
-                run_id, limit,
-            )
-            return [
-                {
-                    "id": r["id"],
-                    "event_type": r["event_type"],
-                    "decision_id": r["decision_id"],
-                    "run_id": r["run_id"],
-                    "project_id": r["project_id"],
-                    "workflow_name": r["workflow_name"],
-                    "policy_id": r["policy_id"],
-                    "signal_kind": r["signal_kind"],
-                    "severity": r["severity"],
-                    "details": json.loads(r["details"]) if isinstance(r["details"], str) else r["details"],
-                    "created_at": r["created_at"],
-                }
-                for r in rows
-            ]
+        from sagewai.db.models import DirectiveEvaluationModel
+        tbl = DirectiveEvaluationModel.__table__
+        stmt = (
+            select(tbl)
+            .where(tbl.c.run_id == run_id)
+            .order_by(tbl.c.created_at.desc())
+            .limit(limit)
+        )
+        async with self._get_engine().connect() as conn:
+            rows = (await conn.execute(stmt)).mappings().all()
+        return [self._row_to_dict(r) for r in rows]
 
     async def list_filtered(
         self,
@@ -85,76 +108,114 @@ class DirectiveEvaluationsAdapter:
         event_type: str | None = None,
         limit: int = 200,
     ) -> list[dict[str, Any]]:
-        clauses = []
-        args: list[Any] = []
+        from sagewai.db.models import DirectiveEvaluationModel
+        tbl = DirectiveEvaluationModel.__table__
+        stmt = select(tbl).order_by(tbl.c.created_at.desc()).limit(limit)
         if run_id:
-            args.append(run_id)
-            clauses.append(f"run_id = ${len(args)}")
+            stmt = stmt.where(tbl.c.run_id == run_id)
         if policy_id:
-            args.append(policy_id)
-            clauses.append(f"policy_id = ${len(args)}")
+            stmt = stmt.where(tbl.c.policy_id == policy_id)
         if event_type:
-            args.append(event_type)
-            clauses.append(f"event_type = ${len(args)}")
-        where = "WHERE " + " AND ".join(clauses) if clauses else ""
-        args.append(limit)
-        sql = f"""
-            SELECT id, event_type, decision_id, run_id, project_id,
-                   workflow_name, policy_id, signal_kind, severity,
-                   details, created_at
-            FROM directive_evaluations
-            {where}
-            ORDER BY created_at DESC
-            LIMIT ${len(args)}
-        """
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(sql, *args)
-            out = []
-            for r in rows:
-                d = dict(r)
-                if isinstance(d.get("details"), str):
-                    d["details"] = json.loads(d["details"])
-                out.append(d)
-            return out
+            stmt = stmt.where(tbl.c.event_type == event_type)
+        async with self._get_engine().connect() as conn:
+            rows = (await conn.execute(stmt)).mappings().all()
+        return [self._row_to_dict(r) for r in rows]
+
+    @staticmethod
+    def _row_to_dict(row: Any) -> dict[str, Any]:
+        details = row["details"]
+        if isinstance(details, str):
+            details = json.loads(details)
+        return {
+            "id": row["id"],
+            "event_type": row["event_type"],
+            "decision_id": row["decision_id"],
+            "run_id": row["run_id"],
+            "project_id": row["project_id"],
+            "workflow_name": row["workflow_name"],
+            "policy_id": row["policy_id"],
+            "signal_kind": row["signal_kind"],
+            "severity": row["severity"],
+            "details": details,
+            "created_at": row["created_at"],
+        }
 
 
 class ApprovalsPostgresAdapter:
-    """Pool adapter for PendingApprovalsRegistry."""
+    """SQLAlchemy Core adapter for pending_directive_approvals.
 
-    def __init__(self, pool: Any) -> None:
-        self._pool = pool
+    Parameters
+    ----------
+    engine:
+        SQLAlchemy async engine.  Defaults to ``factory.get_engine()``.
+    database_url:
+        Convenience alternative to *engine*: creates an engine from the URL.
+    """
+
+    def __init__(
+        self,
+        *,
+        engine: AsyncEngine | None = None,
+        database_url: str | None = None,
+    ) -> None:
+        if engine is not None:
+            self._engine: AsyncEngine | None = engine
+        elif database_url is not None:
+            from sagewai.db.engine import create_engine
+            self._engine = create_engine(database_url)
+        else:
+            self._engine = None
+
+    def _get_engine(self) -> AsyncEngine:
+        if self._engine is not None:
+            return self._engine
+        from sagewai.db import factory
+        return factory.get_engine()
 
     async def fetch_one_pending_for(self, run_id: str, policy_id: str) -> dict[str, Any] | None:
-        async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT decision_id, run_id, policy_id, status, expires_at
-                FROM pending_directive_approvals
-                WHERE run_id = $1 AND policy_id = $2 AND status = 'pending'
-                LIMIT 1
-                """,
-                run_id, policy_id,
+        from sagewai.db.models import PendingDirectiveApprovalModel
+        tbl = PendingDirectiveApprovalModel.__table__
+        stmt = (
+            select(tbl)
+            .where(
+                tbl.c.run_id == run_id,
+                tbl.c.policy_id == policy_id,
+                tbl.c.status == "pending",
             )
-            return dict(row) if row else None
+            .limit(1)
+        )
+        async with self._get_engine().connect() as conn:
+            row = (await conn.execute(stmt)).mappings().first()
+        if row is None:
+            return None
+        return {
+            "decision_id": row["decision_id"],
+            "run_id": row["run_id"],
+            "policy_id": row["policy_id"],
+            "status": row["status"],
+            "expires_at": row["expires_at"],
+        }
 
     async def insert(self, row: dict[str, Any]) -> None:
-        async with self._pool.acquire() as conn:
+        from sagewai.db.models import PendingDirectiveApprovalModel
+        tbl = PendingDirectiveApprovalModel.__table__
+        async with self._get_engine().begin() as conn:
             await conn.execute(
-                """
-                INSERT INTO pending_directive_approvals
-                    (decision_id, run_id, project_id, workflow_name, policy_id,
-                     triggering_signal, proposed_action, requested_at, status,
-                     decided_at, decided_by, operator_note, expires_at)
-                VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb,
-                        $8, $9, $10, $11, $12, $13)
-                """,
-                row["decision_id"], row["run_id"], row["project_id"],
-                row["workflow_name"], row["policy_id"],
-                json.dumps(row["triggering_signal"]),
-                json.dumps(row["proposed_action"]),
-                row["requested_at"], row["status"],
-                row["decided_at"], row["decided_by"], row["operator_note"],
-                row["expires_at"],
+                tbl.insert().values(
+                    decision_id=row["decision_id"],
+                    run_id=row["run_id"],
+                    project_id=row.get("project_id"),
+                    workflow_name=row["workflow_name"],
+                    policy_id=row["policy_id"],
+                    triggering_signal=row["triggering_signal"],
+                    proposed_action=row["proposed_action"],
+                    requested_at=row.get("requested_at"),
+                    status=row.get("status", "pending"),
+                    decided_at=row.get("decided_at"),
+                    decided_by=row.get("decided_by"),
+                    operator_note=row.get("operator_note"),
+                    expires_at=row["expires_at"],
+                )
             )
 
     async def update_status(
@@ -166,39 +227,50 @@ class ApprovalsPostgresAdapter:
         decided_by: str | None = None,
         operator_note: str | None = None,
     ) -> dict[str, Any]:
-        async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                UPDATE pending_directive_approvals
-                SET status = $2, decided_at = $3, decided_by = $4, operator_note = $5
-                WHERE decision_id = $1
-                RETURNING decision_id, run_id, status, decided_at
-                """,
-                decision_id, status, decided_at, decided_by, operator_note,
+        from sagewai.db.models import PendingDirectiveApprovalModel
+        tbl = PendingDirectiveApprovalModel.__table__
+        stmt = (
+            update(tbl)
+            .where(tbl.c.decision_id == decision_id)
+            .values(
+                status=status,
+                decided_at=decided_at,
+                decided_by=decided_by,
+                operator_note=operator_note,
             )
-            if row is None:
-                raise KeyError(decision_id)
-            return dict(row)
+            .returning(tbl.c.decision_id, tbl.c.run_id, tbl.c.status, tbl.c.decided_at)
+        )
+        async with self._get_engine().begin() as conn:
+            row = (await conn.execute(stmt)).mappings().first()
+        if row is None:
+            raise KeyError(decision_id)
+        return dict(row)
 
     async def fetch_approved_for_run(self, run_id: str) -> list[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT decision_id, policy_id, proposed_action, decided_at
-                FROM pending_directive_approvals
-                WHERE run_id = $1 AND status = 'approved'
-                ORDER BY decided_at ASC
-                """,
-                run_id,
+        from sagewai.db.models import PendingDirectiveApprovalModel
+        tbl = PendingDirectiveApprovalModel.__table__
+        stmt = (
+            select(
+                tbl.c.decision_id,
+                tbl.c.policy_id,
+                tbl.c.proposed_action,
+                tbl.c.decided_at,
             )
-            return [
-                {
-                    "decision_id": r["decision_id"],
-                    "policy_id": r["policy_id"],
-                    "proposed_action": json.loads(r["proposed_action"])
+            .where(tbl.c.run_id == run_id, tbl.c.status == "approved")
+            .order_by(tbl.c.decided_at.asc())
+        )
+        async with self._get_engine().connect() as conn:
+            rows = (await conn.execute(stmt)).mappings().all()
+        return [
+            {
+                "decision_id": r["decision_id"],
+                "policy_id": r["policy_id"],
+                "proposed_action": (
+                    json.loads(r["proposed_action"])
                     if isinstance(r["proposed_action"], str)
-                    else r["proposed_action"],
-                    "decided_at": r["decided_at"],
-                }
-                for r in rows
-            ]
+                    else r["proposed_action"]
+                ),
+                "decided_at": r["decided_at"],
+            }
+            for r in rows
+        ]

@@ -19,9 +19,15 @@ try:
 except ImportError:
     keyring = None  # optional dep
 
-DEFAULT_KEY_PATH = Path.home() / ".sagewai" / "master.key"
+from sagewai import home
+
 KEYRING_SERVICE = "sagewai-master-key"
 KEYRING_USERNAME = "sealed"
+
+
+def default_key_path() -> Path:
+    """Default master-key path: ``$SAGEWAI_HOME/secrets/master.key``."""
+    return home.secrets_dir() / "master.key"
 
 
 class MasterKeyMissing(RuntimeError):  # noqa: N818
@@ -31,7 +37,7 @@ class MasterKeyMissing(RuntimeError):  # noqa: N818
 def resolve_master_key() -> tuple[bytes, str]:
     """Resolve the master key. Returns (key_bytes, source_label).
 
-    Order: env-var → OS keychain → ~/.sagewai/master.key file.
+    Order: env-var → OS keychain → $SAGEWAI_HOME/secrets/master.key file.
     Raises MasterKeyMissing if none configured.
     """
     env_key = os.environ.get("SAGEWAI_MASTER_KEY")
@@ -46,10 +52,16 @@ def resolve_master_key() -> tuple[bytes, str]:
         if kr_value:
             return _normalize_key(kr_value), "keychain"
 
-    if DEFAULT_KEY_PATH.exists():
-        _verify_secure_perms(DEFAULT_KEY_PATH)
-        file_value = DEFAULT_KEY_PATH.read_text(encoding="utf-8").strip()
-        return _normalize_key(file_value), "file"
+    # Try the canonical new path first, then the legacy flat root as a
+    # belt-and-suspenders fallback so installs that haven't yet run
+    # migrate_home() (no CLI, no admin-serve) keep working.
+    key_path = default_key_path()
+    legacy_key_path = home.sagewai_home() / "master.key"
+    for candidate in (key_path, legacy_key_path):
+        if candidate.exists():
+            _verify_secure_perms(candidate)
+            file_value = candidate.read_text(encoding="utf-8").strip()
+            return _normalize_key(file_value), "file"
 
     raise MasterKeyMissing(
         "No SAGEWAI_MASTER_KEY env var, OS keychain entry, or master.key file found. "
@@ -102,7 +114,7 @@ def store_master_key(
             )
         keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, key.decode("ascii"))
     elif destination == "file":
-        target = path or DEFAULT_KEY_PATH
+        target = path or default_key_path()
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(key)
         target.chmod(0o600)

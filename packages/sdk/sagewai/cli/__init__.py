@@ -123,6 +123,11 @@ def cli(ctx: click.Context) -> None:
     \b
     Documentation: https://docs.sagewai.ai
     """
+    # Migrate legacy flat files (~/.sagewai/*.json / *.key) into the
+    # structured home layout on every CLI invocation.  Idempotent + cheap
+    # (only stats 4 paths); safe on --help / --version / no legacy files.
+    from sagewai import home as _home
+    _home.migrate_home()
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
 

@@ -9,15 +9,24 @@
 # See COMMERCIAL-LICENSE.md for details.
 """Agent run store — persistent storage for run records.
 
-Provides a PostgreSQL-backed store for agent run records with CRUD
-operations, filtering, and auto-recording from BaseAgent events.
+Backed by SQLAlchemy Core, compatible with both SQLite (default) and
+PostgreSQL. The class name and all public method signatures are
+unchanged so callers require no modification.
 
 Usage::
 
     from sagewai.admin.store import RunStore
 
+    # Default engine (SQLite or $SAGEWAI_DATABASE_URL):
+    store = RunStore()
+    await store.init()
+
+    # Explicit URL (old positional form — still supported):
     store = RunStore("postgresql://user:pass@host/db")
     await store.init()
+
+    # Injected engine (test / DI form):
+    store = RunStore(engine=my_async_engine)
 
     run_id = await store.save_run(
         agent_name="scout",
@@ -39,9 +48,18 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import func, insert, select
+from sqlalchemy.ext.asyncio import AsyncEngine
+
 from sagewai.core.context import get_current_project
+from sagewai.db import factory
+from sagewai.db.engine import create_engine
+from sagewai.db.models import AgentRun, Base
 
 logger = logging.getLogger(__name__)
+
+_tbl = AgentRun.__table__
 
 
 def _resolve_project(project_id: str | None = None) -> str:
@@ -103,41 +121,60 @@ class RunRecord:
 
 
 class RunStore:
-    """PostgreSQL-backed agent run store.
+    """SQLAlchemy Core agent run store — SQLite (default) or PostgreSQL.
 
-    Schema is managed by Alembic migrations. Run ``alembic upgrade head``
-    before starting the application.
+    Constructor forms (all equivalent from caller perspective):
 
-    Parameters
-    ----------
-    database_url:
-        PostgreSQL connection string: ``"postgresql://user:pass@host/db"``.
+    * ``RunStore()``
+        Uses the process-wide engine from :func:`sagewai.db.factory.get_engine`.
+    * ``RunStore("postgresql://user:pass@host/db")``
+        Positional URL string — back-compat with old callers.
+    * ``RunStore(engine=my_engine)``
+        Injected engine; used by tests and DI containers.
+    * ``RunStore(database_url="...")``
+        Keyword URL — also supported.
+
+    On SQLite, :meth:`init` creates the schema via ``create_all``.
+    On PostgreSQL, :meth:`init` is a no-op (Alembic owns the schema).
     """
 
-    def __init__(self, database_url: str) -> None:
-        self._url = database_url
-        self._pool: Any = None
+    def __init__(
+        self,
+        engine_or_url: AsyncEngine | str | None = None,
+        *,
+        database_url: str | None = None,
+        engine: AsyncEngine | None = None,
+    ) -> None:
+        # Resolve which engine to use, in priority order:
+        #   1. `engine=` keyword argument
+        #   2. positional AsyncEngine
+        #   3. positional str URL
+        #   4. `database_url=` keyword URL
+        #   5. factory default
+        if engine is not None:
+            self._engine: AsyncEngine = engine
+        elif isinstance(engine_or_url, AsyncEngine):
+            self._engine = engine_or_url
+        elif isinstance(engine_or_url, str):
+            self._engine = create_engine(engine_or_url)
+        elif database_url is not None:
+            self._engine = create_engine(database_url)
+        else:
+            self._engine = factory.get_engine()
 
     @property
     def is_connected(self) -> bool:
-        return self._pool is not None
+        """True once the engine is available (immediately after construction)."""
+        return self._engine is not None
 
     async def init(self) -> None:
-        """Initialize the connection pool."""
-        try:
-            import asyncpg
-        except ImportError as exc:
-            raise ImportError(
-                "asyncpg is required for PostgreSQL. " "Install with: uv add 'sagewai[postgres]'"
-            ) from exc
-
-        self._pool = await asyncpg.create_pool(self._url, min_size=1, max_size=5)
+        """Bootstrap the schema on SQLite; no-op on PostgreSQL (Alembic owns it)."""
+        if self._engine.dialect.name == "sqlite":
+            async with self._engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
 
     async def close(self) -> None:
-        """Close the connection pool."""
-        if self._pool is not None:
-            await self._pool.close()
-            self._pool = None
+        """No-op — the factory or caller owns the engine lifecycle."""
 
     async def save_run(
         self,
@@ -167,50 +204,45 @@ class RunStore:
         run_id = uuid.uuid4().hex[:12]
         now = time.time()
 
-        sql = """
-        INSERT INTO agent_runs
-        (run_id, agent_name, project_id, status, input_text, output_text,
-         total_tokens, input_tokens, output_tokens, cost_usd, model,
-         duration_ms, tool_calls, metadata, started_at, completed_at, error,
-         run_type, parent_workflow_run_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
-        """
-        async with self._pool.acquire() as conn:
-            await conn.execute(
-                sql,
-                run_id,
-                agent_name,
-                resolved_project,
-                status,
-                input_text,
-                output_text,
-                total_tokens,
-                input_tokens,
-                output_tokens,
-                cost_usd,
-                model,
-                duration_ms,
-                json.dumps(tool_calls or []),
-                json.dumps(metadata or {}),
-                started_at or now,
-                completed_at or now,
-                error,
-                run_type,
-                parent_workflow_run_id,
-            )
+        # Note: the ORM attribute is `metadata_` but the column name is "metadata".
+        # When inserting via Core we use the column key "metadata".
+        stmt = insert(_tbl).values(
+            run_id=run_id,
+            agent_name=agent_name,
+            project_id=resolved_project,
+            status=status,
+            input_text=input_text,
+            output_text=output_text,
+            total_tokens=total_tokens,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=cost_usd,
+            model=model,
+            duration_ms=duration_ms,
+            tool_calls=tool_calls or [],
+            metadata=metadata or {},
+            started_at=started_at if started_at is not None else now,
+            completed_at=completed_at if completed_at is not None else now,
+            error=error,
+            run_type=run_type,
+            parent_workflow_run_id=parent_workflow_run_id,
+        )
+        async with self._engine.begin() as conn:
+            await conn.execute(stmt)
         return run_id
 
     async def get_run(self, run_id: str, *, project_id: str | None = None) -> RunRecord | None:
         """Get a run by ID, scoped to project."""
         self._check_connected()
         resolved_project = _resolve_project(project_id)
-        async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT * FROM agent_runs WHERE run_id = $1 AND project_id = $2",
-                run_id,
-                resolved_project,
-            )
-        if not row:
+        stmt = select(_tbl).where(
+            _tbl.c.run_id == run_id,
+            _tbl.c.project_id == resolved_project,
+        )
+        async with self._engine.connect() as conn:
+            result = await conn.execute(stmt)
+            row = result.mappings().first()
+        if row is None:
             return None
         return self._row_to_record(row)
 
@@ -231,65 +263,41 @@ class RunStore:
         """List runs with optional filtering, scoped to project."""
         self._check_connected()
         resolved_project = _resolve_project(project_id)
-        conditions: list[str] = []
-        params: list[Any] = []
-        idx = 1
 
-        conditions.append(f"project_id = ${idx}")
-        params.append(resolved_project)
-        idx += 1
+        stmt = select(_tbl).where(_tbl.c.project_id == resolved_project)
 
         if agent_name:
-            conditions.append(f"agent_name ILIKE ${idx}")
-            params.append(f"%{agent_name}%")
-            idx += 1
+            stmt = stmt.where(_tbl.c.agent_name.ilike(f"%{agent_name}%"))
         if status:
-            conditions.append(f"status = ${idx}")
-            params.append(status)
-            idx += 1
+            stmt = stmt.where(_tbl.c.status == status)
         if model:
-            conditions.append(f"model = ${idx}")
-            params.append(model)
-            idx += 1
+            stmt = stmt.where(_tbl.c.model == model)
         if since:
-            conditions.append(f"started_at >= ${idx}")
-            params.append(since)
-            idx += 1
+            stmt = stmt.where(_tbl.c.started_at >= since)
         if until:
-            conditions.append(f"started_at <= ${idx}")
-            params.append(until)
-            idx += 1
+            stmt = stmt.where(_tbl.c.started_at <= until)
         if run_type:
-            conditions.append(f"run_type = ${idx}")
-            params.append(run_type)
-            idx += 1
+            stmt = stmt.where(_tbl.c.run_type == run_type)
         if exclude_run_types:
-            placeholders = ", ".join(f"${idx + i}" for i in range(len(exclude_run_types)))
-            conditions.append(f"run_type NOT IN ({placeholders})")
-            params.extend(exclude_run_types)
-            idx += len(exclude_run_types)
+            stmt = stmt.where(_tbl.c.run_type.notin_(exclude_run_types))
 
-        where = " AND ".join(conditions)
-        sql = (
-            f"SELECT * FROM agent_runs WHERE {where} "
-            f"ORDER BY started_at DESC LIMIT ${idx} OFFSET ${idx + 1}"
-        )
-        params.extend([limit, offset])
+        stmt = stmt.order_by(_tbl.c.started_at.desc()).limit(limit).offset(offset)
 
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(sql, *params)
+        async with self._engine.connect() as conn:
+            result = await conn.execute(stmt)
+            rows = result.mappings().all()
         return [self._row_to_record(row) for row in rows]
 
     async def delete_run(self, run_id: str, *, project_id: str | None = None) -> bool:
         """Delete a run by ID, scoped to project. Returns True if deleted."""
         self._check_connected()
         resolved_project = _resolve_project(project_id)
-        async with self._pool.acquire() as conn:
-            await conn.execute(
-                "DELETE FROM agent_runs WHERE run_id = $1 AND project_id = $2",
-                run_id,
-                resolved_project,
-            )
+        stmt = sa_delete(_tbl).where(
+            _tbl.c.run_id == run_id,
+            _tbl.c.project_id == resolved_project,
+        )
+        async with self._engine.begin() as conn:
+            await conn.execute(stmt)
         return True
 
     async def count(
@@ -302,35 +310,24 @@ class RunStore:
         """Count runs with optional filtering, scoped to project."""
         self._check_connected()
         resolved_project = _resolve_project(project_id)
-        conditions: list[str] = []
-        params: list[Any] = []
-        idx = 1
 
-        conditions.append(f"project_id = ${idx}")
-        params.append(resolved_project)
-        idx += 1
-
+        stmt = select(func.count()).select_from(_tbl).where(
+            _tbl.c.project_id == resolved_project
+        )
         if agent_name:
-            conditions.append(f"agent_name ILIKE ${idx}")
-            params.append(f"%{agent_name}%")
-            idx += 1
+            stmt = stmt.where(_tbl.c.agent_name.ilike(f"%{agent_name}%"))
         if status:
-            conditions.append(f"status = ${idx}")
-            params.append(status)
-            idx += 1
+            stmt = stmt.where(_tbl.c.status == status)
 
-        where = " AND ".join(conditions)
-        sql = f"SELECT COUNT(*) as cnt FROM agent_runs WHERE {where}"
-
-        async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(sql, *params)
-        return row["cnt"] if row else 0
+        async with self._engine.connect() as conn:
+            result = await conn.execute(stmt)
+            return result.scalar() or 0
 
     async def clear(self) -> None:
         """Delete all runs."""
         self._check_connected()
-        async with self._pool.acquire() as conn:
-            await conn.execute("DELETE FROM agent_runs")
+        async with self._engine.begin() as conn:
+            await conn.execute(sa_delete(_tbl))
 
     # ------------------------------------------------------------------
     # Event hook for BaseAgent integration
@@ -404,7 +401,19 @@ class RunStore:
     # ------------------------------------------------------------------
 
     def _row_to_record(self, row: Any) -> RunRecord:
-        """Convert an asyncpg Record to a RunRecord."""
+        """Convert a SQLAlchemy RowMapping to a RunRecord.
+
+        The column in the table is named "metadata" (the ORM attribute is
+        metadata_), so we read row["metadata"] here.
+        """
+        tool_calls = row["tool_calls"]
+        if isinstance(tool_calls, str):
+            tool_calls = json.loads(tool_calls)
+
+        metadata = row["metadata"]
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata)
+
         return RunRecord(
             run_id=row["run_id"],
             agent_name=row["agent_name"],
@@ -418,14 +427,8 @@ class RunStore:
             cost_usd=row["cost_usd"],
             model=row["model"],
             duration_ms=row["duration_ms"],
-            tool_calls=(
-                json.loads(row["tool_calls"])
-                if isinstance(row["tool_calls"], str)
-                else row["tool_calls"]
-            ),
-            metadata=(
-                json.loads(row["metadata"]) if isinstance(row["metadata"], str) else row["metadata"]
-            ),
+            tool_calls=tool_calls or [],
+            metadata=metadata or {},
             started_at=row["started_at"],
             completed_at=row["completed_at"],
             error=row["error"],
@@ -434,5 +437,5 @@ class RunStore:
         )
 
     def _check_connected(self) -> None:
-        if self._pool is None:
-            raise RuntimeError("RunStore not initialized. Call init() first.")
+        if self._engine is None:
+            raise RuntimeError("RunStore has no engine. Pass engine= or a database URL.")

@@ -7,10 +7,11 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""PostgreSQL-backed analytics store for cost and guardrail tracking.
+"""Analytics store backed by SQLAlchemy Core — works on both SQLite and PostgreSQL.
 
-Drop-in replacement for the in-memory AnalyticsStore. Uses asyncpg
-connection pool for safe concurrent access.
+One implementation replaces the former asyncpg-only PostgresAnalyticsStore.
+The class name and all public method signatures are unchanged so callers
+require no modification.
 
 Usage::
 
@@ -25,42 +26,83 @@ Usage::
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import func, insert, select
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from sagewai.core.context import get_current_project
+from sagewai.db import factory
+from sagewai.db.engine import create_engine
+from sagewai.db.models import Base, CostRecord, GuardrailEventModel
 from sagewai.observability.costs import is_local_model
+
+
+def _resolve_project(project_id: str | None = None) -> str:
+    """Resolve project_id from explicit param, contextvar, or default."""
+    if project_id:
+        return project_id
+    ctx = get_current_project()
+    return ctx.project_id if ctx else "default"
 
 logger = logging.getLogger(__name__)
 
+_cost_tbl = CostRecord.__table__
+_event_tbl = GuardrailEventModel.__table__
+
 
 class PostgresAnalyticsStore:
-    """PostgreSQL-backed analytics store.
+    """Analytics store using SQLAlchemy Core — SQLite (default) or PostgreSQL.
 
     Tables ``cost_records`` and ``guardrail_events`` must exist
-    (created by Alembic migration 005).
+    (created by Alembic migration 005, or via ``Base.metadata.create_all``
+    on SQLite).
+
+    Parameters
+    ----------
+    database_url:
+        Connection string passed to :func:`sagewai.db.engine.create_engine`.
+        Ignored when *engine* is supplied.  Accepted for backward-compat
+        with callers that previously passed the URL as the only argument.
+    engine:
+        Pre-built :class:`AsyncEngine`.  When supplied, *database_url* is
+        ignored and the asyncpg *pool* is unused.
     """
 
-    def __init__(self, database_url: str) -> None:
-        self._url = database_url
-        self._pool: Any = None
+    def __init__(
+        self,
+        database_url: str | None = None,
+        *,
+        engine: AsyncEngine | None = None,
+    ) -> None:
+        if engine is not None:
+            self._engine: AsyncEngine = engine
+        elif database_url is not None:
+            self._engine = create_engine(database_url)
+        else:
+            self._engine = factory.get_engine()
 
     async def init(self) -> None:
-        """Open a connection pool."""
-        import asyncpg
+        """Bootstrap schema on SQLite; no-op on PostgreSQL (Alembic owns it).
 
-        self._pool = await asyncpg.create_pool(self._url, min_size=1, max_size=5)
+        Kept for API back-compat with the asyncpg version.
+        """
+        if self._engine.dialect.name == "sqlite":
+            async with self._engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
 
     async def close(self) -> None:
-        """Close the connection pool."""
-        if self._pool is not None:
-            await self._pool.close()
-            self._pool = None
+        """Dispose the engine (compat with asyncpg version that closed the pool)."""
+        await self._engine.dispose()
 
     async def clear(self) -> None:
         """Delete all records (for testing)."""
-        self._check()
-        async with self._pool.acquire() as conn:
-            await conn.execute("DELETE FROM cost_records")
-            await conn.execute("DELETE FROM guardrail_events")
+        from sqlalchemy import delete as sa_delete
+
+        async with self._engine.begin() as conn:
+            await conn.execute(sa_delete(_cost_tbl))
+            await conn.execute(sa_delete(_event_tbl))
 
     # ------------------------------------------------------------------
     # Recording
@@ -72,17 +114,20 @@ class PostgresAnalyticsStore:
         model: str,
         cost_usd: float,
         tokens: int,
+        project_id: str | None = None,
     ) -> None:
         """Record a cost event."""
-        self._check()
-        async with self._pool.acquire() as conn:
+        now = datetime.now(timezone.utc)
+        async with self._engine.begin() as conn:
             await conn.execute(
-                "INSERT INTO cost_records (agent_name, model, cost_usd, tokens)"
-                " VALUES ($1, $2, $3, $4)",
-                agent_name,
-                model,
-                cost_usd,
-                tokens,
+                insert(_cost_tbl).values(
+                    agent_name=agent_name,
+                    model=model,
+                    cost_usd=cost_usd,
+                    tokens=tokens,
+                    created_at=now,
+                    project_id=_resolve_project(project_id),
+                )
             )
 
     async def record_guardrail_event(
@@ -90,16 +135,19 @@ class PostgresAnalyticsStore:
         agent_name: str,
         event_type: str,
         detail: str | None = None,
+        project_id: str | None = None,
     ) -> None:
         """Record a guardrail event."""
-        self._check()
-        async with self._pool.acquire() as conn:
+        now = datetime.now(timezone.utc)
+        async with self._engine.begin() as conn:
             await conn.execute(
-                "INSERT INTO guardrail_events (agent_name, event_type, detail)"
-                " VALUES ($1, $2, $3)",
-                agent_name,
-                event_type,
-                detail,
+                insert(_event_tbl).values(
+                    agent_name=agent_name,
+                    event_type=event_type,
+                    detail=detail,
+                    created_at=now,
+                    project_id=_resolve_project(project_id),
+                )
             )
 
     # ------------------------------------------------------------------
@@ -107,58 +155,67 @@ class PostgresAnalyticsStore:
     # ------------------------------------------------------------------
 
     async def get_costs(
-        self, agent_name: str | None = None
+        self, agent_name: str | None = None, *, project_id: str | None = None
     ) -> dict[str, Any]:
-        """Get cost analytics, optionally filtered by agent."""
-        self._check()
-        async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT COALESCE(SUM(cost_usd), 0) AS total,"
-                " COUNT(*) AS cnt"
-                " FROM cost_records"
-                " WHERE ($1::text IS NULL OR agent_name = $1)",
-                agent_name,
-            )
+        """Get cost analytics, optionally filtered by agent.
+
+        *project_id* is accepted for API compatibility with the synchronous
+        ``AnalyticsStore`` but is not yet used for per-project filtering on
+        the database-backed store (all records share a single store).
+        """
+        stmt = select(
+            func.coalesce(func.sum(_cost_tbl.c.cost_usd), 0).label("total"),
+            func.count().label("cnt"),
+        )
+        if agent_name is not None:
+            stmt = stmt.where(_cost_tbl.c.agent_name == agent_name)
+        async with self._engine.connect() as conn:
+            row = (await conn.execute(stmt)).mappings().first()
         return {
             "total_cost_usd": float(row["total"]),
-            "record_count": row["cnt"],
+            "record_count": int(row["cnt"]),
         }
 
     async def get_usage(
-        self, agent_name: str | None = None
+        self, agent_name: str | None = None, *, project_id: str | None = None
     ) -> dict[str, Any]:
-        """Get token usage analytics."""
-        self._check()
-        async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT COALESCE(SUM(tokens), 0) AS total_tokens,"
-                " COUNT(*) AS cnt"
-                " FROM cost_records"
-                " WHERE ($1::text IS NULL OR agent_name = $1)",
-                agent_name,
-            )
+        """Get token usage analytics.
+
+        *project_id* accepted for API compatibility; not yet used for filtering.
+        """
+        stmt = select(
+            func.coalesce(func.sum(_cost_tbl.c.tokens), 0).label("total_tokens"),
+            func.count().label("cnt"),
+        )
+        if agent_name is not None:
+            stmt = stmt.where(_cost_tbl.c.agent_name == agent_name)
+        async with self._engine.connect() as conn:
+            row = (await conn.execute(stmt)).mappings().first()
         return {
             "total_tokens": int(row["total_tokens"]),
-            "record_count": row["cnt"],
+            "record_count": int(row["cnt"]),
         }
 
     async def get_risks(
-        self, agent_name: str | None = None
+        self, agent_name: str | None = None, *, project_id: str | None = None
     ) -> dict[str, Any]:
         """Get risk analytics — PII events, hallucination flags, etc."""
-        self._check()
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT event_type, COUNT(*) AS cnt"
-                " FROM guardrail_events"
-                " WHERE ($1::text IS NULL OR agent_name = $1)"
-                " GROUP BY event_type",
-                agent_name,
-            )
-        counts: dict[str, int] = {r["event_type"]: r["cnt"] for r in rows}
+        stmt = select(
+            _event_tbl.c.event_type,
+            func.count().label("cnt"),
+        ).group_by(_event_tbl.c.event_type)
+        if agent_name is not None:
+            stmt = stmt.where(_event_tbl.c.agent_name == agent_name)
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(stmt)).mappings().all()
+        counts: dict[str, int] = {r["event_type"]: int(r["cnt"]) for r in rows}
         total = sum(counts.values())
         # Accept both "pii" and "pii_detected" for backwards compat
-        pii = counts.get("pii", 0) + counts.get("pii_detected", 0) + counts.get("guardrail_violation", 0)
+        pii = (
+            counts.get("pii", 0)
+            + counts.get("pii_detected", 0)
+            + counts.get("guardrail_violation", 0)
+        )
         return {
             "pii_events": pii,
             "hallucination_flags": counts.get("hallucination", 0),
@@ -166,65 +223,83 @@ class PostgresAnalyticsStore:
             "total_events": total,
         }
 
-    async def get_model_analytics(self) -> list[dict[str, Any]]:
-        """Get per-model analytics."""
-        self._check()
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT model,"
-                " SUM(cost_usd) AS total_cost,"
-                " SUM(tokens) AS total_tokens,"
-                " COUNT(*) AS requests"
-                " FROM cost_records"
-                " GROUP BY model"
-                " ORDER BY total_cost DESC"
+    async def get_model_analytics(self, *, project_id: str | None = None) -> list[dict[str, Any]]:
+        """Get per-model analytics.
+
+        *project_id* accepted for API compatibility; not yet used for filtering.
+        """
+        stmt = (
+            select(
+                _cost_tbl.c.model,
+                func.sum(_cost_tbl.c.cost_usd).label("total_cost"),
+                func.sum(_cost_tbl.c.tokens).label("total_tokens"),
+                func.count().label("requests"),
             )
+            .group_by(_cost_tbl.c.model)
+            .order_by(func.sum(_cost_tbl.c.cost_usd).desc())
+        )
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(stmt)).mappings().all()
         result = []
         for r in rows:
             total_tokens = int(r["total_tokens"])
             total_cost = float(r["total_cost"])
             cost_per_1k = (total_cost / total_tokens * 1000) if total_tokens > 0 else 0.0
-            result.append({
-                "model": r["model"],
-                "total_cost_usd": total_cost,
-                "total_tokens": total_tokens,
-                "request_count": r["requests"],
-                "cost_per_1k_tokens": cost_per_1k,
-                "is_local": is_local_model(r["model"]),
-            })
+            result.append(
+                {
+                    "model": r["model"],
+                    "total_cost_usd": total_cost,
+                    "total_tokens": total_tokens,
+                    "request_count": int(r["requests"]),
+                    "cost_per_1k_tokens": cost_per_1k,
+                    "is_local": is_local_model(r["model"]),
+                }
+            )
         return result
 
-    async def get_agent_analytics(self) -> list[dict[str, Any]]:
-        """Get per-agent analytics."""
-        self._check()
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT agent_name,"
-                " SUM(cost_usd) AS total_cost,"
-                " SUM(tokens) AS total_tokens,"
-                " COUNT(*) AS requests,"
-                " ARRAY_AGG(DISTINCT model) AS models_used"
-                " FROM cost_records"
-                " GROUP BY agent_name"
-                " ORDER BY total_cost DESC"
+    async def get_agent_analytics(self, *, project_id: str | None = None) -> list[dict[str, Any]]:
+        """Get per-agent analytics.
+
+        *project_id* accepted for API compatibility; not yet used for filtering.
+
+        ARRAY_AGG(DISTINCT model) is not portable; we instead collect the
+        distinct models in Python by running a secondary
+        SELECT DISTINCT (agent_name, model) query — one round-trip, but
+        fully portable and produces the same result shape.
+        """
+        # Aggregate: totals per agent
+        agg_stmt = (
+            select(
+                _cost_tbl.c.agent_name,
+                func.sum(_cost_tbl.c.cost_usd).label("total_cost"),
+                func.sum(_cost_tbl.c.tokens).label("total_tokens"),
+                func.count().label("requests"),
             )
+            .group_by(_cost_tbl.c.agent_name)
+            .order_by(func.sum(_cost_tbl.c.cost_usd).desc())
+        )
+        # Distinct models per agent
+        models_stmt = select(
+            _cost_tbl.c.agent_name,
+            _cost_tbl.c.model,
+        ).distinct()
+
+        async with self._engine.connect() as conn:
+            agg_rows = (await conn.execute(agg_stmt)).mappings().all()
+            model_rows = (await conn.execute(models_stmt)).mappings().all()
+
+        # Build agent -> set of models mapping
+        agent_models: dict[str, set[str]] = {}
+        for r in model_rows:
+            agent_models.setdefault(r["agent_name"], set()).add(r["model"])
+
         return [
             {
                 "agent_name": r["agent_name"],
                 "total_cost_usd": float(r["total_cost"]),
                 "total_tokens": int(r["total_tokens"]),
-                "request_count": r["requests"],
-                "models_used": list(r["models_used"]),
+                "request_count": int(r["requests"]),
+                "models_used": sorted(agent_models.get(r["agent_name"], set())),
             }
-            for r in rows
+            for r in agg_rows
         ]
-
-    # ------------------------------------------------------------------
-    # Internal
-    # ------------------------------------------------------------------
-
-    def _check(self) -> None:
-        if self._pool is None:
-            raise RuntimeError(
-                "PostgresAnalyticsStore not initialized. Call init() first."
-            )

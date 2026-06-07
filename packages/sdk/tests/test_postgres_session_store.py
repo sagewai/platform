@@ -7,86 +7,72 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""Tests for PostgresSessionStore.
+"""Tests for PostgresSessionStore (SQLAlchemy Core backend).
 
-These tests use mocking — no real database required.
-For integration tests, run with a live PostgreSQL instance.
+Uses an in-memory SQLite engine so no real database is required.
 """
 
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
+import pytest_asyncio
 
 from sagewai.core.session import SessionRecord
 from sagewai.core.stores.session_store import PostgresSessionStore
+from sagewai.db.engine import create_engine
+from sagewai.db.models import Base
+
+
+@pytest_asyncio.fixture
+async def store(tmp_path):
+    """In-memory SQLite engine with schema bootstrapped."""
+    engine = create_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    s = PostgresSessionStore(engine=engine)
+    yield s
+    await engine.dispose()
+
+
+def _record(sid="s1", pid="acme"):
+    return SessionRecord(
+        session_id=sid,
+        project_id=pid,
+        agent_name="assistant",
+        messages=[{"role": "user", "content": "hi"}],
+        summary="User said hi.",
+    )
 
 
 class TestPostgresSessionStore:
     @pytest.mark.asyncio
-    async def test_save_executes_upsert(self):
-        mock_pool = MagicMock()
-        mock_pool.execute = AsyncMock()
-        store = PostgresSessionStore(pool=mock_pool)
-
-        record = SessionRecord(
-            session_id="s1",
-            project_id="acme",
-            agent_name="assistant",
-            messages=[{"role": "user", "content": "hi"}],
-            summary="User said hi.",
-        )
+    async def test_save_executes_upsert(self, store):
+        record = _record()
         await store.save(record)
-        mock_pool.execute.assert_called_once()
-        call_args = mock_pool.execute.call_args
-        assert "INSERT INTO sessions" in call_args[0][0]
+        loaded = await store.load("s1", project_id="acme")
+        assert loaded is not None
+        assert loaded.session_id == "s1"
 
     @pytest.mark.asyncio
-    async def test_load_returns_record(self):
-        mock_pool = MagicMock()
-        mock_pool.fetchrow = AsyncMock(
-            return_value={
-                "session_id": "s1",
-                "project_id": "acme",
-                "agent_name": "assistant",
-                "messages": '[{"role": "user", "content": "hi"}]',
-                "summary": "User said hi.",
-                "memory_keys": "[]",
-                "created_at": 1000.0,
-                "updated_at": 1000.0,
-            }
-        )
-        store = PostgresSessionStore(pool=mock_pool)
-
+    async def test_load_returns_record(self, store):
+        await store.save(_record())
         record = await store.load("s1", project_id="acme")
         assert record is not None
         assert record.session_id == "s1"
         assert record.project_id == "acme"
 
     @pytest.mark.asyncio
-    async def test_load_returns_none_when_not_found(self):
-        mock_pool = MagicMock()
-        mock_pool.fetchrow = AsyncMock(return_value=None)
-        store = PostgresSessionStore(pool=mock_pool)
-
+    async def test_load_returns_none_when_not_found(self, store):
         assert await store.load("missing") is None
 
     @pytest.mark.asyncio
-    async def test_delete_executes_query(self):
-        mock_pool = MagicMock()
-        mock_pool.execute = AsyncMock()
-        store = PostgresSessionStore(pool=mock_pool)
-
+    async def test_delete_executes_query(self, store):
+        await store.save(_record())
         await store.delete("s1", project_id="acme")
-        mock_pool.execute.assert_called_once()
-        call_args = mock_pool.execute.call_args
-        assert "DELETE FROM sessions" in call_args[0][0]
+        assert await store.load("s1", project_id="acme") is None
 
     @pytest.mark.asyncio
-    async def test_list_sessions_queries_by_project(self):
-        mock_pool = MagicMock()
-        mock_pool.fetch = AsyncMock(return_value=[])
-        store = PostgresSessionStore(pool=mock_pool)
-
+    async def test_list_sessions_queries_by_project(self, store):
+        await store.save(_record(sid="s1", pid="acme"))
+        await store.save(_record(sid="s2", pid="other"))
         result = await store.list_sessions(project_id="acme", limit=10)
-        assert result == []
-        mock_pool.fetch.assert_called_once()
+        assert len(result) == 1
+        assert result[0].session_id == "s1"

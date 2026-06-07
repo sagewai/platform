@@ -106,6 +106,20 @@ just dev-all       # backend API + admin UI together
 
 ---
 
+## Persistence
+
+Sagewai persists all state across restarts with no setup required. On first start it creates `~/.sagewai/` (override with `SAGEWAI_HOME`) and writes to three subdirectories:
+
+| Path | What lives there |
+|------|-----------------|
+| `~/.sagewai/config/` | `admin-state.json`, `connections.json` — human-readable config |
+| `~/.sagewai/db/sagewai.db` | SQLite: sessions, runs, workflow checkpoints, analytics, vector learnings |
+| `~/.sagewai/secrets/` | `master.key`, `profiles.json` — mode 0700 |
+
+For production scale or multi-process deployments, set `SAGEWAI_DATABASE_URL=postgresql+asyncpg://…` and install the `sagewai[postgres]` extra. The same store layer runs on both backends with no code changes. See the [Persistence guide](https://docs.sagewai.ai/docs/guides/persistence) for the full layout, durability matrix, and migration steps.
+
+---
+
 ## Repository map
 
 Sagewai is a monorepo. The packages and apps:

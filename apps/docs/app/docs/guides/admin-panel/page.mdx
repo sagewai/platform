@@ -37,7 +37,7 @@ The panel has three layers:
 | Backend API | FastAPI routers mounted on the admin app | `apps/admin/admin/` |
 | Web frontend | Next.js 15 with recharts | `apps/admin/` |
 
-Data stores are in-memory by default. In production, swap to the PostgreSQL-backed implementations by setting `SAGEWAI_DATABASE_URL`.
+Data stores persist to SQLite at `~/.sagewai/db/sagewai.db` by default. Set `SAGEWAI_DATABASE_URL` to use Postgres for production scale or multi-process deployments.
 
 ---
 

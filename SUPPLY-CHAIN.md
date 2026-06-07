@@ -59,6 +59,19 @@ New runtime deps added for tool-catalog batch 1 (no-auth tier tools).
 | pypdf | 6.11.0 | BSD-3-Clause | PDF text extraction for `pdf_parse` tool |
 | readability-lxml | 0.8.4.1 | Apache-2.0 | Main-content extraction for `web_scrape` tool |
 
+Deps promoted to base for durable-persistence (PR2a — SQLite default):
+
+| Package | Version | Licence | Purpose |
+|---------|---------|---------|---------|
+| sqlalchemy[asyncio] | 2.0.49 | MIT | ORM/Core async DB layer; was `[postgres]`-only, now base (SQLite default) |
+| aiosqlite | 0.22.1 | MIT | Async SQLite driver for SQLAlchemy's asyncio extension; new direct dep |
+
+Deps added for durable-persistence (PR3.1 — sqlite-vec vector memory):
+
+| Package | Version | Licence | Purpose |
+|---------|---------|---------|---------|
+| sqlite-vec | 0.1.9 | MIT | SQLite extension for durable local vector memory (vec0 virtual tables + KNN queries); zero-config default vector path |
+
 ## Optional Dependency Inventory
 
 Extras (opt-in via `pip install sagewai[<extra>]`) documented below for

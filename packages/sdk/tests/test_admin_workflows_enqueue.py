@@ -40,7 +40,7 @@ def state_path(tmp_path, monkeypatch):
 
     import sagewai.admin.state_file as _sf_mod
 
-    monkeypatch.setattr(_sf_mod, "_DEFAULT_STATE_FILE", path)
+    monkeypatch.setattr(_sf_mod, "default_admin_state_path", lambda: path)
     return path
 
 
@@ -192,7 +192,7 @@ async def test_full_mode_with_system_default_and_no_workers_returns_400(
         "setup_complete": True,
         "sealed": {"system_profile_ref": "builtin:system-default"},
     }))
-    monkeypatch.setattr(_sf_mod, "_DEFAULT_STATE_FILE", state_path)
+    monkeypatch.setattr(_sf_mod, "default_admin_state_path", lambda: state_path)
 
     from sagewai.admin.serve import create_admin_serve_app
     from sagewai.admin.state_file import AdminStateFile

@@ -16,20 +16,26 @@ import os
 from typing import Any
 
 import pytest
+import pytest_asyncio
 
 from sagewai.core.base import BaseAgent
 from sagewai.core.events import AgentEvent
+from sagewai.db.engine import create_engine
+from sagewai.db.models import Base
 from sagewai.models.message import ChatMessage, UsageInfo
 from sagewai.models.tool import ToolSpec
 from sagewai.observability.prompt_store import PromptLogRecord, PromptStore
 
-PG_URL = os.environ.get(
-    "SAGEWAI_DATABASE_URL",
-    "postgresql://sagecurator:sagecurator_password@localhost:5432/sagecurator",
+_PG_URL = os.environ.get(
+    "SAGEWAI_TEST_DATABASE_URL",
+    os.environ.get(
+        "SAGEWAI_DATABASE_URL",
+        "postgresql://sagewai:sagewai@localhost:5432/sagewai",
+    ),
 )
 
 # ------------------------------------------------------------------
-# PromptLogRecord dataclass
+# PromptLogRecord dataclass — pure unit tests, no DB needed
 # ------------------------------------------------------------------
 
 
@@ -85,37 +91,45 @@ def test_prompt_log_record_to_dict():
 
 
 # ------------------------------------------------------------------
+# Engine-backed store fixture
+# ------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def store(tmp_path):
+    """PromptStore on a fresh SQLite database (no PG connection required)."""
+    engine = create_engine(f"sqlite+aiosqlite:///{tmp_path / 'ps_test.db'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    s = PromptStore(engine=engine)
+    yield s
+    await engine.dispose()
+
+
+# ------------------------------------------------------------------
 # PromptStore lifecycle
 # ------------------------------------------------------------------
 
 
-@pytest.fixture
-async def store():
-    """PromptStore connected to the local dev PostgreSQL."""
-    s = PromptStore(PG_URL)
-    await s.init()
-    # Clean prompt_logs before each test
-    await s._pool.execute("DELETE FROM prompt_logs")
-    yield s
-    await s._pool.execute("DELETE FROM prompt_logs")
-    await s.close()
-
-
-@pytest.mark.integration
 @pytest.mark.asyncio
-async def test_prompt_store_init_close():
-    s = PromptStore(PG_URL)
-    assert not s.is_connected
-    await s.init()
+async def test_prompt_store_init_close(tmp_path):
+    engine = create_engine(f"sqlite+aiosqlite:///{tmp_path / 'lc.db'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    s = PromptStore(engine=engine)
     assert s.is_connected
     await s.close()
-    assert not s.is_connected
+    # is_connected stays True (engine never set to None in new impl)
+    assert s.is_connected
+    await engine.dispose()
 
 
-@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_prompt_store_not_initialized_raises():
-    s = PromptStore(PG_URL)
+    # Construct with no engine/URL — factory engine is always available,
+    # so test _check_connected by monkey-patching _engine to None.
+    s = PromptStore.__new__(PromptStore)
+    s._engine = None  # type: ignore[assignment]
     with pytest.raises(RuntimeError, match="not initialized"):
         await s.save_prompt_log(agent_name="test")
 
@@ -125,7 +139,6 @@ async def test_prompt_store_not_initialized_raises():
 # ------------------------------------------------------------------
 
 
-@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_save_and_get_prompt_log(store):
     log_id = await store.save_prompt_log(
@@ -156,14 +169,13 @@ async def test_save_and_get_prompt_log(store):
     assert record.response_message == {"role": "assistant", "content": "Here are the latest..."}
     assert record.input_tokens == 100
     assert record.output_tokens == 50
-    assert record.cost_usd == 0.00075
+    assert record.cost_usd == pytest.approx(0.00075)
     assert record.duration_ms == 230
     assert record.strategy == "react"
     assert record.metadata == {"template_version": "v1"}
     assert record.created_at > 0
 
 
-@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_get_nonexistent_prompt_log(store):
     record = await store.get_prompt_log("nonexistent")
@@ -175,7 +187,6 @@ async def test_get_nonexistent_prompt_log(store):
 # ------------------------------------------------------------------
 
 
-@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_list_prompt_logs_all(store):
     await store.save_prompt_log(run_id="", agent_name="scout", step_index=0)
@@ -186,7 +197,6 @@ async def test_list_prompt_logs_all(store):
     assert len(logs) == 3
 
 
-@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_list_prompt_logs_by_agent_name(store):
     await store.save_prompt_log(run_id="", agent_name="scout")
@@ -197,7 +207,6 @@ async def test_list_prompt_logs_by_agent_name(store):
     assert logs[0].agent_name == "scout"
 
 
-@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_list_prompt_logs_by_model(store):
     await store.save_prompt_log(run_id="", agent_name="a", model="gpt-4o")
@@ -209,7 +218,6 @@ async def test_list_prompt_logs_by_model(store):
     assert all(r.model == "gpt-4o" for r in logs)
 
 
-@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_list_prompt_logs_ordered_by_created_at(store):
     await store.save_prompt_log(run_id="", agent_name="a", step_index=0)
@@ -222,7 +230,6 @@ async def test_list_prompt_logs_ordered_by_created_at(store):
     assert logs[0].created_at >= logs[1].created_at >= logs[2].created_at
 
 
-@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_list_prompt_logs_limit_offset(store):
     for i in range(5):
@@ -243,7 +250,6 @@ async def test_list_prompt_logs_limit_offset(store):
 # ------------------------------------------------------------------
 
 
-@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_export_jsonl(store):
     await store.save_prompt_log(
@@ -280,7 +286,8 @@ async def test_export_jsonl(store):
 
 
 def test_export_jsonl_empty():
-    store = PromptStore(PG_URL)
+    store = PromptStore.__new__(PromptStore)
+    store._engine = None  # type: ignore[assignment]
     assert store.export_jsonl([]) == ""
 
 
@@ -309,7 +316,6 @@ class MockAgent(BaseAgent):
         return response
 
 
-@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_event_hook_records_prompt_logged(store):
     """Event hook auto-records from PROMPT_LOGGED events."""
@@ -339,7 +345,6 @@ async def test_event_hook_records_prompt_logged(store):
     assert logs[0].response_message.get("role") == "assistant"
 
 
-@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_event_hook_multi_step(store):
     """Event hook records one log per iteration in a multi-step agent loop."""

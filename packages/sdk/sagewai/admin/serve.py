@@ -348,15 +348,19 @@ def create_admin_serve_app(
     version:
         SDK version string (injected by the CLI).
     """
+    from sagewai import home
+    home.migrate_home()
+
     from sagewai.admin import create_admin_router
     from sagewai.admin.analytics import (
-        AnalyticsStore,
         create_analytics_router,
     )
+    from sagewai.admin.postgres_analytics import PostgresAnalyticsStore
     from sagewai.admin.state import AdminState
     from sagewai.autopilot.controller.driver import MissionDriver
     from sagewai.autopilot.controller.runner import SchedulerRunner
     from sagewai.autopilot.controller.scheduler import MissionScheduler
+    from sagewai.db import factory as _db_factory
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -386,12 +390,65 @@ def create_admin_serve_app(
         set_subscription_manager(sub_manager)
         sub_manager.start_reaper()
         app.state.subscription_manager = sub_manager
+
+        # Bootstrap the SQLite schema (no-op on Postgres where Alembic owns it).
+        # Must run before any store reads/writes so all tables exist.
+        await _db_factory.ensure_schema()
+
+        # Wire the durable workflow checkpoint store as the process-wide
+        # default for DurableWorkflow instances that don't supply their own
+        # store. Tests never call configure_default_workflow_store() so they
+        # continue to get InMemoryStore.
+        from sagewai.core.state import configure_default_workflow_store
+        _wf_store = await _db_factory.get_workflow_store()
+        configure_default_workflow_store(_wf_store)
+
+        # Wire durable vector memory when sqlite-vec is available.
+        # Tests that never call create_admin_serve_app() keep the safe
+        # in-process defaults (VectorMemory / InMemoryBackend).
+        from sagewai.memory.sqlite_vec import sqlite_vec_available
+        if sqlite_vec_available():
+            from sagewai.memory.global_memory import GlobalMemory
+            from sagewai.memory.global_memory_backends import SqliteVecBackend
+            from sagewai.memory.rag import configure_default_vector_memory
+            from sagewai.memory.sqlite_vec import SqliteVecMemory
+            GlobalMemory.configure_backend(SqliteVecBackend())
+            configure_default_vector_memory(
+                lambda pid: SqliteVecMemory(project_id=pid)
+            )
+            logger.info("Vector memory: sqlite-vec (durable)")
+        else:
+            logger.warning(
+                "sqlite-vec unavailable; vector memory is in-process "
+                "(not durable across restart)"
+            )
+
         try:
             yield
         finally:
             await sub_manager.aclose()
             set_subscription_manager(None)
             await runner.stop()
+            # Clear the process-wide workflow store default on shutdown so
+            # that in-process test runners (TestClient) don't leak the
+            # SQLite engine into subsequent tests.
+            from sagewai.core.state import configure_default_workflow_store
+            configure_default_workflow_store(None)
+            # Tear down the workflow store connection pool (important for
+            # Postgres: closes the asyncpg pool so no connections leak).
+            # Guard with try in case startup partially failed before _wf_store
+            # was assigned.
+            try:
+                await _wf_store.close()
+            except Exception:
+                pass
+            # Reset vector memory defaults so serve TestClient runs don't
+            # leak the durable backend into subsequent tests.
+            from sagewai.memory.global_memory import GlobalMemory
+            from sagewai.memory.global_memory_backends import InMemoryBackend
+            from sagewai.memory.rag import configure_default_vector_memory
+            configure_default_vector_memory(None)
+            GlobalMemory.configure_backend(InMemoryBackend())
 
     app = FastAPI(title="Sagewai Admin", version=version, lifespan=lifespan)
 
@@ -405,7 +462,10 @@ def create_admin_serve_app(
     )
 
     state = AdminState()
-    analytics = AnalyticsStore()
+    # Use the durable SQLite-backed analytics store by default (Postgres when
+    # SAGEWAI_DATABASE_URL is set). Falls back to the in-memory AnalyticsStore
+    # is no longer the default — durability is zero-config now.
+    analytics = PostgresAnalyticsStore(engine=_db_factory.get_engine())
     _register_optional_backends(sf)
 
     # Override /admin/agents and /admin/runs BEFORE include_router so

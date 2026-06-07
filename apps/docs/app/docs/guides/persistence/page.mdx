@@ -1,0 +1,170 @@
+export const metadata = {
+  title: 'Persistence — SQLite default, SAGEWAI_HOME layout, and Postgres upgrade',
+  description:
+    'How Sagewai stores state: zero-setup SQLite by default under SAGEWAI_HOME, what goes where, the Postgres upgrade path, and known limitations.',
+  alternates: { canonical: 'https://docs.sagewai.ai/docs/guides/persistence' },
+};
+
+# Persistence
+
+Sagewai persists all state across restarts with **zero configuration**. A fresh `pip install sagewai` + `sagewai admin serve` is already durable — no database to provision, no environment variables to set.
+
+---
+
+## How it works by default
+
+On first start Sagewai creates a home directory at `~/.sagewai` (overridable via `SAGEWAI_HOME`) and writes all state there. Everything lives in three subdirectories:
+
+| Directory | Contents | Durable? |
+|-----------|----------|----------|
+| `config/` | `admin-state.json`, `connections.json` | Yes — atomic JSON writes |
+| `db/` | `sagewai.db` — SQLite database | Yes — WAL mode |
+| `data/` | blueprint cache, worker scratch, artifacts | Yes — filesystem |
+| `secrets/` | `master.key`, `profiles.json` | Yes — mode 0700 |
+
+The `secrets/` directory is created with permissions `0700` so only the owning user can read it.
+
+---
+
+## What persists where
+
+### SQLite (`db/sagewai.db`)
+
+The store layer is built on SQLAlchemy Core and runs on SQLite by default. The following are durable across restarts:
+
+- Agent sessions and multi-turn conversation state
+- Workflow checkpoints and run history
+- Analytics data and per-model cost records
+- Saved workflow definitions
+- All other runtime stores in the `sagewai.stores` layer
+
+### JSON state file (`config/admin-state.json`)
+
+Org and admin configuration that changes infrequently is stored as a human-readable JSON file with atomic writes (write-to-temp + rename). This includes:
+
+- Org settings and admin account config
+- Projects and project settings
+- Provider configurations
+- Playground agent definitions
+- Budget and guardrail configs
+- Saved-workflow definitions (metadata layer)
+
+### Connections (`config/connections.json`)
+
+All connection records (HTTP, gRPC, MQTT, WebSocket, etc.) defined via the Connections Platform are stored here in human-readable form. Credentials are encrypted; the file itself is safe to back up.
+
+### sqlite-vec learnings (`db/sagewai.db`)
+
+Vector memory — `GlobalMemory` learnings and per-agent vector memory — is stored as embeddings inside the same `sagewai.db` file using the [sqlite-vec](https://github.com/asg017/sqlite-vec) extension. If the extension is not available on your platform, Sagewai falls back to an in-process store automatically and emits a warning.
+
+---
+
+## SAGEWAI_HOME layout
+
+```
+~/.sagewai/              ← SAGEWAI_HOME (default)
+├── config/
+│   ├── admin-state.json   org/admin config, projects, providers, budgets
+│   └── connections.json   connection records (credentials encrypted)
+├── db/
+│   └── sagewai.db         SQLite: sessions, runs, workflows, analytics, vectors
+├── data/
+│   ├── blueprints/        Autopilot blueprint cache
+│   ├── scratch/           worker scratch space
+│   └── artifacts/         run artifacts
+└── secrets/               (mode 0700)
+    ├── master.key         Fernet master key
+    └── profiles.json      Sealed identity profiles (encrypted)
+```
+
+Override the base directory:
+
+```bash
+export SAGEWAI_HOME=/var/lib/sagewai   # for a system-wide or container deployment
+sagewai admin serve
+```
+
+---
+
+## Migrating from an older flat-file layout
+
+Earlier versions wrote some files directly under `~/.sagewai/` (a flat layout) instead of the `config/` and `secrets/` subfolders. **This migration is automatic** — the first time `sagewai admin serve` starts, it relocates any legacy flat files (`admin-state.json`, `connections.json` → `config/`; `master.key`, `profiles.json` → `secrets/`) into the canonical layout. The migration is idempotent (it skips files already in place) and never overwrites a newer file, so there is nothing to run by hand.
+
+---
+
+## Upgrading to Postgres
+
+SQLite is appropriate for a single-process deployment running on one machine. Use Postgres when you need:
+
+- **Multi-process / horizontal scaling** — multiple workers or admin servers sharing state
+- **Larger datasets** — thousands of concurrent sessions or millions of stored embeddings
+- **Managed backups and replication** — your existing Postgres infrastructure
+
+Set `SAGEWAI_DATABASE_URL` and install the `[postgres]` extra:
+
+```bash
+pip install 'sagewai[postgres]'
+export SAGEWAI_DATABASE_URL=postgresql://user:pass@host:5432/sagewai
+sagewai db upgrade head   # apply the Alembic migrations to create the schema
+sagewai admin serve
+```
+
+The `[postgres]` extra adds `asyncpg` (the async Postgres driver) and `alembic` (the migration tool). The same SQLAlchemy Core store layer that runs on SQLite runs unchanged on Postgres — there is no code-path difference; only the engine changes.
+
+### Moving existing SQLite data to Postgres
+
+There is no automated SQLite&nbsp;→&nbsp;Postgres data-copy command today. Setting `SAGEWAI_DATABASE_URL` and running `sagewai db upgrade head` gives you a **fresh** Postgres schema; existing rows in your local `sagewai.db` are not carried over. Treat the Postgres switch as a clean start (or migrate data yourself with a tool such as `pgloader`). Keep the SQLite file as a backup either way.
+
+---
+
+## Durability matrix
+
+| Data | Default backend | Durable by default | Survives container restart? |
+|------|----------------|-------------------|----------------------------|
+| Sessions + runs | SQLite | Yes | Yes (if `SAGEWAI_HOME` is on a mounted volume) |
+| Workflow checkpoints | SQLite | Yes | Yes |
+| Analytics / costs | SQLite | Yes | Yes |
+| Org config / projects | JSON file | Yes | Yes |
+| Connection records | JSON file | Yes | Yes |
+| Sealed profiles | JSON file (encrypted) | Yes | Yes |
+| Vector learnings | sqlite-vec in SQLite | Yes | Yes |
+| Blueprint cache | Filesystem (`data/`) | Yes | Yes |
+| **Fleet registry / tasks** | **In-process** | **No** | **No — workers re-register on restart** |
+
+### Fleet registry — known limitation
+
+Fleet worker registration and in-flight task state remain in-process in this release. Workers re-register with the admin server on startup, so a server restart does not lose workers permanently — they reconnect within one heartbeat interval. Durable Fleet persistence (surviving the admin server process) is deferred to a future release.
+
+### Admin UI — separate image
+
+The admin web panel is a separate container image (`ghcr.io/sagewai/admin`) and is not part of the `pip install sagewai` package. It talks to the admin API over HTTP and has no separate state of its own — all state lives in the backend's `SAGEWAI_HOME`.
+
+---
+
+## Container deployments
+
+When running the backend as a container, mount `SAGEWAI_HOME` to a named volume so state survives container replacement:
+
+```yaml
+# docker-compose.yml excerpt
+services:
+  backend:
+    image: ghcr.io/sagewai/backend:latest
+    environment:
+      SAGEWAI_HOME: /var/lib/sagewai
+    volumes:
+      - sagewai-home:/var/lib/sagewai
+
+volumes:
+  sagewai-home:
+```
+
+If you use Postgres instead, you still need to persist `SAGEWAI_HOME` for the `secrets/` and `config/` directories — those are never stored in the database.
+
+---
+
+## See also
+
+- [Self-Hosted Deployment](/docs/guides/self-hosted) — full production stack with Postgres, Redis, and observability.
+- [Sealed Vault](/docs/guides/sealed-vault) — how secrets in `~/.sagewai/secrets/` are encrypted.
+- [Admin Panel](/docs/guides/admin-panel) — what the data stores back.

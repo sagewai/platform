@@ -38,10 +38,11 @@ try:
     from sagewai.connectors.pg_stores import (
         PostgresCredentialStore,
         PostgresCursorStore,
+        PostgresCustomConnectorStore,
         PostgresOAuthTokenStore,
     )
 except ImportError:
-    pass  # asyncpg not installed
+    pass  # optional DB deps not installed
 
 __all__ = [
     "AuthField",
@@ -60,6 +61,7 @@ __all__ = [
     "OAuthTokenStore",
     "PostgresCredentialStore",
     "PostgresCursorStore",
+    "PostgresCustomConnectorStore",
     "PostgresOAuthTokenStore",
     "TokenSet",
 ]

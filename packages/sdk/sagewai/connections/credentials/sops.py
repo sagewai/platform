@@ -17,7 +17,7 @@ manage encryption manually (``sops edit <file>``) and just point the
 connection record at the right ``(file, key)`` tuple.
 
 Path safety: the SOPS file path is resolved against
-``SAGEWAI_SOPS_ROOT`` (default ``~/.sagewai/sops/``). Any path that
+``SAGEWAI_SOPS_ROOT`` (default ``$SAGEWAI_HOME/secrets/sops/``). Any path that
 resolves outside the root after symlink resolution raises
 :class:`SopsDecryptError` immediately.
 
@@ -35,6 +35,7 @@ from typing import Any, ClassVar
 
 import yaml
 
+from sagewai import home
 from sagewai.connections.credentials.base import _get_path, _set_path
 from sagewai.connections.credentials.errors import (
     InvalidBackendConfigError,
@@ -47,7 +48,7 @@ def _sops_root() -> Path:
     override = os.environ.get("SAGEWAI_SOPS_ROOT")
     if override:
         return Path(override).expanduser()
-    return (Path.home() / ".sagewai" / "sops").resolve()
+    return (home.secrets_dir() / "sops").resolve()
 
 
 def _resolve_sops_file(file_str: str) -> Path:

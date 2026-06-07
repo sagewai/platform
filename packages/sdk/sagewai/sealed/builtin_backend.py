@@ -7,7 +7,7 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""BuiltinAdminStoreBackend — encrypted JSON file at ~/.sagewai/profiles.json."""
+"""BuiltinAdminStoreBackend — encrypted JSON file at $SAGEWAI_HOME/secrets/profiles.json."""
 from __future__ import annotations
 
 import asyncio
@@ -26,8 +26,6 @@ from sagewai.sealed.backend import (
 from sagewai.sealed.crypto import Crypto
 from sagewai.sealed.models import Profile, ProfileMetadata, ProfileWritePayload
 
-_DEFAULT_PATH = Path.home() / ".sagewai" / "profiles.json"
-
 
 class BuiltinAdminStoreBackend:
     """Profile backend backed by a Fernet-encrypted JSON file."""
@@ -41,10 +39,18 @@ class BuiltinAdminStoreBackend:
         crypto: Crypto | None = None,
         audit_writer: AuditWriter | None = None,
     ) -> None:
-        self._path = profiles_path or _DEFAULT_PATH
+        self._profiles_path = Path(profiles_path) if profiles_path is not None else None
         self._crypto = crypto
         self._audit = audit_writer
         self._lock = asyncio.Lock()
+
+    @property
+    def _path(self) -> Path:
+        """Resolve the profiles file lazily (creates secrets/ 0700 on first use, not at import)."""
+        if self._profiles_path is not None:
+            return self._profiles_path
+        from sagewai import home as _home
+        return _home.secrets_dir() / "profiles.json"
 
     def _get_crypto(self) -> Crypto:
         if self._crypto is None:

@@ -47,7 +47,7 @@ The base install already bundles the admin API server (FastAPI + uvicorn) and th
 | `sagewai[storage]` | S3 / GCS archival backends |
 | `sagewai[all]` | Everything above |
 
-SQLite works for local exploration without any extra. Use Postgres for production deployments where you need persistence across restarts and multi-process access.
+By default Sagewai persists all state to SQLite at `~/.sagewai/db/sagewai.db` — zero setup, durable across restarts. Set `SAGEWAI_DATABASE_URL=postgresql://…` for production scale (the `sagewai[postgres]` extra adds asyncpg and Alembic).
 
 ## Released vs. pre-release versions
 

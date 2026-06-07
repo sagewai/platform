@@ -31,7 +31,7 @@ docker compose up -d
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `DATABASE_URL` | Yes (for persistence) | — | Postgres connection string. In-memory fallback if unset, warning emitted. |
+| `DATABASE_URL` | No | — | Postgres connection string. Defaults to SQLite at `~/.sagewai/db/sagewai.db` if unset. |
 | `REDIS_URL` | No | — | Redis connection string for pub/sub and caching. |
 | `SAGEWAI_LOG_LEVEL` | No | `INFO` | One of `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
 | `SAGEWAI_PROVIDER_*` | Varies | — | Provider API keys: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc. See the SDK docs for the full list. |
@@ -52,9 +52,11 @@ known gap tracked separately; once added, update this field and the
 
 ## Volume mounts
 
-The image runs as non-root user `sagewai` (uid 1001). If you need persistent
-local state (e.g., sqlite fallback, artifact storage), mount a volume to
-`/var/lib/sagewai` which is owned by the `sagewai` user.
+The image runs as non-root user `sagewai` (uid 1001). By default Sagewai
+persists all state to SQLite at `~/.sagewai/db/sagewai.db` (inside the
+container that is `/home/sagewai/.sagewai/`). Mount a volume to
+`/home/sagewai/.sagewai` (or `/var/lib/sagewai`, which is owned by the
+`sagewai` user) to persist state across container restarts.
 
 ## Building locally
 

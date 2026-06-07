@@ -62,6 +62,7 @@ const SECTIONS: NavSection[] = [
       { label: 'Multi-Agent Workflows', href: '/docs/guides/multi-agent' },
       { label: 'Training & Fine-Tuning', href: '/docs/guides/training' },
       { label: 'Admin Panel', href: '/docs/guides/admin-panel' },
+      { label: 'Persistence', href: '/docs/guides/persistence' },
       { label: 'Fleet Deployment', href: '/docs/guides/fleet-deployment' },
       { label: 'Fleet Architecture', href: '/docs/guides/fleet-architecture' },
       { label: 'Self-Hosted Deployment', href: '/docs/guides/self-hosted' },

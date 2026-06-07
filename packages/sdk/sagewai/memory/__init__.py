@@ -52,6 +52,7 @@ class MemoryProvider(Protocol):
 
 from sagewai.memory.branch import MemoryBranch  # noqa: E402
 from sagewai.memory.global_memory import GlobalMemory  # noqa: E402
+from sagewai.memory.graph import GraphMemory  # noqa: E402
 from sagewai.memory.strategies import (  # noqa: E402
     ExtractedRecord,
     MemoryStrategy,
@@ -60,7 +61,6 @@ from sagewai.memory.strategies import (  # noqa: E402
 from sagewai.memory.strategies.preference import PreferenceStrategy  # noqa: E402
 from sagewai.memory.strategies.semantic import SemanticFactStrategy  # noqa: E402
 from sagewai.memory.strategies.summary import SummaryStrategy  # noqa: E402
-from sagewai.memory.graph import GraphMemory  # noqa: E402
 
 try:
     from sagewai.memory.milvus import MilvusVectorMemory  # noqa: E402
@@ -72,6 +72,7 @@ except ImportError:
     NebulaGraphMemory = None  # type: ignore[assignment,misc]
 from sagewai.memory.query_router import QueryIntent, QueryRouter  # noqa: E402
 from sagewai.memory.rag import RAGEngine, RetrievalStrategy  # noqa: E402
+from sagewai.memory.sqlite_vec import SqliteVecMemory  # noqa: E402
 from sagewai.memory.vector import VectorMemory  # noqa: E402
 
 __all__ = [
@@ -89,6 +90,7 @@ __all__ = [
     "RAGEngine",
     "RetrievalStrategy",
     "SemanticFactStrategy",
+    "SqliteVecMemory",
     "SummaryStrategy",
     "TurnEvent",
     "VectorMemory",

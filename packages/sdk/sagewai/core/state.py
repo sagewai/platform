@@ -343,6 +343,34 @@ class WorkflowStore:
         pass
 
 
+# ---------------------------------------------------------------------------
+# Process-wide configurable default workflow store
+# ---------------------------------------------------------------------------
+
+_default_store: WorkflowStore | None = None
+
+
+def configure_default_workflow_store(store: WorkflowStore | None) -> None:
+    """Set the process-wide default WorkflowStore for DurableWorkflow.
+
+    Called by the admin serve lifespan to wire the SQLite-backed store
+    (or PostgresStore when SAGEWAI_DATABASE_URL is set) as the default for
+    any DurableWorkflow that does not supply its own ``store=`` argument.
+
+    Tests never call this function, so they continue to receive
+    InMemoryStore (the fallback when both ``store`` and ``_default_store``
+    are None).
+
+    Parameters
+    ----------
+    store:
+        The WorkflowStore to use as the process-wide default, or ``None``
+        to reset to InMemoryStore fallback (useful in teardown).
+    """
+    global _default_store
+    _default_store = store
+
+
 class InMemoryStore(WorkflowStore):
     """In-memory workflow store for testing and development."""
 
@@ -476,7 +504,7 @@ class DurableWorkflow:
         store: WorkflowStore | None = None,
     ) -> None:
         self.name = name
-        self._store = store or InMemoryStore()
+        self._store = store or _default_store or InMemoryStore()
         self._steps: list[_StepDef] = []
         self._current_run: WorkflowRun | None = None
 

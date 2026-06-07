@@ -93,6 +93,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from sagewai import home as _home
 from sagewai.admin.autopilot_explain import render_brief
 from sagewai.autopilot.tool_risk_profile import SandboxTier, get_tier, is_downgrade, tier_for_tools
 from sagewai.autopilot.sealed_matcher import ProfileRecord, match_profile
@@ -131,6 +132,14 @@ from sagewai.autopilot.sagewai_llm.identity import ensure_identity
 logger = logging.getLogger("sagewai.admin.autopilot")
 
 _VALID_TIERS = frozenset({"anonymous", "free", "premium", "skip"})
+
+
+def _blueprint_cache_dir() -> Path:
+    """Blueprint cache dir: ``SAGEWAI_CACHE_DIR`` if set, else ``$SAGEWAI_HOME/data/blueprint_cache``."""
+    if raw := os.environ.get("SAGEWAI_CACHE_DIR"):
+        return Path(raw)
+    return _home.data_dir() / "blueprint_cache"
+
 
 # Module-level fleet registry singleton (one per process).  Tests can patch
 # _get_fleet_registry_snapshot to inject a fake snapshot.
@@ -1052,9 +1061,7 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
         store = AdminStateIdentityStore(sf)
         identity = ensure_identity(store)
 
-        cache_dir = Path(
-            os.environ.get("SAGEWAI_CACHE_DIR", Path.home() / ".sagewai" / "blueprint_cache")
-        )
+        cache_dir = _blueprint_cache_dir()
         cache = BlueprintCache(
             cache_dir,
             ttl_seconds=int(config.get("cache_ttl_seconds", 3600)),
@@ -1195,9 +1202,7 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
         config = get_autopilot_config(sf)
         store = AdminStateIdentityStore(sf)
         identity = ensure_identity(store)
-        cache_dir = Path(
-            os.environ.get("SAGEWAI_CACHE_DIR", Path.home() / ".sagewai" / "blueprint_cache")
-        )
+        cache_dir = _blueprint_cache_dir()
         cache = BlueprintCache(
             cache_dir,
             ttl_seconds=int(config.get("cache_ttl_seconds", 3600)),

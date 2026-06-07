@@ -7,90 +7,163 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""Postgres-backed TriggerStore using the ``connector_triggers`` table."""
+"""Postgres-backed TriggerStore using SQLAlchemy Core.
+
+Replaces the former asyncpg-only implementation of PostgresTriggerStore.
+Works on both SQLite (default) and PostgreSQL via a shared AsyncEngine.
+"""
 
 from __future__ import annotations
 
-import json
 from datetime import timedelta
 from typing import Any
 
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from sagewai.db import factory
+from sagewai.db.dialect import upsert
+from sagewai.db.engine import create_engine
+from sagewai.db.models import Base, ConnectorTriggerModel
 from sagewai.gateway.triggers import EventFilter, Strategy, TriggerSpec, TriggerStore
 
 
-class PostgresTriggerStore(TriggerStore):
-    """Persists trigger configurations in the ``connector_triggers`` table."""
+def _make_engine(
+    database_url: str | None,
+    pool: Any,
+    engine: AsyncEngine | None,
+) -> AsyncEngine:
+    """Resolve the engine from the three possible constructor inputs."""
+    if engine is not None:
+        return engine
+    if database_url is not None:
+        return create_engine(database_url)
+    # pool is ignored (asyncpg back-compat)
+    return factory.get_engine()
 
-    def __init__(self, pool: Any) -> None:
-        self._pool = pool
+
+class PostgresTriggerStore(TriggerStore):
+    """Persists trigger configurations in the ``connector_triggers`` table.
+
+    Parameters
+    ----------
+    engine:
+        Pre-built :class:`AsyncEngine`.  When supplied, *database_url* and
+        *pool* are ignored.
+    database_url:
+        Connection string passed to :func:`sagewai.db.engine.create_engine`.
+        Ignored when *engine* is supplied.
+    pool:
+        Accepted for backwards-compatibility with callers that previously
+        passed an asyncpg pool.  It is **not used** by this implementation;
+        the SQLAlchemy engine manages its own connection pool.
+    """
+
+    def __init__(
+        self,
+        pool: Any = None,  # kept for API back-compat; not used
+        database_url: str | None = None,
+        *,
+        engine: AsyncEngine | None = None,
+    ) -> None:
+        self._engine: AsyncEngine = _make_engine(database_url, pool, engine)
+
+    async def init(self) -> None:
+        """Bootstrap schema when using SQLite; no-op on PostgreSQL (Alembic owns it)."""
+        if self._engine.dialect.name == "sqlite":
+            async with self._engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
 
     async def save(self, trigger_id: str, trigger: TriggerSpec) -> None:
-        filter_json = json.dumps(trigger.filter.model_dump())
-        context_json = json.dumps(trigger.context)
+        """Upsert a trigger — ON CONFLICT (id) DO UPDATE."""
+        tbl = ConnectorTriggerModel.__table__
         poll_seconds = (
             int(trigger.poll_interval.total_seconds())
-            if trigger.poll_interval
+            if trigger.poll_interval is not None
             else None
         )
-        async with self._pool.acquire() as conn:
-            await conn.execute(
-                """INSERT INTO connector_triggers
-                       (id, source, strategy, poll_interval_seconds,
-                        filter_json, target, action, context_json, enabled)
-                   VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8::jsonb, $9)
-                   ON CONFLICT (id)
-                   DO UPDATE SET source = $2, strategy = $3,
-                                 poll_interval_seconds = $4,
-                                 filter_json = $5::jsonb, target = $6,
-                                 action = $7, context_json = $8::jsonb,
-                                 enabled = $9, updated_at = now()""",
-                trigger_id,
-                trigger.source,
-                trigger.strategy.value,
-                poll_seconds,
-                filter_json,
-                trigger.target,
-                trigger.action,
-                context_json,
-                trigger.enabled,
-            )
+        values = {
+            "id": trigger_id,
+            "source": trigger.source,
+            "strategy": trigger.strategy.value,
+            "poll_interval_seconds": poll_seconds,
+            "filter_json": trigger.filter.model_dump(),
+            "target": trigger.target,
+            "action": trigger.action,
+            "context_json": trigger.context,
+            "enabled": trigger.enabled,
+        }
+        stmt = upsert(
+            tbl,
+            values,
+            index_elements=["id"],
+            set_={
+                "source": trigger.source,
+                "strategy": trigger.strategy.value,
+                "poll_interval_seconds": poll_seconds,
+                "filter_json": trigger.filter.model_dump(),
+                "target": trigger.target,
+                "action": trigger.action,
+                "context_json": trigger.context,
+                "enabled": trigger.enabled,
+            },
+            dialect=self._engine.dialect.name,
+        )
+        async with self._engine.begin() as conn:
+            await conn.execute(stmt)
 
     async def get(self, trigger_id: str) -> TriggerSpec | None:
-        async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT * FROM connector_triggers WHERE id = $1", trigger_id,
-            )
-            return self._row_to_trigger(row) if row else None
+        """Get a trigger by ID."""
+        tbl = ConnectorTriggerModel.__table__
+        stmt = select(tbl).where(tbl.c.id == trigger_id)
+        async with self._engine.connect() as conn:
+            result = await conn.execute(stmt)
+            row = result.mappings().first()
+        return self._row_to_trigger(row) if row is not None else None
 
     async def list_all(self) -> list[tuple[str, TriggerSpec]]:
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT * FROM connector_triggers ORDER BY created_at",
-            )
-            return [(r["id"], self._row_to_trigger(r)) for r in rows]
+        """List all triggers, ordered by created_at."""
+        tbl = ConnectorTriggerModel.__table__
+        stmt = select(tbl).order_by(tbl.c.created_at)
+        async with self._engine.connect() as conn:
+            result = await conn.execute(stmt)
+            rows = result.mappings().all()
+        return [(row["id"], self._row_to_trigger(row)) for row in rows]
 
     async def delete(self, trigger_id: str) -> None:
-        async with self._pool.acquire() as conn:
-            await conn.execute(
-                "DELETE FROM connector_triggers WHERE id = $1", trigger_id,
-            )
+        """Delete a trigger by ID."""
+        stmt = sa_delete(ConnectorTriggerModel.__table__).where(
+            ConnectorTriggerModel.__table__.c.id == trigger_id
+        )
+        async with self._engine.begin() as conn:
+            await conn.execute(stmt)
 
     @staticmethod
     def _row_to_trigger(row: Any) -> TriggerSpec:
+        """Convert a SQLAlchemy row mapping to a TriggerSpec."""
+        import json
+
         filter_data = row["filter_json"]
         if isinstance(filter_data, str):
             filter_data = json.loads(filter_data)
+        if filter_data is None:
+            filter_data = {}
+
         context_data = row["context_json"]
         if isinstance(context_data, str):
             context_data = json.loads(context_data)
+        if context_data is None:
+            context_data = {}
+
         poll_seconds = row["poll_interval_seconds"]
         return TriggerSpec(
             source=row["source"],
             strategy=Strategy(row["strategy"]),
-            poll_interval=timedelta(seconds=poll_seconds) if poll_seconds else None,
+            poll_interval=timedelta(seconds=poll_seconds) if poll_seconds is not None else None,
             filter=EventFilter(**filter_data),
             target=row["target"],
             action=row["action"],
-            context=context_data or {},
+            context=context_data,
             enabled=row["enabled"],
         )

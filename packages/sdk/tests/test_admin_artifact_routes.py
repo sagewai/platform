@@ -26,7 +26,7 @@ def state_file(tmp_path, monkeypatch):
     from sagewai.admin import state_file as state_file_module
 
     monkeypatch.setattr(
-        state_file_module, "_DEFAULT_STATE_FILE", path,
+        state_file_module, "default_admin_state_path", lambda: path,
     )
     return path
 

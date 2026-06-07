@@ -9,7 +9,7 @@
 # See COMMERCIAL-LICENSE.md for details.
 """Generic CRUD layer for connection records.
 
-Persists records to a single JSON file (``~/.sagewai/connections.json``
+Persists records to a single JSON file (``$SAGEWAI_HOME/config/connections.json``
 in production; injected path in tests). Atomic writes via the same
 tempfile + ``os.replace`` + 0o600 chmod pattern used by the existing
 inference-providers store. ``protocol_data`` is opaque to the store —
@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from sagewai import home
 from sagewai.connections.errors import (
     ConnectionNotFoundError,
     DuplicateDisplayNameError,
@@ -43,13 +44,13 @@ def _default_store_path() -> Path:
     """Resolve the on-disk store path with env override.
 
     ``SAGEWAI_CONNECTIONS_FILE`` overrides; default is
-    ``~/.sagewai/connections.json``. PR4 wires this into the admin via a
+    ``$SAGEWAI_HOME/config/connections.json``. PR4 wires this into the admin via a
     module-level helper so tests can monkeypatch.
     """
     override = os.environ.get("SAGEWAI_CONNECTIONS_FILE")
     if override:
         return Path(override).expanduser()
-    return Path.home() / ".sagewai" / "connections.json"
+    return home.config_dir() / "connections.json"
 
 
 def _utcnow_iso() -> str:
