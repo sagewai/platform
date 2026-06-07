@@ -337,6 +337,14 @@ class McpClient:
                         String is split by spaces; list is used as-is.
             env: Optional environment variables for the subprocess.
         """
+        from sagewai.sandbox.policy import host_exec_allowed
+
+        if not host_exec_allowed():
+            raise RuntimeError(
+                "Host-backed execution disabled. Set SAGEWAI_ALLOW_HOST_EXEC=1 to enable "
+                "stdio MCP servers (they launch local subprocesses)."
+            )
+
         if isinstance(server_cmd, str):
             cmd = server_cmd.split()
         else:
@@ -377,6 +385,14 @@ class McpClient:
                    When provided, tool handler closures bind to the proxy
                    instead of the raw transport, enabling reconnection.
         """
+        from sagewai.sandbox.policy import host_exec_allowed
+
+        if not host_exec_allowed():
+            raise RuntimeError(
+                "Host-backed execution disabled. Set SAGEWAI_ALLOW_HOST_EXEC=1 to enable "
+                "stdio MCP servers (they launch local subprocesses)."
+            )
+
         if isinstance(server_cmd, str):
             cmd = server_cmd.split()
         else:

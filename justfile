@@ -119,6 +119,7 @@ autopilot-demo SAGEWAI_LLM_BASE_URL='http://localhost:8100':
     echo "→ starting admin backend on :8000..."
     SAGEWAI_LLM_BASE_URL={{SAGEWAI_LLM_BASE_URL}} \
     SAGEWAI_DEV_TRUST_LOCAL=1 \
+    SAGEWAI_ALLOW_HOST_EXEC=1 \
       uv run --package sagewai sagewai admin serve --host 0.0.0.0 --port 8000 &
     echo "→ starting admin UI on :3008..."
     pnpm --filter @sagewai/admin dev &

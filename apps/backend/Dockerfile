@@ -50,7 +50,8 @@ FROM python:3.13.13-slim@sha256:aa938a849bcb82dce8f49480f056ab82bf5c1c3ebc294f04
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH" \
-    SAGEWAI_LOG_LEVEL=INFO
+    SAGEWAI_LOG_LEVEL=INFO \
+    SAGEWAI_RUNTIME=container
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \

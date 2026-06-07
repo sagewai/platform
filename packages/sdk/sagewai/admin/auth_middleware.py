@@ -29,12 +29,7 @@ SCOPE_ADMIN = "admin"
 ALL_SCOPES = frozenset({SCOPE_READ, SCOPE_WRITE, SCOPE_ADMIN})
 
 
-def host_exec_allowed() -> bool:
-    """Host-backed bash/NullBackend/MCP exec is opt-in, regardless of bind address.
-
-    Disabled by default; the published backend image never sets this.
-    """
-    return os.environ.get("SAGEWAI_ALLOW_HOST_EXEC", "") in {"1", "true"}
+from sagewai.sandbox.policy import host_exec_allowed  # re-export; keeps PR1 imports working
 
 _SAFE_METHODS = {"GET", "HEAD"}
 

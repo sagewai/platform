@@ -245,3 +245,55 @@ async def test_connect_http_empty_tools():
         tools = await McpClient.connect_http("http://localhost:3000/mcp")
 
     assert tools == []
+
+
+# ------------------------------------------------------------------
+# Host-exec policy guard for stdio MCP transports (#10B bypass)
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stdio_mcp_connect_refused_when_host_exec_disabled(monkeypatch):
+    """connect() must raise before spawning any subprocess when host-exec is denied."""
+    monkeypatch.delenv("SAGEWAI_ALLOW_HOST_EXEC", raising=False)
+    with pytest.raises(RuntimeError, match="Host-backed execution disabled"):
+        await McpClient.connect("echo hello")
+
+
+@pytest.mark.asyncio
+async def test_stdio_mcp_connect_managed_refused_when_host_exec_disabled(monkeypatch):
+    """connect_managed() must raise before spawning any subprocess when host-exec is denied."""
+    monkeypatch.delenv("SAGEWAI_ALLOW_HOST_EXEC", raising=False)
+    with pytest.raises(RuntimeError, match="Host-backed execution disabled"):
+        await McpClient.connect_managed(["echo", "hello"])
+
+
+@pytest.mark.asyncio
+async def test_stdio_mcp_connect_allowed_when_host_exec_enabled(monkeypatch):
+    """connect() proceeds past the guard (and fails on MCP handshake) when flag is set."""
+    monkeypatch.setenv("SAGEWAI_ALLOW_HOST_EXEC", "1")
+    # 'echo hello' is not a real MCP server — we expect a ConnectionError or
+    # similar from the handshake attempt, NOT the "Host-backed execution disabled" error.
+    with pytest.raises(Exception) as exc_info:
+        await McpClient.connect("echo hello")
+    assert "Host-backed execution disabled" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_stdio_mcp_sse_unaffected_by_host_exec_guard(monkeypatch):
+    """connect_sse() (network transport) is NOT gated on host_exec_allowed."""
+    monkeypatch.delenv("SAGEWAI_ALLOW_HOST_EXEC", raising=False)
+    # Should fail with a network/connection error, not the host-exec RuntimeError.
+    with pytest.raises(Exception) as exc_info:
+        await McpClient.connect_sse("http://127.0.0.1:19999/mcp")
+    assert "Host-backed execution disabled" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_stdio_mcp_connect_http_unaffected_by_host_exec_guard(monkeypatch):
+    """connect_http() (network transport) is NOT gated on host_exec_allowed."""
+    monkeypatch.delenv("SAGEWAI_ALLOW_HOST_EXEC", raising=False)
+    # Should fail with a network/connection error, not the host-exec RuntimeError.
+    with pytest.raises(Exception) as exc_info:
+        await McpClient.connect_http("http://127.0.0.1:19999/mcp")
+    assert "Host-backed execution disabled" not in str(exc_info.value)

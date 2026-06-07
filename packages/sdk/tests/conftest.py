@@ -82,3 +82,11 @@ def simple_agent():
         return SimpleTestAgent(responses=responses, **defaults)
 
     return _factory
+
+
+@pytest.fixture(autouse=True)
+def _allow_host_exec_in_tests(monkeypatch):
+    """Tests legitimately exercise on-host execution; opt in by default. Guard
+    tests override via monkeypatch.delenv to exercise the deny path."""
+    monkeypatch.setenv("SAGEWAI_ALLOW_HOST_EXEC", "1")
+    yield

@@ -516,7 +516,7 @@ def _resolve_executor_config(
     first, then org-global). Uses the first provider whose API key is
     available — either persisted in ``config["api_key"]`` or already
     exported via the matching env var (``env_var_set`` flag from
-    :meth:`AdminStateFile.list_providers`). Populates the env var if
+    :meth:`AdminStateFile.list_providers_decrypted`). Populates the env var if
     needed so litellm picks up the credentials, and pins the executor's
     model to the provider's chosen model (or a per-provider default).
 
@@ -524,10 +524,10 @@ def _resolve_executor_config(
     configured — the executor then surfaces a clear "no provider"
     failure via the all-skipped → FAILED path in :class:`MissionDriver`.
     """
-    providers = sf.list_providers(project_id=project_id)
+    providers = sf.list_providers_decrypted(project_id=project_id)
     if project_id and not providers:
         # Fall back to org-global providers if the project has none.
-        providers = sf.list_providers(project_id=None)
+        providers = sf.list_providers_decrypted(project_id=None)
 
     def _has_creds(p: dict[str, Any]) -> bool:
         # Self-hosted providers (ollama, lmstudio, vllm) don't need an
@@ -849,6 +849,10 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
             return err
 
         pid = _project_id(request)
+        # Use the redacted list for the UI summary (no secret values), but
+        # detect credentials via api_key_set (populated by redaction) or
+        # env_var_set (env-var detection). For self-hosted providers no
+        # key is required. The inference path uses list_providers_decrypted.
         providers = sf.list_providers(project_id=pid)
         if pid and not providers:
             providers = sf.list_providers(project_id=None)
@@ -857,7 +861,11 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
             if p.get("provider_name") in _SELF_HOSTED_PROVIDERS:
                 return True
             cfg = p.get("config") or {}
-            return bool(cfg.get("api_key") or p.get("env_var_set"))
+            # api_key_set is the redacted-list sentinel; api_key is present
+            # on unredacted records (e.g. coming from list_providers_decrypted).
+            return bool(
+                cfg.get("api_key") or cfg.get("api_key_set") or p.get("env_var_set")
+            )
 
         configured = [p for p in providers if _has_creds(p)]
         default = next((p for p in configured if p.get("default")), None)

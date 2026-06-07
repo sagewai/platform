@@ -165,6 +165,17 @@ async def _check_run_revocation_and_abort(
     return True
 
 
+def _guarded_null_backend() -> NullBackend:
+    """Return a NullBackend, or raise if host-backed execution is not permitted.
+
+    Single chokepoint so every on-host execution path enforces the policy.
+    """
+    from sagewai.sandbox.policy import host_exec_allowed
+    if not host_exec_allowed():
+        raise RuntimeError("Host-backed execution disabled. Set SAGEWAI_ALLOW_HOST_EXEC=1 to enable.")
+    return NullBackend()
+
+
 def _select_backend(
     config: SandboxConfig,
     *,
@@ -174,7 +185,7 @@ def _select_backend(
 ) -> SandboxBackend:
     """Resolve the SandboxBackend instance from config."""
     if mode is SandboxMode.NONE:
-        return NullBackend()
+        return _guarded_null_backend()
     if override is not None:
         return override
     name = config.backend
@@ -191,7 +202,7 @@ def _select_backend(
             egress_allowlist=kc.get("egress_allowlist") or list(config.network_egress_allowlist),
         )
     if name == "null":
-        return NullBackend()
+        return _guarded_null_backend()
     raise ValueError(f"unknown sandbox backend: {name!r}")
 
 
@@ -365,7 +376,7 @@ class WorkflowWorker:
 
         # If fallback dropped us to NONE, swap backend.
         if effective is SandboxMode.NONE and backend.name != "null":
-            backend = NullBackend()
+            backend = _guarded_null_backend()
 
         config = self._sandbox_config.model_copy(update={"mode": effective})
         self._sandbox_pool = _build_pool(

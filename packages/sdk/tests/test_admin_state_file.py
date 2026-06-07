@@ -12,8 +12,15 @@
 import json
 
 import pytest
+from cryptography.fernet import Fernet
 
 from sagewai.admin.state_file import AdminStateFile
+
+
+@pytest.fixture(autouse=True)
+def _master_key(monkeypatch):
+    monkeypatch.setenv("SAGEWAI_MASTER_KEY", Fernet.generate_key().decode())
+    yield
 
 
 @pytest.fixture
@@ -155,7 +162,14 @@ class TestProviders:
         providers = sf.list_providers()
         assert len(providers) == 1
         assert providers[0]["provider_name"] == "openai"
-        assert providers[0]["id"] == "prov-openai"
+        # ID is now project-scoped: prov-{project_id or 'global'}-{provider_name}
+        assert providers[0]["id"] == "prov-global-openai"
+        # Secrets are redacted in list_providers — api_key stripped, api_key_set present
+        assert providers[0]["config"].get("api_key_set") is True
+        assert "api_key" not in providers[0]["config"]
+        # Plaintext is still accessible via the decrypted accessor
+        rec = sf.get_provider_decrypted("openai")
+        assert rec["config"]["api_key"] == "sk-test"
 
     def test_upsert_updates_existing(self, sf):
         sf.complete_setup(
@@ -165,14 +179,23 @@ class TestProviders:
         sf.upsert_provider({"provider_name": "openai", "config": {"api_key": "new"}})
         providers = sf.list_providers()
         assert len(providers) == 1
-        assert providers[0]["config"]["api_key"] == "new"
+        # Secrets are redacted in list_providers
+        assert providers[0]["config"].get("api_key_set") is True
+        assert "api_key" not in providers[0]["config"]
+        # Verify the update took effect via the decrypted accessor
+        rec = sf.get_provider_decrypted("openai")
+        assert rec["config"]["api_key"] == "new"
 
     def test_delete_provider(self, sf):
         sf.complete_setup(
             org_name="Corp", admin_email="a@b.com", admin_password="x",
         )
         sf.upsert_provider({"provider_name": "openai", "config": {}})
-        assert sf.delete_provider("prov-openai") is True
+        # Derive the id from the returned/listed record rather than hardcoding old form
+        providers = sf.list_providers()
+        provider_id = providers[0]["id"]
+        assert provider_id == "prov-global-openai"
+        assert sf.delete_provider(provider_id) is True
         assert len(sf.list_providers()) == 0
 
 

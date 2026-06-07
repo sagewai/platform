@@ -9,6 +9,16 @@ export const metadata = {
 
 Run the full Sagewai stack on your own infrastructure. This guide covers local bring-up, environment configuration, database management, reverse proxy setup, fleet workers, and common failure modes.
 
+> **Current storage model.** The `sagewai admin serve` backend is a **single-process, single-org** server. Know these limits before deploying:
+>
+> - **Admin state** (connections, providers, agents, profiles) is a JSON file (`~/.sagewai/admin-state.json`). Mount it on a persistent volume; the container discards it on restart otherwise.
+> - **Fleet registry, task store, and harness store are in-memory** and reset on every restart. Workers re-register on reconnect; in-flight tasks are lost if the process restarts.
+> - **Sealed revocation and replay routes** require `DATABASE_URL` (or `SAGEWAI_DATABASE_URL`, which takes precedence) to be set. Without it those routes are simply not registered.
+> - **`X-Project-ID` is an organizational filter, not tenant isolation.** Any caller who can reach the API can supply any project ID. Do not use it as a security boundary between untrusted tenants.
+> - **Provider secrets are encrypted at rest.** Set `SAGEWAI_MASTER_KEY` or mount a key file. Losing the key makes all stored secrets unrecoverable.
+>
+> Durable Postgres-backed stores for fleet, tasks, and harness, plus proper multi-tenant isolation, are on the roadmap.
+
 ---
 
 ## Prerequisites
@@ -151,7 +161,7 @@ Copy `.env.example` and fill in the values you need.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DATABASE_URL` | PostgreSQL connection string | `postgresql://sagewai:sagewai_password@localhost:5432/sagewai` |
+| `DATABASE_URL` | PostgreSQL connection string (also accepted as `SAGEWAI_DATABASE_URL`, which takes precedence). Enables Sealed revocation and replay routes. | `postgresql://sagewai:sagewai_password@localhost:5432/sagewai` |
 | `OPENAI_API_KEY` | OpenAI API key (or another provider key) | — |
 | `JWT_SECRET` | Secret for JWT token signing | — |
 
@@ -186,6 +196,7 @@ Copy `.env.example` and fill in the values you need.
 | `JWT_SECRET` | JWT signing secret | Required for auth |
 | `JWT_ALGORITHM` | JWT algorithm | Default: `HS256` |
 | `SAGEWAI_ENCRYPTION_KEY` | Fernet key for encrypting stored secrets | Recommended |
+| `SAGEWAI_ALLOW_HOST_EXEC` | Enable host-backed execution (on-host NullBackend / bash / stdio MCP) | **Disabled by default** everywhere. Set to `1` to enable — required for local self-hosted autopilot or any workflow that runs code directly on the host. Do not set in Internet-facing containers. |
 
 ### Observability
 

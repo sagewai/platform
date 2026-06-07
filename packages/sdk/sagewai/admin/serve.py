@@ -96,6 +96,11 @@ _CAPABILITIES = {
 _AGENT_TEMPLATES: list[dict[str, Any]] = []
 
 
+def _resolve_database_url() -> str | None:
+    """Accept either env var; SAGEWAI_DATABASE_URL wins over DATABASE_URL."""
+    return os.environ.get("SAGEWAI_DATABASE_URL") or os.environ.get("DATABASE_URL") or None
+
+
 def _load_templates() -> list[dict[str, Any]]:
     """Lazy-load templates to avoid circular imports."""
     global _AGENT_TEMPLATES
@@ -454,6 +459,9 @@ def create_admin_serve_app(
 
     # Run state migrations before serving (versioned, locked, backed-up).
     sf.run_migrations()
+    # Fail closed: if encrypted secrets exist but no master key is available,
+    # refuse to start rather than silently serving nulled/ciphertext credentials.
+    sf.require_secret_key_if_encrypted()
 
     # Auth boundary (deny-by-default). Added BEFORE CORS so CORS is the
     # OUTERMOST middleware and wraps even 401/403 responses with CORS headers.
@@ -661,7 +669,7 @@ def create_admin_serve_app(
     directive_routes.register(app, sf)
 
     # Sealed revocation routes (Sealed-iii.A) — requires Postgres
-    _db_url = os.environ.get("SAGEWAI_DATABASE_URL")
+    _db_url = _resolve_database_url()
     if _db_url:
         from sagewai.admin import revocation_routes  # noqa: E402
         from sagewai.core.stores.postgres import PostgresStore as _PostgresStore
@@ -900,14 +908,11 @@ def create_admin_serve_app(
         return JSONResponse({"id": result.get("id", "")})
 
     @app.post("/api/v1/providers/{provider_id}/test")
-    async def test_provider(provider_id: str) -> JSONResponse:
+    async def test_provider(provider_id: str, request: Request) -> JSONResponse:
         from sagewai.admin.provider_probes import test_cloud_provider
 
-        providers = sf.list_providers()
-        provider = next(
-            (p for p in providers if p.get("id") == provider_id or p.get("provider_name") == provider_id),
-            None,
-        )
+        pid = _project_id(request)
+        provider = sf.get_provider_decrypted(provider_id, project_id=pid)
         if not provider:
             return JSONResponse({"detail": "Provider not found"}, status_code=404)
         result = await test_cloud_provider(
@@ -967,7 +972,7 @@ def create_admin_serve_app(
     @app.get("/playground/models")
     async def playground_models() -> JSONResponse:
         from sagewai.admin.provider_probes import aggregate_available_models
-        providers = sf.list_providers()
+        providers = sf.list_providers_decrypted()
         models = await aggregate_available_models(providers)
         return JSONResponse(models)
 
@@ -1036,22 +1041,25 @@ def create_admin_serve_app(
         return JSONResponse(agents)
 
     @app.get("/playground/agents/{name}")
-    async def playground_agent_detail(name: str) -> JSONResponse:
-        agent = sf.get_agent(name)
+    async def playground_agent_detail(name: str, request: Request) -> JSONResponse:
+        pid = _project_id(request)
+        agent = sf.get_agent(name, project_id=pid)
         if not agent:
             return JSONResponse({"detail": "Agent not found"}, status_code=404)
         return JSONResponse(agent)
 
     @app.get("/playground/agents/{name}/debug")
-    async def playground_agent_debug(name: str) -> JSONResponse:
-        agent = sf.get_agent(name)
+    async def playground_agent_debug(name: str, request: Request) -> JSONResponse:
+        pid = _project_id(request)
+        agent = sf.get_agent(name, project_id=pid)
         if not agent:
             return JSONResponse({"detail": "Agent not found"}, status_code=404)
         return JSONResponse(agent)
 
     @app.delete("/playground/agents/{name}")
-    async def delete_playground_agent(name: str) -> JSONResponse:
-        if sf.delete_agent(name):
+    async def delete_playground_agent(name: str, request: Request) -> JSONResponse:
+        pid = _project_id(request)
+        if sf.delete_agent(name, project_id=pid):
             return JSONResponse({"status": "ok"})
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
@@ -1061,7 +1069,8 @@ def create_admin_serve_app(
         new_name = body.get("new_name", "")
         if not new_name:
             return JSONResponse({"detail": "new_name required"}, status_code=422)
-        result = sf.rename_agent(name, new_name)
+        pid = _project_id(request)
+        result = sf.rename_agent(name, new_name, project_id=pid)
         if result:
             return JSONResponse(result)
         return JSONResponse({"detail": "Not found"}, status_code=404)
@@ -1077,7 +1086,7 @@ def create_admin_serve_app(
         agent_name = body.get("agent_name") or body.get("name") or ""
         message = body.get("message", "")
         pid = _project_id(request)
-        agent_spec = sf.get_agent(agent_name)
+        agent_spec = sf.get_agent(agent_name, project_id=pid)
         run_id = f"run-{_run_sec.token_hex(6)}"
         _run_t0 = _run_time.monotonic()
         _started_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -1214,9 +1223,9 @@ def create_admin_serve_app(
             "project_id": pid,
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         }
-        data = sf._read()
-        data.setdefault("prompt_logs", []).append(entry)
-        sf._write(data)
+        def _apply(d):
+            d.setdefault("prompt_logs", []).append(entry)
+        sf.mutate(_apply)
         return JSONResponse({"log_id": log_id}, status_code=201)
 
     @app.get("/api/v1/prompts/logs/{log_id}")
@@ -1230,22 +1239,25 @@ def create_admin_serve_app(
     @app.patch("/api/v1/prompts/logs/{log_id}")
     async def update_prompt_log(log_id: str, request: Request) -> JSONResponse:
         body = await request.json()
-        data = sf._read()
-        for log in data.get("prompt_logs", []):
-            if log.get("log_id") == log_id:
-                for k in ("tags", "is_example", "output_text"):
-                    if k in body:
-                        log[k] = body[k]
-                sf._write(data)
-                return JSONResponse(log)
+        def _apply(d):
+            for log in d.get("prompt_logs", []):
+                if log.get("log_id") == log_id:
+                    for k in ("tags", "is_example", "output_text"):
+                        if k in body:
+                            log[k] = body[k]
+                    return log
+            return None
+        result = sf.mutate(_apply)
+        if result is not None:
+            return JSONResponse(result)
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     @app.delete("/api/v1/prompts/logs/{log_id}")
     async def delete_prompt_log(log_id: str) -> JSONResponse:
-        data = sf._read()
-        logs = data.get("prompt_logs", [])
-        data["prompt_logs"] = [l for l in logs if l.get("log_id") != log_id]
-        sf._write(data)
+        def _apply(d):
+            logs = d.get("prompt_logs", [])
+            d["prompt_logs"] = [l for l in logs if l.get("log_id") != log_id]
+        sf.mutate(_apply)
         return JSONResponse({"status": "ok"})
 
     @app.post("/api/v1/prompts/replay")
@@ -1321,7 +1333,7 @@ def create_admin_serve_app(
             else:
                 # Alpaca format (default) — instruction/input/output
                 system = ""
-                agent = sf.get_agent(s.get("agent_name", ""))
+                agent = sf.get_agent(s.get("agent_name", ""), project_id=pid)
                 if agent:
                     system = agent.get("system_prompt", "")
                 entry = {
@@ -1375,13 +1387,16 @@ def create_admin_serve_app(
         """Rate a training sample quality (1-5)."""
         body = await request.json()
         quality = body.get("quality", 3)
-        data = sf._read()
-        for log in data.get("prompt_logs", []):
-            if log.get("log_id") == log_id:
-                log["quality"] = max(1, min(5, int(quality)))
-                log["is_example"] = True  # rating implies it's a training sample
-                sf._write(data)
-                return JSONResponse({"status": "ok", "quality": log["quality"]})
+        def _apply(d):
+            for log in d.get("prompt_logs", []):
+                if log.get("log_id") == log_id:
+                    log["quality"] = max(1, min(5, int(quality)))
+                    log["is_example"] = True  # rating implies it's a training sample
+                    return log["quality"]
+            return None
+        result = sf.mutate(_apply)
+        if result is not None:
+            return JSONResponse({"status": "ok", "quality": result})
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     @app.get("/strategies/list")
@@ -1397,7 +1412,7 @@ def create_admin_serve_app(
     @app.get("/api/v1/model-router/models")
     async def model_router_models() -> JSONResponse:
         from sagewai.admin.provider_probes import aggregate_available_models
-        providers = sf.list_providers()
+        providers = sf.list_providers_decrypted()
         models = await aggregate_available_models(providers)
         return JSONResponse(models)
 
@@ -1734,10 +1749,10 @@ def create_admin_serve_app(
                     "finished_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                     "events": events_log,
                 }
-                data = sf._read()
-                data.setdefault("workflow_runs", []).insert(0, run_record)
-                data["workflow_runs"] = data["workflow_runs"][:100]
-                sf._write(data)
+                def _apply(d):
+                    d.setdefault("workflow_runs", []).insert(0, run_record)
+                    d["workflow_runs"] = d["workflow_runs"][:100]
+                sf.mutate(_apply)
 
                 yield _emit("workflow_finished", finished_payload)
 
@@ -1801,12 +1816,14 @@ def create_admin_serve_app(
 
     @app.post("/workflows/runs/{run_id}/cancel")
     async def workflow_cancel(run_id: str) -> JSONResponse:
-        data = sf._read()
-        for r in data.get("workflow_runs", []):
-            if r.get("run_id") == run_id:
-                r["status"] = "cancelled"
-                sf._write(data)
-                return JSONResponse({"status": "cancelled"})
+        def _apply(d):
+            for r in d.get("workflow_runs", []):
+                if r.get("run_id") == run_id:
+                    r["status"] = "cancelled"
+                    return True
+            return False
+        if sf.mutate(_apply):
+            return JSONResponse({"status": "cancelled"})
         return JSONResponse({"status": "not_found"}, status_code=404)
 
     @app.post("/workflows/runs/{run_id}/approve")
@@ -1905,6 +1922,20 @@ def create_admin_serve_app(
 
         # 2. Derive sandbox mode requirement
         requires_sandbox_mode = _sandbox_mode_for(execution_mode)
+
+        # 2b. Host-exec guard: reject bare/inline runs when policy disallows it.
+        # Container images set SAGEWAI_RUNTIME=container; SAGEWAI_ALLOW_HOST_EXEC=1
+        # overrides. Local/self-hosted deployments are allowed by default.
+        if requires_sandbox_mode == _SandboxMode.NONE:
+            from sagewai.sandbox.policy import host_exec_allowed
+            if not host_exec_allowed():
+                raise _HTTPException(
+                    status_code=403,
+                    detail=(
+                        "Host-backed execution disabled. "
+                        "Set SAGEWAI_ALLOW_HOST_EXEC=1 to enable."
+                    ),
+                )
 
         # 3. Capability check against fleet registry.
         # For non-BARE runs (requires_sandbox_mode=PER_RUN) we verify that at
@@ -2047,10 +2078,10 @@ def create_admin_serve_app(
             "run_type": "enqueue",
         })
 
-        data = sf._read()
-        data.setdefault("workflow_runs", []).insert(0, run_record)
-        data["workflow_runs"] = data["workflow_runs"][:100]
-        sf._write(data)
+        def _apply(d):
+            d.setdefault("workflow_runs", []).insert(0, run_record)
+            d["workflow_runs"] = d["workflow_runs"][:100]
+        sf.mutate(_apply)
 
         logger.info(
             "Workflow run enqueued: %s workflow=%s mode=%s",
@@ -2139,9 +2170,9 @@ def create_admin_serve_app(
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         }
-        data = sf._read()
-        data.setdefault("saved_workflows", []).append(wf)
-        sf._write(data)
+        def _apply(d):
+            d.setdefault("saved_workflows", []).append(wf)
+        sf.mutate(_apply)
         return JSONResponse(wf, status_code=201)
 
     @app.get("/api/v1/workflow-registry/by-name/{name}")
@@ -2162,10 +2193,10 @@ def create_admin_serve_app(
 
     @app.delete("/api/v1/workflow-registry/{wf_id}")
     async def delete_saved_workflow(wf_id: str) -> JSONResponse:
-        data = sf._read()
-        wfs = data.get("saved_workflows", [])
-        data["saved_workflows"] = [w for w in wfs if w.get("id") != wf_id]
-        sf._write(data)
+        def _apply(d):
+            wfs = d.get("saved_workflows", [])
+            d["saved_workflows"] = [w for w in wfs if w.get("id") != wf_id]
+        sf.mutate(_apply)
         return JSONResponse({"status": "ok"})
 
     # ── Budget limits ────────────────────────────────────────────
@@ -2178,33 +2209,35 @@ def create_admin_serve_app(
     @app.post("/api/v1/budget/limits")
     async def create_budget_limit(request: Request) -> JSONResponse:
         body = await request.json()
-        data = sf._read()
-        limits = data.setdefault("budget_limits", [])
         body.setdefault("created_at", datetime.datetime.now(datetime.timezone.utc).isoformat())
-        # Upsert by agent_name
         agent = body.get("agent_name", "")
-        data["budget_limits"] = [l for l in limits if l.get("agent_name") != agent]
-        data["budget_limits"].append(body)
-        sf._write(data)
+        def _apply(d):
+            limits = d.setdefault("budget_limits", [])
+            d["budget_limits"] = [l for l in limits if l.get("agent_name") != agent]
+            d["budget_limits"].append(body)
+        sf.mutate(_apply)
         return JSONResponse(body, status_code=201)
 
     @app.put("/api/v1/budget/limits/{agent_name}")
     async def update_budget_limit(agent_name: str, request: Request) -> JSONResponse:
         body = await request.json()
-        data = sf._read()
-        for l in data.get("budget_limits", []):
-            if l.get("agent_name") == agent_name:
-                l.update(body)
-                sf._write(data)
-                return JSONResponse(l)
+        def _apply(d):
+            for l in d.get("budget_limits", []):
+                if l.get("agent_name") == agent_name:
+                    l.update(body)
+                    return l
+            return None
+        result = sf.mutate(_apply)
+        if result is not None:
+            return JSONResponse(result)
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     @app.delete("/api/v1/budget/limits/{agent_name}")
     async def delete_budget_limit(agent_name: str) -> JSONResponse:
-        data = sf._read()
-        limits = data.get("budget_limits", [])
-        data["budget_limits"] = [l for l in limits if l.get("agent_name") != agent_name]
-        sf._write(data)
+        def _apply(d):
+            limits = d.get("budget_limits", [])
+            d["budget_limits"] = [l for l in limits if l.get("agent_name") != agent_name]
+        sf.mutate(_apply)
         return JSONResponse({"status": "ok"})
 
     @app.get("/api/v1/budget/status/{agent_name}")
@@ -2238,23 +2271,24 @@ def create_admin_serve_app(
     async def upsert_guardrail_config(agent_name: str, request: Request) -> JSONResponse:
         body = await request.json()
         body["agent_name"] = agent_name
-        data = sf._read()
-        configs = data.setdefault("guardrail_configs", [])
-        data["guardrail_configs"] = [c for c in configs if c.get("agent_name") != agent_name]
-        data["guardrail_configs"].append(body)
-        sf._write(data)
+        def _apply(d):
+            configs = d.setdefault("guardrail_configs", [])
+            d["guardrail_configs"] = [c for c in configs if c.get("agent_name") != agent_name]
+            d["guardrail_configs"].append(body)
+        sf.mutate(_apply)
         return JSONResponse(body)
 
     @app.delete("/api/v1/guardrails/configs/{agent_name}/{guardrail_type}")
     async def delete_guardrail_config(agent_name: str, guardrail_type: str) -> JSONResponse:
-        data = sf._read()
-        configs = data.get("guardrail_configs", [])
-        for c in configs:
-            if c.get("agent_name") == agent_name:
-                types = c.get("guardrails", [])
-                c["guardrails"] = [g for g in types if g.get("type") != guardrail_type]
-                sf._write(data)
-                return JSONResponse({"status": "ok"})
+        def _apply(d):
+            for c in d.get("guardrail_configs", []):
+                if c.get("agent_name") == agent_name:
+                    types = c.get("guardrails", [])
+                    c["guardrails"] = [g for g in types if g.get("type") != guardrail_type]
+                    return True
+            return False
+        if sf.mutate(_apply):
+            return JSONResponse({"status": "ok"})
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     # ── Audit events ─────────────────────────────────────────────
@@ -2565,11 +2599,11 @@ def create_admin_serve_app(
     async def save_connector(name: str, request: Request) -> JSONResponse:
         body = await request.json()
         body["name"] = name
-        data = sf._read()
-        connectors = data.setdefault("connectors", [])
-        data["connectors"] = [c for c in connectors if c.get("name") != name]
-        data["connectors"].append(body)
-        sf._write(data)
+        def _apply(d):
+            connectors = d.setdefault("connectors", [])
+            d["connectors"] = [c for c in connectors if c.get("name") != name]
+            d["connectors"].append(body)
+        sf.mutate(_apply)
         return JSONResponse(body)
 
     @app.post("/api/v1/connectors/{name}/test")
@@ -2578,10 +2612,10 @@ def create_admin_serve_app(
 
     @app.delete("/api/v1/connectors/{name}")
     async def delete_connector(name: str) -> JSONResponse:
-        data = sf._read()
-        connectors = data.get("connectors", [])
-        data["connectors"] = [c for c in connectors if c.get("name") != name]
-        sf._write(data)
+        def _apply(d):
+            connectors = d.get("connectors", [])
+            d["connectors"] = [c for c in connectors if c.get("name") != name]
+        sf.mutate(_apply)
         return JSONResponse({"status": "ok"})
 
     # ── Notifications ────────────────────────────────────────────
@@ -2596,19 +2630,19 @@ def create_admin_serve_app(
         import secrets as _sec
         body = await request.json()
         body.setdefault("id", f"ch-{_sec.token_hex(6)}")
-        data = sf._read()
-        channels = data.setdefault("notification_channels", [])
-        data["notification_channels"] = [c for c in channels if c.get("id") != body["id"]]
-        data["notification_channels"].append(body)
-        sf._write(data)
+        def _apply(d):
+            channels = d.setdefault("notification_channels", [])
+            d["notification_channels"] = [c for c in channels if c.get("id") != body["id"]]
+            d["notification_channels"].append(body)
+        sf.mutate(_apply)
         return JSONResponse(body, status_code=201)
 
     @app.delete("/api/v1/notifications/channels/{channel_id}")
     async def delete_notification_channel(channel_id: str) -> JSONResponse:
-        data = sf._read()
-        channels = data.get("notification_channels", [])
-        data["notification_channels"] = [c for c in channels if c.get("id") != channel_id]
-        sf._write(data)
+        def _apply(d):
+            channels = d.get("notification_channels", [])
+            d["notification_channels"] = [c for c in channels if c.get("id") != channel_id]
+        sf.mutate(_apply)
         return JSONResponse({"status": "ok"})
 
     @app.get("/api/v1/notifications/triggers")
@@ -2621,19 +2655,19 @@ def create_admin_serve_app(
         import secrets as _sec
         body = await request.json()
         body.setdefault("id", f"tr-{_sec.token_hex(6)}")
-        data = sf._read()
-        triggers = data.setdefault("notification_triggers", [])
-        data["notification_triggers"] = [t for t in triggers if t.get("id") != body["id"]]
-        data["notification_triggers"].append(body)
-        sf._write(data)
+        def _apply(d):
+            triggers = d.setdefault("notification_triggers", [])
+            d["notification_triggers"] = [t for t in triggers if t.get("id") != body["id"]]
+            d["notification_triggers"].append(body)
+        sf.mutate(_apply)
         return JSONResponse(body, status_code=201)
 
     @app.delete("/api/v1/notifications/triggers/{trigger_id}")
     async def delete_notification_trigger(trigger_id: str) -> JSONResponse:
-        data = sf._read()
-        triggers = data.get("notification_triggers", [])
-        data["notification_triggers"] = [t for t in triggers if t.get("id") != trigger_id]
-        sf._write(data)
+        def _apply(d):
+            triggers = d.get("notification_triggers", [])
+            d["notification_triggers"] = [t for t in triggers if t.get("id") != trigger_id]
+        sf.mutate(_apply)
         return JSONResponse({"status": "ok"})
 
     @app.get("/api/v1/notifications/history")
@@ -2877,37 +2911,43 @@ def create_admin_serve_app(
         import secrets as _sec
         body = await request.json()
         body.setdefault("id", f"trig-{_sec.token_hex(6)}")
-        data = sf._read()
-        data.setdefault("triggers", []).append(body)
-        sf._write(data)
+        def _apply(d):
+            d.setdefault("triggers", []).append(body)
+        sf.mutate(_apply)
         return JSONResponse(body, status_code=201)
 
     @app.delete("/api/v1/triggers/{trigger_id}")
     async def delete_trigger(trigger_id: str) -> JSONResponse:
-        data = sf._read()
-        triggers = data.get("triggers", [])
-        data["triggers"] = [t for t in triggers if t.get("id") != trigger_id]
-        sf._write(data)
+        def _apply(d):
+            triggers = d.get("triggers", [])
+            d["triggers"] = [t for t in triggers if t.get("id") != trigger_id]
+        sf.mutate(_apply)
         return JSONResponse({"status": "ok"})
 
     @app.patch("/api/v1/triggers/{trigger_id}/enable")
     async def enable_trigger(trigger_id: str) -> JSONResponse:
-        data = sf._read()
-        for t in data.get("triggers", []):
-            if t.get("id") == trigger_id:
-                t["enabled"] = True
-                sf._write(data)
-                return JSONResponse(t)
+        def _apply(d):
+            for t in d.get("triggers", []):
+                if t.get("id") == trigger_id:
+                    t["enabled"] = True
+                    return t
+            return None
+        result = sf.mutate(_apply)
+        if result is not None:
+            return JSONResponse(result)
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     @app.patch("/api/v1/triggers/{trigger_id}/disable")
     async def disable_trigger(trigger_id: str) -> JSONResponse:
-        data = sf._read()
-        for t in data.get("triggers", []):
-            if t.get("id") == trigger_id:
-                t["enabled"] = False
-                sf._write(data)
-                return JSONResponse(t)
+        def _apply(d):
+            for t in d.get("triggers", []):
+                if t.get("id") == trigger_id:
+                    t["enabled"] = False
+                    return t
+            return None
+        result = sf.mutate(_apply)
+        if result is not None:
+            return JSONResponse(result)
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     # ── Analytics extras ─────────────────────────────────────────
@@ -3012,9 +3052,9 @@ def create_admin_serve_app(
         body = await request.json()
         body.setdefault("id", f"ds-{_sec.token_hex(6)}")
         body.setdefault("created_at", datetime.datetime.now(datetime.timezone.utc).isoformat())
-        data = sf._read()
-        data.setdefault("eval_datasets", []).append(body)
-        sf._write(data)
+        def _apply(d):
+            d.setdefault("eval_datasets", []).append(body)
+        sf.mutate(_apply)
         return JSONResponse(body, status_code=201)
 
     @app.get("/api/v1/eval/datasets/{dataset_id}")
@@ -3027,10 +3067,10 @@ def create_admin_serve_app(
 
     @app.delete("/api/v1/eval/datasets/{dataset_id}")
     async def delete_eval_dataset(dataset_id: str) -> JSONResponse:
-        data = sf._read()
-        datasets = data.get("eval_datasets", [])
-        data["eval_datasets"] = [d for d in datasets if d.get("id") != dataset_id]
-        sf._write(data)
+        def _apply(d):
+            datasets = d.get("eval_datasets", [])
+            d["eval_datasets"] = [ds for ds in datasets if ds.get("id") != dataset_id]
+        sf.mutate(_apply)
         return JSONResponse({"status": "ok"})
 
     @app.post("/api/v1/eval/run")

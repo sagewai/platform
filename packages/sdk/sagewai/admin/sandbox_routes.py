@@ -156,28 +156,28 @@ async def put_project_defaults(
     from sagewai.admin.state_file import AdminStateFile
 
     state = request.app.state.sandbox_store or AdminStateFile()
-    data = state._read()
-    projects = data.setdefault("projects", [])
-    target = None
-    if isinstance(projects, list):
-        target = next((p for p in projects if p.get("slug") == slug), None)
-        if target is None:
-            target = {"slug": slug}
-            projects.append(target)
-    elif isinstance(projects, dict):
-        target = projects.setdefault(slug, {})
-
-    target["default_sandbox_requirements"] = {
+    req_dict = {
         "sandbox_mode": payload.sandbox_mode.value,
         "image": payload.image,
         "network_policy": payload.network_policy.value,
         "required_secret_scopes": payload.required_secret_scopes,
     }
-    state._write(data)
+
+    def _apply(d):
+        projects = d.setdefault("projects", [])
+        if isinstance(projects, list):
+            target = next((p for p in projects if p.get("slug") == slug), None)
+            if target is None:
+                target = {"slug": slug}
+                projects.append(target)
+        elif isinstance(projects, dict):
+            target = projects.setdefault(slug, {})
+        target["default_sandbox_requirements"] = req_dict
+    state.mutate(_apply)
     emit_audit(state, event_type="sandbox.config.updated",
                actor_label=_actor_label(request),
                target=f"project:{slug}/sandbox-defaults")
-    return _build_response(target["default_sandbox_requirements"])
+    return _build_response(req_dict)
 
 
 @router.delete(
@@ -193,16 +193,16 @@ async def delete_project_defaults(slug: str, request: Request) -> SandboxConfigD
     if project is None or "default_sandbox_requirements" not in project:
         return SandboxConfigDeleteResponse(cleared=False)
 
-    data = state._read()
-    projects = data.get("projects", [])
-    if isinstance(projects, list):
-        for p in projects:
-            if p.get("slug") == slug:
-                p.pop("default_sandbox_requirements", None)
-                break
-    elif isinstance(projects, dict):
-        projects.get(slug, {}).pop("default_sandbox_requirements", None)
-    state._write(data)
+    def _apply(d):
+        projects = d.get("projects", [])
+        if isinstance(projects, list):
+            for p in projects:
+                if p.get("slug") == slug:
+                    p.pop("default_sandbox_requirements", None)
+                    break
+        elif isinstance(projects, dict):
+            projects.get(slug, {}).pop("default_sandbox_requirements", None)
+    state.mutate(_apply)
     emit_audit(state, event_type="sandbox.config.deleted",
                actor_label=_actor_label(request),
                target=f"project:{slug}/sandbox-defaults")
@@ -272,19 +272,21 @@ async def put_agent_overrides(
     from sagewai.admin.state_file import AdminStateFile
 
     state = request.app.state.sandbox_store or AdminStateFile()
-    data = state._read()
-    target = _get_or_create_agent(data, name)
-    target["sandbox_requirements_override"] = {
+    req_dict = {
         "sandbox_mode": payload.sandbox_mode.value,
         "image": payload.image,
         "network_policy": payload.network_policy.value,
         "required_secret_scopes": payload.required_secret_scopes,
     }
-    state._write(data)
+
+    def _apply(d):
+        target = _get_or_create_agent(d, name)
+        target["sandbox_requirements_override"] = req_dict
+    state.mutate(_apply)
     emit_audit(state, event_type="sandbox.config.updated",
                actor_label=_actor_label(request),
                target=f"agent:{name}/sandbox-requirements")
-    return _build_response(target["sandbox_requirements_override"])
+    return _build_response(req_dict)
 
 
 @router.delete(
@@ -299,16 +301,16 @@ async def delete_agent_overrides(name: str, request: Request) -> SandboxConfigDe
     agent = state.get_agent(name)
     if agent is None or "sandbox_requirements_override" not in agent:
         return SandboxConfigDeleteResponse(cleared=False)
-    data = state._read()
-    agents = data.get("agents", [])
-    if isinstance(agents, list):
-        for a in agents:
-            if a.get("name") == name:
-                a.pop("sandbox_requirements_override", None)
-                break
-    elif isinstance(agents, dict):
-        agents.get(name, {}).pop("sandbox_requirements_override", None)
-    state._write(data)
+    def _apply(d):
+        agents = d.get("agents", [])
+        if isinstance(agents, list):
+            for a in agents:
+                if a.get("name") == name:
+                    a.pop("sandbox_requirements_override", None)
+                    break
+        elif isinstance(agents, dict):
+            agents.get(name, {}).pop("sandbox_requirements_override", None)
+    state.mutate(_apply)
     emit_audit(state, event_type="sandbox.config.deleted",
                actor_label=_actor_label(request),
                target=f"agent:{name}/sandbox-requirements")

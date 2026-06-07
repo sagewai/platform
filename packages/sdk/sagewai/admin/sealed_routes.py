@@ -208,11 +208,11 @@ async def get_system_config() -> SealedSystemConfig:
 async def put_system_config(body: SealedSystemConfig) -> SealedSystemConfig:
     from sagewai.admin.state_file import AdminStateFile
     state = AdminStateFile()
-    data = state._read()
-    sealed = data.setdefault("sealed", {})
-    sealed["system_profile_ref"] = body.profile_ref
-    sealed["system_overrides"] = body.overrides or {}
-    state._write(data)
+    def _apply(d):
+        sealed = d.setdefault("sealed", {})
+        sealed["system_profile_ref"] = body.profile_ref
+        sealed["system_overrides"] = body.overrides or {}
+    state.mutate(_apply)
     return body
 
 
@@ -232,16 +232,16 @@ async def get_workflow_config(name: str) -> SealedWorkflowConfig:
 async def put_workflow_config(name: str, body: SealedWorkflowConfig) -> SealedWorkflowConfig:
     from sagewai.admin.state_file import AdminStateFile
     state = AdminStateFile()
-    data = state._read()
-    workflows = data.setdefault("workflows", {})
-    if not isinstance(workflows, dict):
-        # Coerce to dict shape if list
-        workflows = {w["name"]: w for w in workflows if "name" in w}
-        data["workflows"] = workflows
-    workflows.setdefault(name, {})
-    workflows[name]["security_profile_ref"] = body.profile_ref
-    workflows[name]["security_overrides"] = body.overrides or {}
-    state._write(data)
+    def _apply(d):
+        workflows = d.setdefault("workflows", {})
+        if not isinstance(workflows, dict):
+            # Coerce to dict shape if list
+            workflows = {w["name"]: w for w in workflows if "name" in w}
+            d["workflows"] = workflows
+        workflows.setdefault(name, {})
+        workflows[name]["security_profile_ref"] = body.profile_ref
+        workflows[name]["security_overrides"] = body.overrides or {}
+    state.mutate(_apply)
     return body
 
 
@@ -249,12 +249,12 @@ async def put_workflow_config(name: str, body: SealedWorkflowConfig) -> SealedWo
 async def delete_workflow_config(name: str) -> None:
     from sagewai.admin.state_file import AdminStateFile
     state = AdminStateFile()
-    data = state._read()
-    workflows = data.get("workflows") or {}
-    if isinstance(workflows, dict) and name in workflows:
-        workflows[name].pop("security_profile_ref", None)
-        workflows[name].pop("security_overrides", None)
-    state._write(data)
+    def _apply(d):
+        workflows = d.get("workflows") or {}
+        if isinstance(workflows, dict) and name in workflows:
+            workflows[name].pop("security_profile_ref", None)
+            workflows[name].pop("security_overrides", None)
+    state.mutate(_apply)
 
 
 @router.get("/preview", response_model=EffectiveProfileResponse)

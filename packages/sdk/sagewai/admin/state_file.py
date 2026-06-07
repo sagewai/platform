@@ -26,6 +26,7 @@ works out of the box with zero dependencies.
 
 from __future__ import annotations
 
+import copy
 import datetime
 import hashlib
 import hmac
@@ -43,10 +44,106 @@ try:
 except ImportError:  # pragma: no cover - Windows
     fcntl = None  # type: ignore[assignment]
 
+import logging
+
 from sagewai import home
 from sagewai.artifacts.models import ArtifactDestination
 from sagewai.sealed.directives.policies import DirectivesConfig, seed_defaults_if_empty
 
+logger = logging.getLogger("sagewai.admin")
+
+# ── provider secret encryption helpers ──────────────────────────────
+
+_PROVIDER_SECRET_FIELDS = (
+    "api_key", "apikey", "key", "secret", "client_secret", "token",
+    "access_token", "refresh_token", "password", "passphrase", "private_key",
+)
+_FERNET_PREFIX = "fernet:"
+
+
+def _walk_secret_fields(node: Any, fn: Any) -> None:
+    """Call fn(parent_dict, key) for every secret-named key at any depth."""
+    if isinstance(node, dict):
+        for k, v in list(node.items()):
+            if k in _PROVIDER_SECRET_FIELDS:
+                fn(node, k)
+            else:
+                _walk_secret_fields(v, fn)
+    elif isinstance(node, list):
+        for item in node:
+            _walk_secret_fields(item, fn)
+
+
+def _provider_has_plaintext_secret(p: dict[str, Any]) -> bool:
+    found: list[bool] = []
+
+    def _check(parent: dict[str, Any], k: str) -> None:
+        v = parent.get(k)
+        if isinstance(v, str) and v and not v.startswith(_FERNET_PREFIX):
+            found.append(True)
+
+    _walk_secret_fields(p.get("config"), _check)
+    return bool(found)
+
+
+def _encrypt_provider(p: dict[str, Any], crypto: Any) -> dict[str, Any]:
+    def _enc(parent: dict[str, Any], k: str) -> None:
+        v = parent.get(k)
+        if isinstance(v, str) and v and not v.startswith(_FERNET_PREFIX):
+            parent[k] = crypto.encrypt(v)
+
+    _walk_secret_fields(p.get("config"), _enc)
+    return p
+
+
+def _provider_is_encrypted(p: dict[str, Any]) -> bool:
+    found: list[bool] = []
+
+    def _check(parent: dict[str, Any], k: str) -> None:
+        v = parent.get(k)
+        if isinstance(v, str) and v.startswith(_FERNET_PREFIX):
+            found.append(True)
+
+    _walk_secret_fields(p.get("config"), _check)
+    return bool(found)
+
+
+def _any_encrypted_provider(providers: list[dict[str, Any]]) -> bool:
+    return any(_provider_is_encrypted(p) for p in providers)
+
+
+def _redact_provider(p: dict[str, Any]) -> dict[str, Any]:
+    out = copy.deepcopy(p)
+
+    def _red(parent: dict[str, Any], k: str) -> None:
+        val = parent.pop(k, None)   # always strip secret material
+        if val:
+            parent[k + "_set"] = True
+
+    _walk_secret_fields(out.get("config"), _red)
+    return out
+
+
+def _decrypt_provider(p: dict[str, Any], crypto: Any) -> dict[str, Any]:
+    """Decrypt secret fields.  On failure (no key / wrong key / corrupt), NULL the
+    field — NEVER leave a ciphertext blob to be passed as a credential."""
+    from sagewai.sealed.crypto import SecretCorrupted
+    out = copy.deepcopy(p)
+
+    def _dec(parent: dict[str, Any], k: str) -> None:
+        v = parent.get(k)
+        if isinstance(v, str) and v.startswith(_FERNET_PREFIX):
+            if crypto is None:
+                parent[k] = None
+                return
+            try:
+                parent[k] = crypto.decrypt(v)
+            except SecretCorrupted:
+                logger.warning("provider secret decrypt failed; treating as unset")
+                parent[k] = None
+
+    _walk_secret_fields(out.get("config"), _dec)
+    return out
 
 def default_admin_state_path() -> Path:
     """Resolve the on-disk admin-state path with env override.
@@ -345,6 +442,12 @@ class AdminStateFile:
                 pass
             raise
 
+    def mutate(self, fn: Any) -> Any:
+        """Public locked read-modify-write. `fn(data)` mutates in place; its return
+        value (if any) is returned. Use this from route handlers instead of
+        _read()/_write() so concurrent updates are not lost."""
+        return self._mutate(fn)
+
     def _mutate(self, fn: Any) -> Any:
         """Locked read → mutate → write, returning the fn result."""
         with self._file_lock():
@@ -355,7 +458,7 @@ class AdminStateFile:
 
     # ── file lock ────────────────────────────────────────────────
 
-    SCHEMA_VERSION = 1  # bumped by each migration-bearing PR
+    SCHEMA_VERSION = 3  # bumped by each migration-bearing PR
 
     @contextmanager
     def _file_lock(self):
@@ -664,50 +767,66 @@ class AdminStateFile:
     def create_agent(
         self, spec: dict[str, Any], project_id: str | None = None
     ) -> dict[str, Any]:
-        data = self._read()
-        agents = data.setdefault("agents", [])
-        name = spec.get("name", "")
         spec["project_id"] = project_id
-        # Replace if exists
-        data["agents"] = [a for a in agents if a.get("name") != name]
-        data["agents"].append(spec)
-        self._write(data)
+        name = spec.get("name", "")
+
+        def _apply(data: dict[str, Any]) -> None:
+            agents = data.setdefault("agents", [])
+            data["agents"] = [
+                a for a in agents
+                if not (a.get("name") == name and a.get("project_id") == project_id)
+            ]
+            data["agents"].append(spec)
+
+        self._mutate(_apply)
         return spec
 
-    def get_agent(self, name: str) -> dict[str, Any] | None:
+    def get_agent(self, name: str, project_id: str | None = None) -> dict[str, Any] | None:
         """Return the agent dict for ``name`` or None if not present.
+
+        When ``project_id`` is given, prefers a scoped match; falls back to
+        org-global records (``project_id`` is None/empty).  When
+        ``project_id`` is None the first matching record is returned
+        regardless of its project scope (org-global view, backward-compat).
 
         Handles both list-of-dicts (matching on ``name``) and
         dict-keyed-by-name shapes for forward-compatibility.
         """
-        state = self._read()
-        agents = state.get("agents", [])
-        if isinstance(agents, dict):
-            return agents.get(name)
-        if isinstance(agents, list):
-            for a in agents:
-                if a.get("name") == name:
+        agents = self._read().get("agents", [])
+        if isinstance(agents, dict):           # forward-compat dict shape
+            agents = list(agents.values())
+        matches = [a for a in agents if isinstance(a, dict) and a.get("name") == name]
+        if project_id is None:
+            return matches[0] if matches else None
+        scoped = [a for a in matches if a.get("project_id") == project_id]
+        if scoped:
+            return scoped[0]
+        glob = [a for a in matches if a.get("project_id") in (None, "")]
+        return glob[0] if glob else None
+
+    def delete_agent(self, name: str, project_id: str | None = None) -> bool:
+        def _apply(data: dict[str, Any]) -> bool:
+            agents = data.get("agents", [])
+            before = len(agents)
+            if project_id is None:
+                data["agents"] = [a for a in agents if a.get("name") != name]
+            else:
+                data["agents"] = [
+                    a for a in agents
+                    if not (a.get("name") == name and a.get("project_id") == project_id)
+                ]
+            return len(data["agents"]) != before
+
+        return self._mutate(_apply)
+
+    def rename_agent(self, old_name: str, new_name: str, project_id: str | None = None) -> dict[str, Any] | None:
+        def _apply(data: dict[str, Any]) -> dict[str, Any] | None:
+            for a in data.get("agents", []):
+                if a.get("name") == old_name and (project_id is None or a.get("project_id") == project_id):
+                    a["name"] = new_name
                     return a
-        return None
-
-    def delete_agent(self, name: str) -> bool:
-        data = self._read()
-        agents = data.get("agents", [])
-        before = len(agents)
-        data["agents"] = [a for a in agents if a.get("name") != name]
-        if len(data["agents"]) == before:
-            return False
-        self._write(data)
-        return True
-
-    def rename_agent(self, old_name: str, new_name: str) -> dict[str, Any] | None:
-        data = self._read()
-        for a in data.get("agents", []):
-            if a.get("name") == old_name:
-                a["name"] = new_name
-                self._write(data)
-                return a
-        return None
+            return None
+        return self._mutate(_apply)
 
     # ── agent runs (individual agent executions) ────────────────
     #
@@ -758,28 +877,32 @@ class AdminStateFile:
 
     # ── providers ────────────────────────────────────────────────
 
-    def list_providers(
-        self, project_id: str | None = None
-    ) -> list[dict[str, Any]]:
+    def _load_providers(self, project_id: str | None) -> list[dict[str, Any]]:
+        """Read + migrate + project-filter + env-var-enrich the raw provider list."""
         data = self._read()
         self._migrate(data)
-        providers = data.get("providers", [])
-        providers = self._filter_by_project(providers, project_id)
-        # Enrich with env-var detection
+        providers = self._filter_by_project(data.get("providers", []), project_id)
         for p in providers:
             env_key = p.get("env_var_key", "")
             if env_key:
                 p["env_var_set"] = bool(os.environ.get(env_key))
         return providers
 
+    def list_providers(
+        self, project_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        return [_redact_provider(p) for p in self._load_providers(project_id)]
+
     def upsert_provider(self, provider: dict[str, Any]) -> dict[str, Any]:
+        provider = copy.deepcopy(provider)
         data = self._read()
         self._migrate(data)
         providers = data.setdefault("providers", [])
         pname = provider.get("provider_name", "")
-        # Auto-generate ID and env_var_key
+        # Auto-generate ID and env_var_key (project-scoped so same-name providers
+        # in different projects get distinct IDs and don't clobber each other)
         if not provider.get("id"):
-            provider["id"] = f"prov-{pname}"
+            provider["id"] = f"prov-{provider.get('project_id') or 'global'}-{pname}"
         env_map = {
             "openai": "OPENAI_API_KEY",
             "anthropic": "ANTHROPIC_API_KEY",
@@ -805,9 +928,14 @@ class AdminStateFile:
                     continue
                 if other.get("project_id") == scope:
                     other["default"] = False
-        # Upsert by provider_name
+        # Encrypt plaintext secrets before persisting
+        if _provider_has_plaintext_secret(provider):
+            from sagewai.admin.secret_crypto import get_admin_crypto
+            _encrypt_provider(provider, get_admin_crypto())
+        # Upsert by (provider_name, project_id) so same-name providers in
+        # different projects coexist without clobbering each other.
         for i, existing in enumerate(providers):
-            if existing.get("provider_name") == pname:
+            if existing.get("provider_name") == pname and existing.get("project_id") == provider.get("project_id"):
                 providers[i] = provider
                 self._write(data)
                 return provider
@@ -858,6 +986,50 @@ class AdminStateFile:
             return False
         self._write(data)
         return True
+
+    def list_providers_decrypted(
+        self, project_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Internal-only: full records with secrets decrypted. NEVER return over HTTP."""
+        providers = self._load_providers(project_id)
+        if not _any_encrypted_provider(providers):
+            return providers  # nothing encrypted → no need for a key
+        from sagewai.admin.secret_crypto import AdminKeyMissing, get_admin_crypto
+        from sagewai.sealed.master_key import MasterKeyMissing
+        try:
+            crypto = get_admin_crypto()
+        except (AdminKeyMissing, MasterKeyMissing):
+            crypto = None  # null secrets, never expose ciphertext as a credential
+        return [_decrypt_provider(p, crypto) for p in providers]
+
+    def get_provider_decrypted(
+        self, name_or_id: str, project_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """Return a provider record with secrets decrypted.
+
+        For internal use only (inference path, connection test).  Never
+        return this over the wire — use :meth:`list_providers` for API
+        responses (redacted shape).
+        """
+        for p in self._load_providers(project_id):
+            if p.get("id") == name_or_id or p.get("provider_name") == name_or_id:
+                if not _provider_is_encrypted(p):
+                    return p
+                from sagewai.admin.secret_crypto import AdminKeyMissing, get_admin_crypto
+                from sagewai.sealed.master_key import MasterKeyMissing
+                try:
+                    crypto = get_admin_crypto()
+                except (AdminKeyMissing, MasterKeyMissing):
+                    crypto = None  # null secrets, never expose ciphertext as a credential
+                return _decrypt_provider(p, crypto)
+        return None
+
+    def require_secret_key_if_encrypted(self) -> None:
+        """Fail closed at startup: if encrypted provider secrets exist, the master
+        key must resolve (raises AdminKeyMissing in a keyless container)."""
+        if _any_encrypted_provider(self._read().get("providers", [])):
+            from sagewai.admin.secret_crypto import get_admin_crypto
+            get_admin_crypto()  # raises in a container with no key
 
     # ── auth ─────────────────────────────────────────────────────
 
@@ -1125,4 +1297,22 @@ def _migrate_v0_to_v1(data: dict[str, Any]) -> None:
             rec["token_hash"] = _hash_token(rec.pop("token"))
 
 
-_MIGRATION_STEPS = [_migrate_v0_to_v1]
+def _migrate_v1_to_v2(data: dict[str, Any]) -> None:
+    """Encrypt plaintext provider secrets at rest (idempotent via the fernet: marker)."""
+    providers = data.get("providers", [])
+    if not any(_provider_has_plaintext_secret(p) for p in providers):
+        return
+    from sagewai.admin.secret_crypto import get_admin_crypto
+    crypto = get_admin_crypto()
+    for p in providers:
+        _encrypt_provider(p, crypto)
+
+
+def _migrate_v2_to_v3(data: dict[str, Any]) -> None:
+    """Project-scope keying is enforced going forward. Legacy records keep their
+    existing project_id (None == org-global, still visible via _filter_by_project),
+    so no data transform is needed — this step only advances the schema version."""
+    # intentionally a no-op
+
+
+_MIGRATION_STEPS = [_migrate_v0_to_v1, _migrate_v1_to_v2, _migrate_v2_to_v3]
