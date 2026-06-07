@@ -33,7 +33,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.responses import Response, StreamingResponse
 
 from sagewai import __version__ as _SDK_VERSION
-from sagewai.admin.state_file import AdminStateFile
+from sagewai.admin.state_file import SHARED_ONLY, AdminStateFile
 
 logger = logging.getLogger("sagewai.admin")
 
@@ -468,6 +468,18 @@ def create_admin_serve_app(
     from sagewai.admin.auth_middleware import AuthMiddleware
     app.add_middleware(AuthMiddleware, sf=sf)
 
+    # RBAC enforcement (W3) raises typed errors; map them to HTTP. TenantHidden
+    # is 404 (existence-hiding, never 403); PermissionDenied is 403.
+    from sagewai.admin.authz import PermissionDeniedError, TenantHiddenError
+
+    @app.exception_handler(TenantHiddenError)
+    async def _on_tenant_hidden(request: Request, exc: TenantHiddenError) -> JSONResponse:
+        return JSONResponse({"detail": "Not found"}, status_code=404)
+
+    @app.exception_handler(PermissionDeniedError)
+    async def _on_permission_denied(request: Request, exc: PermissionDeniedError) -> JSONResponse:
+        return JSONResponse({"detail": "Forbidden"}, status_code=403)
+
     # CORS — env-driven allowlist (default: the local admin dev server, which
     # runs on port 3008). The admin UI calls the backend cross-origin with
     # credentials, so the origin must be allowlisted (not "*", which is unsafe
@@ -516,7 +528,7 @@ def create_admin_serve_app(
     @app.get("/admin/agents", include_in_schema=False)
     async def admin_agents_merged(request: Request) -> JSONResponse:
         """List every visible agent — playground specs from the file store."""
-        pid = _project_id(request)
+        pid = _project_scope(request)
         playground_agents = sf.list_agents(project_id=pid)
         # Count runs per agent from the file store
         runs_by_agent: dict[str, int] = {}
@@ -560,7 +572,7 @@ def create_admin_serve_app(
         offset: int = 0,
     ) -> JSONResponse:
         """List agent runs from the file store (standalone + workflow steps)."""
-        pid = _project_id(request)
+        pid = _project_scope(request)
         runs = sf.list_agent_runs(
             project_id=pid,
             agent_name=agent_name,
@@ -893,14 +905,18 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/providers")
     async def list_providers(request: Request) -> JSONResponse:
-        pid = _project_id(request)
+        pid = _project_scope(request)
         return JSONResponse(sf.list_providers(project_id=pid))
 
     @app.post("/api/v1/providers")
     async def upsert_provider(request: Request) -> JSONResponse:
         body = await request.json()
-        pid = _project_id(request)
-        if pid:
+        _require_resource_write(request)
+        pid = _project_scope(request)
+        if _multi_ctx(request) is not None:
+            # Scope from the session, never the request body (no scope injection).
+            body["project_id"] = _owner(pid)
+        elif pid:
             body["project_id"] = pid
         result = sf.upsert_provider(body)
         logger.info("Provider configured: %s", body.get("provider_name", ""),
@@ -911,7 +927,7 @@ def create_admin_serve_app(
     async def test_provider(provider_id: str, request: Request) -> JSONResponse:
         from sagewai.admin.provider_probes import test_cloud_provider
 
-        pid = _project_id(request)
+        pid = _project_scope(request)
         provider = sf.get_provider_decrypted(provider_id, project_id=pid)
         if not provider:
             return JSONResponse({"detail": "Provider not found"}, status_code=404)
@@ -932,7 +948,18 @@ def create_admin_serve_app(
         return JSONResponse(result)
 
     @app.delete("/api/v1/providers/{provider_id}")
-    async def delete_provider(provider_id: str) -> JSONResponse:
+    async def delete_provider(provider_id: str, request: Request) -> JSONResponse:
+        ctx = _multi_ctx(request)
+        if ctx is not None:
+            # Multi-tenant: only a provider in the actor's WRITE scope may be
+            # deleted (own project; org-shared needs org-admin). A provider in
+            # another project is invisible -> 404 (no existence leak).
+            prov = sf.get_provider_decrypted(provider_id, project_id=ctx.project_id)
+            ppid = (prov or {}).get("project_id")
+            writable = (ppid == ctx.project_id) if ctx.project_id is not None else (ppid in (None, ""))
+            if not prov or not writable:
+                return JSONResponse({"detail": "Not found"}, status_code=404)
+            _require_resource_write(request)
         if sf.delete_provider(provider_id):
             return JSONResponse({"status": "ok"})
         return JSONResponse({"detail": "Not found"}, status_code=404)
@@ -945,7 +972,8 @@ def create_admin_serve_app(
         when no ``X-Project-ID`` header is present). The autopilot mission
         driver will pick this provider's credentials before any other.
         """
-        pid = _project_id(request)
+        _require_resource_write(request)
+        pid = _project_scope(request)
         result = sf.set_default_provider(provider_id, project_id=pid)
         if result is None:
             return JSONResponse({"detail": "Provider not found"}, status_code=404)
@@ -992,7 +1020,7 @@ def create_admin_serve_app(
         from sagewai.admin.state_file import default_admin_state_path
         from sagewai.connections.bootstrap import build_connections_context
 
-        pid = _project_id(request)
+        pid = _project_scope(request)
         try:
             ctx = build_connections_context(
                 AdminStateFile(default_admin_state_path())
@@ -1025,8 +1053,9 @@ def create_admin_serve_app(
         body = await request.json()
         if not body.get("name"):
             return JSONResponse({"detail": "Agent name is required"}, status_code=422)
-        pid = _project_id(request)
-        agent = sf.create_agent(body, project_id=pid)
+        _require_resource_write(request)
+        pid = _project_scope(request)
+        agent = sf.create_agent(body, project_id=_owner(pid))
         logger.info("Agent created: %s model=%s strategy=%s",
                      body["name"], body.get("model", ""), body.get("strategy", ""),
                      extra={"event": "agent.created", "agent_name": body["name"],
@@ -1036,13 +1065,13 @@ def create_admin_serve_app(
 
     @app.get("/playground/agents")
     async def playground_agents(request: Request) -> JSONResponse:
-        pid = _project_id(request)
+        pid = _project_scope(request)
         agents = sf.list_agents(project_id=pid)
         return JSONResponse(agents)
 
     @app.get("/playground/agents/{name}")
     async def playground_agent_detail(name: str, request: Request) -> JSONResponse:
-        pid = _project_id(request)
+        pid = _project_scope(request)
         agent = sf.get_agent(name, project_id=pid)
         if not agent:
             return JSONResponse({"detail": "Agent not found"}, status_code=404)
@@ -1050,7 +1079,7 @@ def create_admin_serve_app(
 
     @app.get("/playground/agents/{name}/debug")
     async def playground_agent_debug(name: str, request: Request) -> JSONResponse:
-        pid = _project_id(request)
+        pid = _project_scope(request)
         agent = sf.get_agent(name, project_id=pid)
         if not agent:
             return JSONResponse({"detail": "Agent not found"}, status_code=404)
@@ -1058,7 +1087,8 @@ def create_admin_serve_app(
 
     @app.delete("/playground/agents/{name}")
     async def delete_playground_agent(name: str, request: Request) -> JSONResponse:
-        pid = _project_id(request)
+        _require_resource_write(request)
+        pid = _project_scope(request)
         if sf.delete_agent(name, project_id=pid):
             return JSONResponse({"status": "ok"})
         return JSONResponse({"detail": "Not found"}, status_code=404)
@@ -1069,7 +1099,7 @@ def create_admin_serve_app(
         new_name = body.get("new_name", "")
         if not new_name:
             return JSONResponse({"detail": "new_name required"}, status_code=422)
-        pid = _project_id(request)
+        pid = _project_scope(request)
         result = sf.rename_agent(name, new_name, project_id=pid)
         if result:
             return JSONResponse(result)
@@ -1085,7 +1115,7 @@ def create_admin_serve_app(
         # The admin UI sends either `agent_name` or `name`; accept both.
         agent_name = body.get("agent_name") or body.get("name") or ""
         message = body.get("message", "")
-        pid = _project_id(request)
+        pid = _project_scope(request)
         agent_spec = sf.get_agent(agent_name, project_id=pid)
         run_id = f"run-{_run_sec.token_hex(6)}"
         _run_t0 = _run_time.monotonic()
@@ -1181,7 +1211,7 @@ def create_admin_serve_app(
                         "run_type": "standalone",
                         "parent_workflow_run_id": None,
                         "tool_calls": [],
-                        "project_id": pid,
+                        "project_id": _owner(pid),
                     })
                 except Exception as persist_exc:
                     logger.error("Failed to persist agent run %s: %s", run_id, persist_exc)
@@ -1199,14 +1229,20 @@ def create_admin_serve_app(
     # ── Prompt logs ───────────────────────────────────────────────
 
     @app.get("/api/v1/prompts/logs")
-    async def list_prompt_logs() -> JSONResponse:
+    async def list_prompt_logs(request: Request) -> JSONResponse:
         data = sf._read()
-        return JSONResponse(data.get("prompt_logs", []))
+        logs = [
+            log
+            for log in data.get("prompt_logs", [])
+            if _in_read_scope(log.get("project_id"), request)
+        ]
+        return JSONResponse(logs)
 
     @app.post("/api/v1/prompts/logs")
     async def save_prompt_log(request: Request) -> JSONResponse:
         body = await request.json()
-        pid = _project_id(request)
+        _require_resource_write(request)
+        pid = _project_scope(request)
         import secrets as _sec
         log_id = f"log-{_sec.token_hex(6)}"
         entry = {
@@ -1220,7 +1256,7 @@ def create_admin_serve_app(
             "source": body.get("source", "playground"),
             "is_example": body.get("is_example", False),
             "quality": body.get("quality", 0),
-            "project_id": pid,
+            "project_id": _owner(pid),
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         }
         def _apply(d):
@@ -1229,19 +1265,24 @@ def create_admin_serve_app(
         return JSONResponse({"log_id": log_id}, status_code=201)
 
     @app.get("/api/v1/prompts/logs/{log_id}")
-    async def get_prompt_log(log_id: str) -> JSONResponse:
+    async def get_prompt_log(log_id: str, request: Request) -> JSONResponse:
         data = sf._read()
         for log in data.get("prompt_logs", []):
             if log.get("log_id") == log_id:
+                if not _in_read_scope(log.get("project_id"), request):
+                    return JSONResponse({"detail": "Not found"}, status_code=404)
                 return JSONResponse(log)
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     @app.patch("/api/v1/prompts/logs/{log_id}")
     async def update_prompt_log(log_id: str, request: Request) -> JSONResponse:
         body = await request.json()
+        _require_resource_write(request)
         def _apply(d):
             for log in d.get("prompt_logs", []):
-                if log.get("log_id") == log_id:
+                if log.get("log_id") == log_id and _in_write_scope(
+                    log.get("project_id"), request
+                ):
                     for k in ("tags", "is_example", "output_text"):
                         if k in body:
                             log[k] = body[k]
@@ -1253,11 +1294,24 @@ def create_admin_serve_app(
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     @app.delete("/api/v1/prompts/logs/{log_id}")
-    async def delete_prompt_log(log_id: str) -> JSONResponse:
+    async def delete_prompt_log(log_id: str, request: Request) -> JSONResponse:
+        _require_resource_write(request)
+        state = {"hit": False}
+
         def _apply(d):
-            logs = d.get("prompt_logs", [])
-            d["prompt_logs"] = [l for l in logs if l.get("log_id") != log_id]
+            kept = []
+            for log in d.get("prompt_logs", []):
+                if log.get("log_id") == log_id and _in_write_scope(
+                    log.get("project_id"), request
+                ):
+                    state["hit"] = True
+                    continue
+                kept.append(log)
+            d["prompt_logs"] = kept
+
         sf.mutate(_apply)
+        if _multi_ctx(request) is not None and not state["hit"]:
+            return JSONResponse({"detail": "Not found"}, status_code=404)
         return JSONResponse({"status": "ok"})
 
     @app.post("/api/v1/prompts/replay")
@@ -1266,7 +1320,7 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/prompts/export")
     async def export_prompts(request: Request) -> JSONResponse:
-        pid = _project_id(request)
+        pid = _project_scope(request)
         data = sf._read()
         logs = data.get("prompt_logs", [])
         if pid:
@@ -1275,7 +1329,7 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/prompts/examples")
     async def list_prompt_examples(request: Request) -> JSONResponse:
-        pid = _project_id(request)
+        pid = _project_scope(request)
         data = sf._read()
         examples = [l for l in data.get("prompt_logs", []) if l.get("is_example")]
         if pid:
@@ -1296,7 +1350,7 @@ def create_admin_serve_app(
         """
         from starlette.responses import Response
 
-        pid = _project_id(request) or request.query_params.get("project_id")
+        pid = _project_scope(request) or request.query_params.get("project_id")
         fmt = request.query_params.get("format", "alpaca")
         min_quality = int(request.query_params.get("min_quality", "0"))
         agent_filter = request.query_params.get("agent_name")
@@ -1361,7 +1415,7 @@ def create_admin_serve_app(
     @app.get("/api/v1/training/stats")
     async def training_stats(request: Request) -> JSONResponse:
         """Training data statistics for the current project."""
-        pid = _project_id(request)
+        pid = _project_scope(request)
         data = sf._read()
         all_logs = data.get("prompt_logs", [])
         examples = [l for l in all_logs if l.get("is_example")]
@@ -1580,7 +1634,7 @@ def create_admin_serve_app(
         import yaml as _yaml
 
         body = await request.json()
-        pid = _project_id(request)
+        pid = _project_scope(request)
         run_id = f"wf-{_sec.token_hex(6)}"
         yaml_str = body.get("yaml", body.get("yaml_content", ""))
         message = body.get("message", body.get("input", ""))
@@ -1705,7 +1759,7 @@ def create_admin_serve_app(
                             "run_type": "workflow_step",
                             "parent_workflow_run_id": run_id,
                             "tool_calls": [],
-                            "project_id": pid,
+                            "project_id": _owner(pid),
                         })
                     except Exception as persist_exc:
                         logger.error("Failed to persist workflow step run %s: %s", step_run_id, persist_exc)
@@ -1739,7 +1793,7 @@ def create_admin_serve_app(
                     "run_id": run_id, "status": "completed",
                     "workflow_name": wf_name, "yaml_content": yaml_str,
                     "input": message, "output": finished_payload,
-                    "steps": steps, "project_id": pid,
+                    "steps": steps, "project_id": _owner(pid),
                     "elapsed_seconds": elapsed,
                     "total_tokens": total_tokens,
                     "total_input_tokens": total_input_tokens,
@@ -1836,7 +1890,7 @@ def create_admin_serve_app(
 
     @app.get("/workflows/history")
     async def workflow_history(request: Request) -> JSONResponse:
-        pid = _project_id(request)
+        pid = _project_scope(request)
         data = sf._read()
         runs = data.get("workflow_runs", [])
         if pid:
@@ -1899,7 +1953,7 @@ def create_admin_serve_app(
         from sagewai.sandbox.models import SandboxMode as _SandboxMode
 
         body = await request.json()
-        pid = _project_id(request)
+        pid = _project_scope(request)
 
         workflow_name = body.get("workflow_name")
         if not workflow_name:
@@ -1994,7 +2048,7 @@ def create_admin_serve_app(
                     audit_writer=None,  # audit via OTel structured log below
                     audit_context={
                         "workflow_name": workflow_name,
-                        "project_id": pid,
+                        "project_id": _owner(pid),
                         "run_type": "enqueue",
                     },
                 )
@@ -2067,7 +2121,7 @@ def create_admin_serve_app(
             effective_secret_keys=effective_secret_keys,
             artifact_destination=artifact_destination,
             input_data=input_data,
-            project_id=pid,
+            project_id=_owner(pid),
         )
 
         run_record = run.to_dict()
@@ -2356,7 +2410,7 @@ def create_admin_serve_app(
     async def fleet_register(request: Request) -> JSONResponse:
         """Worker self-registration."""
         body = await request.json()
-        pid = _project_id(request)
+        pid = _project_scope(request)
         caps = WorkerCapabilities(
             models_supported=body.get("models", []),
             pool=body.get("pool", "default"),
@@ -3180,6 +3234,79 @@ def _project_id(request: Request) -> str | None:
     return pid if pid else None
 
 
+def _project_scope(request: Request) -> str | None:
+    """The **filter** scope for a route's reads/deletes.
+
+    In **multi-tenant** mode this derives from the session-validated
+    RequestContext (the middleware already 404'd a forged/foreign
+    ``X-Project-ID`` and resolves a project-only user's single project):
+    a project context returns that project id (store: own + org-shared); an
+    **org context returns ``SHARED_ONLY``** so the file store returns org-shared
+    rows only — never the legacy ``None``-means-all-projects view. In
+    **single-org** mode it is the header/query filter (unchanged foundation
+    behaviour, ``None`` = no filter).
+
+    Use :func:`_owner` to turn this back into the value to *stamp* on a new row
+    (``SHARED_ONLY`` -> ``None`` = an org-shared row).
+    """
+    ctx = getattr(request.state, "context", None)
+    if ctx is not None and ctx.tenancy_mode == "multi":
+        return ctx.project_id if ctx.project_id is not None else SHARED_ONLY
+    return _project_id(request)
+
+
+def _owner(scope: str | None) -> str | None:
+    """Convert a filter scope (:func:`_project_scope`) to the project_id to
+    *stamp* on a newly-created row. ``SHARED_ONLY`` becomes ``None`` (an
+    org-shared row); a concrete project id and ``None`` pass through."""
+    return None if scope == SHARED_ONLY else scope
+
+
+def _in_read_scope(item_project_id: str | None, request: Request) -> bool:
+    """True if a stored item (by its project_id) is readable in the ctx scope.
+
+    Project context: own project + org-shared (inherited). Org context:
+    org-shared only. Single-org mode: always True (no boundary)."""
+    ctx = _multi_ctx(request)
+    if ctx is None:
+        return True
+    if ctx.project_id is None:
+        return item_project_id in (None, "")
+    return item_project_id in (ctx.project_id, None, "")
+
+
+def _in_write_scope(item_project_id: str | None, request: Request) -> bool:
+    """True if a stored item may be MUTATED in the ctx scope — own project only
+    (org-shared rows are not mutable from a project context). Single mode: True."""
+    ctx = _multi_ctx(request)
+    if ctx is None:
+        return True
+    if ctx.project_id is None:
+        return item_project_id in (None, "")
+    return item_project_id == ctx.project_id
+
+
+def _require_resource_write(request: Request) -> None:
+    """Enforce RBAC write on a tenant-scoped resource (multi-tenant only).
+
+    Raises ``PermissionDeniedError`` (403) / ``TenantHiddenError`` (404), mapped
+    to HTTP by the app exception handlers. No-op in single-org mode (scope is
+    organizational there, not a boundary).
+    """
+    ctx = getattr(request.state, "context", None)
+    if ctx is None or ctx.tenancy_mode != "multi":
+        return
+    from sagewai.admin.authz import Resource, require
+
+    require("resource:write", ctx, on=Resource(ctx.org_id, ctx.project_id))
+
+
+def _multi_ctx(request: Request):
+    """The RequestContext if running in multi-tenant mode, else None."""
+    ctx = getattr(request.state, "context", None)
+    return ctx if (ctx is not None and ctx.tenancy_mode == "multi") else None
+
+
 # ── OTel metrics (module-level so route handlers can use them) ────
 
 _otel_meter = None  # set by _init_otel if OTel is available
@@ -3334,7 +3461,7 @@ def _init_otel(app: FastAPI, version: str) -> None:
                         "http.status_code": response.status_code,
                         "http.duration_ms": round(dt, 1),
                         "sagewai.category": category,
-                        "sagewai.project_id": _project_id(request) or "global",
+                        "sagewai.project_id": _project_scope(request) or "global",
                     },
                 )
                 return response

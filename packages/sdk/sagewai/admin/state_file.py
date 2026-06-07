@@ -198,6 +198,13 @@ def _hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+# Sentinel scope meaning "org-shared rows only" (project_id IS NULL). Distinct
+# from project_id=None, which the file store treats as the legacy "all projects"
+# view. Multi-tenant org-scope reads/deletes pass this so org scope never falls
+# back to cross-project access. It is a filter argument only — never stored.
+SHARED_ONLY = "__sagewai_shared_only__"
+
+
 def _session_record(raw: str) -> dict[str, Any]:
     now = datetime.datetime.now(datetime.timezone.utc)
     return {
@@ -745,11 +752,14 @@ class AdminStateFile:
     ) -> list[dict[str, Any]]:
         """Filter items by project scope.
 
-        - project_id=None → return ALL items (org-global view)
-        - project_id="X"  → return items with project_id=X OR project_id=None (global)
+        - project_id=None        → return ALL items (legacy single-org view)
+        - project_id=SHARED_ONLY  → only org-shared rows (project_id NULL/empty)
+        - project_id="X"          → rows with project_id=X OR org-shared (inherited)
         """
         if project_id is None:
             return items
+        if project_id == SHARED_ONLY:
+            return [i for i in items if i.get("project_id") in (None, "")]
         return [
             i for i in items
             if i.get("project_id") in (project_id, None, "")
@@ -810,6 +820,11 @@ class AdminStateFile:
             before = len(agents)
             if project_id is None:
                 data["agents"] = [a for a in agents if a.get("name") != name]
+            elif project_id == SHARED_ONLY:
+                data["agents"] = [
+                    a for a in agents
+                    if not (a.get("name") == name and a.get("project_id") in (None, ""))
+                ]
             else:
                 data["agents"] = [
                     a for a in agents
@@ -962,7 +977,10 @@ class AdminStateFile:
                 p
                 for p in providers
                 if (p.get("id") == provider_id or p.get("provider_name") == provider_id)
-                and p.get("project_id") == project_id
+                and (
+                    p.get("project_id") == project_id
+                    or (project_id == SHARED_ONLY and p.get("project_id") in (None, ""))
+                )
             ),
             None,
         )
