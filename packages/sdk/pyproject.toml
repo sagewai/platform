@@ -91,7 +91,7 @@ mqtt = [
     "aiomqtt==2.5.1",
 ]
 opcua = [
-    "asyncua==1.1.8",
+    "asyncua==2.0",
 ]
 websocket = [
     "websockets==16.0",
@@ -168,7 +168,7 @@ test = [
     "respx==0.23.1",
     "aiocoap==0.4.17",
     "pymodbus==3.13.0",
-    "asyncua==1.1.8",
+    "asyncua==2.0",
     "websockets==16.0",
     "jsonpath-ng==1.8.0",
     "aiomqtt==2.5.1",
