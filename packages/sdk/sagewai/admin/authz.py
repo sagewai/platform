@@ -184,3 +184,54 @@ def require(permission: str, ctx: RequestContext, *, on: Resource | None = None)
         raise PermissionDeniedError(f"{permission}: requires '{needed}' token scope")
     if not (ctx.roles & grant):
         raise PermissionDeniedError(f"{permission}: requires one of {sorted(grant)}")
+
+
+def require_org_admin(ctx: RequestContext) -> None:
+    """Require org owner/admin for an org/system-level route. No-op in single-org.
+
+    The bounded set of org/system surfaces (org + project settings, API tokens,
+    sealed/security config, credential revocation, directive policies, fleet
+    enrollment, autopilot enable/disable, …) must never be reachable by a plain
+    project member. Raises :class:`PermissionDeniedError` (403) otherwise. Project
+    *isolation* is the data layer's job; this is purely the org-authority gate.
+    """
+    if ctx.tenancy_mode != "multi":
+        return
+    if not (ctx.roles & _ORG_ADMINS):
+        raise PermissionDeniedError("requires org owner/admin")
+
+
+def in_read_scope(record_project_id: str | None, ctx: RequestContext) -> bool:
+    """True if a record is readable by ``ctx`` (own project + inherited org-shared).
+
+    Permissive (always True) in single-org mode. Use to FILTER list results so a
+    project never sees another project's rows.
+    """
+    if ctx.tenancy_mode != "multi":
+        return True
+    return record_project_id == ctx.project_id or record_project_id is None
+
+
+def require_in_project_scope(
+    record_project_id: str | None, ctx: RequestContext, *, write: bool = False
+) -> None:
+    """Tenant-isolation gate for a record fetched by id/name. No-op in single-org.
+
+    The universal by-id guard: a cross-project record is hidden
+    (:class:`TenantHiddenError` → 404, never 403); a project member writing an
+    inherited org-shared (``project_id is None``) record is denied
+    (:class:`PermissionDeniedError` → 403). Read = own + inherited org-shared;
+    write = own project only (org-shared writes need org owner/admin).
+    """
+    if ctx.tenancy_mode != "multi":
+        return
+    pid = ctx.project_id
+    if record_project_id is not None and record_project_id != pid:
+        raise TenantHiddenError("target not in scope")
+    if pid is not None and record_project_id is None and not write:
+        return  # project member reading an inherited org-shared record — allowed
+    if write and record_project_id is None and not (ctx.roles & _ORG_ADMINS):
+        raise PermissionDeniedError("org-shared write requires org owner/admin")
+    if pid is None and record_project_id is not None:
+        # org-scope actor must never reach a project-scoped record by id
+        raise TenantHiddenError("target not in scope")

@@ -50,6 +50,21 @@ def _store(app: FastAPI) -> Any:
     return getattr(app.state, "replay_store", None)
 
 
+def _require_run_scope(request: Request, run: Any, *, write: bool) -> None:
+    """Tenant-isolation gate for a replay of a specific run (project-scoped).
+
+    A run belonging to another project is hidden (404); replaying (the commit
+    POST) is a write so it must target the actor's own project. No-op in
+    single-org mode and whenever no tenancy context is attached (the toolkit
+    short-circuits on ``tenancy_mode != "multi"``)."""
+    ctx = getattr(request.state, "context", None)
+    if ctx is None:
+        return
+    from sagewai.admin.authz import require_in_project_scope
+
+    require_in_project_scope(getattr(run, "project_id", None), ctx, write=write)
+
+
 def register(
     app: FastAPI,
     store: Any,
@@ -143,8 +158,11 @@ async def _preview_for(store, registry, run_id: str, from_step: int) -> dict:
 
 @router.post("/{run_id}/replay/preview")
 async def preview(request: Request, run_id: str, body: ReplayPreviewRequest):
+    store = _store(request.app)
+    run = await _load_run_or_404(store, run_id)
+    _require_run_scope(request, run, write=False)
     return await _preview_for(
-        _store(request.app), _registry(request.app), run_id, body.from_step
+        store, _registry(request.app), run_id, body.from_step
     )
 
 
@@ -152,6 +170,8 @@ async def preview(request: Request, run_id: str, body: ReplayPreviewRequest):
 async def commit(request: Request, run_id: str, body: ReplayCommitRequest):
     store = _store(request.app)
     registry = _registry(request.app)
+    run = await _load_run_or_404(store, run_id)
+    _require_run_scope(request, run, write=True)
     preview_body = await _preview_for(store, registry, run_id, body.from_step)
     if preview_body["blockers"]:
         raise HTTPException(
@@ -166,7 +186,6 @@ async def commit(request: Request, run_id: str, body: ReplayCommitRequest):
             },
         )
 
-    run = await _load_run_or_404(store, run_id)
     wf = registry[run.workflow_name]
     new_run_id = await wf.replay_from(
         run_id,
@@ -179,6 +198,8 @@ async def commit(request: Request, run_id: str, body: ReplayCommitRequest):
 @router.get("/{run_id}/replays")
 async def list_replays(request: Request, run_id: str):
     store = _store(request.app)
+    run = await _load_run_or_404(store, run_id)
+    _require_run_scope(request, run, write=False)
     runs = await store.list_replays_of(run_id)
     return {
         "replays": [

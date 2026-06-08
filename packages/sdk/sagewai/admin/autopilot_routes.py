@@ -94,10 +94,13 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from sagewai import home as _home
+from sagewai.admin.authz import (
+    in_read_scope,
+    require_in_project_scope,
+    require_org_admin,
+)
+from sagewai.admin.autopilot_default_tools import get_default_tool_registry
 from sagewai.admin.autopilot_explain import render_brief
-from sagewai.autopilot.tool_risk_profile import SandboxTier, get_tier, is_downgrade, tier_for_tools
-from sagewai.autopilot.sealed_matcher import ProfileRecord, match_profile
-from sagewai.autopilot.tool_scopes import scopes_for_tools
 from sagewai.admin.autopilot_lifecycle import (
     IllegalTransition,
     MissionStatus,
@@ -120,7 +123,6 @@ from sagewai.admin.serve import _extract_token, _project_id
 from sagewai.admin.state_file import AdminStateFile
 from sagewai.autopilot._types import MissionState
 from sagewai.autopilot.blueprint import Blueprint
-from sagewai.admin.autopilot_default_tools import get_default_tool_registry
 from sagewai.autopilot.controller.driver import MissionDriver
 from sagewai.autopilot.controller.executor import ExecutorConfig
 from sagewai.autopilot.mission import Mission
@@ -128,6 +130,9 @@ from sagewai.autopilot.routing import ConfidenceConfig, GoalRouter, RoutingResul
 from sagewai.autopilot.routing.types import AutoRouted, PickerNeeded, SynthesisNeeded
 from sagewai.autopilot.sagewai_llm import BlueprintCache, SagewaiLLMClient
 from sagewai.autopilot.sagewai_llm.identity import ensure_identity
+from sagewai.autopilot.sealed_matcher import ProfileRecord, match_profile
+from sagewai.autopilot.tool_risk_profile import SandboxTier, get_tier, is_downgrade, tier_for_tools
+from sagewai.autopilot.tool_scopes import scopes_for_tools
 
 logger = logging.getLogger("sagewai.admin.autopilot")
 
@@ -165,6 +170,24 @@ async def _get_fleet_registry_snapshot() -> list:
         return await registry.list_workers(org_id="default")
     except Exception:
         return []
+
+
+def _ctx(request: Request):
+    """The request's :class:`RequestContext`, with a single-org fallback.
+
+    In production ``AuthMiddleware`` always stamps ``request.state.context``
+    (a real context in multi-tenant mode, a :func:`single_org_context` in
+    single-org). Tests that build the router without the middleware leave the
+    attribute unset; fall back to a single-org context so the authz toolkit —
+    which no-ops in single-org — receives a valid context object rather than
+    raising ``AttributeError``. Preserves single-org behaviour exactly.
+    """
+    ctx = getattr(request.state, "context", None)
+    if ctx is None:
+        from sagewai.admin.tenancy import single_org_context
+
+        return single_org_context()
+    return ctx
 
 
 def _now_iso() -> str:
@@ -1015,6 +1038,7 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
         err = _require_auth(request, sf)
         if err is not None:
             return err
+        require_org_admin(_ctx(request))
 
         body: dict[str, Any] = await request.json()
         tier = body.get("tier", "anonymous")
@@ -1048,6 +1072,7 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
         err = _require_auth(request, sf)
         if err is not None:
             return err
+        require_org_admin(_ctx(request))
 
         set_autopilot_config(sf, {"enabled": False})
         logger.info("Autopilot disabled")
@@ -1095,7 +1120,8 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
         router_obj = GoalRouter(client=client, config=routing_config)
 
         result: RoutingResult = await router_obj.route(goal)
-        pid = _project_id(request)
+        mctx = _ctx(request)
+        pid = mctx.project_id if mctx.tenancy_mode == "multi" else _project_id(request)
 
         if isinstance(result, AutoRouted):
             bp_json = result.ranked.blueprint_json
@@ -1242,7 +1268,8 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
         # ``host.docker.internal`` so the sagewai-llm container can
         # reach back out. Cloud providers fall through with no rewrite.
         synthesis_context: dict[str, Any] = {}
-        pid = _project_id(request)
+        mctx = _ctx(request)
+        pid = mctx.project_id if mctx.tenancy_mode == "multi" else _project_id(request)
         try:
             executor_cfg = _resolve_executor_config(sf, pid)
             synthesis_context["model"] = executor_cfg.model
@@ -1290,7 +1317,6 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
                 status_code=502,
             )
 
-        pid = _project_id(request)
         mission_id = secrets.token_hex(12)
         save_mission(
             sf,
@@ -1352,6 +1378,9 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
                     {"ok": False, "error": "mission not found"},
                     status_code=404,
                 )
+            require_in_project_scope(
+                mission.get("project_id"), _ctx(request), write=True
+            )
             current_bp_json = mission.get("blueprint_json") or ""
             current_bp_id: str | None = None
             try:
@@ -1390,7 +1419,12 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
                 status_code=422,
             )
 
-        pid = body.get("project_id") or _project_id(request)
+        mctx = _ctx(request)
+        pid = (
+            mctx.project_id
+            if mctx.tenancy_mode == "multi"
+            else (body.get("project_id") or _project_id(request))
+        )
         mission_payload: dict[str, Any] = {
             "mission_id": secrets.token_hex(12),
             "project_id": pid,
@@ -1444,8 +1478,19 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
         except ValueError:
             offset = 0
 
-        pid = _project_id(request)
-        missions = list_missions(sf, project_id=pid)
+        mctx = _ctx(request)
+        if mctx.tenancy_mode == "multi":
+            # Session project is the source of truth in multi; the
+            # ``X-Project-ID`` header is forgeable. ``list_missions`` filters by
+            # exact project, then ``in_read_scope`` lets a project also see
+            # inherited org-shared (project_id=None) missions.
+            missions = [
+                m
+                for m in list_missions(sf)
+                if in_read_scope(m.get("project_id"), mctx)
+            ]
+        else:
+            missions = list_missions(sf, project_id=_project_id(request))
         items = [_translate_mission_list_item(m) for m in missions]
 
         # Sort newest-first by created_at; ties fall back to mission_id
@@ -1563,6 +1608,7 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
         mission = get_mission(sf, mission_id)
         if mission is None:
             raise HTTPException(status_code=404, detail=f"Mission '{mission_id}' not found")
+        require_in_project_scope(mission.get("project_id"), _ctx(request))
 
         return JSONResponse({
             "mission_id": mission.get("mission_id"),
@@ -1626,6 +1672,7 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
         record = get_mission(sf, mission_id)
         if record is None:
             raise HTTPException(status_code=404, detail=f"Mission '{mission_id}' not found")
+        require_in_project_scope(record.get("project_id"), _ctx(request))
 
         overrides: dict[str, str] = record.get("sandbox_overrides") or {}
 
@@ -1672,6 +1719,9 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
         record = get_mission(sf, mission_id)
         if record is None:
             raise HTTPException(status_code=404, detail=f"Mission '{mission_id}' not found")
+        require_in_project_scope(
+            record.get("project_id"), _ctx(request), write=True
+        )
 
         try:
             proposed = SandboxTier[body.tier]
@@ -1729,6 +1779,7 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
         record = get_mission(sf, mission_id)
         if record is None:
             raise HTTPException(status_code=404, detail=f"Mission '{mission_id}' not found")
+        require_in_project_scope(record.get("project_id"), _ctx(request))
 
         sealed_overrides: dict[str, str] = record.get("sealed_overrides") or {}
 
@@ -1782,6 +1833,9 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
         record = get_mission(sf, mission_id)
         if record is None:
             raise HTTPException(status_code=404, detail=f"Mission '{mission_id}' not found")
+        require_in_project_scope(
+            record.get("project_id"), _ctx(request), write=True
+        )
 
         overrides: dict[str, str] = dict(record.get("sealed_overrides") or {})
         overrides[body.step_id] = body.profile_id
@@ -1814,6 +1868,7 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
             raise HTTPException(
                 status_code=404, detail=f"Mission '{mission_id}' not found"
             )
+        require_in_project_scope(mission.get("project_id"), _ctx(request))
 
         blueprint_json = mission.get("blueprint_json") or ""
         if not blueprint_json:
@@ -1876,6 +1931,7 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
         mission = get_mission(sf, mission_id)
         if mission is None:
             raise HTTPException(status_code=404, detail=f"Mission '{mission_id}' not found")
+        require_in_project_scope(mission.get("project_id"), _ctx(request))
 
         detail = _translate_mission_detail(mission)
         return JSONResponse(detail.model_dump())
@@ -1891,6 +1947,7 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
         mission = get_mission(sf, mission_id)
         if mission is None:
             raise HTTPException(status_code=404, detail=f"Mission '{mission_id}' not found")
+        require_in_project_scope(mission.get("project_id"), _ctx(request))
         detail = _translate_mission_detail(mission).model_dump()
         return JSONResponse(render_brief(detail))
 
@@ -1916,6 +1973,9 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
             raise HTTPException(
                 status_code=404, detail=f"Mission '{mission_id}' not found"
             )
+        require_in_project_scope(
+            record.get("project_id"), _ctx(request), write=True
+        )
 
         current_status = record.get("status")
         if current_status == MissionStatus.RUNNING.value:
@@ -1986,6 +2046,9 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
         source = get_mission(sf, mission_id)
         if source is None:
             raise HTTPException(status_code=404, detail=f"Mission '{mission_id}' not found")
+        require_in_project_scope(
+            source.get("project_id"), _ctx(request), write=True
+        )
 
         new_id = secrets.token_hex(12)
         clone: dict[str, Any] = {
@@ -2029,6 +2092,9 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
         record = get_mission(sf, mission_id)
         if record is None:
             raise HTTPException(status_code=404, detail=f"Mission '{mission_id}' not found")
+        require_in_project_scope(
+            record.get("project_id"), _ctx(request), write=True
+        )
 
         if record.get("status") != MissionStatus.RUNNING.value:
             raise HTTPException(

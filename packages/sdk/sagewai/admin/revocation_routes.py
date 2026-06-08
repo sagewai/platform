@@ -56,6 +56,19 @@ def _check_revoke_rate_limit(admin_id: str, limit_per_hour: int) -> bool:
 router = APIRouter(prefix="/api/v1/admin/sealed/revocations", tags=["sealed"])
 
 
+def _require_org_admin(request: Request) -> None:
+    """Org owner/admin gate — credential revocation is an org-wide security
+    control, never reachable by a plain project member. No-op in single-org mode
+    and whenever no tenancy context is attached (the toolkit short-circuits on
+    ``tenancy_mode != "multi"``)."""
+    ctx = getattr(request.state, "context", None)
+    if ctx is None:
+        return
+    from sagewai.admin.authz import require_org_admin
+
+    require_org_admin(ctx)
+
+
 def _registry(app: FastAPI) -> Any:
     """Pull the registry off app.state (set by register())."""
     return app.state.sealed_revocation_registry
@@ -77,6 +90,7 @@ def register(app: FastAPI, store: Any) -> None:
 
 @router.post("", response_model=RevokeResponse, status_code=201)
 async def post_revocation(request: Request, body: RevokeRequest) -> RevokeResponse:
+    _require_org_admin(request)
     from sagewai.admin.state_file import AdminStateFile
     from sagewai.sealed.revocation import RevocationConflictError
 
@@ -122,6 +136,7 @@ async def list_revocations(
     include_lifted: bool = False,
     limit: int = 200,
 ) -> list[Revocation]:
+    _require_org_admin(request)
     reg = request.app.state.sealed_revocation_registry
     return await (
         reg.list_all(profile_id=profile_id, include_lifted=True, limit=limit)
@@ -137,6 +152,7 @@ async def preview_revocation(
     secret_key: str | None = None,
 ) -> PreviewResponse:
     """Read-only: list runs that would be affected by a hard revoke."""
+    _require_org_admin(request)
     reg = request.app.state.sealed_revocation_registry
     if secret_key is not None:
         rows = await reg._store._pool.fetch(
@@ -164,6 +180,7 @@ async def preview_revocation(
 
 @router.delete("/{revocation_id}", response_model=Revocation)
 async def lift_revocation(request: Request, revocation_id: int) -> Revocation:
+    _require_org_admin(request)
     from sagewai.sealed.revocation import RevocationConflictError
 
     reg = request.app.state.sealed_revocation_registry

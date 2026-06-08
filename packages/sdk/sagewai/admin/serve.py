@@ -35,6 +35,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.responses import Response, StreamingResponse
 
 from sagewai import __version__ as _SDK_VERSION
+from sagewai.admin.authz import require_org_admin
 from sagewai.admin.state_file import SHARED_ONLY, AdminStateFile
 
 logger = logging.getLogger("sagewai.admin")
@@ -978,6 +979,7 @@ def create_admin_serve_app(
 
     @app.patch("/api/v1/organization")
     async def update_org(request: Request) -> JSONResponse:
+        require_org_admin(request.state.context)
         body = await request.json()
         result = sf.update_org(body)
         emit_audit(sf, event_type="org.updated",
@@ -993,6 +995,7 @@ def create_admin_serve_app(
 
     @app.post("/api/v1/projects")
     async def create_project(request: Request) -> JSONResponse:
+        require_org_admin(request.state.context)
         body = await request.json()
         try:
             project = sf.create_project(
@@ -1014,6 +1017,7 @@ def create_admin_serve_app(
 
     @app.patch("/api/v1/projects/{slug}")
     async def update_project(slug: str, request: Request) -> JSONResponse:
+        require_org_admin(request.state.context)
         body = await request.json()
         result = sf.update_project(slug, body)
         if result is None:
@@ -1021,7 +1025,8 @@ def create_admin_serve_app(
         return JSONResponse(result)
 
     @app.delete("/api/v1/projects/{slug}")
-    async def delete_project(slug: str) -> JSONResponse:
+    async def delete_project(slug: str, request: Request) -> JSONResponse:
+        require_org_admin(request.state.context)
         try:
             if sf.delete_project(slug):
                 return JSONResponse({"status": "ok"})
@@ -2534,6 +2539,10 @@ def create_admin_serve_app(
 
     @app.post("/api/v1/workflow-registry")
     async def save_workflow(request: Request) -> JSONResponse:
+        # FLAG: saved_workflows rows carry no project_id column; until that
+        # schema lands, gate the write to org owner/admin (safe interim) rather
+        # than fake per-project scoping. No-op in single-org.
+        require_org_admin(request.state.context)
         body = await request.json()
         import secrets as _sec
         wf = {
@@ -2566,7 +2575,9 @@ def create_admin_serve_app(
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     @app.delete("/api/v1/workflow-registry/{wf_id}")
-    async def delete_saved_workflow(wf_id: str) -> JSONResponse:
+    async def delete_saved_workflow(wf_id: str, request: Request) -> JSONResponse:
+        # FLAG: saved_workflows rows carry no project_id column (see save_workflow).
+        require_org_admin(request.state.context)
         def _apply(d):
             wfs = d.get("saved_workflows", [])
             d["saved_workflows"] = [w for w in wfs if w.get("id") != wf_id]
@@ -2582,6 +2593,9 @@ def create_admin_serve_app(
 
     @app.post("/api/v1/budget/limits")
     async def create_budget_limit(request: Request) -> JSONResponse:
+        # FLAG: budget_limits rows carry no project_id column; org-admin gate is
+        # the safe interim until a project column lands. No-op in single-org.
+        require_org_admin(request.state.context)
         body = await request.json()
         body.setdefault("created_at", datetime.datetime.now(datetime.timezone.utc).isoformat())
         agent = body.get("agent_name", "")
@@ -2594,6 +2608,8 @@ def create_admin_serve_app(
 
     @app.put("/api/v1/budget/limits/{agent_name}")
     async def update_budget_limit(agent_name: str, request: Request) -> JSONResponse:
+        # FLAG: budget_limits rows carry no project_id column (see create_budget_limit).
+        require_org_admin(request.state.context)
         body = await request.json()
         def _apply(d):
             for l in d.get("budget_limits", []):
@@ -2607,7 +2623,9 @@ def create_admin_serve_app(
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     @app.delete("/api/v1/budget/limits/{agent_name}")
-    async def delete_budget_limit(agent_name: str) -> JSONResponse:
+    async def delete_budget_limit(agent_name: str, request: Request) -> JSONResponse:
+        # FLAG: budget_limits rows carry no project_id column (see create_budget_limit).
+        require_org_admin(request.state.context)
         def _apply(d):
             limits = d.get("budget_limits", [])
             d["budget_limits"] = [l for l in limits if l.get("agent_name") != agent_name]
@@ -2643,6 +2661,9 @@ def create_admin_serve_app(
 
     @app.put("/api/v1/guardrails/configs/{agent_name}")
     async def upsert_guardrail_config(agent_name: str, request: Request) -> JSONResponse:
+        # FLAG: guardrail_configs rows carry no project_id column; org-admin gate
+        # is the safe interim until a project column lands. No-op in single-org.
+        require_org_admin(request.state.context)
         body = await request.json()
         body["agent_name"] = agent_name
         def _apply(d):
@@ -2653,7 +2674,9 @@ def create_admin_serve_app(
         return JSONResponse(body)
 
     @app.delete("/api/v1/guardrails/configs/{agent_name}/{guardrail_type}")
-    async def delete_guardrail_config(agent_name: str, guardrail_type: str) -> JSONResponse:
+    async def delete_guardrail_config(agent_name: str, guardrail_type: str, request: Request) -> JSONResponse:
+        # FLAG: guardrail_configs rows carry no project_id column (see upsert_guardrail_config).
+        require_org_admin(request.state.context)
         def _apply(d):
             for c in d.get("guardrail_configs", []):
                 if c.get("agent_name") == agent_name:
@@ -2685,6 +2708,7 @@ def create_admin_serve_app(
 
     @app.post("/api/v1/tokens/")
     async def create_token(request: Request) -> JSONResponse:
+        require_org_admin(request.state.context)
         body = await request.json()
         entry = sf.create_api_token(name=body.get("name", "Unnamed"),
                                     scopes=body.get("scopes", ["read"]))
@@ -2695,6 +2719,7 @@ def create_admin_serve_app(
 
     @app.post("/api/v1/tokens/{token_id}/revoke")
     async def revoke_token(token_id: str, request: Request) -> JSONResponse:
+        require_org_admin(request.state.context)
         if sf.revoke_api_token(token_id):
             emit_audit(sf, event_type="token.revoked",
                        actor_label=request.state.principal.actor_label, target=token_id)
@@ -2703,6 +2728,7 @@ def create_admin_serve_app(
 
     @app.delete("/api/v1/tokens/{token_id}")
     async def delete_token(token_id: str, request: Request) -> JSONResponse:
+        require_org_admin(request.state.context)
         if sf.delete_api_token(token_id):
             emit_audit(sf, event_type="token.deleted",
                        actor_label=request.state.principal.actor_label, target=token_id)
@@ -2838,6 +2864,7 @@ def create_admin_serve_app(
 
     @app.post("/api/v1/fleet/workers/{worker_id}/approve")
     async def approve_fleet_worker(worker_id: str, request: Request) -> JSONResponse:
+        require_org_admin(request.state.context)  # fleet management is org-level
         from fastapi import HTTPException
         try:
             w = await fleet_registry.approve_worker(worker_id, approved_by="admin")
@@ -2849,6 +2876,7 @@ def create_admin_serve_app(
 
     @app.post("/api/v1/fleet/workers/{worker_id}/reject")
     async def reject_fleet_worker(worker_id: str, request: Request) -> JSONResponse:
+        require_org_admin(request.state.context)  # fleet management is org-level
         from fastapi import HTTPException
         try:
             w = await fleet_registry.reject_worker(worker_id)
@@ -2860,6 +2888,7 @@ def create_admin_serve_app(
 
     @app.post("/api/v1/fleet/workers/{worker_id}/revoke")
     async def revoke_fleet_worker(worker_id: str, request: Request) -> JSONResponse:
+        require_org_admin(request.state.context)  # fleet management is org-level
         from fastapi import HTTPException
         try:
             w = await fleet_registry.revoke_worker(worker_id)
@@ -2897,6 +2926,7 @@ def create_admin_serve_app(
 
     @app.post("/api/v1/fleet/enrollment-keys")
     async def create_fleet_enrollment_key(request: Request) -> JSONResponse:
+        require_org_admin(request.state.context)  # fleet management is org-level
         body = await request.json()
         key_record, raw_key = await fleet_registry.create_enrollment_key(
             org_id="default",
@@ -2915,6 +2945,7 @@ def create_admin_serve_app(
 
     @app.delete("/api/v1/fleet/enrollment-keys/{key_id}")
     async def revoke_fleet_enrollment_key(key_id: str, request: Request) -> JSONResponse:
+        require_org_admin(request.state.context)  # fleet management is org-level
         from fastapi import HTTPException
         try:
             await fleet_registry.revoke_enrollment_key(key_id)
@@ -3001,6 +3032,9 @@ def create_admin_serve_app(
 
     @app.post("/api/v1/notifications/channels")
     async def save_notification_channel(request: Request) -> JSONResponse:
+        # FLAG: notification_channels rows carry no project_id column; org-admin
+        # gate is the safe interim until a project column lands. No-op single-org.
+        require_org_admin(request.state.context)
         import secrets as _sec
         body = await request.json()
         body.setdefault("id", f"ch-{_sec.token_hex(6)}")
@@ -3012,7 +3046,9 @@ def create_admin_serve_app(
         return JSONResponse(body, status_code=201)
 
     @app.delete("/api/v1/notifications/channels/{channel_id}")
-    async def delete_notification_channel(channel_id: str) -> JSONResponse:
+    async def delete_notification_channel(channel_id: str, request: Request) -> JSONResponse:
+        # FLAG: notification_channels rows carry no project_id column (see save).
+        require_org_admin(request.state.context)
         def _apply(d):
             channels = d.get("notification_channels", [])
             d["notification_channels"] = [c for c in channels if c.get("id") != channel_id]
@@ -3026,6 +3062,9 @@ def create_admin_serve_app(
 
     @app.post("/api/v1/notifications/triggers")
     async def save_notification_trigger(request: Request) -> JSONResponse:
+        # FLAG: notification_triggers rows carry no project_id column; org-admin
+        # gate is the safe interim until a project column lands. No-op single-org.
+        require_org_admin(request.state.context)
         import secrets as _sec
         body = await request.json()
         body.setdefault("id", f"tr-{_sec.token_hex(6)}")
@@ -3037,7 +3076,9 @@ def create_admin_serve_app(
         return JSONResponse(body, status_code=201)
 
     @app.delete("/api/v1/notifications/triggers/{trigger_id}")
-    async def delete_notification_trigger(trigger_id: str) -> JSONResponse:
+    async def delete_notification_trigger(trigger_id: str, request: Request) -> JSONResponse:
+        # FLAG: notification_triggers rows carry no project_id column (see save).
+        require_org_admin(request.state.context)
         def _apply(d):
             triggers = d.get("notification_triggers", [])
             d["notification_triggers"] = [t for t in triggers if t.get("id") != trigger_id]
@@ -3282,6 +3323,9 @@ def create_admin_serve_app(
 
     @app.post("/api/v1/triggers")
     async def create_trigger(request: Request) -> JSONResponse:
+        # FLAG: triggers rows carry no project_id column; org-admin gate is the
+        # safe interim until a project column lands. No-op in single-org.
+        require_org_admin(request.state.context)
         import secrets as _sec
         body = await request.json()
         body.setdefault("id", f"trig-{_sec.token_hex(6)}")
@@ -3291,7 +3335,9 @@ def create_admin_serve_app(
         return JSONResponse(body, status_code=201)
 
     @app.delete("/api/v1/triggers/{trigger_id}")
-    async def delete_trigger(trigger_id: str) -> JSONResponse:
+    async def delete_trigger(trigger_id: str, request: Request) -> JSONResponse:
+        # FLAG: triggers rows carry no project_id column (see create_trigger).
+        require_org_admin(request.state.context)
         def _apply(d):
             triggers = d.get("triggers", [])
             d["triggers"] = [t for t in triggers if t.get("id") != trigger_id]
@@ -3299,7 +3345,9 @@ def create_admin_serve_app(
         return JSONResponse({"status": "ok"})
 
     @app.patch("/api/v1/triggers/{trigger_id}/enable")
-    async def enable_trigger(trigger_id: str) -> JSONResponse:
+    async def enable_trigger(trigger_id: str, request: Request) -> JSONResponse:
+        # FLAG: triggers rows carry no project_id column (see create_trigger).
+        require_org_admin(request.state.context)
         def _apply(d):
             for t in d.get("triggers", []):
                 if t.get("id") == trigger_id:
@@ -3312,7 +3360,9 @@ def create_admin_serve_app(
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     @app.patch("/api/v1/triggers/{trigger_id}/disable")
-    async def disable_trigger(trigger_id: str) -> JSONResponse:
+    async def disable_trigger(trigger_id: str, request: Request) -> JSONResponse:
+        # FLAG: triggers rows carry no project_id column (see create_trigger).
+        require_org_admin(request.state.context)
         def _apply(d):
             for t in d.get("triggers", []):
                 if t.get("id") == trigger_id:
@@ -3379,6 +3429,10 @@ def create_admin_serve_app(
 
     @app.post("/api/v1/memory/vector/ingest")
     async def vector_ingest(request: Request) -> JSONResponse:
+        # FLAG: stub endpoint with no backing store / no project_id column;
+        # org-admin gate is the safe interim until a project-scoped memory store
+        # lands. No-op in single-org.
+        require_org_admin(request.state.context)
         return JSONResponse({"status": "ok", "chunks": 0})
 
     @app.get("/api/v1/memory/graph/stats")
@@ -3391,10 +3445,14 @@ def create_admin_serve_app(
 
     @app.post("/api/v1/memory/graph/entity")
     async def create_graph_entity(request: Request) -> JSONResponse:
+        # FLAG: stub endpoint, no backing store / no project_id column (see vector_ingest).
+        require_org_admin(request.state.context)
         return JSONResponse({"status": "ok", "entity": ""})
 
     @app.post("/api/v1/memory/graph/relation")
     async def create_graph_relation(request: Request) -> JSONResponse:
+        # FLAG: stub endpoint, no backing store / no project_id column (see vector_ingest).
+        require_org_admin(request.state.context)
         return JSONResponse({"status": "ok", "relation": ""})
 
     @app.get("/api/v1/memory/graph/entities")
@@ -3422,6 +3480,9 @@ def create_admin_serve_app(
 
     @app.post("/api/v1/eval/datasets")
     async def create_eval_dataset(request: Request) -> JSONResponse:
+        # FLAG: eval_datasets rows carry no project_id column; org-admin gate is
+        # the safe interim until a project column lands. No-op in single-org.
+        require_org_admin(request.state.context)
         import secrets as _sec
         body = await request.json()
         body.setdefault("id", f"ds-{_sec.token_hex(6)}")
@@ -3440,7 +3501,9 @@ def create_admin_serve_app(
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     @app.delete("/api/v1/eval/datasets/{dataset_id}")
-    async def delete_eval_dataset(dataset_id: str) -> JSONResponse:
+    async def delete_eval_dataset(dataset_id: str, request: Request) -> JSONResponse:
+        # FLAG: eval_datasets rows carry no project_id column (see create_eval_dataset).
+        require_org_admin(request.state.context)
         def _apply(d):
             datasets = d.get("eval_datasets", [])
             d["eval_datasets"] = [ds for ds in datasets if ds.get("id") != dataset_id]

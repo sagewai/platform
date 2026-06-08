@@ -24,11 +24,21 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
+from sagewai.admin.authz import require_in_project_scope, require_org_admin
 from sagewai.sandbox.models import (
     NetworkPolicy,
     SandboxImageVariant,
     SandboxMode,
 )
+
+
+def _ctx(request: Request) -> Any:
+    """The session-derived RequestContext, or None when unwired (no AuthMiddleware).
+
+    The authz toolkit no-ops in single-org; when ``ctx is None`` (e.g. the
+    isolated test app) the multi-tenant gates below are skipped entirely so
+    single-org behaviour is unchanged."""
+    return getattr(request.state, "context", None)
 
 
 def _actor_label(request: Request) -> str:
@@ -105,6 +115,25 @@ def _get_project_or_404(state: Any, slug: str) -> dict:
     return project
 
 
+def _guard_project_scope(
+    state: Any, slug: str, request: Request, *, write: bool
+) -> None:
+    """Tenant-scope a project-by-slug sandbox-defaults op. No-op in single-org.
+
+    The ``{slug}`` must resolve to a project in the caller's own scope: a
+    cross-project slug is hidden (:class:`TenantHiddenError` -> 404), an
+    org-shared write by a non-admin is denied (403). For an org owner/admin any
+    project is in scope. When the slug doesn't resolve at all, we leave the
+    existing per-route 404/no-op behaviour intact (no project id to scope on)."""
+    ctx = _ctx(request)
+    if ctx is None:
+        return
+    project = state.get_project(slug)
+    if project is None:
+        return
+    require_in_project_scope(project.get("id"), ctx, write=write)
+
+
 def _build_response(payload_dict: dict) -> SandboxRequirementsResponse:
     """Build a typed response with variant resolved via image_manifest."""
     from sagewai.sandbox import image_manifest
@@ -126,10 +155,11 @@ def _build_response(payload_dict: dict) -> SandboxRequirementsResponse:
     response_model=SandboxRequirementsResponse,
     responses={404: {"description": "project or sandbox config not found"}},
 )
-async def get_project_defaults(slug: str) -> SandboxRequirementsResponse:
+async def get_project_defaults(slug: str, request: Request) -> SandboxRequirementsResponse:
     from sagewai.admin.state_file import AdminStateFile
 
     state = AdminStateFile()
+    _guard_project_scope(state, slug, request, write=False)
     project = _get_project_or_404(state, slug)
     defaults = project.get("default_sandbox_requirements")
     if not defaults:
@@ -156,6 +186,7 @@ async def put_project_defaults(
     from sagewai.admin.state_file import AdminStateFile
 
     state = request.app.state.sandbox_store or AdminStateFile()
+    _guard_project_scope(state, slug, request, write=True)
     req_dict = {
         "sandbox_mode": payload.sandbox_mode.value,
         "image": payload.image,
@@ -189,6 +220,7 @@ async def delete_project_defaults(slug: str, request: Request) -> SandboxConfigD
     from sagewai.admin.state_file import AdminStateFile
 
     state = request.app.state.sandbox_store or AdminStateFile()
+    _guard_project_scope(state, slug, request, write=True)
     project = state.get_project(slug)
     if project is None or "default_sandbox_requirements" not in project:
         return SandboxConfigDeleteResponse(cleared=False)
@@ -271,6 +303,10 @@ async def put_agent_overrides(
     from sagewai.admin.audit import emit_audit
     from sagewai.admin.state_file import AdminStateFile
 
+    # Org-level: agent sandbox requirements are shared org-wide -> org-admin only.
+    ctx = _ctx(request)
+    if ctx is not None:
+        require_org_admin(ctx)
     state = request.app.state.sandbox_store or AdminStateFile()
     req_dict = {
         "sandbox_mode": payload.sandbox_mode.value,
@@ -297,6 +333,10 @@ async def delete_agent_overrides(name: str, request: Request) -> SandboxConfigDe
     from sagewai.admin.audit import emit_audit
     from sagewai.admin.state_file import AdminStateFile
 
+    # Org-level: agent sandbox requirements are shared org-wide -> org-admin only.
+    ctx = _ctx(request)
+    if ctx is not None:
+        require_org_admin(ctx)
     state = request.app.state.sandbox_store or AdminStateFile()
     agent = state.get_agent(name)
     if agent is None or "sandbox_requirements_override" not in agent:
@@ -322,6 +362,7 @@ async def delete_agent_overrides(name: str, request: Request) -> SandboxConfigDe
 
 @router.get("/sandbox/preview", response_model=SandboxResolutionPreview)
 async def get_sandbox_preview(
+    request: Request,
     project: str | None = None,
     agent: str | None = None,
     draft_mode: str | None = None,
@@ -344,6 +385,11 @@ async def get_sandbox_preview(
         )
 
     state = AdminStateFile()
+
+    # Project-scoped read: a project may only preview its own (or org-shared)
+    # project config; a cross-project 'project' query param is hidden (404).
+    if project:
+        _guard_project_scope(state, project, request, write=False)
 
     # Project defaults
     project_defaults = None

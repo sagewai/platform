@@ -65,6 +65,40 @@ _ADMIN_MUTATION_PREFIXES = (
 )
 _ADMIN_FLEET_ACTIONS = ("/approve", "/reject", "/revoke")
 
+# Multi-tenant: prefixes that require org-admin for EVERY method (read + write).
+# Two groups: (a) genuine org/system/global surfaces, and (b) stores that have no
+# project_id column yet, so they cannot be safely exposed to a project context at
+# all (reads would leak across projects) — gated org-admin as a documented interim
+# until they grow a project_id (then move them to the project-scoped path). This is
+# central + covers GETs, so it can't be missed per-handler. Project-scoped prefixes
+# (providers, admin/connections, playground, admin/runs, prompts, autopilot
+# missions, admin/projects sandbox-defaults, admin/workflows replay, admin/directives
+# approvals|evaluations|runs) are deliberately NOT here — they enforce isolation at
+# the data layer and are member-writable.
+_MULTI_ORG_PREFIXES = (
+    # org / system / global
+    "/api/v1/organization",
+    "/api/v1/projects",  # project CRUD (distinct from /api/v1/admin/projects sandbox-defaults)
+    "/api/v1/tokens",
+    "/api/v1/account",
+    "/api/v1/connectors",
+    "/api/v1/admin/sealed",  # sealed config + revocations
+    "/api/v1/admin/agents",  # sandbox agent-requirements (org-level agent config)
+    "/api/v1/admin/directives/policies",
+    "/api/v1/admin/directives/preview",
+    "/api/v1/fleet/enrollment-keys",
+    "/api/v1/fleet/workers",  # approve/reject/revoke + list/detail (fleet mgmt)
+    "/api/v1/fleet/audit",
+    # no-project_id-column stores — org-admin interim (reads + writes) until scoped
+    "/api/v1/workflow-registry",
+    "/api/v1/budget",
+    "/api/v1/guardrails",
+    "/api/v1/eval",
+    "/api/v1/notifications",
+    "/api/v1/triggers",
+    "/api/v1/memory",
+)
+
 
 @dataclass(frozen=True)
 class Principal:
@@ -91,7 +125,33 @@ def is_public(method: str, path: str, *, setup_complete: bool, expose_docs: bool
     return False
 
 
-def required_scope(method: str, path: str) -> str:
+def _scopes_for_roles(roles: frozenset[str]) -> frozenset[str]:
+    """Token scopes derived from namespaced roles (multi-tenant sessions).
+
+    org owners/admins get full ``admin`` scope; project admins/members get
+    read+write (they manage their own project's resources); viewers and bare
+    org members are read-only. This is what makes the read/write perimeter a
+    real gate in multi-tenant mode (sessions no longer get blanket ALL_SCOPES).
+    """
+    if roles & {"org:owner", "org:admin"}:
+        return ALL_SCOPES
+    if roles & {"project:admin", "project:member"}:
+        return frozenset({SCOPE_READ, SCOPE_WRITE})
+    return frozenset({SCOPE_READ})
+
+
+def required_scope(method: str, path: str, *, multi: bool = False) -> str:
+    if multi:
+        # Multi-tenant: org/system/global prefixes (and not-yet-project-scoped
+        # stores) require org-admin for EVERY method — a central gate that covers
+        # GETs too, so a sensitive read/list can't leak via a forgotten handler.
+        # Everything else is a coarse read/write gate (viewer=read, member=write),
+        # with project isolation enforced at the data layer. The single-org
+        # admin-marking of project-scoped prefixes (providers/connections/...) must
+        # NOT apply here, or it would lock project members out of their own work.
+        if any(path.startswith(p) for p in _MULTI_ORG_PREFIXES):
+            return SCOPE_ADMIN
+        return SCOPE_READ if method in _SAFE_METHODS else SCOPE_WRITE
     if any(path.startswith(p) for p in _ADMIN_ALL_METHODS):
         return SCOPE_ADMIN
     if method not in _SAFE_METHODS and any(path.startswith(p) for p in _ADMIN_MUTATION_PREFIXES):
@@ -202,7 +262,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 project_id=_project_hint(request),
             )
 
-        need = required_scope(method, path)
+        need = required_scope(method, path, multi=is_multi_tenant())
         if not principal.has_scope(need):
             return JSONResponse({"detail": f"Requires '{need}' scope"}, status_code=403)
 
@@ -241,7 +301,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             type="session",
             subject_id=sess["user_id"],
             token_id=_session_token_id(raw),
-            scopes=ALL_SCOPES,
+            scopes=_scopes_for_roles(context.roles),
             expires_at=None,
             actor_label=context.actor.label,
         )

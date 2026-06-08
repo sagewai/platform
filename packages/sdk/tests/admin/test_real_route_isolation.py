@@ -58,6 +58,8 @@ async def real_app(tmp_path, monkeypatch):
     await store.add_membership(oid, member["id"], "project:member", project_id=pa)
     viewer = await store.create_user(oid, "v@acme.io", password="pw0000", role="org:member")
     await store.add_membership(oid, viewer["id"], "project:viewer", project_id=pa)
+    # An org owner — the only actor allowed to mutate org/project/token routes.
+    owner = await store.create_user(oid, "o@acme.io", password="pw0000", role="org:owner")
 
     sf = AdminStateFile(path=tmp_path / "state.json")
     sf.complete_setup(org_name="Acme", admin_email="a@acme.io", admin_password="pw123456")
@@ -154,6 +156,8 @@ async def real_app(tmp_path, monkeypatch):
         "example_a": example_a,
         "sess_member": await store.issue_session(oid, member["id"]),
         "sess_viewer": await store.issue_session(oid, viewer["id"]),
+        "sess_owner": await store.issue_session(oid, owner["id"]),
+        "pa_slug": "pa",
     }
     await engine.dispose()
 
@@ -571,3 +575,207 @@ async def test_quality_route_member_persists(real_app):
     )
     rec = next(log for log in r2.json() if log.get("log_id") == real_app["example_a"])
     assert rec.get("quality") == 5
+
+
+# ── Org-level routes: org-admin gate (privesc fixes) ─────────────────────
+# A plain project member must not mutate org settings, projects, or API
+# tokens; an org owner can. require_org_admin no-ops in single-org.
+
+
+async def test_org_patch_member_403(real_app):
+    r = await _req(
+        real_app["app"], "PATCH", "/api/v1/organization",
+        token=real_app["sess_member"], project=real_app["pa"],
+        json={"name": "Hijacked"},
+    )
+    assert r.status_code == 403
+
+
+async def test_org_patch_owner_ok(real_app):
+    r = await _req(
+        real_app["app"], "PATCH", "/api/v1/organization",
+        token=real_app["sess_owner"], json={"name": "Renamed"},
+    )
+    assert r.status_code == 200
+
+
+async def test_project_create_member_403(real_app):
+    r = await _req(
+        real_app["app"], "POST", "/api/v1/projects",
+        token=real_app["sess_member"], project=real_app["pa"],
+        json={"name": "Sneaky", "slug": "sneaky"},
+    )
+    assert r.status_code == 403
+
+
+async def test_project_update_member_403(real_app):
+    r = await _req(
+        real_app["app"], "PATCH", f"/api/v1/projects/{real_app['pa_slug']}",
+        token=real_app["sess_member"], project=real_app["pa"],
+        json={"name": "Renamed"},
+    )
+    assert r.status_code == 403
+
+
+async def test_project_delete_member_403(real_app):
+    r = await _req(
+        real_app["app"], "DELETE", f"/api/v1/projects/{real_app['pa_slug']}",
+        token=real_app["sess_member"], project=real_app["pa"],
+    )
+    assert r.status_code == 403
+
+
+async def test_token_create_member_403(real_app):
+    r = await _req(
+        real_app["app"], "POST", "/api/v1/tokens/",
+        token=real_app["sess_member"], project=real_app["pa"],
+        json={"name": "evil", "scopes": ["admin"]},
+    )
+    assert r.status_code == 403
+
+
+async def test_token_create_owner_ok(real_app):
+    r = await _req(
+        real_app["app"], "POST", "/api/v1/tokens/",
+        token=real_app["sess_owner"], json={"name": "ci", "scopes": ["read"]},
+    )
+    assert r.status_code == 201
+
+
+# ── Project-scoped routes whose store lacks a project_id column ───────────
+# These are gated org-admin as a safe interim (FLAGGED: need a project column):
+# saved_workflows, budget_limits, guardrail_configs, eval_datasets,
+# notification channels/triggers, triggers, memory write stubs.
+
+
+async def test_workflow_registry_create_member_403(real_app):
+    r = await _req(
+        real_app["app"], "POST", "/api/v1/workflow-registry",
+        token=real_app["sess_member"], project=real_app["pa"],
+        json={"name": "wf", "yaml_content": "x: 1"},
+    )
+    assert r.status_code == 403
+
+
+async def test_budget_limit_create_member_403(real_app):
+    r = await _req(
+        real_app["app"], "POST", "/api/v1/budget/limits",
+        token=real_app["sess_member"], project=real_app["pa"],
+        json={"agent_name": "scout", "daily_limit_usd": 5},
+    )
+    assert r.status_code == 403
+
+
+async def test_guardrail_config_member_403(real_app):
+    r = await _req(
+        real_app["app"], "PUT", "/api/v1/guardrails/configs/scout",
+        token=real_app["sess_member"], project=real_app["pa"],
+        json={"guardrails": []},
+    )
+    assert r.status_code == 403
+
+
+async def test_eval_dataset_create_member_403(real_app):
+    r = await _req(
+        real_app["app"], "POST", "/api/v1/eval/datasets",
+        token=real_app["sess_member"], project=real_app["pa"],
+        json={"name": "ds"},
+    )
+    assert r.status_code == 403
+
+
+async def test_notification_channel_member_403(real_app):
+    r = await _req(
+        real_app["app"], "POST", "/api/v1/notifications/channels",
+        token=real_app["sess_member"], project=real_app["pa"],
+        json={"type": "slack"},
+    )
+    assert r.status_code == 403
+
+
+async def test_trigger_create_member_403(real_app):
+    r = await _req(
+        real_app["app"], "POST", "/api/v1/triggers",
+        token=real_app["sess_member"], project=real_app["pa"],
+        json={"name": "t"},
+    )
+    assert r.status_code == 403
+
+
+async def test_memory_vector_ingest_member_403(real_app):
+    r = await _req(
+        real_app["app"], "POST", "/api/v1/memory/vector/ingest",
+        token=real_app["sess_member"], project=real_app["pa"],
+        json={"documents": []},
+    )
+    assert r.status_code == 403
+
+
+async def test_workflow_registry_create_owner_ok(real_app):
+    r = await _req(
+        real_app["app"], "POST", "/api/v1/workflow-registry",
+        token=real_app["sess_owner"], json={"name": "wf", "yaml_content": "x: 1"},
+    )
+    assert r.status_code == 201
+
+
+# ── Artifact destinations: org-admin gate (FLAGGED: no project column) ───
+# Keyed globally by workflow name in the admin state file; PUT/DELETE gated
+# org-admin until a project column lands. GET stays open.
+
+
+async def test_artifact_destination_put_member_403(real_app):
+    # Body is a valid ArtifactDestination (target is a str) so FastAPI's 422
+    # body-validation layer passes and the request reaches the org-admin gate.
+    r = await _req(
+        real_app["app"], "PUT",
+        "/api/v1/admin/workflows/wf1/artifact_destination",
+        token=real_app["sess_member"], project=real_app["pa"],
+        json={"type": "local", "target": "/tmp/x"},
+    )
+    assert r.status_code == 403
+
+
+async def test_artifact_destination_delete_member_403(real_app):
+    r = await _req(
+        real_app["app"], "DELETE",
+        "/api/v1/admin/workflows/wf1/artifact_destination",
+        token=real_app["sess_member"], project=real_app["pa"],
+    )
+    assert r.status_code == 403
+
+
+async def test_artifact_destination_put_owner_ok(real_app):
+    r = await _req(
+        real_app["app"], "PUT",
+        "/api/v1/admin/workflows/wf1/artifact_destination",
+        token=real_app["sess_owner"],
+        json={"type": "local", "target": "/tmp/x"},
+    )
+    assert r.status_code == 200
+
+
+# ── api.py admin router: agent-config mutation gate (FLAGGED) ─────────────
+# The in-memory registry isn't project-tagged; the config mutation is gated
+# org-admin. serve.py mounts the router without a registry, so the owner
+# passes the gate then hits "No registry configured" (404) — proving the gate
+# precedes the handler and the member is blocked at the gate (403).
+
+
+async def test_agent_config_patch_member_403(real_app):
+    r = await _req(
+        real_app["app"], "PATCH", "/admin/agents/scout/config",
+        token=real_app["sess_member"], project=real_app["pa"],
+        json={"model": "evil"},
+    )
+    assert r.status_code == 403
+
+
+async def test_agent_config_patch_owner_passes_gate(real_app):
+    # Owner clears the org-admin gate; 404 is from the no-registry handler,
+    # not the gate (proves the gate is org-admin, not a blanket block).
+    r = await _req(
+        real_app["app"], "PATCH", "/admin/agents/scout/config",
+        token=real_app["sess_owner"], json={"model": "ok"},
+    )
+    assert r.status_code == 404

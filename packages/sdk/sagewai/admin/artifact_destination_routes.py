@@ -13,8 +13,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 
+from sagewai.admin.authz import require_org_admin
 from sagewai.artifacts.models import (
     ArtifactDestination,
     ArtifactDestinationConfigError,
@@ -27,6 +28,21 @@ router = APIRouter(
     prefix="/api/v1/admin/workflows",
     tags=["artifacts"],
 )
+
+
+def _gate_org_admin(request: Request) -> None:
+    """Org-admin write gate for artifact-destination mutations.
+
+    FLAG: artifact destinations are keyed globally by workflow name in the admin
+    state file (``workflows[name].artifact_destination``) with NO project_id
+    column, so they cannot be cleanly project-scoped — a project column is a
+    schema follow-up. Until then, gate the mutating routes (PUT/DELETE) to org
+    owner/admin so a plain project member cannot rewrite or clear another
+    project's workflow destination. No-op in single-org, and a no-op when no
+    RequestContext is present (router mounted standalone without middleware)."""
+    ctx = getattr(request.state, "context", None)
+    if ctx is not None:
+        require_org_admin(ctx)
 
 
 def register(app: FastAPI, store: Any | None = None) -> None:
@@ -44,7 +60,8 @@ def register(app: FastAPI, store: Any | None = None) -> None:
     "/{name}/artifact_destination",
     response_model=ArtifactDestination,
 )
-async def get_workflow_artifact_destination(name: str) -> ArtifactDestination:
+async def get_workflow_artifact_destination(name: str, request: Request) -> ArtifactDestination:
+    _gate_org_admin(request)  # global store, no project_id — org-admin interim (reads leak too)
     from sagewai.admin.state_file import AdminStateFile
 
     dest = AdminStateFile().get_workflow_artifact_destination(name)
@@ -61,8 +78,9 @@ async def get_workflow_artifact_destination(name: str) -> ArtifactDestination:
     response_model=ArtifactDestination,
 )
 async def put_workflow_artifact_destination(
-    name: str, body: ArtifactDestination,
+    name: str, body: ArtifactDestination, request: Request,
 ) -> ArtifactDestination:
+    _gate_org_admin(request)
     # Structural validation (target shape per type). env_keys validation
     # against the resolved Sealed cascade happens at enqueue, not here —
     # the cascade isn't known at admin-config time.
@@ -86,7 +104,8 @@ async def put_workflow_artifact_destination(
     "/{name}/artifact_destination",
     status_code=204,
 )
-async def delete_workflow_artifact_destination(name: str) -> None:
+async def delete_workflow_artifact_destination(name: str, request: Request) -> None:
+    _gate_org_admin(request)
     from sagewai.admin.state_file import AdminStateFile
 
     AdminStateFile().clear_workflow_artifact_destination(name)

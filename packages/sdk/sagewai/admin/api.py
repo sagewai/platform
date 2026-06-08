@@ -30,6 +30,7 @@ from typing import Any
 
 from fastapi import Request
 
+from sagewai.admin.authz import require_org_admin
 from sagewai.admin.controller import RunControlRegistry
 from sagewai.admin.models import (
     AgentDetail,
@@ -62,6 +63,22 @@ def create_admin_router(
     from fastapi import APIRouter, HTTPException, Query, Request
 
     router = APIRouter(tags=["admin"])
+
+    def _multi_ctx(request: Request):
+        """The RequestContext when running multi-tenant, else None (single-org).
+
+        Routes use this to switch to the ctx-scoped RunStore API
+        (``list_runs_for`` / ``get_run_for``) so a project never sees another
+        project's runs; single-org keeps its unchanged process-global view.
+        """
+        ctx = getattr(request.state, "context", None)
+        return ctx if (ctx is not None and ctx.tenancy_mode == "multi") else None
+
+    def _resolve_run_store(request: Request):
+        """The active RunStore — the resource-store bundle's, else app.state."""
+        rs = getattr(request.app.state, "resource_stores", None)
+        store = getattr(rs, "run", None) if rs is not None else None
+        return store or getattr(request.app.state, "run_store", None)
 
     async def _get_run_count(request: Request, _state: AdminState, agent_name: str) -> int:
         """Get run count from RunStore (Postgres) if available, else in-memory."""
@@ -221,14 +238,29 @@ def create_admin_router(
             exclude_types = ["workflow_step"]
 
         # Use RunStore (Postgres) when available — survives restarts
-        _run_store = getattr(request.app.state, "run_store", None)
+        _run_store = _resolve_run_store(request)
+        ctx = _multi_ctx(request)
         if _run_store is not None and _run_store.is_connected:
-            db_runs = await _run_store.list_runs(
-                agent_name=agent_name, status=status,
-                run_type=run_type or None,
-                exclude_run_types=exclude_types,
-                limit=limit + 1, offset=offset,
-            )
+            if ctx is not None:
+                # Multi-tenant: ctx-scoped read (own project + org-shared only).
+                # list_runs_for has no exclude_run_types, so over-fetch and drop
+                # workflow_step rows in Python to preserve the default behaviour.
+                fetch = (limit + 1) * 4 if exclude_types else (limit + 1)
+                scoped = await _run_store.list_runs_for(
+                    ctx, agent_name=agent_name, status=status,
+                    run_type=run_type or None, limit=fetch, offset=offset,
+                )
+                if exclude_types:
+                    excl = set(exclude_types)
+                    scoped = [r for r in scoped if r.run_type not in excl]
+                db_runs = scoped
+            else:
+                db_runs = await _run_store.list_runs(
+                    agent_name=agent_name, status=status,
+                    run_type=run_type or None,
+                    exclude_run_types=exclude_types,
+                    limit=limit + 1, offset=offset,
+                )
             items_raw = db_runs[:limit]
             has_more = len(db_runs) > limit
 
@@ -307,9 +339,16 @@ def create_admin_router(
     async def get_run(run_id: str, request: Request) -> RunDetail:
         """Get detailed info about a specific run."""
         # Try RunStore first for persisted runs
-        _run_store = getattr(request.app.state, "run_store", None)
+        _run_store = _resolve_run_store(request)
+        ctx = _multi_ctx(request)
         if _run_store is not None and _run_store.is_connected:
-            db_run = await _run_store.get_run(run_id)
+            # Multi-tenant: get_run_for returns None for a cross-project run, so a
+            # foreign run is reported as a 404 (existence hidden, never 403).
+            db_run = (
+                await _run_store.get_run_for(run_id, ctx)
+                if ctx is not None
+                else await _run_store.get_run(run_id)
+            )
             if db_run is not None:
                 return RunDetail(
                     run_id=db_run.run_id,
@@ -326,6 +365,11 @@ def create_admin_router(
                     ],
                     steps=[],
                 )
+            if ctx is not None:
+                # Multi-tenant + connected store is authoritative: do not fall
+                # back to the process-global in-memory store (it isn't tenant
+                # scoped and would leak a foreign run). 404 = not in scope.
+                raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
 
         run = state.get_run(run_id)
         if run is None:
@@ -386,11 +430,28 @@ def create_admin_router(
     # Run control endpoints (pause / resume / cancel)
     # ------------------------------------------------------------------
 
+    async def _require_run_in_scope(request: Request, run_id: str) -> None:
+        """In multi-tenant mode, 404 a control action on a run outside ``ctx``.
+
+        Run controls act on a process-global registry keyed only by run_id; this
+        ensures one project cannot pause/resume/cancel another's run. Checks the
+        connected RunStore via ``get_run_for`` (own + org-shared); no-op single-org
+        or when no connected store can confirm scope (control stays best-effort)."""
+        ctx = _multi_ctx(request)
+        if ctx is None:
+            return
+        store = _resolve_run_store(request)
+        if store is None or not store.is_connected:
+            return
+        if await store.get_run_for(run_id, ctx) is None:
+            raise HTTPException(status_code=404, detail=f"No active run '{run_id}'")
+
     @router.post("/runs/{run_id}/pause", response_model=ControlActionResponse)
-    async def pause_run(run_id: str) -> ControlActionResponse:
+    async def pause_run(run_id: str, request: Request) -> ControlActionResponse:
         """Pause a running agent invocation."""
         if run_controls is None:
             raise HTTPException(status_code=501, detail="Run controls not configured")
+        await _require_run_in_scope(request, run_id)
         controller = run_controls.get(run_id)
         if controller is None:
             raise HTTPException(status_code=404, detail=f"No active run '{run_id}'")
@@ -400,10 +461,11 @@ def create_admin_router(
         return ControlActionResponse(run_id=run_id, action="pause", status="paused")
 
     @router.post("/runs/{run_id}/resume", response_model=ControlActionResponse)
-    async def resume_run(run_id: str) -> ControlActionResponse:
+    async def resume_run(run_id: str, request: Request) -> ControlActionResponse:
         """Resume a paused agent invocation."""
         if run_controls is None:
             raise HTTPException(status_code=501, detail="Run controls not configured")
+        await _require_run_in_scope(request, run_id)
         controller = run_controls.get(run_id)
         if controller is None:
             raise HTTPException(status_code=404, detail=f"No active run '{run_id}'")
@@ -413,10 +475,11 @@ def create_admin_router(
         return ControlActionResponse(run_id=run_id, action="resume", status="running")
 
     @router.post("/runs/{run_id}/cancel", response_model=ControlActionResponse)
-    async def cancel_run(run_id: str) -> ControlActionResponse:
+    async def cancel_run(run_id: str, request: Request) -> ControlActionResponse:
         """Cancel a running agent invocation."""
         if run_controls is None:
             raise HTTPException(status_code=501, detail="Run controls not configured")
+        await _require_run_in_scope(request, run_id)
         controller = run_controls.get(run_id)
         if controller is None:
             raise HTTPException(status_code=404, detail=f"No active run '{run_id}'")
@@ -430,8 +493,20 @@ def create_admin_router(
     # ------------------------------------------------------------------
 
     @router.patch("/agents/{agent_name}/config")
-    async def update_agent_config(agent_name: str, request: ConfigUpdateRequest) -> dict[str, Any]:
+    async def update_agent_config(
+        agent_name: str, request: ConfigUpdateRequest, http_request: Request
+    ) -> dict[str, Any]:
         """Update an agent's configuration at runtime."""
+        # FLAG: the agent registry is process-global and not project-tagged, so
+        # this config mutation cannot be cleanly project-scoped. As a safe interim
+        # gate the *mutation* to org owner/admin (a plain project member must not
+        # rewrite a process-global agent's config). Per-project agent config needs
+        # a project-tagged agent store (the file/Postgres agent store handles the
+        # project-scoped playground agents in serve.py — this in-memory registry
+        # path does not). No-op in single-org.
+        ctx = getattr(http_request.state, "context", None)
+        if ctx is not None:
+            require_org_admin(ctx)
         if registry is None:
             raise HTTPException(status_code=404, detail="No registry configured")
 

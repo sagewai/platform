@@ -86,6 +86,21 @@ class EffectiveProfileResponse(BaseModel):
 router = APIRouter(prefix="/api/v1/admin/sealed", tags=["sealed"])
 
 
+def _require_org_admin(request: Request) -> None:
+    """Org owner/admin gate for these org-wide security/config routes.
+
+    Sealed manages org-wide security (profiles, secret reveal, system/workflow
+    security config, status, audit, cascade preview) — a plain project member
+    must never reach it. No-op in single-org mode and whenever no tenancy context
+    is attached (the toolkit short-circuits on ``tenancy_mode != "multi"``)."""
+    ctx = getattr(request.state, "context", None)
+    if ctx is None:
+        return
+    from sagewai.admin.authz import require_org_admin
+
+    require_org_admin(ctx)
+
+
 def register(app: FastAPI, store: Any) -> None:
     """Wire routes into the admin app."""
     app.state.sealed_store = store
@@ -98,19 +113,22 @@ def _backend():
 
 
 @router.get("/profiles", response_model=list[ProfileMetadata])
-async def list_profiles() -> list[ProfileMetadata]:
+async def list_profiles(request: Request) -> list[ProfileMetadata]:
+    _require_org_admin(request)
     return await _backend().list_profiles()
 
 
 @router.post("/profiles", response_model=Profile, status_code=201)
-async def create_profile(payload: ProfileWritePayload) -> Profile:
+async def create_profile(request: Request, payload: ProfileWritePayload) -> Profile:
+    _require_org_admin(request)
     if not payload.id:
         raise HTTPException(status_code=400, detail="profile id required")
     return await _backend().save_profile(payload)
 
 
 @router.get("/profiles/{profile_id}", response_model=ProfileMetadata)
-async def get_profile_md(profile_id: str) -> ProfileMetadata:
+async def get_profile_md(request: Request, profile_id: str) -> ProfileMetadata:
+    _require_org_admin(request)
     from sagewai.sealed.backend import ProfileNotFoundError
     try:
         return await _backend().get_profile_metadata(profile_id)
@@ -119,7 +137,8 @@ async def get_profile_md(profile_id: str) -> ProfileMetadata:
 
 
 @router.get("/profiles/{profile_id}/full", response_model=Profile)
-async def get_profile_full(profile_id: str) -> Profile:
+async def get_profile_full(request: Request, profile_id: str) -> Profile:
+    _require_org_admin(request)
     from sagewai.sealed.backend import ProfileNotFoundError
     try:
         return await _backend().get_profile(profile_id)
@@ -128,13 +147,17 @@ async def get_profile_full(profile_id: str) -> Profile:
 
 
 @router.put("/profiles/{profile_id}", response_model=Profile)
-async def update_profile(profile_id: str, payload: ProfileWritePayload) -> Profile:
+async def update_profile(
+    request: Request, profile_id: str, payload: ProfileWritePayload
+) -> Profile:
+    _require_org_admin(request)
     payload_with_id = payload.model_copy(update={"id": profile_id})
     return await _backend().save_profile(payload_with_id)
 
 
 @router.delete("/profiles/{profile_id}", status_code=204)
-async def delete_profile(profile_id: str) -> None:
+async def delete_profile(request: Request, profile_id: str) -> None:
+    _require_org_admin(request)
     from sagewai.sealed.backend import ProfileNotFoundError
     try:
         await _backend().delete_profile(profile_id)
@@ -164,6 +187,7 @@ def _check_reveal_rate_limit(admin_id: str, limit_per_hour: int) -> bool:
     response_model=SealedRevealResponse,
 )
 async def reveal_secret(profile_id: str, secret_key: str, request: Request) -> SealedRevealResponse:
+    _require_org_admin(request)
     from sagewai.admin.audit import emit_audit
     from sagewai.sealed.backend import ProfileNotFoundError
 
@@ -195,7 +219,8 @@ async def reveal_secret(profile_id: str, secret_key: str, request: Request) -> S
 
 
 @router.get("/system", response_model=SealedSystemConfig)
-async def get_system_config() -> SealedSystemConfig:
+async def get_system_config(request: Request) -> SealedSystemConfig:
+    _require_org_admin(request)
     from sagewai.admin.state_file import AdminStateFile
     cfg = AdminStateFile().get_sealed_config()
     return SealedSystemConfig(
@@ -205,7 +230,8 @@ async def get_system_config() -> SealedSystemConfig:
 
 
 @router.put("/system", response_model=SealedSystemConfig)
-async def put_system_config(body: SealedSystemConfig) -> SealedSystemConfig:
+async def put_system_config(request: Request, body: SealedSystemConfig) -> SealedSystemConfig:
+    _require_org_admin(request)
     from sagewai.admin.state_file import AdminStateFile
     state = AdminStateFile()
     def _apply(d):
@@ -217,7 +243,8 @@ async def put_system_config(body: SealedSystemConfig) -> SealedSystemConfig:
 
 
 @router.get("/workflows/{name}", response_model=SealedWorkflowConfig)
-async def get_workflow_config(name: str) -> SealedWorkflowConfig:
+async def get_workflow_config(request: Request, name: str) -> SealedWorkflowConfig:
+    _require_org_admin(request)
     from sagewai.admin.state_file import AdminStateFile
     cfg = AdminStateFile().get_workflow_sealed_config(name)
     if cfg is None:
@@ -229,7 +256,10 @@ async def get_workflow_config(name: str) -> SealedWorkflowConfig:
 
 
 @router.put("/workflows/{name}", response_model=SealedWorkflowConfig)
-async def put_workflow_config(name: str, body: SealedWorkflowConfig) -> SealedWorkflowConfig:
+async def put_workflow_config(
+    request: Request, name: str, body: SealedWorkflowConfig
+) -> SealedWorkflowConfig:
+    _require_org_admin(request)
     from sagewai.admin.state_file import AdminStateFile
     state = AdminStateFile()
     def _apply(d):
@@ -246,7 +276,8 @@ async def put_workflow_config(name: str, body: SealedWorkflowConfig) -> SealedWo
 
 
 @router.delete("/workflows/{name}", status_code=204)
-async def delete_workflow_config(name: str) -> None:
+async def delete_workflow_config(request: Request, name: str) -> None:
+    _require_org_admin(request)
     from sagewai.admin.state_file import AdminStateFile
     state = AdminStateFile()
     def _apply(d):
@@ -259,11 +290,13 @@ async def delete_workflow_config(name: str) -> None:
 
 @router.get("/preview", response_model=EffectiveProfileResponse)
 async def preview_cascade(
+    request: Request,
     project: str | None = None,
     workflow: str | None = None,
     user_profile_ref: str | None = None,
     user_overrides_json: str | None = None,
 ) -> EffectiveProfileResponse:
+    _require_org_admin(request)
     import json as _json
 
     from sagewai.admin.state_file import AdminStateFile
@@ -312,6 +345,7 @@ async def preview_cascade(
 
 @router.get("/audit", response_model=list[SealedAuditEvent])
 async def list_audit(
+    request: Request,
     profile_id: str | None = None,
     event_type: str | None = None,
     actor_id: str | None = None,
@@ -319,13 +353,15 @@ async def list_audit(
     until: str | None = None,
     limit: int = 100,
 ) -> list[SealedAuditEvent]:
+    _require_org_admin(request)
     # Stub for Sealed-i.A — populate via store query when admin app provides
     # the Postgres store via dependency injection. Plan 3b-i pattern.
     return []
 
 
 @router.get("/status", response_model=SealedStatus)
-async def sealed_status() -> SealedStatus:
+async def sealed_status(request: Request) -> SealedStatus:
+    _require_org_admin(request)
     from sagewai.admin.state_file import AdminStateFile
     from sagewai.sealed.master_key import MasterKeyMissing, resolve_master_key
     from sagewai.sealed.refs import _BACKENDS, list_registered_schemes

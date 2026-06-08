@@ -31,6 +31,11 @@ from typing import Any
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 
+from sagewai.admin.authz import (
+    in_read_scope,
+    require_in_project_scope,
+    require_org_admin,
+)
 from sagewai.sealed.directives.approvals import (
     AlreadyDecidedError,
     PendingApprovalsRegistry,
@@ -75,14 +80,30 @@ def _evaluations(request: Request) -> Any | None:
     return getattr(request.app.state, "directive_evaluations_adapter", None)
 
 
+def _ctx(request: Request) -> Any:
+    """The session-derived RequestContext, or None when unwired (no AuthMiddleware).
+
+    The authz toolkit no-ops in single-org and when ``ctx is None`` (unwired test
+    apps), so the multi-tenant gates below are inert outside multi-tenant mode."""
+    return getattr(request.state, "context", None)
+
+
 @router.get("/policies")
 async def get_policies(request: Request) -> dict[str, Any]:
+    # Org-level: returns project policies across the whole org -> org-admin only.
+    ctx = _ctx(request)
+    if ctx is not None:
+        require_org_admin(ctx)
     cfg = _state(request).get_directives_config()
     return cfg.model_dump(mode="json")
 
 
 @router.put("/policies")
 async def put_policies(request: Request, body: dict[str, Any]) -> dict[str, Any]:
+    # Org-level: replaces the org-wide directive cascade config -> org-admin only.
+    ctx = _ctx(request)
+    if ctx is not None:
+        require_org_admin(ctx)
     cfg = DirectivesConfig.model_validate(body)
     _state(request).set_directives_config(cfg)
     return {"ok": True}
@@ -94,6 +115,10 @@ async def preview_cascade(
     workflow: str,
     project_id: str | None = None,
 ) -> dict[str, Any]:
+    # Org-level read: resolves the cascade for an arbitrary project_id -> org-admin only.
+    ctx = _ctx(request)
+    if ctx is not None:
+        require_org_admin(ctx)
     cfg = _state(request).get_directives_config()
     pols = resolve_directive_policies(
         workflow_name=workflow, project_id=project_id, config=cfg,
@@ -115,6 +140,10 @@ async def list_evaluations(
     rows = await adapter.list_filtered(
         run_id=run_id, policy_id=policy_id, event_type=event_type, limit=limit,
     )
+    # Project-scoped read: a project sees only its own + org-shared eval rows.
+    ctx = _ctx(request)
+    if ctx is not None:
+        rows = [r for r in rows if in_read_scope(r.get("project_id"), ctx)]
     return {"events": rows}
 
 
@@ -123,7 +152,33 @@ async def list_approvals(request: Request) -> dict[str, Any]:
     reg = _approvals(request)
     if reg is None:
         return {"pending": []}
-    return {"pending": await reg.list_pending()}
+    pending = await reg.list_pending()
+    # Project-scoped read: a project sees only its own + org-shared approvals.
+    ctx = _ctx(request)
+    if ctx is not None:
+        pending = [r for r in pending if in_read_scope(r.get("project_id"), ctx)]
+    return {"pending": pending}
+
+
+async def _guard_approval_scope(
+    reg: PendingApprovalsRegistry, decision_id: str, request: Request
+) -> None:
+    """Tenant-scope a by-id approval write before the decision/deny transition.
+
+    Each pending row carries the ``project_id`` of its triggering signal. We
+    enforce :func:`require_in_project_scope` (write) so a project may only act on
+    its own (or org-shared) approvals; a cross-project decision is hidden (404).
+    Unknown/already-decided ids fall through to the registry, which raises the
+    KeyError/AlreadyDecidedError the routes already translate to 404/409."""
+    ctx = _ctx(request)
+    if ctx is None:
+        return
+    row = next(
+        (r for r in await reg.list_pending() if r.get("decision_id") == decision_id),
+        None,
+    )
+    if row is not None:
+        require_in_project_scope(row.get("project_id"), ctx, write=True)
 
 
 @router.post("/approvals/{decision_id}/approve")
@@ -135,6 +190,7 @@ async def approve(
     reg = _approvals(request)
     if reg is None:
         raise HTTPException(status_code=503, detail="directive approvals not available")
+    await _guard_approval_scope(reg, decision_id, request)
     try:
         return await reg.approve(
             decision_id=decision_id,
@@ -156,6 +212,7 @@ async def deny(
     reg = _approvals(request)
     if reg is None:
         raise HTTPException(status_code=503, detail="directive approvals not available")
+    await _guard_approval_scope(reg, decision_id, request)
     try:
         return await reg.deny(
             decision_id=decision_id,
@@ -177,6 +234,10 @@ async def get_run_directive_summary(
     if adapter is None:
         return {"events": []}
     rows = await adapter.list_for_run(run_id=run_id)
+    # Project-scoped read: a project sees only its own + org-shared run events.
+    ctx = _ctx(request)
+    if ctx is not None:
+        rows = [r for r in rows if in_read_scope(r.get("project_id"), ctx)]
     return {"events": rows}
 
 
