@@ -101,6 +101,11 @@ jobs:
           subject-path: packages/sdk/dist/*.whl
 
   test:
+    # Prod (PyPI) releases only. On push-to-main (TestPyPI dev builds) ci-sdk
+    # already ran the full test matrix on the same commit, so running it again
+    # here is a duplicate (~5 billable min/run). Gate it to the pypi channel.
+    needs: resolve
+    if: needs.resolve.outputs.channel == 'pypi'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -135,7 +140,7 @@ jobs:
           echo "Acceptance gate passed."
 
   publish-testpypi:
-    needs: [resolve, build, test]
+    needs: [resolve, build]
     if: needs.resolve.outputs.channel == 'testpypi'
     runs-on: ubuntu-latest
     environment: testpypi

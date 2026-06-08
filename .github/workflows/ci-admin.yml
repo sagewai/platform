@@ -17,10 +17,11 @@ on:
   schedule:
     - cron: "0 5 * * *"   # 05:00 UTC nightly — full e2e + a11y
 
-# CI-cost note: build / e2e-regression / docker-build run on every PR
-# (the fast merge gate). The full Playwright e2e suite and the a11y
-# suite are heavier and run only on push-to-main and the nightly
-# schedule — see the `if:` guards on those jobs.
+# CI-cost note: build / e2e-regression / docker-build run on every PR and
+# on push-to-main (the merge gate). The full Playwright e2e suite (~31
+# billable min/run) and the a11y suite are heavy and run on the nightly
+# schedule ONLY — see the `if: github.event_name == 'schedule'` guards.
+# (Previously they also ran on every push-to-main, ~700 billable min/cycle.)
 
 concurrency:
   group: ci-admin-${{ github.ref }}
@@ -104,8 +105,8 @@ jobs:
           cache-to: type=gha,mode=max
 
   a11y:
-    # Heavy Playwright run — push-to-main and nightly only, not per-PR.
-    if: github.event_name != 'pull_request'
+    # Heavy Playwright run — nightly schedule only (not per-PR, not per-merge).
+    if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -139,9 +140,9 @@ jobs:
           retention-days: 7
 
   e2e:
-    # Full Playwright suite — push-to-main and nightly only, not per-PR.
-    # The fast e2e-regression spec is the per-PR gate.
-    if: github.event_name != 'pull_request'
+    # Full Playwright suite (~31 billable min) — nightly schedule only.
+    # The fast e2e-regression spec is the per-PR and per-merge gate.
+    if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
