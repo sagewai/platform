@@ -15,13 +15,15 @@ on:
       - 'pnpm-workspace.yaml'
       - '.github/workflows/ci-admin.yml'
   schedule:
-    - cron: "0 5 * * *"   # 05:00 UTC nightly — full e2e + a11y
+    - cron: "0 5 * * *"   # 05:00 UTC nightly — a11y (e2e is paused, see below)
+  workflow_dispatch:       # on-demand runs (lets the paused e2e suite be exercised while it's fixed)
 
-# CI-cost note: build / e2e-regression / docker-build run on every PR and
-# on push-to-main (the merge gate). The full Playwright e2e suite (~31
-# billable min/run) and the a11y suite are heavy and run on the nightly
-# schedule ONLY — see the `if: github.event_name == 'schedule'` guards.
-# (Previously they also ran on every push-to-main, ~700 billable min/cycle.)
+# CI-cost note: build / e2e-regression / docker-build run on every PR and on
+# push-to-main (the merge gate). The a11y suite runs nightly. The full
+# Playwright `e2e` suite is PAUSED (manual workflow_dispatch only): it has 36
+# failing tests / 0 passes and was burning ~870 billable min/cycle nightly for
+# no green signal. Restore `if: github.event_name == 'schedule'` on the e2e job
+# to resume nightly runs once it's green — see the `if:` guards below.
 
 concurrency:
   group: ci-admin-${{ github.ref }}
@@ -140,9 +142,12 @@ jobs:
           retention-days: 7
 
   e2e:
-    # Full Playwright suite (~31 billable min) — nightly schedule only.
-    # The fast e2e-regression spec is the per-PR and per-merge gate.
-    if: github.event_name == 'schedule'
+    # PAUSED 2026-06-08: the full suite has 36 failing tests (0 passes this
+    # cycle) and ran ~30 min/run (retries:2 x broken tests) — ~870 billable
+    # min/cycle nightly for no green signal. Manual-dispatch only until fixed;
+    # restore `if: github.event_name == 'schedule'` to resume nightly runs.
+    # The fast e2e-regression spec remains the per-PR and per-merge gate.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
