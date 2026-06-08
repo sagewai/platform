@@ -30,7 +30,7 @@ from typing import Any
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -81,6 +81,18 @@ def _project_scope(request: Request) -> str | None:
     return pid if pid else None
 
 
+def _conn_read_visible(record: Any, mctx: Any) -> bool:
+    """Multi-tenant read visibility: the actor's own project plus inherited global."""
+    return record.project_id == mctx.project_id or record.project_id is None
+
+
+def _conn_writable(record: Any, mctx: Any) -> bool:
+    """Multi-tenant write scope: own-project rows; org-shared rows need an org admin."""
+    if record.project_id is None:
+        return mctx.is_org_admin
+    return record.project_id == mctx.project_id
+
+
 def _serialize_connection(record, *, plugin_public_view) -> dict[str, Any]:
     """Convert a Connection dataclass to a JSON-serializable dict with masking."""
     return {
@@ -128,6 +140,35 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
     """Construct the generic connections router bound to an AdminStateFile."""
     from sagewai.admin.autopilot_routes import _require_auth
 
+    # Session-derived tenant scope (multi-tenant only). Imported lazily to avoid a
+    # serve <-> connections_v2_routes import cycle. In single-org mode ``_multi_ctx``
+    # returns None and every guard below is a no-op, so the file-store path is
+    # byte-for-byte unchanged.
+    from sagewai.admin.serve import _multi_ctx, _require_resource_write
+
+    def _ensure_readable(record: Any, request: Request) -> None:
+        """404 unless the connection is visible to the actor (own + inherited global).
+
+        Existence-hidden: a cross-project connection id is indistinguishable from a
+        non-existent one. A missing record is also 404.
+        """
+        mctx = _multi_ctx(request)
+        if record is None or (mctx is not None and not _conn_read_visible(record, mctx)):
+            raise HTTPException(404, "connection not found")
+
+    def _ensure_writable(record: Any, request: Request) -> None:
+        """404 if not visible, then 403 if the actor may not mutate it (RBAC + scope).
+
+        Cross-project -> 404 (hidden); a viewer or an org-shared row mutated by a
+        non-org-admin -> 403 (visible, under-privileged).
+        """
+        _ensure_readable(record, request)
+        mctx = _multi_ctx(request)
+        if mctx is not None:
+            _require_resource_write(request)  # viewer / role -> 403
+            if not _conn_writable(record, mctx):
+                raise HTTPException(403, "forbidden")
+
     router = APIRouter(prefix="/api/v1/admin/connections", tags=["connections"])
 
     # ── GET /protocols ─────────────────────────────────────────────
@@ -169,8 +210,17 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         err = _require_auth(request, sf)
         if err is not None:
             return err
-        pid = _project_scope(request)
-        records = ctx.store.list(pid, protocol=protocol, tag=tag)
+        mctx = _multi_ctx(request)
+        if mctx is not None:
+            # Own project + inherited org-shared (global); org scope = global only.
+            records = list(ctx.store.list(None, protocol=protocol, tag=tag))
+            if mctx.project_id is not None:
+                records = (
+                    list(ctx.store.list(mctx.project_id, protocol=protocol, tag=tag))
+                    + records
+                )
+        else:
+            records = ctx.store.list(_project_scope(request), protocol=protocol, tag=tag)
         return [
             _serialize_connection(
                 r, plugin_public_view=get_protocol(r.protocol).public_view
@@ -187,6 +237,15 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         err = _require_auth(request, sf)
         if err is not None:
             return err
+        # Authorize the write BEFORE processing the payload: in multi-tenant mode
+        # stamp the session-validated project (never the forgeable header); an
+        # org-shared (project-less) create requires an org admin.
+        mctx = _multi_ctx(request)
+        if mctx is not None:
+            _require_resource_write(request)
+            owner = mctx.project_id
+        else:
+            owner = _project_scope(request)
         try:
             plugin = get_protocol(payload.protocol)
         except UnknownProtocolError as exc:
@@ -202,11 +261,10 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
             sensitive_field_paths=plugin.sensitive_fields,
             connection_credentials_backend=payload.credentials_backend,
         )
-        pid = _project_scope(request)
         try:
             connection = ctx.store.create(
                 protocol=payload.protocol,
-                project_id=pid,
+                project_id=owner,
                 display_name=payload.display_name,
                 tags=payload.tags,
                 protocol_data=encrypted_pd,
@@ -215,7 +273,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         except DuplicateDisplayNameError as exc:
             raise HTTPException(409, str(exc))
         # plugin.on_create hook
-        plugin_ctx = ctx.make_plugin_context(project_id=pid, request=request)
+        plugin_ctx = ctx.make_plugin_context(project_id=owner, request=request)
         try:
             connection = await plugin.on_create(connection, ctx=plugin_ctx)
         except Exception as exc:
@@ -242,12 +300,22 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         if err is not None:
             return err
         proj = project_id or request.headers.get("X-Project-ID") or _project_scope(request)
+        mctx = _multi_ctx(request)
+        if mctx is not None:
+            # Session-derived scope only; never export another project via a
+            # forged ?project_id / X-Project-ID.
+            proj = mctx.project_id
 
         if secrets not in _SECRETS_MODES:
             return JSONResponse(
                 status_code=400,
                 content={"detail": f"invalid secrets mode: {secrets}"},
             )
+        # ``encrypted`` export emits ``fernet:`` ciphertext for every secret; that
+        # is credential material, so gate it behind write permission (a read-only
+        # project viewer must use redacted/placeholder output).
+        if mctx is not None and secrets == "encrypted":
+            _require_resource_write(request)
 
         try:
             yaml_text = export_to_yaml(
@@ -310,6 +378,12 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         if err is not None:
             return err
         proj = project_id or request.headers.get("X-Project-ID") or _project_scope(request)
+        mctx = _multi_ctx(request)
+        if mctx is not None:
+            # Import writes connections; force the session-derived target project
+            # and require write permission (org-shared import needs an org admin).
+            _require_resource_write(request)
+            proj = mctx.project_id
 
         if mode not in _IMPORT_MODES:
             return JSONResponse(
@@ -386,8 +460,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         if err is not None:
             return err
         record = ctx.store.get(connection_id)
-        if record is None:
-            raise HTTPException(404, f"connection {connection_id} not found")
+        _ensure_readable(record, request)
         plugin = get_protocol(record.protocol)
         return _serialize_connection(record, plugin_public_view=plugin.public_view)
 
@@ -401,8 +474,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         if err is not None:
             return err
         before = ctx.store.get(connection_id)
-        if before is None:
-            raise HTTPException(404, f"connection {connection_id} not found")
+        _ensure_writable(before, request)
         plugin = get_protocol(before.protocol)
 
         update_fields: dict[str, Any] = {}
@@ -468,8 +540,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         if err is not None:
             return err
         record = ctx.store.get(connection_id)
-        if record is None:
-            raise HTTPException(404, f"connection {connection_id} not found")
+        _ensure_writable(record, request)
         plugin = get_protocol(record.protocol)
         plugin_ctx = ctx.make_plugin_context(
             project_id=_project_scope(request), request=request,
@@ -491,8 +562,10 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         if err is not None:
             return err
         record = ctx.store.get(connection_id)
-        if record is None:
-            raise HTTPException(404, f"connection {connection_id} not found")
+        # /test writes last_tested_at/last_test_ok, so it needs write/execute
+        # authorization: viewers and project actors mutating an inherited org-shared
+        # row are forbidden, not just cross-project ids.
+        _ensure_writable(record, request)
         plugin = get_protocol(record.protocol)
         # Pass the connection through with DECRYPTED protocol_data so the
         # plugin's test() method sees real values.
@@ -521,6 +594,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         err = _require_auth(request, sf)
         if err is not None:
             return err
+        _ensure_writable(ctx.store.get(connection_id), request)
         try:
             record = ctx.store.set_default(connection_id)
         except ConnectionNotFoundError:
@@ -545,6 +619,29 @@ def register(app: FastAPI, sf: AdminStateFile) -> None:
     mqtt_module._test_inject_context(ctx)
     grpc_module._test_inject_context(ctx)
 
+    # Tenant scope guard for plugin extra_routes (mcp/oauth2/mqtt/grpc). Those
+    # routers resolve a connection by id directly (ctx.store.get), so they need
+    # the same isolation as the generic CRUD routes: a cross-project connection
+    # id is hidden (404); a mutating call (non-GET, e.g. refresh/revoke) also
+    # requires write scope (viewer / org-shared-by-project-member -> 403). Routes
+    # that don't carry a {connection_id} (e.g. subscriptions/{id}) are skipped.
+    from sagewai.admin.serve import _multi_ctx, _require_resource_write
+
+    async def _plugin_scope_guard(request: Request) -> None:
+        mctx = _multi_ctx(request)
+        if mctx is None:
+            return
+        cid = request.path_params.get("connection_id")
+        if cid is None:
+            return
+        record = ctx.store.get(cid)
+        if record is None or not _conn_read_visible(record, mctx):
+            raise HTTPException(404, "connection not found")
+        if request.method != "GET":
+            _require_resource_write(request)
+            if not _conn_writable(record, mctx):
+                raise HTTPException(403, "forbidden")
+
     app.include_router(_build_router(sf, ctx))
     # Mount each plugin's extra_routes at /api/v1/admin/connections/<plugin.id>/.
     for plugin in all_protocols():
@@ -558,6 +655,7 @@ def register(app: FastAPI, sf: AdminStateFile) -> None:
             sub_router,
             prefix=f"/api/v1/admin/connections/{plugin.id}",
             tags=[f"connections-{plugin.id}"],
+            dependencies=[Depends(_plugin_scope_guard)],
         )
 
 

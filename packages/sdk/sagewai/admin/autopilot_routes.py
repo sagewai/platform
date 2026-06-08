@@ -178,7 +178,16 @@ def _org_id(sf: AdminStateFile) -> str:
 
 
 def _require_auth(request: Request, sf: AdminStateFile) -> JSONResponse | None:
-    """Return a 401 JSONResponse if the request is not authenticated, else None."""
+    """Return a 401 JSONResponse if the request is not authenticated, else None.
+
+    In multi-tenant mode the session lives in the IdentityStore, not the file
+    store, and ``AuthMiddleware`` has already validated it and built the
+    ``RequestContext``; trust that rather than re-checking the (tenant-blind)
+    file-store token table, which would 401 every valid tenant session.
+    """
+    ctx = getattr(request.state, "context", None)
+    if ctx is not None and getattr(ctx, "tenancy_mode", None) == "multi":
+        return None
     token = _extract_token(request)
     if not token:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
