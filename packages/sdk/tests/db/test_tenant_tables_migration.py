@@ -66,3 +66,30 @@ async def test_agent_partial_unique_allows_same_name_across_projects(tmp_path):
                 " VALUES ('g2',NULL,'scout','{}',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
             ))
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_run_telemetry_project_id_nullable(tmp_path):
+    """Migration 013: a NULL project_id (org-shared/global) row inserts into
+    both agent_runs and prompt_logs."""
+    engine = create_engine(f"sqlite+aiosqlite:///{tmp_path / 'tele.db'}")
+    async with engine.begin() as c:
+        await c.run_sync(Base.metadata.create_all)
+        await c.execute(text(
+            "INSERT INTO agent_runs (run_id, project_id, agent_name)"
+            " VALUES ('r1', NULL, 'scout')"
+        ))
+        await c.execute(text(
+            "INSERT INTO prompt_logs (log_id, project_id, run_id, agent_name)"
+            " VALUES ('l1', NULL, NULL, 'scout')"
+        ))
+    async with engine.connect() as c:
+        run_pid = (await c.execute(
+            text("SELECT project_id FROM agent_runs WHERE run_id='r1'")
+        )).scalar()
+        log_pid = (await c.execute(
+            text("SELECT project_id FROM prompt_logs WHERE log_id='l1'")
+        )).scalar()
+    assert run_pid is None
+    assert log_pid is None
+    await engine.dispose()

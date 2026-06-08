@@ -52,6 +52,7 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, insert, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from sagewai.admin import scoping
 from sagewai.core.context import get_current_project
 from sagewai.db import factory
 from sagewai.db.engine import create_engine
@@ -328,6 +329,120 @@ class RunStore:
         self._check_connected()
         async with self._engine.begin() as conn:
             await conn.execute(sa_delete(_tbl))
+
+    # ------------------------------------------------------------------
+    # ctx-scoped API (multi-tenancy v2) — own + org-shared on reads,
+    # own rows only on mutations. The route-facing surface; the
+    # project_id-keyed methods above stay for the engine / legacy callers.
+    # ------------------------------------------------------------------
+
+    async def list_runs_for(
+        self,
+        ctx,
+        *,
+        agent_name: str | None = None,
+        status: str | None = None,
+        run_type: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[RunRecord]:
+        """List runs visible to ``ctx`` (own project + org-shared global rows)."""
+        self._check_connected()
+        scoping.require_ctx(ctx)
+        stmt = scoping.apply_scope(select(_tbl), _tbl, ctx)
+        if agent_name:
+            stmt = stmt.where(_tbl.c.agent_name.ilike(f"%{agent_name}%"))
+        if status:
+            stmt = stmt.where(_tbl.c.status == status)
+        if run_type:
+            stmt = stmt.where(_tbl.c.run_type == run_type)
+        stmt = stmt.order_by(_tbl.c.started_at.desc()).limit(limit).offset(offset)
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(stmt)).mappings().all()
+        return [self._row_to_record(row) for row in rows]
+
+    async def get_run_for(self, run_id: str, ctx) -> RunRecord | None:
+        """Get a run by id, or ``None`` when it is outside ``ctx``'s read scope."""
+        self._check_connected()
+        scoping.require_ctx(ctx)
+        async with self._engine.connect() as conn:
+            row = (
+                (await conn.execute(select(_tbl).where(_tbl.c.run_id == run_id))).mappings().first()
+            )
+        if row is None or not scoping.row_in_scope(row, ctx):
+            return None
+        return self._row_to_record(row)
+
+    async def save_run_for(
+        self,
+        ctx,
+        *,
+        agent_name: str,
+        run_id: str | None = None,
+        input_text: str = "",
+        output_text: str = "",
+        status: str = "completed",
+        total_tokens: int = 0,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cost_usd: float = 0.0,
+        model: str = "",
+        duration_ms: int = 0,
+        tool_calls: list[dict[str, Any]] | None = None,
+        metadata: dict[str, Any] | None = None,
+        started_at: float | None = None,
+        completed_at: float | None = None,
+        error: str | None = None,
+        run_type: str = "standalone",
+        parent_workflow_run_id: str | None = None,
+    ) -> str:
+        """Save a run, stamping ``project_id`` from ``ctx`` (never the body).
+
+        When ``run_id`` is given, that id is persisted (so a route can emit an id
+        before the run finishes and still resolve it afterwards); otherwise one is
+        generated. Returns the persisted run_id.
+        """
+        self._check_connected()
+        scoping.require_ctx(ctx)
+        run_id = run_id or uuid.uuid4().hex[:12]
+        now = time.time()
+        stmt = insert(_tbl).values(
+            run_id=run_id,
+            agent_name=agent_name,
+            status=status,
+            input_text=input_text,
+            output_text=output_text,
+            total_tokens=total_tokens,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=cost_usd,
+            model=model,
+            duration_ms=duration_ms,
+            tool_calls=tool_calls or [],
+            metadata=metadata or {},
+            started_at=started_at if started_at is not None else now,
+            completed_at=completed_at if completed_at is not None else now,
+            error=error,
+            run_type=run_type,
+            parent_workflow_run_id=parent_workflow_run_id,
+            **scoping.scope_values(ctx),
+        )
+        async with self._engine.begin() as conn:
+            await conn.execute(stmt)
+        return run_id
+
+    async def delete_run_for(self, run_id: str, ctx) -> bool:
+        """Delete a run in ``ctx``'s write scope (own rows only). True if one went.
+
+        A project actor cannot delete an org-shared row — the write-scope filter
+        excludes inherited globals, so the delete matches zero rows.
+        """
+        self._check_connected()
+        scoping.require_ctx(ctx)
+        stmt = sa_delete(_tbl).where(_tbl.c.run_id == run_id, scoping.write_scope_filter(_tbl, ctx))
+        async with self._engine.begin() as conn:
+            result = await conn.execute(stmt)
+        return result.rowcount == 1
 
     # ------------------------------------------------------------------
     # Event hook for BaseAgent integration

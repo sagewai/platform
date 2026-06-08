@@ -98,9 +98,41 @@ async def real_app(tmp_path, monkeypatch):
     await agents.create({"name": "scout", "model": "x"}, ctx=_ctx(pa))
     await agents.create({"name": "scout", "model": "y"}, ctx=_ctx(pb))
 
+    # Run + prompt-log stores on the SAME engine; seed one of each in PA and PB so
+    # the admin-route isolation assertions are meaningful (PB's genuinely exist).
+    from sagewai.admin.store import RunStore
+    from sagewai.observability.prompt_store import PromptStore
+
+    runs = RunStore(engine=engine)
+    await runs.init()
+    run_a = await runs.save_run_for(_ctx(pa), agent_name="scout", input_text="ina")
+    run_b = await runs.save_run_for(_ctx(pb), agent_name="scout", input_text="inb")
+    # A run with a caller-supplied fixed id: proves save_run_for(run_id=X) persists
+    # X (route emits an id before the run finishes, then resolves it by that id).
+    run_fixed = await runs.save_run_for(_ctx(pa), run_id="run-fixed123", agent_name="scout")
+    plogs = PromptStore(engine=engine)
+    await plogs.init()
+    log_a = await plogs.save_prompt_log_for(_ctx(pa), agent_name="scout", run_id=run_a)
+    log_b = await plogs.save_prompt_log_for(_ctx(pb), agent_name="scout", run_id=run_b)
+    # A PA example carrying recognisable text, for export/training regressions.
+    example_a = await plogs.save_prompt_log_for(
+        _ctx(pa),
+        agent_name="scout",
+        is_example=True,
+        input_text="PA-EXAMPLE-INPUT",
+        output_text="PA-EXAMPLE-OUTPUT",
+    )
+
     from sagewai.admin.serve import create_admin_serve_app
 
-    app = create_admin_serve_app(sf, identity_store=store, provider_store=pg, agent_store=agents)
+    app = create_admin_serve_app(
+        sf,
+        identity_store=store,
+        provider_store=pg,
+        agent_store=agents,
+        run_store=runs,
+        prompt_log_store=plogs,
+    )
     # Durable W8 audit fires on successful tenant mutations and fails the write
     # closed if it can't record. ASGITransport skips the lifespan, so bind the
     # audit store to the SAME test engine here; otherwise _emit_audit lazily
@@ -114,6 +146,12 @@ async def real_app(tmp_path, monkeypatch):
         "pb": pb,
         "prov_b": prov_b["id"],
         "prov_a": prov_a["id"],
+        "run_a": run_a,
+        "run_b": run_b,
+        "run_fixed": run_fixed,
+        "log_a": log_a,
+        "log_b": log_b,
+        "example_a": example_a,
         "sess_member": await store.issue_session(oid, member["id"]),
         "sess_viewer": await store.issue_session(oid, viewer["id"]),
     }
@@ -328,3 +366,208 @@ async def test_agent_debug_route_uses_pg_store(real_app):
     )
     assert r.status_code == 200
     assert r.json().get("model") == "x"
+
+
+# ── Run + prompt-log isolation on the real admin routes (PR2) ────────
+
+
+async def test_runs_list_isolated(real_app):
+    # A PA member's /admin/runs shows only PA's run, never PB's.
+    r = await _req(
+        real_app["app"],
+        "GET",
+        "/admin/runs",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 200
+    items = r.json()["items"]
+    ids = {x.get("run_id") for x in items}
+    assert real_app["run_a"] in ids
+    assert real_app["run_b"] not in ids
+
+
+async def test_run_detail_cross_project_404(real_app):
+    r = await _req(
+        real_app["app"],
+        "GET",
+        f"/admin/runs/{real_app['run_b']}",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 404
+
+
+async def test_prompt_logs_list_isolated(real_app):
+    r = await _req(
+        real_app["app"],
+        "GET",
+        "/api/v1/prompts/logs",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 200
+    body = r.json()
+    logs = body["logs"] if isinstance(body, dict) and "logs" in body else body
+    ids = {x.get("log_id") for x in logs}
+    assert real_app["log_a"] in ids
+    assert real_app["log_b"] not in ids
+
+
+async def test_prompt_log_cross_project_get_404(real_app):
+    r = await _req(
+        real_app["app"],
+        "GET",
+        f"/api/v1/prompts/logs/{real_app['log_b']}",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 404
+
+
+async def test_prompt_log_cross_project_delete_404(real_app):
+    r = await _req(
+        real_app["app"],
+        "DELETE",
+        f"/api/v1/prompts/logs/{real_app['log_b']}",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 404
+
+
+# ── PR2 P1 review regressions ────────────────────────────────────────
+
+
+async def test_run_with_fixed_id_resolvable(real_app):
+    # P1 #1: a run saved via save_run_for(run_id="run-fixed123") is retrievable
+    # at /admin/runs/run-fixed123 by the owning member (no uuid mismatch).
+    r = await _req(
+        real_app["app"],
+        "GET",
+        f"/admin/runs/{real_app['run_fixed']}",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 200
+    assert r.json().get("run_id") == "run-fixed123"
+
+
+async def test_prompt_log_create_cross_tenant_run_ref_404(real_app):
+    # P1 #2: a PA member cannot create a PA log that references PB's run id.
+    r = await _req(
+        real_app["app"],
+        "POST",
+        "/api/v1/prompts/logs",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+        json={"agent_name": "scout", "run_id": real_app["run_b"]},
+    )
+    assert r.status_code == 404
+
+
+async def test_prompt_log_create_own_run_ref_201(real_app):
+    # P1 #2: referencing the caller's OWN run id succeeds.
+    r = await _req(
+        real_app["app"],
+        "POST",
+        "/api/v1/prompts/logs",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+        json={"agent_name": "scout", "run_id": real_app["run_a"]},
+    )
+    assert r.status_code == 201
+
+
+async def test_prompts_export_isolated_through_pg(real_app):
+    # P1 #3: /prompts/export goes through the PG store; PA's logs are present,
+    # PB's are excluded.
+    r = await _req(
+        real_app["app"],
+        "GET",
+        "/api/v1/prompts/export",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 200
+    ids = {log.get("log_id") for log in r.json()}
+    assert real_app["log_a"] in ids
+    assert real_app["example_a"] in ids
+    assert real_app["log_b"] not in ids
+
+
+async def test_training_stats_counts_pg_examples(real_app):
+    # P1 #3: /training/stats reads the PG store (the seeded PA example counts).
+    r = await _req(
+        real_app["app"],
+        "GET",
+        "/api/v1/training/stats",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 200
+    assert r.json().get("total_samples", 0) >= 1
+
+
+async def test_training_export_contains_pg_sample(real_app):
+    # P1 #3: /training/export (PG store) is non-empty and contains the PA sample.
+    r = await _req(
+        real_app["app"],
+        "GET",
+        "/api/v1/training/export?format=raw",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 200
+    assert r.text.strip() != ""
+    assert "PA-EXAMPLE-INPUT" in r.text
+
+
+async def test_quality_route_cross_project_404(real_app):
+    # P1 #3: rating a cross-project log id -> 404 (existence-hidden).
+    r = await _req(
+        real_app["app"],
+        "POST",
+        f"/api/v1/training/samples/{real_app['log_b']}/quality",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+        json={"quality": 5},
+    )
+    assert r.status_code == 404
+
+
+async def test_quality_route_viewer_403(real_app):
+    # P1 #3: a project:viewer cannot rate a sample -> RBAC 403 (on an in-scope log).
+    r = await _req(
+        real_app["app"],
+        "POST",
+        f"/api/v1/training/samples/{real_app['example_a']}/quality",
+        token=real_app["sess_viewer"],
+        project=real_app["pa"],
+        json={"quality": 5},
+    )
+    assert r.status_code == 403
+
+
+async def test_quality_route_member_persists(real_app):
+    # P1 #3: a member rating an in-scope example succeeds and the quality is
+    # persisted (read back via the export route's to_dict()).
+    r = await _req(
+        real_app["app"],
+        "POST",
+        f"/api/v1/training/samples/{real_app['example_a']}/quality",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+        json={"quality": 5},
+    )
+    assert r.status_code == 200
+    assert r.json().get("quality") == 5
+    r2 = await _req(
+        real_app["app"],
+        "GET",
+        "/api/v1/prompts/export",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    rec = next(log for log in r2.json() if log.get("log_id") == real_app["example_a"])
+    assert rec.get("quality") == 5

@@ -349,6 +349,8 @@ def create_admin_serve_app(
     provider_store: Any = None,
     agent_store: Any = None,
     connection_store: Any = None,
+    run_store: Any = None,
+    prompt_log_store: Any = None,
 ) -> FastAPI:
     """Create the complete admin API server.
 
@@ -492,7 +494,8 @@ def create_admin_serve_app(
     # before routes so handlers reach the active store via _provider_store().
     from sagewai.admin.resource_stores import ResourceStores
     app.state.resource_stores = ResourceStores(
-        provider=provider_store, agent=agent_store, connection=connection_store)
+        provider=provider_store, agent=agent_store, connection=connection_store,
+        run=run_store, prompt_log=prompt_log_store)
 
     # Multi-tenant: build ONE IdentityStore on the process engine and SHARE it
     # between AuthMiddleware and the resource stores when none was injected. The
@@ -673,15 +676,28 @@ def create_admin_serve_app(
         offset: int = 0,
     ) -> JSONResponse:
         """List agent runs from the file store (standalone + workflow steps)."""
-        pid = _project_scope(request)
-        runs = sf.list_agent_runs(
-            project_id=pid,
-            agent_name=agent_name,
-            status=status,
-            run_type=run_type,
-            limit=limit + 1,
-            offset=offset,
-        )
+        store = _run_store(request)
+        if store is not None:
+            ctx = request.state.context
+            records = await store.list_runs_for(
+                ctx,
+                agent_name=agent_name,
+                status=status,
+                run_type=run_type,
+                limit=limit + 1,
+                offset=offset,
+            )
+            runs = [r.to_dict() for r in records]
+        else:
+            pid = _project_scope(request)
+            runs = sf.list_agent_runs(
+                project_id=pid,
+                agent_name=agent_name,
+                status=status,
+                run_type=run_type,
+                limit=limit + 1,
+                offset=offset,
+            )
         items_raw = runs[:limit]
         has_more = len(runs) > limit
         items = [
@@ -706,11 +722,22 @@ def create_admin_serve_app(
         })
 
     @app.get("/admin/runs/{run_id}", include_in_schema=False)
-    async def admin_run_detail(run_id: str) -> JSONResponse:
+    async def admin_run_detail(run_id: str, request: Request) -> JSONResponse:
         """Return full detail for a single agent run from the file store."""
-        r = sf.get_agent_run(run_id)
-        if r is None:
-            return JSONResponse({"detail": f"Run '{run_id}' not found"}, status_code=404)
+        store = _run_store(request)
+        if store is not None:
+            rec = await store.get_run_for(run_id, request.state.context)
+            if rec is None:
+                return JSONResponse(
+                    {"detail": f"Run '{run_id}' not found"}, status_code=404
+                )
+            r = rec.to_dict()
+        else:
+            r = sf.get_agent_run(run_id)
+            if r is None:
+                return JSONResponse(
+                    {"detail": f"Run '{run_id}' not found"}, status_code=404
+                )
         return JSONResponse({
             "run_id": r.get("run_id", ""),
             "agent_name": r.get("agent_name", ""),
@@ -1353,21 +1380,39 @@ def create_admin_serve_app(
                 # isn't wired to this handler).
                 try:
                     est_tokens = (len(message) + len(full_output)) // 4
-                    sf.save_agent_run({
-                        "run_id": run_id,
-                        "agent_name": agent_name,
-                        "model": model,
-                        "status": status,
-                        "input_text": message,
-                        "output_text": full_output,
-                        "total_tokens": est_tokens,
-                        "started_at": _started_at,
-                        "completed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                        "run_type": "standalone",
-                        "parent_workflow_run_id": None,
-                        "tool_calls": [],
-                        "project_id": _owner(pid),
-                    })
+                    store = _run_store(request)
+                    if store is not None:
+                        await store.save_run_for(
+                            request.state.context,
+                            run_id=run_id,
+                            agent_name=agent_name,
+                            status=status,
+                            input_text=message,
+                            output_text=full_output,
+                            total_tokens=est_tokens,
+                            started_at=_iso_to_epoch(_started_at),
+                            completed_at=_run_time.time(),
+                            run_type="standalone",
+                            parent_workflow_run_id=None,
+                            tool_calls=[],
+                            model=model,
+                        )
+                    else:
+                        sf.save_agent_run({
+                            "run_id": run_id,
+                            "agent_name": agent_name,
+                            "model": model,
+                            "status": status,
+                            "input_text": message,
+                            "output_text": full_output,
+                            "total_tokens": est_tokens,
+                            "started_at": _started_at,
+                            "completed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                            "run_type": "standalone",
+                            "parent_workflow_run_id": None,
+                            "tool_calls": [],
+                            "project_id": _owner(pid),
+                        })
                 except Exception as persist_exc:
                     logger.error("Failed to persist agent run %s: %s", run_id, persist_exc)
 
@@ -1385,6 +1430,17 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/prompts/logs")
     async def list_prompt_logs(request: Request) -> JSONResponse:
+        pstore = _prompt_store(request)
+        if pstore is not None:
+            records = await pstore.list_prompt_logs_for(
+                request.state.context,
+                run_id=request.query_params.get("run_id"),
+                agent_name=request.query_params.get("agent_name"),
+                model=request.query_params.get("model"),
+                limit=int(request.query_params.get("limit", "50")),
+                offset=int(request.query_params.get("offset", "0")),
+            )
+            return JSONResponse([r.to_dict() for r in records])
         data = sf._read()
         logs = [
             log
@@ -1397,6 +1453,41 @@ def create_admin_serve_app(
     async def save_prompt_log(request: Request) -> JSONResponse:
         body = await request.json()
         _require_resource_write(request)
+        pstore = _prompt_store(request)
+        if pstore is not None:
+            # A log's project is stamped from ctx, but the body run_id is trusted.
+            # Reject a run_id outside the caller's scope (cross-project/nonexistent)
+            # so a PA log can never reference PB's run. Existence-hidden -> 404.
+            rid = body.get("run_id") or ""
+            if rid:
+                rstore = _run_store(request)
+                if (
+                    rstore is not None
+                    and await rstore.get_run_for(rid, request.state.context) is None
+                ):
+                    return JSONResponse({"detail": "run not found"}, status_code=404)
+            log_id = await pstore.save_prompt_log_for(
+                request.state.context,
+                run_id=body.get("run_id", ""),
+                agent_name=body.get("agent_name", ""),
+                step_index=body.get("step_index", 0),
+                model=body.get("model", ""),
+                prompt_messages=body.get("prompt_messages"),
+                response_message=body.get("response_message"),
+                input_tokens=body.get("input_tokens", 0),
+                output_tokens=body.get("output_tokens", 0),
+                cost_usd=body.get("cost_usd", 0.0),
+                duration_ms=body.get("duration_ms", 0),
+                strategy=body.get("strategy", "react"),
+                metadata=body.get("metadata"),
+                is_example=body.get("is_example", False),
+                tags=body.get("tags"),
+                source=body.get("source", "playground"),
+                input_text=body.get("input_text", ""),
+                output_text=body.get("output_text", ""),
+            )
+            await _emit_audit(request, "prompt_log.create", target_type="prompt_log", target_id=log_id)
+            return JSONResponse({"log_id": log_id}, status_code=201)
         pid = _project_scope(request)
         import secrets as _sec
         log_id = f"log-{_sec.token_hex(6)}"
@@ -1422,6 +1513,12 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/prompts/logs/{log_id}")
     async def get_prompt_log(log_id: str, request: Request) -> JSONResponse:
+        pstore = _prompt_store(request)
+        if pstore is not None:
+            rec = await pstore.get_prompt_log_for(log_id, request.state.context)
+            if rec is None:
+                return JSONResponse({"detail": "Not found"}, status_code=404)
+            return JSONResponse(rec.to_dict())
         data = sf._read()
         for log in data.get("prompt_logs", []):
             if log.get("log_id") == log_id:
@@ -1434,6 +1531,18 @@ def create_admin_serve_app(
     async def update_prompt_log(log_id: str, request: Request) -> JSONResponse:
         body = await request.json()
         _require_resource_write(request)
+        pstore = _prompt_store(request)
+        if pstore is not None:
+            rec = await pstore.update_prompt_log_for(
+                log_id,
+                request.state.context,
+                tags=body.get("tags"),
+                is_example=body.get("is_example"),
+            )
+            if rec is None:
+                return JSONResponse({"detail": "Not found"}, status_code=404)
+            await _emit_audit(request, "prompt_log.update", target_type="prompt_log", target_id=log_id)
+            return JSONResponse(rec.to_dict())
         def _apply(d):
             for log in d.get("prompt_logs", []):
                 if log.get("log_id") == log_id and _in_write_scope(
@@ -1453,6 +1562,13 @@ def create_admin_serve_app(
     @app.delete("/api/v1/prompts/logs/{log_id}")
     async def delete_prompt_log(log_id: str, request: Request) -> JSONResponse:
         _require_resource_write(request)
+        pstore = _prompt_store(request)
+        if pstore is not None:
+            ok = await pstore.delete_prompt_log_for(log_id, request.state.context)
+            if not ok:
+                return JSONResponse({"detail": "Not found"}, status_code=404)
+            await _emit_audit(request, "prompt_log.delete", target_type="prompt_log", target_id=log_id)
+            return JSONResponse({"status": "ok"})
         state = {"hit": False}
 
         def _apply(d):
@@ -1479,6 +1595,12 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/prompts/export")
     async def export_prompts(request: Request) -> JSONResponse:
+        pstore = _prompt_store(request)
+        if pstore is not None:
+            records = await pstore.list_prompt_logs_for(
+                request.state.context, limit=10000
+            )
+            return JSONResponse([r.to_dict() for r in records])
         pid = _project_scope(request)
         data = sf._read()
         logs = data.get("prompt_logs", [])
@@ -1488,6 +1610,14 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/prompts/examples")
     async def list_prompt_examples(request: Request) -> JSONResponse:
+        pstore = _prompt_store(request)
+        if pstore is not None:
+            records = await pstore.list_examples_for(
+                request.state.context,
+                agent_name=request.query_params.get("agent_name") or None,
+                limit=int(request.query_params.get("limit", "50")),
+            )
+            return JSONResponse([r.to_dict() for r in records])
         pid = _project_scope(request)
         data = sf._read()
         examples = [l for l in data.get("prompt_logs", []) if l.get("is_example")]
@@ -1514,12 +1644,16 @@ def create_admin_serve_app(
         min_quality = int(request.query_params.get("min_quality", "0"))
         agent_filter = request.query_params.get("agent_name")
 
-        data = sf._read()
-        samples = [l for l in data.get("prompt_logs", []) if l.get("is_example")]
-
-        # Filter
-        if pid:
-            samples = [s for s in samples if s.get("project_id") in (pid, None)]
+        pstore = _prompt_store(request)
+        if pstore is not None:
+            records = await pstore.list_examples_for(request.state.context, limit=10000)
+            samples = [r.to_dict() for r in records]
+        else:
+            data = sf._read()
+            samples = [l for l in data.get("prompt_logs", []) if l.get("is_example")]
+            # Filter by project (file-store path only; the PG path is ctx-scoped)
+            if pid:
+                samples = [s for s in samples if s.get("project_id") in (pid, None)]
         if min_quality > 0:
             samples = [s for s in samples if (s.get("quality", 0) or 0) >= min_quality]
         if agent_filter:
@@ -1574,12 +1708,21 @@ def create_admin_serve_app(
     @app.get("/api/v1/training/stats")
     async def training_stats(request: Request) -> JSONResponse:
         """Training data statistics for the current project."""
-        pid = _project_scope(request)
-        data = sf._read()
-        all_logs = data.get("prompt_logs", [])
-        examples = [l for l in all_logs if l.get("is_example")]
-        if pid:
-            examples = [e for e in examples if e.get("project_id") in (pid, None)]
+        pstore = _prompt_store(request)
+        if pstore is not None:
+            ctx = request.state.context
+            example_records = await pstore.list_examples_for(ctx, limit=10000)
+            examples = [r.to_dict() for r in example_records]
+            all_log_records = await pstore.list_prompt_logs_for(ctx, limit=10000)
+            total_logs = len(all_log_records)
+        else:
+            pid = _project_scope(request)
+            data = sf._read()
+            all_logs = data.get("prompt_logs", [])
+            examples = [l for l in all_logs if l.get("is_example")]
+            if pid:
+                examples = [e for e in examples if e.get("project_id") in (pid, None)]
+            total_logs = len(all_logs)
 
         # Stats by agent
         by_agent: dict[str, int] = {}
@@ -1589,7 +1732,7 @@ def create_admin_serve_app(
 
         return JSONResponse({
             "total_samples": len(examples),
-            "total_logs": len(all_logs),
+            "total_logs": total_logs,
             "by_agent": by_agent,
             "formats_available": ["alpaca", "sharegpt", "raw"],
             "export_url": "/api/v1/training/export",
@@ -1599,7 +1742,23 @@ def create_admin_serve_app(
     async def rate_training_sample(log_id: str, request: Request) -> JSONResponse:
         """Rate a training sample quality (1-5)."""
         body = await request.json()
-        quality = body.get("quality", 3)
+        quality = max(1, min(5, int(body.get("quality", 3))))
+        pstore = _prompt_store(request)
+        if pstore is not None:
+            ctx = request.state.context
+            if await pstore.get_prompt_log_for(log_id, ctx) is None:
+                return JSONResponse({"detail": "Not found"}, status_code=404)
+            _require_resource_write(request)  # viewer -> 403
+            await pstore.update_prompt_log_for(
+                log_id, ctx, quality=quality, is_example=True
+            )
+            await _emit_audit(
+                request,
+                "prompt_log.quality",
+                target_type="prompt_log",
+                target_id=log_id,
+            )
+            return JSONResponse({"status": "ok", "quality": quality})
         def _apply(d):
             for log in d.get("prompt_logs", []):
                 if log.get("log_id") == log_id:
@@ -3448,6 +3607,24 @@ def _agent_store(request: Request):
     file store; when None they keep their unchanged ``sf.*`` path."""
     rs = getattr(request.app.state, "resource_stores", None)
     return getattr(rs, "agent", None) if rs is not None else None
+
+
+def _run_store(request: Request):
+    """The active Postgres run store, or None in single-org mode.
+
+    When present, the run routes use it (ctx-scoped) instead of the file store;
+    when None they keep their unchanged ``sf.*`` path."""
+    rs = getattr(request.app.state, "resource_stores", None)
+    return getattr(rs, "run", None) if rs is not None else None
+
+
+def _prompt_store(request: Request):
+    """The active Postgres prompt-log store, or None in single-org mode.
+
+    When present, the prompt-log routes use it (ctx-scoped) instead of the file
+    store; when None they keep their unchanged ``sf.*`` path."""
+    rs = getattr(request.app.state, "resource_stores", None)
+    return getattr(rs, "prompt_log", None) if rs is not None else None
 
 
 def _owner(scope: str | None) -> str | None:

@@ -275,7 +275,7 @@ class AgentRun(Base):
     )
 
     run_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    project_id: Mapped[str] = mapped_column(Text, nullable=False, server_default="default")
+    project_id: Mapped[str | None] = mapped_column(Text, nullable=True, server_default="default")
     agent_name: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="completed")
     input_text: Mapped[str] = mapped_column(Text, server_default="")
@@ -309,7 +309,7 @@ class PromptLog(Base):
     )
 
     log_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    project_id: Mapped[str] = mapped_column(Text, nullable=False, server_default="default")
+    project_id: Mapped[str | None] = mapped_column(Text, nullable=True, server_default="default")
     run_id: Mapped[str | None] = mapped_column(
         Text,
         ForeignKey("agent_runs.run_id", ondelete="CASCADE"),

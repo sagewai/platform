@@ -52,6 +52,7 @@ from sqlalchemy import insert, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from sagewai.admin import scoping
 from sagewai.core.context import resolve_project_id
 from sagewai.db import factory
 from sagewai.db.engine import create_engine
@@ -69,6 +70,7 @@ class PromptLogRecord:
     log_id: str
     run_id: str
     agent_name: str
+    project_id: str | None = None
     step_index: int = 0
     model: str = ""
     prompt_messages: list[dict[str, Any]] = field(default_factory=list)
@@ -93,6 +95,7 @@ class PromptLogRecord:
             "log_id": self.log_id,
             "run_id": self.run_id,
             "agent_name": self.agent_name,
+            "project_id": self.project_id,
             "step_index": self.step_index,
             "model": self.model,
             "prompt_messages": self.prompt_messages,
@@ -103,6 +106,7 @@ class PromptLogRecord:
             "duration_ms": self.duration_ms,
             "strategy": self.strategy,
             "metadata": self.metadata,
+            "quality": (self.metadata or {}).get("quality", 0),
             "created_at": self.created_at,
             "is_example": self.is_example,
             "tags": self.tags,
@@ -320,6 +324,187 @@ class PromptStore:
             rows = result.mappings().all()
         return [self._row_to_record(row) for row in rows]
 
+    # ------------------------------------------------------------------
+    # ctx-scoped API (multi-tenancy v2) — own + org-shared on reads, own
+    # rows only on mutations. These are the route-facing surface; the
+    # log_id-keyed methods above carry NO project filter (a cross-tenant
+    # leak if exposed) and remain only for the unscoped internal callers.
+    # ------------------------------------------------------------------
+
+    async def list_prompt_logs_for(
+        self,
+        ctx,
+        *,
+        run_id: str | None = None,
+        agent_name: str | None = None,
+        model: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[PromptLogRecord]:
+        """List prompt logs visible to ``ctx`` (own project + org-shared global)."""
+        self._check_connected()
+        scoping.require_ctx(ctx)
+        stmt = scoping.apply_scope(select(_tbl), _tbl, ctx)
+        if run_id:
+            stmt = stmt.where(_tbl.c.run_id == run_id)
+        if agent_name:
+            stmt = stmt.where(_tbl.c.agent_name.ilike(f"%{agent_name}%"))
+        if model:
+            stmt = stmt.where(_tbl.c.model.ilike(f"%{model}%"))
+        stmt = stmt.order_by(_tbl.c.created_at.desc()).limit(limit).offset(offset)
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(stmt)).mappings().all()
+        return [self._row_to_record(row) for row in rows]
+
+    async def get_prompt_log_for(self, log_id: str, ctx) -> PromptLogRecord | None:
+        """Get a prompt log by id, or ``None`` when outside ``ctx``'s read scope."""
+        self._check_connected()
+        scoping.require_ctx(ctx)
+        async with self._engine.connect() as conn:
+            row = (
+                (await conn.execute(select(_tbl).where(_tbl.c.log_id == log_id))).mappings().first()
+            )
+        if row is None or not scoping.row_in_scope(row, ctx):
+            return None
+        return self._row_to_record(row)
+
+    async def save_prompt_log_for(
+        self,
+        ctx,
+        *,
+        run_id: str = "",
+        agent_name: str,
+        step_index: int = 0,
+        model: str = "",
+        prompt_messages: list[dict[str, Any]] | None = None,
+        response_message: dict[str, Any] | None = None,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cost_usd: float = 0.0,
+        duration_ms: int = 0,
+        strategy: str = "react",
+        metadata: dict[str, Any] | None = None,
+        is_example: bool = False,
+        tags: list[str] | None = None,
+        source: str = "playground",
+        input_text: str = "",
+        output_text: str = "",
+    ) -> str:
+        """Save a prompt log, stamping ``project_id`` from ``ctx`` (never the body)."""
+        self._check_connected()
+        scoping.require_ctx(ctx)
+        log_id = uuid.uuid4().hex[:12]
+        now = datetime.now(timezone.utc)
+        effective_run_id = run_id if run_id else None
+        stmt = insert(_tbl).values(
+            log_id=log_id,
+            run_id=effective_run_id,
+            agent_name=agent_name,
+            step_index=step_index,
+            model=model,
+            prompt_messages=prompt_messages or [],
+            response_message=response_message or {},
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=cost_usd,
+            duration_ms=duration_ms,
+            strategy=strategy,
+            metadata=metadata or {},
+            created_at=now,
+            is_example=is_example,
+            tags=json.dumps(tags or []),
+            source=source,
+            input_text=input_text,
+            output_text=output_text,
+            **scoping.scope_values(ctx),
+        )
+        async with self._engine.begin() as conn:
+            await conn.execute(stmt)
+        return log_id
+
+    async def update_prompt_log_for(
+        self,
+        log_id: str,
+        ctx,
+        *,
+        tags: list[str] | None = None,
+        is_example: bool | None = None,
+        quality: int | None = None,
+    ) -> PromptLogRecord | None:
+        """Update a log in ``ctx``'s write scope (own rows only).
+
+        ``quality`` has no dedicated column; it is merged into the ``metadata``
+        JSON (read-modify-write). Returns the updated record, or ``None`` when the
+        log is missing or not writable by ``ctx`` (a project actor may not mutate
+        an org-shared row).
+        """
+        self._check_connected()
+        scoping.require_ctx(ctx)
+        updates: dict[str, Any] = {}
+        if tags is not None:
+            updates["tags"] = json.dumps(tags)
+        if is_example is not None:
+            updates["is_example"] = is_example
+
+        async with self._engine.begin() as conn:
+            row = (
+                (await conn.execute(select(_tbl).where(_tbl.c.log_id == log_id))).mappings().first()
+            )
+            if row is None or not scoping.row_writable(row, ctx):
+                return None
+            if quality is not None:
+                existing = row["metadata"]
+                if isinstance(existing, str):
+                    existing = json.loads(existing)
+                merged = dict(existing or {})
+                merged["quality"] = quality
+                updates["metadata"] = merged
+            if updates:
+                await conn.execute(sa_update(_tbl).where(_tbl.c.log_id == log_id).values(**updates))
+                row = (
+                    (await conn.execute(select(_tbl).where(_tbl.c.log_id == log_id)))
+                    .mappings()
+                    .first()
+                )
+        return self._row_to_record(row)
+
+    async def delete_prompt_log_for(self, log_id: str, ctx) -> bool:
+        """Delete a log in ``ctx``'s write scope (own rows only). True if one went.
+
+        A project actor cannot delete an org-shared row — the write-scope filter
+        excludes inherited globals, so the delete matches zero rows.
+        """
+        self._check_connected()
+        scoping.require_ctx(ctx)
+        stmt = sa_delete(_tbl).where(_tbl.c.log_id == log_id, scoping.write_scope_filter(_tbl, ctx))
+        async with self._engine.begin() as conn:
+            result = await conn.execute(stmt)
+        return result.rowcount == 1
+
+    async def list_examples_for(
+        self,
+        ctx,
+        *,
+        agent_name: str | None = None,
+        limit: int = 50,
+    ) -> list[PromptLogRecord]:
+        """List example logs visible to ``ctx`` (own + shared), optionally one agent.
+
+        Mirrors the single-org route: with no ``agent_name`` it returns every
+        in-scope example, not zero.
+        """
+        self._check_connected()
+        scoping.require_ctx(ctx)
+        stmt = scoping.apply_scope(select(_tbl), _tbl, ctx).where(
+            _tbl.c.is_example == True,  # noqa: E712
+        )
+        if agent_name:
+            stmt = stmt.where(_tbl.c.agent_name == agent_name)
+        stmt = stmt.order_by(_tbl.c.created_at.desc()).limit(limit)
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(stmt)).mappings().all()
+        return [self._row_to_record(row) for row in rows]
+
     def export_jsonl(self, records: list[PromptLogRecord]) -> str:
         """Export prompt log records as JSONL string."""
         lines = [json.dumps(r.to_dict(), default=str) for r in records]
@@ -404,6 +589,7 @@ class PromptStore:
             log_id=row["log_id"],
             run_id=row["run_id"] or "",
             agent_name=row["agent_name"],
+            project_id=row.get("project_id"),
             step_index=row["step_index"],
             model=row["model"],
             prompt_messages=_json(row["prompt_messages"], []),

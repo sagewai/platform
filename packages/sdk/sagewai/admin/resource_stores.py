@@ -29,6 +29,8 @@ class ResourceStores:
     provider: Any = None
     agent: Any = None
     connection: Any = None
+    run: Any = None
+    prompt_log: Any = None
 
 
 async def build_resource_stores(identity_store: Any) -> ResourceStores | None:
@@ -58,4 +60,13 @@ async def build_resource_stores(identity_store: Any) -> ResourceStores | None:
 
     agent = PostgresTenantAgentStore(engine=engine)
     await agent.init()
-    return ResourceStores(provider=provider, agent=agent)
+    from sagewai.admin.store import RunStore
+    from sagewai.observability.prompt_store import PromptStore
+
+    run = RunStore(engine=engine)
+    await run.init()
+    prompt_log = PromptStore(engine=engine)
+    await prompt_log.init()
+    return ResourceStores(
+        provider=provider, agent=agent, run=run, prompt_log=prompt_log
+    )
