@@ -25,10 +25,11 @@ test.describe('Sealed ACL matrix', () => {
     await expect(page.locator('body')).not.toContainText('Backend not reachable');
     await expect(page.locator('body')).not.toContainText('Application error');
 
-    // Try to find and click the first profile link
+    // Find the first real profile detail link (/sealed/profiles/<id>). Scoping
+    // by href avoids matching the "New Profile" action (/sealed/profiles/new)
+    // or unrelated nav links such as the sidebar's account "Profile & Password".
     const firstProfileLink = page
-      .locator('a')
-      .filter({ hasText: /Profile|Test|Profile \d+/ })
+      .locator('a[href^="/sealed/profiles/"]:not([href="/sealed/profiles/new"])')
       .first();
 
     if ((await firstProfileLink.count()) === 0) {

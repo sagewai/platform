@@ -25,8 +25,9 @@ test.describe('Sealed profiles CRUD', () => {
     // The Security Profiles heading must be present
     await expect(page.getByRole('heading', { name: /security profiles/i })).toBeVisible();
 
-    // The New Profile button must be present
-    await expect(page.getByRole('button', { name: /new profile/i })).toBeVisible();
+    // The New Profile action must be present. It is a link styled as a button
+    // (it navigates to /sealed/profiles/new), so match it by the link role.
+    await expect(page.getByRole('link', { name: /new profile/i })).toBeVisible();
   });
 
   test('create profile → appears in list', async ({ page }) => {

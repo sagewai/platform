@@ -108,12 +108,20 @@ def default_admin_state_path() -> Path:
     return home.config_dir() / "admin-state.json"
 
 _PBKDF2_ITERATIONS = 600_000
-# Every /auth/refresh rotates the token and appends a new one. The full e2e
-# suite fires ~30+ refreshes in one run, which would otherwise evict the
-# token saved in Playwright's shared storageState and fail every test that
-# loads an authenticated page. 200 is plenty for e2e and for real users who
-# may be signed in from several browsers at once.
-_MAX_TOKENS = 200
+# Every /auth/refresh rotates the token and appends a new one, truncating the
+# active-token list to the last _MAX_TOKENS entries. The default (200) is
+# plenty for real users signed in from several browsers at once.
+#
+# The full e2e suite is the one consumer that reuses a single bootstrap token
+# (saved in Playwright's shared storageState) across the whole run: every
+# authenticated page mount calls silentRefresh — doubled by React Strict Mode
+# in dev — so one run now fires well over 200 refreshes. Once the count passes
+# _MAX_TOKENS the oldest token (the shared bootstrap one) is evicted, and every
+# later test redirects to /login and fails. The e2e backend therefore raises
+# the cap via SAGEWAI_ADMIN_MAX_SESSION_TOKENS so the bootstrap token survives
+# the whole suite. Production is unaffected (browsers always use the freshly
+# rotated token, never an evicted one).
+_MAX_TOKENS = int(os.environ.get("SAGEWAI_ADMIN_MAX_SESSION_TOKENS", "200"))
 
 
 # ── helpers ──────────────────────────────────────────────────────────

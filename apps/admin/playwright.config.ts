@@ -15,7 +15,10 @@ export default defineConfig({
   testDir: './e2e',
   fullyParallel: false,  // Tests depend on shared backend state
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
+  // One retry in CI absorbs the occasional SSE/timing flake without tripling
+  // the runtime of a genuinely-failing test (the suite is deterministic now
+  // that the shared-token-eviction bug is fixed; see state_file.py).
+  retries: process.env.CI ? 1 : 0,
   // Skip snapshot comparisons in CI: baselines are platform-specific (darwin vs
   // linux) and are not committed. Visual regression is caught during local review.
   // See e2e/.gitignore — *.spec.ts-snapshots/ is excluded from the repo.
@@ -52,8 +55,14 @@ export default defineConfig({
       // Starts in ~2s. No Postgres/Redis required.
       // The admin UI (port 3808) calls the backend cross-origin with credentials,
       // so its origin must be in the CORS allowlist.
+      // SAGEWAI_ADMIN_MAX_SESSION_TOKENS: raise the active-token cap far above
+      // the default (200). The suite reuses one bootstrap token from the shared
+      // storageState and fires hundreds of silentRefresh-driven token rotations
+      // across a full run; at the default cap the bootstrap token is evicted
+      // mid-suite and every later test redirects to /login. See state_file.py.
       command:
         'SAGEWAI_ADMIN_ALLOWED_ORIGINS=http://localhost:3808,http://127.0.0.1:3808 ' +
+        'SAGEWAI_ADMIN_MAX_SESSION_TOKENS=100000 ' +
         'uv run --package sagewai sagewai admin serve --host 0.0.0.0 --port 8000',
       port: 8000,
       reuseExistingServer: !process.env.CI,

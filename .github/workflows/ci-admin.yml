@@ -15,15 +15,14 @@ on:
       - 'pnpm-workspace.yaml'
       - '.github/workflows/ci-admin.yml'
   schedule:
-    - cron: "0 5 * * *"   # 05:00 UTC nightly — a11y (e2e is paused, see below)
-  workflow_dispatch:       # on-demand runs (lets the paused e2e suite be exercised while it's fixed)
+    - cron: "0 5 * * *"   # 05:00 UTC nightly — a11y + full e2e suite
+  workflow_dispatch:       # on-demand runs of the nightly suites (a11y + e2e)
 
 # CI-cost note: build / e2e-regression / docker-build run on every PR and on
-# push-to-main (the merge gate). The a11y suite runs nightly. The full
-# Playwright `e2e` suite is PAUSED (manual workflow_dispatch only): it has 36
-# failing tests / 0 passes and was burning ~870 billable min/cycle nightly for
-# no green signal. Restore `if: github.event_name == 'schedule'` on the e2e job
-# to resume nightly runs once it's green — see the `if:` guards below.
+# push-to-main (the merge gate). The a11y and full Playwright `e2e` suites run
+# nightly (and on-demand via workflow_dispatch) — not per-PR — to keep Actions
+# minutes down. The e2e suite was paused for one cycle while a shared-token
+# eviction bug (and a few selector drifts) were fixed; it is green again.
 
 concurrency:
   group: ci-admin-${{ github.ref }}
@@ -107,8 +106,8 @@ jobs:
           cache-to: type=gha,mode=max
 
   a11y:
-    # Heavy Playwright run — nightly schedule only (not per-PR, not per-merge).
-    if: github.event_name == 'schedule'
+    # Heavy Playwright run — nightly (plus on-demand), not per-PR/per-merge.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -142,12 +141,14 @@ jobs:
           retention-days: 7
 
   e2e:
-    # PAUSED 2026-06-08: the full suite has 36 failing tests (0 passes this
-    # cycle) and ran ~30 min/run (retries:2 x broken tests) — ~870 billable
-    # min/cycle nightly for no green signal. Manual-dispatch only until fixed;
-    # restore `if: github.event_name == 'schedule'` to resume nightly runs.
-    # The fast e2e-regression spec remains the per-PR and per-merge gate.
-    if: github.event_name == 'workflow_dispatch'
+    # Full Playwright suite — nightly (plus on-demand via workflow_dispatch).
+    # Un-paused 2026-06-08 after the root-cause fixes: the shared bootstrap
+    # session token was being evicted mid-run (active-token cap of 200 < the
+    # suite's >200 silentRefresh rotations), so every test past ~#110 redirected
+    # to /login; the e2e backend now raises the cap via
+    # SAGEWAI_ADMIN_MAX_SESSION_TOKENS. A handful of selector/mock drifts were
+    # fixed alongside. Not a per-PR/merge gate (the fast e2e-regression spec is).
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

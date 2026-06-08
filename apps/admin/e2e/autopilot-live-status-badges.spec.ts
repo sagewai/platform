@@ -15,7 +15,11 @@ import { test, expect, type Page } from '@playwright/test';
  */
 
 async function mockListEndpoint(page: Page, missions: Array<Record<string, unknown>>) {
-  await page.route('**/api/v1/autopilot/missions', async (route) => {
+  // The missions page requests this list with a query string
+  // (`?limit=50&offset=0&…`), so a bare `**/api/v1/autopilot/missions` glob no
+  // longer matches and the real backend would be hit. Match the path with an
+  // optional query string, and never intercept the `/missions/<id>…` sub-paths.
+  await page.route(/\/api\/v1\/autopilot\/missions(\?.*)?$/, async (route) => {
     if (route.request().method() !== 'GET') {
       await route.continue();
       return;

@@ -72,15 +72,22 @@ export default function AutopilotMissionDetailPage({ params }: PageProps) {
   const traceOutput: unknown = trace?.output ?? null;
 
   function handleRunStarted() {
-    adminApi.getAutopilotMission(id).then((m) => {
-      setMission(m);
-      if (NEEDS_TRACE_STATUSES.has(m.status)) {
-        adminApi
-          .getAutopilotMissionTrace(id)
-          .then((t) => setTrace(t))
-          .catch(() => {});
-      }
-    }).catch(() => {});
+    // Fetch the trace BEFORE flipping mission state. AutopilotMissionLiveTrace
+    // seeds its events from `initialEvents` at mount and skips its SSE stream
+    // for terminal statuses; if we set a completed mission first and the trace
+    // a render later, the trace mounts empty and stays stuck on "Waiting for
+    // events…". Awaiting the trace and setting it together with the mission
+    // (one batched render) means the live trace mounts already populated.
+    adminApi
+      .getAutopilotMission(id)
+      .then(async (m) => {
+        if (NEEDS_TRACE_STATUSES.has(m.status)) {
+          const t = await adminApi.getAutopilotMissionTrace(id).catch(() => null);
+          if (t) setTrace(t);
+        }
+        setMission(m);
+      })
+      .catch(() => {});
   }
 
   return (

@@ -10,7 +10,7 @@ import type { MissionRunEvent } from '@/utils/types';
  * runs without a hosted LLM service or real MissionDriver execution.
  *
  * Coverage:
- *   1. Enable autopilot (Try anonymously → Enable Autopilot)
+ *   1. Enable autopilot (Free (rate-limited) tier → Enable Autopilot)
  *   2. Submit goal → routing-preview visible (auto_routed ≡ confidence ≥ 0.85)
  *   3. Approve & Schedule → mission appears in recent-missions list
  *   4. Navigate to mission detail → agent graph SVG visible
@@ -460,7 +460,13 @@ test.describe('autopilot end-to-end demo cycle', () => {
     await mockDetailStateful(page, MID, ['pending', 'pending', 'running', 'completed']);
     await mockExplain(page, MID);
     await mockRun(page, MID);
-    await mockTrace(page, MID, MAIN_TRACE_EVENTS);
+    // The post-run detail refetch returns 'running', so the fetched trace must
+    // not yet contain the terminal mission.finished event (a running mission
+    // hasn't finished). The detail page seeds the live trace from this fetched
+    // trace, so leaving mission.finished in would make the SSE replay dedup it
+    // and the badge would never reach 'completed'. Completion is delivered via
+    // the SSE stream below, which flips the badge running → completed.
+    await mockTrace(page, MID, MAIN_TRACE_EVENTS.filter((e) => e.kind !== 'mission.finished'));
     await mockSseEvents(page, MID, MAIN_TRACE_EVENTS);
     await mockSubPanels(page, MID);
 
@@ -472,8 +478,11 @@ test.describe('autopilot end-to-end demo cycle', () => {
     // Enable card must be visible (not the goal input yet).
     await expect(page.getByRole('heading', { name: 'Enable Autopilot' })).toBeVisible({ timeout: 15_000 });
 
-    // ── Step 2: Select "Try anonymously" tier ────────────────────────────────
-    await page.locator('button').filter({ hasText: /^Try anonymously/ }).click({ force: true });
+    // ── Step 2: Select the anonymous ("Free (rate-limited)") tier ────────────
+    // The anonymous tier button is labelled "Free (rate-limited)" / "No signup
+    // required." (it was repositioned from "Try anonymously"); it is also the
+    // default selection, but click it explicitly to mirror the user flow.
+    await page.locator('button').filter({ hasText: /^Free \(rate-limited\)/ }).click({ force: true });
 
     // ── Step 3: Click Enable Autopilot ──────────────────────────────────────
     await page.getByRole('button', { name: /enable autopilot/i }).click();

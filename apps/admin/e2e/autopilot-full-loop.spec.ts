@@ -195,16 +195,17 @@ async function mockAllEndpoints(page: Page) {
     });
   });
 
-  // 5. GET /api/v1/autopilot/missions/mid-12 — stateful: first call pending,
-  //    subsequent calls return completed (handleRunStarted is a single refetch).
-  let detailFetches = 0;
+  // 5. GET /api/v1/autopilot/missions/mid-12 — stateful: pending until the run
+  //    is POSTed, completed afterwards. Keyed on whether /run was called rather
+  //    than on a fetch counter: React Strict Mode double-invokes the detail
+  //    effect on mount in dev, so a "first call pending, rest completed" counter
+  //    would hand the kept (2nd) fetch a completed mission and hide the Run
+  //    button. handleRunStarted's post-run refetch then returns completed.
+  let runStarted = false;
   await page.route(
     new RegExp(`/api/v1/autopilot/missions/${MID}$`),
     (route) => {
-      detailFetches += 1;
-      // First load: pending (directions panel).
-      // After run button: return completed immediately so mission-output renders.
-      const status = detailFetches === 1 ? 'pending' : 'completed';
+      const status = runStarted ? 'completed' : 'pending';
       route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -246,6 +247,7 @@ async function mockAllEndpoints(page: Page) {
     new RegExp(`/api/v1/autopilot/missions/${MID}/run$`),
     (route) => {
       if (route.request().method() !== 'POST') return route.fallback();
+      runStarted = true;
       route.fulfill({
         status: 202,
         contentType: 'application/json',
