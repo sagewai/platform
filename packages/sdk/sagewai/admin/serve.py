@@ -345,6 +345,7 @@ def create_admin_serve_app(
     sf: AdminStateFile,
     *,
     version: str = _SDK_VERSION,
+    identity_store: Any = None,
 ) -> FastAPI:
     """Create the complete admin API server.
 
@@ -354,6 +355,10 @@ def create_admin_serve_app(
         The state-file store instance.
     version:
         SDK version string (injected by the CLI).
+    identity_store:
+        Optional multi-tenant IdentityStore. When omitted, the AuthMiddleware
+        lazily constructs one from the process engine in multi-tenant mode. Inject
+        an explicit store for deterministic tests/wiring.
     """
     from sagewai import home
     home.migrate_home()
@@ -468,7 +473,7 @@ def create_admin_serve_app(
     # Auth boundary (deny-by-default). Added BEFORE CORS so CORS is the
     # OUTERMOST middleware and wraps even 401/403 responses with CORS headers.
     from sagewai.admin.auth_middleware import AuthMiddleware
-    app.add_middleware(AuthMiddleware, sf=sf)
+    app.add_middleware(AuthMiddleware, sf=sf, identity_store=identity_store)
 
     # RBAC enforcement (W3) raises typed errors; map them to HTTP. TenantHidden
     # is 404 (existence-hiding, never 403); PermissionDenied is 403.
@@ -527,6 +532,12 @@ def create_admin_serve_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # W6 hardening: security headers + request-size cap (multi-tenant only; the
+    # outermost middleware so headers apply to every response, incl. errors).
+    from sagewai.admin.hardening import SecurityHeadersMiddleware
+
+    app.add_middleware(SecurityHeadersMiddleware)
 
     from sagewai.admin.auth_middleware import csrf_token_for, _LoginThrottle, _session_token_id
     from sagewai.admin.audit import emit_audit
