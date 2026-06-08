@@ -364,6 +364,60 @@ class PlaygroundAgentModel(Base):
     )
 
 
+class ProviderModel(Base):
+    """Tenant-scoped LLM provider config (multi-tenant mode).
+
+    ``project_id`` is the single scope tag: NULL = global/org-shared, a value =
+    isolated to that project. Secret fields inside ``data`` are encrypted under
+    the per-project data key (tenant_keys). One default provider per scope.
+    """
+
+    __tablename__ = "provider"
+    __table_args__ = (
+        Index("ux_provider_global_name", "provider_name", unique=True,
+              sqlite_where=text("project_id IS NULL"),
+              postgresql_where=text("project_id IS NULL")),
+        Index("ux_provider_proj_name", "project_id", "provider_name", unique=True,
+              sqlite_where=text("project_id IS NOT NULL"),
+              postgresql_where=text("project_id IS NOT NULL")),
+        Index("ix_provider_project_id", "project_id"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    project_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provider_name: Mapped[str] = mapped_column(Text, nullable=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    data: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class TenantAgentModel(Base):
+    """Tenant-scoped playground agent (multi-tenant mode).
+
+    ``project_id`` is the single scope tag (NULL = global; value = that project).
+    ``spec`` is the full agent spec JSON. One agent name per scope.
+    """
+
+    __tablename__ = "agent"
+    __table_args__ = (
+        Index("ux_agent_global_name", "name", unique=True,
+              sqlite_where=text("project_id IS NULL"),
+              postgresql_where=text("project_id IS NULL")),
+        Index("ux_agent_proj_name", "project_id", "name", unique=True,
+              sqlite_where=text("project_id IS NOT NULL"),
+              postgresql_where=text("project_id IS NOT NULL")),
+        Index("ix_agent_project_id", "project_id"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    project_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    spec: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 # ---------------------------------------------------------------------------
 # Admin store tables
 # ---------------------------------------------------------------------------

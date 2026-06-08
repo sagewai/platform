@@ -47,43 +47,17 @@ except ImportError:  # pragma: no cover - Windows
 import logging
 
 from sagewai import home
+from sagewai.admin.provider_secrets import FERNET_PREFIX as _FERNET_PREFIX
+from sagewai.admin.provider_secrets import has_plaintext_secret as _provider_has_plaintext_secret
+from sagewai.admin.provider_secrets import is_encrypted as _provider_is_encrypted
+from sagewai.admin.provider_secrets import redact_secrets as _redact_provider
+from sagewai.admin.provider_secrets import walk_secret_fields as _walk_secret_fields
 from sagewai.artifacts.models import ArtifactDestination
 from sagewai.sealed.directives.policies import DirectivesConfig, seed_defaults_if_empty
 
 logger = logging.getLogger("sagewai.admin")
 
 # ── provider secret encryption helpers ──────────────────────────────
-
-_PROVIDER_SECRET_FIELDS = (
-    "api_key", "apikey", "key", "secret", "client_secret", "token",
-    "access_token", "refresh_token", "password", "passphrase", "private_key",
-)
-_FERNET_PREFIX = "fernet:"
-
-
-def _walk_secret_fields(node: Any, fn: Any) -> None:
-    """Call fn(parent_dict, key) for every secret-named key at any depth."""
-    if isinstance(node, dict):
-        for k, v in list(node.items()):
-            if k in _PROVIDER_SECRET_FIELDS:
-                fn(node, k)
-            else:
-                _walk_secret_fields(v, fn)
-    elif isinstance(node, list):
-        for item in node:
-            _walk_secret_fields(item, fn)
-
-
-def _provider_has_plaintext_secret(p: dict[str, Any]) -> bool:
-    found: list[bool] = []
-
-    def _check(parent: dict[str, Any], k: str) -> None:
-        v = parent.get(k)
-        if isinstance(v, str) and v and not v.startswith(_FERNET_PREFIX):
-            found.append(True)
-
-    _walk_secret_fields(p.get("config"), _check)
-    return bool(found)
 
 
 def _encrypt_provider(p: dict[str, Any], crypto: Any) -> dict[str, Any]:
@@ -96,32 +70,8 @@ def _encrypt_provider(p: dict[str, Any], crypto: Any) -> dict[str, Any]:
     return p
 
 
-def _provider_is_encrypted(p: dict[str, Any]) -> bool:
-    found: list[bool] = []
-
-    def _check(parent: dict[str, Any], k: str) -> None:
-        v = parent.get(k)
-        if isinstance(v, str) and v.startswith(_FERNET_PREFIX):
-            found.append(True)
-
-    _walk_secret_fields(p.get("config"), _check)
-    return bool(found)
-
-
 def _any_encrypted_provider(providers: list[dict[str, Any]]) -> bool:
     return any(_provider_is_encrypted(p) for p in providers)
-
-
-def _redact_provider(p: dict[str, Any]) -> dict[str, Any]:
-    out = copy.deepcopy(p)
-
-    def _red(parent: dict[str, Any], k: str) -> None:
-        val = parent.pop(k, None)   # always strip secret material
-        if val:
-            parent[k + "_set"] = True
-
-    _walk_secret_fields(out.get("config"), _red)
-    return out
 
 
 def _decrypt_provider(p: dict[str, Any], crypto: Any) -> dict[str, Any]:

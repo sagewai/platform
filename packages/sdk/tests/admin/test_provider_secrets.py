@@ -11,6 +11,28 @@ from __future__ import annotations
 import pytest
 from cryptography.fernet import Fernet
 
+# ── provider_secrets unit tests ──────────────────────────────────────
+
+
+def test_walk_finds_nested_and_list_secrets():
+    from sagewai.admin.provider_secrets import walk_secret_fields
+    cfg = {"api_key": "sk-1", "nested": {"client_secret": "cs"}, "items": [{"token": "t"}]}
+    seen = []
+    walk_secret_fields(cfg, lambda parent, k: seen.append((k, parent[k])))
+    assert ("api_key", "sk-1") in seen
+    assert ("client_secret", "cs") in seen
+    assert ("token", "t") in seen
+
+
+def test_redact_strips_and_flags():
+    from sagewai.admin.provider_secrets import redact_secrets
+    rec = {"config": {"api_key": "sk-1", "model": "gpt"}}
+    out = redact_secrets(rec)
+    assert "api_key" not in out["config"]
+    assert out["config"]["api_key_set"] is True
+    assert out["config"]["model"] == "gpt"
+    assert rec["config"]["api_key"] == "sk-1"  # original untouched (deep copy)
+
 
 def test_provider_secret_encrypted_at_rest_and_redacted_in_api(tmp_path):
     from sagewai.admin.state_file import AdminStateFile

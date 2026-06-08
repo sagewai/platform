@@ -346,6 +346,9 @@ def create_admin_serve_app(
     *,
     version: str = _SDK_VERSION,
     identity_store: Any = None,
+    provider_store: Any = None,
+    agent_store: Any = None,
+    connection_store: Any = None,
 ) -> FastAPI:
     """Create the complete admin API server.
 
@@ -359,6 +362,10 @@ def create_admin_serve_app(
         Optional multi-tenant IdentityStore. When omitted, the AuthMiddleware
         lazily constructs one from the process engine in multi-tenant mode. Inject
         an explicit store for deterministic tests/wiring.
+    provider_store, agent_store, connection_store:
+        Optional pre-built tenant resource stores (multi-tenant mode). When all
+        are omitted the lifespan builds them from the process engine; inject for
+        deterministic tests/wiring. Bundled on ``app.state.resource_stores``.
     """
     from sagewai import home
     home.migrate_home()
@@ -406,6 +413,22 @@ def create_admin_serve_app(
         # Bootstrap the SQLite schema (no-op on Postgres where Alembic owns it).
         # Must run before any store reads/writes so all tables exist.
         await _db_factory.ensure_schema()
+
+        # Build the tenant resource stores from the process engine unless a test
+        # / DI container already injected one (multi-tenant only; None in
+        # single-org). Runs after ensure_schema so the tables exist.
+        from sagewai.admin.resource_stores import build_resource_stores
+        _rs = app.state.resource_stores
+        if _rs.provider is None and _rs.agent is None and _rs.connection is None:
+            _built = await build_resource_stores(identity_store)
+            if _built is not None:
+                app.state.resource_stores = _built
+
+        # Fail closed (multi-tenant): mirror sf.require_secret_key_if_encrypted()
+        # for the tenant provider table — if encrypted provider secrets exist but
+        # the org master key cannot be resolved, refuse to serve rather than start
+        # unable to decrypt any project's credentials.
+        await _require_tenant_provider_key_if_encrypted(app.state.resource_stores.provider)
 
         # Wire the durable workflow checkpoint store as the process-wide
         # default for DurableWorkflow instances that don't supply their own
@@ -463,6 +486,44 @@ def create_admin_serve_app(
             GlobalMemory.configure_backend(InMemoryBackend())
 
     app = FastAPI(title="Sagewai Admin", version=version, lifespan=lifespan)
+
+    # Tenant resource-store bundle. Injected stores (tests/DI) win; otherwise the
+    # lifespan builds them once the schema exists (multi-tenant only). Attached
+    # before routes so handlers reach the active store via _provider_store().
+    from sagewai.admin.resource_stores import ResourceStores
+    app.state.resource_stores = ResourceStores(
+        provider=provider_store, agent=agent_store, connection=connection_store)
+
+    # Multi-tenant: build ONE IdentityStore on the process engine and SHARE it
+    # between AuthMiddleware and the resource stores when none was injected. The
+    # provider store needs it to resolve per-project data keys for secret
+    # encryption; the lazily-built middleware store would otherwise leave the
+    # auto-built provider store with identity_store=None.
+    from sagewai.admin.tenancy import is_multi_tenant as _is_multi_tenant
+    if identity_store is None and _is_multi_tenant():
+        from sagewai.admin.identity_store import IdentityStore
+        identity_store = IdentityStore()
+
+    async def _provider_decrypted(request: Request, provider_id: str):
+        """A provider with secrets decrypted, from the active store (PG or file)."""
+        store = _provider_store(request)
+        if store is not None:
+            return await store.get_decrypted(provider_id, ctx=request.state.context)
+        return sf.get_provider_decrypted(provider_id, project_id=_project_scope(request))
+
+    async def _providers_decrypted(request: Request):
+        """All in-scope providers with secrets decrypted, from the active store."""
+        store = _provider_store(request)
+        if store is not None:
+            return await store.list_decrypted(ctx=request.state.context)
+        return sf.list_providers_decrypted()
+
+    async def _resolve_agent(request: Request, name: str):
+        """Resolve an agent spec from the active store (PG or file) for the ctx scope."""
+        store = _agent_store(request)
+        if store is not None:
+            return await store.get(name, ctx=request.state.context)
+        return sf.get_agent(name, project_id=_project_scope(request))
 
     # Run state migrations before serving (versioned, locked, backed-up).
     sf.run_migrations()
@@ -945,6 +1006,9 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/providers")
     async def list_providers(request: Request) -> JSONResponse:
+        store = _provider_store(request)
+        if store is not None:
+            return JSONResponse(await store.list(ctx=request.state.context))
         pid = _project_scope(request)
         return JSONResponse(sf.list_providers(project_id=pid))
 
@@ -952,6 +1016,11 @@ def create_admin_serve_app(
     async def upsert_provider(request: Request) -> JSONResponse:
         body = await request.json()
         _require_resource_write(request)
+        store = _provider_store(request)
+        if store is not None:
+            result = await store.upsert(body, ctx=request.state.context)
+            await _emit_audit(request, "provider.upsert", target_type="provider", target_id=result.get("id", ""))
+            return JSONResponse({"id": result.get("id", "")})
         pid = _project_scope(request)
         if _multi_ctx(request) is not None:
             # Scope from the session, never the request body (no scope injection).
@@ -968,8 +1037,7 @@ def create_admin_serve_app(
     async def test_provider(provider_id: str, request: Request) -> JSONResponse:
         from sagewai.admin.provider_probes import test_cloud_provider
 
-        pid = _project_scope(request)
-        provider = sf.get_provider_decrypted(provider_id, project_id=pid)
+        provider = await _provider_decrypted(request, provider_id)
         if not provider:
             return JSONResponse({"detail": "Provider not found"}, status_code=404)
         result = await test_cloud_provider(
@@ -990,6 +1058,13 @@ def create_admin_serve_app(
 
     @app.delete("/api/v1/providers/{provider_id}")
     async def delete_provider(provider_id: str, request: Request) -> JSONResponse:
+        store = _provider_store(request)
+        if store is not None:
+            _require_resource_write(request)
+            if await store.delete(provider_id, ctx=request.state.context):
+                await _emit_audit(request, "provider.delete", target_type="provider", target_id=provider_id)
+                return JSONResponse({"status": "ok"})
+            return JSONResponse({"detail": "Not found"}, status_code=404)
         ctx = _multi_ctx(request)
         if ctx is not None:
             # Multi-tenant: only a provider in the actor's WRITE scope may be
@@ -1015,6 +1090,13 @@ def create_admin_serve_app(
         driver will pick this provider's credentials before any other.
         """
         _require_resource_write(request)
+        store = _provider_store(request)
+        if store is not None:
+            result = await store.set_default(provider_id, ctx=request.state.context)
+            if result is None:
+                return JSONResponse({"detail": "Provider not found"}, status_code=404)
+            await _emit_audit(request, "provider.set_default", target_type="provider", target_id=provider_id)
+            return JSONResponse({"status": "ok", "id": provider_id, "default": True})
         pid = _project_scope(request)
         result = sf.set_default_provider(provider_id, project_id=pid)
         if result is None:
@@ -1041,9 +1123,9 @@ def create_admin_serve_app(
     # ── Playground metadata ──────────────────────────────────────
 
     @app.get("/playground/models")
-    async def playground_models() -> JSONResponse:
+    async def playground_models(request: Request) -> JSONResponse:
         from sagewai.admin.provider_probes import aggregate_available_models
-        providers = sf.list_providers_decrypted()
+        providers = await _providers_decrypted(request)
         models = await aggregate_available_models(providers)
         return JSONResponse(models)
 
@@ -1097,6 +1179,11 @@ def create_admin_serve_app(
         if not body.get("name"):
             return JSONResponse({"detail": "Agent name is required"}, status_code=422)
         _require_resource_write(request)
+        store = _agent_store(request)
+        if store is not None:
+            agent = await store.create(body, ctx=request.state.context)
+            await _emit_audit(request, "agent.create", target_type="agent", target_id=body.get("name", ""))
+            return JSONResponse(agent, status_code=201)
         pid = _project_scope(request)
         agent = sf.create_agent(body, project_id=_owner(pid))
         await _emit_audit(request, "agent.create", target_type="agent", target_id=body.get("name", ""))
@@ -1109,12 +1196,21 @@ def create_admin_serve_app(
 
     @app.get("/playground/agents")
     async def playground_agents(request: Request) -> JSONResponse:
+        store = _agent_store(request)
+        if store is not None:
+            return JSONResponse(await store.list(ctx=request.state.context))
         pid = _project_scope(request)
         agents = sf.list_agents(project_id=pid)
         return JSONResponse(agents)
 
     @app.get("/playground/agents/{name}")
     async def playground_agent_detail(name: str, request: Request) -> JSONResponse:
+        store = _agent_store(request)
+        if store is not None:
+            agent = await store.get(name, ctx=request.state.context)
+            if not agent:
+                return JSONResponse({"detail": "Agent not found"}, status_code=404)
+            return JSONResponse(agent)
         pid = _project_scope(request)
         agent = sf.get_agent(name, project_id=pid)
         if not agent:
@@ -1123,8 +1219,7 @@ def create_admin_serve_app(
 
     @app.get("/playground/agents/{name}/debug")
     async def playground_agent_debug(name: str, request: Request) -> JSONResponse:
-        pid = _project_scope(request)
-        agent = sf.get_agent(name, project_id=pid)
+        agent = await _resolve_agent(request, name)
         if not agent:
             return JSONResponse({"detail": "Agent not found"}, status_code=404)
         return JSONResponse(agent)
@@ -1132,6 +1227,12 @@ def create_admin_serve_app(
     @app.delete("/playground/agents/{name}")
     async def delete_playground_agent(name: str, request: Request) -> JSONResponse:
         _require_resource_write(request)
+        store = _agent_store(request)
+        if store is not None:
+            if await store.delete(name, ctx=request.state.context):
+                await _emit_audit(request, "agent.delete", target_type="agent", target_id=name)
+                return JSONResponse({"status": "ok"})
+            return JSONResponse({"detail": "Not found"}, status_code=404)
         pid = _project_scope(request)
         if sf.delete_agent(name, project_id=pid):
             await _emit_audit(request, "agent.delete", target_type="agent", target_id=name)
@@ -1144,6 +1245,14 @@ def create_admin_serve_app(
         new_name = body.get("new_name", "")
         if not new_name:
             return JSONResponse({"detail": "new_name required"}, status_code=422)
+        store = _agent_store(request)
+        if store is not None:
+            _require_resource_write(request)
+            result = await store.rename(name, new_name, ctx=request.state.context)
+            if not result:
+                return JSONResponse({"detail": "Not found"}, status_code=404)
+            await _emit_audit(request, "agent.rename", target_type="agent", target_id=new_name)
+            return JSONResponse(result)
         pid = _project_scope(request)
         result = sf.rename_agent(name, new_name, project_id=pid)
         if result:
@@ -1162,7 +1271,7 @@ def create_admin_serve_app(
         message = body.get("message", "")
         pid = _project_scope(request)
         _enforce_run_quota(request)
-        agent_spec = sf.get_agent(agent_name, project_id=pid)
+        agent_spec = await _resolve_agent(request, agent_name)
         run_id = f"run-{_run_sec.token_hex(6)}"
         _run_t0 = _run_time.monotonic()
         _started_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -1437,7 +1546,7 @@ def create_admin_serve_app(
             else:
                 # Alpaca format (default) — instruction/input/output
                 system = ""
-                agent = sf.get_agent(s.get("agent_name", ""), project_id=pid)
+                agent = await _resolve_agent(request, s.get("agent_name", ""))
                 if agent:
                     system = agent.get("system_prompt", "")
                 entry = {
@@ -1514,9 +1623,9 @@ def create_admin_serve_app(
     # ── Model router ─────────────────────────────────────────────
 
     @app.get("/api/v1/model-router/models")
-    async def model_router_models() -> JSONResponse:
+    async def model_router_models(request: Request) -> JSONResponse:
         from sagewai.admin.provider_probes import aggregate_available_models
-        providers = sf.list_providers_decrypted()
+        providers = await _providers_decrypted(request)
         models = await aggregate_available_models(providers)
         return JSONResponse(models)
 
@@ -3269,6 +3378,22 @@ def create_admin_serve_app(
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
+async def _require_tenant_provider_key_if_encrypted(provider_store) -> None:
+    """Fail closed at startup: if any encrypted tenant provider secret exists, the
+    org master key must resolve (raises MasterKeyMissing/AdminKeyMissing otherwise).
+
+    The single-org file-store equivalent is ``sf.require_secret_key_if_encrypted()``,
+    run synchronously at app build; the tenant store is only available once the
+    lifespan has built it, so this async check runs there.
+    """
+    if provider_store is None:
+        return
+    if await provider_store.has_encrypted_secrets():
+        from sagewai.admin import tenant_keys
+
+        tenant_keys.org_crypto()  # resolves the org master key; raises if unavailable
+
+
 def _extract_token(request: Request) -> str | None:
     """Get auth token from header or cookie."""
     auth = request.headers.get("authorization", "")
@@ -3305,6 +3430,24 @@ def _project_scope(request: Request) -> str | None:
     if ctx is not None and ctx.tenancy_mode == "multi":
         return ctx.project_id if ctx.project_id is not None else SHARED_ONLY
     return _project_id(request)
+
+
+def _provider_store(request: Request):
+    """The active Postgres provider store, or None in single-org mode.
+
+    When present, the provider routes use it (ctx-scoped) instead of the file
+    store; when None they keep their unchanged ``sf.*`` path."""
+    rs = getattr(request.app.state, "resource_stores", None)
+    return getattr(rs, "provider", None) if rs is not None else None
+
+
+def _agent_store(request: Request):
+    """The active Postgres agent store, or None in single-org mode.
+
+    When present, the playground-agent routes use it (ctx-scoped) instead of the
+    file store; when None they keep their unchanged ``sf.*`` path."""
+    rs = getattr(request.app.state, "resource_stores", None)
+    return getattr(rs, "agent", None) if rs is not None else None
 
 
 def _owner(scope: str | None) -> str | None:
