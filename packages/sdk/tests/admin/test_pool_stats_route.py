@@ -39,6 +39,18 @@ def test_pool_stats_route_returns_404_for_unknown_worker(client):
     assert res.status_code == 404
 
 
+def test_fleet_register_ignores_client_supplied_org_id(client):
+    reg = client.post(
+        "/api/v1/fleet/register",
+        json={"name": "w-forged-org", "org_id": "forged"},
+    )
+    assert reg.status_code in (200, 201), reg.text
+
+    res = client.get("/api/v1/fleet/workers")
+    assert res.status_code == 200, res.text
+    assert any(w["name"] == "w-forged-org" for w in res.json())
+
+
 def test_pool_stats_route_returns_snapshot_after_heartbeat(client):
     # Register a worker
     reg = client.post(

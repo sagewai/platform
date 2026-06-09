@@ -157,7 +157,7 @@ def _blueprint_cache_dir() -> Path:
 _fleet_registry: object | None = None
 
 
-async def _get_fleet_registry_snapshot() -> list:
+async def _get_fleet_registry_snapshot(org_id: str = "default") -> list:
     """Return the list of WorkerRecord objects from the global fleet registry.
 
     In production, this returns the workers registered with the admin's
@@ -170,10 +170,8 @@ async def _get_fleet_registry_snapshot() -> list:
     if _fleet_registry is None:
         _fleet_registry = InMemoryFleetRegistry()
     registry = _fleet_registry
-    # InMemoryFleetRegistry.list_workers requires org_id; use "default" for the
-    # single-tenant admin.
     try:
-        return await registry.list_workers(org_id="default")
+        return await registry.list_workers(org_id=org_id)
     except Exception:
         return []
 
@@ -1629,7 +1627,10 @@ def create_autopilot_router(
         if err is not None:
             return err
 
-        workers = await _get_fleet_registry_snapshot()
+        ctx = getattr(request.state, "context", None)
+        workers = await _get_fleet_registry_snapshot(
+            ctx.org_id if ctx is not None else "default"
+        )
         out = [
             {
                 "id": w.id,

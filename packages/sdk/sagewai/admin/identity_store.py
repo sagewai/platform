@@ -290,7 +290,9 @@ class IdentityStore:
             return None
         async with self._engine.begin() as conn:
             await conn.execute(
-                update(_user).where(_user.c.id == user["id"]).values(last_login_at=_now())
+                update(_user)
+                .where(_user.c.org_id == org_id, _user.c.id == user["id"])
+                .values(last_login_at=_now())
             )
         return user
 

@@ -17,6 +17,7 @@ from sagewai.admin.authz import PermissionDeniedError
 from sagewai.admin.serve import (
     _emit_audit,
     _enforce_run_quota,
+    _fleet_project_label,
     _in_read_scope,
     _in_write_scope,
     _owner,
@@ -24,6 +25,7 @@ from sagewai.admin.serve import (
     _ProjectRunThrottle,
     _QuotaExceededError,
     _require_resource_write,
+    _request_org_id,
     _RunProjectRequiredError,
 )
 from sagewai.admin.state_file import SHARED_ONLY
@@ -100,6 +102,17 @@ def test_owner_maps_sentinel_back_to_none_for_stamping():
     assert _owner(SHARED_ONLY) is None  # org-shared row
     assert _owner("pA") == "pA"
     assert _owner(None) is None
+
+
+def test_fleet_project_label_never_uses_shared_sentinel():
+    assert _fleet_project_label(SHARED_ONLY) is None
+    assert _fleet_project_label(None) is None
+    assert _fleet_project_label("pA") == "pA"
+
+
+def test_request_org_id_is_context_derived_not_client_supplied():
+    assert _request_org_id(_req(ctx=_ctx("pA", {"project:member"}))) == "o1"
+    assert _request_org_id(_req(ctx=None)) == "default"
 
 
 def test_read_scope_inherits_shared_but_not_other_projects():

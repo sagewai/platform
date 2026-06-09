@@ -3010,8 +3010,8 @@ def create_admin_serve_app(
             return JSONResponse({"valid": False, "error": f"YAML parse error: {exc}"})
 
     @app.get("/workflows/registered-agents")
-    async def workflow_registered_agents() -> JSONResponse:
-        agents = sf.list_agents()
+    async def workflow_registered_agents(request: Request) -> JSONResponse:
+        agents = sf.list_agents(project_id=_project_scope(request))
         return JSONResponse([a.get("name", "") for a in agents])
 
     @app.get("/workflow-events/stream")
@@ -3023,24 +3023,24 @@ def create_admin_serve_app(
     # ── Workflow registry (saved workflows) ────────────────────────
 
     @app.get("/api/v1/workflow-registry")
-    async def list_saved_workflows() -> JSONResponse:
+    async def list_saved_workflows(request: Request) -> JSONResponse:
         data = sf._read()
-        workflows = data.get("saved_workflows", [])
+        scope = _project_scope(request)
+        workflows = _filter_items_for_scope(data.get("saved_workflows", []), scope)
         return JSONResponse({"items": workflows, "total": len(workflows)})
 
     @app.post("/api/v1/workflow-registry")
     async def save_workflow(request: Request) -> JSONResponse:
-        # FLAG: saved_workflows rows carry no project_id column; until that
-        # schema lands, gate the write to org owner/admin (safe interim) rather
-        # than fake per-project scoping. No-op in single-org.
-        require_org_admin(request.state.context)
+        _require_resource_write(request)
         body = await request.json()
+        scope = _project_scope(request)
         import secrets as _sec
         wf = {
             "id": f"wf-{_sec.token_hex(6)}",
             "name": body.get("name", ""),
             "yaml_content": body.get("yaml_content", ""),
             "description": body.get("description", ""),
+            "project_id": _owner(scope),
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         }
@@ -3050,30 +3050,42 @@ def create_admin_serve_app(
         return JSONResponse(wf, status_code=201)
 
     @app.get("/api/v1/workflow-registry/by-name/{name}")
-    async def get_saved_workflow_by_name(name: str) -> JSONResponse:
+    async def get_saved_workflow_by_name(name: str, request: Request) -> JSONResponse:
         data = sf._read()
-        for wf in data.get("saved_workflows", []):
+        scope = _project_scope(request)
+        workflows = _filter_items_for_scope(data.get("saved_workflows", []), scope)
+        for wf in _project_first(workflows):
             if wf.get("name") == name:
                 return JSONResponse(wf)
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     @app.get("/api/v1/workflow-registry/{wf_id}")
-    async def get_saved_workflow(wf_id: str) -> JSONResponse:
+    async def get_saved_workflow(wf_id: str, request: Request) -> JSONResponse:
         data = sf._read()
-        for wf in data.get("saved_workflows", []):
+        scope = _project_scope(request)
+        for wf in _filter_items_for_scope(data.get("saved_workflows", []), scope):
             if wf.get("id") == wf_id:
                 return JSONResponse(wf)
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     @app.delete("/api/v1/workflow-registry/{wf_id}")
     async def delete_saved_workflow(wf_id: str, request: Request) -> JSONResponse:
-        # FLAG: saved_workflows rows carry no project_id column (see save_workflow).
-        require_org_admin(request.state.context)
+        _require_resource_write(request)
+        scope = _project_scope(request)
         def _apply(d):
             wfs = d.get("saved_workflows", [])
-            d["saved_workflows"] = [w for w in wfs if w.get("id") != wf_id]
-        sf.mutate(_apply)
-        return JSONResponse({"status": "ok"})
+            remaining = []
+            deleted = False
+            for w in wfs:
+                if w.get("id") == wf_id and _item_writable_in_scope(w, scope):
+                    deleted = True
+                    continue
+                remaining.append(w)
+            d["saved_workflows"] = remaining
+            return deleted
+        if sf.mutate(_apply):
+            return JSONResponse({"status": "ok"})
+        return JSONResponse({"detail": "Not found"}, status_code=404)
 
     # ── Budget limits ────────────────────────────────────────────
 
@@ -3264,15 +3276,11 @@ def create_admin_serve_app(
     )
 
     def _fleet_org_id(request: Request) -> str:
-        ctx = _multi_ctx(request)
-        return ctx.org_id if ctx is not None else "default"
+        return _request_org_id(request)
 
     async def _fleet_worker_in_scope(worker_id: str, request: Request):
         worker = await fleet_registry.get_worker(worker_id)
-        if worker is None:
-            return None
-        ctx = _multi_ctx(request)
-        if ctx is not None and getattr(worker, "org_id", None) != ctx.org_id:
+        if worker is None or getattr(worker, "org_id", None) != _fleet_org_id(request):
             return None
         return worker
 
@@ -3288,8 +3296,9 @@ def create_admin_serve_app(
             max_concurrent=body.get("max_concurrent", 1),
         )
         # Add project_id as a label for scoped dispatch
-        if pid:
-            caps.labels["project_id"] = pid
+        project_label = _fleet_project_label(pid)
+        if project_label:
+            caps.labels["project_id"] = project_label
         worker = await fleet_registry.register_worker(
             name=body.get("name", "worker"),
             org_id=_fleet_org_id(request),
@@ -3346,6 +3355,9 @@ def create_admin_serve_app(
     async def fleet_heartbeat(request: Request) -> JSONResponse:
         """Worker heartbeat. Optionally carries pool_stats snapshot."""
         body = await request.json()
+        worker = await _fleet_worker_in_scope(body.get("worker_id", ""), request)
+        if worker is None:
+            return JSONResponse({"detail": "Not found"}, status_code=404)
         pool_stats = body.get("pool_stats")
         await fleet_registry.heartbeat(
             body.get("worker_id", ""), pool_stats=pool_stats,
@@ -3477,6 +3489,9 @@ def create_admin_serve_app(
     async def revoke_fleet_enrollment_key(key_id: str, request: Request) -> JSONResponse:
         require_org_admin(request.state.context)  # fleet management is org-level
         from fastapi import HTTPException
+        keys = await fleet_registry.list_enrollment_keys(org_id=_fleet_org_id(request))
+        if not any(k.id == key_id for k in keys):
+            raise HTTPException(status_code=404, detail=f"Enrollment key {key_id} not found")
         try:
             await fleet_registry.revoke_enrollment_key(key_id)
         except ValueError as exc:
@@ -4194,6 +4209,17 @@ def _project_id(request: Request) -> str | None:
     return pid if pid else None
 
 
+def _request_org_id(request: Request) -> str:
+    """Return the server-resolved umbrella org for this request.
+
+    ``org_id`` is an internal namespace, not a tenant selector. Auth middleware
+    derives it from the session/context; legacy single-org paths fall back to the
+    process default. Routes must not accept it from request bodies or query params.
+    """
+    ctx = getattr(request.state, "context", None)
+    return ctx.org_id if ctx is not None else "default"
+
+
 def _project_scope(request: Request) -> str | None:
     """The **filter** scope for a route's reads/deletes.
 
@@ -4213,6 +4239,11 @@ def _project_scope(request: Request) -> str | None:
     if ctx is not None and ctx.tenancy_mode == "multi":
         return ctx.project_id if ctx.project_id is not None else SHARED_ONLY
     return _project_id(request)
+
+
+def _fleet_project_label(scope: str | None) -> str | None:
+    """Project label for fleet routing, or None for org-shared/no project scope."""
+    return _owner(scope)
 
 
 def _provider_store(request: Request):
@@ -4265,6 +4296,34 @@ def _owner(scope: str | None) -> str | None:
     *stamp* on a newly-created row. ``SHARED_ONLY`` becomes ``None`` (an
     org-shared row); a concrete project id and ``None`` pass through."""
     return None if scope == SHARED_ONLY else scope
+
+
+def _item_readable_in_scope(item: dict, scope: str | None) -> bool:
+    """Read filter for file-backed project-aware resources."""
+    if scope is None:
+        return True
+    item_project_id = item.get("project_id")
+    if scope == SHARED_ONLY:
+        return item_project_id in (None, "")
+    return item_project_id in (scope, None, "")
+
+
+def _item_writable_in_scope(item: dict, scope: str | None) -> bool:
+    """Write filter for file-backed project-aware resources."""
+    if scope is None:
+        return True
+    item_project_id = item.get("project_id")
+    if scope == SHARED_ONLY:
+        return item_project_id in (None, "")
+    return item_project_id == scope
+
+
+def _filter_items_for_scope(items: list[dict], scope: str | None) -> list[dict]:
+    return [item for item in items if _item_readable_in_scope(item, scope)]
+
+
+def _project_first(items: list[dict]) -> list[dict]:
+    return sorted(items, key=lambda item: item.get("project_id") in (None, ""))
 
 
 def _in_read_scope(item_project_id: str | None, request: Request) -> bool:
