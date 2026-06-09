@@ -125,6 +125,37 @@ async def real_app(tmp_path, monkeypatch):
         output_text="PA-EXAMPLE-OUTPUT",
     )
 
+    sf.mutate(
+        lambda d: d.setdefault("workflow_runs", []).extend(
+            [
+                {
+                    "run_id": "wf-pa",
+                    "workflow_name": "tenant-wf",
+                    "status": "completed",
+                    "project_id": pa,
+                    "events": [
+                        {
+                            "event_type": "workflow_finished",
+                            "data": {"output": "pa-output"},
+                        }
+                    ],
+                },
+                {
+                    "run_id": "wf-pb",
+                    "workflow_name": "tenant-wf",
+                    "status": "running",
+                    "project_id": pb,
+                    "events": [
+                        {
+                            "event_type": "workflow_finished",
+                            "data": {"output": "pb-output"},
+                        }
+                    ],
+                },
+            ]
+        )
+    )
+
     from sagewai.admin.serve import create_admin_serve_app
 
     app = create_admin_serve_app(
@@ -154,6 +185,8 @@ async def real_app(tmp_path, monkeypatch):
         "run_a": run_a,
         "run_b": run_b,
         "run_fixed": run_fixed,
+        "workflow_run_a": "wf-pa",
+        "workflow_run_b": "wf-pb",
         "log_a": log_a,
         "log_b": log_b,
         "example_a": example_a,
@@ -375,6 +408,12 @@ async def test_agent_debug_route_uses_pg_store(real_app):
     assert r.json().get("model") == "x"
 
 
+async def test_multi_tenant_harness_uses_durable_store(real_app):
+    from sagewai.harness.postgres_store import PostgresHarnessStore
+
+    assert isinstance(real_app["app"].state.harness_store, PostgresHarnessStore)
+
+
 # ── Run + prompt-log isolation on the real admin routes (PR2) ────────
 
 
@@ -399,6 +438,64 @@ async def test_run_detail_cross_project_404(real_app):
         real_app["app"],
         "GET",
         f"/admin/runs/{real_app['run_b']}",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 404
+
+
+async def test_workflow_history_list_isolated(real_app):
+    r = await _req(
+        real_app["app"],
+        "GET",
+        "/workflows/history",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 200
+    ids = {x.get("run_id") for x in r.json()}
+    assert real_app["workflow_run_a"] in ids
+    assert real_app["workflow_run_b"] not in ids
+
+
+async def test_workflow_run_detail_cross_project_404(real_app):
+    r = await _req(
+        real_app["app"],
+        "GET",
+        f"/workflows/runs/{real_app['workflow_run_b']}",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 404
+
+
+async def test_workflow_history_detail_cross_project_404(real_app):
+    r = await _req(
+        real_app["app"],
+        "GET",
+        f"/workflows/history/{real_app['workflow_run_b']}",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 404
+
+
+async def test_workflow_events_cross_project_404(real_app):
+    r = await _req(
+        real_app["app"],
+        "GET",
+        f"/workflows/runs/{real_app['workflow_run_b']}/events",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 404
+
+
+async def test_workflow_cancel_cross_project_404(real_app):
+    r = await _req(
+        real_app["app"],
+        "POST",
+        f"/workflows/runs/{real_app['workflow_run_b']}/cancel",
         token=real_app["sess_member"],
         project=real_app["pa"],
     )

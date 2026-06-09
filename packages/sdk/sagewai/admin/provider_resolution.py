@@ -41,12 +41,59 @@ def provider_has_credentials(provider: dict[str, Any]) -> bool:
     return bool(cfg.get("api_key") or provider.get("env_var_set"))
 
 
+def _runtime_visible_providers(providers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse inherited providers for execution-time selection.
+
+    A project-scoped provider shadows an org-shared provider with the same
+    provider_name. Runtime calls must not pick an inherited provider just because
+    it was created first.
+    """
+    by_name: dict[str, dict[str, Any]] = {}
+    for provider in sorted(
+        providers,
+        key=lambda p: (
+            p.get("project_id") is None,
+            str(p.get("created_at") or ""),
+        ),
+    ):
+        name = provider.get("provider_name") or provider.get("id") or str(id(provider))
+        if name in by_name:
+            continue
+        by_name[name] = provider
+    return list(by_name.values())
+
+
 def choose_provider(providers: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Pick default provider first, then the first configured provider."""
-    return next(
-        (p for p in providers if p.get("default") and provider_has_credentials(p)),
-        None,
-    ) or next((p for p in providers if provider_has_credentials(p)), None)
+    """Pick a runtime provider with tenant precedence.
+
+    Order:
+    1. project-scoped default with credentials
+    2. project-scoped credentialed provider
+    3. org-shared default with credentials
+    4. org-shared credentialed provider
+
+    ``providers`` may contain both the project row and an inherited org row for
+    the same provider_name; project rows shadow org rows before default
+    selection.
+    """
+    visible = _runtime_visible_providers(providers)
+
+    def _is_project(p: dict[str, Any]) -> bool:
+        return p.get("project_id") is not None
+
+    for predicate in (
+        lambda p: _is_project(p) and p.get("default"),
+        lambda p: _is_project(p),
+        lambda p: not _is_project(p) and p.get("default"),
+        lambda p: not _is_project(p),
+    ):
+        match = next(
+            (p for p in visible if predicate(p) and provider_has_credentials(p)),
+            None,
+        )
+        if match is not None:
+            return match
+    return None
 
 
 def provider_model(provider: dict[str, Any], requested_model: str | None = None) -> str:

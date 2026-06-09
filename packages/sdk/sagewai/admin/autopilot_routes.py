@@ -819,6 +819,33 @@ def create_autopilot_router(
     """
     router = APIRouter(tags=["autopilot"])
 
+    async def _providers_for_request(
+        request: Request, *, decrypted: bool
+    ) -> list[dict[str, Any]]:
+        """Return providers from the active tenant source for this request."""
+        mctx = _ctx(request)
+        if mctx.tenancy_mode == "multi":
+            provider_store = provider_store_getter() if provider_store_getter else None
+            if provider_store is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail="tenant provider store is not configured",
+                )
+            if decrypted:
+                return await provider_store.list_decrypted(ctx=mctx)
+            return await provider_store.list(ctx=mctx)
+
+        pid = _project_id(request)
+        if decrypted:
+            providers = sf.list_providers_decrypted(project_id=pid)
+            if pid and not providers:
+                providers = sf.list_providers_decrypted(project_id=None)
+            return providers
+        providers = sf.list_providers(project_id=pid)
+        if pid and not providers:
+            providers = sf.list_providers(project_id=None)
+        return providers
+
     # ── GET /autopilot/system-readiness ───────────────────────────────
 
     @router.get("/autopilot/system-readiness")
@@ -836,14 +863,11 @@ def create_autopilot_router(
         if err is not None:
             return err
 
-        pid = _project_id(request)
         # Use the redacted list for the UI summary (no secret values), but
         # detect credentials via api_key_set (populated by redaction) or
         # env_var_set (env-var detection). For self-hosted providers no
         # key is required. The inference path uses list_providers_decrypted.
-        providers = sf.list_providers(project_id=pid)
-        if pid and not providers:
-            providers = sf.list_providers(project_id=None)
+        providers = await _providers_for_request(request, decrypted=False)
 
         def _has_creds(p: dict[str, Any]) -> bool:
             if p.get("provider_name") in SELF_HOSTED_PROVIDERS:
@@ -1227,15 +1251,15 @@ def create_autopilot_router(
         mctx = _ctx(request)
         pid = mctx.project_id if mctx.tenancy_mode == "multi" else _project_id(request)
         try:
-            executor_cfg = _resolve_executor_config(sf, pid)
+            providers = await _providers_for_request(request, decrypted=True)
+            executor_cfg = _resolve_executor_config(sf, pid, providers=providers)
             synthesis_context["model"] = executor_cfg.model
-            for env_name in ("OLLAMA_API_BASE", "OPENAI_API_BASE"):
-                base = os.environ.get(env_name, "")
-                if base:
-                    synthesis_context["base_url"] = base.replace(
-                        "localhost", "host.docker.internal"
-                    ).replace("127.0.0.1", "host.docker.internal")
-                    break
+            if executor_cfg.api_base:
+                synthesis_context["base_url"] = executor_cfg.api_base.replace(
+                    "localhost", "host.docker.internal"
+                ).replace("127.0.0.1", "host.docker.internal")
+        except HTTPException:
+            raise
         except Exception:  # noqa: BLE001
             pass
 

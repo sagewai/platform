@@ -7,17 +7,7 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""Cross-tenant isolation on the REAL connection routes (release gate, PR1b).
-
-The connections router never adopted the W2/W4 tenant boundary: it scoped from
-the forgeable ``x-project-id`` header (not the session) and the by-id routes did
-no scope check at all, so in multi-tenant mode a project member could read /
-mutate / delete / export another project's connections by id. These tests drive
-the actual routes (file-backed store; the Postgres store is PR1c) and assert the
-boundary now holds: cross-project ids are 404 (hidden), inherited org-shared rows
-are read-only to project members (403), viewers cannot write, and export is
-pinned to the session project.
-"""
+"""Connection routes fail closed without a tenant-safe store in multi-tenant mode."""
 
 import httpx
 import pytest_asyncio
@@ -98,7 +88,18 @@ async def _req(app, method, path, *, token, project=None, json=None):
 _BASE = "/api/v1/admin/connections"
 
 
-async def test_cross_project_get_404(conn_app):
+async def test_connection_metadata_routes_stay_available(conn_app):
+    r = await _req(
+        conn_app["app"],
+        "GET",
+        f"{_BASE}/protocols",
+        token=conn_app["sess_member"],
+        project=conn_app["pa"],
+    )
+    assert r.status_code == 200
+
+
+async def test_connection_get_fails_closed_without_tenant_store(conn_app):
     r = await _req(
         conn_app["app"],
         "GET",
@@ -106,10 +107,11 @@ async def test_cross_project_get_404(conn_app):
         token=conn_app["sess_member"],
         project=conn_app["pa"],
     )
-    assert r.status_code == 404  # PB's connection is hidden from a PA member
+    assert r.status_code == 503
+    assert r.json()["detail"] == "tenant connection store is not configured"
 
 
-async def test_cross_project_delete_404(conn_app):
+async def test_connection_delete_fails_closed_without_tenant_store(conn_app):
     r = await _req(
         conn_app["app"],
         "DELETE",
@@ -117,10 +119,10 @@ async def test_cross_project_delete_404(conn_app):
         token=conn_app["sess_member"],
         project=conn_app["pa"],
     )
-    assert r.status_code == 404
+    assert r.status_code == 503
 
 
-async def test_cross_project_patch_404(conn_app):
+async def test_connection_patch_fails_closed_without_tenant_store(conn_app):
     r = await _req(
         conn_app["app"],
         "PATCH",
@@ -129,10 +131,10 @@ async def test_cross_project_patch_404(conn_app):
         project=conn_app["pa"],
         json={"display_name": "hijacked"},
     )
-    assert r.status_code == 404
+    assert r.status_code == 503
 
 
-async def test_cross_project_set_default_404(conn_app):
+async def test_connection_set_default_fails_closed_without_tenant_store(conn_app):
     r = await _req(
         conn_app["app"],
         "POST",
@@ -140,22 +142,17 @@ async def test_cross_project_set_default_404(conn_app):
         token=conn_app["sess_member"],
         project=conn_app["pa"],
     )
-    assert r.status_code == 404
+    assert r.status_code == 503
 
 
-async def test_list_is_scoped_to_own_plus_global(conn_app):
+async def test_list_fails_closed_without_tenant_connection_store(conn_app):
     r = await _req(
         conn_app["app"], "GET", f"{_BASE}/", token=conn_app["sess_member"], project=conn_app["pa"]
     )
-    assert r.status_code == 200
-    ids = {c["id"] for c in r.json()}
-    assert conn_app["conn_pa"] in ids  # own
-    assert conn_app["conn_global"] in ids  # inherited org-shared
-    assert conn_app["conn_pb"] not in ids  # never another project's
+    assert r.status_code == 503
 
 
-async def test_member_reads_global_but_cannot_delete_it(conn_app):
-    # Org-shared (global) connection is readable via inheritance...
+async def test_member_cannot_read_global_without_tenant_connection_store(conn_app):
     r = await _req(
         conn_app["app"],
         "GET",
@@ -163,16 +160,7 @@ async def test_member_reads_global_but_cannot_delete_it(conn_app):
         token=conn_app["sess_member"],
         project=conn_app["pa"],
     )
-    assert r.status_code == 200
-    # ...but a project member may not mutate it (org-shared write = org admin).
-    r2 = await _req(
-        conn_app["app"],
-        "DELETE",
-        f"{_BASE}/{conn_app['conn_global']}",
-        token=conn_app["sess_member"],
-        project=conn_app["pa"],
-    )
-    assert r2.status_code == 403  # visible (not 404), but under-privileged
+    assert r.status_code == 503
 
 
 async def test_viewer_cannot_create_403(conn_app):
@@ -195,8 +183,7 @@ async def test_forged_header_404(conn_app):
     assert r.status_code == 404
 
 
-async def test_export_pinned_to_session_project(conn_app):
-    # Even with ?project_id=PB, a PA member's export only contains PA's connections.
+async def test_export_fails_closed_without_tenant_connection_store(conn_app):
     r = await _req(
         conn_app["app"],
         "GET",
@@ -204,17 +191,13 @@ async def test_export_pinned_to_session_project(conn_app):
         token=conn_app["sess_member"],
         project=conn_app["pa"],
     )
-    assert r.status_code == 200
-    assert "pa-conn" in r.text
-    assert "pb-conn" not in r.text
+    assert r.status_code == 503
 
 
 # ── Review round 1 (sagecurator) regressions ────────────────────────────
 
 
-async def test_plugin_extra_route_cross_project_404(conn_app):
-    # Plugin extra routes (mcp/oauth2/...) resolve a connection by id too; a PA
-    # member hitting PB's MCP tools route must 404, not leak PB's cached tools.
+async def test_plugin_extra_route_fails_closed_without_tenant_store(conn_app):
     r = await _req(
         conn_app["app"],
         "GET",
@@ -222,7 +205,7 @@ async def test_plugin_extra_route_cross_project_404(conn_app):
         token=conn_app["sess_member"],
         project=conn_app["pa"],
     )
-    assert r.status_code == 404
+    assert r.status_code == 503
 
 
 async def test_viewer_cannot_test_own_connection_403(conn_app):
@@ -238,9 +221,7 @@ async def test_viewer_cannot_test_own_connection_403(conn_app):
     assert r.status_code == 403
 
 
-async def test_member_cannot_test_global_connection_403(conn_app):
-    # Testing an inherited org-shared connection mutates a global row -> a project
-    # member is forbidden (org-shared mutation needs an org admin).
+async def test_member_cannot_test_global_without_tenant_connection_store(conn_app):
     r = await _req(
         conn_app["app"],
         "POST",
@@ -248,12 +229,10 @@ async def test_member_cannot_test_global_connection_403(conn_app):
         token=conn_app["sess_member"],
         project=conn_app["pa"],
     )
-    assert r.status_code == 403
+    assert r.status_code == 503
 
 
-async def test_viewer_cannot_export_encrypted_403(conn_app):
-    # Encrypted export emits fernet: ciphertext (credential material); a read-only
-    # viewer must not be able to request it.
+async def test_viewer_cannot_export_encrypted_without_tenant_connection_store(conn_app):
     r = await _req(
         conn_app["app"],
         "GET",
@@ -261,4 +240,4 @@ async def test_viewer_cannot_export_encrypted_403(conn_app):
         token=conn_app["sess_viewer"],
         project=conn_app["pa"],
     )
-    assert r.status_code == 403
+    assert r.status_code == 503

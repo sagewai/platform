@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 from sagewai.admin.autopilot_routes import _resolve_executor_config
-from sagewai.admin.provider_resolution import litellm_kwargs_for_provider
+from sagewai.admin.provider_resolution import choose_provider, litellm_kwargs_for_provider
 
 
 class _UnexpectedFileStore:
@@ -51,3 +51,51 @@ def test_autopilot_executor_config_uses_injected_tenant_provider():
 def test_autopilot_executor_config_disables_env_fallback_for_empty_tenant_providers():
     cfg = _resolve_executor_config(_UnexpectedFileStore(), "project-a", providers=[])
     assert cfg.allow_env_fallback is False
+
+
+def test_choose_provider_prefers_project_default_over_older_org_default():
+    chosen = choose_provider(
+        [
+            {
+                "provider_name": "openai",
+                "project_id": None,
+                "default": True,
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "config": {"api_key": "sk-org", "model": "gpt-org"},
+            },
+            {
+                "provider_name": "anthropic",
+                "project_id": "project-a",
+                "default": True,
+                "created_at": "2026-01-02T00:00:00+00:00",
+                "config": {"api_key": "sk-project", "model": "claude-project"},
+            },
+        ]
+    )
+    assert chosen is not None
+    assert chosen["project_id"] == "project-a"
+    assert chosen["provider_name"] == "anthropic"
+
+
+def test_choose_provider_project_row_shadows_same_named_org_provider():
+    chosen = choose_provider(
+        [
+            {
+                "provider_name": "openai",
+                "project_id": None,
+                "default": True,
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "config": {"api_key": "sk-org", "model": "gpt-org"},
+            },
+            {
+                "provider_name": "openai",
+                "project_id": "project-a",
+                "default": False,
+                "created_at": "2026-01-02T00:00:00+00:00",
+                "config": {"api_key": "sk-project", "model": "gpt-project"},
+            },
+        ]
+    )
+    assert chosen is not None
+    assert chosen["project_id"] == "project-a"
+    assert chosen["config"]["api_key"] == "sk-project"

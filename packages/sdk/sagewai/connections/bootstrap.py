@@ -31,8 +31,9 @@ from sagewai.connections.store import ConnectionStore, _default_store_path
 class ConnectionsContext:
     """The platform's per-process connection-handling triplet."""
 
-    store: ConnectionStore
+    store: Any
     router: CredentialsBackendRouter
+    tenant_safe: bool = False
 
     def make_plugin_context(
         self, *, project_id: str | None, request: Any | None
@@ -46,7 +47,9 @@ class ConnectionsContext:
         )
 
 
-def build_connections_context(sf: AdminStateFile) -> ConnectionsContext:
+def build_connections_context(
+    sf: AdminStateFile, *, store: Any | None = None, tenant_safe: bool = False
+) -> ConnectionsContext:
     """Construct the platform's connection-handling triplet.
 
     Reads the platform default credentials backend from
@@ -54,15 +57,16 @@ def build_connections_context(sf: AdminStateFile) -> ConnectionsContext:
     Wires the store with the full plugin-registry's allowed protocols
     and per-protocol default-key extractors.
     """
-    store = ConnectionStore(
-        _default_store_path(),
-        allowed_protocols=tuple(p.id for p in PROTOCOLS),
-        default_key_for=DEFAULT_KEY_FOR,
-    )
+    if store is None:
+        store = ConnectionStore(
+            _default_store_path(),
+            allowed_protocols=tuple(p.id for p in PROTOCOLS),
+            default_key_for=DEFAULT_KEY_FOR,
+        )
     router = CredentialsBackendRouter(
         default_backend=sf.get_default_credentials_backend(),
     )
-    return ConnectionsContext(store=store, router=router)
+    return ConnectionsContext(store=store, router=router, tenant_safe=tenant_safe)
 
 
 __all__ = ["ConnectionsContext", "build_connections_context"]

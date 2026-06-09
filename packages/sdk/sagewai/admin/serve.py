@@ -36,7 +36,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.responses import Response, StreamingResponse
 
 from sagewai import __version__ as _SDK_VERSION
-from sagewai.admin.authz import require_org_admin
+from sagewai.admin.authz import require_in_project_scope, require_org_admin
 from sagewai.admin.state_file import SHARED_ONLY, AdminStateFile, _slugify
 
 logger = logging.getLogger("sagewai.admin")
@@ -585,7 +585,7 @@ def create_admin_serve_app(
         store = _provider_store(request)
         if store is not None:
             return await store.list_decrypted(ctx=request.state.context)
-        return sf.list_providers_decrypted()
+        return sf.list_providers_decrypted(project_id=_project_scope(request))
 
     async def _litellm_completion_kwargs(request: Request, requested_model: str) -> dict[str, Any]:
         from sagewai.admin.provider_resolution import (
@@ -969,12 +969,9 @@ def create_admin_serve_app(
             replay_routes.register(app, _revocation_store, registry)
 
     # Harness admin routes (LLM proxy: policies, keys, spend, audit, config).
-    # Backend implementation lives in sagewai.harness; mounting its admin
-    # router here makes apps/admin/app/harness/* pages functional. Uses
-    # process-local InMemoryHarnessStore — data does not survive admin
-    # restarts. PostgresHarnessStore (sagewai.harness.postgres_store) is the
-    # production path; can be wired conditionally on SAGEWAI_DATABASE_URL
-    # following the Sealed-iii.A pattern above when needed.
+    # Single-org/dev without a DB keeps the lightweight in-memory store. Any
+    # DB-backed or multi-tenant app uses the durable SQLAlchemy store; tenant
+    # deployments must not lose proxy policy/key/spend state on process restart.
     from sagewai.harness import (
         HarnessConfig,
         InMemoryHarnessStore,
@@ -982,9 +979,28 @@ def create_admin_serve_app(
     )
     from sagewai.harness.admin_api import create_harness_admin_router
 
-    _harness_store = InMemoryHarnessStore()
+    if _db_url or _is_multi_tenant():
+        from sagewai.harness.postgres_store import PostgresHarnessStore
+
+        _identity_engine = getattr(identity_store, "_engine", None)
+        _harness_store = (
+            PostgresHarnessStore(database_url=_db_url)
+            if _db_url
+            else PostgresHarnessStore(engine=_identity_engine)
+            if _identity_engine is not None
+            else PostgresHarnessStore()
+        )
+
+        @app.on_event("startup")
+        async def _init_harness_store() -> None:  # type: ignore[misc]
+            await _harness_store.init()
+
+    else:
+        _harness_store = InMemoryHarnessStore()
     _harness_classifier = RequestClassifier()
     _harness_config = HarnessConfig()
+    app.state.harness_store = _harness_store
+    app.state.harness_config = _harness_config
     app.include_router(
         create_harness_admin_router(
             store=_harness_store,
@@ -1484,15 +1500,24 @@ def create_admin_serve_app(
         hardcoded fixture list. Other capability buckets (tools, memory,
         guardrails, strategies) stay constant for now.
         """
-        from sagewai.admin.state_file import default_admin_state_path
         from sagewai.connections.bootstrap import build_connections_context
 
         pid = _project_scope(request)
+        connection_store = getattr(
+            getattr(getattr(request.app, "state", None), "resource_stores", None),
+            "connection",
+            None,
+        )
         try:
-            ctx = build_connections_context(
-                AdminStateFile(default_admin_state_path())
-            )
-            mcp_connections = ctx.store.list(pid, protocol="mcp")
+            if _multi_ctx(request) is not None:
+                mcp_connections = (
+                    connection_store.list(pid, protocol="mcp")
+                    if connection_store is not None
+                    else []
+                )
+            else:
+                ctx = build_connections_context(sf)
+                mcp_connections = ctx.store.list(pid, protocol="mcp")
         except Exception:
             mcp_connections = []
         body = dict(_CAPABILITIES)
@@ -2250,10 +2275,40 @@ def create_admin_serve_app(
     async def workflow_templates() -> JSONResponse:
         return JSONResponse(_WORKFLOW_TEMPLATES)
 
+    def _workflow_record_project_id(record: dict[str, Any]) -> str | None:
+        pid = record.get("project_id")
+        return pid if pid else None
+
+    def _workflow_record_readable(record: dict[str, Any], request: Request) -> bool:
+        rec_pid = _workflow_record_project_id(record)
+        if _multi_ctx(request) is not None:
+            return _in_read_scope(rec_pid, request)
+        pid = _project_scope(request)
+        return True if pid is None else rec_pid in (pid, None)
+
+    def _workflow_runs_for_request(request: Request) -> list[dict[str, Any]]:
+        runs = sf._read().get("workflow_runs", [])
+        return [r for r in runs if _workflow_record_readable(r, request)]
+
+    def _workflow_run_for_request(
+        run_id: str, request: Request, *, write: bool = False
+    ) -> dict[str, Any] | None:
+        for record in sf._read().get("workflow_runs", []):
+            if record.get("run_id") != run_id:
+                continue
+            ctx = _multi_ctx(request)
+            if ctx is not None:
+                require_in_project_scope(
+                    _workflow_record_project_id(record), ctx, write=write
+                )
+            elif not _workflow_record_readable(record, request):
+                return None
+            return record
+        return None
+
     @app.get("/workflows/stats")
-    async def workflow_stats() -> JSONResponse:
-        data = sf._read()
-        runs = data.get("workflow_runs", [])
+    async def workflow_stats(request: Request) -> JSONResponse:
+        runs = _workflow_runs_for_request(request)
         return JSONResponse({
             "queued": sum(1 for r in runs if r.get("status") == "queued"),
             "running": sum(1 for r in runs if r.get("status") == "running"),
@@ -2338,7 +2393,7 @@ def create_admin_serve_app(
 
                     yield _emit("step_started", {"step": i + 1, "agent": agent_name, "model": model})
 
-                    # Call LLM via litellm
+                    # Call LLM via the active tenant provider resolution.
                     step_output = ""
                     step_status = "completed"
                     try:
@@ -2348,8 +2403,9 @@ def create_admin_serve_app(
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": current_input},
                         ]
+                        completion_kwargs = await _litellm_completion_kwargs(request, model)
                         response = await litellm.acompletion(
-                            model=model, messages=messages, stream=True
+                            **completion_kwargs, messages=messages, stream=True
                         )
                         async for chunk in response:
                             delta = chunk.choices[0].delta.content or ""
@@ -2468,30 +2524,24 @@ def create_admin_serve_app(
         )
 
     @app.get("/workflows/runs/{run_id}")
-    async def workflow_run_detail(run_id: str) -> JSONResponse:
-        data = sf._read()
-        for r in data.get("workflow_runs", []):
-            if r.get("run_id") == run_id:
-                return JSONResponse(r)
+    async def workflow_run_detail(run_id: str, request: Request) -> JSONResponse:
+        record = _workflow_run_for_request(run_id, request)
+        if record is not None:
+            return JSONResponse(record)
         return JSONResponse({
             "run_id": run_id, "status": "not_found",
             "steps": [], "started_at": None, "finished_at": None,
         })
 
     @app.get("/workflows/runs/{run_id}/events")
-    async def workflow_run_events(run_id: str):
+    async def workflow_run_events(run_id: str, request: Request):
         """Stream stored events for a completed workflow run as SSE.
 
         Live events for an in-flight run arrive via the /workflows/run
         POST response. This endpoint is the replay-only path used by the
         history detail page to populate the Events tab for completed runs.
         """
-        data = sf._read()
-        target = None
-        for r in data.get("workflow_runs", []):
-            if r.get("run_id") == run_id:
-                target = r
-                break
+        target = _workflow_run_for_request(run_id, request)
 
         async def _replay():
             if target is None:
@@ -2510,10 +2560,18 @@ def create_admin_serve_app(
         )
 
     @app.post("/workflows/runs/{run_id}/cancel")
-    async def workflow_cancel(run_id: str) -> JSONResponse:
+    async def workflow_cancel(run_id: str, request: Request) -> JSONResponse:
+        target = _workflow_run_for_request(run_id, request, write=True)
+        if target is None:
+            return JSONResponse({"status": "not_found"}, status_code=404)
+        target_pid = _workflow_record_project_id(target)
+
         def _apply(d):
             for r in d.get("workflow_runs", []):
-                if r.get("run_id") == run_id:
+                if (
+                    r.get("run_id") == run_id
+                    and _workflow_record_project_id(r) == target_pid
+                ):
                     r["status"] = "cancelled"
                     return True
             return False
@@ -2531,19 +2589,13 @@ def create_admin_serve_app(
 
     @app.get("/workflows/history")
     async def workflow_history(request: Request) -> JSONResponse:
-        pid = _project_scope(request)
-        data = sf._read()
-        runs = data.get("workflow_runs", [])
-        if pid:
-            runs = [r for r in runs if r.get("project_id") in (pid, None)]
-        return JSONResponse(runs)
+        return JSONResponse(_workflow_runs_for_request(request))
 
     @app.get("/workflows/history/{run_id}")
-    async def workflow_history_detail(run_id: str) -> JSONResponse:
-        data = sf._read()
-        for r in data.get("workflow_runs", []):
-            if r.get("run_id") == run_id:
-                return JSONResponse(r)
+    async def workflow_history_detail(run_id: str, request: Request) -> JSONResponse:
+        record = _workflow_run_for_request(run_id, request)
+        if record is not None:
+            return JSONResponse(record)
         return JSONResponse({
             "run_id": run_id, "status": "not_found",
             "steps": [], "started_at": None, "finished_at": None,

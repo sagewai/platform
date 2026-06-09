@@ -146,6 +146,13 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
     # byte-for-byte unchanged.
     from sagewai.admin.serve import _multi_ctx, _require_resource_write
 
+    def _ensure_tenant_connection_store(request: Request) -> None:
+        if _multi_ctx(request) is not None and not ctx.tenant_safe:
+            raise HTTPException(
+                status_code=503,
+                detail="tenant connection store is not configured",
+            )
+
     def _ensure_readable(record: Any, request: Request) -> None:
         """404 unless the connection is visible to the actor (own + inherited global).
 
@@ -210,6 +217,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         err = _require_auth(request, sf)
         if err is not None:
             return err
+        _ensure_tenant_connection_store(request)
         mctx = _multi_ctx(request)
         if mctx is not None:
             # Own project + inherited org-shared (global); org scope = global only.
@@ -237,6 +245,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         err = _require_auth(request, sf)
         if err is not None:
             return err
+        _ensure_tenant_connection_store(request)
         # Authorize the write BEFORE processing the payload: in multi-tenant mode
         # stamp the session-validated project (never the forgeable header); an
         # org-shared (project-less) create requires an org admin.
@@ -299,6 +308,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         err = _require_auth(request, sf)
         if err is not None:
             return err
+        _ensure_tenant_connection_store(request)
         proj = project_id or request.headers.get("X-Project-ID") or _project_scope(request)
         mctx = _multi_ctx(request)
         if mctx is not None:
@@ -377,6 +387,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         err = _require_auth(request, sf)
         if err is not None:
             return err
+        _ensure_tenant_connection_store(request)
         proj = project_id or request.headers.get("X-Project-ID") or _project_scope(request)
         mctx = _multi_ctx(request)
         if mctx is not None:
@@ -459,6 +470,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         err = _require_auth(request, sf)
         if err is not None:
             return err
+        _ensure_tenant_connection_store(request)
         record = ctx.store.get(connection_id)
         _ensure_readable(record, request)
         plugin = get_protocol(record.protocol)
@@ -473,6 +485,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         err = _require_auth(request, sf)
         if err is not None:
             return err
+        _ensure_tenant_connection_store(request)
         before = ctx.store.get(connection_id)
         _ensure_writable(before, request)
         plugin = get_protocol(before.protocol)
@@ -539,6 +552,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         err = _require_auth(request, sf)
         if err is not None:
             return err
+        _ensure_tenant_connection_store(request)
         record = ctx.store.get(connection_id)
         _ensure_writable(record, request)
         plugin = get_protocol(record.protocol)
@@ -561,6 +575,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         err = _require_auth(request, sf)
         if err is not None:
             return err
+        _ensure_tenant_connection_store(request)
         record = ctx.store.get(connection_id)
         # /test writes last_tested_at/last_test_ok, so it needs write/execute
         # authorization: viewers and project actors mutating an inherited org-shared
@@ -594,6 +609,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         err = _require_auth(request, sf)
         if err is not None:
             return err
+        _ensure_tenant_connection_store(request)
         _ensure_writable(ctx.store.get(connection_id), request)
         try:
             record = ctx.store.set_default(connection_id)
@@ -610,7 +626,13 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
 
 def register(app: FastAPI, sf: AdminStateFile) -> None:
     """Mount the generic connections router + plugin extra_routes."""
-    ctx = build_connections_context(sf)
+    resource_stores = getattr(getattr(app, "state", None), "resource_stores", None)
+    tenant_store = getattr(resource_stores, "connection", None) if resource_stores else None
+    ctx = build_connections_context(
+        sf,
+        store=tenant_store,
+        tenant_safe=tenant_store is not None,
+    )
     # Inject the context for plugin extra_routes that need it (oauth2, mqtt, grpc).
     from sagewai.connections.protocols import grpc as grpc_module
     from sagewai.connections.protocols import mqtt as mqtt_module
@@ -631,6 +653,11 @@ def register(app: FastAPI, sf: AdminStateFile) -> None:
         mctx = _multi_ctx(request)
         if mctx is None:
             return
+        if not ctx.tenant_safe:
+            raise HTTPException(
+                status_code=503,
+                detail="tenant connection store is not configured",
+            )
         cid = request.path_params.get("connection_id")
         if cid is None:
             return
