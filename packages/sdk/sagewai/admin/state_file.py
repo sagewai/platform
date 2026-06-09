@@ -345,13 +345,38 @@ class AdminStateFile:
         return None
 
     def get_workflow_artifact_destination(
-        self, workflow_name: str,
+        self, workflow_name: str, project_id: str | None = None,
     ) -> ArtifactDestination | None:
         """Return the admin-override artifact destination for a workflow.
 
         Plan ART. Returns None when no override is set.
         """
         state = self._read()
+        scoped = state.get("artifact_destinations") or []
+        if isinstance(scoped, list):
+            exact = next(
+                (
+                    row
+                    for row in scoped
+                    if row.get("workflow_name") == workflow_name
+                    and row.get("project_id") == project_id
+                ),
+                None,
+            )
+            if exact and exact.get("destination") is not None:
+                return ArtifactDestination.model_validate(exact["destination"])
+            if project_id is not None:
+                inherited = next(
+                    (
+                        row
+                        for row in scoped
+                        if row.get("workflow_name") == workflow_name
+                        and row.get("project_id") is None
+                    ),
+                    None,
+                )
+                if inherited and inherited.get("destination") is not None:
+                    return ArtifactDestination.model_validate(inherited["destination"])
         block = self._workflow_block(state, workflow_name)
         if not block:
             return None
@@ -387,6 +412,50 @@ class AdminStateFile:
                 block = workflows.get(workflow_name) if isinstance(workflows, dict) else None
             if block and "artifact_destination" in block:
                 del block["artifact_destination"]
+        self._mutate(_apply)
+
+    def set_scoped_workflow_artifact_destination(
+        self,
+        workflow_name: str,
+        destination: ArtifactDestination,
+        project_id: str | None,
+    ) -> None:
+        """Persist an admin artifact destination for a workflow/project scope."""
+        record = {
+            "workflow_name": workflow_name,
+            "project_id": project_id,
+            "destination": destination.model_dump(mode="json"),
+        }
+
+        def _apply(state: dict[str, Any]) -> None:
+            rows = state.setdefault("artifact_destinations", [])
+            state["artifact_destinations"] = [
+                row
+                for row in rows
+                if not (
+                    row.get("workflow_name") == workflow_name
+                    and row.get("project_id") == project_id
+                )
+            ]
+            state["artifact_destinations"].append(record)
+
+        self._mutate(_apply)
+
+    def clear_scoped_workflow_artifact_destination(
+        self, workflow_name: str, project_id: str | None,
+    ) -> None:
+        """Remove the admin artifact destination for a workflow/project scope."""
+        def _apply(state: dict[str, Any]) -> None:
+            rows = state.get("artifact_destinations") or []
+            state["artifact_destinations"] = [
+                row
+                for row in rows
+                if not (
+                    row.get("workflow_name") == workflow_name
+                    and row.get("project_id") == project_id
+                )
+            ]
+
         self._mutate(_apply)
 
     def _write(self, data: dict[str, Any]) -> None:

@@ -133,8 +133,8 @@ async def test_member_denied_on_org_admin_routes_all_methods(app_ctx):
     """A project member must be denied on org/system routes — for EVERY method.
 
     Covers GET/list (not just mutations): a member must not READ org credentials,
-    token metadata, or the not-yet-project-scoped stores (budget/guardrails/
-    notifications/...), whose reads would otherwise leak across projects.
+    token metadata, or the remaining not-yet-project-scoped stores, whose reads
+    would otherwise leak across projects.
     """
     app, token, pa = app_ctx["app"], app_ctx["member"], app_ctx["pa"]
     leaked = []
@@ -152,11 +152,11 @@ async def test_member_denied_on_org_admin_routes_all_methods(app_ctx):
 
 
 @pytest.mark.asyncio
-async def test_member_denied_on_artifact_destination_read(app_ctx):
-    """The artifact-destination store has no project_id — a member must not read it
-    (its prefix overlaps project-scoped replay, so it's gated per-handler)."""
+async def test_unset_artifact_destination_is_not_accidentally_created(app_ctx):
+    """A project member may read in-scope artifact destinations, but an unset one
+    must stay 404 and must not be synthesized by the route."""
     app, token, pa = app_ctx["app"], app_ctx["member"], app_ctx["pa"]
     r = await _hit(
         app, "GET", "/api/v1/admin/workflows/wf-x/artifact_destination", token=token, project=pa
     )
-    assert not (200 <= r.status_code < 300), f"member read artifact destination -> {r.status_code}"
+    assert r.status_code == 404

@@ -530,6 +530,31 @@ async def test_capabilities_include_inherited_mcp_connections(real_app):
     assert "pb-mcp" not in names
 
 
+async def test_mcp_server_list_uses_tenant_connection_context(real_app):
+    # Legacy /api/v1/mcp/servers must not read the process-global state-file
+    # mcp_servers list in multi-tenant mode. It should project-filter through the
+    # same tenant connection store as /playground/capabilities.
+    real_app["sf"].mutate(
+        lambda d: d.setdefault("mcp_servers", []).append(
+            {"name": "state-file-leak", "path": "/tmp/leak", "status": "ready"}
+        )
+    )
+
+    r = await _req(
+        real_app["app"],
+        "GET",
+        "/api/v1/mcp/servers",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 200
+    names = {c.get("name") for c in r.json()}
+    assert "pa-mcp" in names
+    assert "shared-mcp" in names
+    assert "pb-mcp" not in names
+    assert "state-file-leak" not in names
+
+
 # ── Run + prompt-log isolation on the real admin routes (PR2) ────────
 
 
@@ -1023,64 +1048,167 @@ async def test_fleet_register_uses_authenticated_org_not_body_org(real_app):
     assert "tenant-worker" in {w.get("name") for w in listed.json()}
 
 
-# ── Project-scoped routes whose store lacks a project_id column ───────────
-# These are gated org-admin as a safe interim (FLAGGED: need a project column):
-# saved_workflows, budget_limits, guardrail_configs, eval_datasets,
-# notification channels/triggers, triggers, memory write stubs.
+# ── Project-scoped file-backed routes + remaining org-admin stubs ─────────
 
 
-async def test_workflow_registry_create_member_403(real_app):
+async def test_workflow_registry_create_member_scoped_ok(real_app):
     r = await _req(
         real_app["app"], "POST", "/api/v1/workflow-registry",
         token=real_app["sess_member"], project=real_app["pa"],
         json={"name": "wf", "yaml_content": "x: 1"},
     )
-    assert r.status_code == 403
+    assert r.status_code == 201
+    assert r.json()["project_id"] == real_app["pa"]
+
+    listed = await _req(
+        real_app["app"], "GET", "/api/v1/workflow-registry",
+        token=real_app["sess_member"], project=real_app["pa"],
+    )
+    assert listed.status_code == 200
+    assert {wf["name"] for wf in listed.json()["items"]} == {"wf"}
 
 
-async def test_budget_limit_create_member_403(real_app):
+async def test_budget_limit_create_member_scoped_ok(real_app):
     r = await _req(
         real_app["app"], "POST", "/api/v1/budget/limits",
         token=real_app["sess_member"], project=real_app["pa"],
-        json={"agent_name": "scout", "daily_limit_usd": 5},
+        json={"agent_name": "scout", "daily_limit_usd": 5, "project_id": real_app["pb"]},
     )
-    assert r.status_code == 403
+    assert r.status_code == 201
+    assert r.json()["project_id"] == real_app["pa"]
+
+    listed = await _req(
+        real_app["app"], "GET", "/api/v1/budget/limits",
+        token=real_app["sess_member"], project=real_app["pa"],
+    )
+    assert listed.status_code == 200
+    assert {row["agent_name"] for row in listed.json()} == {"scout"}
 
 
-async def test_guardrail_config_member_403(real_app):
+async def test_guardrail_config_member_scoped_ok(real_app):
     r = await _req(
         real_app["app"], "PUT", "/api/v1/guardrails/configs/scout",
         token=real_app["sess_member"], project=real_app["pa"],
-        json={"guardrails": []},
+        json={"guardrails": [], "project_id": real_app["pb"]},
     )
-    assert r.status_code == 403
+    assert r.status_code == 200
+    assert r.json()["project_id"] == real_app["pa"]
 
 
-async def test_eval_dataset_create_member_403(real_app):
+async def test_eval_dataset_create_member_scoped_ok(real_app):
     r = await _req(
         real_app["app"], "POST", "/api/v1/eval/datasets",
         token=real_app["sess_member"], project=real_app["pa"],
-        json={"name": "ds"},
+        json={"name": "ds", "project_id": real_app["pb"]},
     )
-    assert r.status_code == 403
+    assert r.status_code == 201
+    assert r.json()["project_id"] == real_app["pa"]
 
 
-async def test_notification_channel_member_403(real_app):
+async def test_notification_channel_member_scoped_and_redacted(real_app):
     r = await _req(
         real_app["app"], "POST", "/api/v1/notifications/channels",
         token=real_app["sess_member"], project=real_app["pa"],
-        json={"type": "slack"},
+        json={
+            "channel_type": "slack",
+            "webhook_url": "https://hooks.slack.com/services/pa",
+            "project_id": real_app["pb"],
+        },
     )
-    assert r.status_code == 403
+    assert r.status_code == 201
+    assert r.json()["project_id"] == real_app["pa"]
+    assert r.json()["webhook_url"] == "***"
+    assert "hooks.slack.com/services/pa" not in r.text
+
+    listed = await _req(
+        real_app["app"], "GET", "/api/v1/notifications/channels",
+        token=real_app["sess_member"], project=real_app["pa"],
+    )
+    assert listed.status_code == 200
+    assert "hooks.slack.com/services/pa" not in listed.text
+    assert {row["channel_type"] for row in listed.json()} == {"slack"}
 
 
-async def test_trigger_create_member_403(real_app):
+async def test_notification_trigger_member_scoped_ok(real_app):
+    r = await _req(
+        real_app["app"], "POST", "/api/v1/notifications/triggers",
+        token=real_app["sess_member"], project=real_app["pa"],
+        json={"event_type": "budget.warning", "channel_id": "ch-pa", "project_id": real_app["pb"]},
+    )
+    assert r.status_code == 201
+    assert r.json()["project_id"] == real_app["pa"]
+
+
+async def test_trigger_create_member_scoped_ok(real_app):
     r = await _req(
         real_app["app"], "POST", "/api/v1/triggers",
         token=real_app["sess_member"], project=real_app["pa"],
-        json={"name": "t"},
+        json={"name": "t", "project_id": real_app["pb"]},
     )
-    assert r.status_code == 403
+    assert r.status_code == 201
+    assert r.json()["project_id"] == real_app["pa"]
+
+
+async def test_notification_test_ignores_body_supplied_webhook_in_multi_tenant(real_app):
+    r = await _req(
+        real_app["app"], "POST", "/api/v1/notifications/test",
+        token=real_app["sess_member"], project=real_app["pa"],
+        json={
+            "channel_type": "slack",
+            "webhook_url": "https://hooks.slack.com/services/body-injected",
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["sent"] is False
+
+
+async def test_file_backed_project_resources_do_not_list_cross_project_rows(real_app):
+    def _seed(d):
+        d.setdefault("budget_limits", []).append(
+            {"agent_name": "pb-budget", "daily_limit_usd": 99, "project_id": real_app["pb"]}
+        )
+        d.setdefault("guardrail_configs", []).append(
+            {"agent_name": "pb-guardrail", "guardrails": [], "project_id": real_app["pb"]}
+        )
+        d.setdefault("eval_datasets", []).append(
+            {"id": "ds-pb", "name": "pb-dataset", "project_id": real_app["pb"]}
+        )
+        d.setdefault("triggers", []).append(
+            {"id": "trig-pb", "name": "pb-trigger", "project_id": real_app["pb"]}
+        )
+        d.setdefault("notification_channels", []).append(
+            {
+                "id": "ch-pb",
+                "channel_type": "slack",
+                "webhook_url": "https://hooks.slack.com/services/pb",
+                "project_id": real_app["pb"],
+            }
+        )
+        d.setdefault("notification_triggers", []).append(
+            {
+                "id": "notif-tr-pb",
+                "event_type": "pb-event",
+                "project_id": real_app["pb"],
+            }
+        )
+
+    real_app["sf"].mutate(_seed)
+
+    checks = [
+        ("/api/v1/budget/limits", "agent_name", "pb-budget"),
+        ("/api/v1/guardrails/configs", "agent_name", "pb-guardrail"),
+        ("/api/v1/eval/datasets", "name", "pb-dataset"),
+        ("/api/v1/triggers", "name", "pb-trigger"),
+        ("/api/v1/notifications/channels", "id", "ch-pb"),
+        ("/api/v1/notifications/triggers", "id", "notif-tr-pb"),
+    ]
+    for path, key, forbidden in checks:
+        r = await _req(
+            real_app["app"], "GET", path,
+            token=real_app["sess_member"], project=real_app["pa"],
+        )
+        assert r.status_code == 200
+        assert forbidden not in {row.get(key) for row in r.json()}
 
 
 async def test_memory_vector_ingest_member_403(real_app):
@@ -1100,30 +1228,46 @@ async def test_workflow_registry_create_owner_ok(real_app):
     assert r.status_code == 201
 
 
-# ── Artifact destinations: org-admin gate (FLAGGED: no project column) ───
-# Keyed globally by workflow name in the admin state file; PUT/DELETE gated
-# org-admin until a project column lands. GET stays open.
+# ── Artifact destinations: project-scoped admin overrides ────────────────
 
 
-async def test_artifact_destination_put_member_403(real_app):
-    # Body is a valid ArtifactDestination (target is a str) so FastAPI's 422
-    # body-validation layer passes and the request reaches the org-admin gate.
+async def test_artifact_destination_put_member_scoped_ok(real_app):
     r = await _req(
         real_app["app"], "PUT",
         "/api/v1/admin/workflows/wf1/artifact_destination",
         token=real_app["sess_member"], project=real_app["pa"],
         json={"type": "local", "target": "/tmp/x"},
     )
-    assert r.status_code == 403
+    assert r.status_code == 200
+
+    get = await _req(
+        real_app["app"], "GET",
+        "/api/v1/admin/workflows/wf1/artifact_destination",
+        token=real_app["sess_member"], project=real_app["pa"],
+    )
+    assert get.status_code == 200
+    assert get.json()["target"] == "/tmp/x"
+
+    state = real_app["sf"]._read()
+    row = next(r for r in state["artifact_destinations"] if r["workflow_name"] == "wf1")
+    assert row["project_id"] == real_app["pa"]
 
 
-async def test_artifact_destination_delete_member_403(real_app):
+async def test_artifact_destination_delete_member_scoped_ok(real_app):
+    put = await _req(
+        real_app["app"], "PUT",
+        "/api/v1/admin/workflows/wf1/artifact_destination",
+        token=real_app["sess_member"], project=real_app["pa"],
+        json={"type": "local", "target": "/tmp/x"},
+    )
+    assert put.status_code == 200
+
     r = await _req(
         real_app["app"], "DELETE",
         "/api/v1/admin/workflows/wf1/artifact_destination",
         token=real_app["sess_member"], project=real_app["pa"],
     )
-    assert r.status_code == 403
+    assert r.status_code == 204
 
 
 async def test_artifact_destination_put_owner_ok(real_app):

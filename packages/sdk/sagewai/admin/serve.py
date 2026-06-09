@@ -923,7 +923,7 @@ def create_admin_serve_app(
     # Plan ART — artifact destination admin routes
     from sagewai.admin import artifact_destination_routes  # noqa: E402
 
-    artifact_destination_routes.register(app)
+    artifact_destination_routes.register(app, state_file=sf)
 
     # Connections Platform PR4: generic CRUD admin routes delegating
     # to protocol plugins. Replaces the legacy connections_routes
@@ -1497,6 +1497,61 @@ def create_admin_serve_app(
     async def playground_strategies() -> JSONResponse:
         return JSONResponse([s["id"] for s in _STRATEGIES])
 
+    async def _mcp_connections_for_request(request: Request) -> list[Any]:
+        from sagewai.connections.bootstrap import build_connections_context
+        from sagewai.connections.store_ops import store_list
+
+        mctx = _multi_ctx(request)
+        if mctx is not None:
+            connection_store = _tenant_store_or_none(request, "connection")
+            org_connections = list(await store_list(connection_store, None, protocol="mcp"))
+            if mctx.project_id is None:
+                return org_connections
+            project_connections = list(
+                await store_list(connection_store, mctx.project_id, protocol="mcp")
+            )
+            seen = set()
+            merged = []
+            for conn in project_connections + org_connections:
+                key = (conn.protocol, conn.display_name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(conn)
+            return merged
+
+        ctx = build_connections_context(sf)
+        return list(ctx.store.list(_project_scope(request), protocol="mcp"))
+
+    def _mcp_capability_item(conn: Any) -> dict[str, Any]:
+        protocol_data = conn.protocol_data or {}
+        tool_count = len(protocol_data.get("discovered_tools", []))
+        return {
+            "id": conn.id,
+            "name": conn.display_name,
+            "description": (
+                f"{protocol_data.get('server_ref') or 'custom'} via "
+                f"{protocol_data.get('transport', '?')} — "
+                f"{tool_count} tools"
+            ),
+        }
+
+    def _mcp_server_item(conn: Any) -> dict[str, Any]:
+        protocol_data = conn.protocol_data or {}
+        path = (
+            protocol_data.get("server_ref")
+            or protocol_data.get("url")
+            or protocol_data.get("transport")
+            or ""
+        )
+        return {
+            **_mcp_capability_item(conn),
+            "path": path,
+            "status": conn.status,
+            "transport": protocol_data.get("transport"),
+            "tools_count": len(protocol_data.get("discovered_tools", [])),
+        }
+
     @app.get("/playground/capabilities")
     async def playground_capabilities(request: Request) -> JSONResponse:
         """CapabilityCatalog with MCP servers sourced from registered connections.
@@ -1506,58 +1561,14 @@ def create_admin_serve_app(
         hardcoded fixture list. Other capability buckets (tools, memory,
         guardrails, strategies) stay constant for now.
         """
-        from sagewai.connections.bootstrap import build_connections_context
-        from sagewai.connections.store_ops import store_list
-
-        pid = _project_scope(request)
-        connection_store = getattr(
-            getattr(getattr(request.app, "state", None), "resource_stores", None),
-            "connection",
-            None,
-        )
         try:
-            if _multi_ctx(request) is not None:
-                if connection_store is None:
-                    mcp_connections = []
-                else:
-                    mctx = _multi_ctx(request)
-                    org_connections = list(
-                        await store_list(connection_store, None, protocol="mcp")
-                    )
-                    if mctx.project_id is None:
-                        mcp_connections = org_connections
-                    else:
-                        project_connections = list(
-                            await store_list(
-                                connection_store, mctx.project_id, protocol="mcp"
-                            )
-                        )
-                        seen = set()
-                        mcp_connections = []
-                        for conn in project_connections + org_connections:
-                            key = (conn.protocol, conn.display_name)
-                            if key in seen:
-                                continue
-                            seen.add(key)
-                            mcp_connections.append(conn)
-            else:
-                ctx = build_connections_context(sf)
-                mcp_connections = ctx.store.list(pid, protocol="mcp")
+            mcp_connections = await _mcp_connections_for_request(request)
+        except _TenantStoreUnavailableError:
+            raise
         except Exception:
             mcp_connections = []
         body = dict(_CAPABILITIES)
-        body["mcp_servers"] = [
-            {
-                "id": c.id,
-                "name": c.display_name,
-                "description": (
-                    f"{c.protocol_data.get('server_ref') or 'custom'} via "
-                    f"{c.protocol_data.get('transport', '?')} — "
-                    f"{len(c.protocol_data.get('discovered_tools', []))} tools"
-                ),
-            }
-            for c in mcp_connections
-        ]
+        body["mcp_servers"] = [_mcp_capability_item(c) for c in mcp_connections]
         return JSONResponse(body)
 
     @app.get("/playground/presets")
@@ -3047,6 +3058,7 @@ def create_admin_serve_app(
         def _apply(d):
             d.setdefault("saved_workflows", []).append(wf)
         sf.mutate(_apply)
+        await _emit_audit(request, "workflow_registry.create", target_type="workflow", target_id=wf["id"])
         return JSONResponse(wf, status_code=201)
 
     @app.get("/api/v1/workflow-registry/by-name/{name}")
@@ -3084,61 +3096,86 @@ def create_admin_serve_app(
             d["saved_workflows"] = remaining
             return deleted
         if sf.mutate(_apply):
+            await _emit_audit(request, "workflow_registry.delete", target_type="workflow", target_id=wf_id)
             return JSONResponse({"status": "ok"})
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     # ── Budget limits ────────────────────────────────────────────
 
     @app.get("/api/v1/budget/limits")
-    async def list_budget_limits() -> JSONResponse:
+    async def list_budget_limits(request: Request) -> JSONResponse:
         data = sf._read()
-        return JSONResponse(data.get("budget_limits", []))
+        return JSONResponse(_filter_items_for_scope(data.get("budget_limits", []), _project_scope(request)))
 
     @app.post("/api/v1/budget/limits")
     async def create_budget_limit(request: Request) -> JSONResponse:
-        # FLAG: budget_limits rows carry no project_id column; org-admin gate is
-        # the safe interim until a project column lands. No-op in single-org.
-        require_org_admin(request.state.context)
+        _require_resource_write(request)
         body = await request.json()
+        scope = _project_scope(request)
+        body.pop("project_id", None)
+        body["project_id"] = _owner(scope)
         body.setdefault("created_at", datetime.datetime.now(datetime.timezone.utc).isoformat())
         agent = body.get("agent_name", "")
         def _apply(d):
             limits = d.setdefault("budget_limits", [])
-            d["budget_limits"] = [l for l in limits if l.get("agent_name") != agent]
+            d["budget_limits"] = [
+                l
+                for l in limits
+                if not (l.get("agent_name") == agent and _item_writable_in_scope(l, scope))
+            ]
             d["budget_limits"].append(body)
         sf.mutate(_apply)
+        await _emit_audit(request, "budget_limit.upsert", target_type="budget_limit", target_id=agent)
         return JSONResponse(body, status_code=201)
 
     @app.put("/api/v1/budget/limits/{agent_name}")
     async def update_budget_limit(agent_name: str, request: Request) -> JSONResponse:
-        # FLAG: budget_limits rows carry no project_id column (see create_budget_limit).
-        require_org_admin(request.state.context)
+        _require_resource_write(request)
         body = await request.json()
+        body.pop("project_id", None)
+        scope = _project_scope(request)
         def _apply(d):
             for l in d.get("budget_limits", []):
-                if l.get("agent_name") == agent_name:
+                if l.get("agent_name") == agent_name and _item_writable_in_scope(l, scope):
                     l.update(body)
                     return l
             return None
         result = sf.mutate(_apply)
         if result is not None:
+            await _emit_audit(request, "budget_limit.update", target_type="budget_limit", target_id=agent_name)
             return JSONResponse(result)
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     @app.delete("/api/v1/budget/limits/{agent_name}")
     async def delete_budget_limit(agent_name: str, request: Request) -> JSONResponse:
-        # FLAG: budget_limits rows carry no project_id column (see create_budget_limit).
-        require_org_admin(request.state.context)
+        _require_resource_write(request)
+        scope = _project_scope(request)
+        state = {"deleted": False}
         def _apply(d):
             limits = d.get("budget_limits", [])
-            d["budget_limits"] = [l for l in limits if l.get("agent_name") != agent_name]
+            remaining = []
+            for l in limits:
+                if l.get("agent_name") == agent_name and _item_writable_in_scope(l, scope):
+                    state["deleted"] = True
+                    continue
+                remaining.append(l)
+            d["budget_limits"] = remaining
         sf.mutate(_apply)
+        if _multi_ctx(request) is not None and not state["deleted"]:
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        if state["deleted"]:
+            await _emit_audit(
+                request, "budget_limit.delete", target_type="budget_limit", target_id=agent_name
+            )
         return JSONResponse({"status": "ok"})
 
     @app.get("/api/v1/budget/status/{agent_name}")
-    async def get_budget_status(agent_name: str) -> JSONResponse:
+    async def get_budget_status(agent_name: str, request: Request) -> JSONResponse:
         data = sf._read()
-        limit = next((l for l in data.get("budget_limits", []) if l.get("agent_name") == agent_name), None)
+        limits = _project_first(
+            _filter_items_for_scope(data.get("budget_limits", []), _project_scope(request))
+        )
+        limit = next((l for l in limits if l.get("agent_name") == agent_name), None)
         return JSONResponse({
             "agent_name": agent_name,
             "limit": limit,
@@ -3150,44 +3187,62 @@ def create_admin_serve_app(
     # ── Guardrail configs ────────────────────────────────────────
 
     @app.get("/api/v1/guardrails/configs")
-    async def list_guardrail_configs() -> JSONResponse:
+    async def list_guardrail_configs(request: Request) -> JSONResponse:
         data = sf._read()
-        return JSONResponse(data.get("guardrail_configs", []))
+        return JSONResponse(_filter_items_for_scope(data.get("guardrail_configs", []), _project_scope(request)))
 
     @app.get("/api/v1/guardrails/configs/{agent_name}")
-    async def get_guardrail_config(agent_name: str) -> JSONResponse:
+    async def get_guardrail_config(agent_name: str, request: Request) -> JSONResponse:
         data = sf._read()
-        config = next((c for c in data.get("guardrail_configs", []) if c.get("agent_name") == agent_name), None)
+        configs = _project_first(
+            _filter_items_for_scope(data.get("guardrail_configs", []), _project_scope(request))
+        )
+        config = next((c for c in configs if c.get("agent_name") == agent_name), None)
         if config:
             return JSONResponse(config)
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     @app.put("/api/v1/guardrails/configs/{agent_name}")
     async def upsert_guardrail_config(agent_name: str, request: Request) -> JSONResponse:
-        # FLAG: guardrail_configs rows carry no project_id column; org-admin gate
-        # is the safe interim until a project column lands. No-op in single-org.
-        require_org_admin(request.state.context)
+        _require_resource_write(request)
         body = await request.json()
+        scope = _project_scope(request)
+        body.pop("project_id", None)
         body["agent_name"] = agent_name
+        body["project_id"] = _owner(scope)
         def _apply(d):
             configs = d.setdefault("guardrail_configs", [])
-            d["guardrail_configs"] = [c for c in configs if c.get("agent_name") != agent_name]
+            d["guardrail_configs"] = [
+                c
+                for c in configs
+                if not (c.get("agent_name") == agent_name and _item_writable_in_scope(c, scope))
+            ]
             d["guardrail_configs"].append(body)
         sf.mutate(_apply)
+        await _emit_audit(
+            request, "guardrail_config.upsert", target_type="guardrail_config", target_id=agent_name
+        )
         return JSONResponse(body)
 
     @app.delete("/api/v1/guardrails/configs/{agent_name}/{guardrail_type}")
     async def delete_guardrail_config(agent_name: str, guardrail_type: str, request: Request) -> JSONResponse:
-        # FLAG: guardrail_configs rows carry no project_id column (see upsert_guardrail_config).
-        require_org_admin(request.state.context)
+        _require_resource_write(request)
+        scope = _project_scope(request)
         def _apply(d):
             for c in d.get("guardrail_configs", []):
-                if c.get("agent_name") == agent_name:
+                if c.get("agent_name") == agent_name and _item_writable_in_scope(c, scope):
                     types = c.get("guardrails", [])
                     c["guardrails"] = [g for g in types if g.get("type") != guardrail_type]
                     return True
             return False
         if sf.mutate(_apply):
+            await _emit_audit(
+                request,
+                "guardrail_config.delete",
+                target_type="guardrail_config",
+                target_id=agent_name,
+                metadata={"guardrail_type": guardrail_type},
+            )
             return JSONResponse({"status": "ok"})
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
@@ -3601,64 +3656,179 @@ def create_admin_serve_app(
 
     # ── Notifications ────────────────────────────────────────────
 
-    @app.get("/api/v1/notifications/channels")
-    async def list_notification_channels() -> JSONResponse:
+    _NOTIFICATION_SECRET_KEYS = {
+        "webhook_url",
+        "email_api_key",
+        "smtp_password",
+        "api_key",
+        "token",
+        "secret",
+        "password",
+    }
+    _REDACTED_MARKERS = {"***", "********", "***configured***"}
+
+    def _notification_public(record: dict[str, Any]) -> dict[str, Any]:
+        out = dict(record)
+        for key in _NOTIFICATION_SECRET_KEYS:
+            if out.get(key):
+                out[key] = "***"
+                out[f"has_{key}"] = True
+        return out
+
+    def _notification_type(record: dict[str, Any]) -> str:
+        return str(record.get("channel_type") or record.get("type") or "")
+
+    def _notification_channels_for_request(request: Request) -> list[dict[str, Any]]:
         data = sf._read()
-        return JSONResponse(data.get("notification_channels", []))
+        return _project_first(
+            _filter_items_for_scope(data.get("notification_channels", []), _project_scope(request))
+        )
+
+    def _notification_channel_for_type(
+        request: Request, channel_type: str,
+    ) -> dict[str, Any] | None:
+        return next(
+            (
+                c
+                for c in _notification_channels_for_request(request)
+                if _notification_type(c) == channel_type
+            ),
+            None,
+        )
+
+    def _merge_notification_secrets(body: dict[str, Any], existing: dict[str, Any] | None) -> None:
+        if existing is None:
+            return
+        for key in _NOTIFICATION_SECRET_KEYS:
+            if body.get(key) in _REDACTED_MARKERS and existing.get(key):
+                body[key] = existing[key]
+
+    @app.get("/api/v1/notifications/channels")
+    async def list_notification_channels(request: Request) -> JSONResponse:
+        return JSONResponse([
+            _notification_public(c) for c in _notification_channels_for_request(request)
+        ])
 
     @app.post("/api/v1/notifications/channels")
     async def save_notification_channel(request: Request) -> JSONResponse:
-        # FLAG: notification_channels rows carry no project_id column; org-admin
-        # gate is the safe interim until a project column lands. No-op single-org.
-        require_org_admin(request.state.context)
+        _require_resource_write(request)
         import secrets as _sec
         body = await request.json()
+        scope = _project_scope(request)
+        body.pop("project_id", None)
+        body["project_id"] = _owner(scope)
+        if body.get("type") and not body.get("channel_type"):
+            body["channel_type"] = body.get("type")
         body.setdefault("id", f"ch-{_sec.token_hex(6)}")
         def _apply(d):
             channels = d.setdefault("notification_channels", [])
-            d["notification_channels"] = [c for c in channels if c.get("id") != body["id"]]
+            existing = next(
+                (
+                    c
+                    for c in channels
+                    if c.get("id") == body["id"] and _item_writable_in_scope(c, scope)
+                ),
+                None,
+            )
+            _merge_notification_secrets(body, existing)
+            d["notification_channels"] = [
+                c
+                for c in channels
+                if not (c.get("id") == body["id"] and _item_writable_in_scope(c, scope))
+            ]
             d["notification_channels"].append(body)
         sf.mutate(_apply)
-        return JSONResponse(body, status_code=201)
+        await _emit_audit(
+            request,
+            "notification.channel.upsert",
+            target_type="notification_channel",
+            target_id=body["id"],
+        )
+        return JSONResponse(_notification_public(body), status_code=201)
 
     @app.delete("/api/v1/notifications/channels/{channel_id}")
     async def delete_notification_channel(channel_id: str, request: Request) -> JSONResponse:
-        # FLAG: notification_channels rows carry no project_id column (see save).
-        require_org_admin(request.state.context)
+        _require_resource_write(request)
+        scope = _project_scope(request)
+        state = {"deleted": False}
         def _apply(d):
             channels = d.get("notification_channels", [])
-            d["notification_channels"] = [c for c in channels if c.get("id") != channel_id]
+            remaining = []
+            for c in channels:
+                if c.get("id") == channel_id and _item_writable_in_scope(c, scope):
+                    state["deleted"] = True
+                    continue
+                remaining.append(c)
+            d["notification_channels"] = remaining
         sf.mutate(_apply)
+        if _multi_ctx(request) is not None and not state["deleted"]:
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        if state["deleted"]:
+            await _emit_audit(
+                request,
+                "notification.channel.delete",
+                target_type="notification_channel",
+                target_id=channel_id,
+            )
         return JSONResponse({"status": "ok"})
 
     @app.get("/api/v1/notifications/triggers")
-    async def list_notification_triggers() -> JSONResponse:
+    async def list_notification_triggers(request: Request) -> JSONResponse:
         data = sf._read()
-        return JSONResponse(data.get("notification_triggers", []))
+        return JSONResponse(
+            _filter_items_for_scope(data.get("notification_triggers", []), _project_scope(request))
+        )
 
     @app.post("/api/v1/notifications/triggers")
     async def save_notification_trigger(request: Request) -> JSONResponse:
-        # FLAG: notification_triggers rows carry no project_id column; org-admin
-        # gate is the safe interim until a project column lands. No-op single-org.
-        require_org_admin(request.state.context)
+        _require_resource_write(request)
         import secrets as _sec
         body = await request.json()
+        scope = _project_scope(request)
+        body.pop("project_id", None)
+        body["project_id"] = _owner(scope)
         body.setdefault("id", f"tr-{_sec.token_hex(6)}")
         def _apply(d):
             triggers = d.setdefault("notification_triggers", [])
-            d["notification_triggers"] = [t for t in triggers if t.get("id") != body["id"]]
+            d["notification_triggers"] = [
+                t
+                for t in triggers
+                if not (t.get("id") == body["id"] and _item_writable_in_scope(t, scope))
+            ]
             d["notification_triggers"].append(body)
         sf.mutate(_apply)
+        await _emit_audit(
+            request,
+            "notification.trigger.upsert",
+            target_type="notification_trigger",
+            target_id=body["id"],
+        )
         return JSONResponse(body, status_code=201)
 
     @app.delete("/api/v1/notifications/triggers/{trigger_id}")
     async def delete_notification_trigger(trigger_id: str, request: Request) -> JSONResponse:
-        # FLAG: notification_triggers rows carry no project_id column (see save).
-        require_org_admin(request.state.context)
+        _require_resource_write(request)
+        scope = _project_scope(request)
+        state = {"deleted": False}
         def _apply(d):
             triggers = d.get("notification_triggers", [])
-            d["notification_triggers"] = [t for t in triggers if t.get("id") != trigger_id]
+            remaining = []
+            for t in triggers:
+                if t.get("id") == trigger_id and _item_writable_in_scope(t, scope):
+                    state["deleted"] = True
+                    continue
+                remaining.append(t)
+            d["notification_triggers"] = remaining
         sf.mutate(_apply)
+        if _multi_ctx(request) is not None and not state["deleted"]:
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        if state["deleted"]:
+            await _emit_audit(
+                request,
+                "notification.trigger.delete",
+                target_type="notification_trigger",
+                target_id=trigger_id,
+            )
         return JSONResponse({"status": "ok"})
 
     @app.get("/api/v1/notifications/history")
@@ -3668,19 +3838,18 @@ def create_admin_serve_app(
     @app.post("/api/v1/notifications/test")
     async def test_notification(request: Request) -> JSONResponse:
         """Send a test notification to the specified channel."""
+        _require_resource_write(request)
         body = await request.json()
         channel_type = body.get("channel_type", "")
 
         # Find the saved channel config
-        data = sf._read()
-        channels = data.get("notification_channels", [])
-        channel = next(
-            (c for c in channels if c.get("channel_type") == channel_type),
-            None,
-        )
+        channel = _notification_channel_for_type(request, channel_type)
+        multi = _multi_ctx(request) is not None
 
         if channel_type == "slack":
-            webhook_url = channel.get("webhook_url", "") if channel else body.get("webhook_url", "")
+            webhook_url = channel.get("webhook_url", "") if channel else ""
+            if not webhook_url and not multi:
+                webhook_url = body.get("webhook_url", "")
             if not webhook_url:
                 return JSONResponse({"sent": False, "error": "No Slack webhook URL configured. Go to System → Notifications to add one."})
             try:
@@ -3708,9 +3877,13 @@ def create_admin_serve_app(
                 return JSONResponse({"sent": False, "error": "No email address configured. Go to System → Notifications to add one."})
 
             # Resolve provider + API key from channel config or env
-            provider = (channel or {}).get("email_provider", "") or os.environ.get("EMAIL_PROVIDER", "")
-            api_key = (channel or {}).get("email_api_key", "") or os.environ.get("EMAIL_API_KEY", "")
-            from_email = (channel or {}).get("email_from", "") or os.environ.get("EMAIL_FROM", "")
+            provider = (channel or {}).get("email_provider", "")
+            api_key = (channel or {}).get("email_api_key", "")
+            from_email = (channel or {}).get("email_from", "")
+            if not multi:
+                provider = provider or os.environ.get("EMAIL_PROVIDER", "")
+                api_key = api_key or os.environ.get("EMAIL_API_KEY", "")
+                from_email = from_email or os.environ.get("EMAIL_FROM", "")
             # Resend requires a verified domain. Use their test address
             # if no custom from-address is configured.
             if not from_email and provider == "resend":
@@ -3801,16 +3974,18 @@ def create_admin_serve_app(
           webhook_url: str (optional — uses saved channel config if omitted)
           channel_name: str (optional — overrides #channel in message)
         """
+        _require_resource_write(request)
         body = await request.json()
         ch = body.get("channel", "")
+        multi = _multi_ctx(request) is not None
 
         if ch == "slack":
-            webhook_url = body.get("webhook_url", "")
-            if not webhook_url:
-                # Fall back to saved channel config
-                data = sf._read()
-                saved = next((c for c in data.get("notification_channels", []) if c.get("channel_type") == "slack"), None)
-                webhook_url = (saved or {}).get("webhook_url", "")
+            saved = _notification_channel_for_type(request, "slack")
+            webhook_url = ""
+            if saved is not None:
+                webhook_url = saved.get("webhook_url", "")
+            elif not multi:
+                webhook_url = body.get("webhook_url", "")
             if not webhook_url:
                 return JSONResponse({"sent": False, "error": "No Slack webhook URL"}, status_code=400)
             message = body.get("message", "")
@@ -3834,11 +4009,14 @@ def create_admin_serve_app(
             if not email_to:
                 return JSONResponse({"sent": False, "error": "No recipient (to) specified"}, status_code=400)
 
-            data = sf._read()
-            saved = next((c for c in data.get("notification_channels", []) if c.get("channel_type") == "email"), None)
-            provider = (saved or {}).get("email_provider", "") or os.environ.get("EMAIL_PROVIDER", "")
-            api_key = (saved or {}).get("email_api_key", "") or os.environ.get("EMAIL_API_KEY", "")
-            from_email = (saved or {}).get("email_from", "") or os.environ.get("EMAIL_FROM", "")
+            saved = _notification_channel_for_type(request, "email")
+            provider = (saved or {}).get("email_provider", "")
+            api_key = (saved or {}).get("email_api_key", "")
+            from_email = (saved or {}).get("email_from", "")
+            if not multi:
+                provider = provider or os.environ.get("EMAIL_PROVIDER", "")
+                api_key = api_key or os.environ.get("EMAIL_API_KEY", "")
+                from_email = from_email or os.environ.get("EMAIL_FROM", "")
             if not from_email and provider == "resend":
                 from_email = "onboarding@resend.dev"
             elif not from_email:
@@ -3893,60 +4071,74 @@ def create_admin_serve_app(
     # ── Triggers ─────────────────────────────────────────────────
 
     @app.get("/api/v1/triggers")
-    async def list_triggers() -> JSONResponse:
+    async def list_triggers(request: Request) -> JSONResponse:
         data = sf._read()
-        return JSONResponse(data.get("triggers", []))
+        return JSONResponse(_filter_items_for_scope(data.get("triggers", []), _project_scope(request)))
 
     @app.post("/api/v1/triggers")
     async def create_trigger(request: Request) -> JSONResponse:
-        # FLAG: triggers rows carry no project_id column; org-admin gate is the
-        # safe interim until a project column lands. No-op in single-org.
-        require_org_admin(request.state.context)
+        _require_resource_write(request)
         import secrets as _sec
         body = await request.json()
+        body.pop("project_id", None)
+        body["project_id"] = _owner(_project_scope(request))
         body.setdefault("id", f"trig-{_sec.token_hex(6)}")
         def _apply(d):
             d.setdefault("triggers", []).append(body)
         sf.mutate(_apply)
+        await _emit_audit(request, "trigger.create", target_type="trigger", target_id=body["id"])
         return JSONResponse(body, status_code=201)
 
     @app.delete("/api/v1/triggers/{trigger_id}")
     async def delete_trigger(trigger_id: str, request: Request) -> JSONResponse:
-        # FLAG: triggers rows carry no project_id column (see create_trigger).
-        require_org_admin(request.state.context)
+        _require_resource_write(request)
+        scope = _project_scope(request)
+        state = {"deleted": False}
         def _apply(d):
             triggers = d.get("triggers", [])
-            d["triggers"] = [t for t in triggers if t.get("id") != trigger_id]
+            remaining = []
+            for t in triggers:
+                if t.get("id") == trigger_id and _item_writable_in_scope(t, scope):
+                    state["deleted"] = True
+                    continue
+                remaining.append(t)
+            d["triggers"] = remaining
         sf.mutate(_apply)
+        if _multi_ctx(request) is not None and not state["deleted"]:
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        if state["deleted"]:
+            await _emit_audit(request, "trigger.delete", target_type="trigger", target_id=trigger_id)
         return JSONResponse({"status": "ok"})
 
     @app.patch("/api/v1/triggers/{trigger_id}/enable")
     async def enable_trigger(trigger_id: str, request: Request) -> JSONResponse:
-        # FLAG: triggers rows carry no project_id column (see create_trigger).
-        require_org_admin(request.state.context)
+        _require_resource_write(request)
+        scope = _project_scope(request)
         def _apply(d):
             for t in d.get("triggers", []):
-                if t.get("id") == trigger_id:
+                if t.get("id") == trigger_id and _item_writable_in_scope(t, scope):
                     t["enabled"] = True
                     return t
             return None
         result = sf.mutate(_apply)
         if result is not None:
+            await _emit_audit(request, "trigger.enable", target_type="trigger", target_id=trigger_id)
             return JSONResponse(result)
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     @app.patch("/api/v1/triggers/{trigger_id}/disable")
     async def disable_trigger(trigger_id: str, request: Request) -> JSONResponse:
-        # FLAG: triggers rows carry no project_id column (see create_trigger).
-        require_org_admin(request.state.context)
+        _require_resource_write(request)
+        scope = _project_scope(request)
         def _apply(d):
             for t in d.get("triggers", []):
-                if t.get("id") == trigger_id:
+                if t.get("id") == trigger_id and _item_writable_in_scope(t, scope):
                     t["enabled"] = False
                     return t
             return None
         result = sf.mutate(_apply)
         if result is not None:
+            await _emit_audit(request, "trigger.disable", target_type="trigger", target_id=trigger_id)
             return JSONResponse(result)
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
@@ -3963,9 +4155,9 @@ def create_admin_serve_app(
     # ── MCP ──────────────────────────────────────────────────────
 
     @app.get("/api/v1/mcp/servers")
-    async def list_mcp_servers() -> JSONResponse:
-        data = sf._read()
-        return JSONResponse(data.get("mcp_servers", []))
+    async def list_mcp_servers(request: Request) -> JSONResponse:
+        mcp_connections = await _mcp_connections_for_request(request)
+        return JSONResponse([_mcp_server_item(c) for c in mcp_connections])
 
     @app.post("/api/v1/mcp/discover")
     async def discover_mcp_tools(request: Request) -> JSONResponse:
@@ -4050,40 +4242,55 @@ def create_admin_serve_app(
     # ── Eval ─────────────────────────────────────────────────────
 
     @app.get("/api/v1/eval/datasets")
-    async def list_eval_datasets() -> JSONResponse:
+    async def list_eval_datasets(request: Request) -> JSONResponse:
         data = sf._read()
-        return JSONResponse(data.get("eval_datasets", []))
+        return JSONResponse(_filter_items_for_scope(data.get("eval_datasets", []), _project_scope(request)))
 
     @app.post("/api/v1/eval/datasets")
     async def create_eval_dataset(request: Request) -> JSONResponse:
-        # FLAG: eval_datasets rows carry no project_id column; org-admin gate is
-        # the safe interim until a project column lands. No-op in single-org.
-        require_org_admin(request.state.context)
+        _require_resource_write(request)
         import secrets as _sec
         body = await request.json()
+        body.pop("project_id", None)
+        body["project_id"] = _owner(_project_scope(request))
         body.setdefault("id", f"ds-{_sec.token_hex(6)}")
         body.setdefault("created_at", datetime.datetime.now(datetime.timezone.utc).isoformat())
         def _apply(d):
             d.setdefault("eval_datasets", []).append(body)
         sf.mutate(_apply)
+        await _emit_audit(request, "eval_dataset.create", target_type="eval_dataset", target_id=body["id"])
         return JSONResponse(body, status_code=201)
 
     @app.get("/api/v1/eval/datasets/{dataset_id}")
-    async def get_eval_dataset(dataset_id: str) -> JSONResponse:
+    async def get_eval_dataset(dataset_id: str, request: Request) -> JSONResponse:
         data = sf._read()
-        ds = next((d for d in data.get("eval_datasets", []) if d.get("id") == dataset_id), None)
+        datasets = _filter_items_for_scope(data.get("eval_datasets", []), _project_scope(request))
+        ds = next((d for d in datasets if d.get("id") == dataset_id), None)
         if ds:
             return JSONResponse(ds)
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     @app.delete("/api/v1/eval/datasets/{dataset_id}")
     async def delete_eval_dataset(dataset_id: str, request: Request) -> JSONResponse:
-        # FLAG: eval_datasets rows carry no project_id column (see create_eval_dataset).
-        require_org_admin(request.state.context)
+        _require_resource_write(request)
+        scope = _project_scope(request)
+        state = {"deleted": False}
         def _apply(d):
             datasets = d.get("eval_datasets", [])
-            d["eval_datasets"] = [ds for ds in datasets if ds.get("id") != dataset_id]
+            remaining = []
+            for ds in datasets:
+                if ds.get("id") == dataset_id and _item_writable_in_scope(ds, scope):
+                    state["deleted"] = True
+                    continue
+                remaining.append(ds)
+            d["eval_datasets"] = remaining
         sf.mutate(_apply)
+        if _multi_ctx(request) is not None and not state["deleted"]:
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        if state["deleted"]:
+            await _emit_audit(
+                request, "eval_dataset.delete", target_type="eval_dataset", target_id=dataset_id
+            )
         return JSONResponse({"status": "ok"})
 
     @app.post("/api/v1/eval/run")

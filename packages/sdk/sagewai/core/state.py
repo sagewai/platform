@@ -1057,6 +1057,7 @@ class DurableWorkflow:
 
             admin_artifact_dest = AdminStateFile().get_workflow_artifact_destination(
                 self.name,
+                project_id=getattr(self, "project_id", None),
             )
         except Exception as exc:
             logger.debug("Artifact destination admin override skipped: %s", exc)
