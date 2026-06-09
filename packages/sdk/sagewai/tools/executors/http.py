@@ -94,6 +94,19 @@ def _build_auth_headers(auth_cfg: dict, creds: dict[str, str]) -> dict[str, str]
 # 401 stay in this module.
 
 
+def _build_default_connections_context():
+    from sagewai.admin.tenancy import is_multi_tenant
+
+    if is_multi_tenant():
+        raise OAuthNotConfiguredError(
+            "tenant-safe connection context required for OAuth tool execution"
+        )
+    from sagewai.admin.state_file import AdminStateFile, default_admin_state_path
+    from sagewai.connections.bootstrap import build_connections_context
+
+    return build_connections_context(AdminStateFile(default_admin_state_path()))
+
+
 def _has_insufficient_scope_marker(response: httpx.Response) -> bool:
     """RFC 6750 §3 / OAuth2 convention — ``WWW-Authenticate`` header signals
     insufficient scope on a 401. Some vendors only put it in the body, so check
@@ -117,15 +130,13 @@ async def _resolve_oauth_token(
     """Validate config + scopes, optionally pre-emptively refresh, return
     ``(access_token, client_record)``. The record dict is returned alongside
     so the reactive-refresh path can avoid a second store lookup."""
-    from sagewai.admin.state_file import AdminStateFile, default_admin_state_path
-    from sagewai.connections.bootstrap import build_connections_context
     from sagewai.connections.protocols.oauth2 import OAuth2ProtocolPlugin
 
     auth_cfg = entry.exec_["http"]["auth"]
     provider_id = auth_cfg["oauth_provider"]
     required_scopes = list(entry.setup.get("required_scopes", []))
 
-    ctx = build_connections_context(AdminStateFile(default_admin_state_path()))
+    ctx = _build_default_connections_context()
     # get_default_access_token does the default-lookup + decrypt + (if
     # within _REFRESH_BUFFER_SECONDS of expiry) eager refresh; raises
     # the typed OAuth errors for the executor's error handling.
@@ -153,13 +164,11 @@ async def _refresh_via_plugin(
     :class:`OAuthRefreshError` on failure (the helper marks the
     connection ``expired`` internally).
     """
-    from sagewai.admin.state_file import AdminStateFile, default_admin_state_path
-    from sagewai.connections.bootstrap import build_connections_context
     from sagewai.connections.protocols.oauth2 import OAuth2ProtocolPlugin
     from sagewai.oauth import exchange as oauth_exchange
     from sagewai.oauth.providers import get_provider as _get_provider
 
-    ctx = build_connections_context(AdminStateFile(default_admin_state_path()))
+    ctx = _build_default_connections_context()
     # Re-fetch the connection (its tokens may have been updated since the
     # initial _resolve_oauth_token call).
     connection_id = client.get("id")
@@ -303,10 +312,7 @@ async def run(
         if resp.status_code == 401:
             # Refresh succeeded but the new token still fails — treat as
             # unrecoverable and surface the same expired-state signal.
-            from sagewai.admin.state_file import AdminStateFile, default_admin_state_path
-            from sagewai.connections.bootstrap import build_connections_context
-
-            ctx = build_connections_context(AdminStateFile(default_admin_state_path()))
+            ctx = _build_default_connections_context()
             now_iso = datetime.now(timezone.utc).isoformat()
             ctx.store.update(
                 refreshed_client["id"],

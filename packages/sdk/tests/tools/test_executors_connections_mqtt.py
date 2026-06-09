@@ -41,6 +41,14 @@ def _seed(store):
     )
 
 
+def _seed_global(store):
+    return store.create(
+        protocol="mqtt", project_id=None, display_name="shared-broker", tags=[],
+        credentials_backend={"kind": "local"},
+        protocol_data={"host": "shared.example.com", "port": 1883},
+    )
+
+
 @pytest.mark.asyncio
 async def test_subscribe_op_dispatches_to_manager(store):
     _seed(store)
@@ -64,6 +72,46 @@ async def test_subscribe_op_dispatches_to_manager(store):
 
     assert isinstance(kwargs["plugin"], MqttProtocolPlugin)
     assert kwargs["connection"].display_name == "broker"
+
+
+@pytest.mark.asyncio
+async def test_subscribe_can_resolve_inherited_org_connection(store):
+    _seed_global(store)
+    fake_mgr = MagicMock()
+    fake_mgr.subscribe = AsyncMock(return_value="sub-shared")
+    payload = {
+        "_kind": "mqtt", "project_id": "proj",
+        "exec": {"mqtt": {"connection_ref": "shared-broker", "operation": "subscribe",
+                          "args": {"topic_filter": "fleet/+/loc"}}},
+    }
+    with patch(
+        "sagewai.tools.executors.connections.get_subscription_manager",
+        return_value=fake_mgr,
+    ):
+        result = await connections_run(payload, store=store)
+    assert result == {"subscription_id": "sub-shared"}
+    kwargs = fake_mgr.subscribe.await_args.kwargs
+    assert kwargs["connection"].project_id is None
+    assert kwargs["connection"].display_name == "shared-broker"
+
+
+@pytest.mark.asyncio
+async def test_subscribe_requires_injected_router_in_multi_tenant(store, monkeypatch):
+    monkeypatch.setenv("SAGEWAI_TENANCY_MODE", "multi")
+    _seed(store)
+    fake_mgr = MagicMock()
+    fake_mgr.subscribe = AsyncMock(return_value="sub-xyz")
+    payload = {
+        "_kind": "mqtt", "project_id": "proj",
+        "exec": {"mqtt": {"connection_ref": "broker", "operation": "subscribe",
+                          "args": {"topic_filter": "fleet/+/loc"}}},
+    }
+    with patch(
+        "sagewai.tools.executors.connections.get_subscription_manager",
+        return_value=fake_mgr,
+    ):
+        with pytest.raises(RuntimeError, match="tenant-safe credentials router required"):
+            await connections_run(payload, store=store)
 
 
 @pytest.mark.asyncio

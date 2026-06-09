@@ -55,6 +55,7 @@ from sagewai.connections.protocols.base import (
     PluginContext,
     get_sensitive_field_paths_for,
 )
+from sagewai.connections.store_ops import store_get
 from sagewai.connections.subscriptions.errors import (
     SubscriptionLimitExceededError,
     SubscriptionNotFoundError,
@@ -760,12 +761,12 @@ class _DrainBody(BaseModel):
     max_events: int = Field(default=100, gt=0, le=10000)
 
 
-def _resolve_grpc_connection(connection_id: str) -> Connection:
+async def _resolve_grpc_connection(connection_id: str) -> Connection:
     """Resolve + validate a gRPC connection by id, or raise the right HTTP error."""
     from fastapi import HTTPException
 
     ctx = _get_ctx()
-    record = ctx.store.get(connection_id)
+    record = await store_get(ctx.store, connection_id)
     if record is None:
         raise HTTPException(404, f"connection {connection_id} not found")
     if record.protocol != "grpc":
@@ -781,7 +782,7 @@ async def _subscribe_route(connection_id: str, body: dict):
     from fastapi import HTTPException
     from pydantic import ValidationError
 
-    record = _resolve_grpc_connection(connection_id)
+    record = await _resolve_grpc_connection(connection_id)
     try:
         spec = GrpcStreamSpec(**body)
     except ValidationError as exc:

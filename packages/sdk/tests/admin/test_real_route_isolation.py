@@ -35,6 +35,8 @@ from sagewai.admin.provider_store import PostgresProviderStore
 from sagewai.admin.state_file import AdminStateFile
 from sagewai.admin.tenancy import RequestContext, UserRef
 from sagewai.admin.tenant_audit import TenantAuditStore
+from sagewai.connections.postgres_store import PostgresConnectionStore
+from sagewai.connections.protocols import DEFAULT_KEY_FOR, PROTOCOLS
 from sagewai.db.engine import create_engine
 
 
@@ -100,6 +102,69 @@ async def real_app(tmp_path, monkeypatch):
     await agents.create({"name": "scout", "model": "x"}, ctx=_ctx(pa))
     await agents.create({"name": "scout", "model": "y"}, ctx=_ctx(pb))
 
+    connections = PostgresConnectionStore(
+        engine=engine,
+        allowed_protocols=tuple(p.id for p in PROTOCOLS),
+        default_key_for=DEFAULT_KEY_FOR,
+    )
+    await connections.init()
+    conn_pa = await connections.create(
+        protocol="http",
+        project_id=pa,
+        display_name="pa-http",
+        tags=[],
+        protocol_data={"url": "https://pa.example.com"},
+    )
+    conn_pb = await connections.create(
+        protocol="http",
+        project_id=pb,
+        display_name="pb-http",
+        tags=[],
+        protocol_data={"url": "https://pb.example.com"},
+    )
+    conn_global_mcp = await connections.create(
+        protocol="mcp",
+        project_id=None,
+        display_name="shared-mcp",
+        tags=[],
+        protocol_data={
+            "server_ref": "shared",
+            "transport": "http",
+            "url": "https://mcp.example.com",
+            "discovered_tools": [
+                {"name": "shared_tool", "description": "", "input_schema": {}}
+            ],
+        },
+    )
+    conn_pa_mcp = await connections.create(
+        protocol="mcp",
+        project_id=pa,
+        display_name="pa-mcp",
+        tags=[],
+        protocol_data={
+            "server_ref": "pa",
+            "transport": "http",
+            "url": "https://pa-mcp.example.com",
+            "discovered_tools": [
+                {"name": "pa_tool", "description": "", "input_schema": {}}
+            ],
+        },
+    )
+    conn_pb_mcp = await connections.create(
+        protocol="mcp",
+        project_id=pb,
+        display_name="pb-mcp",
+        tags=[],
+        protocol_data={
+            "server_ref": "pb",
+            "transport": "http",
+            "url": "https://pb-mcp.example.com",
+            "discovered_tools": [
+                {"name": "pb_tool", "description": "", "input_schema": {}}
+            ],
+        },
+    )
+
     # Run + prompt-log stores on the SAME engine; seed one of each in PA and PB so
     # the admin-route isolation assertions are meaningful (PB's genuinely exist).
     from sagewai.admin.store import RunStore
@@ -163,6 +228,7 @@ async def real_app(tmp_path, monkeypatch):
         identity_store=store,
         provider_store=pg,
         agent_store=agents,
+        connection_store=connections,
         run_store=runs,
         prompt_log_store=plogs,
     )
@@ -182,6 +248,11 @@ async def real_app(tmp_path, monkeypatch):
         "pb": pb,
         "prov_b": prov_b["id"],
         "prov_a": prov_a["id"],
+        "conn_pa": conn_pa.id,
+        "conn_pb": conn_pb.id,
+        "conn_global_mcp": conn_global_mcp.id,
+        "conn_pa_mcp": conn_pa_mcp.id,
+        "conn_pb_mcp": conn_pb_mcp.id,
         "run_a": run_a,
         "run_b": run_b,
         "run_fixed": run_fixed,
@@ -414,6 +485,51 @@ async def test_multi_tenant_harness_uses_durable_store(real_app):
     assert isinstance(real_app["app"].state.harness_store, PostgresHarnessStore)
 
 
+# ── Connection isolation on the real admin routes ───────────────────
+
+
+async def test_connection_list_uses_tenant_store_with_inheritance(real_app):
+    r = await _req(
+        real_app["app"],
+        "GET",
+        "/api/v1/admin/connections/",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 200
+    names = {c.get("display_name") for c in r.json()}
+    assert "pa-http" in names
+    assert "shared-mcp" in names
+    assert "pb-http" not in names
+
+
+async def test_mcp_extra_route_uses_tenant_connection_context(real_app):
+    r = await _req(
+        real_app["app"],
+        "GET",
+        f"/api/v1/admin/connections/mcp/{real_app['conn_pa_mcp']}/tools",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 200
+    assert {t["name"] for t in r.json()["tools"]} == {"pa_tool"}
+
+
+async def test_capabilities_include_inherited_mcp_connections(real_app):
+    r = await _req(
+        real_app["app"],
+        "GET",
+        "/playground/capabilities",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 200
+    names = {c.get("name") for c in r.json()["mcp_servers"]}
+    assert "pa-mcp" in names
+    assert "shared-mcp" in names
+    assert "pb-mcp" not in names
+
+
 # ── Run + prompt-log isolation on the real admin routes (PR2) ────────
 
 
@@ -500,6 +616,29 @@ async def test_workflow_cancel_cross_project_404(real_app):
         project=real_app["pa"],
     )
     assert r.status_code == 404
+
+
+async def test_workflow_approve_cross_project_404(real_app):
+    r = await _req(
+        real_app["app"],
+        "POST",
+        f"/workflows/runs/{real_app['workflow_run_b']}/approve",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 404
+
+
+async def test_workflow_dispatch_no_longer_returns_fake_success(real_app):
+    r = await _req(
+        real_app["app"],
+        "POST",
+        "/workflows/dispatch",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+        json={"workflow_name": "wf"},
+    )
+    assert r.status_code == 501
 
 
 async def test_prompt_logs_list_isolated(real_app):
@@ -862,6 +1001,26 @@ async def test_missing_prompt_store_fails_closed_in_multi(real_app):
         json={"quality": 5},
     )
     assert r.status_code == 503
+
+
+async def test_fleet_register_uses_authenticated_org_not_body_org(real_app):
+    r = await _req(
+        real_app["app"],
+        "POST",
+        "/api/v1/fleet/register",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+        json={"name": "tenant-worker", "org_id": "forged-org", "models": ["gpt-4o"]},
+    )
+    assert r.status_code == 201
+    listed = await _req(
+        real_app["app"],
+        "GET",
+        "/api/v1/fleet/workers",
+        token=real_app["sess_owner"],
+    )
+    assert listed.status_code == 200
+    assert "tenant-worker" in {w.get("name") for w in listed.json()}
 
 
 # ── Project-scoped routes whose store lacks a project_id column ───────────

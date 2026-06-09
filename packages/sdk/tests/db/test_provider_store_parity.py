@@ -28,8 +28,12 @@ from cryptography.fernet import Fernet
 
 from sagewai.admin import tenant_keys
 from sagewai.admin.identity_store import IdentityStore
-from sagewai.admin.provider_store import PostgresProviderStore
+from sagewai.admin.provider_store import (
+    PostgresProviderStore,
+    ProviderSecretDecryptionError,
+)
 from sagewai.admin.tenancy import RequestContext, UserRef
+from sagewai.sealed.crypto import SecretCorrupted
 
 
 def _ctx(project_id):
@@ -124,3 +128,18 @@ async def test_has_encrypted_secrets(store):
     assert await store.has_encrypted_secrets() is False
     await store.upsert({"provider_name": "withkey", "config": {"api_key": "sk-1"}}, ctx=_ctx("P"))
     assert await store.has_encrypted_secrets() is True
+
+
+@pytest.mark.asyncio
+async def test_corrupt_provider_secret_fails_closed(store, monkeypatch):
+    await store.upsert(
+        {"provider_name": "openai", "config": {"api_key": "sk-P"}},
+        ctx=_ctx("P"),
+    )
+
+    async def _boom(*args, **kwargs):
+        raise SecretCorrupted("tampered")
+
+    monkeypatch.setattr(tenant_keys, "decrypt_for_project", _boom)
+    with pytest.raises(ProviderSecretDecryptionError):
+        await store.list_decrypted(ctx=_ctx("P"))

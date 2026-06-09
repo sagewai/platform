@@ -33,6 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from sagewai.connections.models import Connection, TestResult
 from sagewai.connections.protocols.base import PluginContext
+from sagewai.connections.store_ops import store_get, store_update
 from sagewai.mcp import servers as mcp_servers
 from sagewai.mcp.client import McpClient
 
@@ -235,7 +236,7 @@ async def _servers_route():
 async def _refresh_route(connection_id: str):
     """Re-discover tools + persist; mirrors ``test()``."""
     ctx = _get_ctx()
-    record = ctx.store.get(connection_id)
+    record = await store_get(ctx.store, connection_id)
     if record is None:
         raise HTTPException(404, f"connection {connection_id} not found")
     if record.protocol != "mcp":
@@ -245,7 +246,7 @@ async def _refresh_route(connection_id: str):
     result = await plugin.test(record, ctx=plugin_ctx)
     if not result.ok:
         raise HTTPException(502, f"refresh failed: {result.message}")
-    refreshed = ctx.store.get(connection_id)
+    refreshed = await store_get(ctx.store, connection_id)
     return plugin.public_view(refreshed.protocol_data)
 
 
@@ -253,7 +254,7 @@ async def _refresh_route(connection_id: str):
 async def _tools_route(connection_id: str):
     """Return cached tools list."""
     ctx = _get_ctx()
-    record = ctx.store.get(connection_id)
+    record = await store_get(ctx.store, connection_id)
     if record is None:
         raise HTTPException(404, f"connection {connection_id} not found")
     if record.protocol != "mcp":
@@ -533,7 +534,7 @@ class McpProtocolPlugin:
         else:
             encrypted_pd = new_pd
 
-        ctx.store.update(connection.id, protocol_data=encrypted_pd, status="ready")
+        await store_update(ctx.store, connection.id, protocol_data=encrypted_pd, status="ready")
         return TestResult(
             ok=True,
             message=(

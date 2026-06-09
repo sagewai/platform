@@ -36,8 +36,8 @@ class ResourceStores:
 async def build_resource_stores(identity_store: Any) -> ResourceStores | None:
     """Construct the Postgres-backed tenant stores in multi-tenant mode (else None).
 
-    Provider and agent stores are built here; the connection store is wired in
-    its own task.
+    Provider, agent, connection, run, and prompt-log stores are built here so
+    multi-tenant routes never drift back to file-backed state.
     """
     if not is_multi_tenant():
         return None
@@ -60,6 +60,15 @@ async def build_resource_stores(identity_store: Any) -> ResourceStores | None:
 
     agent = PostgresTenantAgentStore(engine=engine)
     await agent.init()
+    from sagewai.connections.postgres_store import PostgresConnectionStore
+    from sagewai.connections.protocols import DEFAULT_KEY_FOR, PROTOCOLS
+
+    connection = PostgresConnectionStore(
+        engine=engine,
+        allowed_protocols=tuple(p.id for p in PROTOCOLS),
+        default_key_for=DEFAULT_KEY_FOR,
+    )
+    await connection.init()
     from sagewai.admin.store import RunStore
     from sagewai.observability.prompt_store import PromptStore
 
@@ -68,5 +77,9 @@ async def build_resource_stores(identity_store: Any) -> ResourceStores | None:
     prompt_log = PromptStore(engine=engine)
     await prompt_log.init()
     return ResourceStores(
-        provider=provider, agent=agent, run=run, prompt_log=prompt_log
+        provider=provider,
+        agent=agent,
+        connection=connection,
+        run=run,
+        prompt_log=prompt_log,
     )

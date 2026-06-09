@@ -53,6 +53,10 @@ from sagewai.sealed.crypto import Crypto, SecretCorrupted
 _tbl = ProviderModel.__table__
 
 
+class ProviderSecretDecryptionError(RuntimeError):
+    """A provider secret could not be decrypted and execution must fail closed."""
+
+
 class PostgresProviderStore:
     """Persists tenant-scoped provider configs to the ``provider`` table.
 
@@ -243,7 +247,8 @@ class PostgresProviderStore:
         project, no inheritance) — the post-fetch scope check mirrors
         :func:`scoping.scope_filter`. Secrets are decrypted under the data key of
         the row's own ``project_id``. A value that cannot be decrypted (corrupt
-        or missing key) is returned as ``None`` rather than raising.
+        or missing key) raises :class:`ProviderSecretDecryptionError` so execution
+        cannot silently fall back to an inherited provider.
         """
         scoping.require_ctx(ctx)
         async with self._engine.connect() as conn:
@@ -267,7 +272,7 @@ class PostgresProviderStore:
 
         Decrypts under the data key of the row's own ``project_id`` (org master
         key for org-shared rows). An undecryptable value (corrupt / missing key)
-        becomes ``None`` rather than raising — never leak ciphertext as a secret.
+        fails closed; callers must not choose another provider as fallback.
         """
         if not is_encrypted({"config": config}):
             return
@@ -280,8 +285,10 @@ class PostgresProviderStore:
                     parent[k] = await tenant_keys.decrypt_for_project(
                         self._identity, ctx.org_id, row_project_id, v
                     )
-                except SecretCorrupted:
-                    parent[k] = None
+                except SecretCorrupted as exc:
+                    raise ProviderSecretDecryptionError(
+                        "provider secret could not be decrypted"
+                    ) from exc
 
     async def list_decrypted(self, *, ctx) -> list[dict]:
         """All providers visible to ``ctx`` (own + org-shared) with secrets DECRYPTED.
@@ -330,4 +337,4 @@ class PostgresProviderStore:
         return False
 
 
-__all__ = ["PostgresProviderStore"]
+__all__ = ["PostgresProviderStore", "ProviderSecretDecryptionError"]

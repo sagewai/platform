@@ -418,6 +418,53 @@ class TenantAgentModel(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ConnectionModel(Base):
+    """Tenant-scoped connection config (multi-tenant mode).
+
+    ``project_id`` is the single scope tag: NULL = org-shared, a value = isolated
+    to that project. Protocol credentials remain inside ``protocol_data`` and are
+    encrypted by the connection credentials router before persistence.
+    """
+
+    __tablename__ = "connection"
+    __table_args__ = (
+        Index(
+            "ux_connection_global_name",
+            "protocol",
+            "display_name",
+            unique=True,
+            sqlite_where=text("project_id IS NULL"),
+            postgresql_where=text("project_id IS NULL"),
+        ),
+        Index(
+            "ux_connection_proj_name",
+            "project_id",
+            "protocol",
+            "display_name",
+            unique=True,
+            sqlite_where=text("project_id IS NOT NULL"),
+            postgresql_where=text("project_id IS NOT NULL"),
+        ),
+        Index("ix_connection_project_id", "project_id"),
+        Index("ix_connection_protocol", "protocol"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    project_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    protocol: Mapped[str] = mapped_column(Text, nullable=False)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    tags: Mapped[list] = mapped_column(JSONType, nullable=False, default=list)
+    credentials_backend: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    last_tested_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_test_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    last_error: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    protocol_data: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 # ---------------------------------------------------------------------------
 # Admin store tables
 # ---------------------------------------------------------------------------

@@ -36,6 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from sagewai.connections.models import Connection, TestResult
 from sagewai.connections.protocols.base import PluginContext
+from sagewai.connections.store_ops import store_get, store_list, store_update
 from sagewai.oauth import exchange, pending_auth, pkce
 from sagewai.oauth import providers as oauth_providers
 from sagewai.oauth.errors import (
@@ -239,7 +240,7 @@ _oauth2_router = APIRouter()
 async def _start_authorize(connection_id: str) -> dict:
     """Mint authorize URL + stash a pending-auth entry."""
     ctx = _get_ctx()
-    record = ctx.store.get(connection_id)
+    record = await store_get(ctx.store, connection_id)
     if record is None:
         raise HTTPException(404, f"connection {connection_id} not found")
     if record.protocol != "oauth2":
@@ -311,7 +312,7 @@ async def _callback(
         )
 
     ctx = _get_ctx()
-    record = ctx.store.get(entry.oauth_client_id)
+    record = await store_get(ctx.store, entry.oauth_client_id)
     if record is None:
         return _html_page(
             f"Connection {entry.oauth_client_id!r} was deleted before the callback completed. "
@@ -338,7 +339,8 @@ async def _callback(
             code_verifier=entry.code_verifier,
         )
     except OAuthCallbackError as exc:
-        ctx.store.update(
+        await store_update(
+            ctx.store,
             record.id,
             status="error",
             last_error={"code": exc.code, "message": str(exc), "at": _utcnow_iso()},
@@ -378,7 +380,7 @@ async def _callback(
         sensitive_field_paths=OAuth2ProtocolPlugin.sensitive_fields,
         connection_credentials_backend=record.credentials_backend,
     )
-    ctx.store.update(record.id, protocol_data=encrypted_pd, status="authorized")
+    await store_update(ctx.store, record.id, protocol_data=encrypted_pd, status="authorized")
     return _html_page(
         f"{record.display_name} connected. Granted scopes: "
         f"{', '.join(granted_scopes) or '(none)'}. You can close this window.",
@@ -390,7 +392,7 @@ async def _callback(
 async def _refresh(connection_id: str) -> dict:
     """Force token refresh via the vendor token endpoint."""
     ctx = _get_ctx()
-    record = ctx.store.get(connection_id)
+    record = await store_get(ctx.store, connection_id)
     if record is None:
         raise HTTPException(404, f"connection {connection_id} not found")
     if record.protocol != "oauth2":
@@ -421,7 +423,8 @@ async def _refresh(connection_id: str) -> dict:
             refresh_token=refresh_token_value,
         )
     except OAuthRefreshError as exc:
-        ctx.store.update(
+        await store_update(
+            ctx.store,
             record.id,
             status="expired",
             last_error={"code": exc.code, "message": str(exc), "at": _utcnow_iso()},
@@ -472,7 +475,9 @@ async def _refresh(connection_id: str) -> dict:
         sensitive_field_paths=OAuth2ProtocolPlugin.sensitive_fields,
         connection_credentials_backend=record.credentials_backend,
     )
-    updated = ctx.store.update(record.id, protocol_data=encrypted_pd, status="authorized")
+    updated = await store_update(
+        ctx.store, record.id, protocol_data=encrypted_pd, status="authorized"
+    )
     _emit_refresh_event(
         success=True,
         connection_id=record.id,
@@ -495,7 +500,7 @@ async def _refresh(connection_id: str) -> dict:
 async def _revoke(connection_id: str) -> dict:
     """Best-effort vendor revoke + clear local tokens."""
     ctx = _get_ctx()
-    record = ctx.store.get(connection_id)
+    record = await store_get(ctx.store, connection_id)
     if record is None:
         raise HTTPException(404, f"connection {connection_id} not found")
     if record.protocol != "oauth2":
@@ -538,7 +543,9 @@ async def _revoke(connection_id: str) -> dict:
         sensitive_field_paths=OAuth2ProtocolPlugin.sensitive_fields,
         connection_credentials_backend=record.credentials_backend,
     )
-    updated = ctx.store.update(record.id, protocol_data=encrypted_pd, status="revoked")
+    updated = await store_update(
+        ctx.store, record.id, protocol_data=encrypted_pd, status="revoked"
+    )
     plugin = OAuth2ProtocolPlugin()
     return {
         "id": updated.id,
@@ -789,7 +796,7 @@ class OAuth2ProtocolPlugin:
         ``tokens.refresh_token``, etc. without a second lookup).
         """
         candidates = [
-            c for c in store.list(project_id, protocol="oauth2")
+            c for c in await store_list(store, project_id, protocol="oauth2")
             if c.protocol_data.get("provider") == provider and c.is_default
         ]
         if not candidates:
@@ -835,7 +842,8 @@ class OAuth2ProtocolPlugin:
                         refresh_token=tokens.get("refresh_token"),
                     )
                 except OAuthRefreshError as exc:
-                    store.update(
+                    await store_update(
+                        store,
                         connection.id,
                         status="expired",
                         last_error={
@@ -873,7 +881,12 @@ class OAuth2ProtocolPlugin:
                     sensitive_field_paths=OAuth2ProtocolPlugin.sensitive_fields,
                     connection_credentials_backend=connection.credentials_backend,
                 )
-                store.update(connection.id, protocol_data=encrypted_pd, status="authorized")
+                await store_update(
+                    store,
+                    connection.id,
+                    protocol_data=encrypted_pd,
+                    status="authorized",
+                )
                 _emit_refresh_event(
                     success=True,
                     connection_id=connection.id,

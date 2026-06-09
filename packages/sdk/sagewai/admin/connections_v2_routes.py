@@ -25,6 +25,7 @@ parameter for the context.
 """
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 import logging
@@ -46,6 +47,15 @@ from sagewai.connections.errors import (
     UnknownProtocolError,
 )
 from sagewai.connections.protocols import all_protocols, get_protocol
+from sagewai.connections.store_ops import (
+    store_create,
+    store_delete,
+    store_get,
+    store_list,
+    store_set_default,
+    store_update,
+    store_update_test_result,
+)
 
 
 # ── Request bodies ──────────────────────────────────────────────────
@@ -111,6 +121,56 @@ def _serialize_connection(record, *, plugin_public_view) -> dict[str, Any]:
         "last_error": record.last_error,
         "protocol_data": plugin_public_view(record.protocol_data),
     }
+
+
+def _shadow_org_shared(records: list[Any]) -> list[Any]:
+    """Project rows shadow inherited org-shared rows with the same protocol/name."""
+    seen: set[tuple[str, str]] = set()
+    out: list[Any] = []
+    for record in records:
+        key = (record.protocol, record.display_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(record)
+    return out
+
+
+async def _visible_records(
+    store: Any,
+    mctx: Any,
+    *,
+    protocol: str | None = None,
+    tag: str | None = None,
+) -> list[Any]:
+    org_records = list(await store_list(store, None, protocol=protocol, tag=tag))
+    if mctx.project_id is None:
+        return org_records
+    project_records = list(
+        await store_list(store, mctx.project_id, protocol=protocol, tag=tag)
+    )
+    return _shadow_org_shared(project_records + org_records)
+
+
+class _SnapshotConnectionStore:
+    """Tiny sync facade for export_to_yaml after async rows are prefetched."""
+
+    def __init__(self, rows: list[Any]) -> None:
+        self._rows = rows
+
+    def list(
+        self,
+        project_id: str | None,
+        *,
+        protocol: str | None = None,
+        tag: str | None = None,
+    ) -> list[Any]:
+        rows = [r for r in self._rows if r.project_id == project_id]
+        if protocol is not None:
+            rows = [r for r in rows if r.protocol == protocol]
+        if tag is not None:
+            rows = [r for r in rows if tag in r.tags]
+        return rows
 
 
 def _decrypted_pd(ctx: ConnectionsContext, record, plugin) -> dict[str, Any]:
@@ -220,15 +280,11 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         _ensure_tenant_connection_store(request)
         mctx = _multi_ctx(request)
         if mctx is not None:
-            # Own project + inherited org-shared (global); org scope = global only.
-            records = list(ctx.store.list(None, protocol=protocol, tag=tag))
-            if mctx.project_id is not None:
-                records = (
-                    list(ctx.store.list(mctx.project_id, protocol=protocol, tag=tag))
-                    + records
-                )
+            records = await _visible_records(ctx.store, mctx, protocol=protocol, tag=tag)
         else:
-            records = ctx.store.list(_project_scope(request), protocol=protocol, tag=tag)
+            records = await store_list(
+                ctx.store, _project_scope(request), protocol=protocol, tag=tag
+            )
         return [
             _serialize_connection(
                 r, plugin_public_view=get_protocol(r.protocol).public_view
@@ -271,7 +327,8 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
             connection_credentials_backend=payload.credentials_backend,
         )
         try:
-            connection = ctx.store.create(
+            connection = await store_create(
+                ctx.store,
                 protocol=payload.protocol,
                 project_id=owner,
                 display_name=payload.display_name,
@@ -287,7 +344,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
             connection = await plugin.on_create(connection, ctx=plugin_ctx)
         except Exception as exc:
             # roll back the store on plugin-hook failure
-            ctx.store.delete(connection.id)
+            await store_delete(ctx.store, connection.id)
             raise HTTPException(500, f"plugin.on_create failed: {exc}")
         return _serialize_connection(connection, plugin_public_view=plugin.public_view)
 
@@ -328,8 +385,13 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
             _require_resource_write(request)
 
         try:
+            export_store = ctx.store
+            if mctx is not None:
+                export_store = _SnapshotConnectionStore(
+                    await store_list(ctx.store, proj)
+                )
             yaml_text = export_to_yaml(
-                store=ctx.store,
+                store=export_store,
                 router=ctx.router,
                 project_id=proj,
                 secrets_mode=secrets,  # type: ignore[arg-type]
@@ -417,6 +479,16 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         else:
             yaml_text = (await request.body()).decode("utf-8")
 
+        # The legacy YAML importer mutates stores synchronously. Tenant
+        # connection writes go through an AsyncEngine, so do not let this route
+        # accidentally produce un-awaited writes or partial imports. Export
+        # remains supported via a read-only snapshot above.
+        if mctx is not None and inspect.iscoroutinefunction(ctx.store.create):
+            return JSONResponse(
+                status_code=501,
+                content={"detail": "tenant connection import is not yet available"},
+            )
+
         result = import_from_yaml(
             yaml_text=yaml_text,
             store=ctx.store,
@@ -471,7 +543,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         if err is not None:
             return err
         _ensure_tenant_connection_store(request)
-        record = ctx.store.get(connection_id)
+        record = await store_get(ctx.store, connection_id)
         _ensure_readable(record, request)
         plugin = get_protocol(record.protocol)
         return _serialize_connection(record, plugin_public_view=plugin.public_view)
@@ -486,7 +558,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         if err is not None:
             return err
         _ensure_tenant_connection_store(request)
-        before = ctx.store.get(connection_id)
+        before = await store_get(ctx.store, connection_id)
         _ensure_writable(before, request)
         plugin = get_protocol(before.protocol)
 
@@ -532,7 +604,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
             return _serialize_connection(before, plugin_public_view=plugin.public_view)
 
         try:
-            after = ctx.store.update(connection_id, **update_fields)
+            after = await store_update(ctx.store, connection_id, **update_fields)
         except DuplicateDisplayNameError as exc:
             raise HTTPException(409, str(exc))
 
@@ -553,7 +625,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         if err is not None:
             return err
         _ensure_tenant_connection_store(request)
-        record = ctx.store.get(connection_id)
+        record = await store_get(ctx.store, connection_id)
         _ensure_writable(record, request)
         plugin = get_protocol(record.protocol)
         plugin_ctx = ctx.make_plugin_context(
@@ -563,7 +635,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
             await plugin.on_delete(record, ctx=plugin_ctx)
         except Exception as exc:
             raise HTTPException(500, f"plugin.on_delete failed: {exc}")
-        ok = ctx.store.delete(connection_id)
+        ok = await store_delete(ctx.store, connection_id)
         if not ok:
             raise HTTPException(404, f"connection {connection_id} not found")
         return Response(status_code=204)
@@ -576,7 +648,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         if err is not None:
             return err
         _ensure_tenant_connection_store(request)
-        record = ctx.store.get(connection_id)
+        record = await store_get(ctx.store, connection_id)
         # /test writes last_tested_at/last_test_ok, so it needs write/execute
         # authorization: viewers and project actors mutating an inherited org-shared
         # row are forbidden, not just cross-project ids.
@@ -595,7 +667,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
             project_id=record.project_id, request=request,
         )
         result = await plugin.test(decrypted_record, ctx=plugin_ctx)
-        ctx.store.update_test_result(connection_id, ok=result.ok)
+        await store_update_test_result(ctx.store, connection_id, ok=result.ok)
         return {
             "ok": result.ok,
             "status_code": result.status_code,
@@ -610,9 +682,9 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         if err is not None:
             return err
         _ensure_tenant_connection_store(request)
-        _ensure_writable(ctx.store.get(connection_id), request)
+        _ensure_writable(await store_get(ctx.store, connection_id), request)
         try:
-            record = ctx.store.set_default(connection_id)
+            record = await store_set_default(ctx.store, connection_id)
         except ConnectionNotFoundError:
             raise HTTPException(404, f"connection {connection_id} not found")
         plugin = get_protocol(record.protocol)
@@ -633,13 +705,16 @@ def register(app: FastAPI, sf: AdminStateFile) -> None:
         store=tenant_store,
         tenant_safe=tenant_store is not None,
     )
-    # Inject the context for plugin extra_routes that need it (oauth2, mqtt, grpc).
+    app.state.connections_context = ctx
+    # Inject the context for plugin extra_routes that need it.
     from sagewai.connections.protocols import grpc as grpc_module
+    from sagewai.connections.protocols import mcp as mcp_module
     from sagewai.connections.protocols import mqtt as mqtt_module
     from sagewai.connections.protocols import oauth2 as oauth2_module
     oauth2_module._test_inject_context(ctx)
     mqtt_module._test_inject_context(ctx)
     grpc_module._test_inject_context(ctx)
+    mcp_module._test_inject_context(ctx)
 
     # Tenant scope guard for plugin extra_routes (mcp/oauth2/mqtt/grpc). Those
     # routers resolve a connection by id directly (ctx.store.get), so they need
@@ -661,7 +736,7 @@ def register(app: FastAPI, sf: AdminStateFile) -> None:
         cid = request.path_params.get("connection_id")
         if cid is None:
             return
-        record = ctx.store.get(cid)
+        record = await store_get(ctx.store, cid)
         if record is None or not _conn_read_visible(record, mctx):
             raise HTTPException(404, "connection not found")
         if request.method != "GET":

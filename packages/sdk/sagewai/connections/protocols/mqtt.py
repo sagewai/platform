@@ -44,6 +44,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from sagewai.connections.models import Connection, TestResult
 from sagewai.connections.protocols.base import PluginContext
+from sagewai.connections.store_ops import store_get
 from sagewai.connections.subscriptions.base import EmitResult
 from sagewai.connections.subscriptions.errors import (
     SubscriptionLimitExceededError,
@@ -431,10 +432,10 @@ class _DrainBody(BaseModel):
     max_events: int = Field(default=100, gt=0, le=10000)
 
 
-def _resolve_mqtt_connection(connection_id: str) -> Connection:
+async def _resolve_mqtt_connection(connection_id: str) -> Connection:
     """Resolve + validate an MQTT connection by id, or raise the right HTTP error."""
     ctx = _get_ctx()
-    record = ctx.store.get(connection_id)
+    record = await store_get(ctx.store, connection_id)
     if record is None:
         raise HTTPException(404, f"connection {connection_id} not found")
     if record.protocol != "mqtt":
@@ -447,7 +448,7 @@ def _resolve_mqtt_connection(connection_id: str) -> Connection:
 @_mqtt_router.post("/{connection_id}/subscribe")
 async def _subscribe_route(connection_id: str, body: dict):
     """Open a subscription on an MQTT connection. Body = MqttSubscriptionSpec."""
-    record = _resolve_mqtt_connection(connection_id)
+    record = await _resolve_mqtt_connection(connection_id)
     try:
         spec = MqttSubscriptionSpec(**body)
     except ValidationError as exc:

@@ -478,6 +478,7 @@ def create_admin_serve_app(
         if _is_multi_tenant() and (
             _rs.provider is None
             or _rs.agent is None
+            or _rs.connection is None
             or _rs.run is None
             or _rs.prompt_log is None
         ):
@@ -490,6 +491,11 @@ def create_admin_serve_app(
                     run=_rs.run or _built.run,
                     prompt_log=_rs.prompt_log or _built.prompt_log,
                 )
+                conn_ctx = getattr(app.state, "connections_context", None)
+                active_connection_store = app.state.resource_stores.connection
+                if conn_ctx is not None and active_connection_store is not None:
+                    conn_ctx.store = active_connection_store
+                    conn_ctx.tenant_safe = True
 
         # Fail closed (multi-tenant): mirror sf.require_secret_key_if_encrypted()
         # for the tenant provider table — if encrypted provider secrets exist but
@@ -1501,6 +1507,7 @@ def create_admin_serve_app(
         guardrails, strategies) stay constant for now.
         """
         from sagewai.connections.bootstrap import build_connections_context
+        from sagewai.connections.store_ops import store_list
 
         pid = _project_scope(request)
         connection_store = getattr(
@@ -1510,11 +1517,29 @@ def create_admin_serve_app(
         )
         try:
             if _multi_ctx(request) is not None:
-                mcp_connections = (
-                    connection_store.list(pid, protocol="mcp")
-                    if connection_store is not None
-                    else []
-                )
+                if connection_store is None:
+                    mcp_connections = []
+                else:
+                    mctx = _multi_ctx(request)
+                    org_connections = list(
+                        await store_list(connection_store, None, protocol="mcp")
+                    )
+                    if mctx.project_id is None:
+                        mcp_connections = org_connections
+                    else:
+                        project_connections = list(
+                            await store_list(
+                                connection_store, mctx.project_id, protocol="mcp"
+                            )
+                        )
+                        seen = set()
+                        mcp_connections = []
+                        for conn in project_connections + org_connections:
+                            key = (conn.protocol, conn.display_name)
+                            if key in seen:
+                                continue
+                            seen.add(key)
+                            mcp_connections.append(conn)
             else:
                 ctx = build_connections_context(sf)
                 mcp_connections = ctx.store.list(pid, protocol="mcp")
@@ -2443,21 +2468,43 @@ def create_admin_serve_app(
                     # Record this step as an individual agent run so
                     # /agents/runs can surface inline workflow steps.
                     try:
-                        sf.save_agent_run({
-                            "run_id": step_run_id,
-                            "agent_name": agent_name,
-                            "model": model,
-                            "status": step_status,
-                            "input_text": current_input,
-                            "output_text": step_output,
-                            "total_tokens": step_tokens,
-                            "started_at": step_started_at,
-                            "completed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                            "run_type": "workflow_step",
-                            "parent_workflow_run_id": run_id,
-                            "tool_calls": [],
-                            "project_id": _owner(pid),
-                        })
+                        completed_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                        run_store = _run_store(request)
+                        if run_store is not None:
+                            await run_store.save_run_for(
+                                request.state.context,
+                                run_id=step_run_id,
+                                agent_name=agent_name,
+                                model=model,
+                                status=step_status,
+                                input_text=current_input,
+                                output_text=step_output,
+                                total_tokens=step_tokens,
+                                input_tokens=step_input_tokens,
+                                output_tokens=step_output_tokens,
+                                duration_ms=int(step_dt * 1000),
+                                started_at=_iso_to_epoch(step_started_at),
+                                completed_at=_iso_to_epoch(completed_at),
+                                run_type="workflow_step",
+                                parent_workflow_run_id=run_id,
+                                tool_calls=[],
+                            )
+                        else:
+                            sf.save_agent_run({
+                                "run_id": step_run_id,
+                                "agent_name": agent_name,
+                                "model": model,
+                                "status": step_status,
+                                "input_text": current_input,
+                                "output_text": step_output,
+                                "total_tokens": step_tokens,
+                                "started_at": step_started_at,
+                                "completed_at": completed_at,
+                                "run_type": "workflow_step",
+                                "parent_workflow_run_id": run_id,
+                                "tool_calls": [],
+                                "project_id": _owner(pid),
+                            })
                     except Exception as persist_exc:
                         logger.error("Failed to persist workflow step run %s: %s", step_run_id, persist_exc)
 
@@ -2581,11 +2628,55 @@ def create_admin_serve_app(
 
     @app.post("/workflows/runs/{run_id}/approve")
     async def workflow_approve(run_id: str, request: Request) -> JSONResponse:
-        return JSONResponse({"status": "approved"})
+        target = _workflow_run_for_request(run_id, request, write=True)
+        if target is None:
+            return JSONResponse({"status": "not_found"}, status_code=404)
+        target_pid = _workflow_record_project_id(target)
+
+        def _apply(d):
+            for r in d.get("workflow_runs", []):
+                if (
+                    r.get("run_id") == run_id
+                    and _workflow_record_project_id(r) == target_pid
+                ):
+                    r["status"] = "approved"
+                    r["approved_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    return True
+            return False
+
+        if sf.mutate(_apply):
+            await _emit_audit(request, "workflow.approve", target_type="workflow_run", target_id=run_id)
+            return JSONResponse({"status": "approved"})
+        return JSONResponse({"status": "not_found"}, status_code=404)
 
     @app.post("/workflows/runs/{run_id}/reject")
     async def workflow_reject(run_id: str, request: Request) -> JSONResponse:
-        return JSONResponse({"status": "rejected"})
+        target = _workflow_run_for_request(run_id, request, write=True)
+        if target is None:
+            return JSONResponse({"status": "not_found"}, status_code=404)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        target_pid = _workflow_record_project_id(target)
+
+        def _apply(d):
+            for r in d.get("workflow_runs", []):
+                if (
+                    r.get("run_id") == run_id
+                    and _workflow_record_project_id(r) == target_pid
+                ):
+                    r["status"] = "rejected"
+                    r["rejected_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    if body.get("reason"):
+                        r["reject_reason"] = body.get("reason")
+                    return True
+            return False
+
+        if sf.mutate(_apply):
+            await _emit_audit(request, "workflow.reject", target_type="workflow_run", target_id=run_id)
+            return JSONResponse({"status": "rejected"})
+        return JSONResponse({"status": "not_found"}, status_code=404)
 
     @app.get("/workflows/history")
     async def workflow_history(request: Request) -> JSONResponse:
@@ -2611,17 +2702,48 @@ def create_admin_serve_app(
 
     @app.post("/workflows/dlq/{run_id}/retry")
     async def workflow_dlq_retry(run_id: str, request: Request) -> JSONResponse:
-        return JSONResponse({"new_run_id": f"wf-retry-{run_id}"})
+        target = _workflow_run_for_request(run_id, request, write=True)
+        if target is None:
+            return JSONResponse({"status": "not_found"}, status_code=404)
+        if target.get("status") != "failed":
+            return JSONResponse({"detail": "workflow run is not failed"}, status_code=409)
+        return JSONResponse(
+            {"detail": "workflow DLQ retry is not implemented"},
+            status_code=501,
+        )
 
     @app.delete("/workflows/dlq/{run_id}")
-    async def workflow_dlq_discard(run_id: str) -> JSONResponse:
-        return JSONResponse({"status": "ok"})
+    async def workflow_dlq_discard(run_id: str, request: Request) -> JSONResponse:
+        target = _workflow_run_for_request(run_id, request, write=True)
+        if target is None:
+            return JSONResponse({"status": "not_found"}, status_code=404)
+        if target.get("status") != "failed":
+            return JSONResponse({"detail": "workflow run is not failed"}, status_code=409)
+        target_pid = _workflow_record_project_id(target)
+
+        def _apply(d):
+            before = len(d.get("workflow_runs", []))
+            d["workflow_runs"] = [
+                r
+                for r in d.get("workflow_runs", [])
+                if not (
+                    r.get("run_id") == run_id
+                    and _workflow_record_project_id(r) == target_pid
+                )
+            ]
+            return len(d.get("workflow_runs", [])) != before
+
+        if sf.mutate(_apply):
+            await _emit_audit(request, "workflow.dlq.discard", target_type="workflow_run", target_id=run_id)
+            return JSONResponse({"status": "discarded"})
+        return JSONResponse({"status": "not_found"}, status_code=404)
 
     @app.post("/workflows/dispatch")
     async def workflow_dispatch(request: Request) -> JSONResponse:
-        body = await request.json()
-        import secrets as _sec
-        return JSONResponse({"run_id": f"wf-{_sec.token_hex(6)}", "is_new": True})
+        return JSONResponse(
+            {"detail": "workflow dispatch is not implemented; use /api/v1/workflows/enqueue"},
+            status_code=501,
+        )
 
     @app.post("/api/v1/workflows/enqueue", status_code=202)
     async def workflows_enqueue(request: Request) -> JSONResponse:
@@ -2691,7 +2813,7 @@ def create_admin_serve_app(
         # need no worker.
         if requires_sandbox_mode != _SandboxMode.NONE:
             approved_workers = await fleet_registry.list_workers(
-                org_id="default",
+                org_id=_fleet_org_id(request),
                 status=_WorkerApprovalStatus.APPROVED,
             )
             if not approved_workers:
@@ -3141,6 +3263,19 @@ def create_admin_serve_app(
         store=fleet_task_store, poll_timeout=5.0, poll_interval=1.0
     )
 
+    def _fleet_org_id(request: Request) -> str:
+        ctx = _multi_ctx(request)
+        return ctx.org_id if ctx is not None else "default"
+
+    async def _fleet_worker_in_scope(worker_id: str, request: Request):
+        worker = await fleet_registry.get_worker(worker_id)
+        if worker is None:
+            return None
+        ctx = _multi_ctx(request)
+        if ctx is not None and getattr(worker, "org_id", None) != ctx.org_id:
+            return None
+        return worker
+
     @app.post("/api/v1/fleet/register")
     async def fleet_register(request: Request) -> JSONResponse:
         """Worker self-registration."""
@@ -3157,7 +3292,7 @@ def create_admin_serve_app(
             caps.labels["project_id"] = pid
         worker = await fleet_registry.register_worker(
             name=body.get("name", "worker"),
-            org_id=body.get("org_id", "default"),
+            org_id=_fleet_org_id(request),
             capabilities=caps,
             enrollment_key=body.get("enrollment_key"),
         )
@@ -3182,7 +3317,7 @@ def create_admin_serve_app(
         body = await request.json()
         task = await fleet_dispatcher.claim(
             worker_id=body.get("worker_id", ""),
-            org_id=body.get("org_id", "default"),
+            org_id=_fleet_org_id(request),
             models_canonical=body.get("models", []),
             pool=body.get("pool", "default"),
             labels=body.get("labels"),
@@ -3199,7 +3334,7 @@ def create_admin_serve_app(
         body = await request.json()
         await fleet_dispatcher.report(
             worker_id=body.get("worker_id", ""),
-            org_id=body.get("org_id", "default"),
+            org_id=_fleet_org_id(request),
             run_id=body.get("run_id", ""),
             status=body.get("status", "completed"),
             output=body.get("output"),
@@ -3218,8 +3353,8 @@ def create_admin_serve_app(
         return JSONResponse({"ok": True})
 
     @app.get("/api/v1/fleet/workers")
-    async def list_fleet_workers() -> JSONResponse:
-        workers = await fleet_registry.list_workers(org_id="default")
+    async def list_fleet_workers(request: Request) -> JSONResponse:
+        workers = await fleet_registry.list_workers(org_id=_fleet_org_id(request))
         return JSONResponse([
             {
                 "id": w.id,
@@ -3236,8 +3371,8 @@ def create_admin_serve_app(
         ])
 
     @app.get("/api/v1/fleet/workers/{worker_id}")
-    async def get_fleet_worker(worker_id: str) -> JSONResponse:
-        w = await fleet_registry.get_worker(worker_id)
+    async def get_fleet_worker(worker_id: str, request: Request) -> JSONResponse:
+        w = await _fleet_worker_in_scope(worker_id, request)
         if not w:
             return JSONResponse({"detail": "Not found"}, status_code=404)
         return JSONResponse({
@@ -3255,6 +3390,8 @@ def create_admin_serve_app(
     async def approve_fleet_worker(worker_id: str, request: Request) -> JSONResponse:
         require_org_admin(request.state.context)  # fleet management is org-level
         from fastapi import HTTPException
+        if await _fleet_worker_in_scope(worker_id, request) is None:
+            raise HTTPException(status_code=404, detail="worker not found")
         try:
             w = await fleet_registry.approve_worker(worker_id, approved_by="admin")
         except ValueError as exc:
@@ -3267,6 +3404,8 @@ def create_admin_serve_app(
     async def reject_fleet_worker(worker_id: str, request: Request) -> JSONResponse:
         require_org_admin(request.state.context)  # fleet management is org-level
         from fastapi import HTTPException
+        if await _fleet_worker_in_scope(worker_id, request) is None:
+            raise HTTPException(status_code=404, detail="worker not found")
         try:
             w = await fleet_registry.reject_worker(worker_id)
         except ValueError as exc:
@@ -3279,6 +3418,8 @@ def create_admin_serve_app(
     async def revoke_fleet_worker(worker_id: str, request: Request) -> JSONResponse:
         require_org_admin(request.state.context)  # fleet management is org-level
         from fastapi import HTTPException
+        if await _fleet_worker_in_scope(worker_id, request) is None:
+            raise HTTPException(status_code=404, detail="worker not found")
         try:
             w = await fleet_registry.revoke_worker(worker_id)
         except ValueError as exc:
@@ -3288,21 +3429,21 @@ def create_admin_serve_app(
         return JSONResponse({"status": w.approval_status.value, "worker_id": w.id})
 
     @app.get("/api/v1/admin/fleet/workers/{worker_id}/pool-stats")
-    async def get_worker_pool_stats(worker_id: str) -> JSONResponse:
+    async def get_worker_pool_stats(worker_id: str, request: Request) -> JSONResponse:
         """Return the latest pool_stats snapshot from the worker's heartbeat cache.
 
         Returns 404 if the worker is unknown.
         Returns the snapshot (or null payload if worker reported nothing yet).
         """
-        worker = await fleet_registry.get_worker(worker_id)
+        worker = await _fleet_worker_in_scope(worker_id, request)
         if worker is None:
             return JSONResponse({"error": "worker not found"}, status_code=404)
         snap = await fleet_registry.get_pool_stats(worker_id)
         return JSONResponse(snap if snap else {"snapshot": None})
 
     @app.get("/api/v1/fleet/enrollment-keys")
-    async def list_fleet_enrollment_keys() -> JSONResponse:
-        keys = await fleet_registry.list_enrollment_keys(org_id="default")
+    async def list_fleet_enrollment_keys(request: Request) -> JSONResponse:
+        keys = await fleet_registry.list_enrollment_keys(org_id=_fleet_org_id(request))
         return JSONResponse([
             {
                 "id": k.id, "name": k.name, "pool": ",".join(k.allowed_pools),
@@ -3318,7 +3459,7 @@ def create_admin_serve_app(
         require_org_admin(request.state.context)  # fleet management is org-level
         body = await request.json()
         key_record, raw_key = await fleet_registry.create_enrollment_key(
-            org_id="default",
+            org_id=_fleet_org_id(request),
             name=body.get("name", ""),
             created_by="admin",
             max_uses=body.get("max_uses"),

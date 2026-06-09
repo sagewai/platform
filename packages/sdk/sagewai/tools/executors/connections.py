@@ -48,6 +48,7 @@ from sagewai.connections.protocols.mqtt import MqttProtocolPlugin
 from sagewai.connections.protocols.opcua import _run_op as _opcua_run_op
 from sagewai.connections.protocols.websocket import _run_op as _websocket_run_op
 from sagewai.connections.store import ConnectionStore
+from sagewai.connections.store_ops import store_list
 from sagewai.connections.subscriptions.manager import get_subscription_manager
 
 
@@ -79,6 +80,12 @@ def _build_default_router() -> CredentialsBackendRouter:
     platform-default credentials backend. Test paths that don't want to
     touch the admin state pass an explicit ``router`` kwarg instead.
     """
+    from sagewai.admin.tenancy import is_multi_tenant
+
+    if is_multi_tenant():
+        raise RuntimeError(
+            "tenant-safe credentials router required for connection execution"
+        )
     from sagewai.admin.state_file import AdminStateFile, default_admin_state_path
     from sagewai.connections.bootstrap import build_connections_context
 
@@ -86,7 +93,7 @@ def _build_default_router() -> CredentialsBackendRouter:
     return ctx.router
 
 
-def _resolve_connection(store, kind, project_id, connection_ref):
+async def _resolve_connection(store, kind, project_id, connection_ref):
     """Resolve a connection by ``display_name`` within the project scope.
 
     Shared by the stateless ``_run_op`` path and the stateful MQTT
@@ -94,9 +101,15 @@ def _resolve_connection(store, kind, project_id, connection_ref):
     """
     matches = [
         c
-        for c in store.list(project_id=project_id, protocol=kind)
+        for c in await store_list(store, project_id=project_id, protocol=kind)
         if c.display_name == connection_ref
     ]
+    if not matches and project_id is not None:
+        matches = [
+            c
+            for c in await store_list(store, project_id=None, protocol=kind)
+            if c.display_name == connection_ref
+        ]
     if not matches:
         raise ValueError(
             f"connection {connection_ref!r} not found for kind={kind!r} "
@@ -132,7 +145,7 @@ async def _mqtt_dispatch(
     mgr = get_subscription_manager()
 
     if operation == "subscribe":
-        connection = _resolve_connection(
+        connection = await _resolve_connection(
             store, "mqtt", project_id, exec_block["connection_ref"]
         )
         # Build the router lazily — only this op decrypts.
@@ -181,7 +194,7 @@ async def _grpc_stream_dispatch(
     mgr = get_subscription_manager()
 
     if operation == "subscribe":
-        connection = _resolve_connection(
+        connection = await _resolve_connection(
             store, "grpc", project_id, exec_block["connection_ref"]
         )
         # Build the router lazily — only this op decrypts.
@@ -260,7 +273,7 @@ async def run(
     project_id = payload.get("project_id")
 
     # Lookup by display_name in project scope.
-    connection = _resolve_connection(store, kind, project_id, connection_ref)
+    connection = await _resolve_connection(store, kind, project_id, connection_ref)
 
     # Decrypt sensitive fields BEFORE handing the connection to the runner.
     # The runner's contract is "plaintext only" — no protocol-specific

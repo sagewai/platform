@@ -27,7 +27,7 @@ from sagewai.connections.protocols.base import PluginContext
 from sagewai.connections.store import ConnectionStore, _default_store_path
 
 
-@dataclass(frozen=True)
+@dataclass
 class ConnectionsContext:
     """The platform's per-process connection-handling triplet."""
 
