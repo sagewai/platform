@@ -736,6 +736,7 @@ export interface SetupResponse {
 /* ─── Project types ─── */
 
 export interface Project {
+  id: string;
   slug: string;
   name: string;
   environment: string;

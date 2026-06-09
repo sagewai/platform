@@ -587,6 +587,29 @@ def create_admin_serve_app(
             return await store.list_decrypted(ctx=request.state.context)
         return sf.list_providers_decrypted()
 
+    async def _litellm_completion_kwargs(request: Request, requested_model: str) -> dict[str, Any]:
+        from sagewai.admin.provider_resolution import (
+            choose_provider,
+            litellm_kwargs_for_provider,
+        )
+
+        providers = await _providers_decrypted(request)
+        chosen = choose_provider(providers)
+        ctx = getattr(request.state, "context", None)
+        if chosen is None:
+            if ctx is not None and getattr(ctx, "tenancy_mode", None) == "multi":
+                raise RuntimeError("No LLM provider configured for this project")
+            return {"model": requested_model or "gpt-4o-mini"}
+        kwargs = litellm_kwargs_for_provider(chosen, requested_model=requested_model or None)
+        if (
+            ctx is not None
+            and getattr(ctx, "tenancy_mode", None) == "multi"
+            and not kwargs.get("api_key")
+            and not kwargs.get("api_base")
+        ):
+            raise RuntimeError("Selected LLM provider has no project-scoped credentials")
+        return kwargs
+
     async def _resolve_agent(request: Request, name: str):
         """Resolve an agent spec from the active store (PG or file) for the ctx scope."""
         store = _agent_store(request)
@@ -873,7 +896,13 @@ def create_admin_serve_app(
     # Autopilot routes (Plan 7)
     from sagewai.admin.autopilot_routes import create_autopilot_router
 
-    app.include_router(create_autopilot_router(sf), prefix="/api/v1")
+    app.include_router(
+        create_autopilot_router(
+            sf,
+            provider_store_getter=lambda: getattr(app.state.resource_stores, "provider", None),
+        ),
+        prefix="/api/v1",
+    )
 
     # Sandbox config routes (Plan 3b-i)
     from sagewai.admin import sandbox_routes
@@ -1612,10 +1641,12 @@ def create_admin_serve_app(
                     messages.append({"role": "system", "content": system_prompt})
                 messages.append({"role": "user", "content": message})
 
+                completion_kwargs = await _litellm_completion_kwargs(request, model)
+                model = completion_kwargs.get("model") or model
                 response = await litellm.acompletion(
-                    model=model,
                     messages=messages,
                     stream=True,
+                    **completion_kwargs,
                 )
 
                 async for chunk in response:
@@ -1648,11 +1679,16 @@ def create_admin_serve_app(
                              extra={"event": "agent.run.error", "agent_name": agent_name,
                                     "model": model, "error": error_msg[:200]})
                 otel_count("agent.run.errors", agent_name=agent_name, error="runtime")
-                if "api_key" in error_msg.lower() or "authentication" in error_msg.lower():
+                if (
+                    "api_key" in error_msg.lower()
+                    or "authentication" in error_msg.lower()
+                    or "no llm provider" in error_msg.lower()
+                    or "project-scoped credentials" in error_msg.lower()
+                ):
                     full_output = (
                         f"No API key configured for model '{model}'. "
                         f"Go to System → AI Models to add your API key, "
-                        f"or set the environment variable (e.g., OPENAI_API_KEY)."
+                        f"or configure a project-scoped provider."
                     )
                 else:
                     full_output = f"Error running agent: {error_msg}"

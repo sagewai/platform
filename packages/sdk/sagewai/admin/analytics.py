@@ -27,6 +27,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
+from fastapi import Request
+
 from sagewai.core.context import get_current_project, resolve_project_id
 from sagewai.observability.costs import is_local_model
 
@@ -281,40 +283,49 @@ def create_analytics_router(store: Any):
 
     router = APIRouter(tags=["analytics"])
 
+    def _request_project_id(request: Request) -> str | None:
+        ctx = getattr(request.state, "context", None)
+        if ctx is not None:
+            return getattr(ctx, "project_id", None)
+        return resolve_project_id()
+
     @router.get("/costs")
     async def get_costs(
+        request: Request,
         agent_name: str | None = Query(None),
     ) -> dict[str, Any]:
         """Get cost analytics, optionally filtered by agent."""
-        pid = resolve_project_id()
+        pid = _request_project_id(request)
         return await _maybe_await(store.get_costs(agent_name=agent_name, project_id=pid))
 
     @router.get("/usage")
     async def get_usage(
+        request: Request,
         agent_name: str | None = Query(None),
     ) -> dict[str, Any]:
         """Get token usage analytics."""
-        pid = resolve_project_id()
+        pid = _request_project_id(request)
         return await _maybe_await(store.get_usage(agent_name=agent_name, project_id=pid))
 
     @router.get("/risks")
     async def get_risks(
+        request: Request,
         agent_name: str | None = Query(None),
     ) -> dict[str, Any]:
         """Get risk analytics (PII, hallucination, content filter events)."""
-        pid = resolve_project_id()
+        pid = _request_project_id(request)
         return await _maybe_await(store.get_risks(agent_name=agent_name, project_id=pid))
 
     @router.get("/models")
-    async def get_model_comparison() -> list[dict[str, Any]]:
+    async def get_model_comparison(request: Request) -> list[dict[str, Any]]:
         """Get per-model analytics for comparison."""
-        pid = resolve_project_id()
+        pid = _request_project_id(request)
         return await _maybe_await(store.get_model_analytics(project_id=pid))
 
     @router.get("/agents")
-    async def get_agent_analytics() -> list[dict[str, Any]]:
+    async def get_agent_analytics(request: Request) -> list[dict[str, Any]]:
         """Get per-agent analytics."""
-        pid = resolve_project_id()
+        pid = _request_project_id(request)
         return await _maybe_await(store.get_agent_analytics(project_id=pid))
 
     return router

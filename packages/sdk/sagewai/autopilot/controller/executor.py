@@ -48,6 +48,10 @@ class ExecutorConfig(BaseModel):
     Attributes:
         model: Default model name for the direct-litellm fallback
             path (used when ``harness_proxy`` is ``None``).
+        api_key: Optional provider API key passed directly to LiteLLM.
+        api_base: Optional provider base URL passed directly to LiteLLM.
+        allow_env_fallback: Whether LiteLLM may fall back to process
+            environment credentials when no explicit provider config was supplied.
         max_tokens: Default ``max_tokens`` for the fallback path.
         temperature: Default ``temperature`` for the fallback path.
         harness_proxy: Optional :class:`~sagewai.harness.HarnessProxy`
@@ -74,6 +78,9 @@ class ExecutorConfig(BaseModel):
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     model: str = "gpt-4o-mini"
+    api_key: str | None = None
+    api_base: str | None = None
+    allow_env_fallback: bool = True
     max_tokens: int = 2048
     temperature: float = 0.3
     harness_proxy: Any | None = None
@@ -380,12 +387,26 @@ class AgentExecutor:
 
         try:
             while iteration < self._config.max_tool_iterations:
+                if (
+                    not self._config.allow_env_fallback
+                    and not self._config.api_key
+                    and not self._config.api_base
+                ):
+                    return StepResult(
+                        node_id=agent.id,
+                        status="skipped",
+                        output_preview=_NO_PROVIDER_SENTINEL,
+                    )
                 kwargs: dict[str, Any] = {
                     "model": self._config.model,
                     "messages": messages_list,
                     "max_tokens": self._config.max_tokens,
                     "temperature": self._config.temperature,
                 }
+                if self._config.api_key:
+                    kwargs["api_key"] = self._config.api_key
+                if self._config.api_base:
+                    kwargs["api_base"] = self._config.api_base
                 if tool_specs is not None:
                     kwargs["tools"] = tool_specs
 

@@ -11,8 +11,10 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
+from sagewai.sandbox.policy import host_exec_allowed
 from sagewai.tools.registry import CatalogEntry
 
 
@@ -36,6 +38,11 @@ async def run(
     project_id: str,
     get_credentials: Callable[..., Any],
 ) -> dict[str, Any]:
+    if not host_exec_allowed():
+        raise CliExecutionError(
+            "Host-backed CLI execution disabled. Set SAGEWAI_ALLOW_HOST_EXEC=1 "
+            "in trusted single-org mode; multi-tenant mode always denies host CLI tools."
+        )
     cfg = entry.exec_["cli"]
     binary = cfg["binary"]
     argv = [binary] + [arg.format(**inputs) for arg in cfg["argv_template"]]

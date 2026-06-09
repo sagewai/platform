@@ -7,8 +7,10 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-import pytest
 from types import SimpleNamespace
+
+import pytest
+
 from sagewai.tools.executors import cli as cli_exec
 from sagewai.tools.registry import CatalogEntry
 
@@ -54,6 +56,22 @@ async def test_cli_executor_raises_on_nonzero_exit(monkeypatch):
     monkeypatch.setattr(cli_exec, "_run_subprocess", fake_run)
     entry = _make_entry()
     with pytest.raises(cli_exec.CliExecutionError):
+        await cli_exec.run(
+            entry, operation=None, inputs={"message": "x"},
+            project_id="p1", get_credentials=_noop_creds,
+        )
+
+
+@pytest.mark.asyncio
+async def test_cli_executor_denies_host_exec_in_multi_tenant_mode(monkeypatch):
+    async def forbidden_run(argv):
+        raise AssertionError("subprocess must not be launched")
+
+    monkeypatch.setenv("SAGEWAI_TENANCY_MODE", "multi")
+    monkeypatch.setenv("SAGEWAI_ALLOW_HOST_EXEC", "1")
+    monkeypatch.setattr(cli_exec, "_run_subprocess", forbidden_run)
+    entry = _make_entry()
+    with pytest.raises(cli_exec.CliExecutionError, match="Host-backed CLI execution disabled"):
         await cli_exec.run(
             entry, operation=None, inputs={"message": "x"},
             project_id="p1", get_credentials=_noop_creds,

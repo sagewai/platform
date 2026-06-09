@@ -28,14 +28,16 @@ from typing import Any
 
 import pytest
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from httpx import ASGITransport, AsyncClient
 
 from sagewai.admin import autopilot_run_bus as run_bus_mod
+from sagewai.admin.authz import TenantHiddenError
 from sagewai.admin.autopilot_routes import create_autopilot_router
 from sagewai.admin.autopilot_run_bus import get_run_bus
 from sagewai.admin.autopilot_state import save_mission
 from sagewai.admin.state_file import AdminStateFile
-
+from sagewai.admin.tenancy import RequestContext, UserRef
 
 # ── fixtures ──────────────────────────────────────────────────────────
 
@@ -169,6 +171,43 @@ async def test_events_unauth_401(app_and_sf):
             "/api/v1/autopilot/missions/events-mission-001/events"
         )
     assert resp.status_code == 401
+
+
+async def test_events_hidden_for_cross_project_context(sf):
+    """A project context must not subscribe to another project's run stream."""
+    _seed_mission(sf, "events-mission-foreign")
+    # Move the seeded mission to another project.
+    sf._mutate(
+        lambda data: data["autopilot_missions"][0].update(
+            {"project_id": "project-b"}
+        )
+    )
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def _tenant_context(request, call_next):
+        request.state.context = RequestContext(
+            actor=UserRef(id="u1", label="u1@example.com"),
+            org_id="org-1",
+            project_id="project-a",
+            roles=frozenset({"project:member"}),
+            scopes=frozenset({"read", "write"}),
+            request_id="req-1",
+            tenancy_mode="multi",
+        )
+        return await call_next(request)
+
+    @app.exception_handler(TenantHiddenError)
+    async def _hidden(_request, _exc):
+        return JSONResponse({"detail": "Not found"}, status_code=404)
+
+    app.include_router(create_autopilot_router(sf), prefix="/api/v1")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://t") as ac:
+        resp = await ac.get(
+            "/api/v1/autopilot/missions/events-mission-foreign/events"
+        )
+    assert resp.status_code == 404
 
 
 async def test_events_replays_ring_buffer_to_late_subscriber(

@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -103,3 +105,32 @@ class TestAgentAnalytics:
         data = resp.json()
         assert isinstance(data, list)
         assert len(data) >= 2  # agent-a and agent-b
+
+
+def test_router_uses_request_context_project_scope():
+    store = AnalyticsStore()
+    store.record_cost(
+        agent_name="agent-a",
+        model="gpt-4o",
+        cost_usd=0.10,
+        tokens=100,
+        project_id="project-a",
+    )
+    store.record_cost(
+        agent_name="agent-b",
+        model="claude",
+        cost_usd=0.20,
+        tokens=200,
+        project_id="project-b",
+    )
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def _tenant_context(request, call_next):
+        request.state.context = SimpleNamespace(project_id="project-a")
+        return await call_next(request)
+
+    app.include_router(create_analytics_router(store), prefix="/analytics")
+    resp = TestClient(app).get("/analytics/costs")
+    assert resp.status_code == 200
+    assert resp.json()["total_cost_usd"] == pytest.approx(0.10)

@@ -90,6 +90,7 @@ _MULTI_ORG_PREFIXES = (
     "/api/v1/fleet/enrollment-keys",
     "/api/v1/fleet/workers",  # approve/reject/revoke + list/detail (fleet mgmt)
     "/api/v1/fleet/audit",
+    "/api/v1/harness",  # global proxy policy/keys/spend/config
     # no-project_id-column stores — org-admin interim (reads + writes) until scoped
     "/api/v1/workflow-registry",
     "/api/v1/budget",

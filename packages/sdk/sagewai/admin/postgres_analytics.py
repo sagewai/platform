@@ -52,6 +52,12 @@ _cost_tbl = CostRecord.__table__
 _event_tbl = GuardrailEventModel.__table__
 
 
+def _apply_project_filter(stmt, table, project_id: str | None):
+    if project_id is None:
+        return stmt
+    return stmt.where(table.c.project_id == project_id)
+
+
 class PostgresAnalyticsStore:
     """Analytics store using SQLAlchemy Core — SQLite (default) or PostgreSQL.
 
@@ -157,16 +163,12 @@ class PostgresAnalyticsStore:
     async def get_costs(
         self, agent_name: str | None = None, *, project_id: str | None = None
     ) -> dict[str, Any]:
-        """Get cost analytics, optionally filtered by agent.
-
-        *project_id* is accepted for API compatibility with the synchronous
-        ``AnalyticsStore`` but is not yet used for per-project filtering on
-        the database-backed store (all records share a single store).
-        """
+        """Get cost analytics, optionally filtered by project and agent."""
         stmt = select(
             func.coalesce(func.sum(_cost_tbl.c.cost_usd), 0).label("total"),
             func.count().label("cnt"),
         )
+        stmt = _apply_project_filter(stmt, _cost_tbl, project_id)
         if agent_name is not None:
             stmt = stmt.where(_cost_tbl.c.agent_name == agent_name)
         async with self._engine.connect() as conn:
@@ -179,14 +181,12 @@ class PostgresAnalyticsStore:
     async def get_usage(
         self, agent_name: str | None = None, *, project_id: str | None = None
     ) -> dict[str, Any]:
-        """Get token usage analytics.
-
-        *project_id* accepted for API compatibility; not yet used for filtering.
-        """
+        """Get token usage analytics, optionally filtered by project and agent."""
         stmt = select(
             func.coalesce(func.sum(_cost_tbl.c.tokens), 0).label("total_tokens"),
             func.count().label("cnt"),
         )
+        stmt = _apply_project_filter(stmt, _cost_tbl, project_id)
         if agent_name is not None:
             stmt = stmt.where(_cost_tbl.c.agent_name == agent_name)
         async with self._engine.connect() as conn:
@@ -204,6 +204,7 @@ class PostgresAnalyticsStore:
             _event_tbl.c.event_type,
             func.count().label("cnt"),
         ).group_by(_event_tbl.c.event_type)
+        stmt = _apply_project_filter(stmt, _event_tbl, project_id)
         if agent_name is not None:
             stmt = stmt.where(_event_tbl.c.agent_name == agent_name)
         async with self._engine.connect() as conn:
@@ -224,10 +225,7 @@ class PostgresAnalyticsStore:
         }
 
     async def get_model_analytics(self, *, project_id: str | None = None) -> list[dict[str, Any]]:
-        """Get per-model analytics.
-
-        *project_id* accepted for API compatibility; not yet used for filtering.
-        """
+        """Get per-model analytics, optionally filtered by project."""
         stmt = (
             select(
                 _cost_tbl.c.model,
@@ -238,6 +236,7 @@ class PostgresAnalyticsStore:
             .group_by(_cost_tbl.c.model)
             .order_by(func.sum(_cost_tbl.c.cost_usd).desc())
         )
+        stmt = _apply_project_filter(stmt, _cost_tbl, project_id)
         async with self._engine.connect() as conn:
             rows = (await conn.execute(stmt)).mappings().all()
         result = []
@@ -258,9 +257,7 @@ class PostgresAnalyticsStore:
         return result
 
     async def get_agent_analytics(self, *, project_id: str | None = None) -> list[dict[str, Any]]:
-        """Get per-agent analytics.
-
-        *project_id* accepted for API compatibility; not yet used for filtering.
+        """Get per-agent analytics, optionally filtered by project.
 
         ARRAY_AGG(DISTINCT model) is not portable; we instead collect the
         distinct models in Python by running a secondary
@@ -278,11 +275,13 @@ class PostgresAnalyticsStore:
             .group_by(_cost_tbl.c.agent_name)
             .order_by(func.sum(_cost_tbl.c.cost_usd).desc())
         )
+        agg_stmt = _apply_project_filter(agg_stmt, _cost_tbl, project_id)
         # Distinct models per agent
         models_stmt = select(
             _cost_tbl.c.agent_name,
             _cost_tbl.c.model,
         ).distinct()
+        models_stmt = _apply_project_filter(models_stmt, _cost_tbl, project_id)
 
         async with self._engine.connect() as conn:
             agg_rows = (await conn.execute(agg_stmt)).mappings().all()

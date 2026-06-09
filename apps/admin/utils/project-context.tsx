@@ -7,7 +7,7 @@
  *
  * Scope model:
  *   project_id = null   → Org-global (visible everywhere)
- *   project_id = "slug" → Project-scoped (strict isolation)
+ *   project_id = "id"   → Project-scoped (strict isolation)
  */
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
@@ -49,6 +49,16 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   const [currentSlug, setCurrentSlug] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
 
+  const selectProject = useCallback((project: Project | null) => {
+    setCurrentSlug(project?.slug ?? null);
+    setCurrentProjectId(project?.id ?? null);
+    if (project) {
+      localStorage.setItem(LS_KEY, project.slug);
+    } else {
+      localStorage.removeItem(LS_KEY);
+    }
+  }, []);
+
   const fetchProjects = useCallback(async () => {
     try {
       const ps = await adminApi.listProjects();
@@ -57,35 +67,31 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       if (!loaded) {
         // First load — restore from localStorage or pick default
         const saved = localStorage.getItem(LS_KEY);
-        if (saved && ps.find((p) => p.slug === saved)) {
-          setCurrentSlug(saved);
-          setCurrentProjectId(saved);
+        const savedProject = saved ? ps.find((p) => p.slug === saved) ?? null : null;
+        if (savedProject) {
+          selectProject(savedProject);
         } else if (ps.length > 0) {
           // Auto-select default (first) project
-          setCurrentSlug(ps[0].slug);
-          setCurrentProjectId(ps[0].slug);
-          localStorage.setItem(LS_KEY, ps[0].slug);
+          selectProject(ps[0]);
         }
         setLoaded(true);
       }
     } catch {
       // Backend not ready or setup not complete — no projects yet
     }
-  }, [loaded]);
+  }, [loaded, selectProject]);
 
   useEffect(() => {
     fetchProjects();
   }, [fetchProjects]);
 
   const setProject = useCallback((slug: string | null) => {
-    setCurrentSlug(slug);
-    setCurrentProjectId(slug);
-    if (slug) {
-      localStorage.setItem(LS_KEY, slug);
-    } else {
-      localStorage.removeItem(LS_KEY);
+    if (slug === null) {
+      selectProject(null);
+      return;
     }
-  }, []);
+    selectProject(projects.find((p) => p.slug === slug) ?? null);
+  }, [projects, selectProject]);
 
   const current = currentSlug ? projects.find((p) => p.slug === currentSlug) ?? null : null;
 

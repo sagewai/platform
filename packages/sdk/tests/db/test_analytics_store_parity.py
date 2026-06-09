@@ -45,6 +45,16 @@ async def test_get_costs_no_filter_sums_all(dialect_engine):
 
 
 @pytest.mark.asyncio
+async def test_get_costs_filters_by_project(dialect_engine):
+    store = PostgresAnalyticsStore(engine=dialect_engine)
+    await store.record_cost("agent-a", "gpt-4o", 0.10, 1000, project_id="project-a")
+    await store.record_cost("agent-b", "claude", 0.20, 2000, project_id="project-b")
+    result = await store.get_costs(project_id="project-a")
+    assert result["total_cost_usd"] == pytest.approx(0.10, abs=0.001)
+    assert result["record_count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_get_usage(dialect_engine):
     store = PostgresAnalyticsStore(engine=dialect_engine)
     await store.record_cost("agent-a", "gpt-4o", 0.05, 1000)
@@ -61,6 +71,16 @@ async def test_get_usage_filtered(dialect_engine):
     await store.record_cost("agent-b", "claude", 0.03, 9000)
     result = await store.get_usage(agent_name="agent-a")
     assert result["total_tokens"] == 1000
+
+
+@pytest.mark.asyncio
+async def test_get_usage_filters_by_project(dialect_engine):
+    store = PostgresAnalyticsStore(engine=dialect_engine)
+    await store.record_cost("agent-a", "gpt-4o", 0.05, 1000, project_id="project-a")
+    await store.record_cost("agent-b", "claude", 0.03, 9000, project_id="project-b")
+    result = await store.get_usage(project_id="project-a")
+    assert result["total_tokens"] == 1000
+    assert result["record_count"] == 1
 
 
 @pytest.mark.asyncio
@@ -82,6 +102,16 @@ async def test_get_risks_filtered(dialect_engine):
     await store.record_guardrail_event("agent-a", "pii_detected")
     await store.record_guardrail_event("agent-b", "hallucination")
     result = await store.get_risks(agent_name="agent-a")
+    assert result["pii_events"] == 1
+    assert result["total_events"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_risks_filters_by_project(dialect_engine):
+    store = PostgresAnalyticsStore(engine=dialect_engine)
+    await store.record_guardrail_event("agent-a", "pii_detected", project_id="project-a")
+    await store.record_guardrail_event("agent-b", "hallucination", project_id="project-b")
+    result = await store.get_risks(project_id="project-a")
     assert result["pii_events"] == 1
     assert result["total_events"] == 1
 
@@ -113,6 +143,15 @@ async def test_get_model_analytics(dialect_engine):
 
 
 @pytest.mark.asyncio
+async def test_get_model_analytics_filters_by_project(dialect_engine):
+    store = PostgresAnalyticsStore(engine=dialect_engine)
+    await store.record_cost("agent-a", "gpt-4o", 0.05, 1000, project_id="project-a")
+    await store.record_cost("agent-b", "claude", 0.10, 2000, project_id="project-b")
+    models = await store.get_model_analytics(project_id="project-a")
+    assert [m["model"] for m in models] == ["gpt-4o"]
+
+
+@pytest.mark.asyncio
 async def test_get_agent_analytics(dialect_engine):
     store = PostgresAnalyticsStore(engine=dialect_engine)
     await store.record_cost("agent-a", "gpt-4o", 0.05, 1000)
@@ -128,6 +167,15 @@ async def test_get_agent_analytics(dialect_engine):
     assert by_name["agent-a"]["total_tokens"] == 3000
     assert by_name["agent-b"]["request_count"] == 1
     assert "gpt-4o" in by_name["agent-b"]["models_used"]
+
+
+@pytest.mark.asyncio
+async def test_get_agent_analytics_filters_by_project(dialect_engine):
+    store = PostgresAnalyticsStore(engine=dialect_engine)
+    await store.record_cost("agent-a", "gpt-4o", 0.05, 1000, project_id="project-a")
+    await store.record_cost("agent-b", "claude", 0.10, 2000, project_id="project-b")
+    agents = await store.get_agent_analytics(project_id="project-a")
+    assert [a["agent_name"] for a in agents] == ["agent-a"]
 
 
 @pytest.mark.asyncio

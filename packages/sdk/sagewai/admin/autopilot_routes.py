@@ -85,6 +85,7 @@ import json
 import logging
 import os
 import secrets
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -119,6 +120,11 @@ from sagewai.admin.autopilot_state import (
     set_autopilot_config,
     update_mission,
 )
+from sagewai.admin.provider_resolution import (
+    SELF_HOSTED_PROVIDERS,
+    choose_provider,
+    litellm_kwargs_for_provider,
+)
 from sagewai.admin.serve import _extract_token, _project_id
 from sagewai.admin.state_file import AdminStateFile
 from sagewai.autopilot._types import MissionState
@@ -131,7 +137,7 @@ from sagewai.autopilot.routing.types import AutoRouted, PickerNeeded, SynthesisN
 from sagewai.autopilot.sagewai_llm import BlueprintCache, SagewaiLLMClient
 from sagewai.autopilot.sagewai_llm.identity import ensure_identity
 from sagewai.autopilot.sealed_matcher import ProfileRecord, match_profile
-from sagewai.autopilot.tool_risk_profile import SandboxTier, get_tier, is_downgrade, tier_for_tools
+from sagewai.autopilot.tool_risk_profile import SandboxTier, is_downgrade, tier_for_tools
 from sagewai.autopilot.tool_scopes import scopes_for_tools
 
 logger = logging.getLogger("sagewai.admin.autopilot")
@@ -513,34 +519,11 @@ def _translate_mission_detail(mission: dict[str, Any]) -> AutopilotMissionDetail
     )
 
 
-# litellm model name per cloud-provider key. Used when the operator
-# configured a provider in /api/v1/providers but didn't pin a specific
-# model in its config dict.
-_PROVIDER_DEFAULT_MODEL = {
-    "openai": "gpt-4o-mini",
-    "anthropic": "anthropic/claude-haiku-4-5",
-    "google": "gemini/gemini-2.0-flash",
-    "groq": "groq/llama-3.3-70b-versatile",
-    "mistral": "mistral/mistral-small-latest",
-    "together": "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
-    "xai": "xai/grok-2-latest",
-    "perplexity": "perplexity/llama-3.1-sonar-small-128k-online",
-    "cohere": "command-r",
-}
-
-# Self-hosted providers don't need an API key — a base_url and a model
-# pull are enough. They're "configured" by virtue of being added; the
-# executor reaches them over HTTP.
-_SELF_HOSTED_PROVIDERS = {"ollama", "lmstudio", "vllm"}
-
-_SELF_HOSTED_DEFAULT_BASE_URL = {
-    "ollama": "http://localhost:11434",
-    "lmstudio": "http://localhost:1234/v1",
-}
-
-
 def _resolve_executor_config(
-    sf: AdminStateFile, project_id: str | None
+    sf: AdminStateFile,
+    project_id: str | None,
+    *,
+    providers: list[dict[str, Any]] | None = None,
 ) -> ExecutorConfig:
     """Pick a configured LLM provider and build an :class:`ExecutorConfig`.
 
@@ -556,77 +539,38 @@ def _resolve_executor_config(
     configured — the executor then surfaces a clear "no provider"
     failure via the all-skipped → FAILED path in :class:`MissionDriver`.
     """
-    providers = sf.list_providers_decrypted(project_id=project_id)
-    if project_id and not providers:
+    explicit_provider_list = providers is not None
+    visible_providers = providers
+    if visible_providers is None:
+        visible_providers = sf.list_providers_decrypted(project_id=project_id)
+    if project_id and not visible_providers and providers is None:
         # Fall back to org-global providers if the project has none.
-        providers = sf.list_providers_decrypted(project_id=None)
-
-    def _has_creds(p: dict[str, Any]) -> bool:
-        # Self-hosted providers (ollama, lmstudio, vllm) don't need an
-        # API key — they're reachable over HTTP at a known base_url.
-        # Treat them as configured by virtue of being added.
-        if p.get("provider_name") in _SELF_HOSTED_PROVIDERS:
-            return True
-        cfg = p.get("config") or {}
-        return bool(cfg.get("api_key") or p.get("env_var_set"))
-
-    # Prefer the explicitly-marked default; fall back to the first
-    # provider with credentials. This lets operators pin a deterministic
-    # provider via ``set_default_provider`` instead of relying on
-    # insertion order.
-    chosen: dict[str, Any] | None = next(
-        (p for p in providers if p.get("default") and _has_creds(p)),
-        None,
-    )
-    if chosen is None:
-        chosen = next((p for p in providers if _has_creds(p)), None)
+        visible_providers = sf.list_providers_decrypted(project_id=None)
 
     tool_registry = get_default_tool_registry()
-
+    chosen = choose_provider(visible_providers)
     if chosen is None:
-        return ExecutorConfig(tool_registry=tool_registry)
-
-    cfg = chosen.get("config") or {}
-    provider_name = chosen.get("provider_name", "")
-    api_key = cfg.get("api_key", "")
-    env_var = chosen.get("env_var_key", "")
-    if api_key and env_var and not os.environ.get(env_var):
-        os.environ[env_var] = api_key
-
-    # Self-hosted providers: export base_url to the env var litellm
-    # honours for that backend, so the executor reaches the local
-    # server instead of a public API. Default to the well-known port
-    # when the operator didn't specify one.
-    if provider_name in _SELF_HOSTED_PROVIDERS:
-        base_url = (
-            cfg.get("base_url")
-            or _SELF_HOSTED_DEFAULT_BASE_URL.get(provider_name, "")
+        return ExecutorConfig(
+            tool_registry=tool_registry,
+            allow_env_fallback=not explicit_provider_list,
         )
-        if provider_name == "ollama" and base_url:
-            os.environ.setdefault("OLLAMA_API_BASE", base_url)
-        elif provider_name == "lmstudio" and base_url:
-            os.environ.setdefault("OPENAI_API_BASE", base_url)
-            # litellm's openai-compat path requires a non-empty key
-            # even when the local server doesn't validate it.
-            os.environ.setdefault("OPENAI_API_KEY", "lm-studio")
 
-    model = cfg.get("model") or _PROVIDER_DEFAULT_MODEL.get(
-        provider_name, ExecutorConfig.model_fields["model"].default
+    kwargs = litellm_kwargs_for_provider(chosen)
+    return ExecutorConfig(
+        model=kwargs["model"],
+        api_key=kwargs.get("api_key"),
+        api_base=kwargs.get("api_base"),
+        allow_env_fallback=not explicit_provider_list,
+        tool_registry=tool_registry,
     )
-    # Auto-prefix the model name for self-hosted backends so litellm
-    # routes to the right transport. ``ollama/<name>`` → Ollama HTTP
-    # API; ``openai/<name>`` → OpenAI-compatible (LM Studio, vLLM).
-    if provider_name == "ollama" and "/" not in model:
-        model = f"ollama/{model}"
-    elif provider_name == "lmstudio" and "/" not in model:
-        model = f"openai/{model}"
-    return ExecutorConfig(model=model, tool_registry=tool_registry)
 
 
 def _build_mission_driver(
     record: dict[str, Any],
     blueprint: Blueprint,
     sf: AdminStateFile | None = None,
+    *,
+    providers: list[dict[str, Any]] | None = None,
 ) -> Any:
     """Construct the :class:`MissionDriver` used to execute a mission run.
 
@@ -644,7 +588,7 @@ def _build_mission_driver(
     if sf is None:
         return MissionDriver()
     project_id = record.get("project_id")
-    config = _resolve_executor_config(sf, project_id)
+    config = _resolve_executor_config(sf, project_id, providers=providers)
     return MissionDriver(executor_config=config)
 
 
@@ -696,7 +640,12 @@ async def _persist_loop(
 
 
 async def _execute_mission_run(
-    sf: AdminStateFile, mission_id: str, run_id: str
+    sf: AdminStateFile,
+    mission_id: str,
+    run_id: str,
+    *,
+    ctx: Any | None = None,
+    provider_store: Any | None = None,
 ) -> None:
     """Background task body — drives a mission to completion or failure.
 
@@ -750,7 +699,10 @@ async def _execute_mission_run(
             return
 
         try:
-            driver = _build_mission_driver(record, blueprint, sf=sf)
+            providers = None
+            if provider_store is not None and ctx is not None:
+                providers = await provider_store.list_decrypted(ctx=ctx)
+            driver = _build_mission_driver(record, blueprint, sf=sf, providers=providers)
         except Exception as exc:  # noqa: BLE001
             final_reason = f"driver construction failed: {exc}"
             logger.exception("driver construction for mission %s failed", mission_id)
@@ -852,7 +804,11 @@ async def _execute_mission_run(
             )
 
 
-def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
+def create_autopilot_router(
+    sf: AdminStateFile,
+    *,
+    provider_store_getter: Callable[[], Any | None] | None = None,
+) -> APIRouter:
     """Return an :class:`APIRouter` with all autopilot routes.
 
     Parameters
@@ -890,7 +846,7 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
             providers = sf.list_providers(project_id=None)
 
         def _has_creds(p: dict[str, Any]) -> bool:
-            if p.get("provider_name") in _SELF_HOSTED_PROVIDERS:
+            if p.get("provider_name") in SELF_HOSTED_PROVIDERS:
                 return True
             cfg = p.get("config") or {}
             # api_key_set is the redacted-list sentinel; api_key is present
@@ -1540,11 +1496,15 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
 
         org = _org_id(sf)
         bus = get_lifecycle_bus()
+        mctx = _ctx(request)
 
         async def _gen():
             async for evt in bus.subscribe(org):
                 if await request.is_disconnected():
                     break
+                mission = get_mission(sf, evt.mission_id)
+                if mission is None or not in_read_scope(mission.get("project_id"), mctx):
+                    continue
                 yield {"event": "mission.status_changed", "data": evt.model_dump_json()}
 
         return EventSourceResponse(_gen())
@@ -1563,6 +1523,11 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
         err = _require_auth(request, sf)
         if err is not None:
             return err
+
+        mission = get_mission(sf, mission_id)
+        if mission is None:
+            raise HTTPException(status_code=404, detail=f"Mission '{mission_id}' not found")
+        require_in_project_scope(mission.get("project_id"), _ctx(request))
 
         bus = get_run_bus()
         q = bus.subscribe(mission_id)
@@ -2017,7 +1982,16 @@ def create_autopilot_router(sf: AdminStateFile) -> APIRouter:
 
         # Detached background task — must NOT be awaited here.  The
         # request thread returns 202 within milliseconds.
-        asyncio.create_task(_execute_mission_run(sf, mission_id, run_id))
+        provider_store = provider_store_getter() if provider_store_getter else None
+        asyncio.create_task(
+            _execute_mission_run(
+                sf,
+                mission_id,
+                run_id,
+                ctx=_ctx(request),
+                provider_store=provider_store,
+            )
+        )
 
         logger.info("Mission run started (id=%s, run_id=%s)", mission_id, run_id)
         return JSONResponse(

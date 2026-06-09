@@ -399,7 +399,7 @@ async def get_sandbox_preview(
             detail="At least one of 'project' or 'agent' query params required",
         )
 
-    state = AdminStateFile()
+    state = request.app.state.sandbox_store or AdminStateFile()
 
     # Project-scoped read: a project may only preview its own (or org-shared)
     # project config; a cross-project 'project' query param is hidden (404).
