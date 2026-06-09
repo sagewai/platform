@@ -17,6 +17,7 @@ from sagewai.admin.authz import (
     TenantHiddenError,
     can,
     require,
+    require_org_admin,
 )
 from sagewai.admin.tenancy import RequestContext, UserRef
 
@@ -140,6 +141,21 @@ def test_write_scope_token_cannot_do_admin_named_perm():
     with pytest.raises(PermissionDeniedError):
         require("org:manage", write_tok)  # needs admin scope
     require("org:manage", _ctx({"org:admin"}))  # full-scope admin can
+
+
+def test_require_org_admin_enforces_admin_scope():
+    write_tok = RequestContext(
+        actor=UserRef("u", "u@x.io"),
+        org_id="o1",
+        project_id=None,
+        roles=frozenset({"org:admin"}),
+        scopes=frozenset({"read", "write"}),
+        request_id="r",
+        tenancy_mode="multi",
+    )
+    with pytest.raises(PermissionDeniedError):
+        require_org_admin(write_tok)
+    require_org_admin(_ctx({"org:admin"}))
 
 
 # --- targeted permissions must carry a project target (no cross-project leak) ---

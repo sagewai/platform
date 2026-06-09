@@ -165,6 +165,23 @@ class IdentityStore:
             row = (await conn.execute(select(_org).where(_org.c.slug == slug))).mappings().first()
         return dict(row) if row else None
 
+    async def list_orgs(self) -> list[dict[str, Any]]:
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(select(_org).order_by(_org.c.slug))).mappings().all()
+        return [dict(r) for r in rows]
+
+    async def update_org(self, org_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
+        allowed = {"name", "contact_email", "timezone", "settings"}
+        values = {k: v for k, v in patch.items() if k in allowed}
+        if values:
+            async with self._engine.begin() as conn:
+                result = await conn.execute(
+                    update(_org).where(_org.c.id == org_id).values(**values)
+                )
+            if result.rowcount == 0:
+                return None
+        return await self.get_org(org_id)
+
     # ----------------------------------------------------------------- users
     async def _insert_account(
         self,
@@ -240,6 +257,19 @@ class IdentityStore:
             )
         return dict(row) if row else None
 
+    async def update_user_profile(
+        self, org_id: str, user_id: str, *, name: str | None
+    ) -> dict[str, Any] | None:
+        async with self._engine.begin() as conn:
+            result = await conn.execute(
+                update(_user)
+                .where(_user.c.org_id == org_id, _user.c.id == user_id)
+                .values(name=name)
+            )
+        if result.rowcount == 0:
+            return None
+        return await self.get_user(org_id, user_id)
+
     async def set_password(self, org_id: str, user_id: str, password: str) -> None:
         pw_hash, pw_salt = _hash_password(password)
         async with self._engine.begin() as conn:
@@ -266,7 +296,15 @@ class IdentityStore:
 
     # -------------------------------------------------------------- projects
     async def create_project(
-        self, org_id: str, slug: str, name: str, *, project_id: str | None = None
+        self,
+        org_id: str,
+        slug: str,
+        name: str,
+        *,
+        project_id: str | None = None,
+        environment: str = "production",
+        status: str = "active",
+        settings: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         pid = project_id or _new_id()
         async with self._engine.begin() as conn:
@@ -276,9 +314,9 @@ class IdentityStore:
                     org_id=org_id,
                     slug=slug,
                     name=name,
-                    environment="production",
-                    status="active",
-                    settings={},
+                    environment=environment,
+                    status=status,
+                    settings=settings or {},
                 )
             )
         proj = await self.get_project(org_id, pid)
@@ -299,6 +337,55 @@ class IdentityStore:
                 .first()
             )
         return _project_record(row) if row else None
+
+    async def get_project_by_slug(self, org_id: str, slug: str) -> dict[str, Any] | None:
+        async with self._engine.connect() as conn:
+            row = (
+                (
+                    await conn.execute(
+                        select(_project).where(
+                            _project.c.org_id == org_id, _project.c.slug == slug
+                        )
+                    )
+                )
+                .mappings()
+                .first()
+            )
+        return _project_record(row) if row else None
+
+    async def update_project(
+        self,
+        org_id: str,
+        project_id: str,
+        *,
+        name: str | None = None,
+        environment: str | None = None,
+        status: str | None = None,
+        settings_patch: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        existing = await self.get_project(org_id, project_id)
+        if existing is None:
+            return None
+        values: dict[str, Any] = {}
+        if name is not None:
+            values["name"] = name
+        if environment is not None:
+            values["environment"] = environment
+        if status is not None:
+            values["status"] = status
+        if settings_patch:
+            merged = dict(existing.get("settings") or {})
+            merged.update(settings_patch)
+            values["settings"] = merged
+        if values:
+            values["updated_at"] = _now()
+            async with self._engine.begin() as conn:
+                await conn.execute(
+                    update(_project)
+                    .where(_project.c.org_id == org_id, _project.c.id == project_id)
+                    .values(**values)
+                )
+        return await self.get_project(org_id, project_id)
 
     async def get_project_data_key(self, org_id: str, project_id: str) -> str | None:
         """Return the wrapped per-project data key (``project.data_key_ref``).

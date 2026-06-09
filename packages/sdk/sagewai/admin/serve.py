@@ -30,13 +30,14 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.responses import Response, StreamingResponse
 
 from sagewai import __version__ as _SDK_VERSION
 from sagewai.admin.authz import require_org_admin
-from sagewai.admin.state_file import SHARED_ONLY, AdminStateFile
+from sagewai.admin.state_file import SHARED_ONLY, AdminStateFile, _slugify
 
 logger = logging.getLogger("sagewai.admin")
 
@@ -97,6 +98,57 @@ _CAPABILITIES = {
 
 # Agent templates — imported from the CLI module's existing list
 _AGENT_TEMPLATES: list[dict[str, Any]] = []
+
+
+def _tenant_org_payload(org: dict[str, Any]) -> dict[str, Any]:
+    settings = org.get("settings") or {}
+    return {
+        "id": org.get("id"),
+        "org_name": org.get("name", ""),
+        "org_slug": org.get("slug", ""),
+        "app_url": settings.get("app_url", ""),
+        "contact_email": org.get("contact_email") or "",
+        "timezone": org.get("timezone", "UTC"),
+        "industry": settings.get("industry", ""),
+        "team_size": settings.get("team_size", ""),
+        "completed_at": org.get("created_at"),
+    }
+
+
+def _tenant_project_payload(project: dict[str, Any]) -> dict[str, Any]:
+    settings = project.get("settings") or {}
+    return {
+        "id": project.get("id"),
+        "slug": project.get("slug", ""),
+        "name": project.get("name", ""),
+        "environment": project.get("environment", "production"),
+        "allowed_origins": settings.get("allowed_origins", ""),
+        "default_model": settings.get("default_model"),
+        "status": project.get("status", "active"),
+        "created_at": project.get("created_at"),
+        "updated_at": project.get("updated_at"),
+    }
+
+
+def _tenant_user_payload(
+    user: dict[str, Any],
+    ctx: Any,
+    memberships: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    roles = sorted(ctx.roles) if ctx is not None else []
+    public_role = "admin" if {"org:owner", "org:admin"} & set(roles) else "member"
+    return {
+        "id": user.get("id"),
+        "email": user.get("email", ""),
+        "display_name": user.get("name") or "",
+        "name": user.get("name") or "",
+        "avatar_url": None,
+        "role": public_role,
+        "roles": roles,
+        "org_id": user.get("org_id"),
+        "project_id": getattr(ctx, "project_id", None),
+        "memberships": memberships or [],
+    }
 
 
 def _resolve_database_url() -> str | None:
@@ -417,15 +469,27 @@ def create_admin_serve_app(
         # Must run before any store reads/writes so all tables exist.
         await _db_factory.ensure_schema()
 
-        # Build the tenant resource stores from the process engine unless a test
-        # / DI container already injected one (multi-tenant only; None in
-        # single-org). Runs after ensure_schema so the tables exist.
+        # Build missing tenant resource stores from the process engine (multi-
+        # tenant only; None in single-org). Partial DI is allowed, but every
+        # missing tenant store must be filled here so routes never drift back to
+        # the legacy file-store path in multi mode.
         from sagewai.admin.resource_stores import build_resource_stores
         _rs = app.state.resource_stores
-        if _rs.provider is None and _rs.agent is None and _rs.connection is None:
+        if _is_multi_tenant() and (
+            _rs.provider is None
+            or _rs.agent is None
+            or _rs.run is None
+            or _rs.prompt_log is None
+        ):
             _built = await build_resource_stores(identity_store)
             if _built is not None:
-                app.state.resource_stores = _built
+                app.state.resource_stores = type(_rs)(
+                    provider=_rs.provider or _built.provider,
+                    agent=_rs.agent or _built.agent,
+                    connection=_rs.connection or _built.connection,
+                    run=_rs.run or _built.run,
+                    prompt_log=_rs.prompt_log or _built.prompt_log,
+                )
 
         # Fail closed (multi-tenant): mirror sf.require_secret_key_if_encrypted()
         # for the tenant provider table — if encrypted provider secrets exist but
@@ -507,6 +571,7 @@ def create_admin_serve_app(
     if identity_store is None and _is_multi_tenant():
         from sagewai.admin.identity_store import IdentityStore
         identity_store = IdentityStore()
+    app.state.identity_store = identity_store
 
     async def _provider_decrypted(request: Request, provider_id: str):
         """A provider with secrets decrypted, from the active store (PG or file)."""
@@ -558,6 +623,15 @@ def create_admin_serve_app(
     async def _on_audit_unavailable(request: Request, exc: _AuditUnavailableError) -> JSONResponse:
         return JSONResponse(
             {"detail": "Audit log unavailable; operation not recorded — please retry"},
+            status_code=503,
+        )
+
+    @app.exception_handler(_TenantStoreUnavailableError)
+    async def _on_tenant_store_unavailable(
+        request: Request, exc: _TenantStoreUnavailableError
+    ) -> JSONResponse:
+        return JSONResponse(
+            {"detail": f"Tenant {exc.store_name} store unavailable"},
             status_code=503,
         )
 
@@ -617,6 +691,37 @@ def create_admin_serve_app(
         token_id = _session_token_id(raw)
         resp.set_cookie("sagewai_csrf", csrf_token_for(sf, token_id), httponly=False,
                         samesite="lax", secure=secure, max_age=max_age, path="/")
+
+    async def _tenant_login_org(body: dict[str, Any]) -> dict[str, Any] | None:
+        if identity_store is None:
+            return None
+        slug = body.get("org_slug") or body.get("org") or sf.get_org().get("org_slug")
+        if slug:
+            org = await identity_store.get_org_by_slug(slug)
+            if org is not None:
+                return org
+        orgs = await identity_store.list_orgs()
+        return orgs[0] if len(orgs) == 1 else None
+
+    async def _tenant_session_result(
+        org_id: str,
+        user_id: str,
+        *,
+        raw: str | None = None,
+        project_id: str | None = None,
+    ) -> dict[str, Any]:
+        assert identity_store is not None
+        raw = raw or await identity_store.issue_session(org_id, user_id)
+        ctx = await identity_store.build_context(org_id, user_id, project_id=project_id)
+        user = await identity_store.get_user(org_id, user_id)
+        if user is None:
+            raise RuntimeError("identity session resolved an unknown user")
+        memberships = await identity_store.list_memberships(org_id, user_id)
+        return {
+            "access_token": raw,
+            "token_type": "bearer",
+            "user": _tenant_user_payload(user, ctx, memberships),
+        }
 
     state = AdminState()
     # Use the durable SQLite-backed analytics store by default (Postgres when
@@ -890,6 +995,33 @@ def create_admin_serve_app(
         })
         if not result.get("ok"):
             return JSONResponse(result, status_code=409)
+        if _is_multi_tenant() and identity_store is not None:
+            await identity_store.init()
+            org_slug = result.get("org_slug") or _slugify(body["org_name"])
+            org = await identity_store.get_org_by_slug(org_slug)
+            if org is None:
+                org = await identity_store.bootstrap_org(
+                    body["org_name"],
+                    org_slug,
+                    contact_email=body.get("contact_email") or body.get("admin_email"),
+                    tz=body.get("timezone", "UTC"),
+                )
+            app_slug = result.get("app_slug") or "default"
+            if await identity_store.get_project_by_slug(org["id"], app_slug) is None:
+                await identity_store.create_project(
+                    org["id"],
+                    app_slug,
+                    body.get("app_name") or "Default",
+                    environment="production",
+                )
+            if await identity_store.get_user_by_email(org["id"], body["admin_email"]) is None:
+                await identity_store.create_user(
+                    org["id"],
+                    body["admin_email"],
+                    password=body["admin_password"],
+                    name=body.get("admin_name"),
+                    role="org:owner",
+                )
         logger.info("Setup completed for org=%s", result.get("org_slug"),
                      extra={"event": "setup.completed", "org_slug": result.get("org_slug", "")})
         otel_count("setup.completions")
@@ -907,6 +1039,31 @@ def create_admin_serve_app(
             otel_count("auth.logins", status="throttled")
             return JSONResponse({"detail": "Too many attempts. Try again later."},
                                 status_code=429, headers={"Retry-After": "900"})
+        if _is_multi_tenant():
+            org = await _tenant_login_org(body)
+            user = (
+                await identity_store.verify_credentials(org["id"], email, body.get("password", ""))
+                if org is not None and identity_store is not None
+                else None
+            )
+            if not user:
+                _login_throttle.record_failure(key)
+                otel_count("auth.logins", status="failed")
+                return JSONResponse({"detail": "Invalid email or password"}, status_code=401)
+            _login_throttle.reset(key)
+            try:
+                result = await _tenant_session_result(
+                    org["id"], user["id"], project_id=body.get("project_id")
+                )
+            except Exception:
+                logger.exception("Tenant login failed while building session context")
+                return JSONResponse({"detail": "Invalid tenant context"}, status_code=401)
+            logger.info("Login success for email=%s", result["user"]["email"],
+                        extra={"event": "auth.login.success", "email": result["user"]["email"]})
+            otel_count("auth.logins", status="success")
+            resp = JSONResponse(jsonable_encoder(result))
+            _set_session_cookies(resp, result["access_token"])
+            return resp
         result = sf.validate_login(email, body.get("password", ""))
         if not result:
             _login_throttle.record_failure(key)
@@ -927,6 +1084,16 @@ def create_admin_serve_app(
     @app.post("/api/v1/auth/refresh")
     async def auth_refresh(request: Request) -> JSONResponse:
         cookie = request.cookies.get("sagewai_auth")
+        if _is_multi_tenant():
+            if not cookie or identity_store is None:
+                return JSONResponse({"detail": "No session"}, status_code=401)
+            sess = await identity_store.resolve_session(cookie)
+            if sess is None:
+                return JSONResponse({"detail": "No session"}, status_code=401)
+            result = await _tenant_session_result(sess["org_id"], sess["user_id"])
+            resp = JSONResponse(jsonable_encoder(result))
+            _set_session_cookies(resp, result["access_token"])
+            return resp
         result = sf.refresh_token(cookie) if cookie else None
         if not result:
             # Dev-mode bootstrap: when running locally with
@@ -949,6 +1116,20 @@ def create_admin_serve_app(
     @app.post("/api/v1/auth/logout")
     async def auth_logout(request: Request) -> JSONResponse:
         raw = _extract_token(request)
+        if _is_multi_tenant():
+            actor = "unknown"
+            if raw and identity_store is not None:
+                sess = await identity_store.resolve_session(raw)
+                if sess is not None:
+                    user = await identity_store.get_user(sess["org_id"], sess["user_id"])
+                    actor = (user or {}).get("email") or sess["user_id"]
+                    await identity_store.revoke_session(raw)
+            resp = JSONResponse({"status": "ok"})
+            resp.delete_cookie("sagewai_auth", path="/")
+            resp.delete_cookie("sagewai_csrf", path="/")
+            logger.info("Tenant logout for actor=%s", actor,
+                        extra={"event": "auth.logout", "actor": actor})
+            return resp
         user = sf.get_user_by_token(raw) if raw else None
         actor = user.get("email") if user else "unknown"
         if raw:
@@ -966,6 +1147,15 @@ def create_admin_serve_app(
         # session-only token lookup, so API-token callers are treated the same.
         if getattr(request.state, "principal", None) is None:
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+        if _is_multi_tenant():
+            ctx = request.state.context
+            user = await identity_store.get_user(ctx.org_id, ctx.actor.id) if identity_store else None
+            if not user:
+                return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+            memberships = await identity_store.list_memberships(ctx.org_id, ctx.actor.id)
+            return JSONResponse(
+                jsonable_encoder(_tenant_user_payload(user, ctx, memberships))
+            )
         user = sf.get_admin_user()
         if not user:
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
@@ -974,13 +1164,41 @@ def create_admin_serve_app(
     # ── Organization ─────────────────────────────────────────────
 
     @app.get("/api/v1/organization")
-    async def get_org() -> JSONResponse:
+    async def get_org(request: Request) -> JSONResponse:
+        if _is_multi_tenant():
+            ctx = request.state.context
+            org = await identity_store.get_org(ctx.org_id) if identity_store else None
+            if org is None:
+                return JSONResponse({"detail": "Not found"}, status_code=404)
+            return JSONResponse(jsonable_encoder(_tenant_org_payload(org)))
         return JSONResponse(sf.get_org())
 
     @app.patch("/api/v1/organization")
     async def update_org(request: Request) -> JSONResponse:
         require_org_admin(request.state.context)
         body = await request.json()
+        if _is_multi_tenant():
+            ctx = request.state.context
+            current = await identity_store.get_org(ctx.org_id) if identity_store else None
+            if current is None:
+                return JSONResponse({"detail": "Not found"}, status_code=404)
+            settings = dict(current.get("settings") or {})
+            for key in ("app_url", "industry", "team_size"):
+                if key in body:
+                    settings[key] = body[key]
+            patch: dict[str, Any] = {}
+            if "org_name" in body or "name" in body:
+                patch["name"] = body.get("org_name", body.get("name"))
+            if "contact_email" in body:
+                patch["contact_email"] = body["contact_email"]
+            if "timezone" in body:
+                patch["timezone"] = body["timezone"]
+            if settings != (current.get("settings") or {}):
+                patch["settings"] = settings
+            result = await identity_store.update_org(ctx.org_id, patch) if identity_store else None
+            if result is None:
+                return JSONResponse({"detail": "Not found"}, status_code=404)
+            return JSONResponse(jsonable_encoder(_tenant_org_payload(result)))
         result = sf.update_org(body)
         emit_audit(sf, event_type="org.updated",
                    actor_label=request.state.principal.actor_label,
@@ -990,13 +1208,40 @@ def create_admin_serve_app(
     # ── Projects ─────────────────────────────────────────────────
 
     @app.get("/api/v1/projects")
-    async def list_projects() -> JSONResponse:
+    async def list_projects(request: Request) -> JSONResponse:
+        if _is_multi_tenant():
+            projects = await identity_store.list_projects(request.state.context.org_id)
+            return JSONResponse(jsonable_encoder([_tenant_project_payload(p) for p in projects]))
         return JSONResponse(sf.list_projects())
 
     @app.post("/api/v1/projects")
     async def create_project(request: Request) -> JSONResponse:
         require_org_admin(request.state.context)
         body = await request.json()
+        if _is_multi_tenant():
+            from sqlalchemy.exc import IntegrityError
+
+            ctx = request.state.context
+            name = body.get("name", "")
+            slug = body.get("slug") or _slugify(name)
+            settings = {
+                "allowed_origins": body.get("allowed_origins", ""),
+                "default_model": body.get("default_model"),
+            }
+            try:
+                project = await identity_store.create_project(
+                    ctx.org_id,
+                    slug,
+                    name,
+                    environment=body.get("environment", "production"),
+                    settings=settings,
+                )
+                return JSONResponse(
+                    jsonable_encoder(_tenant_project_payload(project)),
+                    status_code=201,
+                )
+            except IntegrityError:
+                return JSONResponse({"detail": f"Project '{slug}' already exists."}, status_code=409)
         try:
             project = sf.create_project(
                 name=body.get("name", ""),
@@ -1009,7 +1254,12 @@ def create_admin_serve_app(
             return JSONResponse({"detail": str(exc)}, status_code=409)
 
     @app.get("/api/v1/projects/{slug}")
-    async def get_project(slug: str) -> JSONResponse:
+    async def get_project(slug: str, request: Request) -> JSONResponse:
+        if _is_multi_tenant():
+            project = await identity_store.get_project_by_slug(request.state.context.org_id, slug)
+            if project is None:
+                return JSONResponse({"detail": "Not found"}, status_code=404)
+            return JSONResponse(jsonable_encoder(_tenant_project_payload(project)))
         for p in sf.list_projects():
             if p["slug"] == slug:
                 return JSONResponse(p)
@@ -1019,6 +1269,27 @@ def create_admin_serve_app(
     async def update_project(slug: str, request: Request) -> JSONResponse:
         require_org_admin(request.state.context)
         body = await request.json()
+        if _is_multi_tenant():
+            ctx = request.state.context
+            project = await identity_store.get_project_by_slug(ctx.org_id, slug)
+            if project is None:
+                return JSONResponse({"detail": "Not found"}, status_code=404)
+            settings_patch = {
+                k: body[k]
+                for k in ("allowed_origins", "default_model")
+                if k in body
+            }
+            result = await identity_store.update_project(
+                ctx.org_id,
+                project["id"],
+                name=body.get("name"),
+                environment=body.get("environment"),
+                status=body.get("status"),
+                settings_patch=settings_patch,
+            )
+            if result is None:
+                return JSONResponse({"detail": "Not found"}, status_code=404)
+            return JSONResponse(jsonable_encoder(_tenant_project_payload(result)))
         result = sf.update_project(slug, body)
         if result is None:
             return JSONResponse({"detail": "Not found"}, status_code=404)
@@ -1027,6 +1298,16 @@ def create_admin_serve_app(
     @app.delete("/api/v1/projects/{slug}")
     async def delete_project(slug: str, request: Request) -> JSONResponse:
         require_org_admin(request.state.context)
+        if _is_multi_tenant():
+            return JSONResponse(
+                {
+                    "detail": (
+                        "Project deletion is not supported in multi-tenant mode; "
+                        "set status='inactive' instead."
+                    )
+                },
+                status_code=409,
+            )
         try:
             if sf.delete_project(slug):
                 return JSONResponse({"status": "ok"})
@@ -2703,12 +2984,22 @@ def create_admin_serve_app(
     # ── API tokens ───────────────────────────────────────────────
 
     @app.get("/api/v1/tokens/")
-    async def list_tokens() -> JSONResponse:
+    async def list_tokens(request: Request) -> JSONResponse:
+        if _is_multi_tenant():
+            return JSONResponse(
+                {"detail": "Tenant API tokens are not implemented"},
+                status_code=501,
+            )
         return JSONResponse(sf.list_api_tokens())
 
     @app.post("/api/v1/tokens/")
     async def create_token(request: Request) -> JSONResponse:
         require_org_admin(request.state.context)
+        if _is_multi_tenant():
+            return JSONResponse(
+                {"detail": "Tenant API tokens are not implemented"},
+                status_code=501,
+            )
         body = await request.json()
         entry = sf.create_api_token(name=body.get("name", "Unnamed"),
                                     scopes=body.get("scopes", ["read"]))
@@ -2720,6 +3011,11 @@ def create_admin_serve_app(
     @app.post("/api/v1/tokens/{token_id}/revoke")
     async def revoke_token(token_id: str, request: Request) -> JSONResponse:
         require_org_admin(request.state.context)
+        if _is_multi_tenant():
+            return JSONResponse(
+                {"detail": "Tenant API tokens are not implemented"},
+                status_code=501,
+            )
         if sf.revoke_api_token(token_id):
             emit_audit(sf, event_type="token.revoked",
                        actor_label=request.state.principal.actor_label, target=token_id)
@@ -2729,6 +3025,11 @@ def create_admin_serve_app(
     @app.delete("/api/v1/tokens/{token_id}")
     async def delete_token(token_id: str, request: Request) -> JSONResponse:
         require_org_admin(request.state.context)
+        if _is_multi_tenant():
+            return JSONResponse(
+                {"detail": "Tenant API tokens are not implemented"},
+                status_code=501,
+            )
         if sf.delete_api_token(token_id):
             emit_audit(sf, event_type="token.deleted",
                        actor_label=request.state.principal.actor_label, target=token_id)
@@ -2973,6 +3274,15 @@ def create_admin_serve_app(
         # the store so admin-scoped API tokens work, not just session cookies.
         if getattr(request.state, "principal", None) is None:
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+        if _is_multi_tenant():
+            ctx = request.state.context
+            user = await identity_store.get_user(ctx.org_id, ctx.actor.id) if identity_store else None
+            if not user:
+                return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+            memberships = await identity_store.list_memberships(ctx.org_id, ctx.actor.id)
+            return JSONResponse(
+                jsonable_encoder(_tenant_user_payload(user, ctx, memberships))
+            )
         user = sf.get_admin_user()
         if not user:
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
@@ -2981,11 +3291,33 @@ def create_admin_serve_app(
     @app.patch("/api/v1/account/profile")
     async def update_profile(request: Request) -> JSONResponse:
         body = await request.json()
+        if _is_multi_tenant():
+            require_org_admin(request.state.context)
+            ctx = request.state.context
+            user = await identity_store.update_user_profile(
+                ctx.org_id, ctx.actor.id, name=body.get("display_name")
+            )
+            if user is None:
+                return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+            memberships = await identity_store.list_memberships(ctx.org_id, ctx.actor.id)
+            return JSONResponse(
+                jsonable_encoder(_tenant_user_payload(user, ctx, memberships))
+            )
         return JSONResponse(sf.update_admin_profile(display_name=body.get("display_name")))
 
     @app.post("/api/v1/account/password")
     async def change_password(request: Request) -> JSONResponse:
         body = await request.json()
+        if _is_multi_tenant():
+            require_org_admin(request.state.context)
+            ctx = request.state.context
+            user = await identity_store.verify_credentials(
+                ctx.org_id, ctx.actor.label, body.get("current_password", "")
+            )
+            if user is None or user.get("id") != ctx.actor.id:
+                return JSONResponse({"detail": "Current password is incorrect"}, status_code=400)
+            await identity_store.set_password(ctx.org_id, ctx.actor.id, body.get("new_password", ""))
+            return JSONResponse({"status": "ok"})
         if not sf.change_admin_password(body.get("current_password", ""),
                                         body.get("new_password", "")):
             return JSONResponse({"detail": "Current password is incorrect"}, status_code=400)
@@ -3659,8 +3991,7 @@ def _provider_store(request: Request):
 
     When present, the provider routes use it (ctx-scoped) instead of the file
     store; when None they keep their unchanged ``sf.*`` path."""
-    rs = getattr(request.app.state, "resource_stores", None)
-    return getattr(rs, "provider", None) if rs is not None else None
+    return _tenant_store_or_none(request, "provider")
 
 
 def _agent_store(request: Request):
@@ -3668,8 +3999,7 @@ def _agent_store(request: Request):
 
     When present, the playground-agent routes use it (ctx-scoped) instead of the
     file store; when None they keep their unchanged ``sf.*`` path."""
-    rs = getattr(request.app.state, "resource_stores", None)
-    return getattr(rs, "agent", None) if rs is not None else None
+    return _tenant_store_or_none(request, "agent")
 
 
 def _run_store(request: Request):
@@ -3677,8 +4007,7 @@ def _run_store(request: Request):
 
     When present, the run routes use it (ctx-scoped) instead of the file store;
     when None they keep their unchanged ``sf.*`` path."""
-    rs = getattr(request.app.state, "resource_stores", None)
-    return getattr(rs, "run", None) if rs is not None else None
+    return _tenant_store_or_none(request, "run")
 
 
 def _prompt_store(request: Request):
@@ -3686,8 +4015,20 @@ def _prompt_store(request: Request):
 
     When present, the prompt-log routes use it (ctx-scoped) instead of the file
     store; when None they keep their unchanged ``sf.*`` path."""
+    return _tenant_store_or_none(request, "prompt_log")
+
+
+def _tenant_store_or_none(request: Request, name: str):
     rs = getattr(request.app.state, "resource_stores", None)
-    return getattr(rs, "prompt_log", None) if rs is not None else None
+    store = getattr(rs, name, None) if rs is not None else None
+    ctx = getattr(request.state, "context", None)
+    if (
+        store is None
+        and ctx is not None
+        and getattr(ctx, "tenancy_mode", None) == "multi"
+    ):
+        raise _TenantStoreUnavailableError(name)
+    return store
 
 
 def _owner(scope: str | None) -> str | None:
@@ -3731,6 +4072,14 @@ def _in_write_scope(item_project_id: str | None, request: Request) -> bool:
 # PR's durable-audit scope is intentionally the list above, not "all writes".
 class _AuditUnavailableError(Exception):
     """Durable audit could not be recorded — the write fails closed (HTTP 503)."""
+
+
+class _TenantStoreUnavailableError(Exception):
+    """A multi-tenant resource route has no tenant store wired."""
+
+    def __init__(self, store_name: str) -> None:
+        super().__init__(store_name)
+        self.store_name = store_name
 
 
 async def _emit_audit(

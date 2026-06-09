@@ -144,6 +144,9 @@ async def real_app(tmp_path, monkeypatch):
     app.state.tenant_audit = audit
     yield {
         "app": app,
+        "identity_store": store,
+        "org_id": oid,
+        "sf": sf,
         "pa": pa,
         "pb": pb,
         "prov_b": prov_b["id"],
@@ -599,6 +602,21 @@ async def test_org_patch_owner_ok(real_app):
     assert r.status_code == 200
 
 
+async def test_auth_me_returns_tenant_actor_not_file_admin(real_app):
+    r = await _req(
+        real_app["app"],
+        "GET",
+        "/api/v1/auth/me",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["email"] == "m@acme.io"
+    assert body["role"] == "member"
+    assert body["email"] != "a@acme.io"
+
+
 async def test_project_create_member_403(real_app):
     r = await _req(
         real_app["app"], "POST", "/api/v1/projects",
@@ -625,6 +643,44 @@ async def test_project_delete_member_403(real_app):
     assert r.status_code == 403
 
 
+async def test_project_create_owner_uses_identity_store(real_app):
+    r = await _req(
+        real_app["app"],
+        "POST",
+        "/api/v1/projects",
+        token=real_app["sess_owner"],
+        json={"name": "Created", "slug": "created"},
+    )
+    assert r.status_code == 201
+    created = r.json()
+    identity_project = await real_app["identity_store"].get_project_by_slug(
+        real_app["org_id"], "created"
+    )
+    assert identity_project is not None
+    assert identity_project["id"] == created["id"]
+
+    # The created project is immediately usable as the auth project id. The old
+    # file-state split-brain returned 201 but then 404'd when selected.
+    selected = await _req(
+        real_app["app"],
+        "GET",
+        "/api/v1/providers",
+        token=real_app["sess_owner"],
+        project=created["id"],
+    )
+    assert selected.status_code == 200
+
+
+async def test_project_delete_owner_409_until_cascade_exists(real_app):
+    r = await _req(
+        real_app["app"],
+        "DELETE",
+        f"/api/v1/projects/{real_app['pa_slug']}",
+        token=real_app["sess_owner"],
+    )
+    assert r.status_code == 409
+
+
 async def test_token_create_member_403(real_app):
     r = await _req(
         real_app["app"], "POST", "/api/v1/tokens/",
@@ -634,12 +690,81 @@ async def test_token_create_member_403(real_app):
     assert r.status_code == 403
 
 
-async def test_token_create_owner_ok(real_app):
+async def test_token_create_owner_501_until_tenant_tokens_exist(real_app):
     r = await _req(
         real_app["app"], "POST", "/api/v1/tokens/",
         token=real_app["sess_owner"], json={"name": "ci", "scopes": ["read"]},
     )
-    assert r.status_code == 201
+    assert r.status_code == 501
+
+
+async def test_legacy_audit_events_project_member_403(real_app):
+    real_app["sf"].mutate(
+        lambda d: d.setdefault("audit_events", []).append(
+            {"event_type": "token.created", "actor": "owner", "target": "tok-secret"}
+        )
+    )
+    r = await _req(
+        real_app["app"],
+        "GET",
+        "/api/v1/audit/events",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 403
+
+
+async def test_sandbox_defaults_cross_project_read_404(real_app):
+    real_app["sf"].create_project(name="PA legacy", slug="pa")
+    real_app["sf"].create_project(name="PB legacy", slug="pb")
+
+    def _seed(d):
+        for p in d.get("projects", []):
+            if p.get("slug") == "pb":
+                p["default_sandbox_requirements"] = {
+                    "sandbox_mode": "per_run",
+                    "image": "private/pb-runtime:latest",
+                    "network_policy": "egress_allowlist",
+                    "required_secret_scopes": ["pb-secret-scope"],
+                }
+
+    real_app["sf"].mutate(_seed)
+    r = await _req(
+        real_app["app"],
+        "GET",
+        "/api/v1/admin/projects/pb/sandbox-defaults",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 404
+
+
+async def test_missing_prompt_store_fails_closed_in_multi(real_app):
+    from sagewai.admin.serve import create_admin_serve_app
+
+    real_app["sf"].mutate(
+        lambda d: d.setdefault("prompt_logs", []).append(
+            {
+                "log_id": "pb-file-log",
+                "project_id": real_app["pb"],
+                "agent_name": "scout",
+                "is_example": False,
+            }
+        )
+    )
+    app = create_admin_serve_app(
+        real_app["sf"],
+        identity_store=real_app["identity_store"],
+    )
+    r = await _req(
+        app,
+        "POST",
+        "/api/v1/training/samples/pb-file-log/quality",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+        json={"quality": 5},
+    )
+    assert r.status_code == 503
 
 
 # ── Project-scoped routes whose store lacks a project_id column ───────────

@@ -115,7 +115,7 @@ def _get_project_or_404(state: Any, slug: str) -> dict:
     return project
 
 
-def _guard_project_scope(
+async def _guard_project_scope(
     state: Any, slug: str, request: Request, *, write: bool
 ) -> None:
     """Tenant-scope a project-by-slug sandbox-defaults op. No-op in single-org.
@@ -127,6 +127,21 @@ def _guard_project_scope(
     existing per-route 404/no-op behaviour intact (no project id to scope on)."""
     ctx = _ctx(request)
     if ctx is None:
+        return
+    if getattr(ctx, "tenancy_mode", None) == "multi":
+        identity = getattr(request.app.state, "identity_store", None)
+        if identity is None:
+            raise HTTPException(status_code=503, detail="Tenant identity store unavailable")
+        project = await identity.get_project_by_slug(ctx.org_id, slug)
+        if project is None:
+            from sagewai.admin.authz import TenantHiddenError
+
+            raise TenantHiddenError("target not in scope")
+        if ctx.is_org_admin:
+            if write:
+                require_org_admin(ctx)
+            return
+        require_in_project_scope(project.get("id"), ctx, write=write)
         return
     project = state.get_project(slug)
     if project is None:
@@ -158,8 +173,8 @@ def _build_response(payload_dict: dict) -> SandboxRequirementsResponse:
 async def get_project_defaults(slug: str, request: Request) -> SandboxRequirementsResponse:
     from sagewai.admin.state_file import AdminStateFile
 
-    state = AdminStateFile()
-    _guard_project_scope(state, slug, request, write=False)
+    state = request.app.state.sandbox_store or AdminStateFile()
+    await _guard_project_scope(state, slug, request, write=False)
     project = _get_project_or_404(state, slug)
     defaults = project.get("default_sandbox_requirements")
     if not defaults:
@@ -186,7 +201,7 @@ async def put_project_defaults(
     from sagewai.admin.state_file import AdminStateFile
 
     state = request.app.state.sandbox_store or AdminStateFile()
-    _guard_project_scope(state, slug, request, write=True)
+    await _guard_project_scope(state, slug, request, write=True)
     req_dict = {
         "sandbox_mode": payload.sandbox_mode.value,
         "image": payload.image,
@@ -220,7 +235,7 @@ async def delete_project_defaults(slug: str, request: Request) -> SandboxConfigD
     from sagewai.admin.state_file import AdminStateFile
 
     state = request.app.state.sandbox_store or AdminStateFile()
-    _guard_project_scope(state, slug, request, write=True)
+    await _guard_project_scope(state, slug, request, write=True)
     project = state.get_project(slug)
     if project is None or "default_sandbox_requirements" not in project:
         return SandboxConfigDeleteResponse(cleared=False)
@@ -264,10 +279,10 @@ def _get_or_create_agent(data: dict, name: str) -> dict:
     response_model=SandboxRequirementsResponse,
     responses={404: {"description": "agent or override not found"}},
 )
-async def get_agent_overrides(name: str) -> SandboxRequirementsResponse:
+async def get_agent_overrides(name: str, request: Request) -> SandboxRequirementsResponse:
     from sagewai.admin.state_file import AdminStateFile
 
-    state = AdminStateFile()
+    state = request.app.state.sandbox_store or AdminStateFile()
     agent = state.get_agent(name)
     if agent is None:
         raise HTTPException(
@@ -389,7 +404,7 @@ async def get_sandbox_preview(
     # Project-scoped read: a project may only preview its own (or org-shared)
     # project config; a cross-project 'project' query param is hidden (404).
     if project:
-        _guard_project_scope(state, project, request, write=False)
+        await _guard_project_scope(state, project, request, write=False)
 
     # Project defaults
     project_defaults = None

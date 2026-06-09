@@ -81,6 +81,7 @@ _MULTI_ORG_PREFIXES = (
     "/api/v1/projects",  # project CRUD (distinct from /api/v1/admin/projects sandbox-defaults)
     "/api/v1/tokens",
     "/api/v1/account",
+    "/api/v1/audit",
     "/api/v1/connectors",
     "/api/v1/admin/sealed",  # sealed config + revocations
     "/api/v1/admin/agents",  # sandbox agent-requirements (org-level agent config)

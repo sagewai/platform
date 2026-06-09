@@ -197,8 +197,7 @@ def require_org_admin(ctx: RequestContext) -> None:
     """
     if ctx.tenancy_mode != "multi":
         return
-    if not (ctx.roles & _ORG_ADMINS):
-        raise PermissionDeniedError("requires org owner/admin")
+    require("org:manage", ctx)
 
 
 def in_read_scope(record_project_id: str | None, ctx: RequestContext) -> bool:

@@ -524,7 +524,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
             raise HTTPException(409, str(exc))
 
         plugin_ctx = ctx.make_plugin_context(
-            project_id=_project_scope(request), request=request,
+            project_id=after.project_id, request=request,
         )
         try:
             after = await plugin.on_update(before, after, ctx=plugin_ctx)
@@ -543,7 +543,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         _ensure_writable(record, request)
         plugin = get_protocol(record.protocol)
         plugin_ctx = ctx.make_plugin_context(
-            project_id=_project_scope(request), request=request,
+            project_id=record.project_id, request=request,
         )
         try:
             await plugin.on_delete(record, ctx=plugin_ctx)
@@ -577,7 +577,7 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         from dataclasses import replace
         decrypted_record = replace(record, protocol_data=decrypted_pd)
         plugin_ctx = ctx.make_plugin_context(
-            project_id=_project_scope(request), request=request,
+            project_id=record.project_id, request=request,
         )
         result = await plugin.test(decrypted_record, ctx=plugin_ctx)
         ctx.store.update_test_result(connection_id, ok=result.ok)
