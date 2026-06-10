@@ -4949,13 +4949,33 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/health/detailed")
     async def health_detailed() -> JSONResponse:
+        # PUBLIC endpoint (no auth) — so the checks are cheap + in-process only:
+        # a real state-file read plus a config inventory. No live DB probe (a
+        # per-call connection would be a DoS vector) and no leaked error detail.
+        # A deep, authenticated readiness probe (/readyz) is a separate follow-up.
+        from sagewai.admin.tenancy import is_multi_tenant
+
+        services: list[dict] = []
+        overall = "healthy"
+        try:
+            sf._read()
+            services.append({"name": "state_file", "status": "ok"})
+        except Exception:
+            services.append({"name": "state_file", "status": "error"})
+            overall = "degraded"
+        services.append({
+            "name": "database",
+            "status": "configured" if _resolve_database_url() else "not_configured",
+        })
+        services.append({
+            "name": "tenancy",
+            "status": "multi" if is_multi_tenant() else "single",
+        })
         return JSONResponse({
-            "status": "healthy",
+            "status": overall,
             "sdk_version": version,
-            "checked_at": datetime.datetime.now(
-                datetime.timezone.utc
-            ).isoformat(),
-            "services": [],
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "services": services,
         })
 
     # ── Billing (self-hosted: no provider) ────────────────────────
