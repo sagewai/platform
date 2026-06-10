@@ -9,9 +9,11 @@
 # See COMMERCIAL-LICENSE.md for details.
 """Hostile-network response hardening (W6 of the multi-tenancy/RBAC roadmap).
 
-Multi-tenant deployments are internet-facing, so add standard security response
-headers and a request-size limit. **Gated to multi-tenant mode** so the single-
-org self-hosted path (and its Playwright e2e) is byte-for-byte unchanged.
+Adds standard security response headers and a request-size limit. **Security
+headers ship in both tenancy modes** — the single-org self-hosted product is
+internet-facing too. The **request-body size cap is multi-tenant only** (it
+changes request handling, so the single-org path / Playwright e2e keeps its
+request stream byte-for-byte unchanged).
 
 A pure-ASGI middleware so the body cap counts **actual** received bytes — a
 ``Content-Length``-only check is bypassable by a chunked/streamed request. The
@@ -51,35 +53,56 @@ def _content_length(scope) -> int | None:
     return None
 
 
+# A conservative CSP that adds clickjacking + plugin + base-uri protection
+# without restricting resource origins — so it never breaks the JSON API, the
+# FastAPI ``/docs``/``/redoc`` Swagger UI (CDN-loaded), or the admin SPA. A
+# stricter ``default-src``/``script-src`` policy can be layered once the served
+# content surface is locked down.
+_CSP = "frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
+
+
 def _inject_headers(message) -> None:
     """Add the security response headers to an ``http.response.start`` message."""
     headers = MutableHeaders(scope=message)
     headers.setdefault("X-Content-Type-Options", "nosniff")
     headers.setdefault("X-Frame-Options", "DENY")
     headers.setdefault("Referrer-Policy", "no-referrer")
+    headers.setdefault("Content-Security-Policy", _CSP)
     if os.environ.get("SAGEWAI_ADMIN_TLS", "") in {"1", "true"}:
         headers.setdefault("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 
 
 class SecurityHeadersMiddleware:
-    """Pure-ASGI hardening (multi-tenant only): security headers + a true body cap.
+    """Pure-ASGI hardening: security headers (both modes) + a true body cap (multi).
 
     - ``X-Content-Type-Options: nosniff``, ``X-Frame-Options: DENY``,
-      ``Referrer-Policy: no-referrer`` on **every** response (incl. the 413);
+      ``Referrer-Policy: no-referrer``, ``Content-Security-Policy`` on **every**
+      response in **both** tenancy modes (incl. the 413);
       ``Strict-Transport-Security`` when ``SAGEWAI_ADMIN_TLS`` is set.
     - Reject a request whose body exceeds ``SAGEWAI_MAX_REQUEST_BYTES`` (default
       10 MiB) with 413 — counting actual received bytes, so chunked/streamed
-      requests can't bypass it; ``Content-Length`` is only a fast-path.
-
-    No-op in single-org mode (scope is organizational; e2e unchanged).
+      requests can't bypass it; ``Content-Length`` is only a fast-path. The body
+      cap is **multi-tenant only**; single-org leaves the request stream untouched.
     """
 
     def __init__(self, app) -> None:
         self.app = app
 
     async def __call__(self, scope, receive, send) -> None:
-        if scope.get("type") != "http" or not is_multi_tenant():
+        if scope.get("type") != "http":
             await self.app(scope, receive, send)
+            return
+
+        async def _send(message):
+            if message.get("type") == "http.response.start":
+                _inject_headers(message)
+            await send(message)
+
+        # Security headers ship in BOTH modes — the single-org product is
+        # internet-facing too. The request-body size cap is multi-tenant only
+        # (it changes request handling); single-org leaves the stream untouched.
+        if not is_multi_tenant():
+            await self.app(scope, receive, _send)
             return
 
         max_bytes = _max_request_bytes()
@@ -116,11 +139,6 @@ class SecurityHeadersMiddleware:
                 replayed = True
                 return {"type": "http.request", "body": bytes(body), "more_body": False}
             return await receive()
-
-        async def _send(message):
-            if message.get("type") == "http.response.start":
-                _inject_headers(message)
-            await send(message)
 
         await self.app(scope, _replay, _send)
 

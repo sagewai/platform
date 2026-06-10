@@ -1,77 +1,10 @@
 'use client';
 
-import { useState, useMemo } from 'react';
-import { Badge, Card, EmptyState } from '@/components/ui/legacy';
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import { Badge, Card, EmptyState, Skeleton } from '@/components/ui/legacy';
 import { Search, ChevronDown, ChevronRight } from 'lucide-react';
 import type { FleetAuditEvent } from '@/utils/types';
-
-// TODO: wire to adminApi.listFleetAuditEvents()
-const DEMO_AUDIT: FleetAuditEvent[] = [
-  {
-    id: 'ae-001',
-    org_id: 'org-1',
-    event_type: 'worker.registered',
-    worker_id: 'w-003',
-    details: { auto_approved: false },
-    created_at: '2026-03-31T08:00:00Z',
-  },
-  {
-    id: 'ae-002',
-    org_id: 'org-1',
-    event_type: 'worker.approved',
-    worker_id: 'w-001',
-    details: { approved_by: 'admin@sagewai.dev' },
-    created_at: '2026-03-28T10:05:00Z',
-  },
-  {
-    id: 'ae-003',
-    org_id: 'org-1',
-    event_type: 'enrollment_key.created',
-    worker_id: null,
-    details: { key_id: 'ek-001', name: 'GPU Cluster Onboarding' },
-    created_at: '2026-03-28T10:00:00Z',
-  },
-  {
-    id: 'ae-004',
-    org_id: 'org-1',
-    event_type: 'run.claimed',
-    worker_id: 'w-001',
-    details: { run_id: 'run-abc' },
-    created_at: '2026-03-31T09:15:00Z',
-  },
-  {
-    id: 'ae-005',
-    org_id: 'org-1',
-    event_type: 'worker.revoked',
-    worker_id: 'w-005',
-    details: {},
-    created_at: '2026-03-30T16:00:00Z',
-  },
-  {
-    id: 'ae-006',
-    org_id: 'org-1',
-    event_type: 'enrollment_key.used',
-    worker_id: 'w-004',
-    details: { key_id: 'ek-002' },
-    created_at: '2026-03-25T09:05:00Z',
-  },
-  {
-    id: 'ae-007',
-    org_id: 'org-1',
-    event_type: 'run.reported',
-    worker_id: 'w-002',
-    details: { run_id: 'run-xyz', status: 'completed' },
-    created_at: '2026-03-31T09:20:00Z',
-  },
-  {
-    id: 'ae-008',
-    org_id: 'org-1',
-    event_type: 'token.issued',
-    worker_id: 'w-001',
-    details: {},
-    created_at: '2026-03-28T10:05:00Z',
-  },
-];
+import { adminApi } from '@/utils/api';
 
 const EVENT_TYPE_VARIANTS: Record<string, 'success' | 'error' | 'warning' | 'info' | 'default'> = {
   'worker.registered': 'info',
@@ -106,10 +39,26 @@ const ALL_EVENT_TYPES = [
 ];
 
 export default function FleetAuditPage() {
-  const [events] = useState<FleetAuditEvent[]>(DEMO_AUDIT);
+  const [events, setEvents] = useState<FleetAuditEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState('');
   const [workerFilter, setWorkerFilter] = useState('');
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+
+  const fetchAudit = useCallback(async () => {
+    try {
+      const data = await adminApi.listFleetAudit();
+      setEvents(data.events);
+      setError(null);
+    } catch {
+      setError('Failed to load fleet audit log.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchAudit(); }, [fetchAudit]);
 
   const sorted = useMemo(() => {
     return [...events].sort(
@@ -145,6 +94,12 @@ export default function FleetAuditPage() {
           Track all fleet operations including worker registrations, approvals, and task assignments.
         </p>
       </div>
+
+      {error && (
+        <div className="bg-error-light border border-error/20 rounded-lg px-4 py-3 text-error text-sm mb-md" role="alert">
+          {error}
+        </div>
+      )}
 
       {/* Filters */}
       <Card className="mb-md">
@@ -182,7 +137,9 @@ export default function FleetAuditPage() {
 
       {/* Event list */}
       <Card>
-        {filtered.length === 0 ? (
+        {loading ? (
+          <Skeleton lines={5} />
+        ) : filtered.length === 0 ? (
           <EmptyState
             title="No Audit Events"
             description="No fleet audit events match your filters. Events are recorded when workers register, get approved, or claim tasks."

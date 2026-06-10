@@ -206,6 +206,14 @@ class GraphMemory:
 
         return neighbors
 
+    async def entity_count(self) -> int:
+        """Return the number of entities in the active project scope."""
+        return len(self._project_entities(self._resolve_pid()))
+
+    async def relation_count(self) -> int:
+        """Return the number of relations (edges) in the active project scope."""
+        return len(self._project_relations(self._resolve_pid()))
+
     async def delete(self, content: str) -> bool:
         """Remove an entity and its relations."""
         pid = self._resolve_pid()

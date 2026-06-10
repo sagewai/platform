@@ -7,13 +7,15 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""W6 hostile-network hardening: security headers + request-size cap (multi-only)."""
+"""W6 hostile-network hardening: security headers (both modes) + request-size cap (multi-only)."""
 
 import httpx
 from fastapi import FastAPI, Request
 from httpx import ASGITransport
 
 from sagewai.admin.hardening import SecurityHeadersMiddleware
+
+_CSP = "frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
 
 
 def _app() -> FastAPI:
@@ -44,12 +46,18 @@ async def test_security_headers_present_in_multi(monkeypatch):
     assert r.headers["x-content-type-options"] == "nosniff"
     assert r.headers["x-frame-options"] == "DENY"
     assert r.headers["referrer-policy"] == "no-referrer"
+    assert r.headers["content-security-policy"] == _CSP
 
 
-async def test_security_headers_absent_in_single_mode(monkeypatch):
+async def test_security_headers_present_in_single_mode(monkeypatch):
+    # Security headers ship in BOTH modes — the single-org product is internet-
+    # facing too. Only the request-body cap stays multi-tenant-only (below).
     monkeypatch.setenv("SAGEWAI_TENANCY_MODE", "single")
     r = await _req()
-    assert "x-frame-options" not in r.headers  # single-org path unchanged
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["x-frame-options"] == "DENY"
+    assert r.headers["referrer-policy"] == "no-referrer"
+    assert r.headers["content-security-policy"] == _CSP
 
 
 async def test_hsts_only_emitted_with_tls(monkeypatch):
@@ -95,3 +103,4 @@ async def test_413_rejection_carries_security_headers(monkeypatch):
     assert r.headers["x-frame-options"] == "DENY"
     assert r.headers["x-content-type-options"] == "nosniff"
     assert r.headers["referrer-policy"] == "no-referrer"
+    assert r.headers["content-security-policy"] == _CSP

@@ -1,52 +1,10 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
-import { Badge, Card, Button, EmptyState } from '@/components/ui/legacy';
+import { useState, useCallback, useEffect } from 'react';
+import { Badge, Card, Button, EmptyState, Skeleton, useToast } from '@/components/ui/legacy';
 import { Plus, Copy, Key, AlertTriangle } from 'lucide-react';
-import type { FleetEnrollmentKey } from '@/utils/types';
-
-// TODO: wire to adminApi.listFleetEnrollmentKeys()
-const DEMO_KEYS: FleetEnrollmentKey[] = [
-  {
-    id: 'ek-001',
-    name: 'GPU Cluster Onboarding',
-    org_id: 'org-1',
-    max_uses: 10,
-    current_uses: 3,
-    expires_at: '2026-04-30T00:00:00Z',
-    allowed_pools: ['gpu-cluster'],
-    allowed_models: [],
-    created_at: '2026-03-28T10:00:00Z',
-    created_by: 'admin@sagewai.dev',
-    revoked: false,
-  },
-  {
-    id: 'ek-002',
-    name: 'Dev Team Key',
-    org_id: 'org-1',
-    max_uses: null,
-    current_uses: 7,
-    expires_at: null,
-    allowed_pools: [],
-    allowed_models: [],
-    created_at: '2026-03-25T09:00:00Z',
-    created_by: 'admin@sagewai.dev',
-    revoked: false,
-  },
-  {
-    id: 'ek-003',
-    name: 'Old Production Key',
-    org_id: 'org-1',
-    max_uses: 5,
-    current_uses: 5,
-    expires_at: '2026-03-30T00:00:00Z',
-    allowed_pools: ['production'],
-    allowed_models: ['gpt-4o'],
-    created_at: '2026-03-15T12:00:00Z',
-    created_by: 'admin@sagewai.dev',
-    revoked: true,
-  },
-];
+import type { FleetEnrollmentKey, FleetEnrollmentKeyCreate } from '@/utils/types';
+import { adminApi } from '@/utils/api';
 
 function getKeyStatus(key: FleetEnrollmentKey): { label: string; variant: 'success' | 'error' | 'warning' | 'default' } {
   if (key.revoked) return { label: 'revoked', variant: 'error' };
@@ -61,10 +19,13 @@ function formatDate(iso: string | null): string {
 }
 
 export default function EnrollmentKeysPage() {
-  const [keys, setKeys] = useState<FleetEnrollmentKey[]>(DEMO_KEYS);
+  const [keys, setKeys] = useState<FleetEnrollmentKey[]>([]);
+  const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [createdKeySecret, setCreatedKeySecret] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const { toast } = useToast();
 
   // Create form state
   const [formName, setFormName] = useState('');
@@ -73,39 +34,60 @@ export default function EnrollmentKeysPage() {
   const [formPools, setFormPools] = useState('');
   const [formModels, setFormModels] = useState('');
 
-  const handleCreate = useCallback(() => {
-    // TODO: wire to adminApi.createFleetEnrollmentKey(...)
-    const now = new Date().toISOString();
-    const expiresAt = formExpiresDays
-      ? new Date(Date.now() + parseInt(formExpiresDays, 10) * 86400000).toISOString()
-      : null;
-    const newKey: FleetEnrollmentKey = {
-      id: `ek-${Date.now()}`,
-      name: formName || 'Untitled Key',
-      org_id: 'org-1',
-      max_uses: formMaxUses ? parseInt(formMaxUses, 10) : null,
-      current_uses: 0,
-      expires_at: expiresAt,
-      allowed_pools: formPools ? formPools.split(',').map((s) => s.trim()).filter(Boolean) : [],
-      allowed_models: formModels ? formModels.split(',').map((s) => s.trim()).filter(Boolean) : [],
-      created_at: now,
-      created_by: 'admin@sagewai.dev',
-      revoked: false,
-    };
-    setKeys((prev) => [newKey, ...prev]);
-    // Simulate key secret (would come from API response)
-    setCreatedKeySecret(`swek_${btoa(Math.random().toString()).slice(0, 32)}`);
-    setShowCreate(false);
-    setFormName('');
-    setFormMaxUses('');
-    setFormExpiresDays('');
-    setFormPools('');
-    setFormModels('');
-  }, [formName, formMaxUses, formExpiresDays, formPools, formModels]);
+  const fetchKeys = useCallback(async () => {
+    try {
+      const data = await adminApi.listEnrollmentKeys();
+      setKeys(data.keys);
+    } catch {
+      toast('error', 'Failed to load enrollment keys');
+    } finally {
+      setLoading(false);
+    }
+  }, [toast]);
 
-  function handleRevoke(id: string) {
-    // TODO: wire to adminApi.revokeFleetEnrollmentKey(id)
-    setKeys((prev) => prev.map((k) => (k.id === id ? { ...k, revoked: true } : k)));
+  useEffect(() => { fetchKeys(); }, [fetchKeys]);
+
+  const handleCreate = useCallback(async () => {
+    setCreating(true);
+    try {
+      const payload: FleetEnrollmentKeyCreate = {
+        name: formName || 'Untitled Key',
+        ...(formMaxUses ? { max_uses: parseInt(formMaxUses, 10) } : {}),
+        ...(formExpiresDays
+          ? { expires_at: new Date(Date.now() + parseInt(formExpiresDays, 10) * 86400000).toISOString() }
+          : {}),
+        ...(formPools
+          ? { allowed_pools: formPools.split(',').map((s) => s.trim()).filter(Boolean) }
+          : {}),
+        ...(formModels
+          ? { allowed_models: formModels.split(',').map((s) => s.trim()).filter(Boolean) }
+          : {}),
+      };
+      const created = await adminApi.createEnrollmentKey(payload);
+      setCreatedKeySecret(created.raw_key ?? null);
+      setShowCreate(false);
+      setFormName('');
+      setFormMaxUses('');
+      setFormExpiresDays('');
+      setFormPools('');
+      setFormModels('');
+      toast('success', 'Enrollment key created');
+      await fetchKeys();
+    } catch {
+      toast('error', 'Failed to create enrollment key');
+    } finally {
+      setCreating(false);
+    }
+  }, [formName, formMaxUses, formExpiresDays, formPools, formModels, fetchKeys, toast]);
+
+  async function handleRevoke(id: string) {
+    try {
+      await adminApi.revokeEnrollmentKey(id);
+      setKeys((prev) => prev.map((k) => (k.id === id ? { ...k, revoked: true } : k)));
+      toast('success', 'Enrollment key revoked');
+    } catch {
+      toast('error', 'Failed to revoke enrollment key');
+    }
   }
 
   function handleCopyKey() {
@@ -222,8 +204,8 @@ export default function EnrollmentKeysPage() {
               />
             </label>
             <div className="flex gap-2 pt-2">
-              <Button variant="primary" onClick={handleCreate} disabled={!formName.trim()}>
-                Create Key
+              <Button variant="primary" onClick={handleCreate} disabled={!formName.trim() || creating}>
+                {creating ? 'Creating…' : 'Create Key'}
               </Button>
               <Button variant="secondary" onClick={() => setShowCreate(false)}>
                 Cancel
@@ -235,7 +217,9 @@ export default function EnrollmentKeysPage() {
 
       {/* Keys table */}
       <Card>
-        {keys.length === 0 ? (
+        {loading ? (
+          <Skeleton lines={4} />
+        ) : keys.length === 0 ? (
           <EmptyState
             title="No Enrollment Keys"
             description="Create an enrollment key to allow workers to register with your fleet."

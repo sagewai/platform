@@ -1,147 +1,13 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { Badge, Card, Button, EmptyState } from '@/components/ui/legacy';
+import { Badge, Card, Button, EmptyState, Skeleton, useToast } from '@/components/ui/legacy';
 import { ArrowLeft, Heart, Cpu, Shield, AlertTriangle, Zap } from 'lucide-react';
-import type { FleetWorker } from '@/utils/types';
+import type { FleetWorker, FleetAuditEvent } from '@/utils/types';
+import { adminApi } from '@/utils/api';
 import { PoolStatsPanel } from '@/components/pool-stats-panel';
-
-// TODO: wire to adminApi.getFleetWorker(id)
-const DEMO_WORKERS: FleetWorker[] = [
-  {
-    id: 'w-001',
-    name: 'gpu-worker-us-east',
-    org_id: 'org-1',
-    approval_status: 'approved',
-    capabilities: {
-      models_supported: ['gpt-4o', 'claude-sonnet-4-6'],
-      models_canonical: ['openai/gpt-4o', 'anthropic/claude-sonnet-4-6'],
-      pool: 'gpu-cluster',
-      max_concurrent: 4,
-      labels: { region: 'us-east-1', gpu: 'a100' },
-      sdk_version: '0.1.0',
-    },
-    last_heartbeat: new Date(Date.now() - 30000).toISOString(),
-    last_probe_at: new Date(Date.now() - 60000).toISOString(),
-    probe_status: 'healthy',
-    registered_at: '2026-03-28T10:00:00Z',
-    approved_at: '2026-03-28T10:05:00Z',
-    approved_by: 'admin@sagewai.dev',
-    // TODO: wire to API — enterprise fields
-    ip_allowlist: ['10.0.0.0/8', '172.16.0.0/12'],
-    requires_dual_approval: true,
-    connection_type: 'websocket' as const,
-    probe_results: [
-      { model: 'gpt-4o', reachable: true, latency_ms: 45, error: null },
-      { model: 'claude-sonnet-4-6', reachable: true, latency_ms: 62, error: null },
-    ],
-    anomalies: [],
-  },
-  {
-    id: 'w-002',
-    name: 'cpu-worker-eu-west',
-    org_id: 'org-1',
-    approval_status: 'approved',
-    capabilities: {
-      models_supported: ['llama3-70b', 'mistral-7b'],
-      models_canonical: ['meta/llama3-70b', 'mistral/mistral-7b'],
-      pool: 'cpu-pool',
-      max_concurrent: 2,
-      labels: { region: 'eu-west-1' },
-      sdk_version: '0.1.0',
-    },
-    last_heartbeat: new Date(Date.now() - 120000).toISOString(),
-    last_probe_at: null,
-    probe_status: null,
-    registered_at: '2026-03-29T14:00:00Z',
-    approved_at: '2026-03-29T14:02:00Z',
-    approved_by: 'admin@sagewai.dev',
-    // TODO: wire to API — enterprise fields
-    connection_type: 'http' as const,
-    probe_results: [
-      { model: 'llama3-70b', reachable: true, latency_ms: 120, error: null },
-      { model: 'mistral-7b', reachable: false, latency_ms: null, error: 'connection timeout' },
-    ],
-    anomalies: [
-      { type: 'excessive_failures', message: '8 failed reports in the last hour (threshold: 10)', detected_at: '2026-03-31T09:30:00Z' },
-      { type: 'heartbeat_timeout', message: 'No heartbeat for 12 minutes (threshold: 5m)', detected_at: '2026-03-31T09:25:00Z' },
-    ],
-  },
-  {
-    id: 'w-003',
-    name: 'edge-worker-apac',
-    org_id: 'org-1',
-    approval_status: 'pending',
-    capabilities: {
-      models_supported: ['gemini-2.0-flash'],
-      models_canonical: ['google/gemini-2.0-flash'],
-      pool: 'edge',
-      max_concurrent: 1,
-      labels: { region: 'ap-southeast-1' },
-      sdk_version: '0.1.0',
-    },
-    last_heartbeat: null,
-    last_probe_at: null,
-    probe_status: null,
-    registered_at: '2026-03-31T08:00:00Z',
-    approved_at: null,
-    approved_by: null,
-    // TODO: wire to API — enterprise fields
-    ip_allowlist: ['192.168.1.0/24'],
-    requires_dual_approval: true,
-    connection_type: 'http' as const,
-  },
-  {
-    id: 'w-004',
-    name: 'dev-local-macbook',
-    org_id: 'org-1',
-    approval_status: 'approved',
-    capabilities: {
-      models_supported: ['ollama/llama3:8b'],
-      models_canonical: ['ollama/llama3:8b'],
-      pool: 'default',
-      max_concurrent: 1,
-      labels: { env: 'dev' },
-      sdk_version: '0.1.0',
-    },
-    last_heartbeat: new Date(Date.now() - 300000).toISOString(),
-    last_probe_at: null,
-    probe_status: null,
-    registered_at: '2026-03-25T09:00:00Z',
-    approved_at: '2026-03-25T09:01:00Z',
-    approved_by: 'admin@sagewai.dev',
-    // TODO: wire to API — enterprise fields
-    connection_type: 'websocket' as const,
-    probe_results: [
-      { model: 'ollama/llama3:8b', reachable: true, latency_ms: 15, error: null },
-    ],
-    anomalies: [],
-  },
-  {
-    id: 'w-005',
-    name: 'retired-worker',
-    org_id: 'org-1',
-    approval_status: 'revoked',
-    capabilities: {
-      models_supported: ['gpt-3.5-turbo'],
-      models_canonical: ['openai/gpt-3.5-turbo'],
-      pool: 'default',
-      max_concurrent: 1,
-      labels: {},
-      sdk_version: '0.0.9',
-    },
-    last_heartbeat: null,
-    last_probe_at: null,
-    probe_status: null,
-    registered_at: '2026-03-20T12:00:00Z',
-    approved_at: '2026-03-20T12:01:00Z',
-    approved_by: 'admin@sagewai.dev',
-    // TODO: wire to API — enterprise fields
-    connection_type: 'http' as const,
-  },
-];
 
 const STATUS_VARIANTS: Record<string, 'success' | 'warning' | 'error' | 'default'> = {
   approved: 'success',
@@ -174,14 +40,52 @@ export default function WorkerDetailPage() {
   const params = useParams();
   const workerId = params.id as string;
   const [activeTab, setActiveTab] = useState<TabId>('overview');
+  const { toast } = useToast();
 
-  // TODO: wire to adminApi.getFleetWorker(workerId)
-  const worker = useMemo(
-    () => DEMO_WORKERS.find((w) => w.id === workerId) ?? null,
-    [workerId],
-  );
+  const [localWorker, setLocalWorker] = useState<FleetWorker | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [auditEvents, setAuditEvents] = useState<FleetAuditEvent[]>([]);
+  const [auditLoaded, setAuditLoaded] = useState(false);
 
-  const [localWorker, setLocalWorker] = useState<FleetWorker | null>(worker);
+  const fetchWorker = useCallback(async () => {
+    try {
+      const { worker } = await adminApi.getFleetWorker(workerId);
+      setLocalWorker(worker);
+    } catch {
+      setLocalWorker(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [workerId]);
+
+  useEffect(() => { fetchWorker(); }, [fetchWorker]);
+
+  useEffect(() => {
+    if (activeTab !== 'activity' || auditLoaded) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await adminApi.listFleetAudit({ worker_id: workerId });
+        if (!cancelled) setAuditEvents(data.events);
+      } catch {
+        if (!cancelled) setAuditEvents([]);
+      } finally {
+        if (!cancelled) setAuditLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [activeTab, auditLoaded, workerId]);
+
+  if (loading) {
+    return (
+      <div className="max-w-4xl mx-auto">
+        <Link href="/fleet" className="text-primary text-sm hover:underline no-underline flex items-center gap-1 mb-md">
+          <ArrowLeft size={14} /> Back to Workers
+        </Link>
+        <Card className="!p-5"><Skeleton lines={6} /></Card>
+      </div>
+    );
+  }
 
   if (!localWorker) {
     return (
@@ -197,27 +101,41 @@ export default function WorkerDetailPage() {
     );
   }
 
-  function handleApprove() {
-    // TODO: wire to adminApi.approveFleetWorker(workerId)
-    setLocalWorker((prev) =>
-      prev
-        ? { ...prev, approval_status: 'approved' as const, approved_at: new Date().toISOString(), approved_by: 'admin@sagewai.dev' }
-        : prev,
-    );
+  async function handleApprove() {
+    try {
+      let approvedBy = 'admin';
+      try {
+        const me = await adminApi.getMe();
+        approvedBy = me.email || me.display_name || 'admin';
+      } catch {
+        /* fall back to generic label */
+      }
+      const { worker } = await adminApi.approveFleetWorker(workerId, approvedBy);
+      setLocalWorker(worker);
+      toast('success', 'Worker approved');
+    } catch {
+      toast('error', 'Failed to approve worker');
+    }
   }
 
-  function handleReject() {
-    // TODO: wire to adminApi.rejectFleetWorker(workerId)
-    setLocalWorker((prev) =>
-      prev ? { ...prev, approval_status: 'rejected' as const } : prev,
-    );
+  async function handleReject() {
+    try {
+      const { worker } = await adminApi.rejectFleetWorker(workerId);
+      setLocalWorker(worker);
+      toast('success', 'Worker rejected');
+    } catch {
+      toast('error', 'Failed to reject worker');
+    }
   }
 
-  function handleRevoke() {
-    // TODO: wire to adminApi.revokeFleetWorker(workerId)
-    setLocalWorker((prev) =>
-      prev ? { ...prev, approval_status: 'revoked' as const } : prev,
-    );
+  async function handleRevoke() {
+    try {
+      const { worker } = await adminApi.revokeFleetWorker(workerId);
+      setLocalWorker(worker);
+      toast('success', 'Worker revoked');
+    } catch {
+      toast('error', 'Failed to revoke worker');
+    }
   }
 
   const tabs: { id: TabId; label: string }[] = [
@@ -481,9 +399,29 @@ export default function WorkerDetailPage() {
               Activity
             </h3>
           </div>
-          <p className="text-sm text-text-secondary m-0">
-            Audit events for this worker will appear here once the fleet API is connected.
-          </p>
+          {!auditLoaded ? (
+            <Skeleton lines={3} />
+          ) : auditEvents.length === 0 ? (
+            <p className="text-sm text-text-secondary m-0">
+              No audit events recorded for this worker yet.
+            </p>
+          ) : (
+            <div className="divide-y divide-border">
+              {auditEvents.map((evt) => (
+                <div key={evt.id} className="py-2.5 flex items-center gap-3">
+                  <span className="text-xs text-text-muted w-[150px] shrink-0">
+                    {new Date(evt.created_at).toLocaleString()}
+                  </span>
+                  <Badge variant="default">{evt.event_type}</Badge>
+                  {Object.keys(evt.details).length > 0 && (
+                    <code className="text-[11px] text-text-muted font-mono truncate">
+                      {JSON.stringify(evt.details)}
+                    </code>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </Card>
       )}
     </div>

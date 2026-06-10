@@ -16,74 +16,6 @@ import {
   ArrowRight,
 } from 'lucide-react';
 
-/* ─── Demo fallback data ─── */
-
-const DEMO_SUBSCRIPTION: BillingSubscription = {
-  plan: 'pro',
-  status: 'active',
-  current_period_end: '2026-04-30T00:00:00Z',
-  cancel_at_period_end: false,
-};
-
-const DEMO_USAGE: BillingUsage = {
-  period_start: '2026-03-01',
-  period_end: '2026-03-31',
-  agent_runs: 847,
-  api_calls: 12450,
-  storage_used_gb: 2.3,
-  workers_active: 4,
-  connectors_active: 7,
-};
-
-const DEMO_PLANS: BillingPlan[] = [
-  {
-    id: 'free',
-    name: 'Free',
-    price_monthly: 0,
-    features: {
-      workers: 1,
-      connectors: 5,
-      agent_runs_monthly: 100,
-      storage_gb: 1,
-      fleet: false,
-      premium_support: false,
-    },
-  },
-  {
-    id: 'pro',
-    name: 'Pro',
-    price_monthly: 49,
-    stripe_price_id: 'price_pro_monthly',
-    features: {
-      workers: 10,
-      connectors: 18,
-      agent_runs_monthly: 10000,
-      storage_gb: 50,
-      fleet: true,
-      premium_support: false,
-    },
-  },
-  {
-    id: 'enterprise',
-    name: 'Enterprise',
-    price_monthly: null,
-    features: {
-      workers: -1,
-      connectors: -1,
-      agent_runs_monthly: -1,
-      storage_gb: -1,
-      fleet: true,
-      premium_support: true,
-    },
-  },
-];
-
-const DEMO_INVOICES: BillingInvoice[] = [
-  { id: 'inv_001', date: '2026-03-01', amount: 49.0, status: 'paid', pdf_url: '#' },
-  { id: 'inv_002', date: '2026-02-01', amount: 49.0, status: 'paid', pdf_url: '#' },
-  { id: 'inv_003', date: '2026-01-01', amount: 49.0, status: 'paid', pdf_url: '#' },
-];
-
 /* ─── Helpers ─── */
 
 function featureLabel(key: string): string {
@@ -167,10 +99,10 @@ function UsageMeter({
 /* ─── Main page ─── */
 
 export default function BillingPage() {
-  const [plans, setPlans] = useState<BillingPlan[]>(DEMO_PLANS);
-  const [subscription, setSubscription] = useState<BillingSubscription>(DEMO_SUBSCRIPTION);
-  const [usage, setUsage] = useState<BillingUsage>(DEMO_USAGE);
-  const [invoices, setInvoices] = useState<BillingInvoice[]>(DEMO_INVOICES);
+  const [plans, setPlans] = useState<BillingPlan[]>([]);
+  const [subscription, setSubscription] = useState<BillingSubscription | null>(null);
+  const [usage, setUsage] = useState<BillingUsage | null>(null);
+  const [invoices, setInvoices] = useState<BillingInvoice[]>([]);
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
 
@@ -188,7 +120,7 @@ export default function BillingPage() {
       if (usageRes.status === 'fulfilled') setUsage(usageRes.value);
       if (invRes.status === 'fulfilled') setInvoices(invRes.value);
     } catch {
-      // Fall back to demo data silently
+      // No billing provider configured — the empty-state guard below handles it.
     } finally {
       setLoading(false);
     }
@@ -198,12 +130,39 @@ export default function BillingPage() {
     fetchData();
   }, [fetchData]);
 
-  const currentPlan = plans.find((p) => p.id === subscription.plan) ?? plans[0];
+  const currentPlan = subscription
+    ? plans.find((p) => p.id === subscription.plan) ?? plans[0]
+    : null;
+
+  // Self-hosted mode — no billing provider configured
+  if (!loading && !subscription) {
+    return (
+      <div className="max-w-4xl mx-auto">
+        <h1 className="text-2xl font-bold font-[family-name:var(--font-heading)] mt-0 mb-1">Billing</h1>
+        <p className="text-sm text-muted-foreground mb-lg">Manage your subscription and usage.</p>
+        <Card className="p-lg text-center">
+          <Server className="mx-auto h-10 w-10 text-primary mb-md" />
+          <h2 className="text-lg font-semibold mb-2">Self-Hosted Instance</h2>
+          <p className="text-sm text-muted-foreground max-w-md mx-auto mb-md">
+            You are running Sagewai on your own infrastructure. There is no billing
+            provider configured. All features are available under the AGPL-3.0 license.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            For commercial licensing, contact{' '}
+            <a href="mailto:licensing@sagewai.ai" className="text-primary no-underline hover:underline">licensing@sagewai.ai</a>
+          </p>
+        </Card>
+      </div>
+    );
+  }
+
+  // After the guard above, subscription + usage are guaranteed non-null
+  const sub = subscription as BillingSubscription;
+  const usg = usage as BillingUsage;
 
   const handleUpgrade = async (planId: string) => {
     try {
       const result = await adminApi.createCheckoutSession(planId);
-      // In production this would redirect to Stripe checkout
       toast('success', `Checkout session created. Redirect URL: ${result.url}`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to create checkout session';
@@ -272,8 +231,8 @@ export default function BillingPage() {
               </p>
               <h2 className="text-xl font-bold mt-1">{currentPlan?.name ?? 'Free'}</h2>
             </div>
-            <Badge variant={statusVariant(subscription.status)}>
-              {subscription.status}
+            <Badge variant={statusVariant(sub.status)}>
+              {sub.status}
             </Badge>
           </div>
 
@@ -288,7 +247,7 @@ export default function BillingPage() {
             )}
           </div>
 
-          {subscription.cancel_at_period_end && (
+          {sub.cancel_at_period_end && (
             <p className="text-xs text-yellow-400">
               Cancels at end of period
             </p>
@@ -296,7 +255,7 @@ export default function BillingPage() {
 
           <p className="text-xs text-text-on-dark/40">
             Current period ends{' '}
-            {new Date(subscription.current_period_end).toLocaleDateString('en-US', {
+            {new Date(sub.current_period_end).toLocaleDateString('en-US', {
               month: 'long',
               day: 'numeric',
               year: 'numeric',
@@ -320,7 +279,7 @@ export default function BillingPage() {
               Current Period Usage
             </p>
             <span className="text-xs text-text-on-dark/30 font-mono">
-              {usage.period_start} -- {usage.period_end}
+              {usg.period_start} -- {usg.period_end}
             </span>
           </div>
 
@@ -328,20 +287,20 @@ export default function BillingPage() {
             <UsageMeter
               label="Agent Runs"
               icon={Zap}
-              used={usage.agent_runs}
+              used={usg.agent_runs}
               limit={runLimit}
             />
             <UsageMeter
               label="Storage"
               icon={HardDrive}
-              used={usage.storage_used_gb}
+              used={usg.storage_used_gb}
               limit={storageLimit}
               unit="GB"
             />
             <UsageMeter
               label="Workers"
               icon={Server}
-              used={usage.workers_active}
+              used={usg.workers_active}
               limit={workerLimit}
             />
           </div>
@@ -349,10 +308,10 @@ export default function BillingPage() {
           <div className="flex items-center gap-md text-xs text-text-muted pt-sm border-t border-border">
             <span className="flex items-center gap-1">
               <Activity size={12} />
-              {usage.api_calls.toLocaleString()} API calls
+              {usg.api_calls.toLocaleString()} API calls
             </span>
             <span>
-              {usage.connectors_active} connectors active
+              {usg.connectors_active} connectors active
             </span>
           </div>
         </Card>
@@ -369,7 +328,7 @@ export default function BillingPage() {
                 {plans.map((plan) => (
                   <th key={plan.id} className="text-center py-3 px-4 font-medium">
                     <div className="flex flex-col items-center gap-1">
-                      <span className={plan.id === subscription.plan ? 'text-primary' : ''}>
+                      <span className={plan.id === sub.plan ? 'text-primary' : ''}>
                         {plan.name}
                       </span>
                       <span className="text-xs text-text-muted font-normal">
@@ -416,7 +375,7 @@ export default function BillingPage() {
                 <td className="py-4" />
                 {plans.map((plan) => (
                   <td key={plan.id} className="text-center py-4 px-4">
-                    {plan.id === subscription.plan ? (
+                    {plan.id === sub.plan ? (
                       <Badge variant="info">Current</Badge>
                     ) : plan.id === 'enterprise' ? (
                       <a

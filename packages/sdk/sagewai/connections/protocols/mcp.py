@@ -106,6 +106,22 @@ class MCPClient:
     async def list_tools(self) -> list[Any]:
         return list(self._tools or [])
 
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        """Invoke a discovered tool by name and return its decoded result.
+
+        Dispatches through the discovered ``ToolSpec``'s ``handler``
+        closure, which proxies ``tools/call`` over the live transport and
+        decodes the MCP content blocks. Raises ``KeyError`` if no tool
+        with ``name`` was discovered.
+        """
+        for tool in self._tools or []:
+            if _tool_attr(tool, "name") == name:
+                handler = getattr(tool, "handler", None)
+                if handler is None:
+                    raise KeyError(name)
+                return await handler(**(arguments or {}))
+        raise KeyError(name)
+
 
 class McpToolMeta(BaseModel):
     """One entry in the capability cache — what the MCP server reports via list_tools."""

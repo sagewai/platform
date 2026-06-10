@@ -1,157 +1,82 @@
 'use client';
 
-import { Badge, Card } from '@/components/ui/legacy';
+import { useEffect, useState } from 'react';
+import { Badge, Card, Skeleton, EmptyState } from '@/components/ui/legacy';
 import type { BadgeVariant } from '@/components/ui/legacy';
 import {
-  Brain,
   Cpu,
   Languages,
   Mic,
   Eye,
   GitBranch,
-  Layers,
   FileText,
-  MessageSquare,
   Sparkles,
+  Network,
   CheckCircle,
-  AlertTriangle,
   XCircle,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { adminApi } from '@/utils/api';
+import type { IntelligenceComponent } from '@/utils/types';
 
 // ---------------------------------------------------------------------------
-// Demo data — mirrors SDK intelligence module state
+// Component presentation metadata (label + icon per known component name).
+// Any component the backend returns that isn't listed here still renders with
+// a sensible default label and icon.
 // ---------------------------------------------------------------------------
 
-const DEMO_INTELLIGENCE = {
-  embedder: {
-    type: 'SentenceTransformerEmbedder',
-    model: 'all-MiniLM-L6-v2',
-    dimension: 384,
-    status: 'active' as const,
-  },
-  extraction: {
-    type: 'GLiNEREntityExtractor',
-    model: 'urchade/gliner_medium-v2.1',
-    status: 'active' as const,
-  },
-  fact_extraction: {
-    type: 'HybridFactExtractor',
-    mode: 'rules+llm',
-    status: 'active' as const,
-  },
-  language: {
-    detector: 'lingua',
-    languages: ['en', 'de', 'tr', 'ru', 'zh', 'ja', 'ko', 'ar', 'fr', 'es'],
-    status: 'active' as const,
-  },
-  multimodal: {
-    transcription: 'FasterWhisperTranscriber',
-    vision: 'StubVisionDescriber',
-    status: 'partial' as const,
-  },
-  summarizer: {
-    type: 'SemanticSummarizer',
-    mode: 'embedding-scored',
-    status: 'active' as const,
-  },
-  graph: {
-    builder: 'ConversationGraphBuilder',
-    entities: 142,
-    relations: 87,
-    status: 'active' as const,
-  },
-  consolidation: {
-    last_run: '2026-03-31T10:00:00Z',
-    facts_deduped: 12,
-    contradictions: 2,
-    status: 'active' as const,
-  },
+const COMPONENT_META: Record<string, { label: string; icon: LucideIcon }> = {
+  embedder: { label: 'Embedder', icon: Cpu },
+  entity_extractor: { label: 'Entity Extraction', icon: Sparkles },
+  relation_extractor: { label: 'Relation Extraction', icon: FileText },
+  language: { label: 'Language Detection', icon: Languages },
+  vision: { label: 'Vision', icon: Eye },
+  transcriber: { label: 'Transcription', icon: Mic },
+  graph: { label: 'Graph Builder', icon: GitBranch },
 };
 
-type IntelStatus = 'active' | 'partial' | 'inactive';
-
-const STATUS_BADGE: Record<IntelStatus, BadgeVariant> = {
-  active: 'success',
-  partial: 'warning',
-  inactive: 'default',
-};
-
-const STATUS_ICON: Record<IntelStatus, LucideIcon> = {
-  active: CheckCircle,
-  partial: AlertTriangle,
-  inactive: XCircle,
-};
-
-// ---------------------------------------------------------------------------
-// Feature grid rows
-// ---------------------------------------------------------------------------
-
-interface FeatureRow {
-  phase: string;
-  feature: string;
-  backend: string;
-  status: IntelStatus;
-  icon: LucideIcon;
-}
-
-const FEATURES: FeatureRow[] = [
-  { phase: 'I1', feature: 'Embeddings', backend: 'SentenceTransformer', status: 'active', icon: Cpu },
-  { phase: 'I2', feature: 'Multi-Language', backend: 'lingua (10 languages)', status: 'active', icon: Languages },
-  { phase: 'I3', feature: 'Entity Extraction', backend: 'GLiNER', status: 'active', icon: Sparkles },
-  { phase: 'I4', feature: 'Fact Extraction', backend: 'Hybrid (rules+LLM)', status: 'active', icon: FileText },
-  { phase: 'I5', feature: 'Multimodal Messages', backend: 'ContentPart', status: 'active', icon: MessageSquare },
-  { phase: 'I6', feature: 'Transcription', backend: 'FasterWhisper', status: 'active', icon: Mic },
-  { phase: 'I6', feature: 'Vision', backend: 'Stub', status: 'inactive', icon: Eye },
-  { phase: 'I7', feature: 'Summarization', backend: 'Semantic', status: 'active', icon: Layers },
-  { phase: 'I8', feature: 'Graph Builder', backend: 'Conversation to Graph', status: 'active', icon: GitBranch },
-  { phase: 'I9', feature: 'Consolidation', backend: 'Dedup+Decay', status: 'active', icon: Brain },
-];
-
-// ---------------------------------------------------------------------------
-// Stat card component
-// ---------------------------------------------------------------------------
-
-function StatCard({
-  icon: Icon,
-  label,
-  value,
-  sub,
-  status,
-}: {
-  icon: LucideIcon;
-  label: string;
-  value: string;
-  sub?: string;
-  status: IntelStatus;
-}) {
-  const StatusIcon = STATUS_ICON[status];
+function metaFor(name: string): { label: string; icon: LucideIcon } {
   return (
-    <Card className="!p-4">
-      <div className="flex items-start justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <Icon size={16} className="text-text-muted" />
-          <span className="text-xs text-text-muted uppercase tracking-wide">{label}</span>
-        </div>
-        <Badge variant={STATUS_BADGE[status]}>
-          <span className="flex items-center gap-1">
-            <StatusIcon size={10} />
-            {status}
-          </span>
-        </Badge>
-      </div>
-      <div className="text-lg font-bold text-text-primary">{value}</div>
-      {sub && <div className="text-xs text-text-muted mt-0.5">{sub}</div>}
-    </Card>
+    COMPONENT_META[name] ?? {
+      label: name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+      icon: Network,
+    }
   );
 }
 
-// ---------------------------------------------------------------------------
-// Page
-// ---------------------------------------------------------------------------
+function availabilityBadge(available: boolean): { variant: BadgeVariant; icon: LucideIcon; label: string } {
+  return available
+    ? { variant: 'success', icon: CheckCircle, label: 'Available' }
+    : { variant: 'default', icon: XCircle, label: 'Unavailable' };
+}
+
+function renderConfig(config: Record<string, unknown>): string {
+  const entries = Object.entries(config).filter(([, v]) => v !== null && v !== undefined && v !== '');
+  if (entries.length === 0) return '';
+  return entries.map(([k, v]) => `${k}: ${String(v)}`).join(' · ');
+}
 
 export default function IntelligenceDashboardPage() {
-  const d = DEMO_INTELLIGENCE;
+  const [components, setComponents] = useState<IntelligenceComponent[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const status = await adminApi.getIntelligenceStatus();
+        if (cancelled) return;
+        setComponents(status.components);
+        setError(status.error ?? null);
+      } catch {
+        if (!cancelled) setError('Failed to load intelligence status.');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   return (
     <div className="max-w-6xl mx-auto">
@@ -161,210 +86,135 @@ export default function IntelligenceDashboardPage() {
           Intelligence Dashboard
         </h1>
         <p className="mt-0 text-sm text-text-secondary">
-          Overview of the Intelligence Layer: embeddings, extraction, language support, multimodal
-          processing, and memory consolidation.
+          Live status of the Intelligence Layer: embeddings, entity and relation extraction, language
+          detection, multimodal processing, and the graph pipeline.
         </p>
       </div>
 
-      {/* Summary stat cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-lg">
-        <StatCard
-          icon={Cpu}
-          label="Embedder"
-          value={d.embedder.model}
-          sub={`${d.embedder.dimension}d / ${d.embedder.type}`}
-          status={d.embedder.status}
-        />
-        <StatCard
-          icon={Sparkles}
-          label="Entity Extraction"
-          value={d.extraction.type.replace('EntityExtractor', '')}
-          sub={d.extraction.model}
-          status={d.extraction.status}
-        />
-        <StatCard
-          icon={Languages}
-          label="Languages"
-          value={`${d.language.languages.length} languages`}
-          sub={d.language.languages.join(', ')}
-          status={d.language.status}
-        />
-        <StatCard
-          icon={Mic}
-          label="Multimodal"
-          value={d.multimodal.transcription.replace('Transcriber', '')}
-          sub={`Vision: ${d.multimodal.vision.replace('Describer', '')}`}
-          status={d.multimodal.status}
-        />
-      </div>
-
-      {/* Provider configuration */}
-      <Card className="mb-lg">
-        <h2 className="text-lg font-bold font-[family-name:var(--font-heading)] text-text-primary mt-0 mb-md">
-          Provider Configuration
-        </h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-          <div className="space-y-3">
-            <div>
-              <span className="text-text-muted">Embedder</span>
-              <div className="font-medium text-text-primary">{d.embedder.type}</div>
-              <div className="text-xs text-text-muted">
-                Model: {d.embedder.model} ({d.embedder.dimension}d)
-              </div>
-            </div>
-            <div>
-              <span className="text-text-muted">Entity Extraction</span>
-              <div className="font-medium text-text-primary">{d.extraction.type}</div>
-              <div className="text-xs text-text-muted">Model: {d.extraction.model}</div>
-            </div>
-            <div>
-              <span className="text-text-muted">Fact Extraction</span>
-              <div className="font-medium text-text-primary">{d.fact_extraction.type}</div>
-              <div className="text-xs text-text-muted">Mode: {d.fact_extraction.mode}</div>
-            </div>
-            <div>
-              <span className="text-text-muted">Language Detection</span>
-              <div className="font-medium text-text-primary">{d.language.detector}</div>
-              <div className="text-xs text-text-muted">
-                {d.language.languages.length} languages supported
-              </div>
-            </div>
-          </div>
-          <div className="space-y-3">
-            <div>
-              <span className="text-text-muted">Summarizer</span>
-              <div className="font-medium text-text-primary">{d.summarizer.type}</div>
-              <div className="text-xs text-text-muted">Mode: {d.summarizer.mode}</div>
-            </div>
-            <div>
-              <span className="text-text-muted">Transcription</span>
-              <div className="font-medium text-text-primary">{d.multimodal.transcription}</div>
-            </div>
-            <div>
-              <span className="text-text-muted">Vision</span>
-              <div className="font-medium text-text-primary">{d.multimodal.vision}</div>
-            </div>
-            <div>
-              <span className="text-text-muted">Graph Builder</span>
-              <div className="font-medium text-text-primary">{d.graph.builder}</div>
-              <div className="text-xs text-text-muted">
-                {d.graph.entities} entities, {d.graph.relations} relations
-              </div>
-            </div>
-          </div>
+      {error && (
+        <div className="bg-error-light border border-error/20 rounded-lg px-4 py-3 text-error text-sm mb-md" role="alert">
+          {error}
         </div>
-      </Card>
+      )}
 
-      {/* Consolidation summary */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-lg">
-        <Card className="!p-4">
-          <div className="flex items-center gap-2 mb-1">
-            <GitBranch size={16} className="text-text-muted" />
-            <span className="text-xs text-text-muted uppercase tracking-wide">Graph Store</span>
-          </div>
-          <div className="text-2xl font-bold">{d.graph.entities}</div>
-          <div className="text-xs text-text-muted">
-            entities / {d.graph.relations} relations
-          </div>
+      {/* Component cards */}
+      {loading ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-lg">
+          <Card className="!p-4"><Skeleton lines={2} /></Card>
+          <Card className="!p-4"><Skeleton lines={2} /></Card>
+          <Card className="!p-4"><Skeleton lines={2} /></Card>
+        </div>
+      ) : components.length === 0 ? (
+        <Card>
+          <EmptyState
+            title="No intelligence components reported"
+            description="The intelligence registry returned no components. Install optional dependencies to enable the Intelligence Layer."
+          />
         </Card>
-        <Card className="!p-4">
-          <div className="flex items-center gap-2 mb-1">
-            <Layers size={16} className="text-text-muted" />
-            <span className="text-xs text-text-muted uppercase tracking-wide">Facts Deduped</span>
-          </div>
-          <div className="text-2xl font-bold">{d.consolidation.facts_deduped}</div>
-          <div className="text-xs text-text-muted">last consolidation run</div>
-        </Card>
-        <Card className="!p-4">
-          <div className="flex items-center gap-2 mb-1">
-            <AlertTriangle size={16} className="text-amber-500" />
-            <span className="text-xs text-text-muted uppercase tracking-wide">Contradictions</span>
-          </div>
-          <div className="text-2xl font-bold">{d.consolidation.contradictions}</div>
-          <div className="text-xs text-text-muted">
-            last run:{' '}
-            {new Date(d.consolidation.last_run).toLocaleDateString('en-US', {
-              month: 'short',
-              day: 'numeric',
-              hour: '2-digit',
-              minute: '2-digit',
-            })}
-          </div>
-        </Card>
-      </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-lg">
+          {components.map((c) => {
+            const meta = metaFor(c.name);
+            const Icon = meta.icon;
+            const badge = availabilityBadge(c.available);
+            const BadgeIcon = badge.icon;
+            const configSummary = renderConfig(c.config);
+            return (
+              <Card key={c.name} className="!p-4">
+                <div className="flex items-start justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <Icon size={16} className="text-text-muted" />
+                    <span className="text-xs text-text-muted uppercase tracking-wide">{meta.label}</span>
+                  </div>
+                  <Badge variant={badge.variant}>
+                    <span className="flex items-center gap-1">
+                      <BadgeIcon size={10} />
+                      {badge.label}
+                    </span>
+                  </Badge>
+                </div>
+                <div className="text-lg font-bold text-text-primary break-words">{c.impl}</div>
+                {configSummary && (
+                  <div className="text-xs text-text-muted mt-1 break-words">{configSummary}</div>
+                )}
+              </Card>
+            );
+          })}
+        </div>
+      )}
 
-      {/* Feature availability grid */}
-      <Card>
-        <h2 className="text-lg font-bold font-[family-name:var(--font-heading)] text-text-primary mt-0 mb-md">
-          Feature Availability
-        </h2>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm border-collapse">
-            <thead>
-              <tr className="border-b-2 border-border">
-                <th className="text-left py-2.5 px-3 text-xs text-text-muted uppercase tracking-wide">
-                  Phase
-                </th>
-                <th className="text-left py-2.5 px-3 text-xs text-text-muted uppercase tracking-wide">
-                  Feature
-                </th>
-                <th className="text-left py-2.5 px-3 text-xs text-text-muted uppercase tracking-wide">
-                  Backend
-                </th>
-                <th className="text-left py-2.5 px-3 text-xs text-text-muted uppercase tracking-wide">
-                  Status
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {FEATURES.map((f) => {
-                const StatusIcon = STATUS_ICON[f.status];
-                return (
-                  <tr
-                    key={`${f.phase}-${f.feature}`}
-                    className="border-b border-border last:border-0 hover:bg-bg-subtle transition-colors"
-                  >
-                    <td className="py-2.5 px-3">
-                      <span className="inline-block px-2 py-0.5 text-[11px] font-mono font-semibold bg-bg-subtle border border-border rounded">
-                        {f.phase}
-                      </span>
-                    </td>
-                    <td className="py-2.5 px-3 font-medium">
-                      <span className="flex items-center gap-2">
-                        <f.icon size={14} className="text-text-muted" />
-                        {f.feature}
-                      </span>
-                    </td>
-                    <td className="py-2.5 px-3 text-text-secondary">{f.backend}</td>
-                    <td className="py-2.5 px-3">
-                      <Badge variant={STATUS_BADGE[f.status]}>
-                        <span className="flex items-center gap-1">
-                          <StatusIcon size={10} />
-                          {f.status === 'active'
-                            ? 'Active'
-                            : f.status === 'partial'
-                              ? 'Partial'
-                              : 'Inactive'}
+      {/* Component detail grid */}
+      {!loading && components.length > 0 && (
+        <Card>
+          <h2 className="text-lg font-bold font-[family-name:var(--font-heading)] text-text-primary mt-0 mb-md">
+            Component Detail
+          </h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="border-b-2 border-border">
+                  <th className="text-left py-2.5 px-3 text-xs text-text-muted uppercase tracking-wide">
+                    Component
+                  </th>
+                  <th className="text-left py-2.5 px-3 text-xs text-text-muted uppercase tracking-wide">
+                    Implementation
+                  </th>
+                  <th className="text-left py-2.5 px-3 text-xs text-text-muted uppercase tracking-wide">
+                    Config
+                  </th>
+                  <th className="text-left py-2.5 px-3 text-xs text-text-muted uppercase tracking-wide">
+                    Status
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {components.map((c) => {
+                  const meta = metaFor(c.name);
+                  const Icon = meta.icon;
+                  const badge = availabilityBadge(c.available);
+                  const BadgeIcon = badge.icon;
+                  const configSummary = renderConfig(c.config);
+                  return (
+                    <tr
+                      key={c.name}
+                      className="border-b border-border last:border-0 hover:bg-bg-subtle transition-colors"
+                    >
+                      <td className="py-2.5 px-3 font-medium">
+                        <span className="flex items-center gap-2">
+                          <Icon size={14} className="text-text-muted" />
+                          {meta.label}
                         </span>
-                      </Badge>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-        <div className="mt-md pt-md border-t border-border text-xs text-text-muted">
-          Install optional dependencies to activate inactive features:{' '}
-          <code className="font-[family-name:var(--font-mono)] text-xs bg-bg-subtle px-1.5 py-0.5 rounded">
-            pip install sagewai[intelligence]
-          </code>{' '}
-          or for all features including BART and Whisper:{' '}
-          <code className="font-[family-name:var(--font-mono)] text-xs bg-bg-subtle px-1.5 py-0.5 rounded">
-            pip install sagewai[intelligence-full]
-          </code>
-        </div>
-      </Card>
+                      </td>
+                      <td className="py-2.5 px-3 text-text-secondary font-[family-name:var(--font-mono)] text-xs">
+                        {c.impl}
+                      </td>
+                      <td className="py-2.5 px-3 text-text-muted text-xs">{configSummary || '—'}</td>
+                      <td className="py-2.5 px-3">
+                        <Badge variant={badge.variant}>
+                          <span className="flex items-center gap-1">
+                            <BadgeIcon size={10} />
+                            {badge.label}
+                          </span>
+                        </Badge>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-md pt-md border-t border-border text-xs text-text-muted">
+            Install optional dependencies to activate unavailable components:{' '}
+            <code className="font-[family-name:var(--font-mono)] text-xs bg-bg-subtle px-1.5 py-0.5 rounded">
+              pip install sagewai[intelligence]
+            </code>{' '}
+            or for all features including Whisper:{' '}
+            <code className="font-[family-name:var(--font-mono)] text-xs bg-bg-subtle px-1.5 py-0.5 rounded">
+              pip install sagewai[intelligence-full]
+            </code>
+          </div>
+        </Card>
+      )}
     </div>
   );
 }

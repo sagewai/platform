@@ -1089,6 +1089,21 @@ export interface FleetAuditEvent {
   created_at: string;
 }
 
+/* ─── Intelligence status types ─── */
+
+export interface IntelligenceComponent {
+  name: string;
+  impl: string;
+  available: boolean;
+  config: Record<string, unknown>;
+}
+
+export interface IntelligenceStatus {
+  components: IntelligenceComponent[];
+  /** Present only when the registry itself failed to load (200 with empty components). */
+  error?: string;
+}
+
 /* ─── Pool stats types (Plan 1.5) ─── */
 
 export interface PerTupleStats {

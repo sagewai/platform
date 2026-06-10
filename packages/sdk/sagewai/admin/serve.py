@@ -156,6 +156,199 @@ def _resolve_database_url() -> str | None:
     return os.environ.get("SAGEWAI_DATABASE_URL") or os.environ.get("DATABASE_URL") or None
 
 
+# Last-resort / stub fallback impl names per intelligence component. When the
+# resolved backend is one of these, the active (preferred) backend was missing
+# its optional dependency, so the component reports ``available: false``.
+_INTELLIGENCE_FALLBACK_IMPLS: dict[str, frozenset[str]] = {
+    "embedder": frozenset({"HashEmbedder"}),
+    "entity_extractor": frozenset({"LLMEntityExtractor"}),
+    "relation_extractor": frozenset({"LLMRelationExtractor"}),
+    "vision": frozenset({"StubVisionDescriber"}),
+}
+
+
+def _intelligence_status_payload() -> dict[str, Any]:
+    """Introspect the runtime intelligence stack into a stable JSON shape.
+
+    Returns ``{"components": [{"name", "impl", "available", "config"}, ...]}``.
+
+    Every component is resolved through the :class:`ProviderRegistry` tiered
+    fallback chains and wrapped in its own ``try``/``except`` so a missing
+    optional dependency degrades to ``available: false`` (with the fallback
+    impl name) rather than raising — the caller never 500s. Heavy optional
+    intelligence deps are imported lazily here, never at module import time.
+    """
+    components: list[dict[str, Any]] = []
+
+    def _add(
+        name: str,
+        *,
+        impl: str,
+        available: bool,
+        config: dict[str, Any] | None = None,
+    ) -> None:
+        components.append(
+            {
+                "name": name,
+                "impl": impl,
+                "available": available,
+                "config": config or {},
+            }
+        )
+
+    def _is_fallback(name: str, impl: str) -> bool:
+        return impl in _INTELLIGENCE_FALLBACK_IMPLS.get(name, frozenset())
+
+    try:
+        from sagewai.intelligence.config import IntelligenceConfig
+        from sagewai.intelligence.registry import ProviderRegistry
+    except Exception as exc:  # noqa: BLE001 — registry import is best-effort
+        logger.debug("intelligence registry unavailable", exc_info=True)
+        return {
+            "components": [],
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+    cfg = IntelligenceConfig()
+
+    # -- Embedder ------------------------------------------------------------
+    try:
+        emb = ProviderRegistry.get_embedder(cfg)
+        impl = type(emb).__name__
+        _add(
+            "embedder",
+            impl=impl,
+            available=not _is_fallback("embedder", impl),
+            config={
+                "provider": cfg.embedding_provider,
+                "dimension": getattr(emb, "dimension", None),
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        _add("embedder", impl="unavailable", available=False,
+             config={"error": f"{type(exc).__name__}: {exc}"})
+
+    # -- Entity extractor (NER / GLiNER) -------------------------------------
+    try:
+        ner = ProviderRegistry.get_entity_extractor(cfg)
+        impl = type(ner).__name__
+        _add(
+            "entity_extractor",
+            impl=impl,
+            available=not _is_fallback("entity_extractor", impl),
+            config={
+                "provider": cfg.extraction_provider,
+                "model": cfg.extraction_model,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        _add("entity_extractor", impl="unavailable", available=False,
+             config={"error": f"{type(exc).__name__}: {exc}"})
+
+    # -- Relation extractor --------------------------------------------------
+    try:
+        rel = ProviderRegistry.get_relation_extractor(cfg)
+        impl = type(rel).__name__
+        _add(
+            "relation_extractor",
+            impl=impl,
+            available=not _is_fallback("relation_extractor", impl),
+            config={"provider": cfg.extraction_provider},
+        )
+    except Exception as exc:  # noqa: BLE001
+        _add("relation_extractor", impl="unavailable", available=False,
+             config={"error": f"{type(exc).__name__}: {exc}"})
+
+    # -- Language detection --------------------------------------------------
+    try:
+        from sagewai.intelligence.language.detector import LanguageDetector
+
+        detector = LanguageDetector()
+        _add(
+            "language",
+            impl="LanguageDetector",
+            # The lingua backend is optional; .available reflects whether it
+            # loaded (else detection always returns "en").
+            available=bool(detector.available),
+            config={"backend": "lingua" if detector.available else "fallback-en"},
+        )
+    except Exception as exc:  # noqa: BLE001
+        _add("language", impl="unavailable", available=False,
+             config={"error": f"{type(exc).__name__}: {exc}"})
+
+    # -- Multimodal: vision --------------------------------------------------
+    try:
+        vis = ProviderRegistry.get_vision_describer(cfg)
+        impl = type(vis).__name__
+        _add(
+            "vision",
+            impl=impl,
+            available=not _is_fallback("vision", impl),
+            config={
+                "provider": cfg.vision_provider,
+                "model": cfg.vision_model,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        _add("vision", impl="unavailable", available=False,
+             config={"error": f"{type(exc).__name__}: {exc}"})
+
+    # -- Multimodal: transcription -------------------------------------------
+    try:
+        tr = ProviderRegistry.get_transcriber(cfg)
+        if tr is None:
+            # Disabled by config or no backend available.
+            _add(
+                "transcriber",
+                impl="none",
+                available=False,
+                config={"provider": cfg.transcription_provider},
+            )
+        else:
+            _add(
+                "transcriber",
+                impl=type(tr).__name__,
+                available=True,
+                config={
+                    "provider": cfg.transcription_provider,
+                    "model": cfg.transcription_model,
+                },
+            )
+    except Exception as exc:  # noqa: BLE001
+        _add("transcriber", impl="unavailable", available=False,
+             config={"error": f"{type(exc).__name__}: {exc}"})
+
+    # -- Graph pipeline ------------------------------------------------------
+    # Don't instantiate the (expensive) builder; report it as available when
+    # both extractors resolved without erroring, reusing what we already know.
+    try:
+        by_name = {c["name"]: c for c in components}
+        ner_ok = by_name.get("entity_extractor", {}).get("impl") not in (
+            None,
+            "unavailable",
+        )
+        rel_ok = by_name.get("relation_extractor", {}).get("impl") not in (
+            None,
+            "unavailable",
+        )
+        _add(
+            "graph",
+            impl="ConversationGraphBuilder",
+            available=bool(ner_ok and rel_ok),
+            config={
+                "entity_extractor": by_name.get("entity_extractor", {}).get("impl"),
+                "relation_extractor": by_name.get("relation_extractor", {}).get(
+                    "impl"
+                ),
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        _add("graph", impl="unavailable", available=False,
+             config={"error": f"{type(exc).__name__}: {exc}"})
+
+    return {"components": components}
+
+
 def _load_templates() -> list[dict[str, Any]]:
     """Lazy-load templates to avoid circular imports."""
     global _AGENT_TEMPLATES
@@ -394,6 +587,63 @@ def _build_subscription_manager():
     return SubscriptionManager()
 
 
+# Single-org project bucket for the in-process memory/context engines. In
+# single-org mode the whole deployment is one project, so the vector/graph/
+# context stores live under a stable id rather than the contextvar fallback.
+_MEMORY_PROJECT_ID = "default"
+
+
+def _setup_memory_engines(app: FastAPI) -> None:
+    """Attach the in-process memory + context engines to ``app.state``.
+
+    Wires three app-state singletons the vector/graph/context routes read:
+
+    * ``app.state.context_engine`` — a :class:`ContextEngine` over in-memory
+      metadata + vector stores, with an embedder from the intelligence registry
+      (falls back to the zero-dep ``HashEmbedder`` when no model is configured).
+    * ``app.state.vector_memory`` — a :class:`VectorMemory` (TF-IDF cosine,
+      in-process; durable sqlite-vec is wired separately for RAGEngine defaults).
+    * ``app.state.graph_memory`` — a :class:`GraphMemory` (in-process knowledge
+      graph).
+
+    Idempotent: skips engines already attached (injected DI / repeated calls).
+    Imports happen inside the function — the heavy/optional deps must not load at
+    serve.py import time, and the engines all have zero-dep fallbacks so a
+    missing optional dep can never crash startup.
+
+    The admin lifespan calls this at startup; tests call it directly because
+    ``httpx.ASGITransport`` does not run the lifespan.
+    """
+    if getattr(app.state, "context_engine", None) is None:
+        from sagewai.context.engine import ContextEngine
+        from sagewai.context.stores import (
+            InMemoryMetadataStore,
+            InMemoryVectorStore,
+        )
+
+        # The admin memory/context endpoints use ContextEngine's built-in
+        # deterministic hash embedder (embedder=None): it works offline with no
+        # API key or heavy model — the right default for admin browsing. Semantic
+        # embedders (LiteLLM / sentence-transformers) require credentials and are
+        # the RAG path's concern, so they are intentionally not wired here.
+        app.state.context_engine = ContextEngine(
+            metadata_store=InMemoryMetadataStore(),
+            vector_store=InMemoryVectorStore(),
+            project_id=_MEMORY_PROJECT_ID,
+            embedder=None,
+        )
+
+    if getattr(app.state, "vector_memory", None) is None:
+        from sagewai.memory.vector import VectorMemory
+
+        app.state.vector_memory = VectorMemory(project_id=_MEMORY_PROJECT_ID)
+
+    if getattr(app.state, "graph_memory", None) is None:
+        from sagewai.memory.graph import GraphMemory
+
+        app.state.graph_memory = GraphMemory(project_id=_MEMORY_PROJECT_ID)
+
+
 def create_admin_serve_app(
     sf: AdminStateFile,
     *,
@@ -530,6 +780,10 @@ def create_admin_serve_app(
                 "sqlite-vec unavailable; vector memory is in-process "
                 "(not durable across restart)"
             )
+
+        # Attach the in-process memory + context engines the vector/graph/context
+        # routes read. Zero-dep fallbacks inside, so this never crashes startup.
+        _setup_memory_engines(app)
 
         try:
             yield
@@ -4159,85 +4413,454 @@ def create_admin_serve_app(
         mcp_connections = await _mcp_connections_for_request(request)
         return JSONResponse([_mcp_server_item(c) for c in mcp_connections])
 
+    async def _resolve_mcp_connection(request: Request, connection_id: str):
+        """Return the scoped MCP connection by id, or None if not visible."""
+        connections = await _mcp_connections_for_request(request)
+        for conn in connections:
+            if conn.id == connection_id:
+                return conn
+        return None
+
+    def _mcp_plugin_context_for(request: Request, conn):
+        """Build the single-org PluginContext + plugin for an MCP connection.
+
+        Reuses the connections bootstrap so ``ctx.creds`` (the credentials
+        router) is wired exactly as ``test()`` expects.
+        """
+        from sagewai.connections.bootstrap import build_connections_context
+        from sagewai.connections.protocols.mcp import McpProtocolPlugin
+
+        cctx = build_connections_context(sf)
+        plugin = McpProtocolPlugin()
+        plugin_ctx = cctx.make_plugin_context(
+            project_id=conn.project_id, request=request
+        )
+        return plugin, plugin_ctx
+
+    async def _open_mcp_client(plugin, plugin_ctx, conn):
+        """Open an :class:`MCPClient` for ``conn`` following the test() recipe.
+
+        Resolves effective config, decrypts + dispatches credentials, and
+        returns an *un-entered* ``MCPClient`` the caller uses as an async
+        context manager. stdio connections without host-exec are refused
+        here (clean error, not a crash) since stdio launches a subprocess.
+        """
+        from sagewai.connections.protocols.mcp import MCPClient
+        from sagewai.sandbox.policy import host_exec_allowed
+
+        effective = plugin._resolve_effective_config(conn)
+        if effective.get("transport") == "stdio" and not host_exec_allowed():
+            raise _McpStdioRefusedError(
+                "Host-backed execution disabled. Set SAGEWAI_ALLOW_HOST_EXEC=1 "
+                "to enable stdio MCP servers (they launch local subprocesses)."
+            )
+
+        pd = conn.protocol_data
+        if plugin_ctx.creds is not None:
+            try:
+                decrypted_pd = plugin_ctx.creds.decrypt(
+                    pd,
+                    sensitive_field_paths=plugin.sensitive_field_paths_for(conn),
+                    connection_credentials_backend=conn.credentials_backend,
+                )
+            except Exception:
+                decrypted_pd = pd
+        else:
+            decrypted_pd = pd
+        decrypted_creds = decrypted_pd.get("credentials", {}) or {}
+        env, headers = plugin._dispatch_credentials(conn, decrypted_creds)
+
+        return MCPClient(
+            transport=effective["transport"],
+            command=effective.get("command"),
+            args=effective.get("args"),
+            url=effective.get("url"),
+            env=env or None,
+            headers=headers or None,
+        )
+
     @app.post("/api/v1/mcp/discover")
     async def discover_mcp_tools(request: Request) -> JSONResponse:
-        return JSONResponse({"tools": []})
+        body = await request.json()
+        connection_id = body.get("connection_id")
+        if not connection_id:
+            return JSONResponse({"error": "connection_id is required"}, status_code=400)
+        conn = await _resolve_mcp_connection(request, connection_id)
+        if conn is None:
+            return JSONResponse(
+                {"error": f"connection {connection_id} not found"}, status_code=404
+            )
+        # Prefer the cached capability list — avoids a live round-trip.
+        cached = (conn.protocol_data or {}).get("discovered_tools")
+        if cached:
+            return JSONResponse({"tools": cached})
+
+        plugin, plugin_ctx = _mcp_plugin_context_for(request, conn)
+        try:
+            client = await _open_mcp_client(plugin, plugin_ctx, conn)
+        except _McpStdioRefusedError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=501)
+        try:
+            async with client as opened:
+                tools = await opened.list_tools()
+        except Exception as exc:  # noqa: BLE001 — surface as a clean error
+            return JSONResponse(
+                {"error": f"{type(exc).__name__}: {exc}"}, status_code=502
+            )
+        from sagewai.connections.protocols.mcp import _tool_attr
+
+        return JSONResponse(
+            {
+                "tools": [
+                    {
+                        "name": _tool_attr(t, "name"),
+                        "description": _tool_attr(t, "description", ""),
+                        "input_schema": _tool_attr(t, "input_schema", {}) or {},
+                    }
+                    for t in tools
+                ]
+            }
+        )
 
     @app.post("/api/v1/mcp/call")
     async def call_mcp_tool(request: Request) -> JSONResponse:
-        return JSONResponse({"result": None, "error": "MCP server not connected"}, status_code=501)
+        body = await request.json()
+        connection_id = body.get("connection_id")
+        tool_name = body.get("tool") or body.get("tool_name")
+        arguments = body.get("arguments") or {}
+        if not connection_id:
+            return JSONResponse(
+                {"result": None, "error": "connection_id is required"},
+                status_code=400,
+            )
+        if not tool_name:
+            return JSONResponse(
+                {"result": None, "error": "tool is required"}, status_code=400
+            )
+        conn = await _resolve_mcp_connection(request, connection_id)
+        if conn is None:
+            return JSONResponse(
+                {"result": None, "error": f"connection {connection_id} not found"},
+                status_code=404,
+            )
+
+        plugin, plugin_ctx = _mcp_plugin_context_for(request, conn)
+        try:
+            client = await _open_mcp_client(plugin, plugin_ctx, conn)
+        except _McpStdioRefusedError as exc:
+            return JSONResponse(
+                {"result": None, "error": str(exc)}, status_code=501
+            )
+        try:
+            async with client as opened:
+                try:
+                    result = await opened.call_tool(tool_name, arguments)
+                except KeyError:
+                    return JSONResponse(
+                        {
+                            "result": None,
+                            "error": f"tool {tool_name!r} not found on connection",
+                        },
+                        status_code=404,
+                    )
+        except Exception as exc:  # noqa: BLE001 — surface as a clean error
+            return JSONResponse(
+                {"result": None, "error": f"{type(exc).__name__}: {exc}"},
+                status_code=502,
+            )
+        return JSONResponse({"result": result, "error": None})
 
     # ── Context Engine ───────────────────────────────────────────
+    #
+    # Wired to the real in-process ContextEngine / VectorMemory / GraphMemory
+    # engines attached to app.state by _setup_memory_engines (lifespan, or the
+    # test fixture under ASGITransport). The engines have zero-dep fallbacks, so
+    # these routes serve real data without requiring any optional backend.
+    #
+    # Multi-tenant gating is unchanged: /api/v1/memory is in _MULTI_ORG_PREFIXES,
+    # so the auth middleware requires org-admin for every memory method in MULTI
+    # mode (project-scoping of memory is out of scope). In single-org these serve
+    # real data. /api/v1/context is project-scoped at the middleware coarse gate.
+
+    def _context_engine():
+        return getattr(app.state, "context_engine", None)
+
+    def _vector_memory():
+        return getattr(app.state, "vector_memory", None)
+
+    def _graph_memory():
+        return getattr(app.state, "graph_memory", None)
 
     @app.get("/api/v1/context/stats")
     async def context_stats() -> JSONResponse:
-        return JSONResponse({"documents": 0, "chunks": 0, "vectors": 0})
+        engine = _context_engine()
+        if engine is None:
+            return JSONResponse(
+                {"status": "ok", "documents": 0, "chunks": 0,
+                 "by_scope": {}, "by_source": {}, "by_status": {}}
+            )
+        docs = await engine.list_documents()
+        by_scope: dict[str, int] = defaultdict(int)
+        by_source: dict[str, int] = defaultdict(int)
+        by_status: dict[str, int] = defaultdict(int)
+        chunks = 0
+        for d in docs:
+            by_scope[d.scope.value] += 1
+            by_source[d.source.value] += 1
+            by_status[d.status] += 1
+            chunks += d.chunk_count
+        return JSONResponse({
+            "status": "ok",
+            "documents": len(docs),
+            "chunks": chunks,
+            "by_scope": dict(by_scope),
+            "by_source": dict(by_source),
+            "by_status": dict(by_status),
+        })
 
     @app.get("/api/v1/context/scopes")
     async def context_scopes() -> JSONResponse:
-        return JSONResponse([])
+        from sagewai.context.models import ContextScope
+
+        engine = _context_engine()
+        rows = []
+        for scope in ContextScope:
+            doc_count = 0
+            chunk_count = 0
+            if engine is not None:
+                docs = await engine.list_documents(scope=scope)
+                doc_count = len(docs)
+                chunk_count = sum(d.chunk_count for d in docs)
+            rows.append({
+                "scope": scope.value,
+                "document_count": doc_count,
+                "chunk_count": chunk_count,
+            })
+        return JSONResponse({"scopes": rows})
 
     @app.get("/api/v1/context/documents")
-    async def list_context_documents() -> JSONResponse:
-        return JSONResponse([])
+    async def list_context_documents(request: Request) -> JSONResponse:
+        from sagewai.context.models import ContextScope, ContextSource
+
+        engine = _context_engine()
+        if engine is None:
+            return JSONResponse({"documents": [], "count": 0, "total": 0})
+        qp = request.query_params
+
+        def _enum(cls, raw):
+            try:
+                return cls(raw) if raw else None
+            except ValueError:
+                return None
+
+        limit = int(qp["limit"]) if qp.get("limit") else None
+        offset = int(qp["offset"]) if qp.get("offset") else None
+        tags = qp["tags"].split(",") if qp.get("tags") else None
+        docs = await engine.list_documents(
+            scope=_enum(ContextScope, qp.get("scope")),
+            scope_id=qp.get("scope_id"),
+            source=_enum(ContextSource, qp.get("source")),
+            status=qp.get("status"),
+            search=qp.get("search"),
+            tags=tags,
+            sort_by=qp.get("sort_by"),
+            sort_order=qp.get("sort_order"),
+            limit=limit,
+            offset=offset,
+        )
+        total = await engine.count_documents(
+            scope=_enum(ContextScope, qp.get("scope")),
+            scope_id=qp.get("scope_id"),
+            source=_enum(ContextSource, qp.get("source")),
+            status=qp.get("status"),
+            search=qp.get("search"),
+            tags=tags,
+        )
+        items = [jsonable_encoder(d) for d in docs]
+        return JSONResponse({"documents": items, "count": len(items), "total": total})
 
     @app.post("/api/v1/context/search")
     async def context_search(request: Request) -> JSONResponse:
-        return JSONResponse({"results": []})
+        from sagewai.context.models import ContextScope, ContextSource
+
+        body = await request.json()
+        query = body.get("query", "")
+        top_k = int(body.get("top_k") or 5)
+        engine = _context_engine()
+        if engine is None or not query:
+            return JSONResponse({"query": query, "results": [], "count": 0})
+
+        def _enum_list(cls, raw):
+            if not raw:
+                return None
+            out = []
+            for v in raw:
+                try:
+                    out.append(cls(v))
+                except ValueError:
+                    continue
+            return out or None
+
+        results = await engine.search(
+            query,
+            top_k=top_k,
+            scopes=_enum_list(ContextScope, body.get("scopes")),
+            sources=_enum_list(ContextSource, body.get("sources")),
+            tags=body.get("tags"),
+        )
+        items = [jsonable_encoder(r) for r in results]
+        return JSONResponse({"query": query, "results": items, "count": len(items)})
 
     # ── Memory ───────────────────────────────────────────────────
 
     @app.get("/api/v1/memory/vector/stats")
     async def vector_stats() -> JSONResponse:
-        return JSONResponse({"total_vectors": 0, "collections": []})
+        mem = _vector_memory()
+        count = len(mem) if mem is not None else 0
+        return JSONResponse({
+            "status": "ok",
+            "documents": count,
+            "backend": type(mem).__name__ if mem is not None else "none",
+        })
 
     @app.post("/api/v1/memory/vector/search")
     async def vector_search(request: Request) -> JSONResponse:
-        return JSONResponse({"results": []})
+        body = await request.json()
+        query = body.get("query", "")
+        top_k = int(body.get("top_k") or 5)
+        mem = _vector_memory()
+        if mem is None or not query:
+            return JSONResponse({"query": query, "results": [], "count": 0})
+        hits = await mem.retrieve(query, top_k=top_k)
+        results = [{"content": c, "rank": i + 1} for i, c in enumerate(hits)]
+        return JSONResponse({"query": query, "results": results, "count": len(results)})
 
     @app.post("/api/v1/memory/vector/ingest")
     async def vector_ingest(request: Request) -> JSONResponse:
-        # FLAG: stub endpoint with no backing store / no project_id column;
-        # org-admin gate is the safe interim until a project-scoped memory store
-        # lands. No-op in single-org.
-        require_org_admin(request.state.context)
-        return JSONResponse({"status": "ok", "chunks": 0})
+        # Single-org members can ingest (MULTI mode stays org-admin-gated by the
+        # /api/v1/memory prefix in _MULTI_ORG_PREFIXES — see the middleware).
+        _require_resource_write(request)
+        body = await request.json()
+        content = body.get("content", "")
+        metadata = body.get("metadata")
+        mem = _vector_memory()
+        if mem is None or not content:
+            return JSONResponse({"status": "ok", "chunks": 0})
+        await mem.store(content, metadata=metadata)
+        return JSONResponse({"status": "ok", "chunks": 1})
 
     @app.get("/api/v1/memory/graph/stats")
     async def graph_stats() -> JSONResponse:
-        return JSONResponse({"total_entities": 0, "total_relations": 0})
+        graph = _graph_memory()
+        if graph is None:
+            return JSONResponse(
+                {"status": "ok", "entities": 0, "relations": 0, "backend": "none"}
+            )
+        return JSONResponse({
+            "status": "ok",
+            "entities": await graph.entity_count(),
+            "relations": await graph.relation_count(),
+            "backend": type(graph).__name__,
+        })
 
     @app.post("/api/v1/memory/graph/query")
     async def graph_query(request: Request) -> JSONResponse:
-        return JSONResponse({"entities": [], "relations": []})
+        body = await request.json()
+        query = body.get("query", "")
+        top_k = int(body.get("top_k") or 5)
+        graph = _graph_memory()
+        if graph is None or not query:
+            return JSONResponse({"query": query, "results": [], "count": 0})
+        lines = await graph.retrieve(query, top_k=top_k)
+        results = [{"content": c, "rank": i + 1} for i, c in enumerate(lines)]
+        return JSONResponse({"query": query, "results": results, "count": len(results)})
 
     @app.post("/api/v1/memory/graph/entity")
     async def create_graph_entity(request: Request) -> JSONResponse:
-        # FLAG: stub endpoint, no backing store / no project_id column (see vector_ingest).
-        require_org_admin(request.state.context)
-        return JSONResponse({"status": "ok", "entity": ""})
+        _require_resource_write(request)
+        body = await request.json()
+        name = body.get("name", "")
+        metadata = body.get("metadata")
+        graph = _graph_memory()
+        if graph is not None and name:
+            await graph.store(name, metadata=metadata)
+        return JSONResponse({"status": "ok", "entity": name})
 
     @app.post("/api/v1/memory/graph/relation")
     async def create_graph_relation(request: Request) -> JSONResponse:
-        # FLAG: stub endpoint, no backing store / no project_id column (see vector_ingest).
-        require_org_admin(request.state.context)
-        return JSONResponse({"status": "ok", "relation": ""})
+        _require_resource_write(request)
+        body = await request.json()
+        source = body.get("source", "")
+        relation = body.get("relation", "")
+        target = body.get("target", "")
+        graph = _graph_memory()
+        if graph is not None and source and relation and target:
+            await graph.add_relation(source, relation, target)
+        return JSONResponse({"status": "ok", "relation": relation})
 
     @app.get("/api/v1/memory/graph/entities")
-    async def list_graph_entities() -> JSONResponse:
-        return JSONResponse({"entities": [], "count": 0})
+    async def list_graph_entities(request: Request) -> JSONResponse:
+        graph = _graph_memory()
+        if graph is None:
+            return JSONResponse({"entities": [], "count": 0})
+        qp = request.query_params
+        entities = await graph.list_entities(
+            search=qp.get("search", ""),
+            limit=int(qp["limit"]) if qp.get("limit") else 50,
+            offset=int(qp["offset"]) if qp.get("offset") else 0,
+        )
+        return JSONResponse({"entities": entities, "count": len(entities)})
 
     @app.get("/api/v1/memory/graph/entity/{name}")
     async def get_graph_entity(name: str) -> JSONResponse:
-        return JSONResponse({"name": name, "metadata": {}})
+        graph = _graph_memory()
+        meta = await graph.get_entity(name) if graph is not None else None
+        if meta is None:
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        return JSONResponse({"name": name, "metadata": meta})
 
     @app.get("/api/v1/memory/graph/entity/{name}/neighbors")
-    async def get_graph_neighbors(name: str) -> JSONResponse:
-        return JSONResponse({"entities": []})
+    async def get_graph_neighbors(name: str, request: Request) -> JSONResponse:
+        graph = _graph_memory()
+        depth = int(request.query_params.get("depth", "1"))
+        neighbors = (
+            await graph.get_neighbors(name, depth=depth) if graph is not None else []
+        )
+        return JSONResponse({
+            "entity": name,
+            "depth": depth,
+            "neighbors": neighbors,
+            "count": len(neighbors),
+        })
 
     @app.get("/api/v1/memory/graph/entity/{name}/relations")
     async def get_graph_relations(name: str) -> JSONResponse:
-        return JSONResponse({"relations": []})
+        graph = _graph_memory()
+        triples = await graph.get_relations(name) if graph is not None else []
+        relations = [
+            {"source": s, "relation": r, "target": t} for s, r, t in triples
+        ]
+        return JSONResponse({
+            "entity": name,
+            "relations": relations,
+            "count": len(relations),
+        })
+
+    # ── Intelligence stack ───────────────────────────────────────
+    #
+    # Reports the runtime status of the pluggable intelligence components
+    # (embedder, NER/relation extractors, language detection, multimodal
+    # vision/transcription, graph). Each component resolves through the
+    # ProviderRegistry's tiered fallback chains, so a missing optional dep
+    # degrades to a zero-dep/stub backend rather than failing. This is a
+    # plain authenticated read — the auth middleware gates it.
+
+    @app.get("/api/v1/intelligence/status")
+    async def intelligence_status() -> JSONResponse:
+        # Introspection happens in a module helper so heavy optional intelligence
+        # deps are imported lazily (never at serve.py import time) and every
+        # component is wrapped — the endpoint never 500s.
+        return JSONResponse(_intelligence_status_payload())
 
     # ── Eval ─────────────────────────────────────────────────────
 
@@ -4557,14 +5180,18 @@ def _in_write_scope(item_project_id: str | None, request: Request) -> bool:
     return item_project_id == ctx.project_id
 
 
-# Durable W8 audit is emitted for the tenant-scoped resource routes this
-# initiative hardened: provider upsert/delete/set-default, agent create/delete,
-# prompt-log create/update/delete. Other sensitive mutators (org/project
-# settings, agent rename/run, workflow registry/run approvals, budget/guardrail,
-# API-token CRUD, fleet approvals/enrollment-keys, connector/notification/trigger
-# writes, memory ingest) still use the foundation's file audit — extending
-# durable per-tenant audit to those is the explicit W8-coverage follow-up. This
-# PR's durable-audit scope is intentionally the list above, not "all writes".
+# Durable, hash-chained, per-tenant W8 audit (`_emit_audit`) is **multi-tenant
+# only** — a no-op in single-org mode, where the foundation file audit
+# (`emit_audit(sf, ...)`) records auth events plus org/token/fleet admin actions.
+#
+# In multi mode, durable audit currently covers: provider upsert/delete/set-
+# default; agent create/delete; prompt-log create/update/delete; budget
+# create/update/delete; guardrail upsert/delete; notification channel/trigger
+# upsert/delete; autopilot trigger create; workflow-registry save; workflow run
+# approve/reject; artifact-destination upsert/delete. Remaining durable-audit
+# gaps (the multi-tenant hardening follow-up, NOT a single-org-launch blocker):
+# org/project settings mutate, fleet approvals/enrollment-keys (file-audited
+# only), connector writes, memory ingest, and API-token CRUD (501 in multi).
 class _AuditUnavailableError(Exception):
     """Durable audit could not be recorded — the write fails closed (HTTP 503)."""
 
@@ -4575,6 +5202,10 @@ class _TenantStoreUnavailableError(Exception):
     def __init__(self, store_name: str) -> None:
         super().__init__(store_name)
         self.store_name = store_name
+
+
+class _McpStdioRefusedError(Exception):
+    """A stdio MCP server was requested but host-exec is disabled."""
 
 
 async def _emit_audit(

@@ -3,17 +3,17 @@
 import { useEffect, useState } from 'react';
 import { Card, Button, Skeleton, EmptyState } from '@/components/ui/legacy';
 import { Download, Filter, Search } from 'lucide-react';
+import { adminApi } from '@/utils/api';
 
 interface RunLog {
   id: string;
   agent_name: string;
   model: string;
-  status: 'success' | 'error' | 'timeout';
   tokens: number;
   cost_usd: number;
   duration_ms: number;
-  created_at: string;
-  messages: number;
+  // created_at is epoch seconds (from PromptLogSummary)
+  created_at: number;
 }
 
 export default function TrainingLogsPage() {
@@ -23,11 +23,29 @@ export default function TrainingLogsPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    // TODO: Replace with actual API call
-    setTimeout(() => {
-      setLogs([]);
-      setLoading(false);
-    }, 500);
+    let cancelled = false;
+    (async () => {
+      try {
+        const page = await adminApi.listPromptLogs({ limit: 100 });
+        if (cancelled) return;
+        setLogs(
+          page.items.map((l) => ({
+            id: l.log_id,
+            agent_name: l.agent_name,
+            model: l.model,
+            tokens: l.input_tokens + l.output_tokens,
+            cost_usd: l.cost_usd,
+            duration_ms: l.duration_ms,
+            created_at: l.created_at,
+          })),
+        );
+      } catch {
+        if (!cancelled) setLogs([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   const filtered = logs.filter((l) =>
@@ -95,8 +113,6 @@ export default function TrainingLogsPage() {
                   </th>
                   <th className="text-left p-3 font-medium">Agent</th>
                   <th className="text-left p-3 font-medium">Model</th>
-                  <th className="text-left p-3 font-medium">Status</th>
-                  <th className="text-right p-3 font-medium">Messages</th>
                   <th className="text-right p-3 font-medium">Tokens</th>
                   <th className="text-right p-3 font-medium">Cost</th>
                   <th className="text-right p-3 font-medium">Duration</th>
@@ -109,17 +125,10 @@ export default function TrainingLogsPage() {
                     <td className="p-3"><input type="checkbox" checked={selected.has(log.id)} onChange={() => toggleSelect(log.id)} /></td>
                     <td className="p-3 font-medium">{log.agent_name}</td>
                     <td className="p-3 text-text-secondary">{log.model}</td>
-                    <td className="p-3">
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                        log.status === 'success' ? 'bg-success/20 text-success' :
-                        log.status === 'error' ? 'bg-error/20 text-error' : 'bg-warning/20 text-warning'
-                      }`}>{log.status}</span>
-                    </td>
-                    <td className="p-3 text-right">{log.messages}</td>
                     <td className="p-3 text-right">{log.tokens.toLocaleString()}</td>
                     <td className="p-3 text-right">${log.cost_usd.toFixed(4)}</td>
                     <td className="p-3 text-right">{(log.duration_ms / 1000).toFixed(1)}s</td>
-                    <td className="p-3 text-text-secondary">{new Date(log.created_at).toLocaleDateString()}</td>
+                    <td className="p-3 text-text-secondary">{new Date(log.created_at * 1000).toLocaleDateString()}</td>
                   </tr>
                 ))}
               </tbody>

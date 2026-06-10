@@ -16,74 +16,6 @@ import {
   ArrowRight,
 } from 'lucide-react';
 
-/* ─── Demo fallback data ─── */
-
-const DEMO_SUBSCRIPTION: BillingSubscription = {
-  plan: 'pro',
-  status: 'active',
-  current_period_end: '2026-04-30T00:00:00Z',
-  cancel_at_period_end: false,
-};
-
-const DEMO_USAGE: BillingUsage = {
-  period_start: '2026-03-01',
-  period_end: '2026-03-31',
-  agent_runs: 847,
-  api_calls: 12450,
-  storage_used_gb: 2.3,
-  workers_active: 4,
-  connectors_active: 7,
-};
-
-const DEMO_PLANS: BillingPlan[] = [
-  {
-    id: 'free',
-    name: 'Free',
-    price_monthly: 0,
-    features: {
-      workers: 1,
-      connectors: 5,
-      agent_runs_monthly: 100,
-      storage_gb: 1,
-      fleet: false,
-      premium_support: false,
-    },
-  },
-  {
-    id: 'pro',
-    name: 'Pro',
-    price_monthly: 49,
-    stripe_price_id: 'price_pro_monthly',
-    features: {
-      workers: 10,
-      connectors: 18,
-      agent_runs_monthly: 10000,
-      storage_gb: 50,
-      fleet: true,
-      premium_support: false,
-    },
-  },
-  {
-    id: 'enterprise',
-    name: 'Enterprise',
-    price_monthly: null,
-    features: {
-      workers: -1,
-      connectors: -1,
-      agent_runs_monthly: -1,
-      storage_gb: -1,
-      fleet: true,
-      premium_support: true,
-    },
-  },
-];
-
-const DEMO_INVOICES: BillingInvoice[] = [
-  { id: 'inv_001', date: '2026-03-01', amount: 49.0, status: 'paid', pdf_url: '#' },
-  { id: 'inv_002', date: '2026-02-01', amount: 49.0, status: 'paid', pdf_url: '#' },
-  { id: 'inv_003', date: '2026-01-01', amount: 49.0, status: 'paid', pdf_url: '#' },
-];
-
 /* ─── Helpers ─── */
 
 function featureLabel(key: string): string {
@@ -188,7 +120,7 @@ export default function BillingPage() {
       if (usageRes.status === 'fulfilled') setUsage(usageRes.value);
       if (invRes.status === 'fulfilled') setInvoices(invRes.value);
     } catch {
-      // Fall back to demo data silently
+      // No billing provider configured — the empty-state guard below handles it.
     } finally {
       setLoading(false);
     }
@@ -198,7 +130,9 @@ export default function BillingPage() {
     fetchData();
   }, [fetchData]);
 
-  const currentPlan = subscription ? plans.find((p) => p.id === sub.plan) ?? plans[0] : null;
+  const currentPlan = subscription
+    ? plans.find((p) => p.id === subscription.plan) ?? plans[0]
+    : null;
 
   // Self-hosted mode — no billing provider configured
   if (!loading && !subscription) {
@@ -229,7 +163,6 @@ export default function BillingPage() {
   const handleUpgrade = async (planId: string) => {
     try {
       const result = await adminApi.createCheckoutSession(planId);
-      // In production this would redirect to Stripe checkout
       toast('success', `Checkout session created. Redirect URL: ${result.url}`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to create checkout session';

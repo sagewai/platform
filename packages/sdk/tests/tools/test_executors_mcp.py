@@ -8,6 +8,7 @@
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
 import pytest
+
 from sagewai.tools import registry
 from sagewai.tools.executors import mcp as mcp_exec
 
@@ -56,3 +57,47 @@ async def test_mcp_executor_overrides_tool_name_with_operation(monkeypatch):
         project_id="p1", get_credentials=_noop_creds,
     )
     assert stub.calls == [("list_dir", {"path": "/"})]
+
+
+# ── _open_client transport selection ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_open_client_selects_http_transport(monkeypatch):
+    """An http:// server_ref opens connect_http and yields a call_tool client."""
+    captured: dict[str, object] = {}
+
+    async def _fake_connect_http(url, headers=None):
+        captured["url"] = url
+        return []  # no tools
+
+    monkeypatch.setattr(mcp_exec.McpClient, "connect_http", _fake_connect_http)
+    client = await mcp_exec._open_client("http://localhost:9999/mcp")
+    assert captured["url"] == "http://localhost:9999/mcp"
+    assert hasattr(client, "call_tool")
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_open_client_selects_sse_transport(monkeypatch):
+    """An sse: prefixed server_ref opens connect_sse."""
+    captured: dict[str, object] = {}
+
+    async def _fake_connect_sse(url, headers=None):
+        captured["url"] = url
+        return []
+
+    monkeypatch.setattr(mcp_exec.McpClient, "connect_sse", _fake_connect_sse)
+    client = await mcp_exec._open_client("sse:http://localhost:9999/sse")
+    assert captured["url"] == "http://localhost:9999/sse"
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_open_client_refuses_stdio_without_host_exec(monkeypatch):
+    """A stdio server_ref is cleanly refused when host-exec is disabled."""
+    monkeypatch.setattr(mcp_exec, "host_exec_allowed", lambda: False)
+    with pytest.raises(mcp_exec.McpStdioRefusedError):
+        await mcp_exec._open_client(
+            "stdio:npx -y @modelcontextprotocol/server-filesystem"
+        )

@@ -1,136 +1,12 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { Badge, Card, Skeleton, EmptyState, Button } from '@/components/ui/legacy';
+import { Badge, Card, Skeleton, EmptyState, Button, useToast } from '@/components/ui/legacy';
 import { Server, Search, CheckCircle, XCircle, Clock, ShieldOff, Shield, Zap } from 'lucide-react';
 import type { FleetWorker } from '@/utils/types';
+import { adminApi } from '@/utils/api';
 import { SandboxSummary, UnsandboxedBadge } from './_components/SandboxSummary';
-
-// TODO: wire to adminApi.listFleetWorkers()
-const DEMO_WORKERS: FleetWorker[] = [
-  {
-    id: 'w-001',
-    name: 'gpu-worker-us-east',
-    org_id: 'org-1',
-    approval_status: 'approved',
-    capabilities: {
-      models_supported: ['gpt-4o', 'claude-sonnet-4-6'],
-      models_canonical: [],
-      pool: 'gpu-cluster',
-      max_concurrent: 4,
-      labels: {
-        'sandbox.mode': 'per_run',
-        'sandbox.backend': 'gvisor',
-        'sandbox.image_variants': 'python3.12,nodejs20',
-        'sandbox.network_policy': 'egress-restricted',
-      },
-      sdk_version: '0.1.0',
-    },
-    last_heartbeat: new Date(Date.now() - 30000).toISOString(),
-    last_probe_at: null,
-    probe_status: null,
-    registered_at: '2026-03-28T10:00:00Z',
-    approved_at: '2026-03-28T10:05:00Z',
-    approved_by: 'admin@sagewai.dev',
-    // TODO: wire to API — enterprise fields
-    ip_allowlist: ['10.0.0.0/8', '172.16.0.0/12'],
-    requires_dual_approval: true,
-    connection_type: 'websocket' as const,
-  },
-  {
-    id: 'w-002',
-    name: 'cpu-worker-eu-west',
-    org_id: 'org-1',
-    approval_status: 'approved',
-    capabilities: {
-      models_supported: ['llama3-70b', 'mistral-7b'],
-      models_canonical: [],
-      pool: 'cpu-pool',
-      max_concurrent: 2,
-      labels: {},
-      sdk_version: '0.1.0',
-    },
-    last_heartbeat: new Date(Date.now() - 120000).toISOString(),
-    last_probe_at: null,
-    probe_status: null,
-    registered_at: '2026-03-29T14:00:00Z',
-    approved_at: '2026-03-29T14:02:00Z',
-    approved_by: 'admin@sagewai.dev',
-    // TODO: wire to API — enterprise fields
-    ip_allowlist: [],
-    requires_dual_approval: false,
-    connection_type: 'http' as const,
-  },
-  {
-    id: 'w-003',
-    name: 'edge-worker-apac',
-    org_id: 'org-1',
-    approval_status: 'pending',
-    capabilities: {
-      models_supported: ['gemini-2.0-flash'],
-      models_canonical: [],
-      pool: 'edge',
-      max_concurrent: 1,
-      labels: {},
-      sdk_version: '0.1.0',
-    },
-    last_heartbeat: null,
-    last_probe_at: null,
-    probe_status: null,
-    registered_at: '2026-03-31T08:00:00Z',
-    approved_at: null,
-    approved_by: null,
-    // TODO: wire to API — enterprise fields
-    ip_allowlist: ['192.168.1.0/24'],
-    requires_dual_approval: true,
-    connection_type: 'http' as const,
-  },
-  {
-    id: 'w-004',
-    name: 'dev-local-macbook',
-    org_id: 'org-1',
-    approval_status: 'approved',
-    capabilities: {
-      models_supported: ['ollama/llama3:8b'],
-      models_canonical: [],
-      pool: 'default',
-      max_concurrent: 1,
-      labels: {},
-      sdk_version: '0.1.0',
-    },
-    last_heartbeat: new Date(Date.now() - 300000).toISOString(),
-    last_probe_at: null,
-    probe_status: null,
-    registered_at: '2026-03-25T09:00:00Z',
-    approved_at: '2026-03-25T09:01:00Z',
-    approved_by: 'admin@sagewai.dev',
-    // TODO: wire to API — enterprise fields
-    connection_type: 'websocket' as const,
-  },
-  {
-    id: 'w-005',
-    name: 'retired-worker',
-    org_id: 'org-1',
-    approval_status: 'revoked',
-    capabilities: {
-      models_supported: ['gpt-3.5-turbo'],
-      models_canonical: [],
-      pool: 'default',
-      max_concurrent: 1,
-      labels: {},
-      sdk_version: '0.0.9',
-    },
-    last_heartbeat: null,
-    last_probe_at: null,
-    probe_status: null,
-    registered_at: '2026-03-20T12:00:00Z',
-    approved_at: '2026-03-20T12:01:00Z',
-    approved_by: 'admin@sagewai.dev',
-    // TODO: wire to API — enterprise fields
-    connection_type: 'http' as const,
-  },
-];
 
 const STATUS_VARIANTS: Record<string, 'success' | 'warning' | 'error' | 'default'> = {
   approved: 'success',
@@ -153,10 +29,27 @@ function relativeTime(iso: string | null): string {
 }
 
 export default function FleetWorkersPage() {
-  const [workers, setWorkers] = useState<FleetWorker[]>(DEMO_WORKERS);
+  const [workers, setWorkers] = useState<FleetWorker[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [poolFilter, setPoolFilter] = useState('');
+  const { toast } = useToast();
+
+  const fetchWorkers = useCallback(async () => {
+    try {
+      const data = await adminApi.listFleetWorkers();
+      setWorkers(data.workers);
+      setError(null);
+    } catch {
+      setError('Failed to load fleet workers.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchWorkers(); }, [fetchWorkers]);
 
   const pools = useMemo(
     () => [...new Set(workers.map((w) => w.capabilities.pool))].sort(),
@@ -180,29 +73,41 @@ export default function FleetWorkersPage() {
     return { total, approved, pending, revoked };
   }, [workers]);
 
-  function handleApprove(id: string) {
-    // TODO: wire to adminApi.approveFleetWorker(id)
-    setWorkers((prev) =>
-      prev.map((w) =>
-        w.id === id
-          ? { ...w, approval_status: 'approved' as const, approved_at: new Date().toISOString(), approved_by: 'admin@sagewai.dev' }
-          : w,
-      ),
-    );
+  async function handleApprove(id: string) {
+    try {
+      let approvedBy = 'admin';
+      try {
+        const me = await adminApi.getMe();
+        approvedBy = me.email || me.display_name || 'admin';
+      } catch {
+        /* fall back to generic label */
+      }
+      const { worker } = await adminApi.approveFleetWorker(id, approvedBy);
+      setWorkers((prev) => prev.map((w) => (w.id === id ? worker : w)));
+      toast('success', 'Worker approved');
+    } catch {
+      toast('error', 'Failed to approve worker');
+    }
   }
 
-  function handleReject(id: string) {
-    // TODO: wire to adminApi.rejectFleetWorker(id)
-    setWorkers((prev) =>
-      prev.map((w) => (w.id === id ? { ...w, approval_status: 'rejected' as const } : w)),
-    );
+  async function handleReject(id: string) {
+    try {
+      const { worker } = await adminApi.rejectFleetWorker(id);
+      setWorkers((prev) => prev.map((w) => (w.id === id ? worker : w)));
+      toast('success', 'Worker rejected');
+    } catch {
+      toast('error', 'Failed to reject worker');
+    }
   }
 
-  function handleRevoke(id: string) {
-    // TODO: wire to adminApi.revokeFleetWorker(id)
-    setWorkers((prev) =>
-      prev.map((w) => (w.id === id ? { ...w, approval_status: 'revoked' as const } : w)),
-    );
+  async function handleRevoke(id: string) {
+    try {
+      const { worker } = await adminApi.revokeFleetWorker(id);
+      setWorkers((prev) => prev.map((w) => (w.id === id ? worker : w)));
+      toast('success', 'Worker revoked');
+    } catch {
+      toast('error', 'Failed to revoke worker');
+    }
   }
 
   return (
@@ -217,6 +122,12 @@ export default function FleetWorkersPage() {
           </p>
         </div>
       </div>
+
+      {error && (
+        <div className="bg-error-light border border-error/20 rounded-lg px-4 py-3 text-error text-sm mb-md" role="alert">
+          {error}
+        </div>
+      )}
 
       {/* Stats bar */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-md">
@@ -300,7 +211,9 @@ export default function FleetWorkersPage() {
 
       {/* Workers table */}
       <Card>
-        {filtered.length === 0 ? (
+        {loading ? (
+          <Skeleton lines={5} />
+        ) : filtered.length === 0 ? (
           <EmptyState
             title="No Workers Found"
             description="No workers match your current filters. Workers will appear here once they register with the fleet."

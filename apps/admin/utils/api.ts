@@ -91,6 +91,7 @@ import type {
   FleetEnrollmentKey,
   FleetEnrollmentKeyCreate,
   FleetAuditEvent,
+  IntelligenceStatus,
   SavedWorkflow,
   BillingPlan,
   BillingSubscription,
@@ -1266,6 +1267,11 @@ export const adminApi = {
       `/api/v1/fleet/audit${qs ? `?${qs}` : ''}`,
     );
   },
+
+  // ─── Intelligence ───
+
+  getIntelligenceStatus: () =>
+    analyticsClient.get<IntelligenceStatus>('/api/v1/intelligence/status'),
 
   getWorkerPoolStats: async (workerId: string): Promise<PoolStatsSnapshot | null> => {
     const res = await fetch(
