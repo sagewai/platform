@@ -465,6 +465,41 @@ class ConnectionModel(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class AdminResourceModel(Base):
+    """Generic project-scoped admin control-plane resource (multi-tenant mode).
+
+    One table backs every currently-file-backed admin resource — budgets,
+    guardrails, saved workflows, eval datasets, notification channels/triggers,
+    connector triggers, artifact destinations — keyed by ``kind``. ``data`` is an
+    opaque JSON blob the store never interprets (secret encryption is the route's
+    job). ``project_id`` is the single scope tag: NULL = org-shared, a value =
+    isolated to that project.
+
+    The composite PK ``(kind, resource_id)`` makes a resource id stable across
+    kinds. The NULL-safe partial-unique index on ``(kind, project_id, name)``
+    WHERE ``name IS NOT NULL`` gives one name per (kind, project) and one global
+    name per kind, while letting unnamed rows coexist freely.
+    """
+
+    __tablename__ = "admin_resources"
+    __table_args__ = (
+        PrimaryKeyConstraint("kind", "resource_id"),
+        Index("ux_admin_resources_kind_proj_name", "kind", "project_id", "name", unique=True,
+              sqlite_where=text("name IS NOT NULL"),
+              postgresql_where=text("name IS NOT NULL")),
+        Index("ix_admin_resources_project_id", "project_id"),
+        Index("ix_admin_resources_kind", "kind"),
+    )
+
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    resource_id: Mapped[str] = mapped_column(Text, nullable=False)
+    project_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    data: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 # ---------------------------------------------------------------------------
 # Admin store tables
 # ---------------------------------------------------------------------------

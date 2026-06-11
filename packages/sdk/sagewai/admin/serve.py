@@ -654,6 +654,7 @@ def create_admin_serve_app(
     connection_store: Any = None,
     run_store: Any = None,
     prompt_log_store: Any = None,
+    admin_resource_store: Any = None,
 ) -> FastAPI:
     """Create the complete admin API server.
 
@@ -667,10 +668,12 @@ def create_admin_serve_app(
         Optional multi-tenant IdentityStore. When omitted, the AuthMiddleware
         lazily constructs one from the process engine in multi-tenant mode. Inject
         an explicit store for deterministic tests/wiring.
-    provider_store, agent_store, connection_store:
+    provider_store, agent_store, connection_store, admin_resource_store:
         Optional pre-built tenant resource stores (multi-tenant mode). When all
         are omitted the lifespan builds them from the process engine; inject for
         deterministic tests/wiring. Bundled on ``app.state.resource_stores``.
+        ``admin_resource_store`` is the generic project-scoped control-plane store
+        (budgets, guardrails, ...); see :class:`AdminResourceStore`.
     """
     from sagewai import home
     home.migrate_home()
@@ -731,6 +734,7 @@ def create_admin_serve_app(
             or _rs.connection is None
             or _rs.run is None
             or _rs.prompt_log is None
+            or _rs.admin_resource is None
         ):
             _built = await build_resource_stores(identity_store)
             if _built is not None:
@@ -740,6 +744,7 @@ def create_admin_serve_app(
                     connection=_rs.connection or _built.connection,
                     run=_rs.run or _built.run,
                     prompt_log=_rs.prompt_log or _built.prompt_log,
+                    admin_resource=_rs.admin_resource or _built.admin_resource,
                 )
                 conn_ctx = getattr(app.state, "connections_context", None)
                 active_connection_store = app.state.resource_stores.connection
@@ -820,7 +825,8 @@ def create_admin_serve_app(
     from sagewai.admin.resource_stores import ResourceStores
     app.state.resource_stores = ResourceStores(
         provider=provider_store, agent=agent_store, connection=connection_store,
-        run=run_store, prompt_log=prompt_log_store)
+        run=run_store, prompt_log=prompt_log_store,
+        admin_resource=admin_resource_store)
 
     # Multi-tenant: build ONE IdentityStore on the process engine and SHARE it
     # between AuthMiddleware and the resource stores when none was injected. The
@@ -917,6 +923,26 @@ def create_admin_serve_app(
             {"detail": f"Tenant {exc.store_name} store unavailable"},
             status_code=503,
         )
+
+    # Generic admin-resource store (budgets, guardrails, ...): a write outside the
+    # actor's scope is 403; a name collision in scope is 409. Mirrors how the
+    # other tenant errors are mapped to HTTP.
+    from sagewai.admin.admin_resource_store import (
+        ResourceConflictError,
+        ResourceWriteScopeError,
+    )
+
+    @app.exception_handler(ResourceWriteScopeError)
+    async def _on_resource_write_scope(
+        request: Request, exc: ResourceWriteScopeError
+    ) -> JSONResponse:
+        return JSONResponse({"detail": "Forbidden"}, status_code=403)
+
+    @app.exception_handler(ResourceConflictError)
+    async def _on_resource_conflict(
+        request: Request, exc: ResourceConflictError
+    ) -> JSONResponse:
+        return JSONResponse({"detail": str(exc)}, status_code=409)
 
     # W7 per-project run-rate quota (multi-tenant): one tenant can't starve others.
     app.state.run_throttle = _ProjectRunThrottle(_run_quota_limit(), _run_quota_window())
@@ -3289,6 +3315,10 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/workflow-registry")
     async def list_saved_workflows(request: Request) -> JSONResponse:
+        store = _admin_resource_store(request)
+        if store is not None:
+            workflows = await store.list_for(request.state.context, "saved_workflow")
+            return JSONResponse({"items": workflows, "total": len(workflows)})
         data = sf._read()
         scope = _project_scope(request)
         workflows = _filter_items_for_scope(data.get("saved_workflows", []), scope)
@@ -3309,6 +3339,15 @@ def create_admin_serve_app(
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         }
+        store = _admin_resource_store(request)
+        if store is not None:
+            # Saved-workflow names are NOT unique (multiple workflows may share a
+            # name; the by-name lookup resolves project-first), so no ``name=``.
+            stored = await store.upsert_for(
+                request.state.context, "saved_workflow", wf["id"], wf
+            )
+            await _emit_audit(request, "workflow_registry.create", target_type="workflow", target_id=wf["id"])
+            return JSONResponse(stored, status_code=201)
         def _apply(d):
             d.setdefault("saved_workflows", []).append(wf)
         sf.mutate(_apply)
@@ -3317,6 +3356,15 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/workflow-registry/by-name/{name}")
     async def get_saved_workflow_by_name(name: str, request: Request) -> JSONResponse:
+        store = _admin_resource_store(request)
+        if store is not None:
+            # Names aren't unique, so resolve via the in-scope list (project rows
+            # before org-shared, matching the file path's _project_first).
+            workflows = await store.list_for(request.state.context, "saved_workflow")
+            for wf in _project_first(workflows):
+                if wf.get("name") == name:
+                    return JSONResponse(wf)
+            return JSONResponse({"detail": "Not found"}, status_code=404)
         data = sf._read()
         scope = _project_scope(request)
         workflows = _filter_items_for_scope(data.get("saved_workflows", []), scope)
@@ -3327,6 +3375,12 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/workflow-registry/{wf_id}")
     async def get_saved_workflow(wf_id: str, request: Request) -> JSONResponse:
+        store = _admin_resource_store(request)
+        if store is not None:
+            wf = await store.get_for(request.state.context, "saved_workflow", wf_id)
+            if wf is not None:
+                return JSONResponse(wf)
+            return JSONResponse({"detail": "Not found"}, status_code=404)
         data = sf._read()
         scope = _project_scope(request)
         for wf in _filter_items_for_scope(data.get("saved_workflows", []), scope):
@@ -3338,6 +3392,13 @@ def create_admin_serve_app(
     async def delete_saved_workflow(wf_id: str, request: Request) -> JSONResponse:
         _require_resource_write(request)
         scope = _project_scope(request)
+        store = _admin_resource_store(request)
+        if store is not None:
+            deleted = await store.delete_for(request.state.context, "saved_workflow", wf_id)
+            if not deleted:
+                return JSONResponse({"detail": "Not found"}, status_code=404)
+            await _emit_audit(request, "workflow_registry.delete", target_type="workflow", target_id=wf_id)
+            return JSONResponse({"status": "ok"})
         def _apply(d):
             wfs = d.get("saved_workflows", [])
             remaining = []
@@ -3358,6 +3419,11 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/budget/limits")
     async def list_budget_limits(request: Request) -> JSONResponse:
+        store = _admin_resource_store(request)
+        if store is not None:
+            return JSONResponse(
+                await store.list_for(request.state.context, "budget_limit")
+            )
         data = sf._read()
         return JSONResponse(_filter_items_for_scope(data.get("budget_limits", []), _project_scope(request)))
 
@@ -3370,6 +3436,13 @@ def create_admin_serve_app(
         body["project_id"] = _owner(scope)
         body.setdefault("created_at", datetime.datetime.now(datetime.timezone.utc).isoformat())
         agent = body.get("agent_name", "")
+        store = _admin_resource_store(request)
+        if store is not None:
+            stored = await store.upsert_for(
+                request.state.context, "budget_limit", agent, body, name=agent
+            )
+            await _emit_audit(request, "budget_limit.upsert", target_type="budget_limit", target_id=agent)
+            return JSONResponse(stored, status_code=201)
         def _apply(d):
             limits = d.setdefault("budget_limits", [])
             d["budget_limits"] = [
@@ -3388,6 +3461,17 @@ def create_admin_serve_app(
         body = await request.json()
         body.pop("project_id", None)
         scope = _project_scope(request)
+        store = _admin_resource_store(request)
+        if store is not None:
+            existing = await store.get_for(request.state.context, "budget_limit", agent_name)
+            if existing is None:
+                return JSONResponse({"detail": "Not found"}, status_code=404)
+            existing.update(body)
+            stored = await store.upsert_for(
+                request.state.context, "budget_limit", agent_name, existing, name=agent_name
+            )
+            await _emit_audit(request, "budget_limit.update", target_type="budget_limit", target_id=agent_name)
+            return JSONResponse(stored)
         def _apply(d):
             for l in d.get("budget_limits", []):
                 if l.get("agent_name") == agent_name and _item_writable_in_scope(l, scope):
@@ -3404,6 +3488,17 @@ def create_admin_serve_app(
     async def delete_budget_limit(agent_name: str, request: Request) -> JSONResponse:
         _require_resource_write(request)
         scope = _project_scope(request)
+        store = _admin_resource_store(request)
+        if store is not None:
+            deleted = await store.delete_for(
+                request.state.context, "budget_limit", agent_name
+            )
+            if not deleted:
+                return JSONResponse({"detail": "Not found"}, status_code=404)
+            await _emit_audit(
+                request, "budget_limit.delete", target_type="budget_limit", target_id=agent_name
+            )
+            return JSONResponse({"status": "ok"})
         state = {"deleted": False}
         def _apply(d):
             limits = d.get("budget_limits", [])
@@ -3425,11 +3520,15 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/budget/status/{agent_name}")
     async def get_budget_status(agent_name: str, request: Request) -> JSONResponse:
-        data = sf._read()
-        limits = _project_first(
-            _filter_items_for_scope(data.get("budget_limits", []), _project_scope(request))
-        )
-        limit = next((l for l in limits if l.get("agent_name") == agent_name), None)
+        store = _admin_resource_store(request)
+        if store is not None:
+            limit = await store.get_for(request.state.context, "budget_limit", agent_name)
+        else:
+            data = sf._read()
+            limits = _project_first(
+                _filter_items_for_scope(data.get("budget_limits", []), _project_scope(request))
+            )
+            limit = next((l for l in limits if l.get("agent_name") == agent_name), None)
         return JSONResponse({
             "agent_name": agent_name,
             "limit": limit,
@@ -3442,11 +3541,22 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/guardrails/configs")
     async def list_guardrail_configs(request: Request) -> JSONResponse:
+        store = _admin_resource_store(request)
+        if store is not None:
+            return JSONResponse(
+                await store.list_for(request.state.context, "guardrail_config")
+            )
         data = sf._read()
         return JSONResponse(_filter_items_for_scope(data.get("guardrail_configs", []), _project_scope(request)))
 
     @app.get("/api/v1/guardrails/configs/{agent_name}")
     async def get_guardrail_config(agent_name: str, request: Request) -> JSONResponse:
+        store = _admin_resource_store(request)
+        if store is not None:
+            config = await store.get_for(request.state.context, "guardrail_config", agent_name)
+            if config:
+                return JSONResponse(config)
+            return JSONResponse({"detail": "Not found"}, status_code=404)
         data = sf._read()
         configs = _project_first(
             _filter_items_for_scope(data.get("guardrail_configs", []), _project_scope(request))
@@ -3464,6 +3574,15 @@ def create_admin_serve_app(
         body.pop("project_id", None)
         body["agent_name"] = agent_name
         body["project_id"] = _owner(scope)
+        store = _admin_resource_store(request)
+        if store is not None:
+            stored = await store.upsert_for(
+                request.state.context, "guardrail_config", agent_name, body, name=agent_name
+            )
+            await _emit_audit(
+                request, "guardrail_config.upsert", target_type="guardrail_config", target_id=agent_name
+            )
+            return JSONResponse(stored)
         def _apply(d):
             configs = d.setdefault("guardrail_configs", [])
             d["guardrail_configs"] = [
@@ -3482,6 +3601,28 @@ def create_admin_serve_app(
     async def delete_guardrail_config(agent_name: str, guardrail_type: str, request: Request) -> JSONResponse:
         _require_resource_write(request)
         scope = _project_scope(request)
+        store = _admin_resource_store(request)
+        if store is not None:
+            # Sub-resource mutation: drop one guardrail type from the config's
+            # list and re-persist. get_for hides cross-project rows (-> 404);
+            # upsert_for re-stamps own scope and 403s an org-shared row.
+            config = await store.get_for(request.state.context, "guardrail_config", agent_name)
+            if config is None:
+                return JSONResponse({"detail": "Not found"}, status_code=404)
+            config["guardrails"] = [
+                g for g in config.get("guardrails", []) if g.get("type") != guardrail_type
+            ]
+            await store.upsert_for(
+                request.state.context, "guardrail_config", agent_name, config, name=agent_name
+            )
+            await _emit_audit(
+                request,
+                "guardrail_config.delete",
+                target_type="guardrail_config",
+                target_id=agent_name,
+                metadata={"guardrail_type": guardrail_type},
+            )
+            return JSONResponse({"status": "ok"})
         def _apply(d):
             for c in d.get("guardrail_configs", []):
                 if c.get("agent_name") == agent_name and _item_writable_in_scope(c, scope):
@@ -3957,8 +4098,88 @@ def create_admin_serve_app(
             if body.get(key) in _REDACTED_MARKERS and existing.get(key):
                 body[key] = existing[key]
 
+    async def _encrypt_notification_secrets(record: dict[str, Any], ctx) -> None:
+        """Encrypt every present plaintext secret field under the tenant key.
+
+        Mutates ``record`` in place. Each secret is wrapped under the data key
+        for ``ctx.project_id`` (org master key when org-shared); already-encrypted
+        values pass through untouched (``encrypt_for_project`` is idempotent), so
+        a redaction-then-restore re-save never double-wraps.
+        """
+        from sagewai.admin import tenant_keys
+
+        for key in _NOTIFICATION_SECRET_KEYS:
+            v = record.get(key)
+            if isinstance(v, str) and v:
+                record[key] = await tenant_keys.encrypt_for_project(
+                    identity_store, ctx.org_id, ctx.project_id, v
+                )
+
+    async def _decrypt_notification_secret(
+        value: str, row_project_id: str | None, ctx
+    ) -> str:
+        """Decrypt one stored notification secret for USE — FAIL CLOSED.
+
+        Decrypts under the data key of the row's own ``project_id`` (org master
+        key for org-shared rows). A value that cannot be decrypted (corrupt or
+        missing key) raises :class:`NotificationSecretDecryptionError` so the
+        send/test path can never fall back to the stored ciphertext or to a
+        plaintext passthrough.
+        """
+        from sagewai.admin import tenant_keys
+        from sagewai.sealed.crypto import SecretCorrupted
+
+        try:
+            return await tenant_keys.decrypt_for_project(
+                identity_store, ctx.org_id, row_project_id, value
+            )
+        except SecretCorrupted as exc:
+            raise NotificationSecretDecryptionError(
+                "notification secret could not be decrypted"
+            ) from exc
+
+    async def _notification_channel_for_type_decrypted(
+        request: Request, channel_type: str
+    ) -> dict[str, Any] | None:
+        """The in-scope channel of ``channel_type`` with secrets DECRYPTED for use.
+
+        In multi mode the channel comes from the durable store (the same rows the
+        CRUD routes write) and every secret is decrypted FAIL-CLOSED under the
+        row's own project key — raises :class:`NotificationSecretDecryptionError`
+        on an undecryptable secret so the caller surfaces an error and never sends
+        the stored value. In single-org mode the file-backed channel is returned
+        verbatim (no tenant-key model, no decryption) — the unchanged path.
+        """
+        ctx = _multi_ctx(request)
+        if ctx is None:
+            # Single-org: file-backed channel, secrets stored/used as-is.
+            return _notification_channel_for_type(request, channel_type)
+        store = _admin_resource_store(request)
+        if store is not None:
+            channels = _project_first(
+                await store.list_for(request.state.context, "notification_channel")
+            )
+        else:
+            channels = _notification_channels_for_request(request)
+        channel = next(
+            (c for c in channels if _notification_type(c) == channel_type), None
+        )
+        if channel is None:
+            return None
+        row_project_id = channel.get("project_id") or None
+        out = dict(channel)
+        for key in _NOTIFICATION_SECRET_KEYS:
+            v = out.get(key)
+            if isinstance(v, str) and v:
+                out[key] = await _decrypt_notification_secret(v, row_project_id, ctx)
+        return out
+
     @app.get("/api/v1/notifications/channels")
     async def list_notification_channels(request: Request) -> JSONResponse:
+        store = _admin_resource_store(request)
+        if store is not None:
+            channels = await store.list_for(request.state.context, "notification_channel")
+            return JSONResponse([_notification_public(c) for c in channels])
         return JSONResponse([
             _notification_public(c) for c in _notification_channels_for_request(request)
         ])
@@ -3974,6 +4195,26 @@ def create_admin_serve_app(
         if body.get("type") and not body.get("channel_type"):
             body["channel_type"] = body.get("type")
         body.setdefault("id", f"ch-{_sec.token_hex(6)}")
+        store = _admin_resource_store(request)
+        if store is not None:
+            ctx = request.state.context
+            # Preserve secrets the client redacted (sent back as the ``***``
+            # marker) by copying the EXISTING stored (encrypted) value, then
+            # encrypt any newly-supplied plaintext under the tenant key.
+            existing = await store.get_for(ctx, "notification_channel", body["id"])
+            _merge_notification_secrets(body, existing)
+            await _encrypt_notification_secrets(body, ctx)
+            try:
+                await store.upsert_for(ctx, "notification_channel", body["id"], body)
+            except ResourceWriteScopeError:
+                return JSONResponse({"detail": "Forbidden"}, status_code=403)
+            await _emit_audit(
+                request,
+                "notification.channel.upsert",
+                target_type="notification_channel",
+                target_id=body["id"],
+            )
+            return JSONResponse(_notification_public(body), status_code=201)
         def _apply(d):
             channels = d.setdefault("notification_channels", [])
             existing = next(
@@ -4004,6 +4245,20 @@ def create_admin_serve_app(
     async def delete_notification_channel(channel_id: str, request: Request) -> JSONResponse:
         _require_resource_write(request)
         scope = _project_scope(request)
+        store = _admin_resource_store(request)
+        if store is not None:
+            deleted = await store.delete_for(
+                request.state.context, "notification_channel", channel_id
+            )
+            if not deleted:
+                return JSONResponse({"detail": "Not found"}, status_code=404)
+            await _emit_audit(
+                request,
+                "notification.channel.delete",
+                target_type="notification_channel",
+                target_id=channel_id,
+            )
+            return JSONResponse({"status": "ok"})
         state = {"deleted": False}
         def _apply(d):
             channels = d.get("notification_channels", [])
@@ -4028,6 +4283,11 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/notifications/triggers")
     async def list_notification_triggers(request: Request) -> JSONResponse:
+        store = _admin_resource_store(request)
+        if store is not None:
+            return JSONResponse(
+                await store.list_for(request.state.context, "notification_trigger")
+            )
         data = sf._read()
         return JSONResponse(
             _filter_items_for_scope(data.get("notification_triggers", []), _project_scope(request))
@@ -4042,6 +4302,21 @@ def create_admin_serve_app(
         body.pop("project_id", None)
         body["project_id"] = _owner(scope)
         body.setdefault("id", f"tr-{_sec.token_hex(6)}")
+        store = _admin_resource_store(request)
+        if store is not None:
+            try:
+                await store.upsert_for(
+                    request.state.context, "notification_trigger", body["id"], body
+                )
+            except ResourceWriteScopeError:
+                return JSONResponse({"detail": "Forbidden"}, status_code=403)
+            await _emit_audit(
+                request,
+                "notification.trigger.upsert",
+                target_type="notification_trigger",
+                target_id=body["id"],
+            )
+            return JSONResponse(body, status_code=201)
         def _apply(d):
             triggers = d.setdefault("notification_triggers", [])
             d["notification_triggers"] = [
@@ -4063,6 +4338,20 @@ def create_admin_serve_app(
     async def delete_notification_trigger(trigger_id: str, request: Request) -> JSONResponse:
         _require_resource_write(request)
         scope = _project_scope(request)
+        store = _admin_resource_store(request)
+        if store is not None:
+            deleted = await store.delete_for(
+                request.state.context, "notification_trigger", trigger_id
+            )
+            if not deleted:
+                return JSONResponse({"detail": "Not found"}, status_code=404)
+            await _emit_audit(
+                request,
+                "notification.trigger.delete",
+                target_type="notification_trigger",
+                target_id=trigger_id,
+            )
+            return JSONResponse({"status": "ok"})
         state = {"deleted": False}
         def _apply(d):
             triggers = d.get("notification_triggers", [])
@@ -4096,8 +4385,16 @@ def create_admin_serve_app(
         body = await request.json()
         channel_type = body.get("channel_type", "")
 
-        # Find the saved channel config
-        channel = _notification_channel_for_type(request, channel_type)
+        # Find the saved channel config, with secrets decrypted under the row's
+        # own project key — FAIL CLOSED: an undecryptable secret returns an error
+        # rather than sending the stored ciphertext or any plaintext fallback.
+        try:
+            channel = await _notification_channel_for_type_decrypted(request, channel_type)
+        except NotificationSecretDecryptionError:
+            return JSONResponse(
+                {"sent": False, "error": "Channel secret could not be decrypted."},
+                status_code=500,
+            )
         multi = _multi_ctx(request) is not None
 
         if channel_type == "slack":
@@ -4233,8 +4530,18 @@ def create_admin_serve_app(
         ch = body.get("channel", "")
         multi = _multi_ctx(request) is not None
 
+        # Resolve the saved channel with secrets decrypted under the row's own
+        # project key — FAIL CLOSED so the send path can never emit the stored
+        # ciphertext or a plaintext fallback for an undecryptable secret.
+        try:
+            saved = await _notification_channel_for_type_decrypted(request, ch)
+        except NotificationSecretDecryptionError:
+            return JSONResponse(
+                {"sent": False, "error": "Channel secret could not be decrypted."},
+                status_code=500,
+            )
+
         if ch == "slack":
-            saved = _notification_channel_for_type(request, "slack")
             webhook_url = ""
             if saved is not None:
                 webhook_url = saved.get("webhook_url", "")
@@ -4263,7 +4570,6 @@ def create_admin_serve_app(
             if not email_to:
                 return JSONResponse({"sent": False, "error": "No recipient (to) specified"}, status_code=400)
 
-            saved = _notification_channel_for_type(request, "email")
             provider = (saved or {}).get("email_provider", "")
             api_key = (saved or {}).get("email_api_key", "")
             from_email = (saved or {}).get("email_from", "")
@@ -4326,6 +4632,9 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/triggers")
     async def list_triggers(request: Request) -> JSONResponse:
+        store = _admin_resource_store(request)
+        if store is not None:
+            return JSONResponse(await store.list_for(request.state.context, "connector_trigger"))
         data = sf._read()
         return JSONResponse(_filter_items_for_scope(data.get("triggers", []), _project_scope(request)))
 
@@ -4337,6 +4646,13 @@ def create_admin_serve_app(
         body.pop("project_id", None)
         body["project_id"] = _owner(_project_scope(request))
         body.setdefault("id", f"trig-{_sec.token_hex(6)}")
+        store = _admin_resource_store(request)
+        if store is not None:
+            stored = await store.upsert_for(
+                request.state.context, "connector_trigger", body["id"], body
+            )
+            await _emit_audit(request, "trigger.create", target_type="trigger", target_id=body["id"])
+            return JSONResponse(stored, status_code=201)
         def _apply(d):
             d.setdefault("triggers", []).append(body)
         sf.mutate(_apply)
@@ -4347,6 +4663,15 @@ def create_admin_serve_app(
     async def delete_trigger(trigger_id: str, request: Request) -> JSONResponse:
         _require_resource_write(request)
         scope = _project_scope(request)
+        store = _admin_resource_store(request)
+        if store is not None:
+            deleted = await store.delete_for(
+                request.state.context, "connector_trigger", trigger_id
+            )
+            if not deleted:
+                return JSONResponse({"detail": "Not found"}, status_code=404)
+            await _emit_audit(request, "trigger.delete", target_type="trigger", target_id=trigger_id)
+            return JSONResponse({"status": "ok"})
         state = {"deleted": False}
         def _apply(d):
             triggers = d.get("triggers", [])
@@ -4364,10 +4689,32 @@ def create_admin_serve_app(
             await _emit_audit(request, "trigger.delete", target_type="trigger", target_id=trigger_id)
         return JSONResponse({"status": "ok"})
 
+    async def _set_trigger_enabled(
+        trigger_id: str, request: Request, *, enabled: bool, action: str
+    ) -> JSONResponse:
+        # Enable/disable is a sub-resource mutation: read the trigger in scope,
+        # flip ``enabled``, re-persist. get_for hides cross-project rows (-> 404);
+        # upsert_for re-stamps own scope and 403s an org-shared row.
+        store = _admin_resource_store(request)
+        config = await store.get_for(request.state.context, "connector_trigger", trigger_id)
+        if config is None:
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        config["enabled"] = enabled
+        stored = await store.upsert_for(
+            request.state.context, "connector_trigger", trigger_id, config
+        )
+        await _emit_audit(request, action, target_type="trigger", target_id=trigger_id)
+        return JSONResponse(stored)
+
     @app.patch("/api/v1/triggers/{trigger_id}/enable")
     async def enable_trigger(trigger_id: str, request: Request) -> JSONResponse:
         _require_resource_write(request)
         scope = _project_scope(request)
+        store = _admin_resource_store(request)
+        if store is not None:
+            return await _set_trigger_enabled(
+                trigger_id, request, enabled=True, action="trigger.enable"
+            )
         def _apply(d):
             for t in d.get("triggers", []):
                 if t.get("id") == trigger_id and _item_writable_in_scope(t, scope):
@@ -4384,6 +4731,11 @@ def create_admin_serve_app(
     async def disable_trigger(trigger_id: str, request: Request) -> JSONResponse:
         _require_resource_write(request)
         scope = _project_scope(request)
+        store = _admin_resource_store(request)
+        if store is not None:
+            return await _set_trigger_enabled(
+                trigger_id, request, enabled=False, action="trigger.disable"
+            )
         def _apply(d):
             for t in d.get("triggers", []):
                 if t.get("id") == trigger_id and _item_writable_in_scope(t, scope):
@@ -4866,6 +5218,9 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/eval/datasets")
     async def list_eval_datasets(request: Request) -> JSONResponse:
+        store = _admin_resource_store(request)
+        if store is not None:
+            return JSONResponse(await store.list_for(request.state.context, "eval_dataset"))
         data = sf._read()
         return JSONResponse(_filter_items_for_scope(data.get("eval_datasets", []), _project_scope(request)))
 
@@ -4878,6 +5233,13 @@ def create_admin_serve_app(
         body["project_id"] = _owner(_project_scope(request))
         body.setdefault("id", f"ds-{_sec.token_hex(6)}")
         body.setdefault("created_at", datetime.datetime.now(datetime.timezone.utc).isoformat())
+        store = _admin_resource_store(request)
+        if store is not None:
+            stored = await store.upsert_for(
+                request.state.context, "eval_dataset", body["id"], body
+            )
+            await _emit_audit(request, "eval_dataset.create", target_type="eval_dataset", target_id=body["id"])
+            return JSONResponse(stored, status_code=201)
         def _apply(d):
             d.setdefault("eval_datasets", []).append(body)
         sf.mutate(_apply)
@@ -4886,6 +5248,12 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/eval/datasets/{dataset_id}")
     async def get_eval_dataset(dataset_id: str, request: Request) -> JSONResponse:
+        store = _admin_resource_store(request)
+        if store is not None:
+            ds = await store.get_for(request.state.context, "eval_dataset", dataset_id)
+            if ds is not None:
+                return JSONResponse(ds)
+            return JSONResponse({"detail": "Not found"}, status_code=404)
         data = sf._read()
         datasets = _filter_items_for_scope(data.get("eval_datasets", []), _project_scope(request))
         ds = next((d for d in datasets if d.get("id") == dataset_id), None)
@@ -4897,6 +5265,15 @@ def create_admin_serve_app(
     async def delete_eval_dataset(dataset_id: str, request: Request) -> JSONResponse:
         _require_resource_write(request)
         scope = _project_scope(request)
+        store = _admin_resource_store(request)
+        if store is not None:
+            deleted = await store.delete_for(request.state.context, "eval_dataset", dataset_id)
+            if not deleted:
+                return JSONResponse({"detail": "Not found"}, status_code=404)
+            await _emit_audit(
+                request, "eval_dataset.delete", target_type="eval_dataset", target_id=dataset_id
+            )
+            return JSONResponse({"status": "ok"})
         state = {"deleted": False}
         def _apply(d):
             datasets = d.get("eval_datasets", [])
@@ -5128,6 +5505,16 @@ def _prompt_store(request: Request):
     return _tenant_store_or_none(request, "prompt_log")
 
 
+def _admin_resource_store(request: Request):
+    """The active generic admin-resource store, or None in single-org mode.
+
+    The durable backing for every file-backed control-plane resource (budgets,
+    guardrails, ...). When present, the resource routes use it (ctx-scoped,
+    keyed by ``kind``) instead of the file store; when None they keep their
+    unchanged ``sf.*`` path."""
+    return _tenant_store_or_none(request, "admin_resource")
+
+
 def _tenant_store_or_none(request: Request, name: str):
     rs = getattr(request.app.state, "resource_stores", None)
     store = getattr(rs, name, None) if rs is not None else None
@@ -5212,6 +5599,11 @@ def _in_write_scope(item_project_id: str | None, request: Request) -> bool:
 # gaps (the multi-tenant hardening follow-up, NOT a single-org-launch blocker):
 # org/project settings mutate, fleet approvals/enrollment-keys (file-audited
 # only), connector writes, memory ingest, and API-token CRUD (501 in multi).
+class NotificationSecretDecryptionError(RuntimeError):
+    """A stored notification secret could not be decrypted; the send/test path
+    fails closed (never emits the stored ciphertext or a plaintext fallback)."""
+
+
 class _AuditUnavailableError(Exception):
     """Durable audit could not be recorded — the write fails closed (HTTP 503)."""
 

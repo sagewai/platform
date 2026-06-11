@@ -75,6 +75,32 @@ def _state_file(request: Request):
     return AdminStateFile()
 
 
+# MT durability: kind for the generic project-scoped AdminResourceStore. The
+# resource_id is the workflow name (one destination per workflow per project);
+# ``name`` is the workflow name too, so the partial-unique index makes the
+# (kind, project, name) tuple the natural key.
+_KIND = "artifact_destination"
+
+
+def _resource_store(request: Request):
+    """The durable AdminResourceStore in multi-tenant mode, else ``None``.
+
+    Reads ``request.app.state.resource_stores.admin_resource`` at request time so
+    a lazily-built store (lifespan-constructed when none was injected) is picked
+    up. In single-org mode this is ``None`` and the routes keep their unchanged
+    scoped state-file path. If multi-tenant but unwired, fail closed (503) rather
+    than silently fall through to the non-durable file path."""
+    ctx = getattr(request.state, "context", None)
+    rs = getattr(getattr(request.app, "state", None), "resource_stores", None)
+    store = getattr(rs, "admin_resource", None) if rs is not None else None
+    if store is None and ctx is not None and getattr(ctx, "tenancy_mode", None) == "multi":
+        raise HTTPException(
+            status_code=503,
+            detail="Tenant resource store unavailable — please retry",
+        )
+    return store
+
+
 @router.get(
     "/{name}/artifact_destination",
     response_model=ArtifactDestination,
@@ -82,9 +108,18 @@ def _state_file(request: Request):
 async def get_workflow_artifact_destination(name: str, request: Request) -> ArtifactDestination:
     _gate_resource(request)
 
-    dest = _state_file(request).get_workflow_artifact_destination(
-        name, project_id=_project_id(request)
-    )
+    store = _resource_store(request)
+    if store is not None:
+        row = await store.get_for(request.state.context, _KIND, name)
+        dest = (
+            ArtifactDestination.model_validate(row["destination"])
+            if row and row.get("destination") is not None
+            else None
+        )
+    else:
+        dest = _state_file(request).get_workflow_artifact_destination(
+            name, project_id=_project_id(request)
+        )
     if dest is None:
         raise HTTPException(
             status_code=404,
@@ -109,14 +144,28 @@ async def put_workflow_artifact_destination(
     except ArtifactDestinationConfigError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    state = _state_file(request)
+    store = _resource_store(request)
     ctx = getattr(request.state, "context", None)
-    if ctx is not None and ctx.tenancy_mode == "multi":
-        state.set_scoped_workflow_artifact_destination(
-            name, body, project_id=ctx.project_id,
+    if store is not None:
+        await store.upsert_for(
+            ctx,
+            _KIND,
+            name,
+            {
+                "workflow_name": name,
+                "project_id": ctx.project_id,
+                "destination": body.model_dump(mode="json"),
+            },
+            name=name,
         )
     else:
-        state.set_workflow_artifact_destination(name, body)
+        state = _state_file(request)
+        if ctx is not None and ctx.tenancy_mode == "multi":
+            state.set_scoped_workflow_artifact_destination(
+                name, body, project_id=ctx.project_id,
+            )
+        else:
+            state.set_workflow_artifact_destination(name, body)
     await _emit_admin_audit(
         event_type="artifact.admin_override.set",
         workflow_name=name,
@@ -137,14 +186,20 @@ async def put_workflow_artifact_destination(
 )
 async def delete_workflow_artifact_destination(name: str, request: Request) -> None:
     _gate_resource(request, write=True)
-    state = _state_file(request)
+    store = _resource_store(request)
     ctx = getattr(request.state, "context", None)
-    if ctx is not None and ctx.tenancy_mode == "multi":
-        state.clear_scoped_workflow_artifact_destination(
-            name, project_id=ctx.project_id,
-        )
+    if store is not None:
+        # delete_for is write-scoped: a cross-project / org-shared row matches
+        # zero rows (no-op), so a PA delete can't destroy PB's destination.
+        await store.delete_for(ctx, _KIND, name)
     else:
-        state.clear_workflow_artifact_destination(name)
+        state = _state_file(request)
+        if ctx is not None and ctx.tenancy_mode == "multi":
+            state.clear_scoped_workflow_artifact_destination(
+                name, project_id=ctx.project_id,
+            )
+        else:
+            state.clear_workflow_artifact_destination(name)
     await _emit_admin_audit(
         event_type="artifact.admin_override.cleared",
         workflow_name=name,

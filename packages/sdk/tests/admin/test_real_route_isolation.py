@@ -30,6 +30,7 @@ from cryptography.fernet import Fernet
 from httpx import ASGITransport
 
 from sagewai.admin import tenant_keys
+from sagewai.admin.admin_resource_store import AdminResourceStore
 from sagewai.admin.identity_store import IdentityStore
 from sagewai.admin.provider_store import PostgresProviderStore
 from sagewai.admin.state_file import AdminStateFile
@@ -221,6 +222,23 @@ async def real_app(tmp_path, monkeypatch):
         )
     )
 
+    # Generic admin-resource store on the SAME engine; the durable backing for
+    # budgets + guardrails (kind-keyed). Seed PB's budget + guardrail THROUGH the
+    # store so cross-project isolation assertions are meaningful (they genuinely
+    # exist in PB's scope).
+    admin_resources = AdminResourceStore(engine=engine)
+    await admin_resources.init()
+    await admin_resources.upsert_for(
+        _ctx(pb), "budget_limit", "pb-budget",
+        {"agent_name": "pb-budget", "daily_limit_usd": 99, "project_id": pb},
+        name="pb-budget",
+    )
+    await admin_resources.upsert_for(
+        _ctx(pb), "guardrail_config", "pb-guardrail",
+        {"agent_name": "pb-guardrail", "guardrails": [], "project_id": pb},
+        name="pb-guardrail",
+    )
+
     from sagewai.admin.serve import create_admin_serve_app
 
     app = create_admin_serve_app(
@@ -231,6 +249,7 @@ async def real_app(tmp_path, monkeypatch):
         connection_store=connections,
         run_store=runs,
         prompt_log_store=plogs,
+        admin_resource_store=admin_resources,
     )
     # Durable W8 audit fires on successful tenant mutations and fails the write
     # closed if it can't record. ASGITransport skips the lifespan, so bind the
@@ -1163,13 +1182,10 @@ async def test_notification_test_ignores_body_supplied_webhook_in_multi_tenant(r
 
 
 async def test_file_backed_project_resources_do_not_list_cross_project_rows(real_app):
+    # NB: budget + guardrail rows are durable now (seeded through the
+    # AdminResourceStore in the fixture as pb-budget / pb-guardrail), so they're
+    # checked below against the durable store, not these file-store seeds.
     def _seed(d):
-        d.setdefault("budget_limits", []).append(
-            {"agent_name": "pb-budget", "daily_limit_usd": 99, "project_id": real_app["pb"]}
-        )
-        d.setdefault("guardrail_configs", []).append(
-            {"agent_name": "pb-guardrail", "guardrails": [], "project_id": real_app["pb"]}
-        )
         d.setdefault("eval_datasets", []).append(
             {"id": "ds-pb", "name": "pb-dataset", "project_id": real_app["pb"]}
         )
@@ -1248,9 +1264,16 @@ async def test_artifact_destination_put_member_scoped_ok(real_app):
     assert get.status_code == 200
     assert get.json()["target"] == "/tmp/x"
 
-    state = real_app["sf"]._read()
-    row = next(r for r in state["artifact_destinations"] if r["workflow_name"] == "wf1")
-    assert row["project_id"] == real_app["pa"]
+    # Durable AdminResourceStore (MT) now backs artifact destinations, so the
+    # destination is project-scoped at the DB layer rather than in the file
+    # state. Prove the scoping holds via the API: a *different* project must not
+    # see PA's destination.
+    other = await _req(
+        real_app["app"], "GET",
+        "/api/v1/admin/workflows/wf1/artifact_destination",
+        token=real_app["sess_owner"], project=real_app["pb"],
+    )
+    assert other.status_code == 404
 
 
 async def test_artifact_destination_delete_member_scoped_ok(real_app):

@@ -34,9 +34,11 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport
 
+from sagewai.admin.admin_resource_store import AdminResourceStore
 from sagewai.admin.auth_middleware import _MULTI_ORG_PREFIXES
 from sagewai.admin.identity_store import IdentityStore
 from sagewai.admin.state_file import AdminStateFile
+from sagewai.admin.tenant_audit import TenantAuditStore
 from sagewai.db.engine import create_engine
 
 _MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
@@ -71,9 +73,18 @@ async def app_ctx(tmp_path, monkeypatch):
     await store.add_membership(oid, member["id"], "project:member", project_id=pa)
     sf = AdminStateFile(path=tmp_path / "state.json")
     sf.complete_setup(org_name="Acme", admin_email="a@acme.io", admin_password="pw123456")
+    # Inject the durable resource store (and audit on the SAME engine) so the
+    # now-durable control-plane routes exercise their store path under
+    # ASGITransport (the lifespan that would lazily build it never runs here);
+    # without it a multi-tenant resource read would fail closed (503).
+    res = AdminResourceStore(engine=engine)
+    await res.init()
     from sagewai.admin.serve import create_admin_serve_app
 
-    app = create_admin_serve_app(sf, identity_store=store)
+    app = create_admin_serve_app(sf, identity_store=store, admin_resource_store=res)
+    audit = TenantAuditStore(engine=engine)
+    await audit.init()
+    app.state.tenant_audit = audit
     yield {
         "app": app,
         "pa": pa,

@@ -31,6 +31,7 @@ class ResourceStores:
     connection: Any = None
     run: Any = None
     prompt_log: Any = None
+    admin_resource: Any = None
 
 
 async def build_resource_stores(identity_store: Any) -> ResourceStores | None:
@@ -76,10 +77,15 @@ async def build_resource_stores(identity_store: Any) -> ResourceStores | None:
     await run.init()
     prompt_log = PromptStore(engine=engine)
     await prompt_log.init()
+    from sagewai.admin.admin_resource_store import AdminResourceStore
+
+    admin_resource = AdminResourceStore(engine=engine)
+    await admin_resource.init()
     return ResourceStores(
         provider=provider,
         agent=agent,
         connection=connection,
         run=run,
         prompt_log=prompt_log,
+        admin_resource=admin_resource,
     )
