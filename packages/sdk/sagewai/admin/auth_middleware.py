@@ -16,7 +16,7 @@ import hmac
 import os
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -237,10 +237,11 @@ def _project_hint(request) -> str | None:
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, *, sf, identity_store=None) -> None:
+    def __init__(self, app, *, sf, identity_store=None, api_token_store=None) -> None:
         super().__init__(app)
         self.sf = sf
         self._identity_store = identity_store
+        self._api_token_store = api_token_store
         self.expose_docs = os.environ.get("SAGEWAI_ADMIN_EXPOSE_DOCS", "") in {"1", "true"}
 
     def _identity(self):
@@ -250,6 +251,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
             self._identity_store = IdentityStore()
         return self._identity_store
+
+    def _tokens(self):
+        """The multi-tenant API-token store (lazy — only constructed in multi mode)."""
+        if self._api_token_store is None:
+            from sagewai.admin.api_token_store import ApiTokenStore
+
+            self._api_token_store = ApiTokenStore()
+        return self._api_token_store
 
     async def dispatch(self, request, call_next):
         method, path = request.method, request.url.path
@@ -297,31 +306,84 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
     async def _resolve_multi(self, request, raw: str):
-        """Multi-tenant resolution: session -> RequestContext (tenancy from the
-        session + membership, never from X-Project-ID). Returns (principal, context)
-        or a JSONResponse error. API tokens are wired in W4; sessions only here.
+        """Multi-tenant resolution: session OR API token -> RequestContext (tenancy
+        from the session/token + membership, never from X-Project-ID). Returns
+        (principal, context) or a JSONResponse error.
+
+        A bearer session is tried first; if it does not resolve, the same raw
+        credential is tried as an API token (machine/CI auth). A token's effective
+        scope is the INTERSECTION of the token's stored scopes and the scopes its
+        owner's role grants — a token can never exceed its owner's role, and its
+        ``project_id`` binding (or org-shared NULL) flows through ``ctx`` exactly
+        like a session's, so the §3 data-scope rule applies unchanged.
         """
         from sagewai.admin.identity_store import TenantAccessError
 
         store = self._identity()
         sess = await store.resolve_session(raw)
-        if sess is None:
-            return JSONResponse({"detail": "Invalid or expired credential"}, status_code=401)
+        if sess is not None:
+            try:
+                context = await store.build_context(
+                    sess["org_id"], sess["user_id"], project_id=_project_hint(request)
+                )
+            except TenantAccessError:
+                # Forged/foreign project, or selection required — hide existence (404).
+                return JSONResponse({"detail": "Not found"}, status_code=404)
+            principal = Principal(
+                type="session",
+                subject_id=sess["user_id"],
+                token_id=_session_token_id(raw),
+                scopes=_scopes_for_roles(context.roles),
+                expires_at=None,
+                actor_label=context.actor.label,
+            )
+            return principal, context
+
+        # Not a session — try the API-token path (CI/machine auth).
+        resolved = await self._resolve_token(request, raw)
+        if resolved is not None:
+            return resolved
+        return JSONResponse({"detail": "Invalid or expired credential"}, status_code=401)
+
+    async def _resolve_token(self, request, raw: str):
+        """Authenticate a bearer API token. Returns (principal, context) on success,
+        ``None`` to fall through to the 401 (unknown / revoked / expired token), or
+        a JSONResponse (404) when the token's owner has lost project access.
+
+        Effective scope = token scopes ∩ ``_scopes_for_roles(context.roles)``; the
+        token's ``project_id`` (or org-shared NULL) is re-resolved through
+        ``build_context`` so membership is re-checked on every request (an owner
+        who lost access yields TenantAccessError -> 404, never the token's stale
+        rights). A forged ``X-Project-ID`` is ignored — a token's scope comes from
+        the token row, not the request.
+        """
+        from sagewai.admin.identity_store import TenantAccessError
+
+        rec = await self._tokens().find_by_hash(hashlib.sha256(raw.encode()).hexdigest())
+        if rec is None or rec.get("revoked_at") is not None:
+            return None
+        expires_at = rec.get("expires_at")
+        if expires_at is not None and expires_at < datetime.now(timezone.utc):
+            return None
         try:
-            context = await store.build_context(
-                sess["org_id"], sess["user_id"], project_id=_project_hint(request)
+            context = await self._identity().build_context(
+                rec["org_id"], rec["subject_user_id"], project_id=rec["project_id"]
             )
         except TenantAccessError:
-            # Forged/foreign project, or selection required — hide existence (404).
+            # The token's owner lost membership in its bound project — hide it (404).
             return JSONResponse({"detail": "Not found"}, status_code=404)
+        token_scopes = frozenset(rec.get("scopes") or ())
+        effective = token_scopes & _scopes_for_roles(context.roles)
         principal = Principal(
-            type="session",
-            subject_id=sess["user_id"],
-            token_id=_session_token_id(raw),
-            scopes=_scopes_for_roles(context.roles),
-            expires_at=None,
+            type="api_token",
+            subject_id=rec["subject_user_id"],
+            token_id=rec["id"],
+            scopes=effective,
+            expires_at=expires_at,
             actor_label=context.actor.label,
         )
+        # Best-effort last-used telemetry; never blocks or fails authentication.
+        await self._tokens().touch_last_used(rec["id"])
         return principal, context
 
     def _resolve(self, raw: str, mech: str) -> Principal | None:

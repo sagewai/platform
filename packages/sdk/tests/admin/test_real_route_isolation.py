@@ -239,8 +239,11 @@ async def real_app(tmp_path, monkeypatch):
         name="pb-guardrail",
     )
 
+    from sagewai.admin.api_token_store import ApiTokenStore
     from sagewai.admin.serve import create_admin_serve_app
 
+    api_tokens = ApiTokenStore(engine=engine)
+    await api_tokens.init()
     app = create_admin_serve_app(
         sf,
         identity_store=store,
@@ -250,6 +253,7 @@ async def real_app(tmp_path, monkeypatch):
         run_store=runs,
         prompt_log_store=plogs,
         admin_resource_store=admin_resources,
+        api_token_store=api_tokens,
     )
     # Durable W8 audit fires on successful tenant mutations and fails the write
     # closed if it can't record. ASGITransport skips the lifespan, so bind the
@@ -970,12 +974,23 @@ async def test_token_create_member_403(real_app):
     assert r.status_code == 403
 
 
-async def test_token_create_owner_501_until_tenant_tokens_exist(real_app):
+async def test_token_create_owner_mints_org_shared_token(real_app):
+    # The org owner (no X-Project-ID -> org scope) mints an org-shared CI token.
     r = await _req(
         real_app["app"], "POST", "/api/v1/tokens/",
         token=real_app["sess_owner"], json={"name": "ci", "scopes": ["read"]},
     )
-    assert r.status_code == 501
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["token"].startswith("swt_")     # plaintext returned ONCE
+    assert body["project_id"] is None           # org-shared scope (NOT all-projects)
+    # The list redacts: never the plaintext or the hash.
+    listed = await _req(
+        real_app["app"], "GET", "/api/v1/tokens/", token=real_app["sess_owner"]
+    )
+    assert listed.status_code == 200, listed.text
+    blob = str(listed.json())
+    assert body["token"] not in blob and "token_hash" not in blob
 
 
 async def test_legacy_audit_events_project_member_403(real_app):

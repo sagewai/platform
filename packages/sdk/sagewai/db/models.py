@@ -522,6 +522,47 @@ class RateLimitModel(Base):
     count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
 
 
+class ApiTokenModel(Base):
+    """Tenant-scoped API token (machine/CI auth) for multi-tenant mode.
+
+    A bearer token used for non-interactive (CI/automation) access. It carries
+    ``read/write/admin`` ``scopes`` AND is bound to a scope via ``project_id``:
+    a value = the token acts only in that project; NULL = an ORG-SHARED token
+    (org-shared resources only — **NOT** an all-projects wildcard). The effective
+    permission at request time is the INTERSECTION of these scopes and the
+    subject's resolved role, so a token never exceeds its owner's role.
+
+    Only the SHA-256 ``token_hash`` is stored (the plaintext is returned once at
+    creation). ``token_hash`` is globally unique and indexed for the pre-context
+    auth lookup. Name uniqueness is NULL-safe per the two partial-unique indexes
+    (one org-shared name, one name per project), matching the resource tables.
+    """
+
+    __tablename__ = "api_token"
+    __table_args__ = (
+        Index("ux_api_token_hash", "token_hash", unique=True),
+        Index("ix_api_token_org_project", "org_id", "project_id"),
+        Index("ux_api_token_org_name", "org_id", "name", unique=True,
+              sqlite_where=text("project_id IS NULL AND name IS NOT NULL"),
+              postgresql_where=text("project_id IS NULL AND name IS NOT NULL")),
+        Index("ux_api_token_org_proj_name", "org_id", "project_id", "name", unique=True,
+              sqlite_where=text("project_id IS NOT NULL AND name IS NOT NULL"),
+              postgresql_where=text("project_id IS NOT NULL AND name IS NOT NULL")),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    org_id: Mapped[str] = mapped_column(Text, nullable=False)
+    project_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subject_user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    scopes: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 # ---------------------------------------------------------------------------
 # Admin store tables
 # ---------------------------------------------------------------------------

@@ -32,6 +32,7 @@ class ResourceStores:
     run: Any = None
     prompt_log: Any = None
     admin_resource: Any = None
+    api_token: Any = None
 
 
 async def build_resource_stores(identity_store: Any) -> ResourceStores | None:
@@ -81,6 +82,10 @@ async def build_resource_stores(identity_store: Any) -> ResourceStores | None:
 
     admin_resource = AdminResourceStore(engine=engine)
     await admin_resource.init()
+    from sagewai.admin.api_token_store import ApiTokenStore
+
+    api_token = ApiTokenStore(engine=engine)
+    await api_token.init()
     return ResourceStores(
         provider=provider,
         agent=agent,
@@ -88,4 +93,5 @@ async def build_resource_stores(identity_store: Any) -> ResourceStores | None:
         run=run,
         prompt_log=prompt_log,
         admin_resource=admin_resource,
+        api_token=api_token,
     )

@@ -654,6 +654,7 @@ def create_admin_serve_app(
     run_store: Any = None,
     prompt_log_store: Any = None,
     admin_resource_store: Any = None,
+    api_token_store: Any = None,
 ) -> FastAPI:
     """Create the complete admin API server.
 
@@ -734,6 +735,7 @@ def create_admin_serve_app(
             or _rs.run is None
             or _rs.prompt_log is None
             or _rs.admin_resource is None
+            or _rs.api_token is None
         ):
             _built = await build_resource_stores(identity_store)
             if _built is not None:
@@ -744,6 +746,7 @@ def create_admin_serve_app(
                     run=_rs.run or _built.run,
                     prompt_log=_rs.prompt_log or _built.prompt_log,
                     admin_resource=_rs.admin_resource or _built.admin_resource,
+                    api_token=_rs.api_token or _built.api_token,
                 )
                 conn_ctx = getattr(app.state, "connections_context", None)
                 active_connection_store = app.state.resource_stores.connection
@@ -825,7 +828,7 @@ def create_admin_serve_app(
     app.state.resource_stores = ResourceStores(
         provider=provider_store, agent=agent_store, connection=connection_store,
         run=run_store, prompt_log=prompt_log_store,
-        admin_resource=admin_resource_store)
+        admin_resource=admin_resource_store, api_token=api_token_store)
 
     # Multi-tenant: build ONE IdentityStore on the process engine and SHARE it
     # between AuthMiddleware and the resource stores when none was injected. The
@@ -837,6 +840,16 @@ def create_admin_serve_app(
         from sagewai.admin.identity_store import IdentityStore
         identity_store = IdentityStore()
     app.state.identity_store = identity_store
+
+    # Multi-tenant: the AuthMiddleware needs the API-token store to authenticate a
+    # bearer token before any context exists (find_by_hash → build_context). Build
+    # it eagerly on the process engine when none was injected so the very first
+    # request can authenticate a token (the lifespan-built bundle is too late for
+    # the perimeter). Bundled on app.state.resource_stores too for the CRUD routes.
+    if api_token_store is None and _is_multi_tenant():
+        from sagewai.admin.api_token_store import ApiTokenStore
+        api_token_store = ApiTokenStore()
+        app.state.resource_stores.api_token = api_token_store
 
     async def _provider_decrypted(request: Request, provider_id: str):
         """A provider with secrets decrypted, from the active store (PG or file)."""
@@ -891,7 +904,10 @@ def create_admin_serve_app(
     # Auth boundary (deny-by-default). Added BEFORE CORS so CORS is the
     # OUTERMOST middleware and wraps even 401/403 responses with CORS headers.
     from sagewai.admin.auth_middleware import AuthMiddleware
-    app.add_middleware(AuthMiddleware, sf=sf, identity_store=identity_store)
+    app.add_middleware(
+        AuthMiddleware, sf=sf, identity_store=identity_store,
+        api_token_store=api_token_store,
+    )
 
     # RBAC enforcement (W3) raises typed errors; map them to HTTP. TenantHidden
     # is 404 (existence-hiding, never 403); PermissionDenied is 403.
@@ -3684,22 +3700,50 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/tokens/")
     async def list_tokens(request: Request) -> JSONResponse:
-        if _is_multi_tenant():
-            return JSONResponse(
-                {"detail": "Tenant API tokens are not implemented"},
-                status_code=501,
-            )
+        store = _token_store(request)
+        if store is not None:
+            # Project-bound + inherited org-shared tokens for this ctx (redacted).
+            rows = await store.list_for(request.state.context)
+            return JSONResponse(jsonable_encoder(rows))
         return JSONResponse(sf.list_api_tokens())
 
     @app.post("/api/v1/tokens/")
     async def create_token(request: Request) -> JSONResponse:
         require_org_admin(request.state.context)
-        if _is_multi_tenant():
-            return JSONResponse(
-                {"detail": "Tenant API tokens are not implemented"},
-                status_code=501,
-            )
         body = await request.json()
+        store = _token_store(request)
+        if store is not None:
+            from sagewai.admin.api_token_store import TokenScopeError
+
+            ctx = request.state.context
+            scopes = set(body.get("scopes", ["read"]))
+            try:
+                record, plaintext = await store.create_for(
+                    ctx,
+                    name=body.get("name") or "Unnamed",
+                    scopes=scopes,
+                    project_id=ctx.project_id,  # from the session, never the body
+                )
+            except ValueError as exc:
+                return JSONResponse({"detail": str(exc)}, status_code=400)
+            except TokenScopeError as exc:
+                return JSONResponse({"detail": str(exc)}, status_code=403)
+            await _emit_audit(
+                request,
+                "token.created",
+                target_type="api_token",
+                target_id=record["id"],
+                metadata={"scopes": record["scopes"], "project_id": record["project_id"]},
+            )
+            # Plaintext returned ONCE; the stored hash is never exposed.
+            wire = {
+                "id": record["id"],
+                "name": record["name"],
+                "scopes": record["scopes"],
+                "project_id": record["project_id"],
+                "token": plaintext,
+            }
+            return JSONResponse(jsonable_encoder(wire), status_code=201)
         entry = sf.create_api_token(name=body.get("name", "Unnamed"),
                                     scopes=body.get("scopes", ["read"]))
         emit_audit(sf, event_type="token.created",
@@ -3710,11 +3754,14 @@ def create_admin_serve_app(
     @app.post("/api/v1/tokens/{token_id}/revoke")
     async def revoke_token(token_id: str, request: Request) -> JSONResponse:
         require_org_admin(request.state.context)
-        if _is_multi_tenant():
-            return JSONResponse(
-                {"detail": "Tenant API tokens are not implemented"},
-                status_code=501,
-            )
+        store = _token_store(request)
+        if store is not None:
+            if await store.revoke_for(request.state.context, token_id):
+                await _emit_audit(
+                    request, "token.revoked", target_type="api_token", target_id=token_id
+                )
+                return JSONResponse({"status": "ok"})
+            return JSONResponse({"detail": "Not found"}, status_code=404)
         if sf.revoke_api_token(token_id):
             emit_audit(sf, event_type="token.revoked",
                        actor_label=request.state.principal.actor_label, target=token_id)
@@ -3724,11 +3771,16 @@ def create_admin_serve_app(
     @app.delete("/api/v1/tokens/{token_id}")
     async def delete_token(token_id: str, request: Request) -> JSONResponse:
         require_org_admin(request.state.context)
-        if _is_multi_tenant():
-            return JSONResponse(
-                {"detail": "Tenant API tokens are not implemented"},
-                status_code=501,
-            )
+        store = _token_store(request)
+        if store is not None:
+            # Multi-tenant tokens are soft-deleted (revoked) — the row stays for
+            # audit/hash-chain integrity. DELETE and revoke share one code path.
+            if await store.revoke_for(request.state.context, token_id):
+                await _emit_audit(
+                    request, "token.deleted", target_type="api_token", target_id=token_id
+                )
+                return JSONResponse({"status": "ok"})
+            return JSONResponse({"detail": "Not found"}, status_code=404)
         if sf.delete_api_token(token_id):
             emit_audit(sf, event_type="token.deleted",
                        actor_label=request.state.principal.actor_label, target=token_id)
@@ -5542,6 +5594,15 @@ def _admin_resource_store(request: Request):
     return _tenant_store_or_none(request, "admin_resource")
 
 
+def _token_store(request: Request):
+    """The active tenant API-token store, or None in single-org mode.
+
+    When present, the /api/v1/tokens routes mint/list/revoke project-bound tokens
+    via this ctx-scoped store; when None they keep their unchanged ``sf.*`` path
+    (the single-org file-backed token list)."""
+    return _tenant_store_or_none(request, "api_token")
+
+
 def _tenant_store_or_none(request: Request, name: str):
     rs = getattr(request.app.state, "resource_stores", None)
     store = getattr(rs, name, None) if rs is not None else None
@@ -5622,10 +5683,10 @@ def _in_write_scope(item_project_id: str | None, request: Request) -> bool:
 # default; agent create/delete; prompt-log create/update/delete; budget
 # create/update/delete; guardrail upsert/delete; notification channel/trigger
 # upsert/delete; autopilot trigger create; workflow-registry save; workflow run
-# approve/reject; artifact-destination upsert/delete. Remaining durable-audit
-# gaps (the multi-tenant hardening follow-up, NOT a single-org-launch blocker):
-# org/project settings mutate, fleet approvals/enrollment-keys (file-audited
-# only), connector writes, memory ingest, and API-token CRUD (501 in multi).
+# approve/reject; artifact-destination upsert/delete; API-token create/revoke/
+# delete. Remaining durable-audit gaps (the multi-tenant hardening follow-up, NOT
+# a single-org-launch blocker): org/project settings mutate, fleet approvals/
+# enrollment-keys (file-audited only), connector writes, and memory ingest.
 class NotificationSecretDecryptionError(RuntimeError):
     """A stored notification secret could not be decrypted; the send/test path
     fails closed (never emits the stored ciphertext or a plaintext fallback)."""

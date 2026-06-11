@@ -39,9 +39,11 @@ class _StubSF:
         return "csrf-secret"
 
 
-def _make_app(store: IdentityStore) -> FastAPI:
+def _make_app(store: IdentityStore, token_store=None) -> FastAPI:
     app = FastAPI()
-    app.add_middleware(AuthMiddleware, sf=_StubSF(), identity_store=store)
+    app.add_middleware(
+        AuthMiddleware, sf=_StubSF(), identity_store=store, api_token_store=token_store
+    )
 
     @app.get("/api/v1/whoami")
     async def whoami(request: Request):
@@ -78,8 +80,12 @@ async def env(dialect_engine, monkeypatch):
         oid, "po@acme.io", "project:member", admin["id"], project_id=pa
     )
     po = await store.accept_invitation(tok, password="pw0000")
+    from sagewai.admin.api_token_store import ApiTokenStore
+
+    token_store = ApiTokenStore(engine=dialect_engine)
+    await token_store.init()
     return {
-        "app": _make_app(store),
+        "app": _make_app(store, token_store),
         "oid": oid,
         "pa": pa,
         "pb": pb,
