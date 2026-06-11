@@ -40,6 +40,17 @@ needs.
 > fail-closed revocation checks at enqueue. See the
 > [v1.0 status](https://github.com/sagewai/platform#v10-status) for the full
 > shipped-vs-experimental breakdown.
+>
+> **Because that runtime enforcement is not yet wired, the identity-scoped,
+> CLI-agent, and JIT-credential modes are preview-gated.** In
+> **multi-tenant mode** they are **refused for tenants** unless the operator
+> explicitly sets `SAGEWAI_SEALED_PREVIEW=1` — a tenant must never receive an
+> unenforced Sealed identity by default. In **single-org mode** the trusted
+> self-hosted operator may run them **at their own risk** (the gate allows
+> them, behaviour unchanged). The gate fires at both the run-submit API
+> (`403`) and a worker backstop (the run is failed before it executes), so
+> non-API paths like replay are covered too. The in-process and
+> sandboxed-only modes are never preview-gated.
 
 ## Before you start
 

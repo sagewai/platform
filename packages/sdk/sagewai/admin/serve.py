@@ -3098,6 +3098,23 @@ def create_admin_serve_app(
                     ),
                 )
 
+        # 2c. Sealed identity-execution preview gate: Modes 2/3/3b
+        # (identity/full/full_jit) inject per-workload credentials and rely on
+        # Sealed *runtime* enforcement that is experimental and not wired into
+        # the default worker path. They are refused for tenants in multi-tenant
+        # mode unless the operator opts in via SAGEWAI_SEALED_PREVIEW=1.
+        # Single-org behaviour is unchanged (identity_execution_allowed → True).
+        from sagewai.sandbox.policy import (
+            identity_execution_allowed,
+            identity_execution_preview_message,
+            is_identity_execution_mode,
+        )
+        if is_identity_execution_mode(execution_mode) and not identity_execution_allowed():
+            raise _HTTPException(
+                status_code=403,
+                detail=identity_execution_preview_message(execution_mode),
+            )
+
         # 3. Capability check against fleet registry.
         # For non-BARE runs (requires_sandbox_mode=PER_RUN) we verify that at
         # least one APPROVED worker is registered. BARE runs execute inline and

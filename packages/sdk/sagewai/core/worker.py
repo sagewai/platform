@@ -608,6 +608,31 @@ class WorkflowWorker:
             wf_run.execution_mode.value,
             wf_run.requires_sandbox_mode.value,
         )
+
+        # Sealed identity-execution preview gate (backstop for runs created off
+        # the API path — replay, direct enqueue, future autopilot). Modes 2/3/3b
+        # inject per-workload credentials and rely on Sealed runtime enforcement
+        # that is experimental and unwired; refuse them for tenants in
+        # multi-tenant mode unless SAGEWAI_SEALED_PREVIEW=1. Single-org allows.
+        from sagewai.sandbox.policy import (
+            identity_execution_allowed,
+            identity_execution_preview_message,
+            is_identity_execution_mode,
+        )
+        if is_identity_execution_mode(wf_run.execution_mode) and not identity_execution_allowed():
+            msg = identity_execution_preview_message(wf_run.execution_mode)
+            logger.warning(
+                "Refusing run %s: %s",
+                wf_run.run_id,
+                msg,
+            )
+            await self._store.fail_run(
+                wf_run.workflow_name,
+                wf_run.run_id,
+                msg,
+            )
+            return
+
         workflow = self._registry.get(wf_run.workflow_name)
         if workflow is None:
             error_msg = f"Unknown workflow: {wf_run.workflow_name}"
