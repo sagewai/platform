@@ -500,6 +500,28 @@ class AdminResourceModel(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class RateLimitModel(Base):
+    """Distributed fixed-window rate-limit counter (multi-tenant mode).
+
+    Backs :class:`sagewai.admin.rate_limit.PostgresRateLimiter`. Each row is one
+    ``(bucket_key, window_start)`` window; ``count`` is incremented atomically via
+    ``INSERT ... ON CONFLICT DO UPDATE``. Because every worker process targets the
+    same row, the limit is enforced across processes (the single-process
+    in-memory limiter is the single-org default and needs no table). Stale
+    windows are pruned opportunistically on write.
+    """
+
+    __tablename__ = "rate_limits"
+    __table_args__ = (
+        PrimaryKeyConstraint("bucket_key", "window_start"),
+        Index("ix_rate_limits_window_start", "window_start"),
+    )
+
+    bucket_key: Mapped[str] = mapped_column(Text, nullable=False)
+    window_start: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+
+
 # ---------------------------------------------------------------------------
 # Admin store tables
 # ---------------------------------------------------------------------------

@@ -15,7 +15,6 @@ import hashlib
 import hmac
 import os
 import time
-from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
@@ -172,32 +171,54 @@ def _session_token_id(raw: str) -> str:
 
 
 class _LoginThrottle:
-    """In-memory per-(ip,email) sliding window. Single-process by contract.
+    """Per-(ip,email) login brute-force throttle.
 
-    Instantiated by the login route (serve.py auth_login).
+    Delegates counting to a :class:`~sagewai.admin.rate_limit.RateLimiter`. The
+    default is an in-memory sliding window (single-process, single-org default,
+    byte-identical to the legacy throttle using wall-clock ``time.time``); in
+    multi-tenant mode it is built with a :class:`PostgresRateLimiter` so the
+    lockout is shared across worker processes (see ``build_rate_limiter``).
+
+    Instantiated by the login route (serve.py auth_login). The public methods are
+    synchronous and back the in-memory default; the ``*_async`` variants are used
+    by the (async) login handler and support the distributed backend.
     """
 
-    def __init__(self, limit: int = 5, window: int = 900) -> None:
+    def __init__(self, limit: int = 5, window: int = 900, limiter=None) -> None:
+        from sagewai.admin.rate_limit import InMemoryRateLimiter
+
         self.limit, self.window = limit, window
-        self._hits: dict[str, deque] = defaultdict(deque)
+        # In-memory default uses wall-clock time, matching the legacy throttle's
+        # 900s lockout window and the ``Retry-After: 900`` denial.
+        self._limiter = limiter if limiter is not None else InMemoryRateLimiter(now=time.time)
+
+    def _in_memory(self):
+        from sagewai.admin.rate_limit import InMemoryRateLimiter
+
+        if isinstance(self._limiter, InMemoryRateLimiter):
+            return self._limiter
+        raise RuntimeError("distributed limiter requires the *_async login throttle methods")
 
     def blocked(self, key: str) -> bool:
-        now = time.time()
-        dq = self._hits.get(key)
-        if not dq:
-            return False
-        while dq and dq[0] < now - self.window:
-            dq.popleft()
-        if not dq:
-            del self._hits[key]
-            return False
-        return len(dq) >= self.limit
+        return self._in_memory().count_sync(key, window=self.window) >= self.limit
 
     def record_failure(self, key: str) -> None:
-        self._hits[key].append(time.time())
+        # Record one failure; the in-memory limiter caps the deque at ``limit`` but
+        # ``hit_sync`` only appends while under it — to preserve "count past the
+        # limit" semantics for blocked(), append unconditionally via a large cap.
+        self._in_memory().hit_sync(key, limit=10**9, window=self.window)
 
     def reset(self, key: str) -> None:
-        self._hits.pop(key, None)
+        self._in_memory().reset_sync(key)
+
+    async def blocked_async(self, key: str) -> bool:
+        return await self._limiter.count(key, window=self.window) >= self.limit
+
+    async def record_failure_async(self, key: str) -> None:
+        await self._limiter.hit(key, limit=10**9, window=self.window)
+
+    async def reset_async(self, key: str) -> None:
+        await self._limiter.reset(key)
 
 
 def _extract(request) -> tuple[str | None, str]:

@@ -40,6 +40,14 @@ denied by default, and the admin API is auth-gated (CORS allowlist, HttpOnly+CSR
 cookies). Multi-tenant mode additionally enforces per-project key envelopes,
 per-project run quotas, and a hash-chained per-project audit log.
 
+**Rate limiting is automatically distributed in multi-tenant mode.** The login
+brute-force lockout and the per-project run-rate quota (`SAGEWAI_PROJECT_RUN_RATE` /
+`SAGEWAI_PROJECT_RUN_WINDOW`) are enforced **across all worker processes** via the
+same PostgreSQL database the tenant stores use — no Redis or extra configuration
+required, so the limits hold correctly even with multiple replicas behind a load
+balancer. Single-org mode uses an equivalent in-process limiter (no database
+dependency), which is exact for a single worker.
+
 ### Surface support matrix (self-hosted)
 
 | Surface | Status |

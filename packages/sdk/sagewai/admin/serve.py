@@ -24,8 +24,7 @@ import datetime
 import json
 import logging
 import os
-import time
-from collections import defaultdict, deque
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -945,7 +944,16 @@ def create_admin_serve_app(
         return JSONResponse({"detail": str(exc)}, status_code=409)
 
     # W7 per-project run-rate quota (multi-tenant): one tenant can't starve others.
-    app.state.run_throttle = _ProjectRunThrottle(_run_quota_limit(), _run_quota_window())
+    # The limiter is distributed (Postgres-backed, correct across worker
+    # processes) in multi-tenant mode and in-memory single-process in single-org
+    # (build_rate_limiter picks the backend; the tenant engine comes from the
+    # identity store). W6 "distributed rate limiting" closed here.
+    from sagewai.admin.rate_limit import build_rate_limiter
+
+    _tenant_engine = getattr(identity_store, "_engine", None)
+    app.state.run_throttle = _ProjectRunThrottle(
+        _run_quota_limit(), _run_quota_window(), build_rate_limiter(_tenant_engine)
+    )
 
     @app.exception_handler(_QuotaExceededError)
     async def _on_quota_exceeded(request: Request, exc: _QuotaExceededError) -> JSONResponse:
@@ -990,7 +998,9 @@ def create_admin_serve_app(
     from sagewai.admin.auth_middleware import csrf_token_for, _LoginThrottle, _session_token_id
     from sagewai.admin.audit import emit_audit
 
-    _login_throttle = _LoginThrottle()
+    # Login brute-force throttle — distributed across workers in multi-tenant
+    # mode (shared Postgres lockout), in-memory single-process in single-org.
+    _login_throttle = _LoginThrottle(limiter=build_rate_limiter(_tenant_engine))
 
     def _set_session_cookies(resp: JSONResponse, raw: str) -> None:
         secure = os.environ.get("SAGEWAI_ADMIN_TLS", "") in {"1", "true"}
@@ -1366,7 +1376,7 @@ def create_admin_serve_app(
         email = body.get("email", "")
         ip = request.client.host if request.client else "?"
         key = f"{ip}:{email}"
-        if _login_throttle.blocked(key):
+        if await _login_throttle.blocked_async(key):
             otel_count("auth.logins", status="throttled")
             return JSONResponse({"detail": "Too many attempts. Try again later."},
                                 status_code=429, headers={"Retry-After": "900"})
@@ -1378,10 +1388,10 @@ def create_admin_serve_app(
                 else None
             )
             if not user:
-                _login_throttle.record_failure(key)
+                await _login_throttle.record_failure_async(key)
                 otel_count("auth.logins", status="failed")
                 return JSONResponse({"detail": "Invalid email or password"}, status_code=401)
-            _login_throttle.reset(key)
+            await _login_throttle.reset_async(key)
             try:
                 result = await _tenant_session_result(
                     org["id"], user["id"], project_id=body.get("project_id")
@@ -1397,13 +1407,13 @@ def create_admin_serve_app(
             return resp
         result = sf.validate_login(email, body.get("password", ""))
         if not result:
-            _login_throttle.record_failure(key)
+            await _login_throttle.record_failure_async(key)
             logger.warning("Login failed for email=%s", email,
                            extra={"event": "auth.login.failed", "email": email})
             otel_count("auth.logins", status="failed")
             emit_audit(sf, event_type="auth.login.failed", actor_label=email)
             return JSONResponse({"detail": "Invalid email or password"}, status_code=401)
-        _login_throttle.reset(key)
+        await _login_throttle.reset_async(key)
         logger.info("Login success for email=%s", result["user"]["email"],
                     extra={"event": "auth.login.success", "email": result["user"]["email"]})
         otel_count("auth.logins", status="success")
@@ -1953,7 +1963,7 @@ def create_admin_serve_app(
         agent_name = body.get("agent_name") or body.get("name") or ""
         message = body.get("message", "")
         pid = _project_scope(request)
-        _enforce_run_quota(request)
+        await _enforce_run_quota(request)
         agent_spec = await _resolve_agent(request, agent_name)
         run_id = f"run-{_run_sec.token_hex(6)}"
         _run_t0 = _run_time.monotonic()
@@ -2646,7 +2656,7 @@ def create_admin_serve_app(
 
         body = await request.json()
         pid = _project_scope(request)
-        _enforce_run_quota(request)
+        await _enforce_run_quota(request)
         run_id = f"wf-{_sec.token_hex(6)}"
         yaml_str = body.get("yaml", body.get("yaml_content", ""))
         message = body.get("message", body.get("input", ""))
@@ -3060,7 +3070,7 @@ def create_admin_serve_app(
 
         body = await request.json()
         pid = _project_scope(request)
-        _enforce_run_quota(request)
+        await _enforce_run_quota(request)
 
         workflow_name = body.get("workflow_name")
         if not workflow_name:
@@ -5694,26 +5704,38 @@ class _RunProjectRequiredError(Exception):
 
 
 class _ProjectRunThrottle:
-    """In-memory per-project run-start rate limiter (single-process by contract,
-    like the foundation login throttle): caps run-starts per sliding window so one
-    project cannot starve others. ``limit <= 0`` disables it (always allow)."""
+    """Per-project run-start rate limiter: caps run-starts per window so one
+    project cannot starve others. ``limit <= 0`` disables it (always allow).
 
-    def __init__(self, limit: int, window: float) -> None:
+    Delegates counting to a :class:`~sagewai.admin.rate_limit.RateLimiter`. The
+    default is an in-memory sliding window (single-process, single-org default,
+    byte-identical to the legacy throttle); in multi-tenant mode it is built with
+    a :class:`PostgresRateLimiter` so the limit is enforced across worker
+    processes (see :func:`build_rate_limiter`).
+    """
+
+    def __init__(self, limit: int, window: float, limiter=None) -> None:
+        from sagewai.admin.rate_limit import InMemoryRateLimiter, RateLimiter
+
         self.limit = limit
         self.window = window
-        self._hits: dict[Any, deque] = defaultdict(deque)
+        self._limiter: RateLimiter = (
+            limiter if limiter is not None else InMemoryRateLimiter()
+        )
 
     def allow(self, key: Any) -> bool:
+        """Synchronous allow — in-memory limiter only (single-org / tests)."""
+        from sagewai.admin.rate_limit import InMemoryRateLimiter
+
+        if not isinstance(self._limiter, InMemoryRateLimiter):
+            raise RuntimeError("distributed limiter requires allow_async()")
+        return self._limiter.hit_sync(str(key), limit=self.limit, window=self.window)
+
+    async def allow_async(self, key: Any) -> bool:
+        """Async allow — used in request handlers; supports the Postgres backend."""
         if self.limit <= 0:
             return True
-        now = time.monotonic()
-        dq = self._hits[key]
-        while dq and dq[0] < now - self.window:
-            dq.popleft()
-        if len(dq) >= self.limit:
-            return False
-        dq.append(now)
-        return True
+        return await self._limiter.hit(str(key), limit=self.limit, window=self.window)
 
 
 def _run_quota_limit() -> int:
@@ -5730,7 +5752,7 @@ def _run_quota_window() -> float:
         return 60.0
 
 
-def _enforce_run_quota(request: Request) -> None:
+async def _enforce_run_quota(request: Request) -> None:
     """Per-project run-start rate quota (multi-tenant only; W7).
 
     Non-admin run-start requires a concrete project context: an org:member who
@@ -5739,10 +5761,10 @@ def _enforce_run_quota(request: Request) -> None:
     org-shared execution to *that* project's bucket. Org owners/admins may run in
     org scope (their own bucket).
 
-    **Scope:** the limiter is in-memory / single-process (like the foundation
-    login throttle) — a single-process fairness guardrail. The durable,
-    cross-replica distributed quota is W6 ("distributed rate limiting"), not this
-    PR; a multi-replica deployment needs that to fully close W7 fairness.
+    **Scope:** the underlying limiter is chosen by :func:`build_rate_limiter` —
+    distributed (Postgres-backed, correct across worker processes) in multi-tenant
+    mode, in-memory single-process in single-org. This closes the W7 fairness gap
+    for multi-replica deployments.
 
     Raises ``_RunProjectRequiredError`` (-> 409) when a non-admin omits the
     project, and ``_QuotaExceededError`` (-> 429) when the rate is exceeded.
@@ -5756,7 +5778,7 @@ def _enforce_run_quota(request: Request) -> None:
     throttle = getattr(getattr(request.app, "state", None), "run_throttle", None)
     if throttle is None:
         return
-    if not throttle.allow((ctx.org_id, ctx.project_id)):
+    if not await throttle.allow_async((ctx.org_id, ctx.project_id)):
         raise _QuotaExceededError("project run-rate quota exceeded")
 
 
