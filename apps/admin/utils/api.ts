@@ -231,12 +231,7 @@ export const adminApi = {
     ),
 
   /* ─── Run control endpoints ─── */
-  pauseRun: (id: string) =>
-    client.post<{ status: string }>(`/runs/${encodeURIComponent(id)}/pause`, {}),
-
-  resumeRun: (id: string) =>
-    client.post<{ status: string }>(`/runs/${encodeURIComponent(id)}/resume`, {}),
-
+  // pause/resume are intentionally absent — no backend route implements them.
   cancelRun: (id: string) =>
     client.post<{ status: string }>(`/runs/${encodeURIComponent(id)}/cancel`, {}),
 

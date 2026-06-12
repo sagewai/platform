@@ -9,6 +9,8 @@ export const metadata = {
 
 Run the full Sagewai stack on your own infrastructure. This guide covers local bring-up, environment configuration, database management, reverse proxy setup, fleet workers, and common failure modes.
 
+> **How Sagewai is organized.** Sagewai is **always self-hosted open source** (AGPL-3.0) — there is one product, which you run on your own infrastructure. The **organization** is the umbrella for your whole deployment. The **project** is the isolation boundary: project-scoped resources never cross project lines. A resource with `project_id = null` is **org-global** — shared across the whole org. In the default `single` tenancy mode the org is a single trusted namespace and the project is an organizational filter; switch to `multi` to make the project a hard, enforced boundary. See [Tenancy modes](#tenancy-modes).
+
 > **Current storage model.** The `sagewai admin serve` backend is a **single-process, single-org** server. Know these limits before deploying:
 >
 > - **Admin state** (connections, providers, agents, profiles) is a JSON file (`~/.sagewai/admin-state.json`). Mount it on a persistent volume; the container discards it on restart otherwise.
@@ -61,6 +63,21 @@ dependency), which is exact for a single worker.
 | Fleet workers | Supported — registry is in-memory and resets on restart |
 | Harness (LLM gateway) | Supported |
 | Budget, guardrails, notifications, triggers, eval, artifact destinations | Supported (file-backed; single-process) |
+
+### Preview / not yet supported
+
+A few surfaces are exposed in the API or admin UI but are **preview-only or not
+yet implemented** in this build. They are listed here so the deployment is
+honest about what does and does not work end-to-end:
+
+| Surface | Status |
+|---------|--------|
+| **Sealed Modes 2 / 3 / 3b** (identity / full / full + JIT execution) | **Preview — off by default.** These inject per-workload credentials and depend on Sealed *runtime* enforcement that is not wired into the default worker path. Refused in `multi` mode unless you opt in with `SAGEWAI_SEALED_PREVIEW=1`. Modes 0/1 (bare / managed) are fully supported. |
+| **Workflow DLQ retry** (`POST /workflows/dlq/{run_id}/retry`) | **Not implemented** (returns `501`). Re-run the workflow from the builder, then discard the failed entry. The admin UI Retry button is disabled. |
+| **Legacy workflow dispatch** (`POST /workflows/dispatch`) | **Not implemented** (returns `501`). Enqueue workflows from the builder or via `POST /api/v1/workflows/enqueue`. The admin Dispatch page is inert. |
+| **Prompt replay** (`POST /api/v1/prompts/replay`) | **Not available standalone** (returns `501`) — replay requires a running agent. Re-running a workflow from its history page (which re-submits the definition) works. |
+| **Eval run** (`POST /api/v1/eval/run`) | **Not available** (returns `501`) — requires a running agent with LLM keys. Datasets and reports are otherwise managed normally. |
+| **Run pause / resume** | **Not implemented** — there is no backend route. Only **cancel** is supported for an in-flight run. |
 
 ---
 

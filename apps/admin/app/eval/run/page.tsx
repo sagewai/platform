@@ -59,8 +59,14 @@ export default function RunEvalPage() {
         judgeModel,
       );
       setResult(data);
-    } catch {
-      setRunError('Eval run failed. Check that the agent and dataset are valid.');
+    } catch (err: unknown) {
+      // Surface the backend's real reason (e.g. a 501 "Evaluation requires a
+      // running agent with LLM keys") rather than blaming the user's inputs.
+      setRunError(
+        err instanceof Error && err.message
+          ? err.message
+          : 'Eval run failed.',
+      );
     } finally {
       setRunning(false);
     }

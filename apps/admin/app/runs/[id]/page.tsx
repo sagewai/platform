@@ -36,16 +36,14 @@ export default function RunDetailPage({ params }: Props) {
 
   useEffect(() => { fetchRun(); }, [id]);
 
-  async function handleAction(action: 'pause' | 'resume' | 'cancel') {
+  async function handleCancel() {
     setActionPending(true);
     try {
-      if (action === 'pause') await adminApi.pauseRun(id);
-      else if (action === 'resume') await adminApi.resumeRun(id);
-      else await adminApi.cancelRun(id);
-      toast('success', `Run ${action}ed`);
+      await adminApi.cancelRun(id);
+      toast('success', 'Run cancelled');
       await fetchRun();
     } catch {
-      toast('error', `Failed to ${action} run`);
+      toast('error', 'Failed to cancel run');
     } finally {
       setActionPending(false);
       setShowCancel(false);
@@ -117,19 +115,10 @@ export default function RunDetailPage({ params }: Props) {
         </Card>
       </div>
 
-      {/* Run controls */}
+      {/* Run controls — pause/resume are not implemented (no backend route);
+          only cancel is offered for an in-flight run. */}
       {isActive && (
         <div className="flex gap-sm mb-lg">
-          {run.status === 'running' && (
-            <Button variant="secondary" size="sm" onClick={() => handleAction('pause')} disabled={actionPending}>
-              Pause
-            </Button>
-          )}
-          {run.status === 'paused' && (
-            <Button size="sm" onClick={() => handleAction('resume')} disabled={actionPending}>
-              Resume
-            </Button>
-          )}
           <Button variant="danger" size="sm" onClick={() => setShowCancel(true)} disabled={actionPending}>
             Cancel
           </Button>
@@ -245,7 +234,7 @@ export default function RunDetailPage({ params }: Props) {
       <ConfirmDialog
         open={showCancel}
         onClose={() => setShowCancel(false)}
-        onConfirm={() => handleAction('cancel')}
+        onConfirm={handleCancel}
         title="Cancel Run"
         message="Are you sure you want to cancel this run? This action cannot be undone."
         confirmLabel="Cancel Run"

@@ -17,6 +17,7 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from sagewai.admin._actor import actor_id_for
 from sagewai.sealed.revocation import Revocation
 
 
@@ -99,7 +100,7 @@ async def post_revocation(request: Request, body: RevokeRequest) -> RevokeRespon
         state.get_sealed_config()
         .get("revoke_rate_limit_per_admin_per_hour", 60)
     )
-    admin_id = "default-admin"  # TODO: extract from auth context when integrated
+    admin_id = actor_id_for(request)  # authenticated actor, never a placeholder
 
     if not _check_revoke_rate_limit(admin_id, rate_limit):
         raise HTTPException(
@@ -185,7 +186,7 @@ async def lift_revocation(request: Request, revocation_id: int) -> Revocation:
 
     reg = request.app.state.sealed_revocation_registry
     try:
-        return await reg.lift(revocation_id, actor_id="default-admin")
+        return await reg.lift(revocation_id, actor_id=actor_id_for(request))
     except LookupError:
         raise HTTPException(status_code=404, detail={"id": revocation_id}) from None
     except RevocationConflictError as exc:

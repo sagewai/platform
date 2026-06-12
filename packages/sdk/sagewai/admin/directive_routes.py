@@ -31,6 +31,7 @@ from typing import Any
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 
+from sagewai.admin._actor import actor_id_for
 from sagewai.admin.authz import (
     in_read_scope,
     require_in_project_scope,
@@ -194,7 +195,7 @@ async def approve(
     try:
         return await reg.approve(
             decision_id=decision_id,
-            actor=body.get("actor", "default-admin"),
+            actor=actor_id_for(request),  # authenticated actor, not body-spoofable
             note=body.get("note"),
         )
     except KeyError as exc:
@@ -216,7 +217,7 @@ async def deny(
     try:
         return await reg.deny(
             decision_id=decision_id,
-            actor=body.get("actor", "default-admin"),
+            actor=actor_id_for(request),  # authenticated actor, not body-spoofable
             note=body.get("note"),
         )
     except KeyError as exc:

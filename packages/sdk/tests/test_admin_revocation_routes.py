@@ -91,6 +91,59 @@ async def test_delete_revocation_lifts(admin_client):
     assert res.json()["lifted_at"] is not None
 
 
+@pytest.fixture
+async def authed_admin_client():
+    """Revocation app with an authenticated single-org context on every request."""
+    from fastapi import Request
+
+    from sagewai.admin import revocation_routes
+    from sagewai.admin.tenancy import single_org_context
+    from sagewai.core.stores.postgres import PostgresStore
+
+    store = PostgresStore(database_url=os.environ["SAGEWAI_DATABASE_URL"])
+    await store.initialize()
+    await store._pool.execute("DELETE FROM sealed_revocations")
+
+    app = FastAPI()
+    revocation_routes.register(app, store=store)
+    revocation_routes._REVOKE_HISTORY.clear()
+
+    @app.middleware("http")
+    async def _inject_ctx(request: Request, call_next):
+        request.state.context = single_org_context(
+            actor_id="auth-user", actor_label="alice@example.com",
+        )
+        return await call_next(request)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
+
+    await store._pool.execute("DELETE FROM sealed_revocations")
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_revoke_and_lift_record_authenticated_actor(authed_admin_client):
+    """revoked_by/lifted_by must be the authenticated actor, never "default-admin"."""
+    res = await authed_admin_client.post(
+        "/api/v1/admin/sealed/revocations",
+        json={"profile_id": "acme", "secret_key": "K", "reason": "leaked"},
+    )
+    assert res.status_code == 201, res.text
+    row = res.json()["revocations"][0]
+    assert row["revoked_by"] == "alice@example.com"
+    assert row["revoked_by"] != "default-admin"
+
+    res = await authed_admin_client.delete(
+        f"/api/v1/admin/sealed/revocations/{row['id']}"
+    )
+    assert res.status_code == 200, res.text
+    lifted = res.json()
+    assert lifted["lifted_by"] == "alice@example.com"
+    assert lifted["lifted_by"] != "default-admin"
+
+
 @pytest.mark.asyncio
 async def test_delete_nonexistent_returns_404(admin_client):
     res = await admin_client.delete("/api/v1/admin/sealed/revocations/999999")

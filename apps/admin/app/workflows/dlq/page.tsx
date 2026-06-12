@@ -27,16 +27,6 @@ export default function DLQPage() {
     fetchEntries();
   }, [fetchEntries]);
 
-  const handleRetry = async (runId: string) => {
-    try {
-      const result = await adminApi.retryDLQ(runId);
-      alert(`Retried as: ${result.new_run_id}`);
-      fetchEntries();
-    } catch (e: unknown) {
-      alert(`Retry failed: ${e instanceof Error ? e.message : 'Unknown error'}`);
-    }
-  };
-
   const handleDiscard = async (runId: string) => {
     try {
       await adminApi.discardDLQ(runId);
@@ -55,7 +45,7 @@ export default function DLQPage() {
             Failed Workflows
           </h1>
           <p className="text-sm text-text-secondary mt-1">
-            Workflows that failed after exhausting retries — review, retry, or discard
+            Workflows that failed after exhausting retries — review and discard
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -80,7 +70,7 @@ export default function DLQPage() {
       {showHelp && (
         <Card>
           <div className="p-md text-sm text-text-secondary space-y-2">
-            <p>Workflows land here after exhausting their retry attempts (Dead Letter Queue). Review the error, fix the underlying cause, then retry. You can also discard entries that are no longer relevant.</p>
+            <p>Workflows land here after exhausting their retry attempts (Dead Letter Queue). Review the error and fix the underlying cause. In-place retry is not available in this build — re-run the workflow from the builder, then discard entries that are no longer relevant.</p>
           </div>
         </Card>
       )}
@@ -125,9 +115,9 @@ export default function DLQPage() {
                   <td className="py-2.5 px-3">
                     <div className="flex gap-2">
                       <button
-                        onClick={() => handleRetry(e.run_id)}
-                        className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-border hover:bg-bg-subtle"
-                        title="Retry"
+                        disabled
+                        className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-border opacity-50 cursor-not-allowed"
+                        title="Not available in this build — workflow DLQ retry is not implemented. Re-run the workflow from the builder, then discard this entry."
                       >
                         <RotateCcw className="w-3 h-3" /> Retry
                       </button>
