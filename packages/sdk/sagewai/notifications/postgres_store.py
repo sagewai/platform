@@ -13,6 +13,18 @@ Persists notification history, channel configs, and trigger routing
 to any SQLAlchemy-supported database (SQLite by default, PostgreSQL in
 production).  Replaces the former asyncpg-only implementation.
 
+.. warning::
+
+    **INTERNAL / single-org or legacy only — NOT tenant-safe.** Do not use for
+    multi-tenant admin resources (superseded by ``AdminResourceStore``, #444).
+    Channel/trigger rows are keyed by name/id ALONE — ``project_id`` is not
+    enforced — AND secret decrypt is **not fail-closed**: :meth:`_decrypt`
+    returns the *stored value unchanged* on any decryption failure (wrong/missing
+    key), so a ciphertext can leak as a "plaintext" secret rather than raising.
+    It remains only for the single-org notification path and its existing tests.
+    New multi-tenant code MUST route through a project-scoped, fail-closed store.
+    Instantiating it emits a :class:`DeprecationWarning`.
+
 Usage::
 
     from sagewai.notifications.postgres_store import PostgresNotificationStore
@@ -44,6 +56,7 @@ from __future__ import annotations
 
 import json
 import logging
+import warnings
 from datetime import datetime, timezone
 from typing import Any
 
@@ -82,6 +95,15 @@ def _make_engine(
 class PostgresNotificationStore:
     """Notification store using SQLAlchemy Core — SQLite (default) or PostgreSQL.
 
+    .. warning::
+
+        **INTERNAL / single-org or legacy only — NOT tenant-safe; do not use for
+        multi-tenant admin resources (superseded by AdminResourceStore).
+        project_id is not enforced / secret decrypt is not fail-closed**
+        (:meth:`_decrypt` returns the stored value unchanged on failure). Use a
+        project-scoped, fail-closed store for any multi-tenant path. Constructing
+        this class emits a :class:`DeprecationWarning`.
+
     Parameters
     ----------
     database_url:
@@ -105,6 +127,15 @@ class PostgresNotificationStore:
         engine: AsyncEngine | None = None,
         encryption_key: str | None = None,
     ) -> None:
+        warnings.warn(
+            "PostgresNotificationStore is INTERNAL / single-org or legacy only and "
+            "is NOT tenant-safe (project_id is not enforced; secret decrypt is not "
+            "fail-closed — _decrypt returns the stored value on failure). It is "
+            "superseded by AdminResourceStore for multi-tenant admin resources — "
+            "do not use it in new multi-tenant code.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._engine = _make_engine(database_url, pool, engine)
         self._fernet: Any = None
         if encryption_key:

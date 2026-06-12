@@ -842,6 +842,11 @@ def create_admin_serve_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Start and stop the autopilot scheduler runner alongside the app."""
+        # Fail fast on an unsafe production deployment BEFORE any state is built.
+        # No-op unless SAGEWAI_ENV=production (dev/test/single-org local unaffected).
+        from sagewai.admin.prod_check import validate_production_config
+        validate_production_config()
+
         scheduler = MissionScheduler()
         driver = MissionDriver(scheduler=scheduler)
         runner_interval = float(os.getenv("SAGEWAI_SCHEDULER_INTERVAL_SECONDS", "60"))
@@ -1705,6 +1710,13 @@ def create_admin_serve_app(
             result = await identity_store.update_org(ctx.org_id, patch) if identity_store else None
             if result is None:
                 return JSONResponse({"detail": "Not found"}, status_code=404)
+            await _emit_audit(
+                request,
+                "org.updated",
+                target_type="org",
+                target_id=ctx.org_id,
+                metadata={"patched_keys": sorted(patch.keys())},
+            )
             return JSONResponse(jsonable_encoder(_tenant_org_payload(result)))
         result = sf.update_org(body)
         emit_audit(sf, event_type="org.updated",
@@ -1796,6 +1808,13 @@ def create_admin_serve_app(
             )
             if result is None:
                 return JSONResponse({"detail": "Not found"}, status_code=404)
+            await _emit_audit(
+                request,
+                "project.updated",
+                target_type="project",
+                target_id=project["id"],
+                metadata={"patched_keys": sorted(k for k in body.keys())},
+            )
             return JSONResponse(jsonable_encoder(_tenant_project_payload(result)))
         result = sf.update_project(slug, body)
         if result is None:
@@ -4089,6 +4108,9 @@ def create_admin_serve_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         emit_audit(sf, event_type="fleet.worker.approved",
                    actor_label=request.state.principal.actor_label, target=worker_id)
+        await _emit_audit(
+            request, "fleet.worker.approved", target_type="fleet_worker", target_id=worker_id
+        )
         return JSONResponse({"status": w.approval_status.value, "worker_id": w.id})
 
     @app.post("/api/v1/fleet/workers/{worker_id}/reject")
@@ -4103,6 +4125,9 @@ def create_admin_serve_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         emit_audit(sf, event_type="fleet.worker.rejected",
                    actor_label=request.state.principal.actor_label, target=worker_id)
+        await _emit_audit(
+            request, "fleet.worker.rejected", target_type="fleet_worker", target_id=worker_id
+        )
         return JSONResponse({"status": w.approval_status.value, "worker_id": w.id})
 
     @app.post("/api/v1/fleet/workers/{worker_id}/revoke")
@@ -4117,6 +4142,9 @@ def create_admin_serve_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         emit_audit(sf, event_type="fleet.worker.revoked",
                    actor_label=request.state.principal.actor_label, target=worker_id)
+        await _emit_audit(
+            request, "fleet.worker.revoked", target_type="fleet_worker", target_id=worker_id
+        )
         return JSONResponse({"status": w.approval_status.value, "worker_id": w.id})
 
     @app.get("/api/v1/admin/fleet/workers/{worker_id}/pool-stats")
@@ -4159,6 +4187,12 @@ def create_admin_serve_app(
         )
         emit_audit(sf, event_type="fleet.enrollment_key.created",
                    actor_label=request.state.principal.actor_label, target=key_record.id)
+        await _emit_audit(
+            request,
+            "fleet.enrollment_key.created",
+            target_type="fleet_enrollment_key",
+            target_id=key_record.id,
+        )
         return JSONResponse({
             "id": key_record.id, "key": raw_key, "name": key_record.name,
             "max_uses": key_record.max_uses,
@@ -4177,6 +4211,12 @@ def create_admin_serve_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         emit_audit(sf, event_type="fleet.enrollment_key.revoked",
                    actor_label=request.state.principal.actor_label, target=key_id)
+        await _emit_audit(
+            request,
+            "fleet.enrollment_key.revoked",
+            target_type="fleet_enrollment_key",
+            target_id=key_id,
+        )
         return JSONResponse({"status": "ok"})
 
     @app.get("/api/v1/fleet/audit")
@@ -4264,6 +4304,9 @@ def create_admin_serve_app(
             d["connectors"] = [c for c in connectors if c.get("name") != name]
             d["connectors"].append(body)
         sf.mutate(_apply)
+        await _emit_audit(
+            request, "connector.saved", target_type="connector", target_id=name
+        )
         return JSONResponse(body)
 
     @app.post("/api/v1/connectors/{name}/test")
@@ -4271,11 +4314,14 @@ def create_admin_serve_app(
         return JSONResponse({"connected": True, "name": name})
 
     @app.delete("/api/v1/connectors/{name}")
-    async def delete_connector(name: str) -> JSONResponse:
+    async def delete_connector(name: str, request: Request) -> JSONResponse:
         def _apply(d):
             connectors = d.get("connectors", [])
             d["connectors"] = [c for c in connectors if c.get("name") != name]
         sf.mutate(_apply)
+        await _emit_audit(
+            request, "connector.deleted", target_type="connector", target_id=name
+        )
         return JSONResponse({"status": "ok"})
 
     # ── Notifications ────────────────────────────────────────────
@@ -5850,14 +5896,15 @@ def _in_write_scope(item_project_id: str | None, request: Request) -> bool:
 # only** — a no-op in single-org mode, where the foundation file audit
 # (`emit_audit(sf, ...)`) records auth events plus org/token/fleet admin actions.
 #
-# In multi mode, durable audit currently covers: provider upsert/delete/set-
-# default; agent create/delete; prompt-log create/update/delete; budget
-# create/update/delete; guardrail upsert/delete; notification channel/trigger
-# upsert/delete; autopilot trigger create; workflow-registry save; workflow run
-# approve/reject; artifact-destination upsert/delete; API-token create/revoke/
-# delete. Remaining durable-audit gaps (the multi-tenant hardening follow-up, NOT
-# a single-org-launch blocker): org/project settings mutate, fleet approvals/
-# enrollment-keys (file-audited only), connector writes, and memory ingest.
+# In multi mode, durable audit currently covers: org/project settings update;
+# provider upsert/delete/set-default; agent create/delete; prompt-log create/
+# update/delete; budget create/update/delete; guardrail upsert/delete;
+# notification channel/trigger upsert/delete; autopilot trigger create; workflow-
+# registry save; workflow run approve/reject; artifact-destination upsert/delete;
+# API-token create/revoke/delete; fleet worker approve/reject/revoke; fleet
+# enrollment-key create/revoke; connector save/delete. Remaining durable-audit
+# gap (tracked in a parallel PR, NOT a single-org-launch blocker): memory/context
+# ingest.
 class NotificationSecretDecryptionError(RuntimeError):
     """A stored notification secret could not be decrypted; the send/test path
     fails closed (never emits the stored ciphertext or a plaintext fallback)."""

@@ -11,10 +11,21 @@
 
 Replaces the former asyncpg-only implementation of PostgresTriggerStore.
 Works on both SQLite (default) and PostgreSQL via a shared AsyncEngine.
+
+.. warning::
+
+    **INTERNAL / single-org or legacy only — NOT tenant-safe.** Do not use for
+    multi-tenant admin resources (superseded by ``AdminResourceStore``, #444).
+    This store keys trigger rows by ``id`` ALONE — ``project_id`` is not enforced,
+    so any caller with a trigger id can read/overwrite/delete a trigger belonging
+    to another project or org. It remains only for the single-org gateway and its
+    existing tests. New multi-tenant code MUST route through a project-scoped
+    store. Instantiating it emits a :class:`DeprecationWarning`.
 """
 
 from __future__ import annotations
 
+import warnings
 from datetime import timedelta
 from typing import Any
 
@@ -46,6 +57,14 @@ def _make_engine(
 class PostgresTriggerStore(TriggerStore):
     """Persists trigger configurations in the ``connector_triggers`` table.
 
+    .. warning::
+
+        **INTERNAL / single-org or legacy only — NOT tenant-safe; do not use for
+        multi-tenant admin resources (superseded by AdminResourceStore).
+        project_id is not enforced** (rows are keyed by ``id`` alone). Use a
+        project-scoped store for any multi-tenant path. Constructing this class
+        emits a :class:`DeprecationWarning`.
+
     Parameters
     ----------
     engine:
@@ -67,6 +86,14 @@ class PostgresTriggerStore(TriggerStore):
         *,
         engine: AsyncEngine | None = None,
     ) -> None:
+        warnings.warn(
+            "PostgresTriggerStore is INTERNAL / single-org or legacy only and is "
+            "NOT tenant-safe (project_id is not enforced; rows are keyed by id "
+            "alone). It is superseded by AdminResourceStore for multi-tenant admin "
+            "resources — do not use it in new multi-tenant code.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._engine: AsyncEngine = _make_engine(database_url, pool, engine)
 
     async def init(self) -> None:
