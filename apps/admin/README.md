@@ -34,7 +34,7 @@ NEXT_PUBLIC_ADMIN_API_URL=http://localhost:8000/admin pnpm dev
 - `/memory` — Knowledge graph explorer, vector store browser
 - `/playground` — Interactive agent playground
 - `/analytics` — Cost, model, network, and performance analytics
-- `/settings` — Organization, projects, models, tokens, triggers, billing, health, notifications
+- `/settings` — Organization, projects, models, tokens, triggers, health, notifications
 - `/workspace` — Members, teams, providers
 - `/safety` — Guardrails, audit log
 - `/eval` — Datasets, run evaluations, reports

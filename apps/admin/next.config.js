@@ -61,7 +61,6 @@ const nextConfig = {
       { source: '/settings/services', destination: '/system/connectors', permanent: true },
       { source: '/settings/infrastructure', destination: '/system/infrastructure', permanent: true },
       { source: '/settings/projects', destination: '/system/projects', permanent: true },
-      { source: '/settings/billing', destination: '/system/billing', permanent: true },
       { source: '/settings/health', destination: '/system/health', permanent: true },
     ];
   },

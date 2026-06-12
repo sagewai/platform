@@ -78,6 +78,7 @@ honest about what does and does not work end-to-end:
 | **Prompt replay** (`POST /api/v1/prompts/replay`) | **Not available standalone** (returns `501`) — replay requires a running agent. Re-running a workflow from its history page (which re-submits the definition) works. |
 | **Eval run** (`POST /api/v1/eval/run`) | **Not available** (returns `501`) — requires a running agent with LLM keys. Datasets and reports are otherwise managed normally. |
 | **Run pause / resume** | **Not implemented** — there is no backend route. Only **cancel** is supported for an in-flight run. |
+| **Connection YAML import in `multi` mode** | **Not yet available** (returns `501`) — the legacy YAML importer is synchronous and not wired to the tenant store. Connection **export** works in all modes, and **import works in single-org** mode. The admin "Import YAML" modal surfaces this message on failure. |
 
 ---
 
