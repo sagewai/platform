@@ -41,7 +41,7 @@ _PUBLIC_ALWAYS = (
     "/api/v1/auth/logout",
     "/license",
 )
-_PUBLIC_PREFIXES = ("/api/v1/health",)
+_PUBLIC_PREFIXES = ("/api/v1/health", "/api/v1/readyz")
 _DOCS_PATHS = ("/docs", "/redoc", "/openapi.json")
 
 # Prefixes where EVERY method (incl. GET) requires admin — they expose secret

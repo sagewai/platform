@@ -5625,7 +5625,8 @@ def create_admin_serve_app(
         # PUBLIC endpoint (no auth) — so the checks are cheap + in-process only:
         # a real state-file read plus a config inventory. No live DB probe (a
         # per-call connection would be a DoS vector) and no leaked error detail.
-        # A deep, authenticated readiness probe (/readyz) is a separate follow-up.
+        # The DEEP readiness probe (live DB/store/key/audit/rate-limit checks)
+        # is served by ``/api/v1/readyz`` (see ``_readyz_payload``).
         from sagewai.admin.tenancy import is_multi_tenant
 
         services: list[dict] = []
@@ -5650,6 +5651,21 @@ def create_admin_serve_app(
             "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "services": services,
         })
+
+    @app.get("/api/v1/readyz")
+    async def readyz(request: Request) -> JSONResponse:
+        # PUBLIC, DEEP readiness probe for orchestrators/ops. Unlike the shallow
+        # /health/detailed (state-file read + config inventory), this actually
+        # exercises the production dependencies (DB, tenant stores, master key,
+        # audit store) and is 200 only when every *configured* dependency is
+        # reachable, 503 otherwise. Because it is public it is leak-free: only
+        # component STATUS strings ("ok"/"error"/"not_configured"), never error
+        # messages, connection strings, or secrets. It reuses the app's already-
+        # pooled engines/stores (no fresh per-call pool — that would be a DoS
+        # vector). "not_configured" is neutral (single-org has no DB/tenant
+        # stores) and does NOT make the service "not ready".
+        payload = await _readyz_payload(request, sf)
+        return JSONResponse(payload, status_code=200 if payload["ready"] else 503)
 
     # ── Billing (self-hosted: no provider) ────────────────────────
 
@@ -5713,6 +5729,178 @@ async def _require_tenant_provider_key_if_encrypted(provider_store) -> None:
         from sagewai.admin import tenant_keys
 
         tenant_keys.org_crypto()  # resolves the org master key; raises if unavailable
+
+
+def _readyz_db_engine(request: Request):
+    """An already-built ``AsyncEngine`` to reuse for the ``SELECT 1`` DB probe, or
+    None if no store engine is wired.
+
+    Crucially this REUSES a pooled engine the app already holds — the identity
+    store, the resource-store bundle, or the tenant-audit store — rather than
+    creating a fresh engine/pool per call (which would be a DoS vector on a
+    public endpoint). It is its own helper so a test can stub a single seam.
+    """
+    state = getattr(request.app, "state", None)
+    candidates = []
+    ident = getattr(state, "identity_store", None)
+    candidates.append(getattr(ident, "_engine", None))
+    rs = getattr(state, "resource_stores", None)
+    if rs is not None:
+        for name in ("admin_resource", "provider", "agent", "connection", "run", "prompt_log"):
+            store = getattr(rs, name, None)
+            candidates.append(getattr(store, "_engine", None))
+    audit = getattr(state, "tenant_audit", None)
+    candidates.append(getattr(audit, "engine", None) or getattr(audit, "_engine", None))
+    for engine in candidates:
+        if engine is not None:
+            return engine
+    return None
+
+
+async def _readyz_payload(request: Request, sf: AdminStateFile) -> dict[str, Any]:
+    """Build the deep-readiness payload by probing each production dependency.
+
+    Every probe is wrapped in its own try/except → ``"error"`` on any exception
+    (the handler never raises). A dependency that isn't configured reports
+    ``"not_configured"`` (neutral — doesn't fail readiness). ``ready`` is true iff
+    no *configured* dependency is in ``"error"``. Only status strings are
+    returned — never error detail, connection strings, or secrets.
+    """
+    from sqlalchemy import text
+
+    from sagewai.admin.tenancy import is_multi_tenant
+
+    multi = is_multi_tenant()
+    checks: list[dict[str, str]] = []
+
+    def _add(name: str, status: str) -> None:
+        checks.append({"name": name, "status": status})
+
+    # state_file — the single-org core store must read.
+    try:
+        sf._read()
+        _add("state_file", "ok")
+    except Exception:
+        _add("state_file", "error")
+
+    # database — reuse an EXISTING pooled engine for SELECT 1. not_configured if
+    # no DB is configured and no store engine is available (single-org default).
+    db_status = "not_configured"
+    try:
+        engine = _readyz_db_engine(request)
+        if _resolve_database_url() is not None or engine is not None:
+            if engine is None:
+                # configured via env but no engine wired — treat as reachable-
+                # unknown; report not_configured rather than spinning a pool.
+                db_status = "not_configured"
+            else:
+                async with engine.connect() as conn:
+                    await conn.execute(text("SELECT 1"))
+                db_status = "ok"
+    except Exception:
+        db_status = "error"
+    _add("database", db_status)
+
+    # identity_store — multi mode only: present + reachable via its engine.
+    ident_status = "not_configured"
+    if multi:
+        try:
+            ident = getattr(request.app.state, "identity_store", None)
+            engine = getattr(ident, "_engine", None)
+            if ident is None or engine is None:
+                ident_status = "error"
+            else:
+                async with engine.connect() as conn:
+                    await conn.execute(text("SELECT 1"))
+                ident_status = "ok"
+        except Exception:
+            ident_status = "error"
+    _add("identity_store", ident_status)
+
+    # resource_store — multi mode only: the generic AdminResourceStore is wired
+    # on the bundle (durable control-plane backing). not_configured in single-org.
+    res_status = "not_configured"
+    if multi:
+        try:
+            rs = getattr(request.app.state, "resource_stores", None)
+            store = getattr(rs, "admin_resource", None) if rs is not None else None
+            engine = getattr(store, "_engine", None)
+            if store is None or engine is None:
+                res_status = "error"
+            else:
+                async with engine.connect() as conn:
+                    await conn.execute(text("SELECT 1"))
+                res_status = "ok"
+        except Exception:
+            res_status = "error"
+    _add("resource_store", res_status)
+
+    # tenant_audit — multi mode only: app.state.tenant_audit present + reachable.
+    audit_status = "not_configured"
+    if multi:
+        try:
+            audit = getattr(request.app.state, "tenant_audit", None)
+            engine = getattr(audit, "engine", None) or getattr(audit, "_engine", None)
+            if audit is None or engine is None:
+                audit_status = "error"
+            else:
+                async with engine.connect() as conn:
+                    await conn.execute(text("SELECT 1"))
+                audit_status = "ok"
+        except Exception:
+            audit_status = "error"
+    _add("tenant_audit", audit_status)
+
+    # master_key — multi mode only: a lightweight custody check that resolves a
+    # key SOURCE without decrypting anything sensitive. If encrypted provider
+    # secrets exist the org master key MUST resolve (error otherwise — the
+    # service can't serve those secrets); else it is neutral (ok if a key source
+    # is available, not_configured if none is). Mirrors the startup fail-closed
+    # check (_require_tenant_provider_key_if_encrypted) without touching ciphertext.
+    key_status = "not_configured"
+    if multi:
+        try:
+            from sagewai.admin import tenant_keys
+
+            rs = getattr(request.app.state, "resource_stores", None)
+            provider = getattr(rs, "provider", None) if rs is not None else None
+            has_encrypted = False
+            if provider is not None:
+                has_encrypted = await provider.has_encrypted_secrets()
+            try:
+                tenant_keys.org_crypto()  # resolves the master key; raises if none
+                key_status = "ok"
+            except Exception:
+                # a missing key is only an ERROR when encrypted secrets exist
+                # (otherwise no key has been provisioned yet — neutral).
+                key_status = "error" if has_encrypted else "not_configured"
+        except Exception:
+            key_status = "error"
+    _add("master_key", key_status)
+
+    # rate_limit — multi mode only: the distributed limiter backing login lockout
+    # and per-project run quotas. A Postgres-backed limiter shares the tenant
+    # engine; confirm the throttle is wired and (if Postgres-backed) reachable.
+    # An in-memory limiter in multi is a valid single-replica config (ok).
+    rl_status = "not_configured"
+    if multi:
+        try:
+            throttle = getattr(request.app.state, "run_throttle", None)
+            limiter = getattr(throttle, "_limiter", None)
+            if throttle is None or limiter is None:
+                rl_status = "error"
+            else:
+                eng = getattr(limiter, "_engine", None)
+                if eng is not None:
+                    async with eng.connect() as conn:
+                        await conn.execute(text("SELECT 1"))
+                rl_status = "ok"
+        except Exception:
+            rl_status = "error"
+    _add("rate_limit", rl_status)
+
+    ready = not any(c["status"] == "error" for c in checks)
+    return {"ready": ready, "checks": checks}
 
 
 def _extract_token(request: Request) -> str | None:
