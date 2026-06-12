@@ -917,6 +917,23 @@ class AdminStateFile:
                 return r
         return None
 
+    def cancel_agent_run(self, run_id: str) -> bool:
+        """Mark an agent run ``cancelled`` in place. True if one was found.
+
+        Locked read-modify-write (via :meth:`mutate`) so a concurrent status
+        write is not lost. Single-org has one project, so there is no cross-scope
+        guard here — the multi-tenant RunStore path owns project isolation.
+        """
+
+        def _apply(data: dict[str, Any]) -> bool:
+            for r in data.get("agent_runs", []):
+                if r.get("run_id") == run_id:
+                    r["status"] = "cancelled"
+                    return True
+            return False
+
+        return self.mutate(_apply)
+
     # ── providers ────────────────────────────────────────────────
 
     def _load_providers(self, project_id: str | None) -> list[dict[str, Any]]:

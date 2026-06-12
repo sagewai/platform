@@ -232,6 +232,8 @@ export const adminApi = {
 
   /* ─── Run control endpoints ─── */
   // pause/resume are intentionally absent — no backend route implements them.
+  // cancel maps to the real, project-scoped POST /admin/runs/{id}/cancel
+  // (client base URL already ends in /admin, so `/runs/...` resolves there).
   cancelRun: (id: string) =>
     client.post<{ status: string }>(`/runs/${encodeURIComponent(id)}/cancel`, {}),
 

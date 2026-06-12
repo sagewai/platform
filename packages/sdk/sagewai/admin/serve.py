@@ -1349,6 +1349,27 @@ def create_admin_serve_app(
             "parent_workflow_run_id": r.get("parent_workflow_run_id"),
         })
 
+    @app.post("/admin/runs/{run_id}/cancel", include_in_schema=False)
+    async def admin_run_cancel(run_id: str, request: Request) -> JSONResponse:
+        """Cancel an agent run — mirror of :func:`workflow_cancel` for agent runs.
+
+        Resolves the run **project-scoped** (cross-project or unknown id -> 404)
+        and flips its status to ``cancelled``. Registered before the api.py admin
+        router so it shadows that router's ``/runs/{id}/cancel`` (which targets
+        in-memory ``run_controls`` and 501s when unconfigured — the dead path the
+        Cancel button used to hit)."""
+        store = _run_store(request)
+        if store is not None:
+            cancelled = await store.cancel_run_for(run_id, request.state.context)
+        else:
+            cancelled = sf.cancel_agent_run(run_id)
+        if not cancelled:
+            return JSONResponse(
+                {"detail": f"Run '{run_id}' not found"}, status_code=404
+            )
+        await _emit_audit(request, "run.cancel", target_type="run", target_id=run_id)
+        return JSONResponse({"status": "cancelled"})
+
     # Existing routers (note: the /admin/agents and /admin/runs routes
     # added above shadow the router's defaults thanks to registration
     # order — Starlette matches on first hit)

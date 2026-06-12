@@ -124,7 +124,9 @@ def create_harness_admin_router(
     """
     router = APIRouter(tags=["harness-admin"])
 
-    # TODO: Add rate limiting middleware
+    # Per-key request-rate limiting lives on the proxy gateway router (the
+    # per-key request surface — see create_harness_proxy_router); these admin
+    # CRUD routes are gated by the admin session/auth layer, not harness keys.
 
     # ── Policies ─────────────────────────────────────────────────
 

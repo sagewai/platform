@@ -50,6 +50,7 @@ from typing import Any
 
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, insert, select
+from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from sagewai.admin import scoping
@@ -440,6 +441,24 @@ class RunStore:
         self._check_connected()
         scoping.require_ctx(ctx)
         stmt = sa_delete(_tbl).where(_tbl.c.run_id == run_id, scoping.write_scope_filter(_tbl, ctx))
+        async with self._engine.begin() as conn:
+            result = await conn.execute(stmt)
+        return result.rowcount == 1
+
+    async def cancel_run_for(self, run_id: str, ctx) -> bool:
+        """Mark a run ``cancelled`` in ``ctx``'s write scope. True if one changed.
+
+        Like :meth:`delete_run_for`, the write-scope filter is own-rows-only, so a
+        project actor cannot cancel another project's run (or an org-shared row it
+        merely inherits for reads) — the update matches zero rows and returns False.
+        """
+        self._check_connected()
+        scoping.require_ctx(ctx)
+        stmt = (
+            sa_update(_tbl)
+            .where(_tbl.c.run_id == run_id, scoping.write_scope_filter(_tbl, ctx))
+            .values(status="cancelled")
+        )
         async with self._engine.begin() as conn:
             result = await conn.execute(stmt)
         return result.rowcount == 1

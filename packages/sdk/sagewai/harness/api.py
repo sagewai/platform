@@ -25,19 +25,41 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from collections.abc import AsyncIterator
-
-import httpx
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Request
+import httpx
+from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncEngine
 
+from sagewai.admin.rate_limit import RateLimiter, build_rate_limiter
+from sagewai.harness.models import HarnessIdentity
 from sagewai.harness.proxy import HarnessProxy
 
 logger = logging.getLogger(__name__)
+
+
+# ── Per-key request-rate limiting (env-configurable) ─────────────────
+
+
+def _harness_rate_limit() -> int:
+    """Max requests per key per window. ``<= 0`` disables (default 120)."""
+    try:
+        return int(os.environ.get("SAGEWAI_HARNESS_RATE_LIMIT", "120"))
+    except ValueError:
+        return 120
+
+
+def _harness_rate_window() -> float:
+    """The rate-limit window in seconds (default 60)."""
+    try:
+        return float(os.environ.get("SAGEWAI_HARNESS_RATE_WINDOW", "60"))
+    except ValueError:
+        return 60.0
 
 
 # ── Anthropic Messages API models ────────────────────────────────────
@@ -118,7 +140,12 @@ async def _sse_from_openai_stream(
 # ── Router factory ───────────────────────────────────────────────────
 
 
-def create_harness_proxy_router(proxy: HarnessProxy) -> APIRouter:
+def create_harness_proxy_router(
+    proxy: HarnessProxy,
+    *,
+    rate_limiter: RateLimiter | None = None,
+    engine: AsyncEngine | None = None,
+) -> APIRouter:
     """Create a FastAPI router with proxy endpoints for AI coding tools.
 
     Endpoints:
@@ -126,15 +153,45 @@ def create_harness_proxy_router(proxy: HarnessProxy) -> APIRouter:
     - ``POST /v1/chat/completions`` — OpenAI Chat Completions format
     - ``GET /v1/models`` — List available models
 
+    A per-key request-rate limit (separate from the per-key *budget* caps the
+    proxy already enforces) guards every request-serving endpoint: on exceed the
+    caller gets HTTP 429 with a ``Retry-After`` header. The limit/window are
+    env-configurable (``SAGEWAI_HARNESS_RATE_LIMIT`` / ``_WINDOW``); a limit
+    ``<= 0`` disables it. The limiter is shared across worker processes when an
+    engine is provided in multi-tenant mode (Postgres-backed), single-process
+    in-memory otherwise — see :func:`~sagewai.admin.rate_limit.build_rate_limiter`.
+
     Args:
         proxy: Configured :class:`HarnessProxy` instance.
+        rate_limiter: Explicit limiter (tests / DI). Defaults to one chosen by
+            :func:`build_rate_limiter` from ``engine``.
+        engine: Optional shared engine for a distributed limiter in multi-tenant
+            deployments. Ignored when ``rate_limiter`` is given.
 
     Returns:
         A FastAPI :class:`APIRouter` ready to mount.
     """
     router = APIRouter(tags=["harness-proxy"])
 
-    # TODO: Add rate limiting middleware per key/user
+    limiter = rate_limiter if rate_limiter is not None else build_rate_limiter(engine)
+
+    async def _enforce_rate_limit(identity: HarnessIdentity) -> None:
+        """429 if ``identity``'s key is over its per-key request-rate budget.
+
+        Keyed by the stable, non-secret ``key_id`` (not the bearer token), so the
+        plaintext key never lands in the limiter/store. A limit ``<= 0`` disables
+        the check (``RateLimiter.hit`` short-circuits to always-allowed)."""
+        limit = _harness_rate_limit()
+        window = _harness_rate_window()
+        allowed = await limiter.hit(
+            f"harness-key:{identity.key_id}", limit=limit, window=window
+        )
+        if not allowed:
+            raise HTTPException(
+                status_code=429,
+                detail="Rate limit exceeded for this key",
+                headers={"Retry-After": str(int(window))},
+            )
 
     # ── Anthropic Messages API ───────────────────────────────────
 
@@ -153,6 +210,7 @@ def create_harness_proxy_router(proxy: HarnessProxy) -> APIRouter:
         and forwards to the configured backend.
         """
         identity = await proxy.authenticate(authorization)
+        await _enforce_rate_limit(identity)
 
         # Build messages list — inject system as a system-role message
         # so the proxy pipeline can process it uniformly.
@@ -206,6 +264,7 @@ def create_harness_proxy_router(proxy: HarnessProxy) -> APIRouter:
         format on both input and output.
         """
         identity = await proxy.authenticate(authorization)
+        await _enforce_rate_limit(identity)
 
         kwargs: dict[str, Any] = {}
         if body.temperature is not None:

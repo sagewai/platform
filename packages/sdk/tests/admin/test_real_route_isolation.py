@@ -608,6 +608,53 @@ async def test_run_detail_cross_project_404(real_app):
     assert r.status_code == 404
 
 
+async def test_run_cancel_by_owner(real_app):
+    # The owning member cancels their own run -> 200 + status flips to cancelled,
+    # and a re-read of the run detail reflects the new status.
+    r = await _req(
+        real_app["app"],
+        "POST",
+        f"/admin/runs/{real_app['run_a']}/cancel",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "cancelled"
+    detail = await _req(
+        real_app["app"],
+        "GET",
+        f"/admin/runs/{real_app['run_a']}",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert detail.status_code == 200
+    assert detail.json()["status"] == "cancelled"
+
+
+async def test_run_cancel_cross_project_404(real_app):
+    # PA member cancels PB's run by id. run_b genuinely EXISTS in PB's scope,
+    # so this 404 is isolation (not absence) and PB's run stays untouched.
+    r = await _req(
+        real_app["app"],
+        "POST",
+        f"/admin/runs/{real_app['run_b']}/cancel",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 404
+
+
+async def test_run_cancel_unknown_id_404(real_app):
+    r = await _req(
+        real_app["app"],
+        "POST",
+        "/admin/runs/does-not-exist/cancel",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert r.status_code == 404
+
+
 async def test_workflow_history_list_isolated(real_app):
     r = await _req(
         real_app["app"],

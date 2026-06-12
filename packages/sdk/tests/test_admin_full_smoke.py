@@ -49,7 +49,7 @@ import pytest
 # documenting that the feature is unavailable in this configuration —
 # not server crashes.
 _EXPECTED_5XX_PATTERNS: list[tuple[str, str]] = [
-    (r"^/admin/runs/[^/]+/(pause|resume|cancel)$",
+    (r"^/admin/runs/[^/]+/(pause|resume)$",
      "501 — run controls not configured in smoke admin app"),
     (r"^/api/v1/admin/directives/approvals/[^/]+/(approve|deny)$",
      "503 — directive approvals require running mission"),

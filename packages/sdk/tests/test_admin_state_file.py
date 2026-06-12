@@ -380,3 +380,15 @@ def test_admin_state_set_agent_sandbox_override_round_trip(tmp_path, monkeypatch
     reloaded = fresh.get_agent("writer")
     assert reloaded["sandbox_requirements_override"]["sandbox_mode"] == "per_run"
     assert reloaded["model"] == "gpt-4o"   # other fields preserved
+
+
+def test_cancel_agent_run_flips_status(sf):
+    """cancel_agent_run marks the run cancelled and returns True (single-org)."""
+    sf.save_agent_run({"run_id": "r1", "agent_name": "scout", "status": "running"})
+    assert sf.cancel_agent_run("r1") is True
+    assert sf.get_agent_run("r1")["status"] == "cancelled"
+
+
+def test_cancel_agent_run_unknown_id_returns_false(sf):
+    """An unknown run id is a no-op and returns False (route maps it to 404)."""
+    assert sf.cancel_agent_run("nope") is False
