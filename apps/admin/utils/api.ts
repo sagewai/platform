@@ -93,10 +93,6 @@ import type {
   FleetAuditEvent,
   IntelligenceStatus,
   SavedWorkflow,
-  BillingPlan,
-  BillingSubscription,
-  BillingUsage,
-  BillingInvoice,
   AutopilotStatus,
   AutopilotGoalResponse,
   AutopilotMissionsResponse,
@@ -1284,28 +1280,6 @@ export const adminApi = {
     if (j.snapshot === null || j.snapshot === undefined) return null;
     return j as PoolStatsSnapshot;
   },
-
-  /* ─── Billing endpoints ─── */
-  listBillingPlans: () =>
-    analyticsClient.get<BillingPlan[]>('/api/v1/billing/plans'),
-
-  getBillingSubscription: () =>
-    analyticsClient.get<BillingSubscription>('/api/v1/billing/subscription'),
-
-  getBillingUsage: () =>
-    analyticsClient.get<BillingUsage>('/api/v1/billing/usage'),
-
-  listBillingInvoices: () =>
-    analyticsClient.get<BillingInvoice[]>('/api/v1/billing/invoices'),
-
-  createCheckoutSession: (planId: string) =>
-    analyticsClient.post<{ url: string; session_id: string }>(
-      '/api/v1/billing/checkout',
-      { plan_id: planId },
-    ),
-
-  createBillingPortal: () =>
-    analyticsClient.post<{ url: string }>('/api/v1/billing/portal', {}),
 
   /* ─── Autopilot endpoints ─── */
   getAutopilotStatus: () =>

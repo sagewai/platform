@@ -14,7 +14,7 @@ Run the full Sagewai stack on your own infrastructure. This guide covers local b
 > - **Admin state** (connections, providers, agents, profiles) is a JSON file (`~/.sagewai/admin-state.json`). Mount it on a persistent volume; the container discards it on restart otherwise.
 > - **Fleet registry, task store, and harness store are in-memory** and reset on every restart. Workers re-register on reconnect; in-flight tasks are lost if the process restarts.
 > - **Sealed revocation and replay routes** require `DATABASE_URL` (or `SAGEWAI_DATABASE_URL`, which takes precedence) to be set. Without it those routes are simply not registered.
-> - **In the default single-org mode, `X-Project-ID` is an organizational filter, not a security boundary.** Any caller who can reach the API can supply any project ID. For hard isolation between untrusted projects, enable multi-tenant mode — see [Tenancy modes](#tenancy-modes).
+> - **In the default single-org mode, `X-Project-ID` is an organizational filter, not a security boundary.** Any caller who can reach the API can supply any project ID. For hard isolation between projects or teams within your own deployment, enable multi-tenant mode — see [Tenancy modes](#tenancy-modes).
 > - **Provider secrets are encrypted at rest.** Set `SAGEWAI_MASTER_KEY` or mount a key file. Losing the key makes all stored secrets unrecoverable.
 >
 > Durable Postgres-backed stores for fleet, tasks, and harness are on the roadmap. **Multi-tenant project isolation is available now** via `SAGEWAI_TENANCY_MODE=multi` (Postgres-backed, session-derived project scoping) — see [Tenancy modes](#tenancy-modes).
@@ -25,15 +25,18 @@ Run the full Sagewai stack on your own infrastructure. This guide covers local b
 
 Sagewai runs in one of two tenancy modes, selected by `SAGEWAI_TENANCY_MODE`:
 
-- **`single`** (default) — one organization, one shared namespace. `X-Project-ID` is a
-  convenience filter for organizing resources, **not** a security boundary; any
-  authenticated caller can pass any project ID. Admin state persists to a JSON file.
-  This is the right mode for a self-hosted instance with a trusted operator and team.
-- **`multi`** — one organization with many **isolated projects** (the tenant unit).
-  Project scope is a **hard, session-derived boundary**: a request only ever reaches
-  its own project's resources plus org-shared (global) ones; a forged `X-Project-ID`
-  is rejected (404). Requires a PostgreSQL `DATABASE_URL`. Use this when exposing
-  projects to users who should not see each other's data.
+- **`single`** (default) — one organization, one shared namespace for a trusted
+  operator and team. `X-Project-ID` is a convenience filter for organizing resources,
+  **not** a security boundary; any authenticated caller can pass any project ID. Admin
+  state persists to a JSON file. This is the right mode for a self-hosted instance run
+  by a single team that shares access to everything.
+- **`multi`** — one organization with many **isolated projects** (the tenant unit),
+  for keeping projects or teams *within your own deployment* separated. Project scope
+  is a **hard, session-derived boundary**: a request only ever reaches its own
+  project's resources plus org-shared (global) ones; a forged `X-Project-ID` is
+  rejected (404). Requires a PostgreSQL `DATABASE_URL`. Use this when you need hard
+  per-project isolation inside your org — for example an agency isolating each
+  client's work, or an enterprise isolating different teams from one another.
 
 In both modes, provider secrets are encrypted at rest, host-backed execution is
 denied by default, and the admin API is auth-gated (CORS allowlist, HttpOnly+CSRF
@@ -48,7 +51,7 @@ required, so the limits hold correctly even with multiple replicas behind a load
 balancer. Single-org mode uses an equivalent in-process limiter (no database
 dependency), which is exact for a single worker.
 
-### Surface support matrix (self-hosted)
+### Feature support matrix
 
 | Surface | Status |
 |---------|--------|
@@ -58,7 +61,6 @@ dependency), which is exact for a single worker.
 | Fleet workers | Supported — registry is in-memory and resets on restart |
 | Harness (LLM gateway) | Supported |
 | Budget, guardrails, notifications, triggers, eval, artifact destinations | Supported (file-backed; single-process) |
-| Billing | Self-hosted: managed externally — no in-app billing provider |
 
 ---
 

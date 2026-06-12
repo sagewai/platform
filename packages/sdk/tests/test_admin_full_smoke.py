@@ -59,8 +59,6 @@ _EXPECTED_5XX_PATTERNS: list[tuple[str, str]] = [
      "501 — MCP server not connected in smoke"),
     (r"^/api/v1/eval/run$",
      "501 — eval requires running agent + LLM keys"),
-    (r"^/api/v1/billing/(portal|checkout)$",
-     "501 — no billing provider configured (self-hosted instance)"),
 ]
 
 

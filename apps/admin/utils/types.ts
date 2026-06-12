@@ -1133,41 +1133,6 @@ export interface PoolStatsSnapshot {
   aggregate: AggregateStats;
 }
 
-/* ─── Billing types ─── */
-
-export interface BillingPlan {
-  id: string;
-  name: string;
-  price_monthly: number | null;
-  stripe_price_id?: string;
-  features: Record<string, number | boolean>;
-}
-
-export interface BillingSubscription {
-  plan: string;
-  status: string;
-  current_period_end: string;
-  cancel_at_period_end: boolean;
-}
-
-export interface BillingUsage {
-  period_start: string;
-  period_end: string;
-  agent_runs: number;
-  api_calls: number;
-  storage_used_gb: number;
-  workers_active: number;
-  connectors_active: number;
-}
-
-export interface BillingInvoice {
-  id: string;
-  date: string;
-  amount: number;
-  status: string;
-  pdf_url: string;
-}
-
 /* ─── Blueprint Composition (Phase 2A orchestration view) ─── */
 
 export interface BlueprintCompositionStep {

@@ -5667,38 +5667,6 @@ def create_admin_serve_app(
         payload = await _readyz_payload(request, sf)
         return JSONResponse(payload, status_code=200 if payload["ready"] else 503)
 
-    # ── Billing (self-hosted: no provider) ────────────────────────
-
-    @app.get("/api/v1/billing/plans")
-    async def billing_plans() -> JSONResponse:
-        return JSONResponse([])
-
-    @app.get("/api/v1/billing/subscription")
-    async def billing_subscription() -> JSONResponse:
-        return JSONResponse(None, status_code=204)
-
-    @app.get("/api/v1/billing/usage")
-    async def billing_usage() -> JSONResponse:
-        return JSONResponse(None, status_code=204)
-
-    @app.get("/api/v1/billing/invoices")
-    async def billing_invoices() -> JSONResponse:
-        return JSONResponse([])
-
-    @app.post("/api/v1/billing/portal")
-    async def billing_portal() -> JSONResponse:
-        return JSONResponse(
-            {"detail": "No billing provider configured (self-hosted instance)"},
-            status_code=501,
-        )
-
-    @app.post("/api/v1/billing/checkout")
-    async def billing_checkout() -> JSONResponse:
-        return JSONResponse(
-            {"detail": "No billing provider configured (self-hosted instance)"},
-            status_code=501,
-        )
-
     # ── License ──────────────────────────────────────────────────
 
     @app.get("/license")

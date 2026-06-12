@@ -12,7 +12,6 @@ const TABS = [
   { href: '/system/connectors', label: 'Connectors' },
   { href: '/system/infrastructure', label: 'Infrastructure' },
   { href: '/system/projects', label: 'Projects' },
-  { href: '/system/billing', label: 'Billing' },
   { href: '/system/notifications', label: 'Notifications' },
   { href: '/system/health', label: 'System Health' },
 ];

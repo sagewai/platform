@@ -271,7 +271,6 @@ export const ALL_GROUPS: NavGroup[] = [
       { href: '/system/connectors', label: 'Connectors' },
       { href: '/system/infrastructure', label: 'Infrastructure' },
       { href: '/system/projects', label: 'Projects' },
-      { href: '/system/billing', label: 'Billing' },
       { href: '/system/notifications', label: 'Notifications' },
       { href: '/system/health', label: 'System Health' },
     ],
@@ -310,7 +309,7 @@ const WORKSPACE_GROUP: NavGroup = {
 const LEGACY_SETTINGS_ROUTES = [
   '/settings/organization', '/settings/account', '/settings/tokens',
   '/settings/models', '/settings/services', '/settings/triggers',
-  '/settings/projects', '/settings/billing', '/settings/infrastructure',
+  '/settings/projects', '/settings/infrastructure',
   '/settings/notifications', '/settings/health',
 ];
 
