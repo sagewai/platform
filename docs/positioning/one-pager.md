@@ -83,7 +83,7 @@ The `sagewai` package is published as `0.1.1` (alpha). Here is what is real toda
 - **Developers building an app.** State what the app should do, let Autopilot design the agents, ship the result.
 - **Infra engineers deploying agent workloads.** Use Fleet to run agents on your own pods and hardware, with capability-based dispatch and per-workload identity.
 - **Teams operating agents in production.** Durable workflows survive crashes; Observatory answers "what did AI cost us this month?"; the Training Loop is the path to driving unit cost down over time.
-- **Vertical SaaS founders.** Build the product on Sagewai under the commercial license — Fleet, Observatory, Sealed, and the Training Loop without building any of it yourself.
+- **Vertical software teams/founders.** Build the product on Sagewai under the commercial license — Fleet, Observatory, Sealed, and the Training Loop without building any of it yourself.
 
 ### For investors
 

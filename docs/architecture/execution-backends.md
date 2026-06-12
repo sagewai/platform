@@ -132,7 +132,7 @@ For most operators:
 
 - **Single VM / dev laptop** → Docker.
 - **Self-managed production** → Docker (small) or Kubernetes (scale).
-- **Multi-tenant SaaS at scale** → Kubernetes. Per-namespace isolation, RBAC, NetworkPolicy.
+- **Multi-project self-managed deployment at scale** → Kubernetes. Per-namespace isolation, RBAC, NetworkPolicy.
 - **Sporadic batch workloads with cost sensitivity** → Lambda for the Mode 1/2 portion + Docker/K8s for the Mode 3 portion.
 - **Highest-isolation tenants** → wait for FirecrackerBackend or use a dedicated cluster per tenant on Kubernetes.
 
@@ -183,7 +183,7 @@ A ProfileRef like `vault://kv/sagewai/acme-prod` parses to `(scheme="vault", pat
 - **Existing Vault deployment** → `VaultBackend`. Sagewai becomes a Vault consumer, not a credential store. Operators get Vault's audit, rotation, lease management for free.
 - **AWS-native shop** → `AWSSecretsManagerBackend`. KMS-backed, IAM-scoped, integrates with existing AWS audit.
 - **GitOps-friendly** → `SOPSBackend`. Profiles are SOPS-encrypted YAML in a git repo; changes go through code review.
-- **Per-end-user vault** → `OnePasswordBackend` or `BitwardenBackend`. Useful for SaaS where each customer has their own 1Password / Bitwarden vault.
+- **Per-end-user vault** → `OnePasswordBackend` or `BitwardenBackend`. Useful for products where each customer or project has its own 1Password / Bitwarden vault.
 
 ### Cascade across multiple identity backends
 

@@ -122,7 +122,7 @@ Most operators land in one of these patterns:
 
 - **Single VM / dev laptop** → Docker.
 - **Self-managed production** → Docker (small) or Kubernetes (scale).
-- **Multi-tenant SaaS at scale** → Kubernetes. Per-namespace isolation, RBAC, NetworkPolicy.
+- **Multi-project self-managed deployment at scale** → Kubernetes. Per-namespace isolation, RBAC, NetworkPolicy.
 - **Sporadic batch workloads with cost sensitivity** → Lambda for the short Sandboxed/Identity portion + Docker/Kubernetes for the full-CLI-agent portion.
 - **Highest-isolation tenants** → wait for Firecracker, or use a dedicated Kubernetes cluster per tenant.
 
