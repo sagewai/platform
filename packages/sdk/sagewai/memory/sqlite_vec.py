@@ -263,6 +263,14 @@ class SqliteVecMemory:
         conn.commit()
         return cur.rowcount > 0
 
+    def _sync_count(self, pid: str) -> int:
+        conn = self._connect()
+        row = conn.execute(
+            f"SELECT COUNT(*) FROM {self._table} WHERE project_id = ?",
+            (pid,),
+        ).fetchone()
+        return int(row[0]) if row else 0
+
     # ------------------------------------------------------------------
     # MemoryProvider interface
     # ------------------------------------------------------------------
@@ -300,3 +308,8 @@ class SqliteVecMemory:
         """
         pid = self._resolve_pid()
         return await asyncio.to_thread(self._sync_delete, doc_id, pid)
+
+    async def count(self) -> int:
+        """Number of stored documents in the current project scope."""
+        pid = self._resolve_pid()
+        return await asyncio.to_thread(self._sync_count, pid)

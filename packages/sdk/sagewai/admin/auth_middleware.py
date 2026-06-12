@@ -90,8 +90,10 @@ _MULTI_ORG_PREFIXES = (
     "/api/v1/fleet/workers",  # approve/reject/revoke + list/detail (fleet mgmt)
     "/api/v1/fleet/audit",
     "/api/v1/harness",  # global proxy policy/keys/spend/config
-    # no-project_id-column stores — org-admin interim (reads + writes) until scoped
-    "/api/v1/memory",
+    # NOTE: /api/v1/memory and /api/v1/context are NOT here — project memory is a
+    # real tenant feature. They are project-scoped at the data layer (per-project
+    # engine resolver keyed by the session-derived RequestContext.project_id, never
+    # X-Project-ID) and member-writable (viewer=read-only via _require_resource_write).
 )
 
 

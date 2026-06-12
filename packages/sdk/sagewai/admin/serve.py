@@ -591,56 +591,206 @@ def _build_subscription_manager():
 # context stores live under a stable id rather than the contextvar fallback.
 _MEMORY_PROJECT_ID = "default"
 
+# Cache key for the org-shared memory bucket (multi-tenant, project_id is None).
+# Org-shared memory is distinct from any project's, so it gets its own namespace
+# rather than colliding with the single-org "default" id.
+_ORG_SHARED_MEMORY_ID = "__org_shared__"
 
-def _setup_memory_engines(app: FastAPI) -> None:
-    """Attach the in-process memory + context engines to ``app.state``.
 
-    Wires three app-state singletons the vector/graph/context routes read:
+class MemoryEngineResolver:
+    """Per-project resolver for the admin memory + context engines.
 
-    * ``app.state.context_engine`` — a :class:`ContextEngine` over in-memory
-      metadata + vector stores, with an embedder from the intelligence registry
-      (falls back to the zero-dep ``HashEmbedder`` when no model is configured).
-    * ``app.state.vector_memory`` — a :class:`VectorMemory` (TF-IDF cosine,
-      in-process; durable sqlite-vec is wired separately for RAGEngine defaults).
-    * ``app.state.graph_memory`` — a :class:`GraphMemory` (in-process knowledge
-      graph).
+    The 13 vector/graph/context routes ask this resolver for an engine bound to a
+    concrete ``project_id`` (derived by the route from the session-validated
+    ``RequestContext`` — never the ``X-Project-ID`` header). Each project gets its
+    own engine instance, bound to that project, so reads/writes can never cross a
+    tenant boundary: the vector/graph engines key their storage by ``project_id``,
+    and the context engine's durable store filters every query by ``project_id``.
 
-    Idempotent: skips engines already attached (injected DI / repeated calls).
-    Imports happen inside the function — the heavy/optional deps must not load at
-    serve.py import time, and the engines all have zero-dep fallbacks so a
-    missing optional dep can never crash startup.
+    Engines are built lazily and cached per ``project_id``. The factory callables
+    are injectable so tests (and the durable-vs-in-memory selection) can vary the
+    backend without changing the routes.
 
-    The admin lifespan calls this at startup; tests call it directly because
-    ``httpx.ASGITransport`` does not run the lifespan.
+    Durability (multi-tenant):
+    - **context** → :class:`PostgresContextStore` (Postgres or SQLite, durable):
+      documents + chunks persist across restart, project-scoped by ``project_id``.
+      The ANN vector index is an in-process :class:`InMemoryVectorStore` over a
+      zero-dep hash embedder (rebuildable from the durable chunks; no API key).
+    - **vector** → :class:`SqliteVecMemory` (file-durable) when sqlite-vec is
+      available, else falls back to in-process :class:`VectorMemory` (FLAGGED:
+      non-durable across restart).
+    - **graph** → :class:`GraphMemory` (project-scoped, in-process; FLAGGED:
+      non-durable — durable graph needs an optional heavy dep we deliberately do
+      not require).
+
+    Single-org mode resolves every request to the stable ``"default"`` project and
+    uses the pure in-process engines (byte-identical to the prior behaviour).
     """
-    if getattr(app.state, "context_engine", None) is None:
-        from sagewai.context.engine import ContextEngine
-        from sagewai.context.stores import (
-            InMemoryMetadataStore,
-            InMemoryVectorStore,
-        )
 
-        # The admin memory/context endpoints use ContextEngine's built-in
-        # deterministic hash embedder (embedder=None): it works offline with no
-        # API key or heavy model — the right default for admin browsing. Semantic
-        # embedders (LiteLLM / sentence-transformers) require credentials and are
-        # the RAG path's concern, so they are intentionally not wired here.
-        app.state.context_engine = ContextEngine(
-            metadata_store=InMemoryMetadataStore(),
+    def __init__(
+        self,
+        *,
+        multi: bool,
+        context_factory=None,
+        vector_factory=None,
+        graph_factory=None,
+    ) -> None:
+        self._multi = multi
+        self._context_factory = context_factory or self._default_context_factory
+        self._vector_factory = vector_factory or self._default_vector_factory
+        self._graph_factory = graph_factory or self._default_graph_factory
+        self._context: dict[str, Any] = {}
+        self._vector: dict[str, Any] = {}
+        self._graph: dict[str, Any] = {}
+
+    # -- default backend factories ------------------------------------------
+
+    @staticmethod
+    def _default_context_factory(pid: str):
+        # Durable document/chunk metadata via the process db engine (SQLite in
+        # SAGEWAI_HOME or Postgres); the ANN index is in-process over the zero-dep
+        # hash embedder (rebuildable, offline, no credentials). The single-org
+        # path uses the in-memory metadata store for byte-identical behaviour.
+        from sagewai.context.engine import ContextEngine
+        from sagewai.context.pg_store import PostgresContextStore
+        from sagewai.context.stores import InMemoryMetadataStore, InMemoryVectorStore
+
+        if pid == _MEMORY_PROJECT_ID:
+            metadata_store: Any = InMemoryMetadataStore()
+        else:
+            metadata_store = PostgresContextStore()
+        return ContextEngine(
+            metadata_store=metadata_store,
             vector_store=InMemoryVectorStore(),
-            project_id=_MEMORY_PROJECT_ID,
+            project_id=pid,
             embedder=None,
         )
 
-    if getattr(app.state, "vector_memory", None) is None:
+    @staticmethod
+    def _default_vector_factory(pid: str):
+        # File-durable sqlite-vec when available; in-process VectorMemory otherwise
+        # (FLAGGED non-durable). The single-org path stays on in-process
+        # VectorMemory for byte-identical behaviour.
+        from sagewai.memory.sqlite_vec import sqlite_vec_available
         from sagewai.memory.vector import VectorMemory
 
-        app.state.vector_memory = VectorMemory(project_id=_MEMORY_PROJECT_ID)
+        if pid != _MEMORY_PROJECT_ID and sqlite_vec_available():
+            from sagewai.memory.sqlite_vec import SqliteVecMemory
 
-    if getattr(app.state, "graph_memory", None) is None:
+            return SqliteVecMemory(project_id=pid)
+        return VectorMemory(project_id=pid)
+
+    @staticmethod
+    def _default_graph_factory(pid: str):
+        # Project-scoped, in-process (FLAGGED non-durable across restart). A
+        # durable graph backend needs an optional heavy dep (nebula) we do not
+        # require; isolation is the guarantee here, durability is best-effort.
         from sagewai.memory.graph import GraphMemory
 
-        app.state.graph_memory = GraphMemory(project_id=_MEMORY_PROJECT_ID)
+        return GraphMemory(project_id=pid)
+
+    # -- resolution ---------------------------------------------------------
+
+    def _key(self, project_id: str | None) -> str:
+        """Normalise a scope to a cache/namespace key.
+
+        Single-org always maps to ``"default"``. Multi-tenant uses the concrete
+        project id, or the org-shared namespace when the context is org-scoped
+        (``project_id is None``)."""
+        if not self._multi:
+            return _MEMORY_PROJECT_ID
+        if project_id is None or project_id == SHARED_ONLY:
+            return _ORG_SHARED_MEMORY_ID
+        return project_id
+
+    def context_for(self, project_id: str | None):
+        key = self._key(project_id)
+        engine = self._context.get(key)
+        if engine is None:
+            engine = self._context[key] = self._context_factory(key)
+        return engine
+
+    def vector_for(self, project_id: str | None):
+        key = self._key(project_id)
+        mem = self._vector.get(key)
+        if mem is None:
+            mem = self._vector[key] = self._vector_factory(key)
+        return mem
+
+    def graph_for(self, project_id: str | None):
+        key = self._key(project_id)
+        graph = self._graph.get(key)
+        if graph is None:
+            graph = self._graph[key] = self._graph_factory(key)
+        return graph
+
+
+def setup_memory_engines(app: FastAPI) -> None:
+    """Attach the per-project memory + context engine resolver to ``app.state``.
+
+    Wires ``app.state.memory_engines`` (a :class:`MemoryEngineResolver`), which the
+    vector/graph/context routes use to obtain an engine bound to the request's
+    project (multi-tenant) or the single ``"default"`` project (single-org). In
+    multi mode the resolver hands out per-project, durable-backed engines so a
+    read/write can never cross a tenant boundary.
+
+    For backward compatibility (and the single-org route fast-path) it also binds
+    the ``"default"`` engines on ``app.state.context_engine`` / ``vector_memory`` /
+    ``graph_memory`` — byte-identical to the prior single-org behaviour, and the
+    seam tests inject through.
+
+    Idempotent: skips wiring already attached (injected DI / repeated calls).
+    Imports happen inside the factories — the heavy/optional deps must not load at
+    serve.py import time, and every engine has a zero-dep fallback so a missing
+    optional dep can never crash startup. The admin lifespan calls this at startup;
+    tests call it directly because ``httpx.ASGITransport`` does not run the
+    lifespan.
+    """
+    from sagewai.admin.tenancy import is_multi_tenant
+
+    if getattr(app.state, "memory_engines", None) is None:
+        app.state.memory_engines = MemoryEngineResolver(multi=is_multi_tenant())
+
+    resolver: MemoryEngineResolver = app.state.memory_engines
+
+    # Bind the single-org "default" engines for the legacy app.state attributes
+    # (single-org routes read them directly; tests inject through them). These are
+    # the in-process zero-dep engines — unchanged from the prior behaviour.
+    if getattr(app.state, "context_engine", None) is None:
+        app.state.context_engine = resolver.context_for(_MEMORY_PROJECT_ID)
+    else:
+        resolver._context[_MEMORY_PROJECT_ID] = app.state.context_engine
+    if getattr(app.state, "vector_memory", None) is None:
+        app.state.vector_memory = resolver.vector_for(_MEMORY_PROJECT_ID)
+    else:
+        resolver._vector[_MEMORY_PROJECT_ID] = app.state.vector_memory
+    if getattr(app.state, "graph_memory", None) is None:
+        app.state.graph_memory = resolver.graph_for(_MEMORY_PROJECT_ID)
+    else:
+        resolver._graph[_MEMORY_PROJECT_ID] = app.state.graph_memory
+
+
+# Backward-compatible alias: the original private name is imported by existing
+# tests and the lifespan. Keep it pointing at the public function.
+_setup_memory_engines = setup_memory_engines
+
+
+async def _vector_doc_count(mem: Any) -> int:
+    """Document count for a vector-memory backend, across backend shapes.
+
+    In-process :class:`VectorMemory` exposes ``__len__`` (sync, project-scoped);
+    the durable :class:`SqliteVecMemory` exposes an async, project-scoped
+    ``count()`` (SQL ``COUNT(*)``). Either way the count is for the engine's bound
+    project only."""
+    if mem is None:
+        return 0
+    counter = getattr(mem, "count", None)
+    if callable(counter):
+        return await counter()
+    try:
+        return len(mem)
+    except TypeError:
+        return 0
 
 
 def create_admin_serve_app(
@@ -5003,28 +5153,47 @@ def create_admin_serve_app(
 
     # ── Context Engine ───────────────────────────────────────────
     #
-    # Wired to the real in-process ContextEngine / VectorMemory / GraphMemory
-    # engines attached to app.state by _setup_memory_engines (lifespan, or the
-    # test fixture under ASGITransport). The engines have zero-dep fallbacks, so
-    # these routes serve real data without requiring any optional backend.
+    # Wired to the real ContextEngine / VectorMemory / GraphMemory engines via the
+    # per-project resolver on ``app.state.memory_engines`` (attached by
+    # setup_memory_engines — lifespan, or the test fixture under ASGITransport).
     #
-    # Multi-tenant gating is unchanged: /api/v1/memory is in _MULTI_ORG_PREFIXES,
-    # so the auth middleware requires org-admin for every memory method in MULTI
-    # mode (project-scoping of memory is out of scope). In single-org these serve
-    # real data. /api/v1/context is project-scoped at the middleware coarse gate.
+    # PROJECT SCOPING (multi-tenant): each route derives its project from
+    # ``_project_scope(request)`` — the session-validated RequestContext, NOT the
+    # X-Project-ID header (a forged/foreign header is already 404'd or ignored by
+    # the auth middleware). The resolver hands back an engine bound to that project,
+    # so project A can never read or mutate project B's memory/context. Durable
+    # backends (Postgres context store, file-durable sqlite-vec) are project-scoped.
+    # In single-org mode the resolver maps every request to the "default" project
+    # and uses the in-process engines (byte-identical to the prior behaviour).
+    #
+    # /api/v1/memory and /api/v1/context are member-writable (not in
+    # _MULTI_ORG_PREFIXES); writes go through _require_resource_write (viewer=403).
 
-    def _context_engine():
-        return getattr(app.state, "context_engine", None)
+    def _scope(request: Request) -> str | None:
+        # The session-derived project filter (multi) / header filter (single-org).
+        return _project_scope(request)
 
-    def _vector_memory():
-        return getattr(app.state, "vector_memory", None)
+    def _context_engine(request: Request):
+        resolver = getattr(app.state, "memory_engines", None)
+        if resolver is None:
+            return getattr(app.state, "context_engine", None)
+        return resolver.context_for(_scope(request))
 
-    def _graph_memory():
-        return getattr(app.state, "graph_memory", None)
+    def _vector_memory(request: Request):
+        resolver = getattr(app.state, "memory_engines", None)
+        if resolver is None:
+            return getattr(app.state, "vector_memory", None)
+        return resolver.vector_for(_scope(request))
+
+    def _graph_memory(request: Request):
+        resolver = getattr(app.state, "memory_engines", None)
+        if resolver is None:
+            return getattr(app.state, "graph_memory", None)
+        return resolver.graph_for(_scope(request))
 
     @app.get("/api/v1/context/stats")
-    async def context_stats() -> JSONResponse:
-        engine = _context_engine()
+    async def context_stats(request: Request) -> JSONResponse:
+        engine = _context_engine(request)
         if engine is None:
             return JSONResponse(
                 {"status": "ok", "documents": 0, "chunks": 0,
@@ -5050,10 +5219,10 @@ def create_admin_serve_app(
         })
 
     @app.get("/api/v1/context/scopes")
-    async def context_scopes() -> JSONResponse:
+    async def context_scopes(request: Request) -> JSONResponse:
         from sagewai.context.models import ContextScope
 
-        engine = _context_engine()
+        engine = _context_engine(request)
         rows = []
         for scope in ContextScope:
             doc_count = 0
@@ -5073,7 +5242,7 @@ def create_admin_serve_app(
     async def list_context_documents(request: Request) -> JSONResponse:
         from sagewai.context.models import ContextScope, ContextSource
 
-        engine = _context_engine()
+        engine = _context_engine(request)
         if engine is None:
             return JSONResponse({"documents": [], "count": 0, "total": 0})
         qp = request.query_params
@@ -5117,7 +5286,7 @@ def create_admin_serve_app(
         body = await request.json()
         query = body.get("query", "")
         top_k = int(body.get("top_k") or 5)
-        engine = _context_engine()
+        engine = _context_engine(request)
         if engine is None or not query:
             return JSONResponse({"query": query, "results": [], "count": 0})
 
@@ -5145,9 +5314,9 @@ def create_admin_serve_app(
     # ── Memory ───────────────────────────────────────────────────
 
     @app.get("/api/v1/memory/vector/stats")
-    async def vector_stats() -> JSONResponse:
-        mem = _vector_memory()
-        count = len(mem) if mem is not None else 0
+    async def vector_stats(request: Request) -> JSONResponse:
+        mem = _vector_memory(request)
+        count = await _vector_doc_count(mem)
         return JSONResponse({
             "status": "ok",
             "documents": count,
@@ -5159,7 +5328,7 @@ def create_admin_serve_app(
         body = await request.json()
         query = body.get("query", "")
         top_k = int(body.get("top_k") or 5)
-        mem = _vector_memory()
+        mem = _vector_memory(request)
         if mem is None or not query:
             return JSONResponse({"query": query, "results": [], "count": 0})
         hits = await mem.retrieve(query, top_k=top_k)
@@ -5168,21 +5337,23 @@ def create_admin_serve_app(
 
     @app.post("/api/v1/memory/vector/ingest")
     async def vector_ingest(request: Request) -> JSONResponse:
-        # Single-org members can ingest (MULTI mode stays org-admin-gated by the
-        # /api/v1/memory prefix in _MULTI_ORG_PREFIXES — see the middleware).
+        # Project members manage their own project's memory: the write perimeter
+        # (_require_resource_write) denies a viewer (403); project isolation is
+        # enforced by the per-project engine the resolver hands back. Single-org
+        # is unchanged (scope is organizational, write gate is a no-op there).
         _require_resource_write(request)
         body = await request.json()
         content = body.get("content", "")
         metadata = body.get("metadata")
-        mem = _vector_memory()
+        mem = _vector_memory(request)
         if mem is None or not content:
             return JSONResponse({"status": "ok", "chunks": 0})
         await mem.store(content, metadata=metadata)
         return JSONResponse({"status": "ok", "chunks": 1})
 
     @app.get("/api/v1/memory/graph/stats")
-    async def graph_stats() -> JSONResponse:
-        graph = _graph_memory()
+    async def graph_stats(request: Request) -> JSONResponse:
+        graph = _graph_memory(request)
         if graph is None:
             return JSONResponse(
                 {"status": "ok", "entities": 0, "relations": 0, "backend": "none"}
@@ -5199,7 +5370,7 @@ def create_admin_serve_app(
         body = await request.json()
         query = body.get("query", "")
         top_k = int(body.get("top_k") or 5)
-        graph = _graph_memory()
+        graph = _graph_memory(request)
         if graph is None or not query:
             return JSONResponse({"query": query, "results": [], "count": 0})
         lines = await graph.retrieve(query, top_k=top_k)
@@ -5212,7 +5383,7 @@ def create_admin_serve_app(
         body = await request.json()
         name = body.get("name", "")
         metadata = body.get("metadata")
-        graph = _graph_memory()
+        graph = _graph_memory(request)
         if graph is not None and name:
             await graph.store(name, metadata=metadata)
         return JSONResponse({"status": "ok", "entity": name})
@@ -5224,14 +5395,14 @@ def create_admin_serve_app(
         source = body.get("source", "")
         relation = body.get("relation", "")
         target = body.get("target", "")
-        graph = _graph_memory()
+        graph = _graph_memory(request)
         if graph is not None and source and relation and target:
             await graph.add_relation(source, relation, target)
         return JSONResponse({"status": "ok", "relation": relation})
 
     @app.get("/api/v1/memory/graph/entities")
     async def list_graph_entities(request: Request) -> JSONResponse:
-        graph = _graph_memory()
+        graph = _graph_memory(request)
         if graph is None:
             return JSONResponse({"entities": [], "count": 0})
         qp = request.query_params
@@ -5243,8 +5414,8 @@ def create_admin_serve_app(
         return JSONResponse({"entities": entities, "count": len(entities)})
 
     @app.get("/api/v1/memory/graph/entity/{name}")
-    async def get_graph_entity(name: str) -> JSONResponse:
-        graph = _graph_memory()
+    async def get_graph_entity(name: str, request: Request) -> JSONResponse:
+        graph = _graph_memory(request)
         meta = await graph.get_entity(name) if graph is not None else None
         if meta is None:
             return JSONResponse({"detail": "Not found"}, status_code=404)
@@ -5252,7 +5423,7 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/memory/graph/entity/{name}/neighbors")
     async def get_graph_neighbors(name: str, request: Request) -> JSONResponse:
-        graph = _graph_memory()
+        graph = _graph_memory(request)
         depth = int(request.query_params.get("depth", "1"))
         neighbors = (
             await graph.get_neighbors(name, depth=depth) if graph is not None else []
@@ -5265,8 +5436,8 @@ def create_admin_serve_app(
         })
 
     @app.get("/api/v1/memory/graph/entity/{name}/relations")
-    async def get_graph_relations(name: str) -> JSONResponse:
-        graph = _graph_memory()
+    async def get_graph_relations(name: str, request: Request) -> JSONResponse:
+        graph = _graph_memory(request)
         triples = await graph.get_relations(name) if graph is not None else []
         relations = [
             {"source": s, "relation": r, "target": t} for s, r, t in triples

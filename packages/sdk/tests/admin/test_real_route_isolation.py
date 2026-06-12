@@ -1242,11 +1242,24 @@ async def test_file_backed_project_resources_do_not_list_cross_project_rows(real
         assert forbidden not in {row.get(key) for row in r.json()}
 
 
-async def test_memory_vector_ingest_member_403(real_app):
+async def test_memory_vector_ingest_member_allowed(real_app):
+    # Project memory is now a real tenant feature: a project MEMBER may write to
+    # its own project's memory (previously org-admin-gated). The write gate passes;
+    # this fixture doesn't wire the engine resolver, so the ingest is a 200 no-op.
     r = await _req(
         real_app["app"], "POST", "/api/v1/memory/vector/ingest",
         token=real_app["sess_member"], project=real_app["pa"],
-        json={"documents": []},
+        json={"content": "member-owned memory"},
+    )
+    assert r.status_code == 200
+
+
+async def test_memory_vector_ingest_viewer_403(real_app):
+    # A project VIEWER stays read-only — the write perimeter denies the ingest.
+    r = await _req(
+        real_app["app"], "POST", "/api/v1/memory/vector/ingest",
+        token=real_app["sess_viewer"], project=real_app["pa"],
+        json={"content": "viewer should be denied"},
     )
     assert r.status_code == 403
 
