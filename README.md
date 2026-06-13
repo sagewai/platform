@@ -93,6 +93,8 @@ just compose-down                  # stop
 
 `just stack-up` is just `docker compose up -d --build`: it builds the backend image from `packages/sdk` (the repo-root context) and the Next.js admin image entirely from your checkout — only Docker is required, no host toolchain and no prebuilt artifact. (`postgres` + `redis` are pulled as stock upstream images.)
 
+The **first** build compiles the Next.js admin and downloads the backend's Python dependencies, so it takes a few minutes — let it finish (don't cancel it; a cancelled build wastes the layer cache). After that, the backend's dependency install is cached separately from its source, so editing the code and rebuilding is a matter of seconds. Rebuild only the service you changed instead of the whole stack: `docker compose up -d --build backend` (or `admin`).
+
 **Log in.** A fresh stack has no account yet, so create one first: open **http://localhost:3008/setup** and complete the short wizard (organization → admin account: name, email, password ≥ 8 characters). It signs you in automatically at the end; afterwards — or from another browser — sign in at **http://localhost:3008/login** with that email and password. There are no default credentials; the admin is whatever you set in the wizard.
 
 **Locked out / forgot your password?** Email reset needs SMTP (not configured out of the box), so reset it locally instead — no email required:

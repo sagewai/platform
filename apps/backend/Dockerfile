@@ -34,17 +34,32 @@ WORKDIR /build
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Build + install the SDK from source. The build context is the repo root, so
-# packages/sdk is the actual checkout — no prebuilt wheel, no PyPI fallback, so
-# the image runs exactly the code you cloned. hatchling builds it in isolation
-# (pip's PEP517 build); sagewai has no workspace path-deps, so all runtime
-# dependencies resolve from PyPI.
+# Install in two layers so editing the source doesn't reinstall every
+# dependency — the difference between a multi-minute rebuild and a few seconds:
+#
+#   1. Dependencies — keyed on the manifest (pyproject.toml + README.md) ONLY.
+#      We copy the manifest plus an empty `sagewai/__init__.py` stub so
+#      hatchling can build metadata and pip can resolve + install the full
+#      dependency tree, then drop the stub package itself. Docker reuses this
+#      layer's cache on every build until the dependency list actually changes.
+#   2. Source — copy the real packages/sdk, then a `--no-deps` install of the
+#      package. A code change invalidates only this layer, so the rebuild just
+#      recompiles the (pure-Python) sagewai wheel and installs it in seconds;
+#      the multi-minute dependency install above is untouched.
+#
+# The build context is the repo root, so packages/sdk is the actual checkout —
+# no prebuilt wheel, no PyPI fallback; the image runs exactly the code you
+# cloned. The BuildKit cache mount persists pip's download/wheel cache, so even
+# a dependency change reinstalls from cache instead of re-downloading.
+COPY packages/sdk/pyproject.toml packages/sdk/README.md /build/sdk/
+RUN mkdir -p /build/sdk/sagewai && touch /build/sdk/sagewai/__init__.py
+RUN --mount=type=cache,target=/root/.cache/pip \
+        pip install "/build/sdk[fastapi,postgres]" \
+    && pip uninstall -y sagewai
+
 COPY packages/sdk /build/sdk
-# A BuildKit cache mount persists pip's download + built-wheel cache across
-# builds, so a rebuild after a source change reinstalls from cache instead of
-# re-downloading and re-compiling every dependency. First build still populates
-# the cache (~minutes); subsequent rebuilds are much faster.
-RUN --mount=type=cache,target=/root/.cache/pip pip install "/build/sdk[fastapi,postgres]"
+RUN --mount=type=cache,target=/root/.cache/pip \
+        pip install --no-deps "/build/sdk[fastapi,postgres]"
 
 # ── Stage 2: runtime ────────────────────────────────────────────────────────
 FROM python:3.13.13-slim@sha256:aa938a849bcb82dce8f49480f056ab82bf5c1c3ebc294f0430f37b6820e7f286 AS runtime
