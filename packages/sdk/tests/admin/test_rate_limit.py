@@ -20,13 +20,13 @@ import os
 import pytest
 import pytest_asyncio
 
-from sagewai.admin.rate_limit import (
+from sagewai.db.engine import create_engine
+from sagewai.db.models import Base
+from sagewai.db.rate_limit import (
     InMemoryRateLimiter,
     PostgresRateLimiter,
     build_rate_limiter,
 )
-from sagewai.db.engine import create_engine
-from sagewai.db.models import Base
 
 # Dual-dialect engine fixture (mirrors tests/db/conftest.py, which is scoped to
 # tests/db/): SQLite always; Postgres when SAGEWAI_TEST_DATABASE_URL is set, so
@@ -187,19 +187,20 @@ async def test_postgres_prunes_stale_windows(dialect_engine):
 # ------------------------------------------------------------ build_rate_limiter
 
 
-def test_build_rate_limiter_single_org_is_in_memory(monkeypatch):
-    monkeypatch.setattr("sagewai.admin.rate_limit.is_multi_tenant", lambda: False)
-    # Even with an engine available, single-org never takes a DB dependency.
+def test_build_rate_limiter_single_org_is_in_memory():
+    # Single-org (multi_tenant=False, the default) never takes a DB dependency,
+    # even with an engine available.
+    assert isinstance(build_rate_limiter(object(), multi_tenant=False), InMemoryRateLimiter)
     assert isinstance(build_rate_limiter(object()), InMemoryRateLimiter)
-    assert isinstance(build_rate_limiter(None), InMemoryRateLimiter)
+    assert isinstance(build_rate_limiter(None, multi_tenant=False), InMemoryRateLimiter)
 
 
-def test_build_rate_limiter_multi_with_engine_is_postgres(monkeypatch, dialect_engine):
-    monkeypatch.setattr("sagewai.admin.rate_limit.is_multi_tenant", lambda: True)
-    assert isinstance(build_rate_limiter(dialect_engine), PostgresRateLimiter)
+def test_build_rate_limiter_multi_with_engine_is_postgres(dialect_engine):
+    assert isinstance(
+        build_rate_limiter(dialect_engine, multi_tenant=True), PostgresRateLimiter
+    )
 
 
-def test_build_rate_limiter_multi_without_engine_falls_back(monkeypatch):
-    monkeypatch.setattr("sagewai.admin.rate_limit.is_multi_tenant", lambda: True)
+def test_build_rate_limiter_multi_without_engine_falls_back():
     # Multi-tenant but no engine wired yet → safe in-memory fallback.
-    assert isinstance(build_rate_limiter(None), InMemoryRateLimiter)
+    assert isinstance(build_rate_limiter(None, multi_tenant=True), InMemoryRateLimiter)

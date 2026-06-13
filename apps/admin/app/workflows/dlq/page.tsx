@@ -37,6 +37,15 @@ export default function DLQPage() {
     }
   };
 
+  const handleRetry = async (runId: string) => {
+    try {
+      await adminApi.retryDLQ(runId);
+      fetchEntries();
+    } catch (e: unknown) {
+      alert(`Retry failed: ${e instanceof Error ? e.message : 'Unknown error'}`);
+    }
+  };
+
   return (
     <div className="max-w-6xl mx-auto">
       <div className="flex items-center justify-between mb-lg">
@@ -70,7 +79,7 @@ export default function DLQPage() {
       {showHelp && (
         <Card>
           <div className="p-md text-sm text-text-secondary space-y-2">
-            <p>Workflows land here after exhausting their retry attempts (Dead Letter Queue). Review the error and fix the underlying cause. In-place retry is not available in this build — re-run the workflow from the builder, then discard entries that are no longer relevant.</p>
+            <p>Workflows land here after exhausting their retry attempts (Dead Letter Queue). Review the error and fix the underlying cause, then <strong>Retry</strong> to re-enqueue the run under a new id (the failed entry is removed and linked to the new run), or <strong>Discard</strong> entries that are no longer relevant.</p>
           </div>
         </Card>
       )}
@@ -115,9 +124,9 @@ export default function DLQPage() {
                   <td className="py-2.5 px-3">
                     <div className="flex gap-2">
                       <button
-                        disabled
-                        className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-border opacity-50 cursor-not-allowed"
-                        title="Not available in this build — workflow DLQ retry is not implemented. Re-run the workflow from the builder, then discard this entry."
+                        onClick={() => handleRetry(e.run_id)}
+                        className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-border hover:bg-bg-subtle"
+                        title="Re-enqueue this workflow under a new run id, then remove this entry"
                       >
                         <RotateCcw className="w-3 h-3" /> Retry
                       </button>

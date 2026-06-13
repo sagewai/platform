@@ -25,11 +25,10 @@ parameter for the context.
 """
 from __future__ import annotations
 
-import inspect
-from typing import Any
-
 import logging
+from dataclasses import replace
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
@@ -44,8 +43,10 @@ from sagewai.connections.credentials import all_backends
 from sagewai.connections.errors import (
     ConnectionNotFoundError,
     DuplicateDisplayNameError,
+    IdCollisionError,
     UnknownProtocolError,
 )
+from sagewai.connections.models import Connection
 from sagewai.connections.protocols import all_protocols, get_protocol
 from sagewai.connections.store_ops import (
     store_create,
@@ -56,7 +57,6 @@ from sagewai.connections.store_ops import (
     store_update,
     store_update_test_result,
 )
-
 
 # ── Request bodies ──────────────────────────────────────────────────
 
@@ -171,6 +171,94 @@ class _SnapshotConnectionStore:
         if tag is not None:
             rows = [r for r in rows if tag in r.tags]
         return rows
+
+
+class _ImportCaptureStore(_SnapshotConnectionStore):
+    """Sync facade that lets the legacy *sync* importer drive an *async* tenant
+    store. Reads are answered from a prefetched snapshot; writes (create / update
+    / set_default) are *captured* in order so the route can replay them through
+    the async store afterwards (mirrors the read-only ``_SnapshotConnectionStore``
+    that ``export_to_yaml`` already uses).
+
+    The importer accounts its result against this facade, so the facade reproduces
+    the store's id-collision behaviour and returns real ``Connection`` rows; the
+    captured creates carry the same generated id (``id_override``) so the replayed
+    async write lands under the exact id the result reports. Captured ops contain
+    only writes the importer treated as successful — a collision raises here
+    before the op is recorded, exactly as the real store would.
+    """
+
+    def __init__(self, rows: list[Any], id_factory) -> None:
+        super().__init__(list(rows))
+        self._ids = {r.id for r in self._rows}
+        self._id_factory = id_factory
+        self.ops: list[tuple[str, dict[str, Any]]] = []
+
+    def create(
+        self,
+        *,
+        protocol: str,
+        project_id: str | None,
+        display_name: str,
+        tags: Any,
+        protocol_data: dict[str, Any],
+        credentials_backend: dict[str, Any] | None = None,
+        id_override: str | None = None,
+    ) -> Connection:
+        new_id = id_override if id_override is not None else self._id_factory(protocol)
+        if new_id in self._ids:
+            raise IdCollisionError(new_id)
+        now = datetime.now(timezone.utc).isoformat()
+        conn = Connection(
+            id=new_id,
+            protocol=protocol,
+            project_id=project_id,
+            display_name=display_name,
+            tags=tuple(tags or ()),
+            credentials_backend=credentials_backend,
+            status="pending",
+            last_tested_at=None,
+            last_test_ok=None,
+            is_default=False,
+            created_at=now,
+            updated_at=now,
+            last_error=None,
+            protocol_data=protocol_data,
+        )
+        self._rows.append(conn)
+        self._ids.add(new_id)
+        self.ops.append(
+            (
+                "create",
+                {
+                    "protocol": protocol,
+                    "project_id": project_id,
+                    "display_name": display_name,
+                    "tags": list(tags or []),
+                    "protocol_data": protocol_data,
+                    "credentials_backend": credentials_backend,
+                    "id_override": new_id,
+                },
+            )
+        )
+        return conn
+
+    def update(self, connection_id: str, **fields: Any) -> Connection:
+        idx = next(
+            (i for i, r in enumerate(self._rows) if r.id == connection_id), None
+        )
+        if idx is None:
+            raise ConnectionNotFoundError(connection_id)
+        applied = dict(fields)
+        if "tags" in applied:
+            applied["tags"] = tuple(applied["tags"] or ())
+        updated = replace(self._rows[idx], **applied)
+        self._rows[idx] = updated
+        self.ops.append(("update", {"connection_id": connection_id, "fields": dict(fields)}))
+        return updated
+
+    def set_default(self, connection_id: str) -> None:
+        self.ops.append(("set_default", {"connection_id": connection_id}))
 
 
 def _decrypted_pd(ctx: ConnectionsContext, record, plugin) -> dict[str, Any]:
@@ -479,25 +567,45 @@ def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
         else:
             yaml_text = (await request.body()).decode("utf-8")
 
-        # The legacy YAML importer mutates stores synchronously. Tenant
-        # connection writes go through an AsyncEngine, so do not let this route
-        # accidentally produce un-awaited writes or partial imports. Export
-        # remains supported via a read-only snapshot above.
-        if mctx is not None and inspect.iscoroutinefunction(ctx.store.create):
-            return JSONResponse(
-                status_code=501,
-                content={"detail": "tenant connection import is not yet available"},
+        # The legacy YAML importer is synchronous. In single-org it drives the
+        # file-backed store directly; in multi-tenant the store is async, so run
+        # the importer against a sync capture facade seeded from a prefetched
+        # snapshot (mirroring the export snapshot above), then replay the captured
+        # writes through the async store. ``dry_run`` captures no writes, so the
+        # replay loop is a no-op; a create-only conflict aborts before any write
+        # is captured, preserving the all-or-nothing guarantee.
+        if mctx is not None:
+            facade = _ImportCaptureStore(
+                await store_list(ctx.store, proj), ctx.store._generate_id
             )
-
-        result = import_from_yaml(
-            yaml_text=yaml_text,
-            store=ctx.store,
-            router=ctx.router,
-            project_id=proj,
-            mode=mode,  # type: ignore[arg-type]
-            dry_run=dry_run,
-            preserve_ids=preserve_ids,
-        )
+            result = import_from_yaml(
+                yaml_text=yaml_text,
+                store=facade,
+                router=ctx.router,
+                project_id=proj,
+                mode=mode,  # type: ignore[arg-type]
+                dry_run=dry_run,
+                preserve_ids=preserve_ids,
+            )
+            for action, payload in facade.ops:
+                if action == "create":
+                    await store_create(ctx.store, **payload)
+                elif action == "update":
+                    await store_update(
+                        ctx.store, payload["connection_id"], **payload["fields"]
+                    )
+                elif action == "set_default":
+                    await store_set_default(ctx.store, payload["connection_id"])
+        else:
+            result = import_from_yaml(
+                yaml_text=yaml_text,
+                store=ctx.store,
+                router=ctx.router,
+                project_id=proj,
+                mode=mode,  # type: ignore[arg-type]
+                dry_run=dry_run,
+                preserve_ids=preserve_ids,
+            )
 
         # Structured business event (best-effort).
         try:

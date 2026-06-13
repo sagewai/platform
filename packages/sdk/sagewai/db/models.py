@@ -503,7 +503,7 @@ class AdminResourceModel(Base):
 class RateLimitModel(Base):
     """Distributed fixed-window rate-limit counter (multi-tenant mode).
 
-    Backs :class:`sagewai.admin.rate_limit.PostgresRateLimiter`. Each row is one
+    Backs :class:`sagewai.db.rate_limit.PostgresRateLimiter`. Each row is one
     ``(bucket_key, window_start)`` window; ``count`` is incremented atomically via
     ``INSERT ... ON CONFLICT DO UPDATE``. Because every worker process targets the
     same row, the limit is enforced across processes (the single-process

@@ -61,6 +61,10 @@ async def real_app(tmp_path, monkeypatch):
     await store.add_membership(oid, member["id"], "project:member", project_id=pa)
     viewer = await store.create_user(oid, "v@acme.io", password="pw0000", role="org:member")
     await store.add_membership(oid, viewer["id"], "project:viewer", project_id=pa)
+    # A member of the OTHER project (PB) — the cross-tenant actor for the
+    # two-project isolation smoke; sees PB, must never see PA.
+    member_b = await store.create_user(oid, "mb@acme.io", password="pw0000", role="org:member")
+    await store.add_membership(oid, member_b["id"], "project:member", project_id=pb)
     # An org owner — the only actor allowed to mutate org/project/token routes.
     owner = await store.create_user(oid, "o@acme.io", password="pw0000", role="org:owner")
 
@@ -287,6 +291,9 @@ async def real_app(tmp_path, monkeypatch):
         "sess_member": await store.issue_session(oid, member["id"]),
         "sess_viewer": await store.issue_session(oid, viewer["id"]),
         "sess_owner": await store.issue_session(oid, owner["id"]),
+        "sess_member_b": await store.issue_session(oid, member_b["id"]),
+        "member_b_id": member_b["id"],
+        "api_token_store": api_tokens,
         "pa_slug": "pa",
     }
     await engine.dispose()
@@ -299,6 +306,19 @@ async def _req(app, method, path, *, token, project=None, json=None):
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
         return await c.request(method, path, headers=headers, json=json)
+
+
+async def _post_yaml(app, path, *, token, project, content):
+    """POST a raw YAML body (connection import accepts application/yaml)."""
+    headers = {
+        "authorization": f"Bearer {token}",
+        "content-type": "application/yaml",
+    }
+    if project:
+        headers["x-project-id"] = project
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+        return await c.request("POST", path, headers=headers, content=content)
 
 
 async def test_forged_project_header_404_on_real_route(real_app):
@@ -524,6 +544,152 @@ async def test_connection_list_uses_tenant_store_with_inheritance(real_app):
     assert "pa-http" in names
     assert "shared-mcp" in names
     assert "pb-http" not in names
+
+
+_IMPORT_HTTP_YAML = (
+    "version: 1\n"
+    "secrets_mode: redacted\n"
+    "connections:\n"
+    "  - protocol: http\n"
+    "    display_name: imported-http\n"
+    "    tags: [fresh]\n"
+    "    protocol_data:\n"
+    "      base_url: https://imported.example.com\n"
+    "      auth:\n"
+    "        kind: none\n"
+)
+
+
+async def test_connection_import_writes_to_tenant_store(real_app):
+    """POST /import in multi mode persists through the async tenant store.
+
+    (Was a hard 501 — the sync importer couldn't drive the AsyncEngine store.)
+    """
+    r = await _post_yaml(
+        real_app["app"],
+        "/api/v1/admin/connections/import",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+        content=_IMPORT_HTTP_YAML,
+    )
+    assert r.status_code == 200, r.text
+    assert [c["display_name"] for c in r.json()["created"]] == ["imported-http"]
+
+    # Persisted in PA's scope, with the imported tags...
+    pa = await _req(
+        real_app["app"],
+        "GET",
+        "/api/v1/admin/connections/",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    pa_conns = {c["display_name"]: c for c in pa.json()}
+    assert "imported-http" in pa_conns
+    assert pa_conns["imported-http"]["project_id"] == real_app["pa"]
+    assert pa_conns["imported-http"]["tags"] == ["fresh"]
+
+    # ...and invisible to another project (owner scoped to PB does not see it).
+    pb = await _req(
+        real_app["app"],
+        "GET",
+        "/api/v1/admin/connections/",
+        token=real_app["sess_owner"],
+        project=real_app["pb"],
+    )
+    assert "imported-http" not in {c["display_name"] for c in pb.json()}
+
+
+async def test_connection_import_upsert_updates_tenant_store(real_app):
+    """upsert mode replays an update through the async tenant store."""
+    yaml_text = (
+        "version: 1\n"
+        "secrets_mode: redacted\n"
+        "connections:\n"
+        "  - protocol: http\n"
+        "    display_name: pa-http\n"  # already exists in PA
+        "    tags: [upserted]\n"
+        "    protocol_data:\n"
+        "      base_url: https://pa-updated.example.com\n"
+        "      auth:\n"
+        "        kind: none\n"
+    )
+    r = await _post_yaml(
+        real_app["app"],
+        "/api/v1/admin/connections/import?mode=upsert",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+        content=yaml_text,
+    )
+    assert r.status_code == 200, r.text
+    assert [c["display_name"] for c in r.json()["updated"]] == ["pa-http"]
+
+    # The real tenant row reflects the update (not just the importer's report).
+    pa = await _req(
+        real_app["app"],
+        "GET",
+        "/api/v1/admin/connections/",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    pa_http = next(c for c in pa.json() if c["display_name"] == "pa-http")
+    assert pa_http["tags"] == ["upserted"]
+
+
+async def test_connection_import_create_only_conflict_aborts(real_app):
+    """create-only against an existing tenant name is all-or-nothing (400, no write)."""
+    yaml_text = (
+        "version: 1\n"
+        "secrets_mode: redacted\n"
+        "connections:\n"
+        "  - protocol: http\n"
+        "    display_name: pa-http\n"  # collides with the existing PA row
+        "    tags: [should-not-land]\n"
+        "    protocol_data:\n"
+        "      base_url: https://dupe.example.com\n"
+        "      auth:\n"
+        "        kind: none\n"
+    )
+    r = await _post_yaml(
+        real_app["app"],
+        "/api/v1/admin/connections/import",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+        content=yaml_text,
+    )
+    assert r.status_code == 400, r.text
+    # The existing row is untouched (the conflicting tags never landed).
+    pa = await _req(
+        real_app["app"],
+        "GET",
+        "/api/v1/admin/connections/",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    pa_http = next(c for c in pa.json() if c["display_name"] == "pa-http")
+    assert pa_http["tags"] == []
+
+
+async def test_connection_import_dry_run_does_not_persist(real_app):
+    """dry_run reports the would-be writes but persists nothing to the tenant store."""
+    r = await _post_yaml(
+        real_app["app"],
+        "/api/v1/admin/connections/import?dry_run=true",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+        content=_IMPORT_HTTP_YAML,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["dry_run"] is True
+    assert [c["display_name"] for c in r.json()["created"]] == ["imported-http"]
+
+    pa = await _req(
+        real_app["app"],
+        "GET",
+        "/api/v1/admin/connections/",
+        token=real_app["sess_member"],
+        project=real_app["pa"],
+    )
+    assert "imported-http" not in {c["display_name"] for c in pa.json()}
 
 
 async def test_mcp_extra_route_uses_tenant_connection_context(real_app):
@@ -1402,3 +1568,117 @@ async def test_agent_config_patch_owner_passes_gate(real_app):
         token=real_app["sess_owner"], json={"model": "ok"},
     )
     assert r.status_code == 404
+
+
+# ── Two-project isolation smoke (end-to-end capstone) ────────────────
+#
+# A single, readable walk of the cross-tenant boundary on the REAL multi-tenant
+# admin app: for each control-plane resource, project A's member sees its own
+# and a project B member gets 404/empty; and a B-bound API token can neither
+# read A's resources nor be widened to A via a forged X-Project-ID. This is the
+# runnable form of the pre-launch "manual two-project isolation smoke".
+#
+# Backed by SQLite — the multi-mode isolation logic is byte-identical to
+# Postgres (the dual-dialect store tests prove parity), so it runs anywhere
+# without infra and is unaffected by the Actions-billing block. Durable
+# cross-tenant *memory* isolation (B's vector store cannot read A's docs) is
+# proven separately in test_mt_memory_isolation.py — real_app intentionally does
+# not wire the memory engine resolver, so this smoke checks only the memory
+# write perimeter.
+
+
+async def _mint_token(real_app, *, user_id, scopes, project_id):
+    """Mint a project-bound API token via the store (ctx stamps org/subject)."""
+    ctx = await real_app["identity_store"].build_context(
+        real_app["org_id"], user_id, project_id=project_id
+    )
+    _, plaintext = await real_app["api_token_store"].create_for(
+        ctx, name="smoke", scopes=set(scopes), project_id=project_id
+    )
+    return plaintext
+
+
+async def test_two_project_isolation_smoke(real_app):
+    app, pa, pb = real_app["app"], real_app["pa"], real_app["pb"]
+    a, b = real_app["sess_member"], real_app["sess_member_b"]  # PA member, PB member
+
+    # 1. CREDENTIAL (provider). A owns "anthropic" (id prov_a, secret seeded); B owns "openai".
+    a_provs = await _req(app, "GET", "/api/v1/providers", token=a, project=pa)
+    assert a_provs.status_code == 200
+    assert "anthropic" in {p.get("provider_name") for p in a_provs.json()}  # A sees its own
+    assert "sk-SECRET-PA" not in a_provs.text and "fernet:" not in a_provs.text  # redacted
+    b_provs = await _req(app, "GET", "/api/v1/providers", token=b, project=pb)
+    assert b_provs.status_code == 200
+    assert real_app["prov_a"] not in {p.get("id") for p in b_provs.json()}  # A's row absent for B
+
+    # 2. AGENT. Both own "scout"; each sees only its own (A model "x", B model "y").
+    a_scout = await _req(app, "GET", "/playground/agents/scout", token=a, project=pa)
+    assert a_scout.status_code == 200 and a_scout.json().get("model") == "x"
+    b_scout = await _req(app, "GET", "/playground/agents/scout", token=b, project=pb)
+    assert b_scout.status_code == 200 and b_scout.json().get("model") == "y"  # never A's "x"
+
+    # 3. CONNECTION. A owns pa-http; B owns pb-http. Lists are scoped; a cross GET 404s.
+    a_names = {
+        c["display_name"]
+        for c in (await _req(app, "GET", "/api/v1/admin/connections/", token=a, project=pa)).json()
+    }
+    assert "pa-http" in a_names and "pb-http" not in a_names
+    b_names = {
+        c["display_name"]
+        for c in (await _req(app, "GET", "/api/v1/admin/connections/", token=b, project=pb)).json()
+    }
+    assert "pb-http" in b_names and "pa-http" not in b_names
+    b_get_conn = await _req(
+        app, "GET", f"/api/v1/admin/connections/{real_app['conn_pa']}", token=b, project=pb
+    )
+    assert b_get_conn.status_code == 404
+
+    # 4. RUN (agent run). A owns run_a.
+    assert (
+        await _req(app, "GET", f"/admin/runs/{real_app['run_a']}", token=a, project=pa)
+    ).status_code == 200
+    assert (
+        await _req(app, "GET", f"/admin/runs/{real_app['run_a']}", token=b, project=pb)
+    ).status_code == 404
+    b_runs = await _req(app, "GET", "/admin/runs", token=b, project=pb)
+    assert real_app["run_a"] not in {r.get("run_id") for r in b_runs.json()["items"]}
+
+    # 5. WORKFLOW run. A owns wf-pa (project_id=pa); B owns wf-pb.
+    a_wf = {r.get("run_id") for r in (await _req(app, "GET", "/workflows/history", token=a, project=pa)).json()}
+    assert "wf-pa" in a_wf and "wf-pb" not in a_wf
+    b_wf = {r.get("run_id") for r in (await _req(app, "GET", "/workflows/history", token=b, project=pb)).json()}
+    assert "wf-pb" in b_wf and "wf-pa" not in b_wf
+
+    # 6. MEMORY write perimeter (durable isolation: see test_mt_memory_isolation).
+    assert (
+        await _req(app, "POST", "/api/v1/memory/vector/ingest", token=a, project=pa,
+                   json={"content": "A-owned memory"})
+    ).status_code == 200  # a member may write its own project's memory
+    assert (
+        await _req(app, "POST", "/api/v1/memory/vector/ingest", token=b, project=pa,
+                   json={"content": "B forging into A"})
+    ).status_code == 404  # B is not a member of PA — middleware 404s the forge
+
+    # 7. SESSION-based switch: a PA member forging X-Project-ID: PB is 404'd at the
+    #    middleware (member of PA, not PB).
+    assert (
+        await _req(app, "GET", "/api/v1/providers", token=a, project=pb)
+    ).status_code == 404
+
+    # 8. TOKEN-based switch: a B-bound read token is pinned to PB by its token row;
+    #    a forged X-Project-ID: PA is ignored, so it cannot be widened to A.
+    b_token = await _mint_token(
+        real_app, user_id=real_app["member_b_id"], scopes={"read"}, project_id=pb
+    )
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t"
+    ) as c:
+        own = await c.get("/api/v1/providers", headers={"authorization": f"Bearer {b_token}"})
+        assert own.status_code == 200
+        assert real_app["prov_a"] not in {p.get("id") for p in own.json()}
+        forged = await c.get(
+            "/api/v1/providers",
+            headers={"authorization": f"Bearer {b_token}", "x-project-id": pa},
+        )
+        assert forged.status_code == 200
+        assert real_app["prov_a"] not in {p.get("id") for p in forged.json()}

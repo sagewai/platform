@@ -36,7 +36,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from sagewai.admin.rate_limit import RateLimiter, build_rate_limiter
+from sagewai.db.rate_limit import RateLimiter, build_rate_limiter
 from sagewai.harness.models import HarnessIdentity
 from sagewai.harness.proxy import HarnessProxy
 
@@ -159,7 +159,7 @@ def create_harness_proxy_router(
     env-configurable (``SAGEWAI_HARNESS_RATE_LIMIT`` / ``_WINDOW``); a limit
     ``<= 0`` disables it. The limiter is shared across worker processes when an
     engine is provided in multi-tenant mode (Postgres-backed), single-process
-    in-memory otherwise — see :func:`~sagewai.admin.rate_limit.build_rate_limiter`.
+    in-memory otherwise — see :func:`~sagewai.db.rate_limit.build_rate_limiter`.
 
     Args:
         proxy: Configured :class:`HarnessProxy` instance.

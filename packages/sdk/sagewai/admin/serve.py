@@ -1119,11 +1119,14 @@ def create_admin_serve_app(
     # processes) in multi-tenant mode and in-memory single-process in single-org
     # (build_rate_limiter picks the backend; the tenant engine comes from the
     # identity store). W6 "distributed rate limiting" closed here.
-    from sagewai.admin.rate_limit import build_rate_limiter
+    from sagewai.admin.tenancy import is_multi_tenant
+    from sagewai.db.rate_limit import build_rate_limiter
 
     _tenant_engine = getattr(identity_store, "_engine", None)
     app.state.run_throttle = _ProjectRunThrottle(
-        _run_quota_limit(), _run_quota_window(), build_rate_limiter(_tenant_engine)
+        _run_quota_limit(),
+        _run_quota_window(),
+        build_rate_limiter(_tenant_engine, multi_tenant=is_multi_tenant()),
     )
 
     @app.exception_handler(_QuotaExceededError)
@@ -3204,20 +3207,77 @@ def create_admin_serve_app(
         return JSONResponse([])
 
     @app.get("/workflows/dlq")
-    async def workflow_dlq() -> JSONResponse:
-        return JSONResponse([])
+    async def workflow_dlq(request: Request) -> JSONResponse:
+        """Failed workflow runs (the dead-letter queue), scoped to the requester.
+
+        Failed runs are ``workflow_runs`` rows with ``status == "failed"`` — the
+        same rows the retry/discard routes act on. Shaped for the admin DLQ table.
+        """
+        entries = [
+            {
+                "id": r.get("run_id"),
+                "run_id": r.get("run_id"),
+                "workflow_name": r.get("workflow_name", ""),
+                "error": r.get("error", ""),
+                "retry_count": r.get("retry_count", 0),
+                "created_at": r.get("enqueued_at") or r.get("started_at") or "",
+            }
+            for r in _workflow_runs_for_request(request)
+            if r.get("status") == "failed"
+        ]
+        return JSONResponse(entries)
 
     @app.post("/workflows/dlq/{run_id}/retry")
     async def workflow_dlq_retry(run_id: str, request: Request) -> JSONResponse:
+        """Re-enqueue a failed workflow run under a fresh run_id, then drop the
+        failed entry (lineage preserved via ``replay_of_run_id`` on the new run).
+
+        Clones the original run's fields into the shared enqueue core, so a retry
+        passes the same host-exec / Sealed-preview / worker-capability gates as a
+        first run (e.g. a full-mode retry still needs an approved worker). The
+        new run is charged to the *original* run's project, not the caller's hint.
+        """
         target = _workflow_run_for_request(run_id, request, write=True)
         if target is None:
             return JSONResponse({"status": "not_found"}, status_code=404)
         if target.get("status") != "failed":
             return JSONResponse({"detail": "workflow run is not failed"}, status_code=409)
-        return JSONResponse(
-            {"detail": "workflow DLQ retry is not implemented"},
-            status_code=501,
+        target_pid = _workflow_record_project_id(target)
+
+        # Re-enqueue first; if a gate rejects (403/400) the original is left intact.
+        result = await _enqueue_workflow_run(
+            request,
+            pid=target_pid,
+            workflow_name=target.get("workflow_name"),
+            input_data=target.get("input_data", {}),
+            execution_mode_str=target.get("execution_mode", "full"),
+            security_profile_ref=target.get("security_profile_ref"),
+            artifact_destination_raw=target.get("artifact_destination"),
+            replay_of_run_id=run_id,
         )
+        new_run_id = result["run_id"]
+
+        def _apply(d):
+            before = len(d.get("workflow_runs", []))
+            d["workflow_runs"] = [
+                r
+                for r in d.get("workflow_runs", [])
+                if not (
+                    r.get("run_id") == run_id
+                    and _workflow_record_project_id(r) == target_pid
+                )
+            ]
+            return len(d.get("workflow_runs", [])) != before
+
+        sf.mutate(_apply)
+        await _emit_audit(
+            request,
+            "workflow.dlq.retry",
+            target_type="workflow_run",
+            target_id=run_id,
+            metadata={"new_run_id": new_run_id},
+        )
+        return JSONResponse({"new_run_id": new_run_id}, status_code=202)
 
     @app.delete("/workflows/dlq/{run_id}")
     async def workflow_dlq_discard(run_id: str, request: Request) -> JSONResponse:
@@ -3252,18 +3312,26 @@ def create_admin_serve_app(
             status_code=501,
         )
 
-    @app.post("/api/v1/workflows/enqueue", status_code=202)
-    async def workflows_enqueue(request: Request) -> JSONResponse:
-        """Canonical workflow-run enqueue endpoint matching architecture WorkflowRun shape.
+    async def _enqueue_workflow_run(
+        request: Request,
+        *,
+        pid: str | None,
+        workflow_name: str,
+        input_data: Any,
+        execution_mode_str: str,
+        security_profile_ref: str | None,
+        artifact_destination_raw: Any,
+        replay_of_run_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Shared core for enqueuing a workflow run.
 
-        Accepts the canonical body shape (workflow_name, input_data, execution_mode,
-        optional security_profile_ref, optional artifact_destination). Resolves the
-        Sealed cascade when security_profile_ref is set, derives requires_sandbox_mode
-        via sandbox_mode_for(), capability-checks against the fleet registry, persists
-        a WorkflowRun row, and returns 202 Accepted with resolved metadata.
-
-        Does NOT replace /workflows/run (YAML-shaped playground endpoint) or
-        /workflows/runs/{run_id} (status polling).
+        Validates execution_mode, applies the host-exec and Sealed
+        identity-execution preview gates, capability-checks the fleet, resolves the
+        Sealed cascade, persists a WorkflowRun row, and returns the 202 response
+        body. Used by both POST /api/v1/workflows/enqueue and DLQ retry (which
+        replays a failed run under a fresh run_id and threads ``replay_of_run_id``
+        for lineage). The per-project run quota is enforced by the public enqueue
+        route, not here — a DLQ retry is bounded by the existence of a failed run.
         """
         import secrets as _enq_sec
 
@@ -3273,19 +3341,6 @@ def create_admin_serve_app(
         from sagewai.core.state import ExecutionMode as _ExecutionMode, WorkflowRun as _WorkflowRun, sandbox_mode_for as _sandbox_mode_for
         from sagewai.fleet.models import WorkerApprovalStatus as _WorkerApprovalStatus
         from sagewai.sandbox.models import SandboxMode as _SandboxMode
-
-        body = await request.json()
-        pid = _project_scope(request)
-        await _enforce_run_quota(request)
-
-        workflow_name = body.get("workflow_name")
-        if not workflow_name:
-            raise _HTTPException(status_code=400, detail="workflow_name is required")
-
-        input_data = body.get("input_data", {})
-        execution_mode_str = body.get("execution_mode", "full")
-        security_profile_ref = body.get("security_profile_ref")
-        artifact_destination_raw = body.get("artifact_destination")
 
         # 1. Validate execution_mode
         try:
@@ -3462,6 +3517,7 @@ def create_admin_serve_app(
             artifact_destination=artifact_destination,
             input_data=input_data,
             project_id=_owner(pid),
+            replay_of_run_id=replay_of_run_id,
         )
 
         run_record = run.to_dict()
@@ -3490,19 +3546,50 @@ def create_admin_serve_app(
             },
         )
 
-        # 7. Return 202 Accepted with resolved metadata
-        return JSONResponse(
-            {
-                "run_id": run_id,
-                "status": run.status.value,
-                "execution_mode": run.execution_mode.value,
-                "requires_sandbox_mode": run.requires_sandbox_mode.value,
-                "security_profile_ref": run.security_profile_ref,
-                "effective_env_keys": run.effective_env_keys,
-                "effective_secret_keys": run.effective_secret_keys,
-            },
-            status_code=202,
+        # 7. Resolved metadata for the 202 response body
+        return {
+            "run_id": run_id,
+            "status": run.status.value,
+            "execution_mode": run.execution_mode.value,
+            "requires_sandbox_mode": run.requires_sandbox_mode.value,
+            "security_profile_ref": run.security_profile_ref,
+            "effective_env_keys": run.effective_env_keys,
+            "effective_secret_keys": run.effective_secret_keys,
+        }
+
+    @app.post("/api/v1/workflows/enqueue", status_code=202)
+    async def workflows_enqueue(request: Request) -> JSONResponse:
+        """Canonical workflow-run enqueue endpoint matching architecture WorkflowRun shape.
+
+        Accepts the canonical body shape (workflow_name, input_data, execution_mode,
+        optional security_profile_ref, optional artifact_destination). Resolves the
+        Sealed cascade when security_profile_ref is set, derives requires_sandbox_mode
+        via sandbox_mode_for(), capability-checks against the fleet registry, persists
+        a WorkflowRun row, and returns 202 Accepted with resolved metadata.
+
+        Does NOT replace /workflows/run (YAML-shaped playground endpoint) or
+        /workflows/runs/{run_id} (status polling).
+        """
+        from fastapi import HTTPException as _HTTPException
+
+        body = await request.json()
+        pid = _project_scope(request)
+        await _enforce_run_quota(request)
+
+        workflow_name = body.get("workflow_name")
+        if not workflow_name:
+            raise _HTTPException(status_code=400, detail="workflow_name is required")
+
+        result = await _enqueue_workflow_run(
+            request,
+            pid=pid,
+            workflow_name=workflow_name,
+            input_data=body.get("input_data", {}),
+            execution_mode_str=body.get("execution_mode", "full"),
+            security_profile_ref=body.get("security_profile_ref"),
+            artifact_destination_raw=body.get("artifact_destination"),
         )
+        return JSONResponse(result, status_code=202)
 
     @app.post("/workflows/validate")
     async def workflow_validate(request: Request) -> JSONResponse:
@@ -6163,7 +6250,7 @@ class _ProjectRunThrottle:
     """Per-project run-start rate limiter: caps run-starts per window so one
     project cannot starve others. ``limit <= 0`` disables it (always allow).
 
-    Delegates counting to a :class:`~sagewai.admin.rate_limit.RateLimiter`. The
+    Delegates counting to a :class:`~sagewai.db.rate_limit.RateLimiter`. The
     default is an in-memory sliding window (single-process, single-org default,
     byte-identical to the legacy throttle); in multi-tenant mode it is built with
     a :class:`PostgresRateLimiter` so the limit is enforced across worker
@@ -6171,7 +6258,7 @@ class _ProjectRunThrottle:
     """
 
     def __init__(self, limit: int, window: float, limiter=None) -> None:
-        from sagewai.admin.rate_limit import InMemoryRateLimiter, RateLimiter
+        from sagewai.db.rate_limit import InMemoryRateLimiter, RateLimiter
 
         self.limit = limit
         self.window = window
@@ -6181,7 +6268,7 @@ class _ProjectRunThrottle:
 
     def allow(self, key: Any) -> bool:
         """Synchronous allow — in-memory limiter only (single-org / tests)."""
-        from sagewai.admin.rate_limit import InMemoryRateLimiter
+        from sagewai.db.rate_limit import InMemoryRateLimiter
 
         if not isinstance(self._limiter, InMemoryRateLimiter):
             raise RuntimeError("distributed limiter requires allow_async()")

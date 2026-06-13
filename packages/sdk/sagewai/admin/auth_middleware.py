@@ -175,7 +175,7 @@ def _session_token_id(raw: str) -> str:
 class _LoginThrottle:
     """Per-(ip,email) login brute-force throttle.
 
-    Delegates counting to a :class:`~sagewai.admin.rate_limit.RateLimiter`. The
+    Delegates counting to a :class:`~sagewai.db.rate_limit.RateLimiter`. The
     default is an in-memory sliding window (single-process, single-org default,
     byte-identical to the legacy throttle using wall-clock ``time.time``); in
     multi-tenant mode it is built with a :class:`PostgresRateLimiter` so the
@@ -187,7 +187,7 @@ class _LoginThrottle:
     """
 
     def __init__(self, limit: int = 5, window: int = 900, limiter=None) -> None:
-        from sagewai.admin.rate_limit import InMemoryRateLimiter
+        from sagewai.db.rate_limit import InMemoryRateLimiter
 
         self.limit, self.window = limit, window
         # In-memory default uses wall-clock time, matching the legacy throttle's
@@ -195,7 +195,7 @@ class _LoginThrottle:
         self._limiter = limiter if limiter is not None else InMemoryRateLimiter(now=time.time)
 
     def _in_memory(self):
-        from sagewai.admin.rate_limit import InMemoryRateLimiter
+        from sagewai.db.rate_limit import InMemoryRateLimiter
 
         if isinstance(self._limiter, InMemoryRateLimiter):
             return self._limiter

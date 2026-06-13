@@ -7,7 +7,7 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""Pluggable rate limiter for the admin throttles.
+"""Pluggable rate limiter shared by the admin throttles and the harness gateway.
 
 Two backends behind one :class:`RateLimiter` interface:
 
@@ -23,8 +23,12 @@ Two backends behind one :class:`RateLimiter` interface:
   that is acceptable for these coarse fairness guardrails (single-org keeps the
   tighter sliding window).
 
-:func:`build_rate_limiter` picks the backend: Postgres when multi-tenant **and**
-an engine is available, in-memory otherwise (single-org never takes a DB dep).
+:func:`build_rate_limiter` picks the backend: Postgres when ``multi_tenant`` is
+set **and** an engine is available, in-memory otherwise (single-org never takes
+a DB dep). The ``multi_tenant`` decision is supplied by the caller so this module
+stays free of any admin/tenancy dependency — it lives in the shared ``db`` layer
+that both the admin app and the harness already depend on, and must not import
+back up into either.
 """
 
 from __future__ import annotations
@@ -37,8 +41,6 @@ from collections.abc import Callable
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine
-
-from sagewai.admin.tenancy import is_multi_tenant
 
 
 class RateLimiter(ABC):
@@ -206,14 +208,20 @@ class PostgresRateLimiter(RateLimiter):
             await conn.execute(sa_delete(tbl).where(tbl.c.bucket_key == key))
 
 
-def build_rate_limiter(engine: AsyncEngine | None) -> RateLimiter:
+def build_rate_limiter(
+    engine: AsyncEngine | None, *, multi_tenant: bool = False
+) -> RateLimiter:
     """Select the limiter backend.
 
-    Returns a :class:`PostgresRateLimiter` when running multi-tenant **and** an
+    Returns a :class:`PostgresRateLimiter` when ``multi_tenant`` is set **and** an
     engine is available (distributed, correct across processes); otherwise an
     :class:`InMemoryRateLimiter` (single-org default — no DB dependency, and a
     safe fallback if multi-tenant is configured before an engine is wired).
+
+    ``multi_tenant`` is passed in by the caller (e.g. the admin app supplies
+    ``is_multi_tenant()``) rather than read here, so this shared module carries no
+    dependency on the admin/tenancy layer.
     """
-    if is_multi_tenant() and engine is not None:
+    if multi_tenant and engine is not None:
         return PostgresRateLimiter(engine)
     return InMemoryRateLimiter()
