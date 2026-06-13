@@ -99,14 +99,19 @@ services:
   admin:
     image: ghcr.io/sagewai/admin:latest
     # Mirrors release-admin.yml (context apps/admin); self-contained Next.js build.
+    # NEXT_PUBLIC_ADMIN_API_URL is a BUILD ARG (baked into the browser bundle +
+    # the CSP), so it must be reachable from the browser: the published backend
+    # port on the host (http://localhost:8000), NOT the docker-internal
+    # backend:8000 hostname. Setting it as a runtime `environment:` does nothing
+    # for the browser — NEXT_PUBLIC_* is inlined at build.
     build:
       context: apps/admin
+      args:
+        NEXT_PUBLIC_ADMIN_API_URL: http://localhost:8000/admin
     restart: unless-stopped
     depends_on:
       backend:
         condition: service_healthy
-    environment:
-      NEXT_PUBLIC_ADMIN_API_URL: http://backend:8000/admin
     ports:
       - "3008:3008"
 
