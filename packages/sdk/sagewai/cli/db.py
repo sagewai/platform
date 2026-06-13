@@ -13,8 +13,12 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
+
+if TYPE_CHECKING:
+    from alembic.config import Config as AlembicConfig
 
 
 @click.group()
@@ -47,11 +51,36 @@ def db_downgrade(revision: str) -> None:
     _run_alembic(["downgrade", revision])
 
 
+def migrations_dir() -> Path:
+    """Absolute path to the Alembic migrations shipped with the SDK.
+
+    They live at ``sagewai/db/migrations`` — a sibling of this ``cli`` package —
+    which is why we step up two parents from ``cli/db.py`` (``cli`` -> ``sagewai``)
+    before descending into ``db/migrations``.
+    """
+    return Path(__file__).resolve().parent.parent / "db" / "migrations"
+
+
+def build_alembic_config(db_url: str) -> AlembicConfig:
+    """Build the programmatic Alembic config — the single migration entrypoint.
+
+    ``sagewai db upgrade`` and the migration tests both route through here, so
+    there is deliberately no ``alembic.ini`` on disk: ``script_location`` and
+    ``sqlalchemy.url`` are set in code. ``env.py`` still reads
+    ``SAGEWAI_DATABASE_URL`` from the environment at run time.
+    """
+    from alembic.config import Config as AlembicConfig
+
+    cfg = AlembicConfig()
+    cfg.set_main_option("script_location", str(migrations_dir()))
+    cfg.set_main_option("sqlalchemy.url", db_url)
+    return cfg
+
+
 def _run_alembic(args: list[str]) -> None:
     """Execute an Alembic command using the SDK's migrations directory."""
     try:
         from alembic import command as alembic_command
-        from alembic.config import Config as AlembicConfig
     except ImportError:
         click.echo(
             "Error: alembic not installed. "
@@ -60,10 +89,10 @@ def _run_alembic(args: list[str]) -> None:
         )
         raise SystemExit(1)
 
-    migrations_dir = Path(__file__).resolve().parent / "db" / "migrations"
-    if not migrations_dir.exists():
+    mig_dir = migrations_dir()
+    if not mig_dir.exists():
         click.echo(
-            f"Error: migrations directory not found at {migrations_dir}",
+            f"Error: migrations directory not found at {mig_dir}",
             err=True,
         )
         raise SystemExit(1)
@@ -77,9 +106,7 @@ def _run_alembic(args: list[str]) -> None:
         )
         raise SystemExit(1)
 
-    cfg = AlembicConfig()
-    cfg.set_main_option("script_location", str(migrations_dir))
-    cfg.set_main_option("sqlalchemy.url", db_url)
+    cfg = build_alembic_config(db_url)
 
     subcmd = args[0]
     revision = args[1] if len(args) > 1 else "head"

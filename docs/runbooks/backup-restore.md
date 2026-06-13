@@ -69,7 +69,7 @@ For point-in-time recovery, use base backups + WAL archiving (`pg_basebackup` +
 # 1. Create / select the target database, then bring the schema to head FIRST
 #    (see section C). On a fresh database this creates every table; on an
 #    existing one it is a no-op.
-SAGEWAI_DATABASE_URL="$TARGET_URL" alembic upgrade head
+SAGEWAI_DATABASE_URL="$TARGET_URL" sagewai db upgrade
 
 # 2. Restore the data. --clean drops existing objects first; omit it when
 #    restoring into a freshly migrated, empty database.
@@ -91,7 +91,7 @@ Run this end-to-end against a scratch database at least quarterly — a backup y
 have never restored is a hypothesis, not a backup.
 
 - [ ] Provision a throwaway Postgres database; set `TARGET_URL`.
-- [ ] `alembic upgrade head` succeeds (schema is at head; section C).
+- [ ] `sagewai db upgrade` succeeds (schema is at head; section C).
 - [ ] `pg_restore` completes with no errors.
 - [ ] Make the **correct** master key available (the one in force at dump time).
 - [ ] Start admin with `SAGEWAI_ENV=production` (or staging) — the production
@@ -161,12 +161,13 @@ database has every table/column the dump expects. Sagewai uses Alembic; the
 migration environment reads `SAGEWAI_DATABASE_URL`.
 
 ```bash
-# From the SDK package (where the alembic migrations live):
-#   packages/sdk/sagewai/db/migrations
-SAGEWAI_DATABASE_URL="$TARGET_URL" alembic upgrade head
+# `sagewai db upgrade` runs the bundled Alembic migrations
+# (packages/sdk/sagewai/db/migrations) — it resolves them itself, so you can
+# run it from anywhere. There is no alembic.ini; the CLI is the entrypoint.
+SAGEWAI_DATABASE_URL="$TARGET_URL" sagewai db upgrade
 
 # Verify which revision a database is on:
-SAGEWAI_DATABASE_URL="$TARGET_URL" alembic current
+psql "$TARGET_URL" -c "SELECT version_num FROM alembic_version;"
 ```
 
 Notes:
