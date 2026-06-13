@@ -48,6 +48,7 @@ Bias toward caution over speed; use judgment on trivial tasks.
 - **Licensing.** Every `packages/sdk` Python file carries the AGPL-3.0-or-later header — copy the exact phrasing from an existing file.
 - **Docs MDX.** In `apps/docs/**/*.mdx`, escape `<digit`/`<lowercase` in prose as `&lt;` (Turbopack reads them as JSX tags); code fences are fine.
 - **Issues over half-fixes.** Too deep to fix now? File a GitHub issue — area label (`sdk`/`admin`/`cli`/`fleet`/`docs`/…) + priority (`bug`/`enhancement`/`chore`), titled `[area] short description`.
+- **Branch names.** `[feat/bug/chore]-[issue-id]-[short-definition]` — e.g. `feat-123-conn-import-multi`, `bug-456-postgres-url-scheme`, `chore-789-branch-naming`. Never the auto `claude/<slug>` form; omit `issue-id` when there's no tracked issue.
 
 ## Releases
 
