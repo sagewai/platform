@@ -1,20 +1,20 @@
 # syntax=docker/dockerfile:1.7
 #
-# Sagewai backend — thin production image that bundles the `sagewai` Python
-# package with a minimal runtime and starts the FastAPI admin server.
+# Sagewai backend — thin production image that builds the `sagewai` Python
+# package from source and starts the FastAPI admin server.
 #
 # Published as ghcr.io/sagewai/backend:<version> on every v*.*.* tag by
 # .github/workflows/release-backend.yml. Multi-arch (linux/amd64, linux/arm64).
 #
-# Build context expects a pre-built SDK wheel copied into ./dist/ by CI:
-#   (from repo root) uv build --package sagewai --out-dir apps/backend/dist
-#
-# Local dev build:
-#   docker build -t sagewai-backend:dev apps/backend
+# The build context is the REPO ROOT (so packages/sdk is visible). Build it via
+# the compose `build:` section or directly:
+#   docker build -t sagewai-backend:dev -f apps/backend/Dockerfile .
+# `just stack-up` / `docker compose up -d --build` do this for you. No prebuilt
+# wheel and no PyPI fallback — the image runs exactly the checked-out source.
 #
 # Run:
 #   docker run --rm -p 8000:8000 \
-#     -e DATABASE_URL=postgres://... \
+#     -e DATABASE_URL=postgresql://... \
 #     -e REDIS_URL=redis://... \
 #     ghcr.io/sagewai/backend:latest
 
@@ -32,17 +32,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 
-# Expect a pre-built wheel in ./dist/. If missing, fall back to PyPI.
-COPY dist/ /build/dist/
-
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-RUN if ls /build/dist/sagewai-*.whl >/dev/null 2>&1; then \
-        pip install "/build/dist/$(basename /build/dist/sagewai-*.whl)[fastapi,postgres]"; \
-    else \
-        pip install "sagewai[fastapi,postgres]"; \
-    fi
+# Build + install the SDK from source. The build context is the repo root, so
+# packages/sdk is the actual checkout — no prebuilt wheel, no PyPI fallback, so
+# the image runs exactly the code you cloned. hatchling builds it in isolation
+# (pip's PEP517 build); sagewai has no workspace path-deps, so all runtime
+# dependencies resolve from PyPI.
+COPY packages/sdk /build/sdk
+RUN pip install "/build/sdk[fastapi,postgres]"
 
 # ── Stage 2: runtime ────────────────────────────────────────────────────────
 FROM python:3.13.13-slim@sha256:aa938a849bcb82dce8f49480f056ab82bf5c1c3ebc294f0430f37b6820e7f286 AS runtime
@@ -63,7 +62,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && chown -R sagewai:sagewai /home/sagewai /var/lib/sagewai
 
 COPY --from=builder /opt/venv /opt/venv
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY apps/backend/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 USER sagewai

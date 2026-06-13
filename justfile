@@ -154,9 +154,9 @@ admin-up:
 docs-dev:
     pnpm --filter @sagewai/docs dev
 
-# Pre-publish (no v*.*.* release yet) the backend/admin images don't exist on GHCR,
-# so a plain up 403s — use `just stack-up` to build them locally instead.
-# Start the full stack from PUBLISHED ghcr.io images (postgres + redis + backend + admin)
+# Builds the backend/admin images from source on first run (compose `build:`) and
+# reuses them after; a one-time "unauthorized" ghcr pull-attempt warning is harmless.
+# Start the full stack (postgres + redis + backend + admin); `stack-up` forces a rebuild
 compose-up:
     docker compose up -d
 
@@ -164,12 +164,11 @@ compose-up:
 compose-down:
     docker compose down
 
-# The backend bundles the SDK from a freshly-built wheel (your current checkout, not
-# the PyPI release), matching release-backend.yml. Stop the stack with `just compose-down`.
-# Build the backend + admin images locally, then start the full stack
+# Builds backend (from packages/sdk) + admin (Next.js) images entirely from your
+# checkout — no prebuilt images, no host prereqs beyond Docker. Equivalent to
+# `docker compose up -d --build`. Stop the stack with `just compose-down`.
+# Build the backend + admin images from source, then start the full stack
 stack-up:
-    rm -rf apps/backend/dist
-    uv build --package sagewai --out-dir apps/backend/dist
     docker compose up -d --build
 
 # ── Dependencies (data services only — no app containers) ─────────────────

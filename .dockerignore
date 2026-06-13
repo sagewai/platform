@@ -1,0 +1,16 @@
+# Build-context hygiene for repo-root image builds (apps/backend, sandbox images).
+# Keep package/app SOURCE; drop heavy or irrelevant trees so the context stays small.
+.git
+.github
+**/node_modules
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.next
+**/dist
+**/build
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.DS_Store
+.claude

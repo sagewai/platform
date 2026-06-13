@@ -55,3 +55,10 @@ async def test_sqlite_busy_timeout_set(tmp_path):
 def test_postgres_url_still_normalized():
     engine = create_engine("postgresql://u:p@localhost/db")
     assert "+asyncpg" in str(engine.url)
+
+
+def test_postgres_short_scheme_normalized():
+    # `postgres://` (the common shorthand / docker-compose default) must map to
+    # the asyncpg driver; SQLAlchemy rejects the bare `postgres` dialect.
+    engine = create_engine("postgres://u:p@localhost/db")
+    assert engine.url.drivername == "postgresql+asyncpg"

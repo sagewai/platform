@@ -41,7 +41,7 @@ In practice that means you can:
 
 **Autopilot** sits on top: describe a goal in plain English and it assembles and runs the agent for you. *(v1.0 runs linear plans; branched/conditional plans are in progress.)*
 
-All AGPL-3.0. Install with `uv pip install sagewai` (or `pip install sagewai` inside a virtualenv), or run the full stack with `docker compose up`. Self-hostable on your own hardware.
+All AGPL-3.0. Install with `uv pip install sagewai` (or `pip install sagewai` inside a virtualenv), or clone the repo and build the full stack from source with `just stack-up`. Self-hostable on your own hardware.
 
 > **Sagewai is early software.** The [v1.0 status](#v10-status) section is explicit about what ships today, what is experimental, and what is on the v1.1 roadmap — so you can decide what to rely on.
 
@@ -82,12 +82,20 @@ sagewai doctor                     # check your environment
 sagewai admin serve --port 8000    # admin API; interactive API docs at http://localhost:8000/docs
 ```
 
-**Full stack with the web admin UI.** The UI ships as a container image (not the pip package), so run everything with Docker:
+**Full stack with the web admin UI.** The admin UI ships as a container, so the full stack runs via Docker (or Podman). Sagewai is open source — **clone the repo and build the images from your own checkout** (nothing is pulled from a registry except the stock `postgres` + `redis`):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sagewai/platform/main/docker-compose.yml -o docker-compose.yml
-docker compose up -d               # admin UI at http://localhost:3008
+git clone https://github.com/sagewai/platform && cd platform
+just stack-up                      # builds the backend + admin images from source, then starts
+docker compose logs -f             # tail; admin UI at http://localhost:3008
+just compose-down                  # stop
 ```
+
+`just stack-up` is just `docker compose up -d --build`: it builds the backend image from `packages/sdk` (the repo-root context) and the Next.js admin image entirely from your checkout — only Docker is required, no host toolchain and no prebuilt artifact. (`postgres` + `redis` are pulled as stock upstream images.)
+
+> **Podman users:** if a build fails pulling a base image with `unauthorized: incorrect username or password`, you have a stale Docker Hub login — clear it with `podman logout docker.io` (public base images pull anonymously). If a bare image name like `redis:8-alpine` won't resolve, add `docker.io` to `unqualified-search-registries` in `~/.config/containers/registries.conf`.
+
+Prebuilt `ghcr.io/sagewai/{backend,admin}` images are also published to GHCR on each tagged release if you'd rather pull than build (`docker pull ghcr.io/sagewai/backend:latest`) — but the bundled compose builds from source, which is the recommended path.
 
 **Pre-release builds** live on TestPyPI (a normal `pip install sagewai` never picks these up):
 
@@ -168,8 +176,8 @@ Common tasks (run `just` for the full list):
 |---|---|
 | `just smoke` | Fast smoke tests (no LLM, no services) |
 | `just test` | Full SDK unit suite |
-| `just dev-all` | Backend + admin UI on localhost |
-| `just compose-up` | Full stack (postgres + redis + backend + admin) |
+| `just dev-all` | Backend + admin UI on localhost (no containers) |
+| `just stack-up` | Full container stack, building backend+admin images locally (postgres + redis + backend + admin) |
 | `just build` | sdk wheel + admin + docs + vscode builds |
 
 Package-scoped variants exist for targeted work: `just sdk-test`, `just admin-dev`, `just docs-dev`, and more. See [DEVELOPMENT.md](./DEVELOPMENT.md) for prerequisites and [CONTRIBUTING.md](./CONTRIBUTING.md) for the PR flow.
@@ -252,7 +260,7 @@ We would rather tell you this plainly than have you find it out in production.
 | Worker fleet on your own hardware | ✅ | ❌ | ❌ | ❌ |
 | Built-in budget, guardrails, cost analytics | ✅ | Partial (LangSmith = SaaS) | ❌ | ❌ |
 | Any model, any provider | ✅ | ✅ | ✅ | OpenAI-first |
-| One-command full stack (`docker compose`) | ✅ | ❌ | ❌ | ❌ |
+| One-command full stack from source (`just stack-up`) | ✅ | ❌ | ❌ | ❌ |
 | License for embedding in a proprietary product | Commercial | MIT | MIT | Apache |
 
 Sagewai is the answer to "I want a self-hosted agent platform with the admin UI, the worker fleet, and no vendor lock-in."

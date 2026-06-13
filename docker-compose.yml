@@ -34,17 +34,14 @@
 #   `milvus-standalone-data`.
 #
 # Image sources:
-#   ghcr.io/sagewai/backend:latest — built from apps/backend/ (has a local `build:`)
-#   ghcr.io/sagewai/admin:latest   — built from apps/admin/   (has a local `build:`)
+#   ghcr.io/sagewai/backend:latest — built from source (packages/sdk; repo-root context)
+#   ghcr.io/sagewai/admin:latest   — built from source (apps/admin; Next.js)
 #   vesoft/nebula-*:v3.8.0         — pinned to match nebula3-python==3.8.3
 #   milvusdb/milvus:v2.6.17        — pinned to match pymilvus==2.6.14
-#   Backend + admin are published on every v*.*.* tag via
-#   .github/workflows/release-*.yml. Until a release is published they do NOT
-#   exist on GHCR (a plain `docker compose up` would 403) — build them locally
-#   with `just stack-up` (or `docker compose up -d --build`). The backend build
-#   COPYs the SDK wheel from apps/backend/dist/, so build that wheel first:
-#   `uv build --package sagewai --out-dir apps/backend/dist` (just stack-up does
-#   this for you). Without the wheel the image falls back to the PyPI release.
+#   Backend + admin also publish to GHCR on every v*.*.* tag via
+#   .github/workflows/release-*.yml, but the recommended path is to build from
+#   your checkout: `just stack-up` or `docker compose up -d --build`. No prebuilt
+#   wheel or PyPI fallback — the images run exactly the source you cloned.
 
 services:
   postgres:
@@ -73,12 +70,13 @@ services:
 
   backend:
     image: ghcr.io/sagewai/backend:latest
-    # Mirrors release-backend.yml (context apps/backend). The Dockerfile COPYs
-    # the SDK wheel from apps/backend/dist/ — build it first with
-    # `uv build --package sagewai --out-dir apps/backend/dist` (or just `just
-    # stack-up`); otherwise the image falls back to the PyPI release.
+    # Built from source: context is the repo root so the Dockerfile can build
+    # packages/sdk in-image (mirrors release-backend.yml). No prebuilt wheel and
+    # no PyPI fallback — `docker compose up -d --build` (or `just stack-up`)
+    # builds exactly the checked-out source.
     build:
-      context: apps/backend
+      context: .
+      dockerfile: apps/backend/Dockerfile
     restart: unless-stopped
     depends_on:
       postgres:
@@ -86,7 +84,7 @@ services:
       redis:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgres://sagewai:sagewai@postgres:5432/sagewai
+      DATABASE_URL: postgresql://sagewai:sagewai@postgres:5432/sagewai
       REDIS_URL: redis://redis:6379
       SAGEWAI_LOG_LEVEL: INFO
     ports:

@@ -23,14 +23,20 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 def create_engine(database_url: str, **kwargs) -> AsyncEngine:
     """Create an async engine for Postgres (asyncpg) or SQLite (aiosqlite).
 
-    - ``postgresql://`` → ``postgresql+asyncpg://`` with a connection pool
-      (``pool_size``/``max_overflow`` kwargs apply here).
+    - ``postgresql://`` (or the ``postgres://`` shorthand) → ``postgresql+asyncpg://``
+      with a connection pool (``pool_size``/``max_overflow`` kwargs apply here).
     - ``sqlite://`` / ``sqlite+aiosqlite://`` → aiosqlite engine with WAL,
       foreign keys, and a busy timeout. Only ``echo`` is honored; pool
       kwargs are ignored (SQLite uses aiosqlite's default pool).
     """
     if database_url.startswith("postgresql://"):
         database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    elif database_url.startswith("postgres://"):
+        # ``postgres://`` is a common shorthand (Heroku/Railway/many hosts and
+        # tools, and the docker-compose default). SQLAlchemy dropped the bare
+        # ``postgres`` dialect, so normalise it to the asyncpg driver just like
+        # ``postgresql://`` — otherwise engine creation raises NoSuchModuleError.
+        database_url = database_url.replace("postgres://", "postgresql+asyncpg://", 1)
     elif database_url.startswith("sqlite://") and "+aiosqlite" not in database_url:
         database_url = database_url.replace("sqlite://", "sqlite+aiosqlite://", 1)
 
