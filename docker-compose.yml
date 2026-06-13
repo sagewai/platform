@@ -29,6 +29,9 @@
 # Data persistence:
 #   postgres data lives in the `sagewai-pg-data` named volume. Safe across
 #   `docker compose down` unless you pass `-v`.
+#   the backend's admin account + master key + file config live in the
+#   `sagewai-home` volume (SAGEWAI_HOME=/var/lib/sagewai) — survives recreates;
+#   `docker compose down -v` wipes it, so you'd re-run /setup afterwards.
 #   NebulaGraph data lives in `nebula-meta-data`, `nebula-storage-data`.
 #   Milvus data lives in `milvus-etcd-data`, `milvus-minio-data`,
 #   `milvus-standalone-data`.
@@ -87,6 +90,14 @@ services:
       DATABASE_URL: postgresql://sagewai:sagewai@postgres:5432/sagewai
       REDIS_URL: redis://redis:6379
       SAGEWAI_LOG_LEVEL: INFO
+      # Persist SAGEWAI_HOME (the admin account, master key, and file-backed
+      # config) on the sagewai-home volume below. /var/lib/sagewai is created and
+      # chowned to the runtime user in the image. Without this, ~/.sagewai is
+      # ephemeral: the admin account + master key are lost on every container
+      # recreate, so you'd re-run /setup (and encrypted secrets would break).
+      SAGEWAI_HOME: /var/lib/sagewai
+    volumes:
+      - sagewai-home:/var/lib/sagewai
     ports:
       - "8000:8000"
     healthcheck:
@@ -315,6 +326,7 @@ services:
 
 volumes:
   sagewai-pg-data:
+  sagewai-home:          # backend SAGEWAI_HOME — admin account, master key, file config
   nebula-meta-data:
   nebula-meta-logs:
   nebula-storage-data:
