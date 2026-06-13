@@ -579,6 +579,30 @@ class AdminStateFile:
     def is_setup_complete(self) -> bool:
         return bool(self._read().get("setup_complete"))
 
+    def reset_admin_password(self, new_password: str, *, email: str | None = None) -> bool:
+        """Set a new admin password locally — the no-SMTP lockout recovery path.
+
+        Rewrites the admin's password hash in the state file and revokes every
+        existing session. ``email``, if given, must match the configured admin's
+        email (a guard against resetting the wrong account); omit it to reset the
+        single configured admin. Returns ``True`` when a password was changed.
+        Single-org only — multi-tenant accounts live in the identity store.
+        """
+
+        def _apply(data: dict[str, Any]) -> bool:
+            admin = data.get("admin")
+            if not admin:
+                return False
+            if email is not None and admin.get("email") != email:
+                return False
+            pw_hash, pw_salt = _hash_password(new_password)
+            admin["password_hash"] = pw_hash
+            admin["password_salt"] = pw_salt
+            data["active_tokens"] = []  # revoke every existing session
+            return True
+
+        return bool(self.mutate(_apply))
+
     def complete_setup(
         self,
         *,

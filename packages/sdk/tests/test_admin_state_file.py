@@ -29,6 +29,42 @@ def sf(tmp_path):
     return AdminStateFile(tmp_path / "state.json")
 
 
+class TestResetPassword:
+    """Local admin password reset (no SMTP) — the lockout recovery path."""
+
+    def _setup(self, sf):
+        sf.complete_setup(
+            org_name="Acme", admin_email="a@b.com", admin_password="oldpassword1"
+        )
+
+    def test_reset_changes_the_password(self, sf):
+        self._setup(sf)
+        assert sf.validate_login("a@b.com", "oldpassword1") is not None
+        assert sf.reset_admin_password("newpassword2") is True
+        assert sf.validate_login("a@b.com", "oldpassword1") is None  # old no longer works
+        assert sf.validate_login("a@b.com", "newpassword2") is not None  # new works
+
+    def test_reset_invalidates_existing_sessions(self, sf):
+        self._setup(sf)
+        login = sf.validate_login("a@b.com", "oldpassword1")
+        assert sf.validate_token(login["access_token"]) is True
+        sf.reset_admin_password("newpassword2")
+        assert sf.validate_token(login["access_token"]) is False  # old session revoked
+
+    def test_reset_with_matching_email(self, sf):
+        self._setup(sf)
+        assert sf.reset_admin_password("newpassword2", email="a@b.com") is True
+        assert sf.validate_login("a@b.com", "newpassword2") is not None
+
+    def test_reset_with_wrong_email_is_noop(self, sf):
+        self._setup(sf)
+        assert sf.reset_admin_password("newpassword2", email="nope@b.com") is False
+        assert sf.validate_login("a@b.com", "oldpassword1") is not None  # unchanged
+
+    def test_reset_without_setup_returns_false(self, sf):
+        assert sf.reset_admin_password("newpassword2") is False
+
+
 class TestSetup:
     def test_fresh_state_requires_setup(self, sf):
         assert not sf.is_setup_complete()

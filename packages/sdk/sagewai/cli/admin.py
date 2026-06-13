@@ -51,6 +51,50 @@ def admin_status() -> None:
     click.echo(f"  SDK version       : {_cli.VERSION}")
 
 
+@admin.command("reset-password")
+@click.option(
+    "--email",
+    default=None,
+    help="Admin email to reset (defaults to the single configured admin).",
+)
+@click.option(
+    "--password",
+    default=None,
+    help="New password. Omit to be prompted securely (keeps it out of shell history).",
+)
+def admin_reset_password(email, password) -> None:
+    """Reset the admin password locally — recover from a lockout without email/SMTP.
+
+    \b
+    On a host install:        sagewai admin reset-password
+    Inside a Docker stack:    docker compose exec backend sagewai admin reset-password
+
+    Rewrites the admin password in the state file and revokes existing sessions;
+    then sign in at /login with the new password. (Single-org; multi-tenant
+    accounts live in the identity store, not the state file.)
+    """
+    from sagewai.admin.state_file import AdminStateFile, default_admin_state_path
+
+    sf = AdminStateFile(default_admin_state_path())
+    if not sf.is_setup_complete():
+        click.echo(
+            "No admin account exists yet — open the setup wizard at /setup instead.",
+            err=True,
+        )
+        raise SystemExit(1)
+    if password is None:
+        password = click.prompt("New password", hide_input=True, confirmation_prompt=True)
+    if len(password) < 8:
+        click.echo("Password must be at least 8 characters.", err=True)
+        raise SystemExit(1)
+    if sf.reset_admin_password(password, email=email):
+        click.echo("Admin password reset. Sign in at /login with the new password.")
+    else:
+        suffix = f" for {email!r}." if email else "."
+        click.echo(f"No matching admin account found{suffix}", err=True)
+        raise SystemExit(1)
+
+
 @admin.command("runs")
 @click.option(
     "--agent", "agent_name", default=None, help="Filter by agent name."

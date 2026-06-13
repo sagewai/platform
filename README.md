@@ -95,6 +95,15 @@ just compose-down                  # stop
 
 **Log in.** A fresh stack has no account yet, so create one first: open **http://localhost:3008/setup** and complete the short wizard (organization → admin account: name, email, password ≥ 8 characters). It signs you in automatically at the end; afterwards — or from another browser — sign in at **http://localhost:3008/login** with that email and password. There are no default credentials; the admin is whatever you set in the wizard.
 
+**Locked out / forgot your password?** Email reset needs SMTP (not configured out of the box), so reset it locally instead — no email required:
+
+```bash
+sagewai admin reset-password                               # host install
+docker compose exec backend sagewai admin reset-password   # Docker stack
+```
+
+It prompts for a new password and revokes existing sessions; sign back in at `/login`. To start over completely on a Docker stack, recreate the backend so the setup wizard runs again — `docker compose rm -sf backend && docker compose up -d backend` (Postgres data is kept; the file-backed admin config is reset).
+
 > **Podman users:** if a build fails pulling a base image with `unauthorized: incorrect username or password`, you have a stale Docker Hub login — clear it with `podman logout docker.io` (public base images pull anonymously). If a bare image name like `redis:8-alpine` won't resolve, add `docker.io` to `unqualified-search-registries` in `~/.config/containers/registries.conf`.
 
 Prebuilt `ghcr.io/sagewai/{backend,admin}` images are also published to GHCR on each tagged release if you'd rather pull than build (`docker pull ghcr.io/sagewai/backend:latest`) — but the bundled compose builds from source, which is the recommended path.

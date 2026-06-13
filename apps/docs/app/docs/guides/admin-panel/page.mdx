@@ -27,6 +27,29 @@ pnpm --filter @sagewai/admin dev
 
 Open [http://localhost:3008](http://localhost:3008).
 
+## First-time setup & login
+
+A fresh install has no account yet. Complete the setup wizard at **`/setup`** (organization → admin account: name, email, password ≥ 8 characters) — it signs you in automatically. Afterwards, sign in at **`/login`** with that email and password. There are no default credentials; the admin is whatever you set in the wizard.
+
+## Resetting a forgotten password
+
+Email-based recovery needs SMTP (not configured by default), so reset the password **locally** instead — no email required:
+
+```bash
+sagewai admin reset-password                               # host install
+docker compose exec backend sagewai admin reset-password   # Docker stack
+```
+
+It prompts for a new password and revokes existing sessions; sign back in at `/login`. Pass `--email` to target a specific admin, or `--password` to skip the prompt (keeps it out of shell history if you omit it).
+
+To start over completely on a Docker stack, recreate the backend so the setup wizard runs again:
+
+```bash
+docker compose rm -sf backend && docker compose up -d backend
+```
+
+Postgres data is preserved; the file-backed admin config (single-org) is reset.
+
 ## Architecture
 
 The panel has three layers:
