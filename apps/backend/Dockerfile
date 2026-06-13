@@ -21,8 +21,7 @@
 # ── Stage 1: builder ────────────────────────────────────────────────────────
 FROM python:3.13.13-slim@sha256:aa938a849bcb82dce8f49480f056ab82bf5c1c3ebc294f0430f37b6820e7f286 AS builder
 
-ENV PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONDONTWRITEBYTECODE=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -41,7 +40,11 @@ ENV PATH="/opt/venv/bin:$PATH"
 # (pip's PEP517 build); sagewai has no workspace path-deps, so all runtime
 # dependencies resolve from PyPI.
 COPY packages/sdk /build/sdk
-RUN pip install "/build/sdk[fastapi,postgres]"
+# A BuildKit cache mount persists pip's download + built-wheel cache across
+# builds, so a rebuild after a source change reinstalls from cache instead of
+# re-downloading and re-compiling every dependency. First build still populates
+# the cache (~minutes); subsequent rebuilds are much faster.
+RUN --mount=type=cache,target=/root/.cache/pip pip install "/build/sdk[fastapi,postgres]"
 
 # ── Stage 2: runtime ────────────────────────────────────────────────────────
 FROM python:3.13.13-slim@sha256:aa938a849bcb82dce8f49480f056ab82bf5c1c3ebc294f0430f37b6820e7f286 AS runtime

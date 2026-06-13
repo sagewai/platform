@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { adminApi } from '@/utils/api';
@@ -16,6 +16,19 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // No admin account yet → there's nothing to log into; send the user to the
+  // first-run setup wizard instead of stranding them on the login form.
+  useEffect(() => {
+    adminApi
+      .getSetupStatus()
+      .then((s) => {
+        if (s?.setup_required) router.replace('/setup');
+      })
+      .catch(() => {
+        /* backend unreachable — leave the login form up so the user can retry */
+      });
+  }, [router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
