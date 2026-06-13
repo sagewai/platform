@@ -40,6 +40,29 @@ from sagewai.admin.state_file import SHARED_ONLY, AdminStateFile, _slugify
 
 logger = logging.getLogger("sagewai.admin")
 
+# Heartbeat interval for the global /workflow-events/stream SSE feed. Module-level
+# so tests can shrink it. Keeps the stream open so the browser's EventSource does
+# not reconnect in a tight loop (which floods the backend and exhausts the
+# per-origin connection limit).
+_WORKFLOW_EVENTS_HEARTBEAT_S = 15.0
+
+
+async def _workflow_events_sse():
+    """SSE body for ``/workflow-events/stream``.
+
+    Stays open with periodic heartbeat comments so the browser's EventSource does
+    not reconnect in a tight loop (no live event source is wired here yet — this
+    just holds the connection). The server cancels this generator when the client
+    disconnects, ending the loop.
+    """
+    import asyncio
+
+    yield "data: {}\n\n"
+    while True:
+        await asyncio.sleep(_WORKFLOW_EVENTS_HEARTBEAT_S)
+        yield ": keepalive\n\n"
+
+
 # ── Built-in data ────────────────────────────────────────────────────
 
 _STRATEGIES = [
@@ -3627,9 +3650,22 @@ def create_admin_serve_app(
 
     @app.get("/workflow-events/stream")
     async def workflow_events_stream() -> StreamingResponse:
-        async def _empty():
-            yield "data: {}\n\n"
-        return StreamingResponse(_empty(), media_type="text/event-stream")
+        # Global live workflow-event feed for the dashboard's toast listener.
+        # No event source is wired here yet, but the stream MUST stay open: a
+        # generator that ends after one event makes the browser's EventSource
+        # reconnect in a tight loop, flooding the backend and saturating the
+        # per-origin connection limit (which then times out the dashboard's
+        # health check → "Backend not reachable"). Hold it open with periodic
+        # SSE heartbeat comments; the server cancels the generator on disconnect.
+        return StreamingResponse(
+            _workflow_events_sse(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     # ── Workflow registry (saved workflows) ────────────────────────
 
