@@ -4222,20 +4222,24 @@ def create_admin_serve_app(
     @app.get("/api/v1/fleet/workers")
     async def list_fleet_workers(request: Request) -> JSONResponse:
         workers = await fleet_registry.list_workers(org_id=_fleet_org_id(request))
-        return JSONResponse([
-            {
-                "id": w.id,
-                "name": w.name,
-                "status": w.approval_status.value,
-                "pool": w.capabilities.pool,
-                "models": w.capabilities.models_supported,
-                "labels": w.capabilities.labels,
-                "max_concurrent": w.capabilities.max_concurrent,
-                "last_heartbeat": w.last_heartbeat.isoformat() if w.last_heartbeat else None,
-                "registered_at": w.registered_at.isoformat(),
-            }
-            for w in workers
-        ])
+        # The admin UI expects { workers: FleetWorker[], total } with the full
+        # nested FleetWorker shape (capabilities, approval_status, …). Pydantic's
+        # model_dump produces exactly that; this previously returned a flattened
+        # bare array, so the page read `data.workers` as undefined and crashed.
+        return JSONResponse({
+            "workers": [
+                {
+                    # Enterprise fields the UI reads that the core model doesn't
+                    # carry — default them so worker rows never crash on access.
+                    "ip_allowlist": [],
+                    "requires_dual_approval": False,
+                    "connection_type": None,
+                    **w.model_dump(mode="json"),
+                }
+                for w in workers
+            ],
+            "total": len(workers),
+        })
 
     @app.get("/api/v1/fleet/workers/{worker_id}")
     async def get_fleet_worker(worker_id: str, request: Request) -> JSONResponse:
