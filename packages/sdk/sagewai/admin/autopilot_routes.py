@@ -919,10 +919,10 @@ def create_autopilot_router(
                         "will fail until you add one."
                     ),
                     "fix": (
-                        "Run `sagewai provider add ollama --model qwen2.5:14b "
-                        "--default` for a free local model, or `sagewai "
-                        "provider add openai --api-key sk-... --default` "
-                        "for hosted."
+                        "Add a provider in the admin under System Settings → "
+                        "AI Models (Ollama and LM Studio are auto-detected — pick "
+                        "a model and set it as the default), or POST to "
+                        "/api/v1/providers."
                     ),
                 }
             )
@@ -1274,10 +1274,9 @@ def create_autopilot_router(
             is_timeout = "timeout" in msg or "timed out" in msg
             error = (
                 "Blueprint synthesis timed out. The configured model is "
-                "taking longer than 10 minutes. Switch to a smaller / "
-                "faster local model (e.g. `sagewai provider add ollama "
-                "--model qwen2.5:7b --default`) or run the synthesis on a "
-                "cloud provider."
+                "taking longer than 10 minutes. Switch to a smaller / faster "
+                "local model (set a different default under System Settings → "
+                "AI Models) or run the synthesis on a cloud provider."
                 if is_timeout
                 else "Blueprint synthesis service is unreachable. "
                 f"({type(exc).__name__}: {exc})"
