@@ -38,4 +38,4 @@ def test_autopilot_config_default_base_url_without_env(tmp_path, monkeypatch):
 
     sf = _setup_sf(tmp_path)
     monkeypatch.delenv("SAGEWAI_LLM_BASE_URL", raising=False)
-    assert get_autopilot_config(sf)["base_url"] == "https://llm.sagewai.ai"
+    assert get_autopilot_config(sf)["base_url"] == "https://sw-autopilot-llm.sagewai.ai"

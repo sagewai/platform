@@ -21,7 +21,11 @@ from pytest_httpx import HTTPXMock
 from sagewai.autopilot.sagewai_llm.cache import BlueprintCache
 from sagewai.autopilot.sagewai_llm.client import SagewaiLLMClient
 from sagewai.autopilot.sagewai_llm.errors import ClientUnreachable, QuotaExceeded
-from sagewai.autopilot.sagewai_llm.identity import FileIdentityStore, ensure_identity
+from sagewai.autopilot.sagewai_llm.identity import (
+    FileIdentityStore,
+    InstanceIdentity,
+    ensure_identity,
+)
 
 BASE_URL = "https://api.sagewai.ai"
 
@@ -30,6 +34,14 @@ BASE_URL = "https://api.sagewai.ai"
 def client(tmp_path: Path) -> SagewaiLLMClient:
     ident_store = FileIdentityStore(tmp_path / "identity.json")
     ident = ensure_identity(ident_store)
+    # These tests exercise signed calls, which presuppose a completed
+    # enrollment handshake — mark the identity registered so the client does
+    # not enroll first (that path is covered in test_enrollment.py).
+    ident = InstanceIdentity(
+        instance_id=ident.instance_id,
+        instance_secret=ident.instance_secret,
+        registered=True,
+    )
     cache = BlueprintCache(tmp_path / "cache", ttl_seconds=3600)
     return SagewaiLLMClient(
         base_url=BASE_URL,

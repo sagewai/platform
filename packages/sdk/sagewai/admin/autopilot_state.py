@@ -25,10 +25,16 @@ This module provides:
 
 from __future__ import annotations
 
+import hashlib
 import os
+import secrets
 from typing import TYPE_CHECKING, Any, Callable
 
 from sagewai.autopilot.sagewai_llm.identity import InstanceIdentity
+
+#: Domain-separation prefix for the org-derived instance id. Bump only if the
+#: derivation basis changes (it would re-key every install).
+_INSTANCE_ID_BASIS = "sagewai-autopilot-instance-v1"
 
 if TYPE_CHECKING:
     from sagewai.admin.state_file import AdminStateFile
@@ -39,7 +45,7 @@ if TYPE_CHECKING:
 _DEFAULT_CONFIG: dict[str, Any] = {
     "enabled": False,
     "tier": "anonymous",
-    "base_url": "https://llm.sagewai.ai",
+    "base_url": "https://sw-autopilot-llm.sagewai.ai",
     "confidence_high": 0.85,
     "confidence_low": 0.65,
     "cache_ttl_seconds": 3600,
@@ -81,7 +87,11 @@ class AdminStateIdentityStore:
         sec = raw.get("instance_secret")
         if not (isinstance(iid, str) and isinstance(sec, str)):
             return None
-        return InstanceIdentity(instance_id=iid, instance_secret=sec)
+        return InstanceIdentity(
+            instance_id=iid,
+            instance_secret=sec,
+            registered=bool(raw.get("registered", False)),
+        )
 
     def save(self, identity: InstanceIdentity) -> None:
         """Persist the identity to the state file."""
@@ -90,9 +100,56 @@ class AdminStateIdentityStore:
             data["autopilot_identity"] = {
                 "instance_id": identity.instance_id,
                 "instance_secret": identity.instance_secret,
+                "registered": identity.registered,
             }
 
         self._sf._mutate(_mutate)
+
+    @staticmethod
+    def _derive_instance_id(data: dict[str, Any]) -> str:
+        """Deterministically derive the instance id from the organization.
+
+        One autopilot key per organization, so quota is fair and un-farmable:
+        the id is a hash of the org's stable, immutable setup identity
+        (``org_slug`` + ``setup_at``), NOT a random value. It is therefore the
+        same for the life of the org regardless of identity-file resets or
+        container redeploys — you cannot mint a second identity (or reset quota)
+        from the same install without wiping the org itself.
+        """
+        slug = data.get("org_slug") or data.get("org_name") or "default"
+        setup_at = data.get("setup_at") or ""
+        basis = f"{_INSTANCE_ID_BASIS}:{slug}:{setup_at}"
+        return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:32]
+
+    def ensure(self) -> InstanceIdentity:
+        """Return the org-derived instance identity, idempotently.
+
+        The id is derived from the org (see :meth:`_derive_instance_id`); the
+        secret is a placeholder until enrollment adopts the server-derived key.
+        A previously-enrolled secret (and the ``registered`` flag) is preserved
+        whenever the stored id still matches the org — so enrollment runs once,
+        not on every call. If the stored identity is missing or belongs to a
+        different org (e.g. the file was reset), a fresh unenrolled identity with
+        the SAME derived id is minted, and enrollment re-fetches the same secret.
+        """
+        data = self._sf._read()
+        derived_id = self._derive_instance_id(data)
+        raw = data.get("autopilot_identity")
+        if isinstance(raw, dict) and raw.get("instance_id") == derived_id:
+            sec = raw.get("instance_secret")
+            if isinstance(sec, str):
+                return InstanceIdentity(
+                    instance_id=derived_id,
+                    instance_secret=sec,
+                    registered=bool(raw.get("registered", False)),
+                )
+        identity = InstanceIdentity(
+            instance_id=derived_id,
+            instance_secret=secrets.token_hex(32),  # placeholder until enrolled
+            registered=False,
+        )
+        self.save(identity)
+        return identity
 
 
 # ── Config helpers ────────────────────────────────────────────────────

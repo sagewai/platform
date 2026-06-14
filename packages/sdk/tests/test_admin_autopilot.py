@@ -241,12 +241,27 @@ class TestAutopilotEnable:
 
     def test_enable_preserves_existing_identity(self, auth_client):
         tc, sf = auth_client
-        existing = InstanceIdentity.generate()
-        set_autopilot_identity(sf, existing)
+        # First enable mints the deterministic, org-derived identity.
         tc.post("/api/v1/autopilot/enable", json={"tier": "anonymous"})
+        first = get_autopilot_identity(sf)
+        assert first is not None
+        # Simulate a completed enrollment (the server-derived secret adopted).
+        set_autopilot_identity(
+            sf,
+            InstanceIdentity(
+                instance_id=first.instance_id,
+                instance_secret="ab" * 32,
+                registered=True,
+            ),
+        )
+        # Re-enabling must NOT clobber the enrolled identity (idempotent): same
+        # org-derived id, and the adopted secret + registered flag are kept.
+        tc.post("/api/v1/autopilot/enable", json={"tier": "free"})
         identity = get_autopilot_identity(sf)
         assert identity is not None
-        assert identity.instance_id == existing.instance_id
+        assert identity.instance_id == first.instance_id
+        assert identity.instance_secret == "ab" * 32
+        assert identity.registered is True
 
     def test_invalid_tier_returns_422(self, auth_client):
         tc, _ = auth_client

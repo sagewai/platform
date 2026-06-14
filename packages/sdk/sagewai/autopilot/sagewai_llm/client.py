@@ -37,7 +37,7 @@ import httpx
 
 from .cache import BlueprintCache
 from .errors import ClientUnreachable, QuotaExceeded, ServiceError
-from .identity import InstanceIdentity
+from .identity import InstanceIdentity, InstanceIdentityStore
 from .quota import QUOTA_HEADER, QuotaStatus, parse_quota_header
 from .signing import build_signed_headers
 from .types import (
@@ -54,7 +54,7 @@ from .types import (
     TelemetryEvent,
 )
 
-DEFAULT_BASE_URL = "https://api.sagewai.ai"
+DEFAULT_BASE_URL = "https://sw-autopilot-llm.sagewai.ai"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
 
@@ -78,12 +78,17 @@ class SagewaiLLMClient:
         cache: BlueprintCache,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         http_client: httpx.AsyncClient | None = None,
+        identity_store: InstanceIdentityStore | None = None,
     ) -> None:
         self.base_url = (base_url if base_url is not None else _default_base_url()).rstrip("/")
         self.identity = identity
         self.cache = cache
         self._http = http_client or httpx.AsyncClient(timeout=timeout_seconds)
         self._owns_http = http_client is None
+        # Persists the server-issued secret after enrollment so later clients
+        # skip the handshake. Optional — without it, enrollment runs once per
+        # client instance (still correct, just an extra round trip).
+        self._identity_store = identity_store
         self.last_quota: QuotaStatus | None = None
         self.last_degraded: bool = False
 
@@ -99,6 +104,46 @@ class SagewaiLLMClient:
 
     # ── HTTP plumbing ─────────────────────────────────────────────
 
+    async def _ensure_enrolled(self) -> None:
+        """Fetch the server-derived HMAC secret before any signed request.
+
+        A freshly generated identity carries a placeholder random secret that
+        can never validate against the server (which derives the per-instance
+        secret as ``HKDF(master, instance_id)``). Enrollment exchanges the
+        instance id for that derived secret exactly once.
+
+        Tolerant by design: a 404 means an older server without the endpoint
+        (dev-mode servers ignore the signature, so the placeholder still works);
+        a 409 means the id was already claimed and the secret is unrecoverable.
+        In both cases we mark ``registered`` so we don't retry every request.
+        """
+        if self.identity.registered:
+            return
+        url = f"{self.base_url}/v1/instances/enroll"
+        try:
+            resp = await self._http.post(
+                url, json={"instance_id": self.identity.instance_id}
+            )
+        except httpx.HTTPError as exc:
+            raise ClientUnreachable(f"POST /v1/instances/enroll: {exc}") from exc
+
+        if resp.status_code == 200:
+            self._adopt_secret(resp.json()["instance_secret"])
+        elif resp.status_code in (404, 409):
+            self._adopt_secret(self.identity.instance_secret)
+        else:
+            raise ServiceError(status_code=resp.status_code, body=resp.text)
+
+    def _adopt_secret(self, secret: str) -> None:
+        """Replace the identity's secret, mark it registered, and persist."""
+        self.identity = InstanceIdentity(
+            instance_id=self.identity.instance_id,
+            instance_secret=secret,
+            registered=True,
+        )
+        if self._identity_store is not None:
+            self._identity_store.save(self.identity)
+
     async def _request(
         self,
         *,
@@ -106,6 +151,7 @@ class SagewaiLLMClient:
         path: str,
         json_body: dict[str, Any] | None = None,
     ) -> httpx.Response:
+        await self._ensure_enrolled()
         body = b"" if json_body is None else self._encode(json_body)
         timestamp = _now_iso()
         headers = build_signed_headers(

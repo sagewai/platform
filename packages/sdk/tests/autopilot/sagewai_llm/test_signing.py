@@ -7,9 +7,19 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""Tests for Sagewai LLM request signing."""
+"""Tests for Sagewai LLM request signing.
+
+The headline test, :func:`test_client_signature_matches_server_canonical`, pins
+the client signature to the hosted service's exact canonical string. They had
+diverged (the client prefixed ``instance_id`` and appended the raw body; the
+server uses ``{method}\\n{path}\\n{ts}\\n{sha256(body)}``), so every signed
+request was rejected. This test is the contract that keeps them in lockstep.
+"""
 
 from __future__ import annotations
+
+import hashlib
+import hmac
 
 import pytest
 
@@ -22,76 +32,95 @@ from sagewai.autopilot.sagewai_llm.signing import (
 )
 
 INSTANCE_ID = "aaaabbbbccccddddaaaabbbbccccdddd"
-SECRET = "f" * 64
+SECRET = "f" * 64  # 32-byte hex key
+
+
+def _server_sign(*, method: str, path: str, timestamp: str, body: bytes, secret_hex: str) -> str:
+    """Re-implementation of sagewai-llm's auth.py canonical + signing.
+
+    Mirrors ``tests/auth/test_strict_mode.py::_sign`` in the sagewai-llm repo
+    verbatim — the source of truth the client must agree with.
+    """
+    secret = bytes.fromhex(secret_hex)
+    body_sha = hashlib.sha256(body).hexdigest()
+    canonical = f"{method}\n{path}\n{timestamp}\n{body_sha}".encode()
+    return hmac.new(secret, canonical, hashlib.sha256).hexdigest()
+
+
+def test_client_signature_matches_server_canonical():
+    """The client signs EXACTLY what the server verifies — the core contract."""
+    common = dict(
+        method="POST",
+        path="/v1/blueprints/generate",
+        timestamp="2026-04-16T00:00:00Z",
+        body=b'{"goal":"summarise my inbox"}',
+    )
+    client_sig = sign_request(secret=SECRET, **common)
+    server_sig = _server_sign(secret_hex=SECRET, **common)
+    assert client_sig == server_sig
+
+
+def test_signature_excludes_instance_id():
+    """instance_id keys the secret server-side; it is NOT in the canonical."""
+    base = dict(
+        secret=SECRET,
+        timestamp="2026-04-16T00:00:00Z",
+        method="POST",
+        path="/v1/blueprints/generate",
+        body=b'{"goal":"x"}',
+    )
+    # Same signature regardless of which instance carries it (only the header
+    # differs) — proves instance_id left the canonical string.
+    headers_a = build_signed_headers(instance_id="a" * 32, **base)
+    headers_b = build_signed_headers(instance_id="b" * 32, **base)
+    assert headers_a[SIGNATURE_HEADER] == headers_b[SIGNATURE_HEADER]
 
 
 def test_sign_is_deterministic_for_same_inputs():
-    a = sign_request(
-        instance_id=INSTANCE_ID,
+    base = dict(
         secret=SECRET,
         timestamp="2026-04-16T00:00:00Z",
         method="POST",
         path="/v1/blueprints/generate",
         body=b'{"goal":"x"}',
     )
-    b = sign_request(
-        instance_id=INSTANCE_ID,
-        secret=SECRET,
-        timestamp="2026-04-16T00:00:00Z",
-        method="POST",
-        path="/v1/blueprints/generate",
-        body=b'{"goal":"x"}',
-    )
-    assert a == b
+    assert sign_request(**base) == sign_request(**base)
 
 
 @pytest.mark.parametrize(
     "mutation",
     [
-        {"instance_id": "x" * 32},
         {"timestamp": "2026-04-16T00:00:01Z"},
         {"method": "GET"},
         {"path": "/v1/blueprints/retrieve"},
         {"body": b'{"goal":"y"}'},
     ],
 )
-def test_sign_differs_when_any_field_mutates(mutation: dict):
+def test_sign_differs_when_any_signed_field_mutates(mutation: dict):
     base = dict(
-        instance_id=INSTANCE_ID,
         secret=SECRET,
         timestamp="2026-04-16T00:00:00Z",
         method="POST",
         path="/v1/blueprints/generate",
         body=b'{"goal":"x"}',
     )
-    sig_a = sign_request(**base)
-    sig_b = sign_request(**{**base, **mutation})
-    assert sig_a != sig_b
+    assert sign_request(**base) != sign_request(**{**base, **mutation})
 
 
 def test_verify_accepts_matching_signature():
-    sig = sign_request(
-        instance_id=INSTANCE_ID,
+    common = dict(
         secret=SECRET,
         timestamp="2026-04-16T00:00:00Z",
         method="POST",
         path="/v1/blueprints/generate",
         body=b"hello",
     )
-    assert verify_signature(
-        expected=sig,
-        instance_id=INSTANCE_ID,
-        secret=SECRET,
-        timestamp="2026-04-16T00:00:00Z",
-        method="POST",
-        path="/v1/blueprints/generate",
-        body=b"hello",
-    )
+    sig = sign_request(**common)
+    assert verify_signature(expected=sig, **common)
 
 
 def test_verify_rejects_tampered_body():
     sig = sign_request(
-        instance_id=INSTANCE_ID,
         secret=SECRET,
         timestamp="2026-04-16T00:00:00Z",
         method="POST",
@@ -100,7 +129,6 @@ def test_verify_rejects_tampered_body():
     )
     assert not verify_signature(
         expected=sig,
-        instance_id=INSTANCE_ID,
         secret=SECRET,
         timestamp="2026-04-16T00:00:00Z",
         method="POST",

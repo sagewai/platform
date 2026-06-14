@@ -34,16 +34,26 @@ from typing import Protocol, runtime_checkable
 
 @dataclass(frozen=True)
 class InstanceIdentity:
-    """One Sagewai install's identity for the hosted service."""
+    """One Sagewai install's identity for the hosted service.
+
+    ``instance_secret`` is a placeholder random value at generation time. The
+    real signing key is the server's ``HKDF(master, instance_id)``, obtained
+    once via enrollment (see :meth:`SagewaiLLMClient._ensure_enrolled`); after
+    that ``registered`` is ``True`` and ``instance_secret`` holds the enrolled
+    key. A random unenrolled secret can never validate against the server, so
+    enrollment is mandatory before any signed call.
+    """
 
     instance_id: str  # 32-char hex (16 bytes)
     instance_secret: str  # 64-char hex (32 bytes)
+    registered: bool = False
 
     @classmethod
     def generate(cls) -> InstanceIdentity:
         return cls(
             instance_id=uuid.uuid4().hex,
             instance_secret=secrets.token_hex(32),
+            registered=False,
         )
 
 
@@ -77,7 +87,11 @@ class FileIdentityStore:
         sec = data.get("instance_secret")
         if not (isinstance(iid, str) and isinstance(sec, str)):
             return None
-        return InstanceIdentity(instance_id=iid, instance_secret=sec)
+        return InstanceIdentity(
+            instance_id=iid,
+            instance_secret=sec,
+            registered=bool(data.get("registered", False)),
+        )
 
     def save(self, identity: InstanceIdentity) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -85,6 +99,7 @@ class FileIdentityStore:
             {
                 "instance_id": identity.instance_id,
                 "instance_secret": identity.instance_secret,
+                "registered": identity.registered,
             },
             indent=2,
         )

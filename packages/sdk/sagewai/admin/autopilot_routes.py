@@ -136,7 +136,6 @@ from sagewai.autopilot.routing import ConfidenceConfig, GoalRouter, RoutingResul
 from sagewai.autopilot.routing.types import AutoRouted, PickerNeeded, SynthesisNeeded
 from sagewai.autopilot.sagewai_llm import BlueprintCache, SagewaiLLMClient
 from sagewai.autopilot.sagewai_llm.client import _default_base_url
-from sagewai.autopilot.sagewai_llm.identity import ensure_identity
 from sagewai.autopilot.sealed_matcher import ProfileRecord, match_profile
 from sagewai.autopilot.tool_risk_profile import SandboxTier, is_downgrade, tier_for_tools
 from sagewai.autopilot.tool_scopes import scopes_for_tools
@@ -1029,7 +1028,7 @@ def create_autopilot_router(
 
         # Ensure an identity exists.
         store = AdminStateIdentityStore(sf)
-        identity = ensure_identity(store)
+        identity = store.ensure()
 
         set_autopilot_config(sf, {"enabled": True, "tier": tier})
 
@@ -1080,7 +1079,7 @@ def create_autopilot_router(
 
         config = get_autopilot_config(sf)
         store = AdminStateIdentityStore(sf)
-        identity = ensure_identity(store)
+        identity = store.ensure()
 
         cache_dir = _blueprint_cache_dir()
         cache = BlueprintCache(
@@ -1091,6 +1090,7 @@ def create_autopilot_router(
             identity=identity,
             cache=cache,
             base_url=config.get("base_url") or _default_base_url(),
+            identity_store=store,
         )
         routing_config = ConfidenceConfig(
             auto_route_threshold=config.get("confidence_high", 0.85),
@@ -1223,7 +1223,7 @@ def create_autopilot_router(
 
         config = get_autopilot_config(sf)
         store = AdminStateIdentityStore(sf)
-        identity = ensure_identity(store)
+        identity = store.ensure()
         cache_dir = _blueprint_cache_dir()
         cache = BlueprintCache(
             cache_dir,
@@ -1239,6 +1239,7 @@ def create_autopilot_router(
             cache=cache,
             base_url=config.get("base_url") or _default_base_url(),
             timeout_seconds=600.0,
+            identity_store=store,
         )
 
         # Forward the operator's configured provider so sagewai-llm uses

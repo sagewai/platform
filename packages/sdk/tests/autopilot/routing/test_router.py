@@ -25,6 +25,7 @@ from sagewai.autopilot.sagewai_llm import (
     SagewaiLLMClient,
     ensure_identity,
 )
+from sagewai.autopilot.sagewai_llm.identity import InstanceIdentity
 from tests.autopilot.fixtures import (
     make_synthetic_batch_blueprint,
     make_synthetic_event_driven_blueprint,
@@ -48,7 +49,18 @@ def _retrieve_response(candidates: list[tuple[str, float]]) -> dict[str, Any]:
 @pytest.fixture()
 def tmp_store(tmp_path):
     store = FileIdentityStore(tmp_path / "identity.json")
-    ensure_identity(store)
+    ident = ensure_identity(store)
+    # Routing tests exercise already-enrolled installs; persist the identity as
+    # registered so the client doesn't run the enrollment handshake (which would
+    # be an unmocked request). The handshake itself is covered in
+    # tests/autopilot/sagewai_llm/test_enrollment.py.
+    store.save(
+        InstanceIdentity(
+            instance_id=ident.instance_id,
+            instance_secret=ident.instance_secret,
+            registered=True,
+        )
+    )
     return store
 
 
