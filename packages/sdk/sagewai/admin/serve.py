@@ -4324,15 +4324,15 @@ def create_admin_serve_app(
     @app.get("/api/v1/fleet/enrollment-keys")
     async def list_fleet_enrollment_keys(request: Request) -> JSONResponse:
         keys = await fleet_registry.list_enrollment_keys(org_id=_fleet_org_id(request))
-        return JSONResponse([
-            {
-                "id": k.id, "name": k.name, "pool": ",".join(k.allowed_pools),
-                "max_uses": k.max_uses, "uses": k.current_uses,
-                "revoked": k.revoked,
-                "created_at": k.created_at.isoformat(),
-            }
-            for k in keys
-        ])
+        # The admin UI expects { keys: FleetEnrollmentKey[], total } with the
+        # full nested shape (allowed_pools/allowed_models arrays, …). Previously
+        # this returned a flattened bare array, so the page read `data.keys` as
+        # undefined and crashed. model_dump gives the right shape; key_hash is
+        # excluded so the secret hash is never sent to the browser.
+        return JSONResponse({
+            "keys": [k.model_dump(mode="json", exclude={"key_hash"}) for k in keys],
+            "total": len(keys),
+        })
 
     @app.post("/api/v1/fleet/enrollment-keys")
     async def create_fleet_enrollment_key(request: Request) -> JSONResponse:
@@ -4382,7 +4382,9 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/fleet/audit")
     async def list_fleet_audit() -> JSONResponse:
-        return JSONResponse([])
+        # The admin UI reads { events, total }; a bare array makes data.events
+        # undefined and crashes the fleet audit view.
+        return JSONResponse({"events": [], "total": 0})
 
     # ── Sessions ─────────────────────────────────────────────────
 
