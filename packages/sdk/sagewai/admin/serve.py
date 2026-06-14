@@ -5482,6 +5482,119 @@ def create_admin_serve_app(
         items = [jsonable_encoder(d) for d in docs]
         return JSONResponse({"documents": items, "count": len(items), "total": total})
 
+    @app.post("/api/v1/context/documents")
+    async def upload_context_document(request: Request) -> JSONResponse:
+        """Upload + ingest a file (the admin 'Add Knowledge → Upload Files')."""
+        from sagewai.context.models import ContextScope
+
+        engine = _context_engine(request)
+        if engine is None:
+            return JSONResponse(
+                {"detail": "Context engine is not configured on this server"},
+                status_code=503,
+            )
+        _require_resource_write(request)
+        form = await request.form()
+        upload = form.get("file")
+        if upload is None or not hasattr(upload, "read"):
+            return JSONResponse({"detail": "No file provided"}, status_code=422)
+        file_bytes = await upload.read()
+        filename = getattr(upload, "filename", "") or "upload"
+        try:
+            scope = ContextScope(str(form.get("scope") or "org"))
+        except ValueError:
+            return JSONResponse(
+                {"detail": f"Invalid scope: {form.get('scope')}"}, status_code=422
+            )
+        scope_id = str(form.get("scope_id") or "")
+        enable_graph = str(form.get("enable_graph") or "").lower() in ("1", "true", "yes")
+        tags_raw = str(form.get("tags") or "")
+        tags = [t.strip() for t in tags_raw.split(",") if t.strip()]
+        try:
+            doc = await engine.ingest_file(
+                file_bytes=file_bytes,
+                filename=filename,
+                scope=scope,
+                scope_id=scope_id,
+                enable_graph=enable_graph,
+                metadata={"tags": tags} if tags else None,
+            )
+        except Exception as exc:  # noqa: BLE001 - surface ingestion failure to the UI
+            logger.exception("Context document upload failed: %s", filename)
+            return JSONResponse(
+                {"detail": f"Ingestion failed: {exc}"}, status_code=500
+            )
+        await _emit_audit(
+            request, "context.document.upload",
+            target_type="context_document", target_id=doc.id,
+        )
+        return JSONResponse(
+            {
+                "status": "ok",
+                "filename": filename,
+                "message": f"Ingested {filename}",
+                "document": jsonable_encoder(doc),
+            },
+            status_code=201,
+        )
+
+    @app.post("/api/v1/context/documents/text")
+    async def ingest_context_text(request: Request) -> JSONResponse:
+        """Ingest pasted text (the admin 'Add Knowledge → Paste Text')."""
+        from sagewai.context.models import ContextScope, ContextSource
+
+        engine = _context_engine(request)
+        if engine is None:
+            return JSONResponse(
+                {"detail": "Context engine is not configured on this server"},
+                status_code=503,
+            )
+        _require_resource_write(request)
+        body = await request.json()
+        text = str(body.get("text") or "").strip()
+        title = str(body.get("title") or "Pasted text").strip()
+        if not text:
+            return JSONResponse({"detail": "No text provided"}, status_code=422)
+        try:
+            scope = ContextScope(str(body.get("scope") or "org"))
+        except ValueError:
+            return JSONResponse({"detail": "Invalid scope"}, status_code=422)
+        try:
+            source = ContextSource(str(body.get("source") or "manual"))
+        except ValueError:
+            source = ContextSource.MANUAL
+        metadata = body.get("metadata") or None
+        tags = body.get("tags") or []
+        if tags:
+            metadata = {**(metadata or {}), "tags": tags}
+        try:
+            doc = await engine.ingest_text(
+                text=text,
+                title=title,
+                scope=scope,
+                scope_id=str(body.get("scope_id") or ""),
+                source=source,
+                metadata=metadata,
+            )
+        except Exception as exc:  # noqa: BLE001 - surface ingestion failure to the UI
+            logger.exception("Context text ingestion failed: %s", title)
+            return JSONResponse(
+                {"detail": f"Ingestion failed: {exc}"}, status_code=500
+            )
+        await _emit_audit(
+            request, "context.document.ingest_text",
+            target_type="context_document", target_id=doc.id,
+        )
+        return JSONResponse(
+            {
+                "status": "ok",
+                "title": title,
+                "message": f"Ingested {title}",
+                "document": jsonable_encoder(doc),
+            },
+            status_code=201,
+        )
+
     @app.post("/api/v1/context/search")
     async def context_search(request: Request) -> JSONResponse:
         from sagewai.context.models import ContextScope, ContextSource
