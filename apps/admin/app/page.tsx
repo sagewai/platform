@@ -1,3 +1,14 @@
+'use client';
+
+// The dashboard fetches authenticated control-plane data, so it must run in the
+// BROWSER, not as a Server Component. Server-side rendering happens inside the
+// admin container, where (a) `localhost:8000` is the admin itself rather than the
+// backend, and (b) there is no access to the user's bearer token (it lives in
+// browser storage) — so the calls fail/401 and the page falls to "Backend not
+// reachable". Fetching client-side reuses the same auth + host the other admin
+// pages use. See utils/connection.tsx for the matching client-side health check.
+
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Monitor, ArrowUpRight, Sparkles } from 'lucide-react';
 import { adminApi } from '@/utils/api';
@@ -8,47 +19,55 @@ import { DashboardHealth } from '@/components/dashboard-health';
 import { DashboardClientWidgets } from '@/components/dashboard/client-widgets';
 import { SystemOffline } from '@/components/system-offline';
 import { EmptyState } from '@/components/ui/empty-state';
-import { Button, buttonVariants } from '@/components/ui/button';
+import { buttonVariants } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ProjectBadge } from '@/components/project-badge';
 import type { RunSummary } from '@/utils/types';
 
-export const dynamic = 'force-dynamic';
+type LoadState = 'loading' | 'error' | 'ready';
 
-export default async function DashboardPage() {
-  let agentCount = 0;
-  let runCount = 0;
-  let sessionCount = 0;
-  let totalTokens = 0;
-  let totalCost = 0;
-  let piiEvents = 0;
-  let costByModel: Record<string, number> = {};
-  let tokensByModel: Record<string, number> = {};
-  let recentRuns: RunSummary[] = [];
-  let apiError = false;
+export default function DashboardPage() {
+  const [loadState, setLoadState] = useState<LoadState>('loading');
+  const [agentCount, setAgentCount] = useState(0);
+  const [runCount, setRunCount] = useState(0);
+  const [sessionCount, setSessionCount] = useState(0);
+  const [totalTokens, setTotalTokens] = useState(0);
+  const [totalCost, setTotalCost] = useState(0);
+  const [piiEvents, setPiiEvents] = useState(0);
+  const [costByModel, setCostByModel] = useState<Record<string, number>>({});
+  const [tokensByModel, setTokensByModel] = useState<Record<string, number>>({});
+  const [recentRuns, setRecentRuns] = useState<RunSummary[]>([]);
 
-  try {
-    const [agents, runs, sessions, costs, usage, risks] = await Promise.all([
-      adminApi.listAgents(),
-      adminApi.listRuns({ limit: 200 }),
-      adminApi.listSessions(),
-      adminApi.getCosts(),
-      adminApi.getUsage(),
-      adminApi.getRisks(),
-    ]);
-    agentCount = agents.length;
-    runCount = runs.items.length;
-    recentRuns = runs.items;
-    sessionCount = sessions.items.length;
-    totalTokens = usage.total_tokens;
-    totalCost = costs.total_cost_usd;
-    piiEvents = risks.pii_events + risks.hallucination_flags;
-    costByModel = costs.by_model ?? {};
-    tokensByModel = usage.by_model ?? {};
-  } catch {
-    apiError = true;
-  }
+  const load = useCallback(async () => {
+    setLoadState('loading');
+    try {
+      const [agents, runs, sessions, costs, usage, risks] = await Promise.all([
+        adminApi.listAgents(),
+        adminApi.listRuns({ limit: 200 }),
+        adminApi.listSessions(),
+        adminApi.getCosts(),
+        adminApi.getUsage(),
+        adminApi.getRisks(),
+      ]);
+      setAgentCount(agents.length);
+      setRunCount(runs.items.length);
+      setRecentRuns(runs.items);
+      setSessionCount(sessions.items.length);
+      setTotalTokens(usage.total_tokens);
+      setTotalCost(costs.total_cost_usd);
+      setPiiEvents(risks.pii_events + risks.hallucination_flags);
+      setCostByModel(costs.by_model ?? {});
+      setTokensByModel(usage.by_model ?? {});
+      setLoadState('ready');
+    } catch {
+      setLoadState('error');
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
 
   // ── Header (always visible) ──
   const header = (
@@ -60,13 +79,23 @@ export default async function DashboardPage() {
     </div>
   );
 
+  // ── Loading: show the shell while the first fetch lands ──
+  if (loadState === 'loading') {
+    return (
+      <div className="max-w-6xl mx-auto">
+        {header}
+        <div className="mt-8 text-sm text-muted-foreground">Loading dashboard…</div>
+      </div>
+    );
+  }
+
   // ── API down: friendly empty state instead of red banner ──
-  if (apiError) {
+  if (loadState === 'error') {
     return (
       <div className="max-w-6xl mx-auto">
         {header}
         <div className="mt-8">
-          <SystemOffline />
+          <SystemOffline onRetry={load} />
         </div>
       </div>
     );
@@ -196,7 +225,7 @@ export default async function DashboardPage() {
                   <div>
                     <span className="font-medium text-sm">{run.agent_name}</span>
                     <span className="text-muted-foreground text-xs ml-2">
-                      {run.input_preview?.slice(0, 50) || '\u2014'}
+                      {run.input_preview?.slice(0, 50) || '—'}
                     </span>
                   </div>
                   <Badge variant={run.status === 'completed' ? 'default' : 'secondary'}>
