@@ -102,6 +102,12 @@ services:
       # the host gateway (Docker Desktop and Podman both provide it), so the
       # backend can reach them. Change these if Ollama/LM Studio run elsewhere.
       OLLAMA_HOST: http://host.docker.internal:11434
+      # litellm's Ollama client reads OLLAMA_API_BASE (not OLLAMA_HOST) for the
+      # actual inference call. Without it, running an ollama model from the
+      # Playground/agents falls back to localhost:11434 inside the container —
+      # even though detection (which uses OLLAMA_HOST) works. (LM Studio
+      # inference uses a per-provider api_base; configure an LM Studio provider.)
+      OLLAMA_API_BASE: http://host.docker.internal:11434
       LMSTUDIO_HOST: http://host.docker.internal:1234/v1
     volumes:
       - sagewai-home:/var/lib/sagewai
