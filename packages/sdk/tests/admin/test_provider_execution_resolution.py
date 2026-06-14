@@ -99,3 +99,38 @@ def test_choose_provider_project_row_shadows_same_named_org_provider():
     assert chosen is not None
     assert chosen["project_id"] == "project-a"
     assert chosen["config"]["api_key"] == "sk-project"
+
+
+def test_self_hosted_default_base_url_honors_ollama_host_env(monkeypatch):
+    # In the bundled compose stack the backend runs in a container, so OLLAMA_HOST
+    # points at the host gateway. A provider with no explicit base_url must still
+    # reach Ollama on the host, not the container's localhost.
+    monkeypatch.setenv("OLLAMA_HOST", "http://host.docker.internal:11434")
+    provider = {"provider_name": "ollama", "config": {"model": "qwen2.5:14b"}}
+    kwargs = litellm_kwargs_for_provider(provider)
+    assert kwargs["model"] == "ollama/qwen2.5:14b"
+    assert kwargs["api_base"] == "http://host.docker.internal:11434"
+
+
+def test_self_hosted_default_base_url_honors_lmstudio_host_env(monkeypatch):
+    monkeypatch.setenv("LMSTUDIO_HOST", "http://host.docker.internal:1234/v1")
+    provider = {"provider_name": "lmstudio", "config": {"model": "google/gemma-3-4b"}}
+    assert (
+        litellm_kwargs_for_provider(provider)["api_base"]
+        == "http://host.docker.internal:1234/v1"
+    )
+
+
+def test_self_hosted_default_base_url_falls_back_to_localhost(monkeypatch):
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    provider = {"provider_name": "ollama", "config": {"model": "llama3.2"}}
+    assert litellm_kwargs_for_provider(provider)["api_base"] == "http://localhost:11434"
+
+
+def test_explicit_provider_base_url_overrides_env(monkeypatch):
+    monkeypatch.setenv("OLLAMA_HOST", "http://host.docker.internal:11434")
+    provider = {
+        "provider_name": "ollama",
+        "config": {"model": "llama3.2", "base_url": "http://gpu-box:11434"},
+    }
+    assert litellm_kwargs_for_provider(provider)["api_base"] == "http://gpu-box:11434"

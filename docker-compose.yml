@@ -96,8 +96,19 @@ services:
       # ephemeral: the admin account + master key are lost on every container
       # recreate, so you'd re-run /setup (and encrypted secrets would break).
       SAGEWAI_HOME: /var/lib/sagewai
+      # Local LLM servers (Ollama, LM Studio) run on the HOST, not in this
+      # container — so `localhost` here would mean the container itself and
+      # provider auto-detection finds nothing. host.docker.internal resolves to
+      # the host gateway (Docker Desktop and Podman both provide it), so the
+      # backend can reach them. Change these if Ollama/LM Studio run elsewhere.
+      OLLAMA_HOST: http://host.docker.internal:11434
+      LMSTUDIO_HOST: http://host.docker.internal:1234/v1
     volumes:
       - sagewai-home:/var/lib/sagewai
+    extra_hosts:
+      # Map host.docker.internal to the host gateway. Podman provides this
+      # automatically, but declaring it keeps Docker Engine + Compose working too.
+      - "host.docker.internal:host-gateway"
     ports:
       - "8000:8000"
     healthcheck:

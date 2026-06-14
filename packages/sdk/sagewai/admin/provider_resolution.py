@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 PROVIDER_DEFAULT_MODEL = {
@@ -27,10 +28,24 @@ PROVIDER_DEFAULT_MODEL = {
 
 SELF_HOSTED_PROVIDERS = {"ollama", "lmstudio", "vllm"}
 
-SELF_HOSTED_DEFAULT_BASE_URL = {
-    "ollama": "http://localhost:11434",
-    "lmstudio": "http://localhost:1234/v1",
+# Default base URL for a self-hosted provider when its config carries no
+# explicit base_url. Reads the same env vars as the provider probes
+# (OLLAMA_HOST / LMSTUDIO_HOST), so the bundled compose stack — where these
+# point at host.docker.internal — drives inference too, not just model
+# detection. Defaults to localhost for plain host installs.
+_SELF_HOSTED_BASE_URL_ENV = {
+    "ollama": ("OLLAMA_HOST", "http://localhost:11434"),
+    "lmstudio": ("LMSTUDIO_HOST", "http://localhost:1234/v1"),
 }
+
+
+def self_hosted_default_base_url(provider_name: str) -> str | None:
+    """Default inference base URL for a self-hosted provider, env-aware."""
+    spec = _SELF_HOSTED_BASE_URL_ENV.get(provider_name)
+    if spec is None:
+        return None
+    env_var, default = spec
+    return os.environ.get(env_var, default)
 
 
 def provider_has_credentials(provider: dict[str, Any]) -> bool:
@@ -119,7 +134,7 @@ def litellm_kwargs_for_provider(
     if api_key:
         kwargs["api_key"] = api_key
 
-    base_url = cfg.get("base_url") or SELF_HOSTED_DEFAULT_BASE_URL.get(provider_name)
+    base_url = cfg.get("base_url") or self_hosted_default_base_url(provider_name)
     if base_url:
         kwargs["api_base"] = base_url
 
