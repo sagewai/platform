@@ -530,14 +530,21 @@ export function Toggle({ checked, onChange, label, disabled }: ToggleProps) {
 // Legacy signature: const { toast } = useToast(); toast('success', 'message');
 type ToastType = 'success' | 'error' | 'info';
 
+// Stable, module-level identities. `toast` only delegates to sonner's global
+// singleton, so it needs no per-render state — returning a fresh closure (and a
+// fresh object) on every render would change `toast`'s identity each render and
+// re-fire any effect/callback that lists it as a dependency. That caused an
+// infinite reload→re-render loop (flicker) on pages like /context/documents
+// where loadDocuments() depends on `toast`.
+function _toast(type: ToastType, message: string) {
+  if (type === 'success') sonnerToast.success(message);
+  else if (type === 'error') sonnerToast.error(message);
+  else sonnerToast(message);
+}
+const _toastApi = { toast: _toast } as const;
+
 export function useToast() {
-  return {
-    toast: (type: ToastType, message: string) => {
-      if (type === 'success') sonnerToast.success(message);
-      else if (type === 'error') sonnerToast.error(message);
-      else sonnerToast(message);
-    },
-  };
+  return _toastApi;
 }
 
 // ToastProvider is now <Toaster /> mounted in root layout; export a no-op
