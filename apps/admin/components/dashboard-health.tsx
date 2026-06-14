@@ -58,7 +58,7 @@ export function DashboardHealth() {
                     Providers
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    {health.providers.map((p) => (
+                    {(health.providers ?? []).map((p) => (
                       <div key={p.name} className="flex items-center gap-1.5 text-xs">
                         <span
                           className={`w-2 h-2 rounded-full ${
@@ -68,7 +68,7 @@ export function DashboardHealth() {
                         {p.name}
                       </div>
                     ))}
-                    {health.providers.length === 0 && (
+                    {(health.providers ?? []).length === 0 && (
                       <span className="text-xs text-text-muted">No providers configured</span>
                     )}
                   </div>
@@ -80,7 +80,7 @@ export function DashboardHealth() {
                     Databases
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    {health.databases.map((db) => (
+                    {(health.databases ?? []).map((db) => (
                       <div key={db.name} className="flex items-center gap-1.5 text-xs">
                         <span
                           className={`w-2 h-2 rounded-full ${
@@ -98,8 +98,8 @@ export function DashboardHealth() {
 
                 {/* Workers */}
                 <div className="text-xs text-text-secondary">
-                  {health.workers.active} active worker{health.workers.active !== 1 ? 's' : ''},{' '}
-                  {health.workers.queued} queued run{health.workers.queued !== 1 ? 's' : ''}
+                  {(health.workers?.active ?? 0)} active worker{(health.workers?.active ?? 0) !== 1 ? 's' : ''},{' '}
+                  {(health.workers?.queued ?? 0)} queued run{(health.workers?.queued ?? 0) !== 1 ? 's' : ''}
                 </div>
               </div>
             )}
