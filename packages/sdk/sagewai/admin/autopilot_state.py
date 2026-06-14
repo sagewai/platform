@@ -25,6 +25,7 @@ This module provides:
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any, Callable
 
 from sagewai.autopilot.sagewai_llm.identity import InstanceIdentity
@@ -104,7 +105,14 @@ def get_autopilot_config(sf: AdminStateFile) -> dict[str, Any]:
     """
     data = sf._read()
     stored = data.get("autopilot", {})
-    return {**_DEFAULT_CONFIG, **stored}
+    config = {**_DEFAULT_CONFIG, **stored}
+    # A deployment-level SAGEWAI_LLM_BASE_URL env var overrides the hosted
+    # default so a self-hosted operator can point Autopilot's blueprint service
+    # at their own sagewai-llm (e.g. http://host.docker.internal:8100).
+    env_url = os.environ.get("SAGEWAI_LLM_BASE_URL")
+    if env_url:
+        config["base_url"] = env_url
+    return config
 
 
 def set_autopilot_config(sf: AdminStateFile, patch: dict[str, Any]) -> dict[str, Any]:

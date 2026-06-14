@@ -135,6 +135,7 @@ from sagewai.autopilot.mission import Mission
 from sagewai.autopilot.routing import ConfidenceConfig, GoalRouter, RoutingResult
 from sagewai.autopilot.routing.types import AutoRouted, PickerNeeded, SynthesisNeeded
 from sagewai.autopilot.sagewai_llm import BlueprintCache, SagewaiLLMClient
+from sagewai.autopilot.sagewai_llm.client import _default_base_url
 from sagewai.autopilot.sagewai_llm.identity import ensure_identity
 from sagewai.autopilot.sealed_matcher import ProfileRecord, match_profile
 from sagewai.autopilot.tool_risk_profile import SandboxTier, is_downgrade, tier_for_tools
@@ -1089,7 +1090,7 @@ def create_autopilot_router(
         client = SagewaiLLMClient(
             identity=identity,
             cache=cache,
-            base_url=config.get("base_url", "https://llm.sagewai.ai"),
+            base_url=config.get("base_url") or _default_base_url(),
         )
         routing_config = ConfidenceConfig(
             auto_route_threshold=config.get("confidence_high", 0.85),
@@ -1236,7 +1237,7 @@ def create_autopilot_router(
         client = SagewaiLLMClient(
             identity=identity,
             cache=cache,
-            base_url=config.get("base_url", "https://llm.sagewai.ai"),
+            base_url=config.get("base_url") or _default_base_url(),
             timeout_seconds=600.0,
         )
 
