@@ -2919,6 +2919,7 @@ def create_admin_serve_app(
                 wf_name = wf_def.get("name", "unnamed")
                 agents_defs = wf_def.get("agents", {})
                 workflow_node = wf_def.get("workflow", {})
+                default_model = wf_def.get("default_model")
 
                 yield _emit("workflow_started", {"run_id": run_id, "name": wf_name})
 
@@ -2944,8 +2945,20 @@ def create_admin_serve_app(
                 current_input = message
                 for i, agent_name in enumerate(agent_steps):
                     agent_def = agents_defs.get(agent_name, {})
-                    model = agent_def.get("model", "gpt-4o-mini")
-                    system_prompt = agent_def.get("system_prompt", f"You are the {agent_name} agent.")
+                    model = agent_def.get("model")
+                    system_prompt = agent_def.get("system_prompt")
+                    # Resolve a registered-agent reference (or any agent with no
+                    # inline model) to its stored spec. Otherwise a `ref` agent —
+                    # which carries no inline model in the YAML — ignores its
+                    # configured model (e.g. a local ollama model) and falls back
+                    # to the gpt-4o-mini default, which routes to OpenAI.
+                    if not model or "ref" in agent_def:
+                        spec = await _resolve_agent(request, agent_def.get("ref") or agent_name)
+                        if spec:
+                            model = model or spec.get("model")
+                            system_prompt = system_prompt or spec.get("system_prompt")
+                    model = model or default_model or "gpt-4o-mini"
+                    system_prompt = system_prompt or f"You are the {agent_name} agent."
                     step_t0 = _wf_time.monotonic()
                     step_started_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
