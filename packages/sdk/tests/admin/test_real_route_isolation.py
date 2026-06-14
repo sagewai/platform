@@ -912,7 +912,11 @@ async def test_prompt_logs_list_isolated(real_app):
     )
     assert r.status_code == 200
     body = r.json()
-    logs = body["logs"] if isinstance(body, dict) and "logs" in body else body
+    # CursorPage<PromptLogSummary> envelope: { items, next_cursor, has_more }.
+    if isinstance(body, dict):
+        logs = body.get("items", body.get("logs", []))
+    else:
+        logs = body
     ids = {x.get("log_id") for x in logs}
     assert real_app["log_a"] in ids
     assert real_app["log_b"] not in ids

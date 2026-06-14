@@ -2335,6 +2335,10 @@ def create_admin_serve_app(
 
     @app.get("/api/v1/prompts/logs")
     async def list_prompt_logs(request: Request) -> JSONResponse:
+        # CursorPage<PromptLogSummary> envelope: the UI reads page.items. A bare
+        # array makes page.items undefined → the prompt-history table's .map()
+        # crashes the page (observability/prompts) or silently empties it
+        # (training/logs). Keep the existing filtering/limit behaviour, just wrap.
         pstore = _prompt_store(request)
         if pstore is not None:
             records = await pstore.list_prompt_logs_for(
@@ -2345,14 +2349,15 @@ def create_admin_serve_app(
                 limit=int(request.query_params.get("limit", "50")),
                 offset=int(request.query_params.get("offset", "0")),
             )
-            return JSONResponse([r.to_dict() for r in records])
-        data = sf._read()
-        logs = [
-            log
-            for log in data.get("prompt_logs", [])
-            if _in_read_scope(log.get("project_id"), request)
-        ]
-        return JSONResponse(logs)
+            logs = [r.to_dict() for r in records]
+        else:
+            data = sf._read()
+            logs = [
+                log
+                for log in data.get("prompt_logs", [])
+                if _in_read_scope(log.get("project_id"), request)
+            ]
+        return JSONResponse({"items": logs, "next_cursor": None, "has_more": False})
 
     @app.post("/api/v1/prompts/logs")
     async def save_prompt_log(request: Request) -> JSONResponse:
@@ -4015,7 +4020,25 @@ def create_admin_serve_app(
     @app.get("/api/v1/audit/events")
     async def list_audit_events() -> JSONResponse:
         data = sf._read()
-        return JSONResponse(data.get("audit_events", []))
+        # CursorPage<AuditEvent> envelope: the UI reads page.items / next_cursor /
+        # has_more. A bare array makes page.items undefined → the audit table's
+        # .map() crashes the page. Map the stored audit shape (id/ts/event_type/
+        # actor_label/target/details) onto the UI's AuditEvent contract so rows
+        # render with a populated agent, detail and time instead of blanks.
+        items = []
+        for e in reversed(data.get("audit_events", [])):
+            details = e.get("details") or {}
+            detail = e.get("target") or ", ".join(
+                f"{k}={v}" for k, v in details.items()
+            ) or None
+            items.append({
+                "id": e.get("id", ""),
+                "agent_name": details.get("agent_name") or e.get("actor_label", ""),
+                "event_type": e.get("event_type", ""),
+                "detail": detail,
+                "created_at": e.get("ts"),
+            })
+        return JSONResponse({"items": items, "next_cursor": None, "has_more": False})
 
     @app.get("/api/v1/audit/export")
     async def export_audit_events() -> JSONResponse:
