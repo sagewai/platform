@@ -1,39 +1,57 @@
+'use client';
+
+// Session messages are authenticated control-plane data, so this must run in the
+// BROWSER, not as a Server Component. Server-side rendering happens inside the
+// admin container, where (a) `localhost:8000` is the admin itself rather than the
+// backend, and (b) there is no access to the user's bearer token (it lives in
+// browser storage) — so the call fails/401 and the page reports the API as down.
+// Fetching client-side reuses the same auth + host the other admin pages use.
+// See app/page.tsx (PR #468) for the matching dashboard fix. The route param is
+// read with useParams() because client components have no server `params` prop.
+
+import { useCallback, useEffect, useState } from 'react';
+import { useParams } from 'next/navigation';
 import Link from 'next/link';
 
 import { adminApi } from '@/utils/api';
 import type { SessionMessagesResponse } from '@/utils/types';
 import { Card, EmptyState } from '@/components/ui/legacy';
 
-export const dynamic = 'force-dynamic';
+const roleBg: Record<string, string> = {
+  user: 'bg-info-light',
+  assistant: 'bg-success-light',
+  system: 'bg-purple-50',
+  tool: 'bg-warning-light',
+};
 
-export default async function SessionDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
-  const { id } = await params;
+const roleAlign: Record<string, string> = {
+  user: 'justify-end',
+  assistant: 'justify-start',
+  system: 'justify-center',
+  tool: 'justify-start',
+};
 
-  let data: SessionMessagesResponse | null = null;
-  let error = '';
-  try {
-    data = await adminApi.getSessionMessages(id);
-  } catch {
-    error = 'Failed to load session messages. The API may be unavailable.';
-  }
+export default function SessionDetailPage() {
+  const { id } = useParams<{ id: string }>();
+  const [data, setData] = useState<SessionMessagesResponse | null>(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
 
-  const roleBg: Record<string, string> = {
-    user: 'bg-info-light',
-    assistant: 'bg-success-light',
-    system: 'bg-purple-50',
-    tool: 'bg-warning-light',
-  };
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      setData(await adminApi.getSessionMessages(id));
+    } catch {
+      setError('Failed to load session messages. The API may be unavailable.');
+    } finally {
+      setLoading(false);
+    }
+  }, [id]);
 
-  const roleAlign: Record<string, string> = {
-    user: 'justify-end',
-    assistant: 'justify-start',
-    system: 'justify-center',
-    tool: 'justify-start',
-  };
+  useEffect(() => {
+    load();
+  }, [load]);
 
   return (
     <div className="max-w-6xl mx-auto">
@@ -47,6 +65,10 @@ export default async function SessionDetailPage({
       </div>
 
       <h1 className="mt-0 mb-lg text-2xl font-bold font-[family-name:var(--font-heading)]">Session Detail</h1>
+
+      {loading && (
+        <div className="text-sm text-text-muted mb-md">Loading session…</div>
+      )}
 
       {error && (
         <div className="bg-error-light border border-error/20 rounded-lg px-5 py-3 text-error text-sm mb-md">

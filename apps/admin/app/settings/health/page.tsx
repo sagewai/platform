@@ -1,21 +1,46 @@
+'use client';
+
+// System health fetches authenticated control-plane data, so it must run in the
+// BROWSER, not as a Server Component. Server-side rendering happens inside the
+// admin container, where (a) `localhost:8000` is the admin itself rather than the
+// backend, and (b) there is no access to the user's bearer token (it lives in
+// browser storage) — so the call fails/401 and the page reports the API as down.
+// Fetching client-side reuses the same auth + host the other admin pages use.
+// See app/page.tsx (PR #468) for the matching dashboard fix.
+
+import { useCallback, useEffect, useState } from 'react';
 import { adminApi } from '@/utils/api';
 import type { SystemHealth } from '@/utils/types';
 import { Badge, Card, EmptyState } from '@/components/ui/legacy';
 
-export const dynamic = 'force-dynamic';
+export default function SystemHealthPage() {
+  const [health, setHealth] = useState<SystemHealth | null>(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
 
-export default async function SystemHealthPage() {
-  let health: SystemHealth | null = null;
-  let error = '';
-  try {
-    health = await adminApi.getSystemHealth();
-  } catch {
-    error = 'Failed to fetch system health. The API may be unavailable.';
-  }
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      setHealth(await adminApi.getSystemHealth());
+    } catch {
+      setError('Failed to fetch system health. The API may be unavailable.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
 
   return (
     <div className="max-w-6xl mx-auto">
       <h1 className="mt-0 mb-lg text-2xl font-bold font-[family-name:var(--font-heading)]">System Health</h1>
+
+      {loading && (
+        <div className="text-sm text-text-muted mb-md">Loading system health…</div>
+      )}
 
       {error && (
         <div className="bg-error-light border border-error/20 rounded-lg px-5 py-3 text-error text-sm mb-md">
