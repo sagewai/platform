@@ -641,7 +641,7 @@ export function WorkflowEditor() {
               />
               <Button
                 onClick={runWorkflow}
-                disabled={running || !testInput.trim()}
+                disabled={running || !testInput.trim() || !(mode === 'visual' ? generatedYaml : yaml).trim()}
               >
                 {running ? 'Running...' : 'Run'}
               </Button>
@@ -655,6 +655,17 @@ export function WorkflowEditor() {
                 </Button>
               )}
             </div>
+
+            {/* Explain why Run is disabled — otherwise an unnamed workflow
+                generates no YAML and Run silently does nothing (the visible
+                "my-workflow" is only placeholder text, not a value). */}
+            {!running && !(mode === 'visual' ? generatedYaml : yaml).trim() && (
+              <p className="text-xs text-warning">
+                {mode === 'visual'
+                  ? 'Give your workflow a name (the “my-workflow” text is just a placeholder) and add at least one agent step to run it.'
+                  : 'Enter workflow YAML to run it.'}
+              </p>
+            )}
 
             {/* Progress bar for durable runs */}
             {activeRunId && durableRun.stepsTotal && durableRun.stepsTotal > 0 && (
