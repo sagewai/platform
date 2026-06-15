@@ -26,10 +26,10 @@ This module provides:
 from __future__ import annotations
 
 import hashlib
-import os
 import secrets
 from typing import TYPE_CHECKING, Any, Callable
 
+from sagewai.autopilot.sagewai_llm.client import _default_base_url
 from sagewai.autopilot.sagewai_llm.identity import InstanceIdentity
 
 #: Domain-separation prefix for the org-derived instance id. Bump only if the
@@ -42,10 +42,14 @@ if TYPE_CHECKING:
 
 # ── Default autopilot config ──────────────────────────────────────────
 
+# NOTE: ``base_url`` is deliberately NOT here. It is infrastructure config, not
+# a user choice — it is resolved at read time from SAGEWAI_LLM_BASE_URL or the
+# built-in default (see get_autopilot_config) and is never written to per-install
+# state. Persisting it would freeze whatever default shipped at setup time into
+# the state file, so a later default change wouldn't take effect.
 _DEFAULT_CONFIG: dict[str, Any] = {
     "enabled": False,
     "tier": "anonymous",
-    "base_url": "https://sw-autopilot-llm.sagewai.ai",
     "confidence_high": 0.85,
     "confidence_low": 0.65,
     "cache_ttl_seconds": 3600,
@@ -163,24 +167,25 @@ def get_autopilot_config(sf: AdminStateFile) -> dict[str, Any]:
     data = sf._read()
     stored = data.get("autopilot", {})
     config = {**_DEFAULT_CONFIG, **stored}
-    # A deployment-level SAGEWAI_LLM_BASE_URL env var overrides the hosted
-    # default so a self-hosted operator can point Autopilot's blueprint service
-    # at their own sagewai-llm (e.g. http://host.docker.internal:8100).
-    env_url = os.environ.get("SAGEWAI_LLM_BASE_URL")
-    if env_url:
-        config["base_url"] = env_url
+    # base_url is infrastructure config, NOT per-install state: always resolve it
+    # from SAGEWAI_LLM_BASE_URL (self-hosted override) or the built-in default.
+    # Any value lingering in `stored` is ignored, so a default change always
+    # takes effect and there is no stale URL to "migrate".
+    config["base_url"] = _default_base_url()
     return config
 
 
 def set_autopilot_config(sf: AdminStateFile, patch: dict[str, Any]) -> dict[str, Any]:
     """Merge *patch* into the stored autopilot config and persist.
 
-    Returns the new merged config.
+    Returns the new merged config. ``base_url`` is never persisted (it is
+    resolved at read time — see :func:`get_autopilot_config`).
     """
-    allowed_keys = set(_DEFAULT_CONFIG)
+    allowed_keys = set(_DEFAULT_CONFIG)  # excludes base_url by construction
 
     def _mutate(data: dict[str, Any]) -> dict[str, Any]:
         current = {**_DEFAULT_CONFIG, **data.get("autopilot", {})}
+        current.pop("base_url", None)  # drop any value frozen in by older builds
         for k, v in patch.items():
             if k in allowed_keys:
                 current[k] = v
