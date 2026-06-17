@@ -2,9 +2,16 @@
 // Copyright (C) 2026 Ali Arda Diri
 'use client';
 
+import { useEffect, useState } from 'react';
+
+import { adminApi } from '@/utils/api';
 import { GoalToBlueprintIllustration } from './illustrations/goal-to-blueprint-illustration';
 
-const SAMPLE_GOALS = [
+// Fallback shown if the blueprint service can't supply real example goals
+// (offline, or an older sagewai-llm without /v1/examples). On success these are
+// replaced by a random sample of real goals from the ~200 golden blueprints, so
+// clicking one retrieves that blueprint directly instead of synthesizing.
+const FALLBACK_GOALS = [
   'Summarize my unread inbox into 5 bullets',
   'Find a flight from Berlin to Lisbon under €120',
   'Generate a weekly status report from my calendar',
@@ -15,6 +22,23 @@ export interface EmptyAutopilotPageProps {
 }
 
 export function EmptyAutopilotPage({ onPickGoal }: EmptyAutopilotPageProps) {
+  const [sampleGoals, setSampleGoals] = useState<string[]>(FALLBACK_GOALS);
+
+  useEffect(() => {
+    let cancelled = false;
+    adminApi
+      .getAutopilotExamples()
+      .then((res) => {
+        if (!cancelled && res?.examples?.length) setSampleGoals(res.examples);
+      })
+      .catch(() => {
+        /* keep the fallback goals */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <section
       data-testid="empty-autopilot-page"
@@ -35,7 +59,7 @@ export function EmptyAutopilotPage({ onPickGoal }: EmptyAutopilotPageProps) {
             Try these →
           </p>
           <div className="flex flex-wrap gap-2">
-            {SAMPLE_GOALS.map((g) => (
+            {sampleGoals.map((g) => (
               <button
                 key={g}
                 type="button"

@@ -1008,6 +1008,41 @@ def create_autopilot_router(
             }
         )
 
+    # ── GET /autopilot/examples ───────────────────────────────────────
+
+    @router.get("/autopilot/examples")
+    async def autopilot_examples(request: Request) -> JSONResponse:
+        """Random example goals from the curated blueprint corpus (for the UI).
+
+        Real golden-blueprint goals, so clicking one retrieves that blueprint
+        directly. Degrades to an empty list when the blueprint service is
+        unreachable or predates the endpoint, so the frontend can fall back to
+        its built-in goals rather than showing an error.
+        """
+        err = _require_auth(request, sf)
+        if err is not None:
+            return err
+
+        config = get_autopilot_config(sf)
+        store = AdminStateIdentityStore(sf)
+        identity = store.ensure()
+        cache = BlueprintCache(
+            _blueprint_cache_dir(),
+            ttl_seconds=int(config.get("cache_ttl_seconds", 3600)),
+        )
+        client = SagewaiLLMClient(
+            identity=identity,
+            cache=cache,
+            base_url=config.get("base_url") or _default_base_url(),
+            identity_store=store,
+        )
+        try:
+            examples = await client.get_examples(count=6)
+        except Exception as exc:  # noqa: BLE001 — service down / older version
+            logger.info("autopilot examples unavailable: %s", exc)
+            examples = []
+        return JSONResponse({"examples": examples})
+
     # ── POST /autopilot/enable ────────────────────────────────────────
 
     @router.post("/autopilot/enable")

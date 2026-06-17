@@ -1282,6 +1282,9 @@ export const adminApi = {
   getAutopilotStatus: () =>
     analyticsClient.get<AutopilotStatus>('/api/v1/autopilot/status'),
 
+  getAutopilotExamples: () =>
+    analyticsClient.get<{ examples: string[] }>('/api/v1/autopilot/examples'),
+
   enableAutopilot: (tier: string) =>
     analyticsClient.post<AutopilotStatus>('/api/v1/autopilot/enable', { tier }),
 

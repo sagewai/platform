@@ -206,6 +206,26 @@ class TestAutopilotStatus:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/v1/autopilot/examples
+# ---------------------------------------------------------------------------
+
+
+class TestAutopilotExamples:
+    def test_unauthenticated_returns_401(self, client):
+        assert client.get("/api/v1/autopilot/examples").status_code == 401
+
+    def test_degrades_to_empty_when_service_unreachable(self, auth_client, monkeypatch):
+        tc, _ = auth_client
+        # Point at a closed port so the blueprint service is unreachable: the
+        # route must degrade to an empty list (the frontend keeps its built-in
+        # fallback goals), never error.
+        monkeypatch.setenv("SAGEWAI_LLM_BASE_URL", "http://127.0.0.1:9")
+        resp = tc.get("/api/v1/autopilot/examples")
+        assert resp.status_code == 200
+        assert resp.json() == {"examples": []}
+
+
+# ---------------------------------------------------------------------------
 # POST /api/v1/autopilot/enable
 # ---------------------------------------------------------------------------
 

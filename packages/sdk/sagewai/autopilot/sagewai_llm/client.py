@@ -285,3 +285,19 @@ class SagewaiLLMClient:
             json_body=None,
         )
         return QuotaResponse.model_validate(response.json())
+
+    async def get_examples(self, *, count: int = 6) -> list[str]:
+        """Return up to *count* random example goals from the curated corpus.
+
+        Powers Autopilot's "try these" suggestions with real golden-blueprint
+        goals (so a click retrieves that blueprint directly). Returns a plain
+        list of strings; callers degrade to their own defaults on error.
+        """
+        response = await self._request(
+            method="GET",
+            path=f"/v1/examples?count={count}",
+            json_body=None,
+        )
+        data = response.json()
+        examples = data.get("examples", []) if isinstance(data, dict) else []
+        return [g for g in examples if isinstance(g, str)]
