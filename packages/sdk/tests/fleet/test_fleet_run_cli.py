@@ -19,8 +19,49 @@ def test_run_help_lists_key_options():
     res = CliRunner().invoke(fleet_group, ["run", "--help"])
     assert res.exit_code == 0
     for opt in ("--name", "--models", "--pool", "--labels", "--max-concurrent",
-                "--exec", "--register-only", "--once", "--worker-id", "--enrollment-key"):
+                "--exec", "--exec-timeout", "--env", "--env-file", "--image",
+                "--docker-arg", "--register-only", "--once", "--worker-id",
+                "--enrollment-key"):
         assert opt in res.output
+
+
+def test_enqueue_help_lists_key_options():
+    res = CliRunner().invoke(fleet_group, ["enqueue", "--help"])
+    assert res.exit_code == 0
+    for opt in ("--agent", "--message", "--model", "--pool"):
+        assert opt in res.output
+
+
+def test_enqueue_posts_task(monkeypatch):
+    import httpx
+
+    calls = {}
+
+    class _Response:
+        status_code = 201
+        text = '{"run_id":"run-123"}'
+
+        def json(self):
+            return {"run_id": "run-123"}
+
+    def fake_post(url, json, headers, timeout):
+        calls.update({"url": url, "json": json, "headers": headers, "timeout": timeout})
+        return _Response()
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    res = CliRunner().invoke(
+        fleet_group,
+        ["enqueue", "--agent", "helper", "-m", "hi", "--model", "gpt-4o"],
+    )
+    assert res.exit_code == 0, res.output
+    assert calls["url"].endswith("/api/v1/fleet/tasks")
+    assert calls["json"]["payload"] == {
+        "agent": "helper",
+        "message": "hi",
+        "model": "gpt-4o",
+    }
+    assert calls["json"]["model"] == "gpt-4o"
+    assert "run-123" in res.output
 
 
 def test_run_register_only_invokes_register(monkeypatch):
@@ -47,6 +88,43 @@ def test_run_register_only_invokes_register(monkeypatch):
     assert calls["name"] == "w1"
     assert calls["models"] == ["gpt-4o", "ollama/llama3:70b"]
     assert calls["labels"] == {"gpu": "a100", "zone": "us"}
+
+
+def test_run_register_only_passes_task_isolation_options(monkeypatch):
+    calls = {}
+
+    class _FakeRunner:
+        def __init__(self, **kw):
+            calls.update(kw)
+
+        async def register(self):
+            return "wid-123", "pending"
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr("sagewai.cli.fleet.WorkerRunner", _FakeRunner)
+    res = CliRunner().invoke(
+        fleet_group,
+        [
+            "run",
+            "--register-only",
+            "--name",
+            "w",
+            "--models",
+            "gpt-4o",
+            "--env",
+            "A=1",
+            "--image",
+            "img",
+            "--docker-arg",
+            "--network=none",
+        ],
+    )
+    assert res.exit_code == 0, res.output
+    assert calls["task_env"] == {"A": "1"}
+    assert calls["image"] == "img"
+    assert calls["docker_args"] == ["--network=none"]
 
 
 def test_run_surfaces_registration_401_with_token_hint(monkeypatch):

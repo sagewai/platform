@@ -4287,6 +4287,41 @@ def create_admin_serve_app(
         await fleet_registry.heartbeat(worker.id, pool_stats=body.get("pool_stats"))
         return JSONResponse({"ok": True})
 
+    @app.post("/api/v1/fleet/tasks")
+    async def fleet_enqueue_task(request: Request) -> JSONResponse:
+        """Operator producer: enqueue a task onto the (project-scoped) fleet queue."""
+        import uuid as _uuid
+
+        from sagewai.fleet.normalizer import ModelNormalizer
+
+        body = await request.json()
+        pid = _project_scope(request)
+        labels = dict(body.get("labels") or {})
+        labels.pop("project_id", None)  # never trust a body-supplied project scope
+        project_label = _fleet_project_label(pid)
+        if project_label:
+            labels["project_id"] = project_label
+        raw_model = body.get("model")
+        model = ModelNormalizer.canonical_list([raw_model])[0] if raw_model else None
+        run_id = str(_uuid.uuid4())
+        task: dict = {
+            "run_id": run_id,
+            "org_id": _fleet_org_id(request),  # cross-org isolation at claim time
+            "pool": body.get("pool", "default"),
+            "labels": labels,
+            "payload": body.get("payload", {}),
+        }
+        if model:
+            task["model"] = model
+        fleet_task_store.enqueue(task)
+        logger.info(
+            "Fleet task enqueued: run=%s pool=%s model=%s project=%s",
+            run_id, task["pool"], model or "any", project_label or "global",
+        )
+        return JSONResponse(
+            {"run_id": run_id, "pool": task["pool"], "model": model}, status_code=201
+        )
+
     @app.get("/api/v1/fleet/workers")
     async def list_fleet_workers(request: Request) -> JSONResponse:
         workers = await fleet_registry.list_workers(org_id=_fleet_org_id(request))

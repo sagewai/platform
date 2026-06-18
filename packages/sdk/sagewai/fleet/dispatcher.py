@@ -156,6 +156,13 @@ class InMemoryTaskStore:
         (sandbox filtering is a Postgres SQL concern; unit tests stub it out).
         """
         for i, task in enumerate(self._pending):
+            # Org filter (cross-org isolation): a task stamped with an org_id may
+            # only be claimed by a worker from that same org. Tasks with no org_id
+            # (legacy / internal self-claimed) are not org-restricted.
+            task_org = task.get("org_id")
+            if task_org is not None and task_org != org_id:
+                continue
+
             # Model filter
             task_model = task.get("model")
             if task_model and task_model not in models_canonical:

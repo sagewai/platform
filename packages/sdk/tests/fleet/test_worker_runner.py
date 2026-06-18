@@ -18,6 +18,33 @@ import pytest
 from sagewai.fleet.runner import WorkerRunner
 
 
+def test_docker_run_argv_builds_isolated_invocation():
+    r = WorkerRunner(
+        base_url="http://test",
+        image="my-img:latest",
+        exec_cmd="python h.py",
+        task_env={"FOO": "bar"},
+        docker_args=["--network=none"],
+    )
+    argv = r._docker_run_argv(
+        {
+            "SAGEWAI_TASK_RUN_ID": "r1",
+            "SAGEWAI_TASK_JOB_ID": "",
+            "SAGEWAI_TASK_MODEL": "",
+            "SAGEWAI_TASK_POOL": "",
+        },
+        "sagewai-task-abc123",
+    )
+    # --name is present so a timed-out container can be force-removed.
+    assert argv[:6] == ["docker", "run", "--rm", "-i", "--name", "sagewai-task-abc123"]
+    assert "--network=none" in argv
+    assert "-e" in argv
+    assert "FOO=bar" in argv
+    assert "SAGEWAI_TASK_RUN_ID=r1" in argv
+    assert "my-img:latest" in argv
+    assert argv[-3:] == ["sh", "-c", "python h.py"]
+
+
 @pytest.fixture
 def app_token(tmp_path):
     from sagewai.admin.serve import create_admin_serve_app
@@ -250,6 +277,21 @@ async def test_exec_env_is_allowlisted_dropping_arbitrary_secrets(monkeypatch):
     assert "TOK=[] MK=[] DB=[] OAI=[]" in output  # all secrets scrubbed → empty
     assert "RID=[rX]" in output  # task IDs still injected
     assert "HASPATH=[yes]" in output  # PATH preserved so the command can run
+
+
+@pytest.mark.asyncio
+async def test_exec_injects_explicit_env_and_scrubs_rest(monkeypatch):
+    monkeypatch.setenv("SAGEWAI_ADMIN_TOKEN", "secret")
+    r = WorkerRunner(
+        base_url="http://test",
+        task_env={"FOO": "bar"},
+        exec_cmd='printf "FOO=[%s] TOK=[%s]" "$FOO" "$SAGEWAI_ADMIN_TOKEN"',
+    )
+    status, output, error = await r._execute({"run_id": "rX"})
+    assert status == "completed", (status, error, output)
+    assert "FOO=[bar]" in output
+    assert "TOK=[]" in output
+    assert "secret" not in output
 
 
 @pytest.mark.asyncio

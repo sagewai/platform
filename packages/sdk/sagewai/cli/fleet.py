@@ -212,6 +212,10 @@ def register(
 @click.option("--worker-id", default=None, help="Reuse an approved worker; skip registration.")
 @click.option("--exec", "exec_cmd", default=None, help="Shell command to run per task.")
 @click.option("--exec-timeout", default=300.0, type=float, help="Per-task kill (seconds).")
+@click.option("--env", "envs", multiple=True, help="Task env var KEY=VALUE (repeatable).")
+@click.option("--env-file", default=None, help="File of KEY=VALUE task env vars.")
+@click.option("--image", default=None, help="Run each task in a fresh container of this image.")
+@click.option("--docker-arg", "docker_args", multiple=True, help="Extra `docker run` args (repeatable).")
 @click.option("--register-only", is_flag=True, help="Register (appear in the screen), then exit.")
 @click.option("--once", is_flag=True, help="Claim/execute/report one task, then exit.")
 @click.option("--gateway-url", default=None, help="Gateway base URL (default $SAGEWAI_ADMIN_URL).")
@@ -219,8 +223,8 @@ def register(
 @click.option("--heartbeat-interval", default=10.0, type=float, help="Heartbeat cadence seconds.")
 def run(
     name, models, pool, labels, max_concurrent, project, enrollment_key,
-    worker_id, exec_cmd, exec_timeout, register_only, once, gateway_url,
-    poll_timeout, heartbeat_interval,
+    worker_id, exec_cmd, exec_timeout, envs, env_file, image, docker_args,
+    register_only, once, gateway_url, poll_timeout, heartbeat_interval,
 ):
     """Run this machine as a fleet worker (register + claim/execute/report loop)."""
     if worker_id is None and (not name or not models):
@@ -234,6 +238,20 @@ def run(
             if "=" in pair:
                 k, v = pair.split("=", 1)
                 parsed_labels[k.strip()] = v.strip()
+
+    task_env: dict[str, str] = {}
+    if env_file:
+        with open(env_file, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                task_env[k.strip()] = v.strip()
+    for pair in envs:
+        if "=" in pair:
+            k, v = pair.split("=", 1)
+            task_env[k.strip()] = v.strip()
 
     base_url = gateway_url or os.environ.get("SAGEWAI_ADMIN_URL", "http://localhost:8000")
     runner = WorkerRunner(
@@ -249,6 +267,9 @@ def run(
         worker_id=worker_id,
         exec_cmd=exec_cmd,
         exec_timeout=exec_timeout,
+        task_env=task_env,
+        image=image,
+        docker_args=list(docker_args),
         poll_timeout=poll_timeout,
         heartbeat_interval=heartbeat_interval,
     )
@@ -292,6 +313,35 @@ def run(
             await runner.aclose()
 
     asyncio.run(_drive())
+
+
+@fleet_group.command("enqueue")
+@click.option("--agent", default="worker-agent", help="Agent name to run.")
+@click.option("--message", "-m", required=True, help="Message/prompt for the agent.")
+@click.option("--model", default=None, help="Model for the task (matched to a worker).")
+@click.option("--pool", default="default", help="Target pool.")
+@click.option("--project", default=None, help="Project scope (X-Project-ID).")
+@click.option("--gateway-url", default=None, help="Gateway base URL.")
+def enqueue(agent, message, model, pool, project, gateway_url):
+    """Enqueue an agent task onto the fleet for a worker to claim and run."""
+    import os
+
+    import httpx
+
+    base_url = gateway_url or os.environ.get("SAGEWAI_ADMIN_URL", "http://localhost:8000")
+    headers = {"Content-Type": "application/json"}
+    token = os.environ.get("SAGEWAI_ADMIN_TOKEN", "")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if project:
+        headers["X-Project-ID"] = project
+    body: dict = {"pool": pool, "payload": {"agent": agent, "message": message, "model": model}}
+    if model:
+        body["model"] = model
+    r = httpx.post(base_url + "/api/v1/fleet/tasks", json=body, headers=headers, timeout=30.0)
+    if r.status_code not in (200, 201):
+        raise click.ClickException(f"enqueue failed: {r.status_code} {r.text[:200]}")
+    click.echo(f"Enqueued task {r.json().get('run_id')} (pool={pool}, model={model or 'any'})")
 
 
 @fleet_group.command("list-workers")

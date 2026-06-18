@@ -148,6 +148,17 @@ class TestInMemoryTaskStore:
         assert task is not None
 
     @pytest.mark.asyncio
+    async def test_claim_enforces_org_isolation(self, store: InMemoryTaskStore) -> None:
+        """An org-stamped task can only be claimed by a worker from that org."""
+        store.enqueue({"run_id": "r1", "org_id": "orgA", "pool": "default"})
+
+        # A worker from a different org must NOT get it.
+        assert await store.claim_task("w", "orgB", [], "default", None) is None
+        # A same-org worker can.
+        task = await store.claim_task("w", "orgA", [], "default", None)
+        assert task is not None and task["run_id"] == "r1"
+
+    @pytest.mark.asyncio
     async def test_report_task(self, store: InMemoryTaskStore) -> None:
         store.enqueue({"run_id": "r1", "pool": "default"})
         await store.claim_task("w1", "org1", [], "default", None)

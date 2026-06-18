@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import signal
+import uuid
 from dataclasses import dataclass, field
 
 import httpx
@@ -87,6 +88,9 @@ class WorkerRunner:
     worker_id: str | None = None
     exec_cmd: str | None = None
     exec_timeout: float = 300.0
+    task_env: dict[str, str] = field(default_factory=dict)
+    image: str | None = None
+    docker_args: list[str] = field(default_factory=list)
     poll_timeout: float = 30.0
     heartbeat_interval: float = 10.0
     grace: float = 10.0
@@ -161,33 +165,69 @@ class WorkerRunner:
         logger.warning("claim transient %s: %s", r.status_code, r.text[:200])
         return None
 
+    def _docker_run_argv(self, task_ids: dict[str, str], container_name: str) -> list[str]:
+        # --name so a timed-out task can be force-removed (killing the `docker run`
+        # client alone does NOT stop the container workload).
+        argv = ["docker", "run", "--rm", "-i", "--name", container_name, *self.docker_args]
+        for k, v in {**self.task_env, **task_ids}.items():
+            argv += ["-e", f"{k}={v}"]
+        argv.append(self.image)  # type: ignore[arg-type]
+        if self.exec_cmd:
+            argv += ["sh", "-c", self.exec_cmd]
+        return argv
+
+    async def _docker_force_rm(self, container_name: str) -> None:
+        """Best-effort `docker rm -f` to stop+remove a timed-out task container."""
+        try:
+            p = await asyncio.create_subprocess_exec(
+                "docker", "rm", "-f", container_name,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await p.wait()
+        except Exception:  # pragma: no cover - cleanup is best-effort
+            logger.warning("could not force-remove task container %s", container_name)
+
     async def _execute(self, task: dict) -> tuple[str, str | None, str | None]:
-        if not self.exec_cmd:
+        if not self.exec_cmd and not self.image:
             logger.info("echo-exec run_id=%s", task.get("run_id"))
             return "completed", f"echo: {task.get('run_id')}", None
-        env = {k: v for k, v in os.environ.items() if k in _EXEC_ENV_ALLOWLIST}
-        env.update(
-            {
-                "SAGEWAI_TASK_RUN_ID": str(task.get("run_id", "")),
-                "SAGEWAI_TASK_JOB_ID": str(task.get("job_id", "")),
-                "SAGEWAI_TASK_MODEL": str(task.get("model", "")),
-                "SAGEWAI_TASK_POOL": str(task.get("pool", "")),
-            }
-        )
-        proc = await asyncio.create_subprocess_shell(
-            self.exec_cmd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
+        task_ids = {
+            "SAGEWAI_TASK_RUN_ID": str(task.get("run_id", "")),
+            "SAGEWAI_TASK_JOB_ID": str(task.get("job_id", "")),
+            "SAGEWAI_TASK_MODEL": str(task.get("model", "")),
+            "SAGEWAI_TASK_POOL": str(task.get("pool", "")),
+        }
+        container_name: str | None = None
+        if self.image:
+            container_name = f"sagewai-task-{uuid.uuid4().hex[:12]}"
+            proc = await asyncio.create_subprocess_exec(
+                *self._docker_run_argv(task_ids, container_name),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        else:
+            env = {k: v for k, v in os.environ.items() if k in _EXEC_ENV_ALLOWLIST}
+            env.update(self.task_env)
+            env.update(task_ids)
+            proc = await asyncio.create_subprocess_shell(
+                self.exec_cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
         try:
             out, err = await asyncio.wait_for(
                 proc.communicate(json.dumps(task).encode()), timeout=self.exec_timeout
             )
         except asyncio.TimeoutError:
             proc.kill()
-            await proc.wait()  # reap the killed child — no zombie
+            await proc.wait()
+            if container_name is not None:
+                # The `docker run` client is dead but the container may still run.
+                await self._docker_force_rm(container_name)
             return "failed", None, "timeout"
         if proc.returncode == 0:
             return "completed", out.decode(errors="replace")[:4000], None
