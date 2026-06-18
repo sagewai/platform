@@ -146,6 +146,24 @@ autopilot-demo-down:
     -lsof -ti :3008 | xargs -r kill 2>/dev/null
     @echo "✓ stopped admin processes on :8000 and :3008"
 
+# ── Fleet workers ──────────────────────────────────────────────────────────
+# Create/run fleet workers against the gateway. Auth via env:
+#   SAGEWAI_ADMIN_URL (default http://localhost:8000), SAGEWAI_ADMIN_TOKEN.
+
+# Register a worker so it appears in the admin Workers screen (no loop).
+fleet-create name models *flags:
+    uv run --package sagewai sagewai fleet run --register-only --name {{name}} --models {{models}} {{flags}}
+
+# Register + run the worker daemon in the foreground (Ctrl-C to drain & stop).
+fleet-run name models *flags:
+    uv run --package sagewai sagewai fleet run --name {{name}} --models {{models}} {{flags}}
+
+# Example fuller config: GPU pool, labels, concurrency.
+fleet-run-gpu name:
+    uv run --package sagewai sagewai fleet run --name {{name}} \
+        --models gpt-4o,ollama/llama3:70b --pool gpu-cluster \
+        --labels gpu=a100,zone=us-east --max-concurrent 4
+
 # Start backend + admin via Docker (scripts/admin-up.sh)
 admin-up:
     ./scripts/admin-up.sh

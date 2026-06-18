@@ -37,6 +37,8 @@ from starlette.responses import Response, StreamingResponse
 from sagewai import __version__ as _SDK_VERSION
 from sagewai.admin.authz import require_in_project_scope, require_org_admin
 from sagewai.admin.state_file import SHARED_ONLY, AdminStateFile, _slugify
+from sagewai.fleet.dispatcher import NotTaskOwnerError
+from sagewai.fleet.models import WorkerApprovalStatus
 
 logger = logging.getLogger("sagewai.admin")
 
@@ -3380,7 +3382,6 @@ def create_admin_serve_app(
 
         from sagewai.artifacts.models import ArtifactDestination as _ArtifactDestination
         from sagewai.core.state import ExecutionMode as _ExecutionMode, WorkflowRun as _WorkflowRun, sandbox_mode_for as _sandbox_mode_for
-        from sagewai.fleet.models import WorkerApprovalStatus as _WorkerApprovalStatus
         from sagewai.sandbox.models import SandboxMode as _SandboxMode
 
         # 1. Validate execution_mode
@@ -3434,7 +3435,7 @@ def create_admin_serve_app(
         if requires_sandbox_mode != _SandboxMode.NONE:
             approved_workers = await fleet_registry.list_workers(
                 org_id=_fleet_org_id(request),
-                status=_WorkerApprovalStatus.APPROVED,
+                status=WorkerApprovalStatus.APPROVED,
             )
             if not approved_workers:
                 raise _HTTPException(
@@ -4152,6 +4153,9 @@ def create_admin_serve_app(
     fleet_dispatcher = FleetDispatcher(
         store=fleet_task_store, poll_timeout=5.0, poll_interval=1.0
     )
+    app.state.fleet_registry = fleet_registry
+    app.state.fleet_task_store = fleet_task_store
+    app.state.fleet_dispatcher = fleet_dispatcher
 
     def _fleet_org_id(request: Request) -> str:
         return _request_org_id(request)
@@ -4162,18 +4166,39 @@ def create_admin_serve_app(
             return None
         return worker
 
+    async def _fleet_worker_authorized(
+        worker_id: str, request: Request, *, require_approved: bool
+    ):
+        """Return (worker, None) when the caller may act for this worker, else
+        (None, JSONResponse). Enforces org + project (write scope) + approval."""
+        worker = await _fleet_worker_in_scope(worker_id, request)  # exists + same org
+        if worker is None:
+            return None, JSONResponse({"detail": "Not found"}, status_code=404)
+        worker_project = worker.capabilities.labels.get("project_id")
+        if not _in_write_scope(worker_project, request):  # same project (write scope)
+            # 404, not 403: do not confirm a cross-project worker exists.
+            return None, JSONResponse({"detail": "Not found"}, status_code=404)
+        if require_approved and worker.approval_status != WorkerApprovalStatus.APPROVED:
+            return None, JSONResponse(
+                {"detail": "Worker not approved", "status": worker.approval_status.value},
+                status_code=403,
+            )
+        return worker, None
+
     @app.post("/api/v1/fleet/register")
     async def fleet_register(request: Request) -> JSONResponse:
         """Worker self-registration."""
         body = await request.json()
         pid = _project_scope(request)
+        labels = dict(body.get("labels") or {})
+        labels.pop("project_id", None)  # never trust a body-supplied project scope
         caps = WorkerCapabilities(
             models_supported=body.get("models", []),
             pool=body.get("pool", "default"),
-            labels=body.get("labels", {}),
+            labels=labels,
             max_concurrent=body.get("max_concurrent", 1),
         )
-        # Add project_id as a label for scoped dispatch
+        # Stamp the project_id label from the token-derived scope only.
         project_label = _fleet_project_label(pid)
         if project_label:
             caps.labels["project_id"] = project_label
@@ -4199,47 +4224,67 @@ def create_admin_serve_app(
         }, status_code=201)
 
     @app.post("/api/v1/fleet/claim")
-    async def fleet_claim(request: Request) -> JSONResponse:
-        """Worker claims a task matching its capabilities."""
+    async def fleet_claim(request: Request) -> Response:
+        """Approved, in-scope worker claims a task matching its REGISTERED caps."""
         body = await request.json()
+        worker, err = await _fleet_worker_authorized(
+            body.get("worker_id", ""), request, require_approved=True
+        )
+        if err is not None:
+            return err
+        # Client-controlled long-poll window, clamped to a safe ceiling so a
+        # worker cannot hold a server coroutine indefinitely.
+        try:
+            poll_timeout = min(max(float(body.get("poll_timeout", 5.0)), 0.0), 60.0)
+        except (TypeError, ValueError):
+            poll_timeout = 5.0
+        caps = worker.capabilities
         task = await fleet_dispatcher.claim(
-            worker_id=body.get("worker_id", ""),
+            worker_id=worker.id,
             org_id=_fleet_org_id(request),
-            models_canonical=body.get("models", []),
-            pool=body.get("pool", "default"),
-            labels=body.get("labels"),
+            models_canonical=caps.models_canonical,
+            pool=caps.pool,
+            labels=caps.labels,
+            poll_timeout=poll_timeout,
         )
         if task:
             return JSONResponse(task)
-        # 204 must have no body; JSONResponse(None, ...) writes "null" and
-        # crashes the h11 writer with "Too much data for declared Content-Length".
+        # 204 must have no body.
         return Response(status_code=204)
 
     @app.post("/api/v1/fleet/report")
     async def fleet_report(request: Request) -> JSONResponse:
-        """Worker reports task completion."""
+        """Approved, in-scope worker reports a task it owns."""
         body = await request.json()
-        await fleet_dispatcher.report(
-            worker_id=body.get("worker_id", ""),
-            org_id=_fleet_org_id(request),
-            run_id=body.get("run_id", ""),
-            status=body.get("status", "completed"),
-            output=body.get("output"),
-            error=body.get("error"),
+        worker, err = await _fleet_worker_authorized(
+            body.get("worker_id", ""), request, require_approved=True
         )
+        if err is not None:
+            return err
+        try:
+            await fleet_dispatcher.report(
+                worker_id=worker.id,
+                org_id=_fleet_org_id(request),
+                run_id=body.get("run_id", ""),
+                status=body.get("status", "completed"),
+                output=body.get("output"),
+                error=body.get("error"),
+            )
+        except NotTaskOwnerError:
+            return JSONResponse({"detail": "Run not owned by this worker"}, status_code=403)
         return JSONResponse({"status": "ok"})
 
     @app.post("/api/v1/fleet/heartbeat")
     async def fleet_heartbeat(request: Request) -> JSONResponse:
-        """Worker heartbeat. Optionally carries pool_stats snapshot."""
+        """Worker heartbeat — org + project scope, NO approval gate (pending
+        workers must heartbeat to stay visible)."""
         body = await request.json()
-        worker = await _fleet_worker_in_scope(body.get("worker_id", ""), request)
-        if worker is None:
-            return JSONResponse({"detail": "Not found"}, status_code=404)
-        pool_stats = body.get("pool_stats")
-        await fleet_registry.heartbeat(
-            body.get("worker_id", ""), pool_stats=pool_stats,
+        worker, err = await _fleet_worker_authorized(
+            body.get("worker_id", ""), request, require_approved=False
         )
+        if err is not None:
+            return err
+        await fleet_registry.heartbeat(worker.id, pool_stats=body.get("pool_stats"))
         return JSONResponse({"ok": True})
 
     @app.get("/api/v1/fleet/workers")

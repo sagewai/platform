@@ -48,7 +48,7 @@ def test_fleet_register_ignores_client_supplied_org_id(client):
 
     res = client.get("/api/v1/fleet/workers")
     assert res.status_code == 200, res.text
-    assert any(w["name"] == "w-forged-org" for w in res.json())
+    assert any(w["name"] == "w-forged-org" for w in res.json()["workers"])
 
 
 def test_pool_stats_route_returns_snapshot_after_heartbeat(client):

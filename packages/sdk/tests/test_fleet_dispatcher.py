@@ -152,7 +152,7 @@ class TestInMemoryTaskStore:
         store.enqueue({"run_id": "r1", "pool": "default"})
         await store.claim_task("w1", "org1", [], "default", None)
 
-        await store.report_task("r1", "completed", "output data", None)
+        await store.report_task("r1", "completed", "output data", None, worker_id="w1")
 
         assert "r1" in store._completed
         assert store._completed["r1"]["status"] == "completed"
@@ -164,7 +164,7 @@ class TestInMemoryTaskStore:
         store.enqueue({"run_id": "r1", "pool": "default"})
         await store.claim_task("w1", "org1", [], "default", None)
 
-        await store.report_task("r1", "failed", None, "something broke")
+        await store.report_task("r1", "failed", None, "something broke", worker_id="w1")
 
         assert store._completed["r1"]["status"] == "failed"
         assert store._completed["r1"]["error"] == "something broke"

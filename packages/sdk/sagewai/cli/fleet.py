@@ -23,13 +23,16 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import os
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import click
 
+from sagewai.fleet.runner import RegistrationError, TerminalAuthError, WorkerRunner
 from sagewai.fleet.models import (
     EnrollmentKey,
     WorkerApprovalStatus,
@@ -196,6 +199,99 @@ def register(
     click.echo(f"  Status       : {approval.value}")
     if parsed_labels:
         click.echo(f"  Labels       : {parsed_labels}")
+
+
+@fleet_group.command("run")
+@click.option("--name", default=None, help="Worker name (required unless --worker-id).")
+@click.option("--models", default=None, help="Comma-separated model list (required unless --worker-id).")
+@click.option("--pool", default="default", help="Worker pool.")
+@click.option("--labels", default=None, help="Comma-separated key=value labels.")
+@click.option("--max-concurrent", default=1, type=int, help="Max in-flight tasks.")
+@click.option("--project", default=None, help="Project scope (X-Project-ID).")
+@click.option("--enrollment-key", default=None, help="Enrollment key for auto-approval.")
+@click.option("--worker-id", default=None, help="Reuse an approved worker; skip registration.")
+@click.option("--exec", "exec_cmd", default=None, help="Shell command to run per task.")
+@click.option("--exec-timeout", default=300.0, type=float, help="Per-task kill (seconds).")
+@click.option("--register-only", is_flag=True, help="Register (appear in the screen), then exit.")
+@click.option("--once", is_flag=True, help="Claim/execute/report one task, then exit.")
+@click.option("--gateway-url", default=None, help="Gateway base URL (default $SAGEWAI_ADMIN_URL).")
+@click.option("--poll-timeout", default=30.0, type=float, help="Claim long-poll seconds.")
+@click.option("--heartbeat-interval", default=10.0, type=float, help="Heartbeat cadence seconds.")
+def run(
+    name, models, pool, labels, max_concurrent, project, enrollment_key,
+    worker_id, exec_cmd, exec_timeout, register_only, once, gateway_url,
+    poll_timeout, heartbeat_interval,
+):
+    """Run this machine as a fleet worker (register + claim/execute/report loop)."""
+    if worker_id is None and (not name or not models):
+        raise click.UsageError("--name and --models are required unless --worker-id is given.")
+
+    model_list = [m.strip() for m in (models or "").split(",") if m.strip()]
+    parsed_labels: dict[str, str] = {}
+    if labels:
+        for pair in labels.split(","):
+            pair = pair.strip()
+            if "=" in pair:
+                k, v = pair.split("=", 1)
+                parsed_labels[k.strip()] = v.strip()
+
+    base_url = gateway_url or os.environ.get("SAGEWAI_ADMIN_URL", "http://localhost:8000")
+    runner = WorkerRunner(
+        base_url=base_url,
+        token=os.environ.get("SAGEWAI_ADMIN_TOKEN", ""),
+        project=project,
+        name=name or "worker",
+        models=model_list,
+        pool=pool,
+        labels=parsed_labels,
+        max_concurrent=max_concurrent,
+        enrollment_key=enrollment_key,
+        worker_id=worker_id,
+        exec_cmd=exec_cmd,
+        exec_timeout=exec_timeout,
+        poll_timeout=poll_timeout,
+        heartbeat_interval=heartbeat_interval,
+    )
+
+    async def _drive():
+        try:
+            if register_only:
+                wid, status = await runner.register()
+                click.echo(f"Registered worker {wid} (status: {status})")
+                if status == "pending":
+                    click.echo("Approve it in the Workers screen, or pass --enrollment-key.")
+                return
+            if once:
+                result = await runner.run_once()
+                if result.get("claimed"):
+                    click.echo(
+                        f"Task {result['run_id']}: {result['status']} "
+                        f"(reported={result['reported']})"
+                    )
+                    if not result["reported"]:
+                        raise SystemExit(2)  # executed but the report was rejected
+                else:
+                    reason = result.get("reason", "no_task")
+                    detail = result.get("detail", "")
+                    click.echo(f"No task claimed ({reason}). {detail}".rstrip())
+                    if reason == "terminal":
+                        # rejected / revoked / unknown / unauthorized — not transient
+                        raise SystemExit(2)
+                return
+            await runner.run()
+        except RegistrationError as exc:
+            hint = ""
+            if exc.status_code == 401:
+                hint = " — set SAGEWAI_ADMIN_TOKEN (and SAGEWAI_ADMIN_URL) for this gateway"
+            raise click.ClickException(f"Worker registration failed ({exc.status_code}){hint}")
+        except TerminalAuthError as exc:
+            # rejected / revoked / unknown worker — the daemon cannot recover.
+            click.echo(f"Worker stopped: {exc}", err=True)
+            raise SystemExit(2)
+        finally:
+            await runner.aclose()
+
+    asyncio.run(_drive())
 
 
 @fleet_group.command("list-workers")

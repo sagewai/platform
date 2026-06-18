@@ -56,6 +56,10 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+class NotTaskOwnerError(Exception):
+    """Raised when a worker reports a run it did not claim."""
+
+
 @runtime_checkable
 class TaskStore(Protocol):
     """Abstract store for task claim/report operations.
@@ -93,8 +97,11 @@ class TaskStore(Protocol):
         status: str,
         output: str | None,
         error: str | None,
+        *,
+        worker_id: str,
     ) -> None:
-        """Report the completion (or failure) of a previously claimed task."""
+        """Report completion/failure. Raises NotTaskOwnerError if run_id was not
+        claimed by worker_id; idempotent no-op for a same-worker+status duplicate."""
         ...
 
 
@@ -180,16 +187,31 @@ class InMemoryTaskStore:
         status: str,
         output: str | None,
         error: str | None,
+        *,
+        worker_id: str,
     ) -> None:
-        """Mark a claimed task as completed or failed."""
-        self._completed[run_id] = {
-            "run_id": run_id,
-            "status": status,
-            "output": output,
-            "error": error,
-            "reported_at": datetime.now(timezone.utc).isoformat(),
-        }
-        self._claimed.pop(run_id, None)
+        """Complete a claimed task. Ownership-checked + idempotent."""
+        claimed = self._claimed.get(run_id)
+        if claimed is not None:
+            if claimed.get("worker_id") != worker_id:
+                raise NotTaskOwnerError(run_id)
+            self._completed[run_id] = {
+                "run_id": run_id,
+                "status": status,
+                "output": output,
+                "error": error,
+                "worker_id": worker_id,
+                "reported_at": datetime.now(timezone.utc).isoformat(),
+            }
+            self._claimed.pop(run_id, None)
+            return
+        prior = self._completed.get(run_id)
+        if prior is not None:
+            # lost-ack retry: a duplicate from the same worker + status is OK.
+            if prior.get("worker_id") == worker_id and prior.get("status") == status:
+                return
+            raise NotTaskOwnerError(run_id)
+        raise NotTaskOwnerError(run_id)
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +257,7 @@ class FleetDispatcher:
         pool: str = "default",
         labels: dict[str, str] | None = None,
         *,
+        poll_timeout: float | None = None,
         worker_sandbox_mode: SandboxMode = SandboxMode.NONE,
         worker_sandbox_variants: list[SandboxImageVariant] | None = None,
         worker_network_policy: NetworkPolicy = NetworkPolicy.NONE,
@@ -253,7 +276,8 @@ class FleetDispatcher:
         success.
         """
         loop = asyncio.get_event_loop()
-        deadline = loop.time() + self._poll_timeout
+        effective_timeout = self._poll_timeout if poll_timeout is None else poll_timeout
+        deadline = loop.time() + effective_timeout
 
         while loop.time() < deadline:
             task = await self._store.claim_task(
@@ -339,6 +363,7 @@ class FleetDispatcher:
             status=status,
             output=encrypted_output,
             error=error,
+            worker_id=worker_id,
         )
 
         if self._audit:
