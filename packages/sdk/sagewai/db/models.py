@@ -61,6 +61,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # ---------------------------------------------------------------------------
@@ -68,6 +69,9 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 # ---------------------------------------------------------------------------
 
 JSONType = JSON().with_variant(JSONB(), "postgresql")
+
+# Portable UUID — TEXT on SQLite, native UUID on PostgreSQL (matches migration 001).
+UuidText = Text().with_variant(PG_UUID(as_uuid=False), "postgresql")
 
 # Postgres TEXT[] columns; JSON list on SQLite. Round-trips as list[str] on both.
 ArrayText = JSON().with_variant(ARRAY(Text()), "postgresql")
@@ -1793,3 +1797,64 @@ class AuditChainHeadModel(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class WorkerModel(Base):
+    """Fleet worker — mirrors the `workers` table (001_initial + 018).
+
+    Shared with the core workflow-worker system. Fleet rows are written with
+    ``status='fleet'`` so the core load balancer (which selects ``status='active'``)
+    never picks them. ``metadata`` is mapped to ``metadata_`` (``metadata`` is
+    reserved on DeclarativeBase).
+    """
+
+    __tablename__ = "workers"
+    __table_args__ = (
+        Index("idx_workers_pool", "pool"),
+        Index("idx_workers_status", "status"),
+        Index("idx_workers_project_id", "project_id"),
+        Index("ix_workers_org_approval", "org_id", "approval_status"),
+    )
+
+    worker_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    pool: Mapped[str] = mapped_column(Text, nullable=False, server_default="default")
+    labels: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+    project_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
+    max_concurrent: Mapped[int] = mapped_column(Integer, nullable=False, server_default="4")
+    last_heartbeat: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    metadata_: Mapped[dict] = mapped_column("metadata", JSONType, nullable=False, default=dict)
+    org_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    models_supported: Mapped[list] = mapped_column(ArrayText, nullable=False, default=list)
+    models_canonical: Mapped[list] = mapped_column(ArrayText, nullable=False, default=list)
+    approval_status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    capabilities: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+    last_probe_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    probe_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sdk_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # migration 018:
+    name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    secret_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class EnrollmentKeyModel(Base):
+    """Fleet enrollment key — mirrors the `enrollment_keys` table (001_initial)."""
+
+    __tablename__ = "enrollment_keys"
+    __table_args__ = (Index("ix_enrollment_keys_org", "org_id"),)
+
+    id: Mapped[str] = mapped_column(UuidText, primary_key=True)  # UUID on Postgres, TEXT on SQLite
+    org_id: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    key_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    max_uses: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    current_uses: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    allowed_pools: Mapped[list] = mapped_column(ArrayText, nullable=False, default=list)
+    allowed_models: Mapped[list] = mapped_column(ArrayText, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")

@@ -149,5 +149,42 @@ async def test_project_token_cannot_override_project_via_body_label(mt):
         wid = reg.json()["worker_id"]
     async with _client(app, mt["tok_owner"]) as co:
         w = (await co.get(f"/api/v1/fleet/workers/{wid}")).json()
-    assert w["labels"]["project_id"] == mt["pa"]   # token scope, not body's "pb"
+    worker = await app.state.fleet_registry.get_worker(wid)
+    assert worker.project_id == mt["pa"]             # token scope, not body's "pb"
+    assert "project_id" not in w["labels"]
     assert w["labels"].get("gpu") == "a100"          # other labels preserved
+
+
+@pytest.mark.asyncio
+async def test_enqueue_capability_gate_is_project_scoped(mt):
+    """A sandboxed-execution enqueue must require an approved worker IN THE RUN'S
+    project — claim routing is project-strict, so an approved worker in another
+    project can never claim the run. Regression: the gate previously checked
+    org-only and accepted unclaimable runs (202, then permanently unclaimed)."""
+    app = mt["app"]
+    # Approve a worker ONLY in project pa.
+    async with _client(app, mt["tok_a"]) as ca:
+        reg = (await ca.post(
+            "/api/v1/fleet/register", json={"name": "wa", "models": ["gpt-4o"]}
+        )).json()
+        wid = reg["worker_id"]
+    async with _client(app, mt["tok_owner"]) as co:
+        await co.post(f"/api/v1/fleet/workers/{wid}/approve")
+    # Project pb has no approved worker -> the gate rejects (was a 202 stuck run).
+    async with _client(app, mt["tok_b"]) as cb:
+        res = await cb.post(
+            "/api/v1/workflows/enqueue",
+            json={"workflow_name": "wf", "execution_mode": "sandboxed"},
+        )
+    assert res.status_code == 400, res.text
+    assert "worker" in res.json().get("detail", "").lower()
+    # Project pa HAS an approved worker -> the gate passes (no "no worker" 400).
+    async with _client(app, mt["tok_a"]) as ca:
+        res = await ca.post(
+            "/api/v1/workflows/enqueue",
+            json={"workflow_name": "wf", "execution_mode": "sandboxed"},
+        )
+    body = res.json()
+    assert not (
+        res.status_code == 400 and "worker" in str(body.get("detail", "")).lower()
+    ), body

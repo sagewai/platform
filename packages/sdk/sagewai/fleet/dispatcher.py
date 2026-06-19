@@ -76,6 +76,7 @@ class TaskStore(Protocol):
         pool: str,
         labels: dict[str, str] | None,
         *,
+        project_id: str | None = None,
         worker_sandbox_mode: SandboxMode = SandboxMode.NONE,
         worker_sandbox_variants: list[SandboxImageVariant] | None = None,
         worker_network_policy: NetworkPolicy = NetworkPolicy.NONE,
@@ -145,6 +146,7 @@ class InMemoryTaskStore:
         pool: str,
         labels: dict[str, str] | None,
         *,
+        project_id: str | None = None,
         worker_sandbox_mode: SandboxMode = SandboxMode.NONE,
         worker_sandbox_variants: list[SandboxImageVariant] | None = None,
         worker_network_policy: NetworkPolicy = NetworkPolicy.NONE,
@@ -161,6 +163,10 @@ class InMemoryTaskStore:
             # (legacy / internal self-claimed) are not org-restricted.
             task_org = task.get("org_id")
             if task_org is not None and task_org != org_id:
+                continue
+
+            # Project filter (strict equality; None == None = org-global).
+            if task.get("project_id") != project_id:
                 continue
 
             # Model filter
@@ -264,6 +270,7 @@ class FleetDispatcher:
         pool: str = "default",
         labels: dict[str, str] | None = None,
         *,
+        project_id: str | None = None,
         poll_timeout: float | None = None,
         worker_sandbox_mode: SandboxMode = SandboxMode.NONE,
         worker_sandbox_variants: list[SandboxImageVariant] | None = None,
@@ -293,6 +300,7 @@ class FleetDispatcher:
                 models_canonical=models_canonical,
                 pool=pool,
                 labels=labels,
+                project_id=project_id,
                 worker_sandbox_mode=worker_sandbox_mode,
                 worker_sandbox_variants=worker_sandbox_variants,
                 worker_network_policy=worker_network_policy,

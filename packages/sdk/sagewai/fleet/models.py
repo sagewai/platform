@@ -102,6 +102,10 @@ class WorkerRecord(BaseModel):
     id: str = Field(description="Worker UUID")
     name: str = Field(description="Human-readable worker name")
     org_id: str = Field(description="Owning organization ID")
+    project_id: str | None = Field(
+        default=None,
+        description="Project scope (None = org-global, slug = project-scoped)",
+    )
     capabilities: WorkerCapabilities = Field(
         default_factory=WorkerCapabilities,
         description="Declared worker capabilities",

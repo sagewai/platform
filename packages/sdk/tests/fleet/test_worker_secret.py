@@ -52,16 +52,3 @@ def test_worker_record_excludes_secret_hash_from_serialization():
     )
     assert w.secret_hash == "deadbeef"  # attribute access still works
     assert "secret_hash" not in w.model_dump(mode="json")  # never serialized
-
-
-@pytest.mark.asyncio
-async def test_postgres_registry_refuses_secret_hash():
-    from sagewai.fleet.registry import PostgresFleetRegistry
-
-    reg = PostgresFleetRegistry(pool=None)  # guard fires before any DB access
-    with pytest.raises(NotImplementedError):
-        await reg.register_worker(
-            name="w", org_id="o",
-            capabilities=WorkerCapabilities(models_supported=["gpt-4o"]),
-            secret_hash="x",
-        )

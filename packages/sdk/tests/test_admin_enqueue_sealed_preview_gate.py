@@ -29,6 +29,20 @@ import pytest_asyncio
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _isolate_fleet_factory_db(tmp_path, monkeypatch):
+    """The admin app's fleet registry uses the process-cached factory engine
+    (PostgresFleetRegistry, persistent SQLite). Isolate SAGEWAI_HOME and reset the
+    cached engine per test so a worker registered by one test can't leak into
+    another via the shared SQLite file."""
+    from sagewai.db import factory
+
+    monkeypatch.setenv("SAGEWAI_HOME", str(tmp_path / "_fleet_home"))
+    factory.reset_engine()
+    yield
+    factory.reset_engine()
+
+
 @pytest.fixture
 def single_org_state(tmp_path, monkeypatch):
     from sagewai.admin.state_file import AdminStateFile

@@ -902,6 +902,11 @@ def create_admin_serve_app(
         # Must run before any store reads/writes so all tables exist.
         await _db_factory.ensure_schema()
 
+        # Eager fail-closed startup: build the SQLite schema, or (on Postgres)
+        # verify the DB is reachable and migrated. Raises here rather than on the
+        # first route call if Postgres is unreachable/unmigrated.
+        await app.state.fleet_registry.init()
+
         # Build missing tenant resource stores from the process engine (multi-
         # tenant only; None in single-org). Partial DI is allowed, but every
         # missing tenant store must be filled here so routes never drift back to
@@ -3433,18 +3438,28 @@ def create_admin_serve_app(
         # least one APPROVED worker is registered. BARE runs execute inline and
         # need no worker.
         if requires_sandbox_mode != _SandboxMode.NONE:
+            # Scope the gate to the run's project — claim routing matches the
+            # worker's project_id exactly (None == org-global), so an approved
+            # worker in another project cannot claim this run and must not satisfy
+            # the gate (else the run is accepted but never claimable).
+            run_project = _fleet_project_label(_project_scope(request))
             approved_workers = await fleet_registry.list_workers(
                 org_id=_fleet_org_id(request),
                 status=WorkerApprovalStatus.APPROVED,
+                project_id=run_project,
             )
             if not approved_workers:
+                scope_label = (
+                    f"project {run_project!r}" if run_project else "the org-global scope"
+                )
                 raise _HTTPException(
                     status_code=400,
                     detail=(
                         f"execution_mode={execution_mode_str!r} requires "
                         f"sandbox_mode={requires_sandbox_mode.value!r} but no approved "
-                        "worker is registered in the fleet. Register and approve a worker "
-                        "first, or use execution_mode='bare' for inline execution."
+                        f"worker is registered in {scope_label}. Register and approve a "
+                        "worker in that project, or use execution_mode='bare' for inline "
+                        "execution."
                     ),
                 )
 
@@ -4145,10 +4160,11 @@ def create_admin_serve_app(
         InMemoryFleetRegistry,
         InMemoryTaskStore,
         FleetDispatcher,
+        PostgresFleetRegistry,
         WorkerCapabilities,
     )
 
-    fleet_registry = InMemoryFleetRegistry()
+    fleet_registry = PostgresFleetRegistry()  # factory engine; persistent
     fleet_task_store = InMemoryTaskStore()
     fleet_dispatcher = FleetDispatcher(
         store=fleet_task_store, poll_timeout=5.0, poll_interval=1.0
@@ -4179,10 +4195,6 @@ def create_admin_serve_app(
             labels=labels,
             max_concurrent=body.get("max_concurrent", 1),
         )
-        # Stamp the project_id label from the token-derived scope only.
-        project_label = _fleet_project_label(pid)
-        if project_label:
-            caps.labels["project_id"] = project_label
         import hashlib as _hashlib
         import secrets as _secrets
 
@@ -4190,6 +4202,7 @@ def create_admin_serve_app(
         worker = await fleet_registry.register_worker(
             name=body.get("name", "worker"),
             org_id=_fleet_org_id(request),
+            project_id=_fleet_project_label(pid),  # first-class field, None = org-global
             capabilities=caps,
             enrollment_key=body.get("enrollment_key"),
             secret_hash=_hashlib.sha256(worker_secret.encode()).hexdigest(),
@@ -4231,6 +4244,7 @@ def create_admin_serve_app(
         task = await fleet_dispatcher.claim(
             worker_id=worker.id,
             org_id=worker.org_id,
+            project_id=worker.project_id,
             models_canonical=caps.models_canonical,
             pool=caps.pool,
             labels=caps.labels,
@@ -4285,15 +4299,13 @@ def create_admin_serve_app(
         pid = _project_scope(request)
         labels = dict(body.get("labels") or {})
         labels.pop("project_id", None)  # never trust a body-supplied project scope
-        project_label = _fleet_project_label(pid)
-        if project_label:
-            labels["project_id"] = project_label
         raw_model = body.get("model")
         model = ModelNormalizer.canonical_list([raw_model])[0] if raw_model else None
         run_id = str(_uuid.uuid4())
         task: dict = {
             "run_id": run_id,
             "org_id": _fleet_org_id(request),  # cross-org isolation at claim time
+            "project_id": _fleet_project_label(pid),
             "pool": body.get("pool", "default"),
             "labels": labels,
             "payload": body.get("payload", {}),
@@ -4303,7 +4315,7 @@ def create_admin_serve_app(
         fleet_task_store.enqueue(task)
         logger.info(
             "Fleet task enqueued: run=%s pool=%s model=%s project=%s",
-            run_id, task["pool"], model or "any", project_label or "global",
+            run_id, task["pool"], model or "any", _fleet_project_label(pid) or "global",
         )
         return JSONResponse(
             {"run_id": run_id, "pool": task["pool"], "model": model}, status_code=201
@@ -4338,6 +4350,7 @@ def create_admin_serve_app(
             return JSONResponse({"detail": "Not found"}, status_code=404)
         return JSONResponse({
             "id": w.id, "name": w.name,
+            "project_id": w.project_id,
             "status": w.approval_status.value,
             "pool": w.capabilities.pool,
             "models": w.capabilities.models_supported,

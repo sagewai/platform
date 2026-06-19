@@ -102,3 +102,23 @@ def test_enqueue_stamps_org_id_for_isolation(app_token):
     # The queued task carries the requester's org so a foreign-org worker can't claim it.
     pending = app.state.fleet_task_store._pending
     assert pending and pending[-1].get("org_id")
+
+
+def test_register_and_enqueue_use_first_class_project(client):
+    import asyncio
+
+    reg = client.post("/api/v1/fleet/register", json={"name": "w", "models": ["gpt-4o"]})
+    assert reg.status_code == 201
+    wid = reg.json()["worker_id"]
+    # Worker row got the first-class field (None = org-global in single-org), NOT a label.
+    detail = client.get(f"/api/v1/fleet/workers/{wid}").json()
+    assert detail["project_id"] is None
+    assert "project_id" not in detail.get("labels", {})
+    w = asyncio.run(client.app.state.fleet_registry.get_worker(wid))
+    assert w.project_id is None
+    # Producer: the task store row carries project_id as a top-level field, not a label.
+    enq = client.post("/api/v1/fleet/tasks", json={"model": "gpt-4o", "payload": {"message": "hi"}})
+    assert enq.status_code == 201
+    task = client.app.state.fleet_task_store._pending[-1]
+    assert task["project_id"] is None
+    assert "project_id" not in (task.get("labels") or {})
