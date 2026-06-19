@@ -81,13 +81,33 @@ def _synthesise_path_params(path: str) -> str:
 
 @pytest.fixture(scope="module")
 def app(tmp_path_factory):
-    """A fully-constructed admin FastAPI app for smoke testing."""
-    from sagewai.admin.state_file import AdminStateFile
-    from sagewai.admin.serve import create_admin_serve_app
+    """A fully-constructed admin FastAPI app for smoke testing.
 
-    state_path = tmp_path_factory.mktemp("admin-smoke") / "admin-state.json"
-    state_file = AdminStateFile(path=state_path)
-    return create_admin_serve_app(state_file)
+    Isolates SAGEWAI_HOME to a per-module temp dir (and resets the process-cached
+    factory engine) so the app's stores resolve to a FRESH current-schema SQLite —
+    the lifespan runs fail-closed store inits (e.g. PostgresTaskStore.init()), which
+    would (correctly) reject the developer's real ~/.sagewai if it lags a migration.
+    Module-scoped, so os.environ is used directly (monkeypatch is function-scoped).
+    """
+    import os
+
+    from sagewai.admin.serve import create_admin_serve_app
+    from sagewai.admin.state_file import AdminStateFile
+    from sagewai.db import factory
+
+    home = tmp_path_factory.mktemp("admin-smoke-home")
+    prev = os.environ.get("SAGEWAI_HOME")
+    os.environ["SAGEWAI_HOME"] = str(home)
+    factory.reset_engine()
+    try:
+        state_file = AdminStateFile(path=home / "admin-state.json")
+        yield create_admin_serve_app(state_file)
+    finally:
+        if prev is None:
+            os.environ.pop("SAGEWAI_HOME", None)
+        else:
+            os.environ["SAGEWAI_HOME"] = prev
+        factory.reset_engine()
 
 
 @pytest.fixture(scope="module")

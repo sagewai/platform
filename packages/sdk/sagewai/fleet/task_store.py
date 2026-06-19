@@ -17,7 +17,7 @@ Protocol plus the ``get_task``/``list_tasks`` status reads.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sagewai.fleet.dispatcher import _TERMINAL_STATUSES, NotTaskOwnerError
@@ -33,29 +33,32 @@ def _iso(v: datetime | None) -> str | None:
 
 
 class PostgresTaskStore:
-    def __init__(self, *, engine=None) -> None:
+    def __init__(self, *, engine=None, lease_ttl_seconds: float = 60.0, max_attempts: int = 3) -> None:
         from sagewai.db import factory
         from sagewai.db.models import FleetTaskModel
 
         self._engine = engine or factory.get_engine()
         self._tasks = FleetTaskModel.__table__
         self._inited = False
+        self._lease_ttl_seconds = lease_ttl_seconds
+        self._max_attempts = max_attempts
 
     async def init(self) -> None:
-        """Idempotent. SQLite → create schema. Non-SQLite → fail-closed probe."""
         if self._inited:
             return
+        from sqlalchemy import text
+
         from sagewai.db.models import Base
 
         eng = self._engine
-        if eng.dialect.name == "sqlite":
-            async with eng.begin() as conn:
+        async with eng.begin() as conn:
+            if eng.dialect.name == "sqlite":
                 await conn.run_sync(Base.metadata.create_all)
-        else:
-            from sqlalchemy import text
-
-            async with eng.connect() as conn:
-                await conn.execute(text("SELECT run_id, status FROM fleet_tasks LIMIT 0"))
+            # Fail-closed on BOTH dialects: a fleet_tasks stuck at migration 019
+            # (no lease_expires_at/attempts) raises HERE, not at first claim/renew/reap.
+            await conn.execute(
+                text("SELECT run_id, status, lease_expires_at, attempts FROM fleet_tasks LIMIT 0")
+            )
         self._inited = True
 
     async def _ensure_init(self) -> None:
@@ -73,6 +76,24 @@ class PostgresTaskStore:
         await self._ensure_init()
         async with self._engine.connect() as conn:
             yield conn
+
+    def _now_expr(self):
+        """The 'now' for lease comparisons. Postgres: the DB clock (func.now()) — the
+        HA invariant (no app-process clock; see spec §1). SQLite: the app clock —
+        correct (single-process, no skew) AND necessary (SQLite datetime() is only
+        second-precision, too coarse for the sub-second leases the tests use)."""
+        if self._engine.dialect.name == "postgresql":
+            from sqlalchemy import func
+            return func.now()
+        return _now()
+
+    def _lease_expr(self):
+        """now + lease_ttl, on the SAME clock as _now_expr (see its docstring)."""
+        if self._engine.dialect.name == "postgresql":
+            from sqlalchemy import func
+            # make_interval(years,months,weeks,days,hours,mins,secs) — unambiguous PG interval.
+            return func.now() + func.make_interval(0, 0, 0, 0, 0, 0, self._lease_ttl_seconds)
+        return _now() + timedelta(seconds=self._lease_ttl_seconds)
 
     # -- mapping --------------------------------------------------------
     @staticmethod
@@ -186,7 +207,8 @@ class PostgresTaskStore:
                 now = _now()
                 upd = await conn.execute(
                     update(t).where((t.c.run_id == m["run_id"]) & (t.c.status == "pending"))
-                    .values(status="claimed", worker_id=worker_id, claimed_at=now)
+                    .values(status="claimed", worker_id=worker_id, claimed_at=now,
+                            lease_expires_at=self._lease_expr(), attempts=t.c.attempts + 1)
                 )
                 if upd.rowcount == 1:
                     return self._claimed_view(row, worker_id, now)
@@ -206,7 +228,8 @@ class PostgresTaskStore:
                     (t.c.run_id == run_id)
                     & (t.c.worker_id == worker_id)
                     & (t.c.status == "claimed")
-                ).values(status=status, output=output, error=error, reported_at=_now())
+                ).values(status=status, output=output, error=error,
+                         reported_at=_now(), lease_expires_at=None)
             )
             if upd.rowcount == 1:
                 return
@@ -220,3 +243,38 @@ class PostgresTaskStore:
         if m["status"] in _TERMINAL_STATUSES and m["status"] == status:
             return
         raise NotTaskOwnerError(run_id)
+
+    async def renew_worker_leases(self, worker_id) -> int:
+        from sqlalchemy import update
+
+        t = self._tasks
+        async with self._begin() as conn:
+            res = await conn.execute(
+                update(t).where((t.c.worker_id == worker_id) & (t.c.status == "claimed"))
+                .values(lease_expires_at=self._lease_expr())
+            )
+        return res.rowcount
+
+    async def reap_expired_leases(self, *, max_attempts=None) -> dict[str, int]:
+        from sqlalchemy import update
+
+        t = self._tasks
+        cap = self._max_attempts if max_attempts is None else max_attempts
+        now_expr = self._now_expr()
+        async with self._begin() as conn:
+            # Fail poison first so a capped row isn't requeued then re-failed in one tick.
+            failed = (await conn.execute(
+                update(t).where(
+                    (t.c.status == "claimed") & (t.c.lease_expires_at < now_expr)
+                    & (t.c.attempts >= cap)
+                ).values(status="failed", error="lease expired after max attempts",
+                         reported_at=now_expr, lease_expires_at=None)
+            )).rowcount
+            requeued = (await conn.execute(
+                update(t).where(
+                    (t.c.status == "claimed") & (t.c.lease_expires_at < now_expr)
+                    & (t.c.attempts < cap)
+                ).values(status="pending", worker_id=None, claimed_at=None,
+                         lease_expires_at=None)
+            )).rowcount
+        return {"failed": failed, "requeued": requeued}

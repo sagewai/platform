@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol, runtime_checkable
 
 from sagewai.sandbox.models import NetworkPolicy, SandboxImageVariant, SandboxMode
@@ -124,6 +124,15 @@ class TaskStore(Protocol):
         """Return status views for the org+project scope, newest first."""
         ...
 
+    async def renew_worker_leases(self, worker_id: str) -> int:
+        """Extend the lease of every task this worker holds in 'claimed'."""
+        ...
+
+    async def reap_expired_leases(self, *, max_attempts: int | None = None) -> dict[str, int]:
+        """Requeue expired-lease claims (fail at the attempt cap). Returns
+        {"failed": n, "requeued": m}."""
+        ...
+
 
 # ---------------------------------------------------------------------------
 # InMemoryTaskStore — for testing
@@ -144,10 +153,12 @@ class InMemoryTaskStore:
     * ``labels`` — every key-value pair must be present in the worker's labels.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, lease_ttl_seconds: float = 60.0, max_attempts: int = 3) -> None:
         self._pending: list[dict[str, Any]] = []
         self._claimed: dict[str, dict[str, Any]] = {}  # run_id -> task
         self._completed: dict[str, dict[str, Any]] = {}  # run_id -> result
+        self._lease_ttl_seconds = lease_ttl_seconds
+        self._max_attempts = max_attempts
 
     async def enqueue(self, task: dict[str, Any]) -> None:
         """Add a task to the pending queue.
@@ -211,6 +222,10 @@ class InMemoryTaskStore:
             claimed["worker_id"] = worker_id
             claimed["claimed_at"] = datetime.now(timezone.utc).isoformat()
             claimed["status"] = "claimed"
+            claimed["lease_expires_at"] = datetime.now(timezone.utc) + timedelta(
+                seconds=self._lease_ttl_seconds
+            )
+            claimed["attempts"] = claimed.get("attempts", 0) + 1
             self._claimed[claimed["run_id"]] = claimed
             return claimed
 
@@ -240,6 +255,7 @@ class InMemoryTaskStore:
                 "output": output,
                 "error": error,
                 "worker_id": worker_id,
+                "lease_expires_at": None,
                 "reported_at": datetime.now(timezone.utc).isoformat(),
             }
             self._claimed.pop(run_id, None)
@@ -251,6 +267,40 @@ class InMemoryTaskStore:
                 return
             raise NotTaskOwnerError(run_id)
         raise NotTaskOwnerError(run_id)
+
+    async def renew_worker_leases(self, worker_id):
+        now = datetime.now(timezone.utc)
+        extended = 0
+        for task in self._claimed.values():
+            if task.get("worker_id") == worker_id:
+                task["lease_expires_at"] = now + timedelta(seconds=self._lease_ttl_seconds)
+                extended += 1
+        return extended
+
+    async def reap_expired_leases(self, *, max_attempts=None):
+        cap = self._max_attempts if max_attempts is None else max_attempts
+        now = datetime.now(timezone.utc)
+        failed = requeued = 0
+        for run_id, task in list(self._claimed.items()):
+            lease = task.get("lease_expires_at")
+            if lease is None or lease >= now:
+                continue
+            if task.get("attempts", 0) >= cap:
+                task["status"] = "failed"
+                task["error"] = "lease expired after max attempts"
+                task["lease_expires_at"] = None
+                task["reported_at"] = now.isoformat()
+                self._completed[run_id] = task
+                failed += 1
+            else:
+                task["status"] = "pending"
+                task["worker_id"] = None
+                task["claimed_at"] = None
+                task["lease_expires_at"] = None
+                self._pending.append(task)
+                requeued += 1
+            del self._claimed[run_id]
+        return {"failed": failed, "requeued": requeued}
 
     @staticmethod
     def _status_view(task: dict[str, Any]) -> dict[str, Any]:

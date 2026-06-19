@@ -1876,6 +1876,7 @@ class FleetTaskModel(Base):
         ),
         Index("ix_fleet_tasks_claim", "status", "org_id", "project_id", "pool", "created_at"),
         Index("ix_fleet_tasks_scope", "org_id", "project_id", "created_at"),
+        Index("ix_fleet_tasks_lease", "status", "lease_expires_at"),
     )
 
     run_id: Mapped[str] = mapped_column(Text, primary_key=True)
@@ -1894,3 +1895,5 @@ class FleetTaskModel(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")

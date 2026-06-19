@@ -907,6 +907,13 @@ def create_admin_serve_app(
         # first route call if Postgres is unreachable/unmigrated.
         await app.state.fleet_registry.init()
         await app.state.fleet_task_store.init()
+        # (B2) Start the lease reaper ONLY after the fail-closed store init above, so the
+        # background loop never touches an unmigrated/uninited fleet_tasks table.
+        from sagewai.fleet.reaper import FleetReaper
+
+        fleet_reaper = FleetReaper(app.state.fleet_task_store)
+        fleet_reaper.start()
+        app.state.fleet_reaper = fleet_reaper
 
         # Build missing tenant resource stores from the process engine (multi-
         # tenant only; None in single-org). Partial DI is allowed, but every
@@ -982,6 +989,8 @@ def create_admin_serve_app(
             yield
         finally:
             await sub_manager.aclose()
+            if getattr(app.state, "fleet_reaper", None) is not None:
+                await app.state.fleet_reaper.aclose()
             set_subscription_manager(None)
             await runner.stop()
             # Clear the process-wide workflow store default on shutdown so
@@ -4302,6 +4311,7 @@ def create_admin_serve_app(
         except Exception:
             body = {}
         await fleet_registry.heartbeat(worker.id, pool_stats=(body or {}).get("pool_stats"))
+        await fleet_task_store.renew_worker_leases(worker.id)
         return JSONResponse({"ok": True})
 
     @app.post("/api/v1/fleet/tasks")

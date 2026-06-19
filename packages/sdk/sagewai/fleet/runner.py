@@ -348,8 +348,13 @@ class WorkerRunner:
             return {"claimed": False, "reason": "terminal", "detail": str(exc)}
         if task is None:
             return {"claimed": False, "reason": "no_task"}
-        status, output, error = await self._execute(task)
-        reported = await self._report(task["run_id"], status, output, error)
+        hb = asyncio.create_task(self._heartbeat_loop())
+        try:
+            status, output, error = await self._execute(task)
+            reported = await self._report(task["run_id"], status, output, error)
+        finally:
+            hb.cancel()
+            await asyncio.gather(hb, return_exceptions=True)
         return {
             "claimed": True,
             "run_id": task["run_id"],

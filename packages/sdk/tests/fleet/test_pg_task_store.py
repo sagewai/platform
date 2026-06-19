@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import text, update
 
 from sagewai.db.engine import create_engine
 from sagewai.fleet.dispatcher import NotTaskOwnerError
@@ -150,3 +152,124 @@ async def test_list_tasks_scope_and_status_filter(store):
     pending = await s.list_tasks(org_id="o", project_id=None, status="pending")
     assert [t["run_id"] for t in pending] == ["r2"]
     assert await s.list_tasks(org_id="other", project_id=None) == []  # scope isolation
+
+
+@pytest.mark.asyncio
+async def test_claim_sets_lease_and_attempts(store):
+    s, engine = store
+    await s.enqueue(_task(run_id="r1"))
+    await s.claim_task("w", "o", [], "default", {}, project_id=None)
+    async with engine.connect() as conn:
+        row = (await conn.execute(text(
+            "SELECT attempts, lease_expires_at FROM fleet_tasks WHERE run_id='r1'"
+        ))).first()
+    assert row[0] == 1 and row[1] is not None  # attempts incremented, lease set
+
+
+@pytest.mark.asyncio
+async def test_report_clears_lease(store):
+    s, engine = store
+    await s.enqueue(_task(run_id="r1"))
+    await s.claim_task("w", "o", [], "default", {}, project_id=None)
+    await s.report_task("r1", "completed", "out", None, worker_id="w")
+    async with engine.connect() as conn:
+        lease = (await conn.execute(text(
+            "SELECT lease_expires_at FROM fleet_tasks WHERE run_id='r1'"
+        ))).scalar_one()
+    assert lease is None  # IS NOT NULL <=> claimed
+
+
+@pytest.mark.asyncio
+async def test_init_fail_closed_on_019_shaped_sqlite(tmp_path):
+    """Real fail-closed on SQLite (always runs): a fleet_tasks stuck at migration
+    019 (no lease_expires_at/attempts) must fail init() at STARTUP, not at first
+    claim/renew/reap. create_all does NOT add columns to an existing table, so
+    init() must probe the columns on SQLite too."""
+    eng = create_engine(f"sqlite+aiosqlite:///{tmp_path/'old.db'}")
+    async with eng.begin() as conn:
+        await conn.execute(text(
+            "CREATE TABLE fleet_tasks (run_id TEXT PRIMARY KEY, org_id TEXT NOT NULL, status TEXT)"
+        ))
+    with pytest.raises(Exception):
+        await PostgresTaskStore(engine=eng).init()
+    await eng.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_init_fail_closed_on_unmigrated_pg():
+    """Real fail-closed: against a Postgres fleet_tasks missing the B2 columns,
+    init() raises (skipped without Postgres)."""
+    import os
+
+    url = os.environ.get("SAGEWAI_TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("no Postgres")
+    from sagewai.db.models import Base
+
+    eng = create_engine(url)
+    async with eng.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.execute(text(
+            "CREATE TABLE fleet_tasks (run_id TEXT PRIMARY KEY, org_id TEXT NOT NULL, status TEXT)"
+        ))
+    try:
+        with pytest.raises(Exception):
+            await PostgresTaskStore(engine=eng).init()
+    finally:
+        async with eng.begin() as conn:
+            await conn.execute(text("DROP TABLE fleet_tasks"))
+        await eng.dispose()
+
+
+async def _force_lease_past(engine, run_id):
+    """Write a past lease_expires_at directly — deterministic, no clock injection."""
+    from sagewai.db.models import FleetTaskModel
+    t = FleetTaskModel.__table__
+    async with engine.begin() as conn:
+        await conn.execute(update(t).where(t.c.run_id == run_id).values(
+            lease_expires_at=datetime(2020, 1, 1, tzinfo=timezone.utc)
+        ))
+
+
+@pytest.mark.asyncio
+async def test_renew_extends_only_that_worker(store):
+    s, engine = store
+    await s.enqueue(_task(run_id="r1"))
+    await s.claim_task("w", "o", [], "default", {}, project_id=None)
+    await _force_lease_past(engine, "r1")
+    assert await s.renew_worker_leases("w") == 1
+    assert await s.renew_worker_leases("other") == 0
+    # renewed back into the future -> reap finds nothing
+    assert await s.reap_expired_leases() == {"failed": 0, "requeued": 0}
+
+
+@pytest.mark.asyncio
+async def test_reap_requeues_then_fails_at_cap(store):
+    s, engine = store
+    s._max_attempts = 2
+    await s.enqueue(_task(run_id="r1"))
+    await s.claim_task("w", "o", [], "default", {}, project_id=None)   # attempts=1
+    # not expired yet -> untouched
+    assert await s.reap_expired_leases() == {"failed": 0, "requeued": 0}
+    await _force_lease_past(engine, "r1")
+    assert await s.reap_expired_leases() == {"failed": 0, "requeued": 1}
+    got = await s.get_task("r1", org_id="o", project_id=None)
+    assert got["status"] == "pending" and got["worker_id"] is None
+    # re-claim -> attempts=2 (== cap); expire -> failed, lease cleared
+    await s.claim_task("w", "o", [], "default", {}, project_id=None)
+    await _force_lease_past(engine, "r1")
+    assert await s.reap_expired_leases() == {"failed": 1, "requeued": 0}
+    done = await s.get_task("r1", org_id="o", project_id=None)
+    assert done["status"] == "failed" and done["error"]
+
+
+@pytest.mark.asyncio
+async def test_reap_vs_late_report_race(store):
+    s, engine = store
+    await s.enqueue(_task(run_id="r1"))
+    await s.claim_task("w", "o", [], "default", {}, project_id=None)
+    await _force_lease_past(engine, "r1")
+    await s.reap_expired_leases()  # requeued to pending, worker cleared
+    with pytest.raises(NotTaskOwnerError):
+        await s.report_task("r1", "completed", "x", None, worker_id="w")

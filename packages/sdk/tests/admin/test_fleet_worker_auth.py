@@ -14,6 +14,20 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+@pytest.fixture(autouse=True)
+def _isolate_fleet_factory_db(tmp_path, monkeypatch):
+    """The app's fleet stores use the process-cached factory engine; isolate
+    SAGEWAI_HOME + reset the engine per test so each gets a fresh current-schema
+    SQLite (never the developer's real ~/.sagewai, which may be a stale older
+    migration that the B2 fail-closed init() probe correctly rejects)."""
+    from sagewai.db import factory
+
+    monkeypatch.setenv("SAGEWAI_HOME", str(tmp_path / "_fleet_home"))
+    factory.reset_engine()
+    yield
+    factory.reset_engine()
+
+
 @pytest.fixture
 def app_token(tmp_path):
     from sagewai.admin.serve import create_admin_serve_app

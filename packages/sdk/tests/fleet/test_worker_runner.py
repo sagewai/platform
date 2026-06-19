@@ -203,6 +203,37 @@ async def test_report_403_is_not_retried_and_returns_false(app_token):
 
 
 @pytest.mark.asyncio
+async def test_run_once_renews_lease_during_long_task(app_token):
+    """run_once must keep the lease alive: with a reaper running on a short lease,
+    a one-shot exec longer than LEASE_TTL must still have its report ACCEPTED
+    (reported is True) — i.e. it was never requeued mid-flight. Without run_once
+    heartbeating, the reaper would requeue it and the report would 403."""
+    import asyncio
+
+    from sagewai.fleet.reaper import FleetReaper
+
+    app, token = app_token
+    store = app.state.fleet_task_store
+    store._lease_ttl_seconds = 0.3              # short lease
+    r = _runner(app, token, exec_cmd="sleep 1")  # task far longer than the lease
+    wid, _ = await r.register()
+    await _approve(app, token, wid)
+    r.heartbeat_interval = 0.05                 # renew well inside the 0.3s lease
+    org_id = (await app.state.fleet_registry.get_worker(wid)).org_id
+    await store.enqueue(
+        {"run_id": "rl", "org_id": org_id, "project_id": None, "model": "gpt-4o", "pool": "default"}
+    )
+    reaper = FleetReaper(store, interval_seconds=0.05)
+    reaper.start()
+    try:
+        result = await r.run_once()
+    finally:
+        await reaper.aclose()
+    assert result["status"] == "completed"
+    assert result["reported"] is True          # report accepted => lease stayed alive
+
+
+@pytest.mark.asyncio
 async def test_heartbeat_fires_within_interval(app_token):
     app, token = app_token
     r = _runner(app, token, heartbeat_interval=0.05)
