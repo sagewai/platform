@@ -25,6 +25,12 @@ def test_run_help_lists_key_options():
         assert opt in res.output
 
 
+def test_run_help_lists_worker_secret_options():
+    res = CliRunner().invoke(fleet_group, ["run", "--help"])
+    assert res.exit_code == 0
+    assert "--worker-secret" in res.output and "--creds-file" in res.output
+
+
 def test_enqueue_help_lists_key_options():
     res = CliRunner().invoke(fleet_group, ["enqueue", "--help"])
     assert res.exit_code == 0

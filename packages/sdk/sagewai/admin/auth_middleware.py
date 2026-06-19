@@ -64,6 +64,19 @@ _ADMIN_MUTATION_PREFIXES = (
 )
 _ADMIN_FLEET_ACTIONS = ("/approve", "/reject", "/revoke")
 
+# Fleet worker hot-path routes: authenticated by the worker's own secret
+# (X-Worker-Secret + X-Worker-Id), not an org token. Non-ambient → no CSRF.
+_FLEET_WORKER_ROUTES = (
+    "/api/v1/fleet/claim",
+    "/api/v1/fleet/report",
+    "/api/v1/fleet/heartbeat",
+)
+_FLEET_REGISTER_PATH = "/api/v1/fleet/register"
+
+
+def _hash_fleet_secret(raw: str) -> str:
+    return hashlib.sha256(raw.encode()).hexdigest()
+
 # Multi-tenant: prefixes that require org-admin for EVERY method (read + write).
 # Two groups: (a) genuine org/system/global surfaces, and (b) stores that have no
 # project_id column yet, so they cannot be safely exposed to a project context at
@@ -262,10 +275,76 @@ class AuthMiddleware(BaseHTTPMiddleware):
             self._api_token_store = ApiTokenStore()
         return self._api_token_store
 
+    async def _authenticate_fleet_worker(self, request):
+        """Authenticate a worker by X-Worker-Id + X-Worker-Secret. Returns the
+        WorkerRecord, or a JSONResponse 401."""
+        secret = request.headers.get("x-worker-secret", "")
+        worker_id = request.headers.get("x-worker-id", "")
+        registry = getattr(request.app.state, "fleet_registry", None)
+        if not (secret and worker_id and registry is not None):
+            return JSONResponse({"detail": "Worker credential required"}, status_code=401)
+        worker = await registry.get_worker(worker_id)
+        if (
+            worker is None
+            or not worker.secret_hash
+            or not hmac.compare_digest(worker.secret_hash, _hash_fleet_secret(secret))
+        ):
+            return JSONResponse({"detail": "Invalid worker credential"}, status_code=401)
+        return worker
+
+    async def _authenticate_enrollment(self, request, enroll_key: str):
+        """Authenticate the token-less register path via an enrollment key.
+        Returns (principal, context), or a JSONResponse 401."""
+        from sagewai.admin.tenancy import RequestContext, UserRef
+
+        registry = getattr(request.app.state, "fleet_registry", None)
+        key = (
+            await registry.find_enrollment_key_by_hash(_hash_fleet_secret(enroll_key))
+            if registry is not None else None
+        )
+        if key is None:
+            return JSONResponse({"detail": "Invalid enrollment key"}, status_code=401)
+        label = f"enrollment-key:{key.name}"
+        principal = Principal(
+            type="api_token", subject_id="enroll", token_id=key.id,
+            scopes=frozenset({SCOPE_WRITE}), expires_at=None, actor_label=label,
+        )
+        if is_multi_tenant():
+            context = RequestContext(
+                actor=UserRef(id="enroll", label=label), org_id=key.org_id,
+                project_id=None, roles=frozenset(), scopes=frozenset({SCOPE_WRITE}),
+                request_id="", tenancy_mode="multi",
+            )
+        else:
+            context = single_org_context(
+                actor_id="enroll", actor_label=label, org_id=key.org_id,
+                scopes=frozenset({SCOPE_WRITE}),
+            )
+        return principal, context
+
     async def dispatch(self, request, call_next):
         method, path = request.method, request.url.path
         if is_public(method, path, setup_complete=self.sf.is_setup_complete(),
                      expose_docs=self.expose_docs):
+            return await call_next(request)
+
+        # Fleet worker hot path: the worker authenticates by its own secret.
+        if path in _FLEET_WORKER_ROUTES:
+            worker = await self._authenticate_fleet_worker(request)
+            if isinstance(worker, JSONResponse):
+                return worker
+            request.state.worker = worker
+            return await call_next(request)
+
+        # Token-less worker enrollment: register may authenticate by enrollment key.
+        enroll_key = request.headers.get("x-enrollment-key", "")
+        if enroll_key and path == _FLEET_REGISTER_PATH:
+            resolved = await self._authenticate_enrollment(request, enroll_key)
+            if isinstance(resolved, JSONResponse):
+                return resolved
+            principal, context = resolved
+            request.state.principal = principal
+            request.state.context = context
             return await call_next(request)
 
         raw, mech = _extract(request)

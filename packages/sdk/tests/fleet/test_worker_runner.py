@@ -46,10 +46,11 @@ def test_docker_run_argv_builds_isolated_invocation():
 
 
 @pytest.fixture
-def app_token(tmp_path):
+def app_token(tmp_path, monkeypatch):
     from sagewai.admin.serve import create_admin_serve_app
     from sagewai.admin.state_file import AdminStateFile
 
+    monkeypatch.setenv("SAGEWAI_HOME", str(tmp_path / "home"))
     sf = AdminStateFile(path=tmp_path / "state.json")
     sf.complete_setup(org_name="Acme", admin_email="a@b.com", admin_password="pw123456")
     app = create_admin_serve_app(sf)
@@ -311,3 +312,59 @@ async def test_claim_401_is_terminal(app_token):
     assert result["claimed"] is False
     assert result["reason"] == "terminal"
     assert "SAGEWAI_ADMIN_TOKEN" in result.get("detail", "")
+
+
+@pytest.mark.asyncio
+async def test_register_captures_and_loop_sends_worker_secret(app_token):
+    app, token = app_token
+    r = _runner(app, token)
+    wid, _ = await r.register()
+    assert r.worker_secret and len(r.worker_secret) > 16
+    await _approve(app, token, wid)
+    app.state.fleet_task_store.enqueue({"run_id": "r1", "org_id": "default", "model": "gpt-4o", "pool": "default"})
+    # Spy on the headers the loop sends.
+    seen = {}
+    real_post = r.http_client.post
+
+    async def spy(url, *a, **kw):
+        if url.endswith("/api/v1/fleet/claim"):
+            seen.update(kw.get("headers") or {})
+        return await real_post(url, *a, **kw)
+
+    r.http_client.post = spy  # type: ignore[assignment]
+    await r.run_once()
+    assert seen.get("X-Worker-Id") == wid
+    assert seen.get("X-Worker-Secret") == r.worker_secret
+
+
+def test_creds_file_roundtrip(tmp_path):
+    from sagewai.fleet.runner import WorkerRunner
+
+    p = tmp_path / "w.json"
+    r = WorkerRunner(base_url="http://test", worker_id="w1", worker_secret="s1", creds_file=str(p))
+    r._save_creds()
+    r2 = WorkerRunner(base_url="http://test", worker_id="w1", creds_file=str(p))
+    assert r2._load_secret() == "s1"
+
+
+@pytest.mark.asyncio
+async def test_token_less_register_via_enrollment_key(app_token):
+    # A worker with NO org token registers using only its enrollment key.
+    app, token = app_token
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test",
+        headers={"Authorization": f"Bearer {token}"},
+    ) as admin:
+        key = (await admin.post(
+            "/api/v1/fleet/enrollment-keys", json={"name": "k", "models": ["gpt-4o"]}
+        )).json()["key"]
+    client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test",
+        headers={"Content-Type": "application/json"},
+    )
+    r = WorkerRunner(
+        base_url="http://test", http_client=client, name="ek",
+        models=["gpt-4o"], enrollment_key=key,  # no token
+    )
+    wid, status = await r.register()
+    assert wid and r.worker_secret

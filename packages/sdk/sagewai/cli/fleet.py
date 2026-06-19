@@ -210,6 +210,8 @@ def register(
 @click.option("--project", default=None, help="Project scope (X-Project-ID).")
 @click.option("--enrollment-key", default=None, help="Enrollment key for auto-approval.")
 @click.option("--worker-id", default=None, help="Reuse an approved worker; skip registration.")
+@click.option("--worker-secret", default=None, help="Worker secret (else $SAGEWAI_WORKER_SECRET / creds file).")
+@click.option("--creds-file", default=None, help="Path to the worker credentials file.")
 @click.option("--exec", "exec_cmd", default=None, help="Shell command to run per task.")
 @click.option("--exec-timeout", default=300.0, type=float, help="Per-task kill (seconds).")
 @click.option("--env", "envs", multiple=True, help="Task env var KEY=VALUE (repeatable).")
@@ -223,8 +225,8 @@ def register(
 @click.option("--heartbeat-interval", default=10.0, type=float, help="Heartbeat cadence seconds.")
 def run(
     name, models, pool, labels, max_concurrent, project, enrollment_key,
-    worker_id, exec_cmd, exec_timeout, envs, env_file, image, docker_args,
-    register_only, once, gateway_url, poll_timeout, heartbeat_interval,
+    worker_id, worker_secret, creds_file, exec_cmd, exec_timeout, envs, env_file,
+    image, docker_args, register_only, once, gateway_url, poll_timeout, heartbeat_interval,
 ):
     """Run this machine as a fleet worker (register + claim/execute/report loop)."""
     if worker_id is None and (not name or not models):
@@ -265,6 +267,8 @@ def run(
         max_concurrent=max_concurrent,
         enrollment_key=enrollment_key,
         worker_id=worker_id,
+        worker_secret=worker_secret or os.environ.get("SAGEWAI_WORKER_SECRET"),
+        creds_file=creds_file,
         exec_cmd=exec_cmd,
         exec_timeout=exec_timeout,
         task_env=task_env,

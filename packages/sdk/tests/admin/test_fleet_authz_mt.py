@@ -79,22 +79,61 @@ def _client(app, token):
     )
 
 
+def _worker_client(app):
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+        headers={"Content-Type": "application/json"},
+    )
+
+
+def _wh(worker_id, secret):
+    return {"X-Worker-Id": worker_id, "X-Worker-Secret": secret}
+
+
 @pytest.mark.asyncio
 async def test_cross_project_token_cannot_act_through_foreign_worker(mt):
     app = mt["app"]
     # Project A registers + (owner) approves a worker → record stamped project_id=pa.
     async with _client(app, mt["tok_a"]) as ca:
-        wid = (await ca.post("/api/v1/fleet/register", json={"name": "wa", "models": ["gpt-4o"]})).json()["worker_id"]
+        reg = (await ca.post("/api/v1/fleet/register", json={"name": "wa", "models": ["gpt-4o"]})).json()
+        wid, secret = reg["worker_id"], reg["worker_secret"]
     async with _client(app, mt["tok_owner"]) as co:
         await co.post(f"/api/v1/fleet/workers/{wid}/approve")
-    # Project B's token tries to claim / report / heartbeat via A's worker → 404.
+    # Worker routes are secret-gated; a foreign token is irrelevant without the secret.
+    async with _worker_client(app) as cw:
+        assert (
+            await cw.post("/api/v1/fleet/claim", headers=_wh(wid, "wrong"), json={})
+        ).status_code == 401
+        assert (
+            await cw.post(
+                "/api/v1/fleet/report",
+                headers=_wh(wid, "wrong"),
+                json={"run_id": "x", "status": "completed"},
+            )
+        ).status_code == 401
+        assert (
+            await cw.post("/api/v1/fleet/heartbeat", headers=_wh(wid, "wrong"), json={})
+        ).status_code == 401
+    # A project A worker cannot claim project B's task; it can claim its own project task.
     async with _client(app, mt["tok_b"]) as cb:
-        assert (await cb.post("/api/v1/fleet/claim", json={"worker_id": wid})).status_code == 404
-        assert (await cb.post("/api/v1/fleet/report", json={"worker_id": wid, "run_id": "x", "status": "completed"})).status_code == 404
-        assert (await cb.post("/api/v1/fleet/heartbeat", json={"worker_id": wid})).status_code == 404
-    # Project A's own token CAN claim its worker (204 = nothing queued).
+        assert (await cb.post("/api/v1/fleet/tasks", json={"model": "gpt-4o"})).status_code == 201
+    async with _worker_client(app) as cw:
+        assert (
+            await cw.post(
+                "/api/v1/fleet/claim",
+                headers=_wh(wid, secret),
+                json={"poll_timeout": 0.01},
+            )
+        ).status_code == 204
     async with _client(app, mt["tok_a"]) as ca:
-        assert (await ca.post("/api/v1/fleet/claim", json={"worker_id": wid})).status_code in (200, 204)
+        task = await ca.post("/api/v1/fleet/tasks", json={"model": "gpt-4o"})
+        assert task.status_code == 201, task.text
+        run_id = task.json()["run_id"]
+    async with _worker_client(app) as cw:
+        claim = await cw.post("/api/v1/fleet/claim", headers=_wh(wid, secret), json={})
+        assert claim.status_code == 200, claim.text
+        assert claim.json()["run_id"] == run_id
 
 
 @pytest.mark.asyncio

@@ -34,6 +34,10 @@ def client(app_token):
     return c
 
 
+def _wh(worker_id, secret):
+    return {"X-Worker-Id": worker_id, "X-Worker-Secret": secret}
+
+
 def test_enqueue_task_can_be_claimed_by_approved_worker(client):
     reg = client.post(
         "/api/v1/fleet/register",
@@ -41,6 +45,7 @@ def test_enqueue_task_can_be_claimed_by_approved_worker(client):
     )
     assert reg.status_code == 201, reg.text
     worker_id = reg.json()["worker_id"]
+    worker_secret = reg.json()["worker_secret"]
 
     approved = client.post(f"/api/v1/fleet/workers/{worker_id}/approve")
     assert approved.status_code == 200, approved.text
@@ -52,7 +57,8 @@ def test_enqueue_task_can_be_claimed_by_approved_worker(client):
     assert enq.status_code == 201, enq.text
     run_id = enq.json()["run_id"]
 
-    claim = client.post("/api/v1/fleet/claim", json={"worker_id": worker_id})
+    worker = TestClient(client.app)
+    claim = worker.post("/api/v1/fleet/claim", headers=_wh(worker_id, worker_secret), json={})
     assert claim.status_code == 200, claim.text
     task = claim.json()
     assert task["run_id"] == run_id
@@ -66,6 +72,7 @@ def test_enqueue_task_scrubs_body_project_id_label(client):
     )
     assert reg.status_code == 201, reg.text
     worker_id = reg.json()["worker_id"]
+    worker_secret = reg.json()["worker_secret"]
     approved = client.post(f"/api/v1/fleet/workers/{worker_id}/approve")
     assert approved.status_code == 200, approved.text
 
@@ -79,7 +86,8 @@ def test_enqueue_task_scrubs_body_project_id_label(client):
     )
     assert enq.status_code == 201, enq.text
 
-    claim = client.post("/api/v1/fleet/claim", json={"worker_id": worker_id})
+    worker = TestClient(client.app)
+    claim = worker.post("/api/v1/fleet/claim", headers=_wh(worker_id, worker_secret), json={})
     assert claim.status_code == 200, claim.text
     task = claim.json()
     assert task.get("labels", {}) == {}

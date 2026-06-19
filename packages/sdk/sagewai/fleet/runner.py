@@ -23,6 +23,7 @@ import os
 import signal
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import httpx
 
@@ -86,6 +87,8 @@ class WorkerRunner:
     max_concurrent: int = 1
     enrollment_key: str | None = None
     worker_id: str | None = None
+    worker_secret: str | None = None
+    creds_file: str | None = None
     exec_cmd: str | None = None
     exec_timeout: float = 300.0
     task_env: dict[str, str] = field(default_factory=dict)
@@ -107,6 +110,41 @@ class WorkerRunner:
             h["X-Project-ID"] = self.project
         return h
 
+    def _creds_path(self) -> Path:
+        if self.creds_file:
+            return Path(self.creds_file)
+        home = os.environ.get("SAGEWAI_HOME") or os.path.expanduser("~/.sagewai")
+        return Path(home) / "fleet" / f"{self.worker_id}.json"
+
+    def _save_creds(self) -> None:
+        if not (self.worker_id and self.worker_secret):
+            return
+        p = self._creds_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"worker_id": self.worker_id, "worker_secret": self.worker_secret}))
+        try:
+            os.chmod(p, 0o600)
+        except OSError:  # pragma: no cover
+            pass
+
+    def _load_secret(self) -> str | None:
+        # Precedence: explicit field > env > creds file.
+        if self.worker_secret:
+            return self.worker_secret
+        env = os.environ.get("SAGEWAI_WORKER_SECRET")
+        if env:
+            return env
+        p = self._creds_path()
+        if p.exists():
+            try:
+                return json.loads(p.read_text()).get("worker_secret")
+            except (OSError, ValueError):
+                return None
+        return None
+
+    def _worker_headers(self) -> dict[str, str]:
+        return {"X-Worker-Id": self.worker_id or "", "X-Worker-Secret": self.worker_secret or ""}
+
     def _client(self) -> httpx.AsyncClient:
         if self.http_client is not None:
             return self.http_client
@@ -125,6 +163,12 @@ class WorkerRunner:
 
     # -- lifecycle ------------------------------------------------------
     async def register(self) -> tuple[str, str]:
+        # Token-less enrollment: the gateway authenticates register via the
+        # X-Enrollment-Key header. With an org token, the default bearer is used.
+        headers = (
+            {"X-Enrollment-Key": self.enrollment_key}
+            if self.enrollment_key and not self.token else None
+        )
         r = await self._client().post(
             "/api/v1/fleet/register",
             json={
@@ -135,17 +179,21 @@ class WorkerRunner:
                 "max_concurrent": self.max_concurrent,
                 "enrollment_key": self.enrollment_key,
             },
+            headers=headers,
         )
         if r.status_code not in (200, 201):
             raise RegistrationError(r.status_code, r.text[:200])
         data = r.json()
         self.worker_id = data["worker_id"]
+        self.worker_secret = data.get("worker_secret") or self.worker_secret
+        self._save_creds()
         return data["worker_id"], data.get("status", "pending")
 
     async def _claim(self) -> dict | None:
         r = await self._client().post(
             "/api/v1/fleet/claim",
-            json={"worker_id": self.worker_id, "poll_timeout": self.poll_timeout},
+            json={"poll_timeout": self.poll_timeout},
+            headers=self._worker_headers(),
         )
         if r.status_code == 200 and r.content:
             return r.json()
@@ -242,12 +290,12 @@ class WorkerRunner:
                 r = await self._client().post(
                     "/api/v1/fleet/report",
                     json={
-                        "worker_id": self.worker_id,
                         "run_id": run_id,
                         "status": status,
                         "output": output,
                         "error": error,
                     },
+                    headers=self._worker_headers(),
                 )
             except httpx.HTTPError as exc:
                 logger.warning("report network error (try %d): %s", attempt + 1, exc)
@@ -273,7 +321,7 @@ class WorkerRunner:
     async def _heartbeat_once(self) -> None:
         try:
             await self._client().post(
-                "/api/v1/fleet/heartbeat", json={"worker_id": self.worker_id}
+                "/api/v1/fleet/heartbeat", json={}, headers=self._worker_headers()
             )
         except httpx.HTTPError as exc:
             logger.warning("heartbeat error: %s", exc)
@@ -290,6 +338,8 @@ class WorkerRunner:
         """
         if self.worker_id is None:
             await self.register()
+        if self.worker_id is not None and not self.worker_secret:
+            self.worker_secret = self._load_secret()
         try:
             task = await self._claim()
         except _PendingApproval:
@@ -316,6 +366,8 @@ class WorkerRunner:
                     "or pass --enrollment-key",
                     wid,
                 )
+        if self.worker_id is not None and not self.worker_secret:
+            self.worker_secret = self._load_secret()
         self._install_signal_handlers()
         sem = asyncio.Semaphore(self.max_concurrent)
         hb = asyncio.create_task(self._heartbeat_loop())

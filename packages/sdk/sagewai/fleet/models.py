@@ -131,6 +131,11 @@ class WorkerRecord(BaseModel):
         default=None,
         description="Admin user ID who approved",
     )
+    secret_hash: str | None = Field(
+        default=None,
+        exclude=True,  # credential verifier — never serialize across the auth boundary
+        description="SHA-256 hash of the worker's operating secret (None until set)",
+    )
 
 
 class EnrollmentKey(BaseModel):

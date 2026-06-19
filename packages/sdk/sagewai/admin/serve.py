@@ -4166,25 +4166,6 @@ def create_admin_serve_app(
             return None
         return worker
 
-    async def _fleet_worker_authorized(
-        worker_id: str, request: Request, *, require_approved: bool
-    ):
-        """Return (worker, None) when the caller may act for this worker, else
-        (None, JSONResponse). Enforces org + project (write scope) + approval."""
-        worker = await _fleet_worker_in_scope(worker_id, request)  # exists + same org
-        if worker is None:
-            return None, JSONResponse({"detail": "Not found"}, status_code=404)
-        worker_project = worker.capabilities.labels.get("project_id")
-        if not _in_write_scope(worker_project, request):  # same project (write scope)
-            # 404, not 403: do not confirm a cross-project worker exists.
-            return None, JSONResponse({"detail": "Not found"}, status_code=404)
-        if require_approved and worker.approval_status != WorkerApprovalStatus.APPROVED:
-            return None, JSONResponse(
-                {"detail": "Worker not approved", "status": worker.approval_status.value},
-                status_code=403,
-            )
-        return worker, None
-
     @app.post("/api/v1/fleet/register")
     async def fleet_register(request: Request) -> JSONResponse:
         """Worker self-registration."""
@@ -4202,11 +4183,16 @@ def create_admin_serve_app(
         project_label = _fleet_project_label(pid)
         if project_label:
             caps.labels["project_id"] = project_label
+        import hashlib as _hashlib
+        import secrets as _secrets
+
+        worker_secret = _secrets.token_urlsafe(32)
         worker = await fleet_registry.register_worker(
             name=body.get("name", "worker"),
             org_id=_fleet_org_id(request),
             capabilities=caps,
             enrollment_key=body.get("enrollment_key"),
+            secret_hash=_hashlib.sha256(worker_secret.encode()).hexdigest(),
         )
         logger.info("Fleet worker registered: %s pool=%s models=%s",
                      worker.name, caps.pool, caps.models_supported,
@@ -4214,6 +4200,7 @@ def create_admin_serve_app(
                             "pool": caps.pool, "project_id": pid or "global"})
         return JSONResponse({
             "worker_id": worker.id,
+            "worker_secret": worker_secret,
             "status": worker.approval_status.value,
             "capabilities": {
                 "models": caps.models_supported,
@@ -4225,23 +4212,25 @@ def create_admin_serve_app(
 
     @app.post("/api/v1/fleet/claim")
     async def fleet_claim(request: Request) -> Response:
-        """Approved, in-scope worker claims a task matching its REGISTERED caps."""
-        body = await request.json()
-        worker, err = await _fleet_worker_authorized(
-            body.get("worker_id", ""), request, require_approved=True
-        )
-        if err is not None:
-            return err
-        # Client-controlled long-poll window, clamped to a safe ceiling so a
-        # worker cannot hold a server coroutine indefinitely.
+        """Approved worker (authenticated by its secret) claims a matching task."""
+        worker = request.state.worker  # set by AuthMiddleware
+        if worker.approval_status != WorkerApprovalStatus.APPROVED:
+            return JSONResponse(
+                {"detail": "Worker not approved", "status": worker.approval_status.value},
+                status_code=403,
+            )
         try:
-            poll_timeout = min(max(float(body.get("poll_timeout", 5.0)), 0.0), 60.0)
+            body = await request.json()
+        except Exception:
+            body = {}
+        try:
+            poll_timeout = min(max(float((body or {}).get("poll_timeout", 5.0)), 0.0), 60.0)
         except (TypeError, ValueError):
             poll_timeout = 5.0
         caps = worker.capabilities
         task = await fleet_dispatcher.claim(
             worker_id=worker.id,
-            org_id=_fleet_org_id(request),
+            org_id=worker.org_id,
             models_canonical=caps.models_canonical,
             pool=caps.pool,
             labels=caps.labels,
@@ -4249,22 +4238,21 @@ def create_admin_serve_app(
         )
         if task:
             return JSONResponse(task)
-        # 204 must have no body.
         return Response(status_code=204)
 
     @app.post("/api/v1/fleet/report")
     async def fleet_report(request: Request) -> JSONResponse:
-        """Approved, in-scope worker reports a task it owns."""
+        worker = request.state.worker
+        if worker.approval_status != WorkerApprovalStatus.APPROVED:
+            return JSONResponse(
+                {"detail": "Worker not approved", "status": worker.approval_status.value},
+                status_code=403,
+            )
         body = await request.json()
-        worker, err = await _fleet_worker_authorized(
-            body.get("worker_id", ""), request, require_approved=True
-        )
-        if err is not None:
-            return err
         try:
             await fleet_dispatcher.report(
                 worker_id=worker.id,
-                org_id=_fleet_org_id(request),
+                org_id=worker.org_id,
                 run_id=body.get("run_id", ""),
                 status=body.get("status", "completed"),
                 output=body.get("output"),
@@ -4276,15 +4264,14 @@ def create_admin_serve_app(
 
     @app.post("/api/v1/fleet/heartbeat")
     async def fleet_heartbeat(request: Request) -> JSONResponse:
-        """Worker heartbeat — org + project scope, NO approval gate (pending
+        """Worker heartbeat — valid secret only, NO approval gate (pending
         workers must heartbeat to stay visible)."""
-        body = await request.json()
-        worker, err = await _fleet_worker_authorized(
-            body.get("worker_id", ""), request, require_approved=False
-        )
-        if err is not None:
-            return err
-        await fleet_registry.heartbeat(worker.id, pool_stats=body.get("pool_stats"))
+        worker = request.state.worker
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        await fleet_registry.heartbeat(worker.id, pool_stats=(body or {}).get("pool_stats"))
         return JSONResponse({"ok": True})
 
     @app.post("/api/v1/fleet/tasks")

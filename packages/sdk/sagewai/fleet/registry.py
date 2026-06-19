@@ -79,6 +79,7 @@ class FleetRegistry(ABC):
         org_id: str,
         capabilities: WorkerCapabilities,
         enrollment_key: str | None = None,
+        secret_hash: str | None = None,
     ) -> WorkerRecord:
         """Register a new worker.
 
@@ -166,6 +167,11 @@ class FleetRegistry(ABC):
         Checks: not revoked, not expired, not exhausted, org matches.
         """
 
+    @abstractmethod
+    async def find_enrollment_key_by_hash(self, key_hash: str) -> EnrollmentKey | None:
+        """Global lookup of a USABLE enrollment key by its hash (any org)."""
+        ...
+
 
 # ---------------------------------------------------------------------------
 # In-Memory Implementation
@@ -189,6 +195,7 @@ class InMemoryFleetRegistry(FleetRegistry):
         org_id: str,
         capabilities: WorkerCapabilities,
         enrollment_key: str | None = None,
+        secret_hash: str | None = None,
     ) -> WorkerRecord:
         worker_id = str(uuid.uuid4())
         now = _now()
@@ -229,6 +236,7 @@ class InMemoryFleetRegistry(FleetRegistry):
             registered_at=now,
             approved_at=now if auto_approve else None,
             approved_by="enrollment-key" if auto_approve else None,
+            secret_hash=secret_hash,
         )
         self._workers[worker_id] = worker
         logger.info(
@@ -387,6 +395,12 @@ class InMemoryFleetRegistry(FleetRegistry):
             return record
         return None
 
+    async def find_enrollment_key_by_hash(self, key_hash: str) -> EnrollmentKey | None:
+        for record, _raw in self._keys.values():
+            if record.key_hash == key_hash and record.is_usable():
+                return record
+        return None
+
     # --- Helpers ---
 
     @staticmethod
@@ -435,7 +449,18 @@ class PostgresFleetRegistry(FleetRegistry):
         org_id: str,
         capabilities: WorkerCapabilities,
         enrollment_key: str | None = None,
+        secret_hash: str | None = None,
     ) -> WorkerRecord:
+        # Per-worker secret persistence needs a `secret_hash` column the `workers`
+        # table doesn't have yet (atelier#59 B0). Refuse rather than silently store a
+        # worker that can never authenticate claim/report/heartbeat (the middleware
+        # requires worker.secret_hash). Keeps Postgres out of the credential path.
+        if secret_hash is not None:
+            raise NotImplementedError(
+                "PostgresFleetRegistry does not persist per-worker secrets yet "
+                "(atelier#59 B0 adds the column/migration). Use InMemoryFleetRegistry, "
+                "or land B0 before wiring Postgres into the worker-secret path."
+            )
         worker_id = str(uuid.uuid4())
         now = _now()
 
@@ -783,6 +808,22 @@ class PostgresFleetRegistry(FleetRegistry):
                FROM enrollment_keys
                WHERE org_id = $1 AND key_hash = $2 AND revoked = false""",
             org_id,
+            key_hash,
+        )
+        if row is None:
+            return None
+        record = self._row_to_enrollment_key(row)
+        if not record.is_usable():
+            return None
+        return record
+
+    async def find_enrollment_key_by_hash(self, key_hash: str) -> EnrollmentKey | None:
+        row = await self._pool.fetchrow(
+            """SELECT id, org_id, name, key_hash, max_uses, current_uses,
+                      expires_at, allowed_pools, allowed_models,
+                      created_at, created_by, revoked
+               FROM enrollment_keys
+               WHERE key_hash = $1 AND revoked = false""",
             key_hash,
         )
         if row is None:

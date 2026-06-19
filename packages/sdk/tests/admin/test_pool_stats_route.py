@@ -34,6 +34,10 @@ def client(admin_app):
     return c
 
 
+def _wh(worker_id, secret):
+    return {"X-Worker-Id": worker_id, "X-Worker-Secret": secret}
+
+
 def test_pool_stats_route_returns_404_for_unknown_worker(client):
     res = client.get("/api/v1/admin/fleet/workers/does-not-exist/pool-stats")
     assert res.status_code == 404
@@ -59,6 +63,7 @@ def test_pool_stats_route_returns_snapshot_after_heartbeat(client):
     )
     assert reg.status_code in (200, 201), reg.text
     worker_id = reg.json()["worker_id"]
+    worker_secret = reg.json()["worker_secret"]
 
     # Approve it (heartbeat with pool_stats from an unapproved worker still works
     # because InMemoryFleetRegistry.heartbeat silently ignores unknown workers;
@@ -77,9 +82,11 @@ def test_pool_stats_route_returns_snapshot_after_heartbeat(client):
             "last_evict_at": None,
         },
     }
-    hb = client.post(
+    worker = TestClient(client.app)
+    hb = worker.post(
         "/api/v1/fleet/heartbeat",
-        json={"worker_id": worker_id, "pool_stats": snap},
+        headers=_wh(worker_id, worker_secret),
+        json={"pool_stats": snap},
     )
     assert hb.status_code == 200, hb.text
 

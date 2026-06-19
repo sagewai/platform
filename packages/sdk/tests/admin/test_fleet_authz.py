@@ -58,55 +58,81 @@ def _approve(client, worker_id):
     return client.post(f"/api/v1/fleet/workers/{worker_id}/approve")
 
 
+def _wh(worker_id, secret):
+    return {"X-Worker-Id": worker_id, "X-Worker-Secret": secret}
+
+
 def test_pending_worker_cannot_claim_then_can_after_approve(client):
-    wid = _register(client, name="w-pending").json()["worker_id"]
-    r = client.post("/api/v1/fleet/claim", json={"worker_id": wid})
+    reg = _register(client, name="w-pending").json()
+    wid, secret = reg["worker_id"], reg["worker_secret"]
+    worker = TestClient(client.app)
+    r = worker.post("/api/v1/fleet/claim", headers=_wh(wid, secret), json={})
     assert r.status_code == 403
     assert r.json().get("status") == "pending"
     _approve(client, wid)
-    r2 = client.post("/api/v1/fleet/claim", json={"worker_id": wid})
+    r2 = worker.post("/api/v1/fleet/claim", headers=_wh(wid, secret), json={})
     assert r2.status_code in (200, 204)  # approved: claims (204 = nothing queued)
 
 
 def test_revoked_worker_cannot_claim(client):
-    wid = _register(client, name="w-rev").json()["worker_id"]
+    reg = _register(client, name="w-rev").json()
+    wid, secret = reg["worker_id"], reg["worker_secret"]
     _approve(client, wid)
     client.post(f"/api/v1/fleet/workers/{wid}/revoke")
-    r = client.post("/api/v1/fleet/claim", json={"worker_id": wid})
+    worker = TestClient(client.app)
+    r = worker.post("/api/v1/fleet/claim", headers=_wh(wid, secret), json={})
     assert r.status_code == 403
     assert r.json().get("status") == "revoked"
 
 
-def test_unknown_worker_claim_404(client):
-    r = client.post("/api/v1/fleet/claim", json={"worker_id": "does-not-exist"})
-    assert r.status_code == 404
+def test_unknown_worker_claim_401(client):
+    worker = TestClient(client.app)
+    r = worker.post("/api/v1/fleet/claim", headers=_wh("does-not-exist", "wrong"), json={})
+    assert r.status_code == 401
 
 
 def test_report_wrong_worker_denied_and_idempotent(app_token):
     app, sf, token = app_token
     c = TestClient(app)
     c.headers.update({"Authorization": f"Bearer {token}"})
-    wid = _register(c, name="w-owner").json()["worker_id"]
+    reg = _register(c, name="w-owner").json()
+    wid, secret = reg["worker_id"], reg["worker_secret"]
     _approve(c, wid)
+    worker = TestClient(app)
     # Enqueue a task and claim it as this worker.
     app.state.fleet_task_store.enqueue({"run_id": "r1", "model": "gpt-4o", "pool": "default"})
-    claim = c.post("/api/v1/fleet/claim", json={"worker_id": wid})
+    claim = worker.post("/api/v1/fleet/claim", headers=_wh(wid, secret), json={})
     assert claim.status_code == 200, claim.text
     # A different (approved) worker cannot report it.
-    other = _register(c, name="w-other").json()["worker_id"]
+    other_reg = _register(c, name="w-other").json()
+    other, other_secret = other_reg["worker_id"], other_reg["worker_secret"]
     _approve(c, other)
-    bad = c.post("/api/v1/fleet/report", json={"worker_id": other, "run_id": "r1", "status": "completed"})
+    bad = worker.post(
+        "/api/v1/fleet/report",
+        headers=_wh(other, other_secret),
+        json={"run_id": "r1", "status": "completed"},
+    )
     assert bad.status_code == 403
     # The owner reports — twice (idempotent).
-    ok = c.post("/api/v1/fleet/report", json={"worker_id": wid, "run_id": "r1", "status": "completed", "output": "ok"})
+    ok = worker.post(
+        "/api/v1/fleet/report",
+        headers=_wh(wid, secret),
+        json={"run_id": "r1", "status": "completed", "output": "ok"},
+    )
     assert ok.status_code == 200
-    dup = c.post("/api/v1/fleet/report", json={"worker_id": wid, "run_id": "r1", "status": "completed", "output": "ok"})
+    dup = worker.post(
+        "/api/v1/fleet/report",
+        headers=_wh(wid, secret),
+        json={"run_id": "r1", "status": "completed", "output": "ok"},
+    )
     assert dup.status_code == 200
 
 
 def test_pending_worker_can_heartbeat(client):
-    wid = _register(client, name="w-hb").json()["worker_id"]
-    hb = client.post("/api/v1/fleet/heartbeat", json={"worker_id": wid})
+    reg = _register(client, name="w-hb").json()
+    wid, secret = reg["worker_id"], reg["worker_secret"]
+    worker = TestClient(client.app)
+    hb = worker.post("/api/v1/fleet/heartbeat", headers=_wh(wid, secret), json={})
     assert hb.status_code == 200  # heartbeat has no approval gate
 
 
@@ -114,8 +140,10 @@ def test_claim_forwards_poll_timeout_to_dispatcher(app_token):
     app, sf, token = app_token
     c = TestClient(app)
     c.headers.update({"Authorization": f"Bearer {token}"})
-    wid = _register(c, name="w-pt").json()["worker_id"]
+    reg = _register(c, name="w-pt").json()
+    wid, secret = reg["worker_id"], reg["worker_secret"]
     _approve(c, wid)
+    worker = TestClient(app)
 
     captured: dict = {}
     orig = app.state.fleet_dispatcher.claim
@@ -126,7 +154,7 @@ def test_claim_forwards_poll_timeout_to_dispatcher(app_token):
 
     app.state.fleet_dispatcher.claim = spy  # same object the route calls
     try:
-        r = c.post("/api/v1/fleet/claim", json={"worker_id": wid, "poll_timeout": 3.5})
+        r = worker.post("/api/v1/fleet/claim", headers=_wh(wid, secret), json={"poll_timeout": 3.5})
     finally:
         app.state.fleet_dispatcher.claim = orig
     assert r.status_code == 204

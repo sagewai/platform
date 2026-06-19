@@ -1296,7 +1296,7 @@ async def test_fleet_register_uses_authenticated_org_not_body_org(real_app):
         token=real_app["sess_owner"],
     )
     assert listed.status_code == 200
-    assert "tenant-worker" in {w.get("name") for w in listed.json()}
+    assert "tenant-worker" in {w.get("name") for w in listed.json()["workers"]}
 
 
 # ── Project-scoped file-backed routes + remaining org-admin stubs ─────────
