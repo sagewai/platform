@@ -124,7 +124,7 @@ async def main() -> None:
     print("Step 4: Dispatching tasks...")
 
     # Enqueue tasks with model and pool requirements
-    task_store.enqueue({
+    await task_store.enqueue({
         "run_id": "run-001",
         "model": "gpt-4o",
         "pool": "gpu",
@@ -133,7 +133,7 @@ async def main() -> None:
         "requires_image": f"ghcr.io/sagewai/sandbox-base:{image_manifest.SDK_VERSION}",
         "requires_network_policy": NetworkPolicy.NONE,
     })
-    task_store.enqueue({
+    await task_store.enqueue({
         "run_id": "run-002",
         "model": "gpt-4o-mini",
         "pool": "default",

@@ -25,7 +25,7 @@ async def _claim_one(store, worker_id, model="gpt-4o"):
 @pytest.mark.asyncio
 async def test_owner_can_report():
     store = InMemoryTaskStore()
-    store.enqueue({"run_id": "r1", "model": "gpt-4o", "pool": "default"})
+    await store.enqueue({"run_id": "r1", "model": "gpt-4o", "pool": "default"})
     await _claim_one(store, "w1")
     await store.report_task("r1", "completed", "ok", None, worker_id="w1")
     assert store._completed["r1"]["status"] == "completed"
@@ -34,7 +34,7 @@ async def test_owner_can_report():
 @pytest.mark.asyncio
 async def test_non_owner_rejected():
     store = InMemoryTaskStore()
-    store.enqueue({"run_id": "r1", "model": "gpt-4o", "pool": "default"})
+    await store.enqueue({"run_id": "r1", "model": "gpt-4o", "pool": "default"})
     await _claim_one(store, "w1")
     with pytest.raises(NotTaskOwnerError):
         await store.report_task("r1", "completed", "ok", None, worker_id="w2")
@@ -43,7 +43,7 @@ async def test_non_owner_rejected():
 @pytest.mark.asyncio
 async def test_duplicate_same_worker_status_is_idempotent():
     store = InMemoryTaskStore()
-    store.enqueue({"run_id": "r1", "model": "gpt-4o", "pool": "default"})
+    await store.enqueue({"run_id": "r1", "model": "gpt-4o", "pool": "default"})
     await _claim_one(store, "w1")
     await store.report_task("r1", "completed", "ok", None, worker_id="w1")
     # lost-ack retry: same worker + status → no error

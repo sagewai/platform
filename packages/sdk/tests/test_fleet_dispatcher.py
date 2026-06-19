@@ -32,7 +32,7 @@ class TestInMemoryTaskStore:
 
     @pytest.mark.asyncio
     async def test_enqueue_and_claim(self, store: InMemoryTaskStore) -> None:
-        store.enqueue({"run_id": "r1", "model": "gpt-4o", "pool": "default", "payload": "hello"})
+        await store.enqueue({"run_id": "r1", "model": "gpt-4o", "pool": "default", "payload": "hello"})
 
         task = await store.claim_task(
             worker_id="w1",
@@ -59,7 +59,7 @@ class TestInMemoryTaskStore:
 
     @pytest.mark.asyncio
     async def test_claim_model_filter(self, store: InMemoryTaskStore) -> None:
-        store.enqueue({"run_id": "r1", "model": "claude-sonnet-4-6", "pool": "default"})
+        await store.enqueue({"run_id": "r1", "model": "claude-sonnet-4-6", "pool": "default"})
 
         # Worker only supports gpt-4o — should not match
         task = await store.claim_task(
@@ -84,7 +84,7 @@ class TestInMemoryTaskStore:
 
     @pytest.mark.asyncio
     async def test_claim_pool_filter(self, store: InMemoryTaskStore) -> None:
-        store.enqueue({"run_id": "r1", "model": "gpt-4o", "pool": "gpu-cluster"})
+        await store.enqueue({"run_id": "r1", "model": "gpt-4o", "pool": "gpu-cluster"})
 
         task = await store.claim_task(
             worker_id="w1",
@@ -106,7 +106,7 @@ class TestInMemoryTaskStore:
 
     @pytest.mark.asyncio
     async def test_claim_label_filter(self, store: InMemoryTaskStore) -> None:
-        store.enqueue({
+        await store.enqueue({
             "run_id": "r1",
             "model": "gpt-4o",
             "pool": "default",
@@ -136,7 +136,7 @@ class TestInMemoryTaskStore:
     @pytest.mark.asyncio
     async def test_claim_no_model_matches_any(self, store: InMemoryTaskStore) -> None:
         """A task without a model field matches any worker."""
-        store.enqueue({"run_id": "r1", "pool": "default"})
+        await store.enqueue({"run_id": "r1", "pool": "default"})
 
         task = await store.claim_task(
             worker_id="w1",
@@ -150,7 +150,7 @@ class TestInMemoryTaskStore:
     @pytest.mark.asyncio
     async def test_claim_enforces_org_isolation(self, store: InMemoryTaskStore) -> None:
         """An org-stamped task can only be claimed by a worker from that org."""
-        store.enqueue({"run_id": "r1", "org_id": "orgA", "pool": "default"})
+        await store.enqueue({"run_id": "r1", "org_id": "orgA", "pool": "default"})
 
         # A worker from a different org must NOT get it.
         assert await store.claim_task("w", "orgB", [], "default", None) is None
@@ -160,7 +160,7 @@ class TestInMemoryTaskStore:
 
     @pytest.mark.asyncio
     async def test_report_task(self, store: InMemoryTaskStore) -> None:
-        store.enqueue({"run_id": "r1", "pool": "default"})
+        await store.enqueue({"run_id": "r1", "pool": "default"})
         await store.claim_task("w1", "org1", [], "default", None)
 
         await store.report_task("r1", "completed", "output data", None, worker_id="w1")
@@ -172,7 +172,7 @@ class TestInMemoryTaskStore:
 
     @pytest.mark.asyncio
     async def test_report_failed(self, store: InMemoryTaskStore) -> None:
-        store.enqueue({"run_id": "r1", "pool": "default"})
+        await store.enqueue({"run_id": "r1", "pool": "default"})
         await store.claim_task("w1", "org1", [], "default", None)
 
         await store.report_task("r1", "failed", None, "something broke", worker_id="w1")
@@ -209,7 +209,7 @@ class TestFleetDispatcher:
     async def test_claim_with_available_task(
         self, store: InMemoryTaskStore, dispatcher: FleetDispatcher
     ) -> None:
-        store.enqueue({"run_id": "r1", "model": "gpt-4o", "pool": "default", "payload": "data"})
+        await store.enqueue({"run_id": "r1", "model": "gpt-4o", "pool": "default", "payload": "data"})
 
         task = await dispatcher.claim(
             worker_id="w1",
@@ -236,7 +236,7 @@ class TestFleetDispatcher:
 
         async def _enqueue_later() -> None:
             await asyncio.sleep(0.1)
-            store.enqueue({"run_id": "r-late", "pool": "default"})
+            await store.enqueue({"run_id": "r-late", "pool": "default"})
 
         task_coro = dispatcher.claim(
             worker_id="w1", org_id="org1", models_canonical=["gpt-4o"],
@@ -251,7 +251,7 @@ class TestFleetDispatcher:
     async def test_report_success(
         self, store: InMemoryTaskStore, dispatcher: FleetDispatcher
     ) -> None:
-        store.enqueue({"run_id": "r1", "pool": "default"})
+        await store.enqueue({"run_id": "r1", "pool": "default"})
         await dispatcher.claim(worker_id="w1", org_id="org1", models_canonical=[])
 
         await dispatcher.report(
@@ -267,7 +267,7 @@ class TestFleetDispatcher:
     async def test_report_failure(
         self, store: InMemoryTaskStore, dispatcher: FleetDispatcher
     ) -> None:
-        store.enqueue({"run_id": "r1", "pool": "default"})
+        await store.enqueue({"run_id": "r1", "pool": "default"})
         await dispatcher.claim(worker_id="w1", org_id="org1", models_canonical=[])
 
         await dispatcher.report(
@@ -304,7 +304,7 @@ class TestFleetDispatcher:
             poll_timeout=0.3,
         )
 
-        store.enqueue({
+        await store.enqueue({
             "run_id": "r1",
             "pool": "default",
             "payload": "ENC:secret-data",
@@ -338,7 +338,7 @@ class TestFleetDispatcher:
             poll_timeout=0.3,
         )
 
-        store.enqueue({"run_id": "r1", "pool": "default"})
+        await store.enqueue({"run_id": "r1", "pool": "default"})
 
         await dispatcher.claim(worker_id="w1", org_id="org1", models_canonical=[])
         assert len(events) == 1

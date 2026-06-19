@@ -156,9 +156,9 @@ class TestFleetMissionAdapterDispatchStep:
         captured: list[dict] = []
         original_enqueue = store.enqueue
 
-        def _capture(task: dict) -> None:
+        async def _capture(task: dict) -> None:
             captured.append(task)
-            original_enqueue(task)
+            await original_enqueue(task)
 
         store.enqueue = _capture  # type: ignore[method-assign]
 
@@ -179,9 +179,9 @@ class TestFleetMissionAdapterDispatchStep:
         captured: list[dict] = []
         original_enqueue = store.enqueue
 
-        def _capture(task: dict) -> None:
+        async def _capture(task: dict) -> None:
             captured.append(task)
-            original_enqueue(task)
+            await original_enqueue(task)
 
         store.enqueue = _capture  # type: ignore[method-assign]
 
@@ -198,7 +198,7 @@ class TestFleetMissionAdapterDispatchStep:
         """
         store = InMemoryTaskStore()
         # Task belongs to finance project.
-        store.enqueue({
+        await store.enqueue({
             "run_id": "r-isolation-test",
             "model": "medium",
             "pool": "proj-finance",
@@ -228,7 +228,7 @@ class TestFleetMissionAdapterDispatchStep:
     async def test_project_isolation_correct_pool_can_claim(self) -> None:
         """A task for project A IS claimable by a worker on project A's pool."""
         store = InMemoryTaskStore()
-        store.enqueue({
+        await store.enqueue({
             "run_id": "r-isolation-ok",
             "model": "medium",
             "pool": "proj-finance",
@@ -397,9 +397,9 @@ class TestBlueprintSandboxRequirementsPassThrough:
         captured: list[dict] = []
         original_enqueue = store.enqueue
 
-        def _capture(task: dict) -> None:
+        async def _capture(task: dict) -> None:
             captured.append(task)
-            original_enqueue(task)
+            await original_enqueue(task)
 
         store.enqueue = _capture  # type: ignore[method-assign]
 
@@ -425,9 +425,9 @@ class TestBlueprintSandboxRequirementsPassThrough:
         captured: list[dict] = []
         original_enqueue = store.enqueue
 
-        def _capture(task: dict) -> None:
+        async def _capture(task: dict) -> None:
             captured.append(task)
-            original_enqueue(task)
+            await original_enqueue(task)
 
         store.enqueue = _capture  # type: ignore[method-assign]
 

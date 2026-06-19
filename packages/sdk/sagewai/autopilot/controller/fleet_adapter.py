@@ -205,7 +205,7 @@ class FleetMissionAdapter:
         }
 
         # Enqueue the task into the store so the dispatcher can see it.
-        self._enqueue(task)
+        await self._enqueue(task)
 
         await self._emit("agent.dispatched_to_worker", {
             "step_id": agent.id,
@@ -368,7 +368,7 @@ class FleetMissionAdapter:
             "requires_network_policy": reqs.network_policy.value,
         }
 
-    def _enqueue(self, task: dict) -> None:
+    async def _enqueue(self, task: dict) -> None:
         """Enqueue a task into the dispatcher's backing store.
 
         Works when the dispatcher's ``_store`` is an
@@ -378,7 +378,7 @@ class FleetMissionAdapter:
         """
         store = self._dispatcher._store  # noqa: SLF001
         if isinstance(store, InMemoryTaskStore):
-            store.enqueue(task)
+            await store.enqueue(task)
         else:
             logger.debug(
                 "FleetMissionAdapter._enqueue: store is not InMemoryTaskStore; "

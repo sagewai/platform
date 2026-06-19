@@ -1858,3 +1858,39 @@ class EnrollmentKeyModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     created_by: Mapped[str | None] = mapped_column(Text, nullable=True)
     revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+
+
+class FleetTaskModel(Base):
+    """Durable fleet task queue (B1). One row per enqueued run.
+
+    `status` is constrained to the queue lifecycle; `org_id` is NOT NULL (tenant
+    isolation — the durable store requires an exact org, unlike the in-memory dev
+    helper). The claim index covers the exact filter + FIFO order.
+    """
+
+    __tablename__ = "fleet_tasks"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','claimed','completed','failed')",
+            name="ck_fleet_tasks_status",
+        ),
+        Index("ix_fleet_tasks_claim", "status", "org_id", "project_id", "pool", "created_at"),
+        Index("ix_fleet_tasks_scope", "org_id", "project_id", "created_at"),
+    )
+
+    run_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    org_id: Mapped[str] = mapped_column(Text, nullable=False)
+    project_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pool: Mapped[str] = mapped_column(Text, nullable=False, server_default="default")
+    model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    labels: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+    payload: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    worker_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    output: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

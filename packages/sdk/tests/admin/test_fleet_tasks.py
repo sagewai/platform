@@ -98,10 +98,11 @@ def test_enqueue_stamps_org_id_for_isolation(app_token):
     app, sf, token = app_token
     c = TestClient(app)
     c.headers.update({"Authorization": f"Bearer {token}"})
-    c.post("/api/v1/fleet/tasks", json={"payload": {"message": "hi"}})
-    # The queued task carries the requester's org so a foreign-org worker can't claim it.
-    pending = app.state.fleet_task_store._pending
-    assert pending and pending[-1].get("org_id")
+    run_id = c.post("/api/v1/fleet/tasks", json={"payload": {"message": "hi"}}).json()["run_id"]
+    # The durable row is persisted under the requester's org: the org-scoped status
+    # read finds it (a missing/foreign org_id would 404), proving org stamping for
+    # cross-org isolation — without reaching into store internals.
+    assert c.get(f"/api/v1/fleet/tasks/{run_id}").status_code == 200
 
 
 def test_register_and_enqueue_use_first_class_project(client):
@@ -116,9 +117,9 @@ def test_register_and_enqueue_use_first_class_project(client):
     assert "project_id" not in detail.get("labels", {})
     w = asyncio.run(client.app.state.fleet_registry.get_worker(wid))
     assert w.project_id is None
-    # Producer: the task store row carries project_id as a top-level field, not a label.
+    # Producer: the persisted task carries project_id as a first-class field (read it
+    # back through the durable status API, not store internals).
     enq = client.post("/api/v1/fleet/tasks", json={"model": "gpt-4o", "payload": {"message": "hi"}})
     assert enq.status_code == 201
-    task = client.app.state.fleet_task_store._pending[-1]
-    assert task["project_id"] is None
-    assert "project_id" not in (task.get("labels") or {})
+    detail = client.get(f"/api/v1/fleet/tasks/{enq.json()['run_id']}").json()
+    assert detail["project_id"] is None  # None = org-global in single-org

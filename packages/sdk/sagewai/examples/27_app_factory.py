@@ -410,7 +410,7 @@ async def _dispatch_stage(
         "requires_image": f"ghcr.io/sagewai/sandbox-general:{image_manifest.SDK_VERSION}",
         "requires_network_policy": NetworkPolicy.FULL,
     }
-    task_store.enqueue(task)
+    await task_store.enqueue(task)
 
     claimed = await dispatcher.claim(
         worker_id=worker_id,

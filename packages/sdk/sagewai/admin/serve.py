@@ -906,6 +906,7 @@ def create_admin_serve_app(
         # verify the DB is reachable and migrated. Raises here rather than on the
         # first route call if Postgres is unreachable/unmigrated.
         await app.state.fleet_registry.init()
+        await app.state.fleet_task_store.init()
 
         # Build missing tenant resource stores from the process engine (multi-
         # tenant only; None in single-org). Partial DI is allowed, but every
@@ -4153,19 +4154,18 @@ def create_admin_serve_app(
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     # ── Fleet (real SDK integration) ────────────────────────────
-    # Uses InMemoryFleetRegistry + FleetDispatcher from the SDK.
+    # Uses the durable PostgresFleetRegistry + PostgresTaskStore + FleetDispatcher.
     # Workers register, get approved, claim tasks by project/model/tags.
 
     from sagewai.fleet import (
-        InMemoryFleetRegistry,
-        InMemoryTaskStore,
         FleetDispatcher,
         PostgresFleetRegistry,
         WorkerCapabilities,
     )
+    from sagewai.fleet.task_store import PostgresTaskStore
 
     fleet_registry = PostgresFleetRegistry()  # factory engine; persistent
-    fleet_task_store = InMemoryTaskStore()
+    fleet_task_store = PostgresTaskStore()  # factory engine; durable
     fleet_dispatcher = FleetDispatcher(
         store=fleet_task_store, poll_timeout=5.0, poll_interval=1.0
     )
@@ -4173,8 +4173,22 @@ def create_admin_serve_app(
     app.state.fleet_task_store = fleet_task_store
     app.state.fleet_dispatcher = fleet_dispatcher
 
+    import hashlib as _hashlib
+
+    _single_org_state = sf._read()
+    _single_org_admin_id = (_single_org_state.get("admin") or {}).get("id", "default")
+    _single_org_fleet_org_id = (
+        "default:"
+        + _hashlib.sha256(
+            f"{getattr(sf, '_path', 'default')}:{_single_org_admin_id}".encode()
+        ).hexdigest()[:16]
+    )
+
     def _fleet_org_id(request: Request) -> str:
-        return _request_org_id(request)
+        ctx = getattr(request.state, "context", None)
+        if ctx is not None and getattr(ctx, "tenancy_mode", None) == "multi":
+            return ctx.org_id
+        return _single_org_fleet_org_id
 
     async def _fleet_worker_in_scope(worker_id: str, request: Request):
         worker = await fleet_registry.get_worker(worker_id)
@@ -4274,6 +4288,8 @@ def create_admin_serve_app(
             )
         except NotTaskOwnerError:
             return JSONResponse({"detail": "Run not owned by this worker"}, status_code=403)
+        except ValueError as e:
+            return JSONResponse({"detail": str(e)}, status_code=400)
         return JSONResponse({"status": "ok"})
 
     @app.post("/api/v1/fleet/heartbeat")
@@ -4312,7 +4328,7 @@ def create_admin_serve_app(
         }
         if model:
             task["model"] = model
-        fleet_task_store.enqueue(task)
+        await fleet_task_store.enqueue(task)
         logger.info(
             "Fleet task enqueued: run=%s pool=%s model=%s project=%s",
             run_id, task["pool"], model or "any", _fleet_project_label(pid) or "global",
@@ -4320,6 +4336,40 @@ def create_admin_serve_app(
         return JSONResponse(
             {"run_id": run_id, "pool": task["pool"], "model": model}, status_code=201
         )
+
+    @app.get("/api/v1/fleet/tasks/{run_id}")
+    async def fleet_get_task(run_id: str, request: Request) -> JSONResponse:
+        detail = await fleet_task_store.get_task(
+            run_id,
+            org_id=_fleet_org_id(request),
+            project_id=_fleet_project_label(_project_scope(request)),
+        )
+        if detail is None:
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        # Decrypt output best-effort if payload encryption is configured (symmetric
+        # with claim). The dispatcher owns the encryption instance.
+        enc = getattr(fleet_dispatcher, "_encryption", None)
+        if enc is not None and detail.get("output"):
+            try:
+                detail["output"] = enc.decrypt(_fleet_org_id(request), detail["output"])
+            except Exception:
+                logger.warning("Failed to decrypt output for run %s", run_id)
+        return JSONResponse(detail)
+
+    @app.get("/api/v1/fleet/tasks")
+    async def fleet_list_tasks(request: Request) -> JSONResponse:
+        status = request.query_params.get("status")
+        try:
+            limit = min(max(int(request.query_params.get("limit", 50)), 1), 200)
+        except (TypeError, ValueError):
+            limit = 50
+        tasks = await fleet_task_store.list_tasks(
+            org_id=_fleet_org_id(request),
+            project_id=_fleet_project_label(_project_scope(request)),
+            status=status,
+            limit=limit,
+        )
+        return JSONResponse({"tasks": tasks})
 
     @app.get("/api/v1/fleet/workers")
     async def list_fleet_workers(request: Request) -> JSONResponse:

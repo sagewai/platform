@@ -224,7 +224,7 @@ async def main() -> None:
     ]
 
     for t in tasks:
-        task_store.enqueue(t)
+        await task_store.enqueue(t)
 
     print(f"Tasks enqueued: {len(tasks)}")
     for t in tasks:

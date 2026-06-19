@@ -51,6 +51,8 @@ def app_token(tmp_path, monkeypatch):
     from sagewai.admin.state_file import AdminStateFile
 
     monkeypatch.setenv("SAGEWAI_HOME", str(tmp_path / "home"))
+    from sagewai.db import factory as _factory
+    _factory.reset_engine()
     sf = AdminStateFile(path=tmp_path / "state.json")
     sf.complete_setup(org_name="Acme", admin_email="a@b.com", admin_password="pw123456")
     app = create_admin_serve_app(sf)
@@ -78,6 +80,12 @@ async def _approve(app, token, worker_id):
         await c.post(f"/api/v1/fleet/workers/{worker_id}/approve")
 
 
+async def _worker_org_id(app, worker_id):
+    worker = await app.state.fleet_registry.get_worker(worker_id)
+    assert worker is not None
+    return worker.org_id
+
+
 @pytest.mark.asyncio
 async def test_register_appears_in_registry(app_token):
     app, token = app_token
@@ -96,10 +104,12 @@ async def test_claims_and_reports_completed(app_token):
     r = _runner(app, token)
     wid, _ = await r.register()
     await _approve(app, token, wid)
-    app.state.fleet_task_store.enqueue({"run_id": "r1", "model": "gpt-4o", "pool": "default"})
+    org_id = await _worker_org_id(app, wid)
+    await app.state.fleet_task_store.enqueue({"run_id": "r1", "org_id": org_id, "model": "gpt-4o", "pool": "default"})
     result = await r.run_once()
     assert result == {"claimed": True, "run_id": "r1", "status": "completed", "reported": True}
-    assert app.state.fleet_task_store._completed["r1"]["status"] == "completed"
+    store = app.state.fleet_task_store
+    assert (await store.get_task("r1", org_id=org_id, project_id=None))["status"] == "completed"
 
 
 @pytest.mark.asyncio
@@ -108,7 +118,8 @@ async def test_exec_nonzero_reports_failed(app_token):
     r = _runner(app, token, exec_cmd="exit 3")
     wid, _ = await r.register()
     await _approve(app, token, wid)
-    app.state.fleet_task_store.enqueue({"run_id": "r2", "model": "gpt-4o", "pool": "default"})
+    org_id = await _worker_org_id(app, wid)
+    await app.state.fleet_task_store.enqueue({"run_id": "r2", "org_id": org_id, "model": "gpt-4o", "pool": "default"})
     result = await r.run_once()
     assert result == {"claimed": True, "run_id": "r2", "status": "failed", "reported": True}
 
@@ -120,7 +131,9 @@ async def test_register_only_does_not_claim(app_token):
     wid, status = await r.register()  # register_only path = register then stop
     assert status == "pending"
     # nothing claimed because we never call run_once/run
-    assert app.state.fleet_task_store._claimed == {}
+    store = app.state.fleet_task_store
+    org_id = await _worker_org_id(app, wid)
+    assert await store.list_tasks(org_id=org_id, project_id=None, status="claimed") == []
 
 
 @pytest.mark.asyncio
@@ -138,7 +151,8 @@ async def test_report_retries_transient_5xx_then_succeeds(app_token):
     r = _runner(app, token)
     wid, _ = await r.register()
     await _approve(app, token, wid)
-    app.state.fleet_task_store.enqueue({"run_id": "r5", "model": "gpt-4o", "pool": "default"})
+    org_id = await _worker_org_id(app, wid)
+    await app.state.fleet_task_store.enqueue({"run_id": "r5", "org_id": org_id, "model": "gpt-4o", "pool": "default"})
 
     # Wrap the client so the first /report attempt raises a transient error.
     real_post = r.http_client.post
@@ -155,7 +169,8 @@ async def test_report_retries_transient_5xx_then_succeeds(app_token):
     result = await r.run_once()
     assert result == {"claimed": True, "run_id": "r5", "status": "completed", "reported": True}
     assert calls["n"] >= 2  # retried at least once
-    assert app.state.fleet_task_store._completed["r5"]["status"] == "completed"
+    store = app.state.fleet_task_store
+    assert (await store.get_task("r5", org_id=org_id, project_id=None))["status"] == "completed"
 
 
 @pytest.mark.asyncio
@@ -167,7 +182,8 @@ async def test_report_403_is_not_retried_and_returns_false(app_token):
     r2 = _runner(app, token, name="w2")
     w2, _ = await r2.register()
     await _approve(app, token, w2)
-    app.state.fleet_task_store.enqueue({"run_id": "r403", "model": "gpt-4o", "pool": "default"})
+    org_id = await _worker_org_id(app, w1)
+    await app.state.fleet_task_store.enqueue({"run_id": "r403", "org_id": org_id, "model": "gpt-4o", "pool": "default"})
     task = await r._claim()  # claimed by w1
     assert task and task["run_id"] == "r403"
 
@@ -216,8 +232,9 @@ async def test_max_concurrent_is_capped(app_token):
     r = _runner(app, token, max_concurrent=2, heartbeat_interval=0.05)
     wid, _ = await r.register()
     await _approve(app, token, wid)
+    org_id = await _worker_org_id(app, wid)
     for i in range(4):
-        app.state.fleet_task_store.enqueue({"run_id": f"c{i}", "model": "gpt-4o", "pool": "default"})
+        await app.state.fleet_task_store.enqueue({"run_id": f"c{i}", "org_id": org_id, "model": "gpt-4o", "pool": "default"})
 
     peak = {"cur": 0, "max": 0}
 
@@ -236,7 +253,8 @@ async def test_max_concurrent_is_capped(app_token):
 
     await asyncio.gather(r.run(), _stop_soon())
     assert peak["max"] <= 2  # never more than max_concurrent in flight
-    assert len(app.state.fleet_task_store._completed) == 4  # all drained
+    store = app.state.fleet_task_store
+    assert len(await store.list_tasks(org_id=org_id, project_id=None, status="completed")) == 4  # all drained
 
 
 @pytest.mark.asyncio
@@ -245,14 +263,16 @@ async def test_run_drains_then_stops_on_signal_event(app_token):
     r = _runner(app, token, heartbeat_interval=0.05)
     wid, _ = await r.register()
     await _approve(app, token, wid)
-    app.state.fleet_task_store.enqueue({"run_id": "rA", "model": "gpt-4o", "pool": "default"})
+    org_id = await _worker_org_id(app, wid)
+    await app.state.fleet_task_store.enqueue({"run_id": "rA", "org_id": org_id, "model": "gpt-4o", "pool": "default"})
 
     async def _stop_soon():
         await asyncio.sleep(0.3)
         r.stop()
 
     await asyncio.gather(r.run(), _stop_soon())
-    assert app.state.fleet_task_store._completed.get("rA", {}).get("status") == "completed"
+    store = app.state.fleet_task_store
+    assert (await store.get_task("rA", org_id=org_id, project_id=None) or {}).get("status") == "completed"
 
 
 @pytest.mark.asyncio
@@ -321,7 +341,8 @@ async def test_register_captures_and_loop_sends_worker_secret(app_token):
     wid, _ = await r.register()
     assert r.worker_secret and len(r.worker_secret) > 16
     await _approve(app, token, wid)
-    app.state.fleet_task_store.enqueue({"run_id": "r1", "org_id": "default", "model": "gpt-4o", "pool": "default"})
+    org_id = await _worker_org_id(app, wid)
+    await app.state.fleet_task_store.enqueue({"run_id": "r1", "org_id": org_id, "model": "gpt-4o", "pool": "default"})
     # Spy on the headers the loop sends.
     seen = {}
     real_post = r.http_client.post

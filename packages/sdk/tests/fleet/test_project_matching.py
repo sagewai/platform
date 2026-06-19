@@ -25,7 +25,7 @@ async def _claim(store, *, org, project):
 @pytest.mark.asyncio
 async def test_claim_strict_project_equality():
     store = InMemoryTaskStore()
-    store.enqueue({"run_id": "rA", "org_id": "o", "project_id": "pa", "model": "gpt-4o", "pool": "default"})
+    await store.enqueue({"run_id": "rA", "org_id": "o", "project_id": "pa", "model": "gpt-4o", "pool": "default"})
     # different project -> no match
     assert await _claim(store, org="o", project="pb") is None
     # org-global worker (None) can't take a project task
@@ -38,7 +38,7 @@ async def test_claim_strict_project_equality():
 @pytest.mark.asyncio
 async def test_org_global_task_matches_org_global_worker():
     store = InMemoryTaskStore()
-    store.enqueue({"run_id": "rG", "org_id": "o", "project_id": None, "model": "gpt-4o", "pool": "default"})
+    await store.enqueue({"run_id": "rG", "org_id": "o", "project_id": None, "model": "gpt-4o", "pool": "default"})
     assert await _claim(store, org="o", project="pa") is None      # project worker
     t = await _claim(store, org="o", project=None)                  # org-global worker
     assert t and t["run_id"] == "rG"

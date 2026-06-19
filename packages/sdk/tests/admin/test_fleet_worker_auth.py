@@ -100,6 +100,19 @@ def test_secret_cannot_act_as_another_worker(app_token):
     assert r.status_code == 401
 
 
+def test_report_rejects_non_terminal_status(app_token):
+    app, sf, token = app_token
+    admin = TestClient(app)
+    admin.headers.update({"Authorization": f"Bearer {token}"})
+    reg = _register(admin).json()
+    wid, secret = reg["worker_id"], reg["worker_secret"]
+    admin.post(f"/api/v1/fleet/workers/{wid}/approve")
+    worker = TestClient(app)
+    r = worker.post("/api/v1/fleet/report", headers=_wh(wid, secret),
+                    json={"run_id": "anything", "status": "pending"})
+    assert r.status_code == 400, r.text  # not 500, not 403
+
+
 def test_enrollment_key_register_is_token_less(app_token):
     app, sf, token = app_token
     admin = TestClient(app)

@@ -95,7 +95,7 @@ async def test_fleet_register_claim_report():
     )
 
     # 7. Enqueue a task
-    store.enqueue({
+    await store.enqueue({
         "run_id": "run-1",
         "model": "gpt-4o",
         "pool": "default",
@@ -175,7 +175,7 @@ async def test_fleet_claim_timeout_no_matching_task():
     )
 
     # Enqueue task for a different model
-    store.enqueue({
+    await store.enqueue({
         "run_id": "run-x",
         "model": "claude-3-opus",
         "pool": "default",

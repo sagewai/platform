@@ -15,10 +15,13 @@ from fastapi.testclient import TestClient
 
 
 @pytest.fixture
-def app_token(tmp_path):
+def app_token(tmp_path, monkeypatch):
     from sagewai.admin.serve import create_admin_serve_app
     from sagewai.admin.state_file import AdminStateFile
 
+    monkeypatch.setenv("SAGEWAI_HOME", str(tmp_path / "home"))
+    from sagewai.db import factory as _factory
+    _factory.reset_engine()
     sf = AdminStateFile(path=tmp_path / "state.json")
     sf.complete_setup(org_name="Acme", admin_email="a@b.com", admin_password="pw123456")
     app = create_admin_serve_app(sf)
@@ -41,6 +44,12 @@ def _register(client, name="w", **body):
 
 def _worker(client, worker_id):
     return client.get(f"/api/v1/fleet/workers/{worker_id}").json()
+
+
+async def _worker_org_id(app, worker_id):
+    worker = await app.state.fleet_registry.get_worker(worker_id)
+    assert worker is not None
+    return worker.org_id
 
 
 def test_register_scrubs_body_project_id(client):
@@ -91,7 +100,8 @@ def test_unknown_worker_claim_401(client):
     assert r.status_code == 401
 
 
-def test_report_wrong_worker_denied_and_idempotent(app_token):
+@pytest.mark.asyncio
+async def test_report_wrong_worker_denied_and_idempotent(app_token):
     app, sf, token = app_token
     c = TestClient(app)
     c.headers.update({"Authorization": f"Bearer {token}"})
@@ -100,7 +110,8 @@ def test_report_wrong_worker_denied_and_idempotent(app_token):
     _approve(c, wid)
     worker = TestClient(app)
     # Enqueue a task and claim it as this worker.
-    app.state.fleet_task_store.enqueue({"run_id": "r1", "model": "gpt-4o", "pool": "default"})
+    org_id = await _worker_org_id(app, wid)
+    await app.state.fleet_task_store.enqueue({"run_id": "r1", "org_id": org_id, "model": "gpt-4o", "pool": "default"})
     claim = worker.post("/api/v1/fleet/claim", headers=_wh(wid, secret), json={})
     assert claim.status_code == 200, claim.text
     # A different (approved) worker cannot report it.

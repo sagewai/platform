@@ -277,7 +277,7 @@ async def main() -> None:
     print("  Enqueuing 6 tasks (3 acme, 1 globex, 1 initech, 1 global)…")
     for t in TASKS_TO_ENQUEUE:
         scope = t["project_id"] or "ORG-GLOBAL"
-        task_store.enqueue({
+        await task_store.enqueue({
             "run_id": t["run_id"],
             "model": t["model"],
             "pool": "default",

@@ -319,7 +319,7 @@ async def main() -> None:
     # 3. Enqueue the workload.
     tasks = _build_tasks(args.tasks)
     for t in tasks:
-        task_store.enqueue({
+        await task_store.enqueue({
             "run_id": t["run_id"],
             "model": t["model"],
             "pool": t["pool"],

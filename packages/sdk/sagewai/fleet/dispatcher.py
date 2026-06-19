@@ -28,7 +28,7 @@ Usage::
     dispatcher = FleetDispatcher(store=store, poll_timeout=5.0)
 
     # Enqueue a task (test helper)
-    store.enqueue({"run_id": "r1", "model": "gpt-4o", "pool": "default", "payload": "..."})
+    await store.enqueue({"run_id": "r1", "model": "gpt-4o", "pool": "default", "payload": "..."})
 
     # Worker claims
     task = await dispatcher.claim(
@@ -50,6 +50,8 @@ from sagewai.sandbox.models import NetworkPolicy, SandboxImageVariant, SandboxMo
 
 logger = logging.getLogger(__name__)
 
+_TERMINAL_STATUSES = ("completed", "failed")
+
 
 # ---------------------------------------------------------------------------
 # TaskStore protocol
@@ -67,6 +69,10 @@ class TaskStore(Protocol):
     Implementations must provide async ``claim_task`` and ``report_task``
     methods.  The dispatcher calls these in a polling loop.
     """
+
+    async def enqueue(self, task: dict[str, Any]) -> None:
+        """Persist a task onto the pending queue."""
+        ...
 
     async def claim_task(
         self,
@@ -105,6 +111,19 @@ class TaskStore(Protocol):
         claimed by worker_id; idempotent no-op for a same-worker+status duplicate."""
         ...
 
+    async def get_task(
+        self, run_id: str, *, org_id: str, project_id: str | None
+    ) -> dict[str, Any] | None:
+        """Return a status view of an in-scope task, or None."""
+        ...
+
+    async def list_tasks(
+        self, *, org_id: str, project_id: str | None,
+        status: str | None = None, limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Return status views for the org+project scope, newest first."""
+        ...
+
 
 # ---------------------------------------------------------------------------
 # InMemoryTaskStore — for testing
@@ -130,12 +149,14 @@ class InMemoryTaskStore:
         self._claimed: dict[str, dict[str, Any]] = {}  # run_id -> task
         self._completed: dict[str, dict[str, Any]] = {}  # run_id -> result
 
-    def enqueue(self, task: dict[str, Any]) -> None:
+    async def enqueue(self, task: dict[str, Any]) -> None:
         """Add a task to the pending queue.
 
         The task dict should contain at least ``run_id``.  Optional keys
         used for matching: ``model``, ``pool``, ``labels``.
         """
+        task.setdefault("status", "pending")
+        task.setdefault("created_at", datetime.now(timezone.utc).isoformat())
         self._pending.append(task)
 
     async def claim_task(
@@ -189,6 +210,7 @@ class InMemoryTaskStore:
             claimed = self._pending.pop(i)
             claimed["worker_id"] = worker_id
             claimed["claimed_at"] = datetime.now(timezone.utc).isoformat()
+            claimed["status"] = "claimed"
             self._claimed[claimed["run_id"]] = claimed
             return claimed
 
@@ -204,12 +226,16 @@ class InMemoryTaskStore:
         worker_id: str,
     ) -> None:
         """Complete a claimed task. Ownership-checked + idempotent."""
+        if status not in _TERMINAL_STATUSES:
+            raise ValueError(
+                f"Invalid report status {status!r} (only 'completed'/'failed' may be reported)"
+            )
         claimed = self._claimed.get(run_id)
         if claimed is not None:
             if claimed.get("worker_id") != worker_id:
                 raise NotTaskOwnerError(run_id)
             self._completed[run_id] = {
-                "run_id": run_id,
+                **claimed,
                 "status": status,
                 "output": output,
                 "error": error,
@@ -225,6 +251,44 @@ class InMemoryTaskStore:
                 return
             raise NotTaskOwnerError(run_id)
         raise NotTaskOwnerError(run_id)
+
+    @staticmethod
+    def _status_view(task: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "run_id": task.get("run_id"),
+            "status": task.get("status", "pending"),
+            "project_id": task.get("project_id"),
+            "pool": task.get("pool", "default"),
+            "model": task.get("model"),
+            "worker_id": task.get("worker_id"),
+            "claimed_at": task.get("claimed_at"),
+            "error": task.get("error"),
+            "output": task.get("output"),
+            "reported_at": task.get("reported_at"),
+            "created_at": task.get("created_at"),
+        }
+
+    def _scoped_all(self, org_id: str, project_id: str | None):
+        seen = set()
+        for t in (*self._completed.values(), *self._claimed.values(), *self._pending):
+            rid = t.get("run_id")
+            if rid in seen:
+                continue
+            seen.add(rid)
+            if t.get("org_id") == org_id and t.get("project_id") == project_id:
+                yield t
+
+    async def get_task(self, run_id, *, org_id, project_id):
+        for t in self._scoped_all(org_id, project_id):
+            if t.get("run_id") == run_id:
+                return self._status_view(t)
+        return None
+
+    async def list_tasks(self, *, org_id, project_id, status=None, limit=50):
+        tasks = [t for t in self._scoped_all(org_id, project_id)
+                 if status is None or t.get("status", "pending") == status]
+        tasks.sort(key=lambda t: t.get("created_at") or "", reverse=True)
+        return [self._status_view(t) for t in tasks[:limit]]
 
 
 # ---------------------------------------------------------------------------

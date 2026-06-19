@@ -162,7 +162,7 @@ async def main() -> None:
     agent.on_event(audit.create_event_hook(project_id="demo-project"))
 
     # Dispatch via fleet
-    task_store.enqueue({
+    await task_store.enqueue({
         "run_id": "demo-run-001",
         "model": "gpt-4o-mini",
         "pool": "default",
