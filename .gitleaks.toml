@@ -1,0 +1,27 @@
+# gitleaks config for sagewai/platform — extends the default ruleset and
+# allowlists known-benign tracked findings (fake test fixtures, docs
+# placeholders, and SHA-256 image digest pins — never live credentials).
+# Path-based (stable across history rewrites). Assessed at the 2026-06-20
+# go-live cutover.
+title = "sagewai gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Benign fixtures, docs placeholders, and digest pins."
+paths = [
+  '''packages/sdk/tests/connections/test_protocols_coap\.py''',
+  '''packages/sdk/tests/connections/test_credentials_vault\.py''',
+  '''packages/sdk/tests/admin/test_connections_tools_routes\.py''',
+  '''packages/sdk/tests/test_admin_inference_provider_routes\.py''',
+  '''packages/sdk/tests/cli/test_profiles_acl_cli\.py''',
+  '''packages/sdk/sagewai/examples/33_fleet_sealed_integration\.py''',
+  '''apps/docs/app/docs/connections/backends/vault/page\.mdx''',
+  '''packages/tool-runner/images/api/Dockerfile''',
+  '''packages/tool-runner/images/pins\.env''',
+  '''apps/docs/app/docs/api-reference/rest-api/page\.mdx''',
+  '''apps/docs/app/docs/guides/mcp-server/page\.mdx''',
+  '''apps/docs/app/docs/guides/litellm-integration/page\.mdx''',
+  '''tests/test_cli_commands\.py''',
+]
