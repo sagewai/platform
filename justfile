@@ -182,16 +182,27 @@ fleet_url  := env_var_or_default('SAGEWAI_ADMIN_URL', 'http://127.0.0.1:8000')
 
 # Start the local gateway for single-user fleet use (auto-creates an admin). Leave running.
 fleet-demo-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Serve on whatever host/port the fleet-* recipes target (fleet_url honors
+    # SAGEWAI_ADMIN_URL), so the gateway and the recipes can never desync.
+    host="$(python3 -c "import urllib.parse as u; print(u.urlparse('{{fleet_url}}').hostname or '127.0.0.1')")"
+    port="$(python3 -c "import urllib.parse as u; print(u.urlparse('{{fleet_url}}').port or 8000)")"
     SAGEWAI_HOME="{{fleet_home}}" uv run --package sagewai python scripts/fleet-local-setup.py
-    @echo "→ gateway on {{fleet_url}} — dev-trust on; fleet-* recipes auto-auth. Ctrl-C to stop."
+    echo "→ gateway on {{fleet_url}} (host=$host port=$port) — dev-trust on; fleet-* recipes auto-auth. Ctrl-C to stop."
     SAGEWAI_HOME="{{fleet_home}}" SAGEWAI_DEV_TRUST_LOCAL=1 \
-        uv run --package sagewai sagewai admin serve --host 127.0.0.1 --port 8000
+        exec uv run --package sagewai sagewai admin serve --host "$host" --port "$port"
 
 # Mint a short-lived admin token from the local dev-trust gateway (used by the recipes).
 [private]
 _fleet-token:
-    @curl -fsS -X POST "{{fleet_url}}/api/v1/auth/refresh" \
-        | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    resp="$(curl -fsS -X POST "{{fleet_url}}/api/v1/auth/refresh" 2>/dev/null)" || {
+      echo "ERROR: gateway not reachable at {{fleet_url}} — run 'just fleet-demo-up' first (or point SAGEWAI_ADMIN_URL at your gateway)." >&2
+      exit 1
+    }
+    printf '%s' "$resp" | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])"
 
 # Run a worker that executes AGENTS (the agent_task_handler) — auto-auths. Pass the LLM
 # key as a flag:  just fleet-run-agent w1 gpt-4o-mini --env OPENAI_API_KEY=sk-...

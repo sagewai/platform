@@ -180,18 +180,26 @@ async def test_report_clears_lease(store):
 
 
 @pytest.mark.asyncio
-async def test_init_fail_closed_on_019_shaped_sqlite(tmp_path):
-    """Real fail-closed on SQLite (always runs): a fleet_tasks stuck at migration
-    019 (no lease_expires_at/attempts) must fail init() at STARTUP, not at first
-    claim/renew/reap. create_all does NOT add columns to an existing table, so
-    init() must probe the columns on SQLite too."""
+async def test_init_upgrades_019_shaped_sqlite(tmp_path):
+    """init() upgrades an older local SQLite fleet_tasks in place (adds the lease
+    columns) instead of fail-closing, so a pre-020 home boots transparently. create_all
+    won't ALTER an existing table, so the upgrade pass does it. (Postgres still
+    fail-closes — Alembic owns its upgrades; see the integration test below.)"""
     eng = create_engine(f"sqlite+aiosqlite:///{tmp_path/'old.db'}")
     async with eng.begin() as conn:
         await conn.execute(text(
-            "CREATE TABLE fleet_tasks (run_id TEXT PRIMARY KEY, org_id TEXT NOT NULL, status TEXT)"
+            "CREATE TABLE fleet_tasks (run_id TEXT PRIMARY KEY, org_id TEXT NOT NULL, "
+            "project_id TEXT, pool TEXT NOT NULL DEFAULT 'default', model TEXT, "
+            "labels TEXT NOT NULL DEFAULT '{}', payload TEXT NOT NULL DEFAULT '{}', "
+            "status TEXT NOT NULL DEFAULT 'pending', worker_id TEXT, claimed_at TIMESTAMP, "
+            "output TEXT, error TEXT, reported_at TIMESTAMP, "
+            "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"
         ))
-    with pytest.raises(Exception):
-        await PostgresTaskStore(engine=eng).init()
+    await PostgresTaskStore(engine=eng).init()  # must NOT raise — upgrades in place
+    async with eng.connect() as conn:
+        res = await conn.exec_driver_sql("PRAGMA table_info(fleet_tasks)")
+        cols = {r[1] for r in res}
+    assert "lease_expires_at" in cols and "attempts" in cols
     await eng.dispose()
 
 

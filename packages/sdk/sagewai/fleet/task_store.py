@@ -47,19 +47,41 @@ class PostgresTaskStore:
         if self._inited:
             return
         from sqlalchemy import text
+        from sqlalchemy.exc import OperationalError, ProgrammingError
 
         from sagewai.db.models import Base
 
         eng = self._engine
         async with eng.begin() as conn:
             if eng.dialect.name == "sqlite":
+                # Build new tables, then upgrade an older home in place (add any model
+                # columns + indexes an existing fleet_tasks lacks) so the probe passes.
+                from sagewai.db.factory import add_missing_sqlite_columns
+
                 await conn.run_sync(Base.metadata.create_all)
-            # Fail-closed on BOTH dialects: a fleet_tasks stuck at migration 019
-            # (no lease_expires_at/attempts) raises HERE, not at first claim/renew/reap.
-            await conn.execute(
-                text("SELECT run_id, status, lease_expires_at, attempts FROM fleet_tasks LIMIT 0")
-            )
+                await conn.run_sync(add_missing_sqlite_columns)
+            # Fail-closed on BOTH dialects: a fleet_tasks missing lease_expires_at/attempts
+            # raises HERE, not at first claim/renew/reap.
+            try:
+                await conn.execute(
+                    text("SELECT run_id, status, lease_expires_at, attempts FROM fleet_tasks LIMIT 0")
+                )
+            except (OperationalError, ProgrammingError) as exc:
+                raise RuntimeError(self._unmigrated_hint(eng.dialect.name)) from exc
         self._inited = True
+
+    @staticmethod
+    def _unmigrated_hint(dialect: str) -> str:
+        if dialect == "postgresql":
+            return (
+                "fleet_tasks is missing columns from a newer migration. Run "
+                "`alembic upgrade head` against the database, then restart."
+            )
+        return (
+            "fleet_tasks in the local SQLite home is from an older version and could not "
+            "be auto-upgraded. Delete the fleet_tasks table (it's a transient queue — it "
+            "will be rebuilt) and restart."
+        )
 
     async def _ensure_init(self) -> None:
         if not self._inited:

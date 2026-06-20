@@ -56,13 +56,85 @@ def is_sqlite() -> bool:
     return get_engine().dialect.name == "sqlite"
 
 
+def add_missing_sqlite_columns(sync_conn) -> None:
+    """Upgrade an existing SQLite home in place by adding model columns it lacks.
+
+    ``create_all`` builds *new* tables but never ALTERs *existing* ones, so a home
+    created before a column-adding migration is missing those columns — and a
+    fail-closed startup probe (e.g. the fleet_tasks lease columns from migration 020)
+    then refuses to boot with a raw SQL error. Add every model column the live table
+    is missing so an older local home upgrades transparently on the next start.
+
+    SQLite-only (Postgres upgrades are owned by Alembic). Strictly additive — never
+    drops or retypes. Each column/index is attempted in its own SAVEPOINT so one
+    failure can't poison the others, and a column that can't be added with its full
+    spec is retried as a plain nullable column so it at least *exists* — a missing
+    column crashes a non-probed table at runtime, which is worse than a missing default.
+    """
+    from sqlalchemy import inspect as sa_inspect
+    from sqlalchemy import text as sa_text
+
+    def _try(clause: str) -> bool:
+        sp = sync_conn.begin_nested()  # SAVEPOINT: isolate this statement's failure
+        try:
+            sync_conn.execute(sa_text(clause))
+            sp.commit()
+            return True
+        except Exception:  # noqa: BLE001
+            sp.rollback()
+            return False
+
+    insp = sa_inspect(sync_conn)
+    ddl = sync_conn.dialect.ddl_compiler(sync_conn.dialect, None)
+    existing_tables = set(insp.get_table_names())
+    for table in Base.metadata.sorted_tables:
+        if table.name not in existing_tables:
+            continue  # create_all already built it at the current schema
+        have = {c["name"] for c in insp.get_columns(table.name)}
+        for col in table.columns:
+            if col.name in have:
+                continue
+            # Render the column the SAME way create_all does — correct quoting for
+            # string/empty defaults, CURRENT_TIMESTAMP for func.now(), etc. — rather
+            # than hand-building DEFAULT SQL from the raw server_default text.
+            candidates: list[str] = []
+            try:
+                candidates.append(
+                    f'ALTER TABLE "{table.name}" ADD COLUMN {ddl.get_column_specification(col)}'
+                )
+            except Exception:  # noqa: BLE001 — fall back to a bare column below
+                pass
+            coltype = col.type.compile(dialect=sync_conn.dialect)
+            candidates.append(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {coltype}')
+            if any(_try(c) for c in candidates):
+                logger.info("sqlite home upgrade: added %s.%s", table.name, col.name)
+            else:
+                logger.warning("sqlite home upgrade: could not add %s.%s", table.name, col.name)
+        # create_all won't add an index to a table that already exists (e.g. an index
+        # over a column we just added), so create any the live table is missing.
+        for index in table.indexes:
+            sp = sync_conn.begin_nested()
+            try:
+                index.create(bind=sync_conn, checkfirst=True)
+                sp.commit()
+            except Exception:  # noqa: BLE001 — best-effort; probe is the backstop
+                sp.rollback()
+                logger.warning("sqlite home upgrade: could not add index %s", index.name)
+
+
 async def ensure_schema() -> None:
-    """Bootstrap the SQLite schema via create_all. No-op on Postgres (Alembic owns it)."""
+    """Bootstrap + upgrade the SQLite schema. No-op on Postgres (Alembic owns it).
+
+    Creates any missing tables, then ALTERs in any model columns (and adds any indexes)
+    an *existing* table lacks, so a home from an older version upgrades in place
+    (e.g. the fleet_tasks lease columns + ix_fleet_tasks_lease from migration 020).
+    """
     engine = get_engine()
     if engine.dialect.name != "sqlite":
         return
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(add_missing_sqlite_columns)
 
 
 async def dispose_engine() -> None:
