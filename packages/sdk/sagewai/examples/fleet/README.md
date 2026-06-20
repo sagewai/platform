@@ -12,16 +12,20 @@ sagewai fleet enqueue --agent helper -m "…"  ──►│   gateway queues a t
        worker claims it → runs UniversalAgent → reports the reply
 ```
 
-> **Scope.** The task queue is in-memory on the gateway (demo/dev scale; tasks don't
-> survive a restart). This is the operator path to dispatch work to your fleet;
-> wiring Autopilot *missions* to remote workers is tracked separately
-> (sagewai/atelier#59). Everything here uses the shipped, hardened runtime
-> (token auth, project isolation, `--exec` env allowlist).
+> **Scope.** This is the operator path to dispatch **standalone agent tasks** to your
+> fleet, and it runs on the shipped, hardened runtime: a **durable task queue** (tasks
+> survive a gateway restart), **per-worker credentials**, token auth, project isolation,
+> and the `--exec` env allowlist. If a worker dies mid-task, the task is **automatically
+> requeued** (lease + reaper — see [Durability & recovery](#durability--recovery)).
+> Wiring Autopilot *multi-step missions* to remote workers is a separate, deferred track
+> (sagewai/atelier#59) and does not affect this path.
 
 ## Prerequisites
 
 - The gateway (admin server) running, reachable at `SAGEWAI_ADMIN_URL`.
-- A tenant **API token** (admin panel → API tokens) — the worker's credential.
+- A tenant **API token** (admin panel → API tokens) — authorizes registration and
+  `enqueue`. The worker then gets its **own** per-worker secret at registration
+  (captured automatically, stored under `$SAGEWAI_HOME/fleet/`).
 - An **LLM provider key** for the agent (e.g. `OPENAI_API_KEY`).
 
 ```bash
@@ -131,9 +135,26 @@ docker run --rm -i <your --docker-arg flags> \
 - **result:** exit `0` → reported `completed` (stdout = output); non-zero / timeout →
   `failed` (stderr = error).
 
-## Limitations
+## Durability & recovery
 
-- In-memory queue (no persistence/lease/requeue yet) and inline `UniversalAgent`
-  (no rich agent-spec management) — see sagewai/atelier#59.
-- The worker authenticates with an org/project API token; per-worker credentials are
-  also tracked in atelier#59.
+The task path on this page is durable end-to-end:
+
+- **Durable queue** — enqueued tasks are persisted (SQLite by default, Postgres in
+  production), so they survive a gateway restart; a task is never lost between
+  `enqueue` and `claim`. Claims are atomic across many workers
+  (`SELECT … FOR UPDATE SKIP LOCKED` on Postgres / a guarded CAS on SQLite), so exactly
+  one worker wins each task.
+- **Dead-worker recovery** — each claim takes a **lease** that the worker's heartbeat
+  keeps fresh. If a worker crashes or is killed mid-task, its lease expires and a
+  background **reaper** requeues the task for another worker (or fails it after a few
+  attempts, to bound a poison task). This is at-least-once execution, with no leader.
+- **Per-worker credentials** — the worker authenticates `claim`/`report`/`heartbeat`
+  with **its own secret**, captured at registration and stored under
+  `$SAGEWAI_HOME/fleet/` — not the shared API token (which only authorizes
+  registration and `enqueue`).
+
+## Still simulated (a separate track)
+
+The handler here runs an inline `UniversalAgent`. Richer agent-spec management and
+wiring Autopilot *multi-step missions* to remote workers are deferred to
+sagewai/atelier#59 — the **standalone task path on this page is fully real and shipped**.

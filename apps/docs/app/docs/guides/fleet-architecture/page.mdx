@@ -105,6 +105,10 @@ flowchart TD
 
 `openai/gpt-4o`, `gpt-4o`, and `GPT-4o` are all treated as the same model. The normalizer strips provider prefixes, lowercases, and replaces colons with hyphens.
 
+### Durability & recovery
+
+The task queue is **durable**: tasks are persisted (`fleet_tasks` table) and survive a gateway restart. Each claim holds a **lease** that the worker's heartbeat renews. A background **reaper** sweeps expired leases — when a worker crashes or is killed mid-task, its lease lapses and the task is **requeued** for another worker (or failed after a bounded number of attempts, to contain a poison task). The result is at-least-once execution with no leader election: the `status = 'claimed'` compare-and-set ensures exactly one writer wins each transition, so a reaper and a late-reporting worker can never both finalize a task.
+
 ---
 
 ## Heartbeat flow
