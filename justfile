@@ -164,6 +164,84 @@ fleet-run-gpu name:
         --models gpt-4o,ollama/llama3:70b --pool gpu-cluster \
         --labels gpu=a100,zone=us-east --max-concurrent 4
 
+# ── Fleet: single-user local (auto-auth, no manual token/login) ─────────────
+# One-command-per-step path for your own machine. `fleet-demo-up` starts the
+# gateway with loopback dev-trust (SAGEWAI_DEV_TRUST_LOCAL=1), so the fleet-*
+# recipes below mint a short-lived admin token from localhost automatically.
+# Single-user / single-org / LOOPBACK ONLY — never point these at a shared gateway.
+#
+# Typical flow (two terminals):
+#   T1:  just fleet-demo-up
+#   T2:  just fleet-selftest                         # prove it works (no LLM key)
+#   T2:  just fleet-run-agent w1 gpt-4o-mini --env OPENAI_API_KEY=sk-...   # real agents
+#   T3:  just fleet-approve-all                       # approve the worker
+#   T3:  just fleet-enqueue helper "Summarize Sagewai." gpt-4o-mini
+
+fleet_home := env_var_or_default('SAGEWAI_HOME', env_var('HOME') / '.sagewai')
+fleet_url  := env_var_or_default('SAGEWAI_ADMIN_URL', 'http://127.0.0.1:8000')
+
+# Start the local gateway for single-user fleet use (auto-creates an admin). Leave running.
+fleet-demo-up:
+    SAGEWAI_HOME="{{fleet_home}}" uv run --package sagewai python scripts/fleet-local-setup.py
+    @echo "→ gateway on {{fleet_url}} — dev-trust on; fleet-* recipes auto-auth. Ctrl-C to stop."
+    SAGEWAI_HOME="{{fleet_home}}" SAGEWAI_DEV_TRUST_LOCAL=1 \
+        uv run --package sagewai sagewai admin serve --host 127.0.0.1 --port 8000
+
+# Mint a short-lived admin token from the local dev-trust gateway (used by the recipes).
+[private]
+_fleet-token:
+    @curl -fsS -X POST "{{fleet_url}}/api/v1/auth/refresh" \
+        | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])"
+
+# Run a worker that executes AGENTS (the agent_task_handler) — auto-auths. Pass the LLM
+# key as a flag:  just fleet-run-agent w1 gpt-4o-mini --env OPENAI_API_KEY=sk-...
+fleet-run-agent name models *flags:
+    SAGEWAI_ADMIN_URL="{{fleet_url}}" SAGEWAI_ADMIN_TOKEN="$(just _fleet-token)" SAGEWAI_HOME="{{fleet_home}}" \
+        uv run --package sagewai sagewai fleet run --name {{quote(name)}} --models {{quote(models)}} {{flags}} \
+        --exec 'python -m sagewai.examples.fleet.agent_task_handler'
+
+# Run a worker with a CUSTOM --exec command, quoted properly (fleet-run's *flags can't).
+#   just fleet-run-exec w1 gpt-4o-mini 'python /path/handler.py' --env KEY=val
+fleet-run-exec name models exec *flags:
+    SAGEWAI_ADMIN_URL="{{fleet_url}}" SAGEWAI_ADMIN_TOKEN="$(just _fleet-token)" SAGEWAI_HOME="{{fleet_home}}" \
+        uv run --package sagewai sagewai fleet run --name {{quote(name)}} --models {{quote(models)}} {{flags}} \
+        --exec {{quote(exec)}}
+
+# Assign a task to the fleet — auto-auths. The message is quoted, so spaces are fine.
+#   just fleet-enqueue helper "Summarize Sagewai in one line." gpt-4o-mini
+fleet-enqueue agent message model="gpt-4o-mini":
+    SAGEWAI_ADMIN_URL="{{fleet_url}}" SAGEWAI_ADMIN_TOKEN="$(just _fleet-token)" \
+        uv run --package sagewai sagewai fleet enqueue --agent {{quote(agent)}} --message {{quote(message)}} --model {{quote(model)}}
+
+# Approve all pending workers (so you don't have to copy worker ids).
+fleet-approve-all:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    token="$(just _fleet-token)"
+    ids="$(curl -fsS "{{fleet_url}}/api/v1/fleet/workers" -H "Authorization: Bearer $token" \
+      | python3 -c "import sys,json;d=json.load(sys.stdin);ws=d if isinstance(d,list) else d.get('workers') or d.get('items') or [];print(chr(10).join((w.get('worker_id') or w.get('id') or '') for w in ws if str(w.get('approval_status') or w.get('status') or '').lower().startswith('pend')))")"
+    if [ -z "$ids" ]; then echo "no pending workers"; exit 0; fi
+    while read -r wid; do
+      [ -n "$wid" ] || continue
+      curl -fsS -X POST "{{fleet_url}}/api/v1/fleet/workers/$wid/approve" -H "Authorization: Bearer $token" >/dev/null
+      echo "approved $wid"
+    done <<< "$ids"
+
+# Prove the local fleet works end-to-end with NO LLM/key: register+approve a worker,
+# enqueue a trivial task, run it once, print the captured output. Needs fleet-demo-up.
+fleet-selftest:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export SAGEWAI_ADMIN_URL="{{fleet_url}}" SAGEWAI_HOME="{{fleet_home}}"
+    token="$(just _fleet-token)"; export SAGEWAI_ADMIN_TOKEN="$token"
+    handler="$(mktemp)"
+    printf 'import sys,json,os\nt=json.load(sys.stdin)\nm=(t.get("payload") or {}).get("message","")\nprint(f"[worker pid={os.getpid()}] ran {t[\"run_id\"]} -> {m.upper()}")\n' > "$handler"
+    wid="$(uv run --package sagewai sagewai fleet run --register-only --name selftest-$$ --models gpt-4o-mini | grep -oiE '[0-9a-f-]{36}' | head -1)"
+    curl -fsS -X POST "$SAGEWAI_ADMIN_URL/api/v1/fleet/workers/$wid/approve" -H "Authorization: Bearer $token" >/dev/null
+    echo "✓ worker $wid registered + approved"
+    uv run --package sagewai sagewai fleet enqueue --agent selftest --message "fleet works" --model gpt-4o-mini
+    uv run --package sagewai sagewai fleet run --once --worker-id "$wid" --models gpt-4o-mini --exec "python $handler"
+
 # Start backend + admin via Docker (scripts/admin-up.sh)
 admin-up:
     ./scripts/admin-up.sh
