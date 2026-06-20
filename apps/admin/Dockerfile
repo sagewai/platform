@@ -15,7 +15,7 @@
 #     ghcr.io/sagewai/admin:latest
 
 # ──── Stage 1: Dependencies ────────────────────────────────────────────────
-FROM node:24-alpine@sha256:01743339035a5c3c11a373cd7c83aeab6ed1457b55da6a69e014a95ac4e4700b AS deps
+FROM node:26-alpine@sha256:a2dc166a387cc6ca1e62d0c8e265e49ca985d6e60abc9fe6e6c3d6ce8e63f606 AS deps
 WORKDIR /app
 
 # CI=true tells pnpm 11 not to prompt for `node_modules` purges on TTY-less
@@ -30,7 +30,7 @@ COPY package.json ./
 RUN corepack enable pnpm && pnpm install --prod=false
 
 # ──── Stage 2: Build ───────────────────────────────────────────────────────
-FROM node:24-alpine@sha256:01743339035a5c3c11a373cd7c83aeab6ed1457b55da6a69e014a95ac4e4700b AS builder
+FROM node:26-alpine@sha256:a2dc166a387cc6ca1e62d0c8e265e49ca985d6e60abc9fe6e6c3d6ce8e63f606 AS builder
 WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
@@ -52,7 +52,7 @@ ENV NEXT_PUBLIC_ADMIN_API_URL=${NEXT_PUBLIC_ADMIN_API_URL}
 RUN corepack enable pnpm && pnpm build
 
 # ──── Stage 3: Production Runtime ──────────────────────────────────────────
-FROM node:24-alpine@sha256:01743339035a5c3c11a373cd7c83aeab6ed1457b55da6a69e014a95ac4e4700b AS runner
+FROM node:26-alpine@sha256:a2dc166a387cc6ca1e62d0c8e265e49ca985d6e60abc9fe6e6c3d6ce8e63f606 AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
