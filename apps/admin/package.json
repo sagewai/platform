@@ -1,6 +1,6 @@
 {
   "name": "@sagewai/admin",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Sagewai Admin Panel — web interface for managing agents, workflows, and AI infrastructure",
   "scripts": {

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sagewai"
-version = "1.0.0"
+version = "1.0.1"
 description = "Sagewai is the autonomous agent platform: describe the goal, we design the agents, run them in production, and fine-tune local models so every run gets cheaper."
 readme = "README.md"
 requires-python = ">=3.10"
