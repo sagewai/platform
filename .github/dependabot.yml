@@ -1,10 +1,12 @@
 version: 2
 
-# CI-cost note: schedule is monthly and each ecosystem groups its
-# minor/patch bumps into a single PR (majors still open individually,
-# so risky upgrades stay reviewable). This collapses what used to be
-# ~50 separate PRs/week — each triggering a full CI matrix — into a
-# handful of grouped PRs/month.
+# Unified monthly dependency policy
+# ---------------------------------
+# Every ecosystem runs ONCE A MONTH, all at the same time
+# (Europe/Berlin 06:00), and groups ALL of its updates — patch, minor,
+# AND major — into a single PR per ecosystem. Known-incompatible majors
+# are held back via `ignore`. Net effect: one coordinated batch of a few
+# grouped PRs per month (each gated by CI), not a stream of individual PRs.
 
 updates:
   # Python SDK dependencies
@@ -12,6 +14,8 @@ updates:
     directory: "/packages/sdk"
     schedule:
       interval: "monthly"
+      time: "06:00"
+      timezone: "Europe/Berlin"
     open-pull-requests-limit: 10
     reviewers:
       - "sagecurator"
@@ -24,21 +28,15 @@ updates:
       sdk-dependencies:
         patterns:
           - "*"
-        update-types:
-          - "minor"
-          - "patch"
     ignore:
-      # transformers 5.x does not resolve: docling-ibm-models (via
-      # docling-slim[standard]) requires an older transformers, and
-      # gliner==0.2.26 caps transformers <5.2.0. Both 5.9.0 (#393) and
-      # 5.1.0 (#409) failed universal resolution. Block all of 5.x until
-      # docling and gliner support it.
+      # transformers 5.x does not resolve: docling-ibm-models requires an
+      # older transformers and gliner caps transformers <5.2.0. Block 5.x
+      # until docling and gliner support it.
       - dependency-name: "transformers"
         versions:
           - ">=5.0.0"
-      # Hold pymilvus on the stable 2.6.x line: pymilvus 3.x targets the
-      # Milvus 3.0 server, but our docker-compose pins the Milvus server to
-      # v2.6.17. Allow minor/patch, block majors until stable Milvus 3 ships.
+      # Hold pymilvus on 2.6.x: 3.x targets the Milvus 3.0 server but our
+      # compose pins Milvus to v2.6.17. Block majors until stable Milvus 3.
       - dependency-name: "pymilvus"
         update-types:
           - "version-update:semver-major"
@@ -48,6 +46,8 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
+      time: "06:00"
+      timezone: "Europe/Berlin"
     open-pull-requests-limit: 5
     reviewers:
       - "sagecurator"
@@ -57,15 +57,14 @@ updates:
       github-actions:
         patterns:
           - "*"
-        update-types:
-          - "minor"
-          - "patch"
 
   # Admin UI (npm)
   - package-ecosystem: "npm"
     directory: "/apps/admin"
     schedule:
       interval: "monthly"
+      time: "06:00"
+      timezone: "Europe/Berlin"
     open-pull-requests-limit: 10
     reviewers:
       - "sagecurator"
@@ -78,15 +77,14 @@ updates:
       admin-npm:
         patterns:
           - "*"
-        update-types:
-          - "minor"
-          - "patch"
 
   # Docs site (npm)
   - package-ecosystem: "npm"
     directory: "/apps/docs"
     schedule:
       interval: "monthly"
+      time: "06:00"
+      timezone: "Europe/Berlin"
     open-pull-requests-limit: 10
     reviewers:
       - "sagecurator"
@@ -99,15 +97,14 @@ updates:
       docs-npm:
         patterns:
           - "*"
-        update-types:
-          - "minor"
-          - "patch"
 
   # VS Code extension (npm)
   - package-ecosystem: "npm"
     directory: "/apps/vscode-extension"
     schedule:
       interval: "monthly"
+      time: "06:00"
+      timezone: "Europe/Berlin"
     open-pull-requests-limit: 10
     reviewers:
       - "sagecurator"
@@ -120,15 +117,14 @@ updates:
       vscode-npm:
         patterns:
           - "*"
-        update-types:
-          - "minor"
-          - "patch"
 
   # Backend Docker image
   - package-ecosystem: "docker"
     directory: "/apps/backend"
     schedule:
       interval: "monthly"
+      time: "06:00"
+      timezone: "Europe/Berlin"
     open-pull-requests-limit: 5
     reviewers:
       - "sagecurator"
@@ -141,14 +137,8 @@ updates:
       backend-docker:
         patterns:
           - "*"
-        update-types:
-          - "minor"
-          - "patch"
     ignore:
-      # Python 3.14 isn't in our CI test matrix (3.10/3.13) and no
-      # docker-build/test exercises it (#386, #407). Block 3.14+ so it stops
-      # re-proposing monthly; a future 3.13 bump (tested) is still allowed.
-      # Lift this once 3.14 is added to CI.
+      # Python 3.14 isn't in our CI matrix (3.10/3.13). Block 3.14+ until added.
       - dependency-name: "python"
         versions:
           - ">=3.14"
@@ -158,6 +148,8 @@ updates:
     directory: "/apps/admin"
     schedule:
       interval: "monthly"
+      time: "06:00"
+      timezone: "Europe/Berlin"
     open-pull-requests-limit: 5
     reviewers:
       - "sagecurator"
@@ -170,6 +162,3 @@ updates:
       admin-docker:
         patterns:
           - "*"
-        update-types:
-          - "minor"
-          - "patch"
