@@ -20,6 +20,26 @@ sagewai fleet enqueue --agent helper -m "…"  ──►│   gateway queues a t
 > Wiring Autopilot *multi-step missions* to remote workers is a separate, deferred track
 > (sagewai/atelier#59) and does not affect this path.
 
+## Fastest path — `just` (single-user, local)
+
+On your own machine these recipes run the whole loop with **auto-auth** (loopback
+dev-trust — no manual token or login). In two terminals:
+
+```bash
+# terminal 1 — gateway: auto-creates an admin, serves with dev-trust
+just fleet-demo-up
+
+# terminal 2 — prove it end-to-end with NO LLM key, then run real agents
+just fleet-selftest
+just fleet-run-agent w1 gpt-4o-mini --env OPENAI_API_KEY=sk-...
+just fleet-approve-all
+just fleet-enqueue helper "Summarize Sagewai in one line." gpt-4o-mini
+```
+
+> Single-user / single-org / loopback only — don't point these at a shared gateway.
+> `just --list | grep fleet` shows them all. The sections below are the explicit,
+> step-by-step path (and what production looks like).
+
 ## Prerequisites
 
 - The gateway (admin server) running, reachable at `SAGEWAI_ADMIN_URL`.
