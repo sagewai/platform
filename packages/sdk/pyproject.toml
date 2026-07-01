@@ -37,31 +37,31 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "litellm==1.88.0",
-    "google-genai==2.8.0",
+    "litellm==1.90.2",
+    "google-genai==2.10.0",
     "pydantic>=2.12.5",
     "python-dotenv==1.2.2",
     "httpx==0.28.1",
     "tenacity==9.1.4",
     "pyjwt==2.13.0",
-    "opentelemetry-api==1.42.1",
-    "opentelemetry-sdk==1.42.1",
+    "opentelemetry-api==1.43.0",
+    "opentelemetry-sdk==1.43.0",
     "pyyaml==6.0.3",
     "click>=8.4.1",
-    "pymilvus==2.6.15",
-    "cryptography==48.0.1",
+    "pymilvus==2.6.16",
+    "cryptography==49.0.0",
     "mnemonic==0.21",
     "duckduckgo-search==8.1.1",
-    "pypdf==6.13.3",
+    "pypdf==6.14.2",
     "readability-lxml==0.8.4.1",
     # Durable local persistence (SQLite default; Postgres via SAGEWAI_DATABASE_URL).
-    "sqlalchemy[asyncio]==2.0.50",
+    "sqlalchemy[asyncio]==2.0.51",
     "aiosqlite==0.22.1",
     "sqlite-vec==0.1.9",
     # Web/admin server stack — base deps so `pip install sagewai` yields a
     # working CLI and `sagewai admin serve` (the documented quickstart).
-    "fastapi==0.136.3",
-    "sse-starlette==3.4.4",
+    "fastapi==0.138.2",
+    "sse-starlette==3.4.5",
     "uvicorn==0.49.0",
     "python-multipart==0.0.32",
 ]
@@ -75,31 +75,31 @@ Changelog = "https://github.com/sagewai/platform/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 memory = [
-    "docling==2.97.0",
+    "docling==2.107.0",
     "tree-sitter-languages==1.10.2",
     "tiktoken==0.13.0",
-    "pymilvus==2.6.15",
+    "pymilvus==2.6.16",
     "nebula3-python==3.8.3",
 ]
 coap = [
     "aiocoap==0.4.17",
 ]
 modbus = [
-    "pymodbus==3.13.0",
+    "pymodbus==3.13.1",
 ]
 mqtt = [
     "aiomqtt==2.5.1",
 ]
 opcua = [
-    "asyncua==2.0",
+    "asyncua==2.0.1",
 ]
 websocket = [
     "websockets==16.0",
     "jsonpath-ng==1.8.0",
 ]
 grpc = [
-    "grpcio==1.81.0",
-    "grpcio-reflection==1.81.0",
+    "grpcio==1.81.1",
+    "grpcio-reflection==1.81.1",
 ]
 # fastapi/uvicorn/python-multipart are now base dependencies (the CLI and
 # `sagewai admin serve` require them). This extra is kept as a no-op alias so
@@ -107,19 +107,19 @@ grpc = [
 fastapi = []
 postgres = [
     "asyncpg==0.31.0",
-    "alembic==1.18.4",
+    "alembic==1.18.5",
 ]
 prometheus = [
     "prometheus_client==0.25.0",
 ]
 storage = [
-    "boto3==1.43.24",
-    "google-cloud-storage==3.11.0",
+    "boto3==1.43.38",
+    "google-cloud-storage==3.12.0",
 ]
 intelligence = [
-    "sentence-transformers==5.5.1",
+    "sentence-transformers==5.6.0",
     "lingua-language-detector==2.1.1",
-    "gliner==0.2.26",
+    "gliner==0.2.27",
 ]
 multimodal = [
     "faster-whisper==1.2.1",
@@ -128,7 +128,7 @@ multimodal = [
 intelligence-full = [
     "sagewai[intelligence,multimodal]",
     "transformers==4.57.6",
-    "torch==2.12.0",
+    "torch==2.12.1",
 ]
 all = [
     "sagewai[memory,fastapi,postgres,prometheus,storage,intelligence,multimodal]",
@@ -167,13 +167,13 @@ test = [
     "hvac==2.4.0",
     "respx==0.23.1",
     "aiocoap==0.4.17",
-    "pymodbus==3.13.0",
-    "asyncua==2.0",
+    "pymodbus==3.13.1",
+    "asyncua==2.0.1",
     "websockets==16.0",
     "jsonpath-ng==1.8.0",
     "aiomqtt==2.5.1",
-    "grpcio==1.81.0",
-    "grpcio-reflection==1.81.0",
+    "grpcio==1.81.1",
+    "grpcio-reflection==1.81.1",
     "sqlite-vec==0.1.9",
 ]
 
