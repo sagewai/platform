@@ -19,7 +19,7 @@
 #     ghcr.io/sagewai/backend:latest
 
 # ── Stage 1: builder ────────────────────────────────────────────────────────
-FROM python:3.13.14-slim@sha256:c33f0bc4364a6881bed1ec0cc2665e6c53c87a43e774aaeab88e6f17af105e4f AS builder
+FROM python:3.13.14-slim@sha256:eb43ff125d8d58d7449dcba7d336c23bcac412f526d861db493b9994d8010280 AS builder
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONDONTWRITEBYTECODE=1
@@ -62,7 +62,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         pip install --no-deps "/build/sdk[fastapi,postgres]"
 
 # ── Stage 2: runtime ────────────────────────────────────────────────────────
-FROM python:3.13.14-slim@sha256:c33f0bc4364a6881bed1ec0cc2665e6c53c87a43e774aaeab88e6f17af105e4f AS runtime
+FROM python:3.13.14-slim@sha256:eb43ff125d8d58d7449dcba7d336c23bcac412f526d861db493b9994d8010280 AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
