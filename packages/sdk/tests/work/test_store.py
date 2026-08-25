@@ -134,6 +134,20 @@ async def test_event_stream_cannot_fork_projects_before_projection(
 
 
 @pytest.mark.asyncio
+async def test_projection_cannot_fork_from_existing_event_stream(
+    store: WorkStore,
+) -> None:
+    await store.append_event(_event(1, project_id=None))
+
+    with pytest.raises(ValueError, match="different project"):
+        await store.save_work(_record(project_id="project-a"))
+
+    assert await store.load_work("work-1", project_id="project-a") is None
+    events = await store.read_events("work-1", project_id=None)
+    assert [event.sequence for event in events] == [1]
+
+
+@pytest.mark.asyncio
 async def test_projection_save_load_and_profile_context_round_trip(store: WorkStore) -> None:
     await store.save_work(_record())
     updated = _record(

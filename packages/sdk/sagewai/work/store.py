@@ -102,6 +102,16 @@ class WorkStore:
             if existing is not None and existing.project_id != record.project_id:
                 raise ValueError("work_id belongs to a different project")
 
+            existing_event = (
+                await conn.execute(
+                    select(self._work_events.c.project_id)
+                    .where(self._work_events.c.work_id == record.work_id)
+                    .limit(1)
+                )
+            ).first()
+            if existing_event is not None and existing_event.project_id != record.project_id:
+                raise ValueError("work_id belongs to a different project")
+
             statement = upsert(
                 table,
                 values,
