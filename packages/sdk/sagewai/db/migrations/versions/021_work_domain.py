@@ -23,10 +23,6 @@ branch_labels = None
 depends_on = None
 
 
-def _json_type():
-    return sa.JSON().with_variant(postgresql.JSONB(), "postgresql")
-
-
 def upgrade() -> None:
     op.create_table(
         "work_items",
@@ -38,7 +34,7 @@ def upgrade() -> None:
         sa.Column("contract_version", sa.Integer(), nullable=True),
         sa.Column("active_run_id", sa.Text(), nullable=True),
         sa.Column("pending_gate", sa.Text(), nullable=True),
-        sa.Column("profile_context", _json_type(), nullable=False),
+        sa.Column("profile_context", postgresql.JSONB(), nullable=False),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -63,7 +59,7 @@ def upgrade() -> None:
         sa.Column("event_type", sa.Text(), nullable=False),
         sa.Column("actor_type", sa.Text(), nullable=False),
         sa.Column("actor_ref", sa.Text(), nullable=True),
-        sa.Column("payload_json", _json_type(), nullable=False),
+        sa.Column("payload_json", postgresql.JSONB(), nullable=False),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

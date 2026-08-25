@@ -39,7 +39,7 @@ class WorkStore:
         self._work_events = WorkEventModel.__table__
 
     async def init(self) -> None:
-        """Create Work tables for SQLite; Alembic owns PostgreSQL schema."""
+        """Bootstrap the schema on SQLite; Alembic owns PostgreSQL schema."""
         if self._engine.dialect.name != "sqlite":
             return
         async with self._engine.begin() as conn:
@@ -50,6 +50,26 @@ class WorkStore:
         values = event.model_dump(mode="python")
         values["event_type"] = event.event_type.value
         async with self._engine.begin() as conn:
+            projection = (
+                await conn.execute(
+                    select(self._work_items.c.project_id).where(
+                        self._work_items.c.work_id == event.work_id
+                    )
+                )
+            ).first()
+            if projection is not None and projection.project_id != event.project_id:
+                raise ValueError("work_id belongs to a different project")
+
+            existing_event = (
+                await conn.execute(
+                    select(self._work_events.c.project_id)
+                    .where(self._work_events.c.work_id == event.work_id)
+                    .limit(1)
+                )
+            ).first()
+            if existing_event is not None and existing_event.project_id != event.project_id:
+                raise ValueError("work_id belongs to a different project")
+
             await conn.execute(insert(self._work_events).values(**values))
 
     async def read_events(

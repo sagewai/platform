@@ -7,17 +7,25 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""Migration 021 revision and portable Work-domain DDL tests."""
+"""Migration 021: revision-chain guard + Postgres-gated up/down round-trip."""
 
 from __future__ import annotations
 
 import importlib
+import os
 
-import sqlalchemy as sa
+import pytest
+from alembic import command as alembic_command
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.schema import CreateTable
 
+from sagewai.cli.db import build_alembic_config
 from sagewai.db.models import WorkEventModel, WorkItemModel
+
+DB_URL = os.environ.get(
+    "SAGEWAI_DATABASE_URL",
+    "postgresql+asyncpg://sagewai:sagewai@localhost:5432/sagewai",
+)
 
 
 def test_migration_021_revision_chain() -> None:
@@ -25,6 +33,7 @@ def test_migration_021_revision_chain() -> None:
 
     assert mod.revision == "021_work_domain"
     assert mod.down_revision == "020_fleet_task_lease"
+    assert callable(mod.upgrade) and callable(mod.downgrade)
 
 
 def test_work_tables_compile_with_postgres_jsonb_mapping() -> None:
@@ -38,48 +47,12 @@ def test_work_tables_compile_with_postgres_jsonb_mapping() -> None:
     assert "UNIQUE (work_id, sequence)" in work_events
 
 
-def test_migration_021_up_down_against_sqlite() -> None:
-    mod = importlib.import_module("sagewai.db.migrations.versions.021_work_domain")
-    engine = sa.create_engine("sqlite://")
+@pytest.mark.integration
+class TestMigration021RoundTrip:
+    def _cfg(self):
+        return build_alembic_config(DB_URL)
 
-    from alembic.migration import MigrationContext
-    from alembic.operations import Operations
-
-    with engine.begin() as conn:
-        context = MigrationContext.configure(conn)
-        with Operations.context(context):
-            mod.upgrade()
-            inspector = sa.inspect(conn)
-            assert {"work_items", "work_events"} <= set(inspector.get_table_names())
-            assert {
-                "work_id",
-                "project_id",
-                "source_ref",
-                "profile",
-                "status",
-                "contract_version",
-                "active_run_id",
-                "pending_gate",
-                "profile_context",
-                "created_at",
-                "updated_at",
-            } == {column["name"] for column in inspector.get_columns("work_items")}
-            assert {
-                "id",
-                "project_id",
-                "work_id",
-                "sequence",
-                "event_type",
-                "actor_type",
-                "actor_ref",
-                "payload_json",
-                "created_at",
-            } == {column["name"] for column in inspector.get_columns("work_events")}
-            unique_columns = {
-                tuple(constraint["column_names"])
-                for constraint in inspector.get_unique_constraints("work_events")
-            }
-            assert ("work_id", "sequence") in unique_columns
-
-            mod.downgrade()
-            assert {"work_items", "work_events"}.isdisjoint(sa.inspect(conn).get_table_names())
+    def test_up_down_up(self):
+        alembic_command.upgrade(self._cfg(), "021_work_domain")
+        alembic_command.downgrade(self._cfg(), "020_fleet_task_lease")
+        alembic_command.upgrade(self._cfg(), "021_work_domain")

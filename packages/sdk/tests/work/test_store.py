@@ -109,6 +109,31 @@ async def test_event_reads_are_project_scoped(store: WorkStore) -> None:
 
 
 @pytest.mark.asyncio
+async def test_event_append_rejects_projection_project_mismatch(
+    store: WorkStore,
+) -> None:
+    await store.save_work(_record(project_id=None))
+
+    with pytest.raises(ValueError, match="different project"):
+        await store.append_event(_event(1, project_id="project-b"))
+
+    assert await store.read_events("work-1", project_id="project-b") == []
+
+
+@pytest.mark.asyncio
+async def test_event_stream_cannot_fork_projects_before_projection(
+    store: WorkStore,
+) -> None:
+    await store.append_event(_event(1, project_id=None))
+
+    with pytest.raises(ValueError, match="different project"):
+        await store.append_event(_event(2, project_id="project-b"))
+
+    events = await store.read_events("work-1", project_id=None)
+    assert [event.sequence for event in events] == [1]
+
+
+@pytest.mark.asyncio
 async def test_projection_save_load_and_profile_context_round_trip(store: WorkStore) -> None:
     await store.save_work(_record())
     updated = _record(
