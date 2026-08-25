@@ -1897,3 +1897,48 @@ class FleetTaskModel(Base):
     )
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
+
+class WorkItemModel(Base):
+    """Current projection for a generic WorkItem."""
+
+    __tablename__ = "work_items"
+    __table_args__ = (Index("ix_work_items_project_id", "project_id"),)
+
+    work_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    project_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
+    profile: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    contract_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    active_run_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pending_gate: Mapped[str | None] = mapped_column(Text, nullable=True)
+    profile_context: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class WorkEventModel(Base):
+    """One immutable event in a generic WorkItem stream."""
+
+    __tablename__ = "work_events"
+    __table_args__ = (
+        UniqueConstraint("work_id", "sequence", name="uq_work_events_work_sequence"),
+        Index("ix_work_events_project_work_sequence", "project_id", "work_id", "sequence"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    project_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    work_id: Mapped[str] = mapped_column(Text, nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_type: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload_json: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
