@@ -62,6 +62,17 @@ class TaskCapsuleCompiler:
                     if len(selected) == self._max_knowledge_items:
                         break
 
+            for item_id in prior_result_refs:
+                if len(selected) == self._max_knowledge_items:
+                    break
+                if item_id in selected_ids:
+                    continue
+                item = await self._knowledge_store.get(item_id, project_id=project_id)
+                if item is None or item.work_id not in {None, work_item.id}:
+                    continue
+                selected.append(item)
+                selected_ids.add(item.id)
+
             if search_text and len(selected) < self._max_knowledge_items:
                 matches = await self._knowledge_store.search(
                     KnowledgeQuery(text=search_text, project_id=project_id)

@@ -22,11 +22,15 @@ from sagewai.work import (
     ActionIntent,
     ActionResult,
     ActionScope,
+    Assumption,
     ClaimClassification,
     ControlPrecondition,
     ControlPreconditionKind,
     OperatorDisciplineReport,
     Reversibility,
+    ReviewFinding,
+    ReviewResult,
+    VerificationResult,
     WorkContract,
     WorkEventType,
     WorkItem,
@@ -117,6 +121,42 @@ def test_profile_context_round_trips_without_interpretation() -> None:
 
     assert restored == contract
     assert restored.profile_context == {"opaque": {"base_sha": "not-kernel-data"}}
+
+
+def test_assumption_verification_and_review_models_are_typed_and_immutable() -> None:
+    assumption = Assumption(
+        id="assumption-1",
+        statement="A compatibility path is required",
+        kind="compatibility",
+        evidence_refs=(),
+        confidence="low",
+        impact_if_wrong="high",
+        status="open",
+    )
+    verification = VerificationResult(
+        attempt_id="verify-1",
+        passed=False,
+        evidence_refs=("knowledge-verification-1",),
+        profile_context={"checks": [{"command": "just smoke", "exit_code": 1}]},
+    )
+    finding = ReviewFinding(
+        severity="high",
+        claim="The compatibility path is unsupported",
+        evidence_refs=("knowledge-verification-1",),
+        required_change="Remove the unsupported compatibility path",
+        profile_context={"file": "target.py", "line": 12},
+    )
+    review = ReviewResult(
+        attempt_id="review-1",
+        verdict="repair",
+        findings=(finding,),
+        evidence_refs=("review://review-1",),
+    )
+
+    assert verification.passed is False
+    assert review.findings == (finding,)
+    with pytest.raises(ValidationError):
+        assumption.status = "validated"  # type: ignore[misc]
 
 
 def test_action_and_discipline_models_match_the_generic_contract() -> None:

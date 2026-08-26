@@ -129,7 +129,10 @@ class Workspace(Protocol):
     """Workspace boundary supplied to an OperatorRuntime."""
 
     ref: str
-    project_id: str | None
+
+    @property
+    def project_id(self) -> str | None: ...
+
     work_id: str
     path: Path
 

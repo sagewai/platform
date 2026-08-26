@@ -145,6 +145,25 @@ async def test_compiler_builds_fresh_capsule_without_session_history(
     assert "session" not in TaskCapsule.model_fields
 
 
+@pytest.mark.asyncio
+async def test_compiler_resolves_prior_result_knowledge_for_fresh_stage(
+    knowledge_store: KnowledgeStore,
+) -> None:
+    prior = _knowledge("verification-1", "Verification command passed")
+    await knowledge_store.publish(prior)
+
+    capsule = await TaskCapsuleCompiler(knowledge_store=knowledge_store).compile(
+        work_item=_work_item(),
+        contract=_contract(),
+        stage="review",
+        prior_result_refs=(prior.id, "command://opaque"),
+    )
+
+    assert capsule.knowledge_refs == (prior.id,)
+    assert capsule.knowledge_items == (prior,)
+    assert capsule.prior_result_refs == (prior.id, "command://opaque")
+
+
 def test_task_capsule_keeps_profile_context_opaque() -> None:
     capsule = TaskCapsule(
         work_id="work-1",

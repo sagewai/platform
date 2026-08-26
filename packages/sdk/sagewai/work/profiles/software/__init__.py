@@ -9,22 +9,46 @@
 # See COMMERCIAL-LICENSE.md for details.
 """Public API for the software Work profile."""
 
+from sagewai.work.profiles.software.lifecycle import (
+    SoftwareLifecycle,
+    SoftwareStageOperator,
+)
 from sagewai.work.profiles.software.models import (
     SoftwareAttemptContext,
     SoftwareCapsuleContext,
     SoftwareContractContext,
+    SoftwareRepairContext,
+    SoftwareReviewContext,
+    SoftwareReviewFindingContext,
+    SoftwareVerificationCheck,
     SoftwareWorkspace,
     WorkspaceStaleError,
 )
-from sagewai.work.profiles.software.scm import SoftwareWorktreeManager
-from sagewai.work.profiles.software.verification import SoftwareResultValidator
+from sagewai.work.profiles.software.scm import (
+    SoftwareWorktreeManager,
+    workspace_diff,
+)
+from sagewai.work.profiles.software.verification import (
+    SoftwareReadOnlyResultValidator,
+    SoftwareResultValidator,
+    SoftwareVerifier,
+)
 
 __all__ = [
     "SoftwareAttemptContext",
     "SoftwareCapsuleContext",
     "SoftwareContractContext",
+    "SoftwareLifecycle",
+    "SoftwareReadOnlyResultValidator",
+    "SoftwareRepairContext",
     "SoftwareResultValidator",
+    "SoftwareReviewContext",
+    "SoftwareReviewFindingContext",
+    "SoftwareStageOperator",
+    "SoftwareVerificationCheck",
+    "SoftwareVerifier",
     "SoftwareWorkspace",
     "SoftwareWorktreeManager",
     "WorkspaceStaleError",
+    "workspace_diff",
 ]
