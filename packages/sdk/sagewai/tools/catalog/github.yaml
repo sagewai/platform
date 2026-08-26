@@ -105,6 +105,26 @@ exec:
             id:       { type: integer }
             number:   { type: integer }
             html_url: { type: string }
+      get_pull_request:
+        method: GET
+        path: /repos/{owner}/{repo}/pulls/{number}
+        input_schema:
+          type: object
+          required: [owner, repo, number]
+          properties:
+            owner:  { type: string }
+            repo:   { type: string }
+            number: { type: integer }
+        output_schema:
+          type: object
+          required: [number, html_url, state, merged, merge_commit_sha]
+          properties:
+            number:           { type: integer }
+            html_url:         { type: string }
+            state:            { type: string }
+            merged:           { type: boolean }
+            merge_commit_sha:
+              type: [string, "null"]
       merge_pull_request:
         method: PUT
         path: /repos/{owner}/{repo}/pulls/{number}/merge

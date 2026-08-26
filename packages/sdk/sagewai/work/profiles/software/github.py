@@ -70,6 +70,17 @@ class GitHubPullRequest(BaseModel):
     base: str
 
 
+class GitHubPullRequestState(BaseModel):
+    """Current merge state read directly from GitHub."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    project_id: str
+    pull_request_number: int
+    merged: bool
+    merge_commit_sha: str | None
+
+
 class GitHubMergeResult(BaseModel):
     """The immutable SHA returned by a successful GitHub merge."""
 
@@ -112,6 +123,11 @@ class GitHubClient(Protocol):
         base: str,
         body: str,
     ) -> GitHubPullRequest: ...
+
+    async def get_pull_request(
+        self,
+        pull_request: GitHubPullRequest,
+    ) -> GitHubPullRequestState: ...
 
     async def merge_pull_request(
         self,
@@ -221,6 +237,26 @@ class CatalogGitHubClient:
             url=str(result["html_url"]),
             head=head,
             base=base,
+        )
+
+    async def get_pull_request(
+        self,
+        pull_request: GitHubPullRequest,
+    ) -> GitHubPullRequestState:
+        self._validate_project(pull_request.project_id)
+        result = await self._call(
+            {
+                "_operation": "get_pull_request",
+                "owner": pull_request.owner,
+                "repo": pull_request.repo,
+                "number": pull_request.number,
+            }
+        )
+        return GitHubPullRequestState(
+            project_id=self._project_id,
+            pull_request_number=pull_request.number,
+            merged=bool(result["merged"]),
+            merge_commit_sha=result.get("merge_commit_sha"),
         )
 
     async def merge_pull_request(
@@ -648,12 +684,36 @@ class GitHubIssueLifecycle:
             )
             return record
 
-        merge = await self._github.merge_pull_request(pull_request)
+        state = await self._github.get_pull_request(pull_request)
         if (
-            merge.project_id != work_item.project_id
-            or merge.pull_request_number != pull_request.number
+            state.project_id != work_item.project_id
+            or state.pull_request_number != pull_request.number
         ):
-            raise ValueError("merge result belongs to a different WorkItem")
+            raise ValueError("pull request state belongs to a different WorkItem")
+
+        if not state.merged:
+            merge_result = await self._github.merge_pull_request(pull_request)
+            if (
+                merge_result.project_id != work_item.project_id
+                or merge_result.pull_request_number != pull_request.number
+            ):
+                raise ValueError("merge result belongs to a different WorkItem")
+            state = await self._github.get_pull_request(pull_request)
+            if (
+                state.project_id != work_item.project_id
+                or state.pull_request_number != pull_request.number
+            ):
+                raise ValueError("pull request state belongs to a different WorkItem")
+
+        if not state.merged:
+            raise RuntimeError("GitHub did not report the pull request as merged")
+        if state.merge_commit_sha is None:
+            raise RuntimeError("GitHub did not report the merged commit SHA")
+        merge = GitHubMergeResult(
+            project_id=work_item.project_id,
+            pull_request_number=pull_request.number,
+            merged_sha=state.merge_commit_sha,
+        )
         await self._append(
             work_id=work_item.id,
             project_id=work_item.project_id,
@@ -854,6 +914,7 @@ __all__ = [
     "GitHubIssueLifecycle",
     "GitHubMergeResult",
     "GitHubPullRequest",
+    "GitHubPullRequestState",
     "GitHubWorkContext",
     "WorktreeBranchPublisher",
     "is_github_issue_url",

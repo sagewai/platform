@@ -29,6 +29,7 @@ from sagewai.work.profiles.software.github import (
     GitHubIssueLifecycle,
     GitHubMergeResult,
     GitHubPullRequest,
+    GitHubPullRequestState,
 )
 from tests.db.conftest import dialect_engine  # noqa: F401
 
@@ -103,8 +104,11 @@ class FakeGitHub:
             default_branch="main",
         )
         self.pull_requests = []
+        self.pull_request_reads = []
         self.merges = []
         self.comments = []
+        self.merged_sha = None
+        self.fail_after_merge_once = False
 
     async def fetch_issue(self, issue_url: str) -> GitHubIssue:
         assert issue_url == ISSUE_URL
@@ -143,10 +147,27 @@ class FakeGitHub:
         pull_request: GitHubPullRequest,
     ) -> GitHubMergeResult:
         self.merges.append(pull_request)
-        return GitHubMergeResult(
+        self.merged_sha = "c" * 40
+        result = GitHubMergeResult(
             project_id=pull_request.project_id,
             pull_request_number=pull_request.number,
-            merged_sha="c" * 40,
+            merged_sha=self.merged_sha,
+        )
+        if self.fail_after_merge_once:
+            self.fail_after_merge_once = False
+            raise RuntimeError("connection lost after merge")
+        return result
+
+    async def get_pull_request(
+        self,
+        pull_request: GitHubPullRequest,
+    ) -> GitHubPullRequestState:
+        self.pull_request_reads.append(pull_request)
+        return GitHubPullRequestState(
+            project_id=pull_request.project_id,
+            pull_request_number=pull_request.number,
+            merged=self.merged_sha is not None,
+            merge_commit_sha=self.merged_sha,
         )
 
     async def comment_issue(self, issue_url: str, body: str) -> None:
@@ -291,6 +312,47 @@ async def test_merge_policy_denial_blocks_without_merge_side_effect(
 
 
 @pytest.mark.asyncio
+async def test_resume_recovers_merge_completed_before_event_persistence(
+    store: WorkStore,
+) -> None:
+    flow, _, github, _ = _flow(store)
+    gated = await flow.start(
+        issue_url=ISSUE_URL,
+        project_id=PROJECT_ID,
+        base_sha="a" * 40,
+    )
+    github.fail_after_merge_once = True
+
+    with pytest.raises(RuntimeError, match="connection lost after merge"):
+        await flow.approve(
+            gated.work_id,
+            project_id=PROJECT_ID,
+            gate_id=gated.pending_gate,
+            actor_ref="operator:arda",
+        )
+
+    interrupted = await store.load_work(gated.work_id, project_id=PROJECT_ID)
+    assert interrupted is not None
+    assert interrupted.status == "MERGE_APPROVED"
+    assert github.merged_sha == "c" * 40
+
+    delivered = await flow.resume(gated.work_id, project_id=PROJECT_ID)
+
+    assert delivered.status == "READY_TO_DELIVER"
+    assert delivered.profile_context["github"]["merged_sha"] == "c" * 40
+    assert len(github.merges) == 1
+    events = await store.read_events(gated.work_id, project_id=PROJECT_ID)
+    merge_events = [
+        event
+        for event in events
+        if event.event_type is WorkEventType.STAGE_COMPLETED
+        and event.payload_json.get("stage") == "merge"
+    ]
+    assert len(merge_events) == 1
+    assert merge_events[0].payload_json["merged_sha"] == "c" * 40
+
+
+@pytest.mark.asyncio
 async def test_pending_attention_is_presented_as_concise_issue_comments(
     store: WorkStore,
 ) -> None:
@@ -371,6 +433,14 @@ async def test_catalog_client_adapts_existing_github_callable() -> None:
                 "number": 7,
                 "html_url": "https://github.com/octocat/hello-world/pull/7",
             }
+        if operation == "get_pull_request":
+            return {
+                "number": 7,
+                "html_url": "https://github.com/octocat/hello-world/pull/7",
+                "state": "closed",
+                "merged": True,
+                "merge_commit_sha": "d" * 40,
+            }
         if operation == "merge_pull_request":
             return {"sha": "d" * 40, "merged": True, "message": "merged"}
         if operation == "create_comment":
@@ -389,16 +459,20 @@ async def test_catalog_client_adapts_existing_github_callable() -> None:
         base=issue.default_branch,
         body="Closes #42",
     )
+    state = await client.get_pull_request(pull_request)
     await client.comment_issue(ISSUE_URL, "Pending approval")
     merge = await client.merge_pull_request(pull_request)
 
     assert issue.default_branch == "main"
     assert pull_request.number == 7
     assert merge.merged_sha == "d" * 40
+    assert state.merged is True
+    assert state.merge_commit_sha == "d" * 40
     assert [call["_operation"] for call in calls] == [
         "get_repo",
         "get_issue",
         "create_pull_request",
+        "get_pull_request",
         "create_comment",
         "merge_pull_request",
     ]

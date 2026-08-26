@@ -39,6 +39,7 @@ def test_github_has_new_write_ops():
         "create_comment",
         "create_pull_request",
         "get_issue",
+        "get_pull_request",
         "merge_pull_request",
         "search_code",
     }
