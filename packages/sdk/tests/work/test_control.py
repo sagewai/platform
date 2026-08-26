@@ -383,6 +383,37 @@ async def test_post_run_blocking_report_rejects_runtime_result(
 
 
 @pytest.mark.asyncio
+async def test_completed_run_returns_persisted_result_without_reexecution(
+    work_store: WorkStore,
+) -> None:
+    durability = InMemoryStore()
+    controller = _controller(work_store, durability)
+    runtime = RecordingRuntime()
+    request = _request(run_id="run-completed")
+
+    first = await controller.run(
+        runtime=runtime,
+        request=request,
+        capsule=_capsule(),
+        capabilities=_capabilities(),
+        workspace=None,
+    )
+    second = await controller.run(
+        runtime=runtime,
+        request=request,
+        capsule=_capsule(),
+        capabilities=_capabilities(),
+        workspace=None,
+    )
+
+    events = await work_store.read_events("work-1", project_id="project-a")
+    assert first == second
+    assert runtime.started == 1
+    assert sum(event.event_type is WorkEventType.STAGE_STARTED for event in events) == 1
+    assert sum(event.event_type is WorkEventType.EXECUTION_RECORDED for event in events) == 1
+
+
+@pytest.mark.asyncio
 async def test_inflight_observability_loss_freezes_until_control_is_restored(
     work_store: WorkStore,
 ) -> None:

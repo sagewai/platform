@@ -12,8 +12,9 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -291,20 +292,30 @@ class ClaudeRuntime(_NativeRuntime):
     ) -> OperatorResult:
         if workspace is None:
             raise ValueError("ClaudeRuntime requires a workspace")
-        process = await run_worker_subprocess(
-            argv=(
-                self._executable,
-                "--print",
-                "--no-session-persistence",
-                "--safe-mode",
-                "--strict-mcp-config",
-                "--permission-mode",
-                "dontAsk",
+        builtin_tools, allowed_tools = _claude_tool_scope(capabilities)
+        argv = [
+            self._executable,
+            "--print",
+            "--no-session-persistence",
+            "--safe-mode",
+            "--strict-mcp-config",
+            "--permission-mode",
+            "dontAsk",
+            "--tools",
+            ",".join(builtin_tools),
+        ]
+        if allowed_tools:
+            argv.extend(("--allowedTools", ",".join(allowed_tools)))
+        argv.extend(
+            (
                 "--output-format",
                 "json",
                 "--json-schema",
                 json.dumps(OperatorResult.model_json_schema(), sort_keys=True),
-            ),
+            )
+        )
+        process = await run_worker_subprocess(
+            argv=argv,
             stdin=self._prompt(request, capsule, capabilities),
             explicit_env=await self._environment(request, capabilities),
             cwd=workspace.path,
@@ -314,6 +325,55 @@ class ClaudeRuntime(_NativeRuntime):
             return _failed_result(request, process.stderr)
         envelope = json.loads(process.stdout)
         return self._validate_result(envelope["structured_output"], request)
+
+
+def _claude_tool_scope(
+    capabilities: CapabilitySet,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    builtin_tools: set[str] = set()
+    allowed_tools: set[str] = set()
+    for grant in capabilities.grants:
+        if grant.kind == "cli":
+            command = _capability_suffix(grant.name, "cli", r"[A-Za-z0-9._+-]+")
+            builtin_tools.add("Bash")
+            allowed_tools.add(f"Bash({command} *)")
+        elif grant.kind == "mcp":
+            server = _capability_suffix(grant.name, "mcp", r"[A-Za-z0-9_-]+")
+            allowed_tools.add(f"mcp__{server}__*")
+        elif grant.kind == "filesystem":
+            permissions = set(grant.permissions)
+            can_write = "workspace.write" in permissions
+            can_read = can_write or "workspace.read" in permissions
+            if not can_read:
+                raise ValueError("filesystem grant requires workspace.read or workspace.write")
+            roots = grant.scope.get("roots")
+            if not isinstance(roots, (list, tuple)) or not roots:
+                raise ValueError("filesystem grant requires scoped roots")
+            patterns = tuple(_claude_workspace_pattern(root) for root in roots)
+            builtin_tools.update(("Glob", "Grep", "Read"))
+            allowed_tools.update(f"Read({pattern})" for pattern in patterns)
+            if can_write:
+                builtin_tools.update(("Edit", "Write"))
+                allowed_tools.update(f"Edit({pattern})" for pattern in patterns)
+    return tuple(sorted(builtin_tools)), tuple(sorted(allowed_tools))
+
+
+def _capability_suffix(name: str, kind: str, pattern: str) -> str:
+    prefix = f"{kind}:"
+    value = name.removeprefix(prefix)
+    if value == name or re.fullmatch(pattern, value) is None:
+        raise ValueError(f"{kind} capability name must match {prefix}<name>")
+    return value
+
+
+def _claude_workspace_pattern(root: object) -> str:
+    if not isinstance(root, str) or not root:
+        raise ValueError("filesystem roots must be non-empty relative paths")
+    path = PurePosixPath(root)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError("filesystem roots must stay inside the workspace")
+    normalized = path.as_posix().strip("/")
+    return "/**" if normalized in {"", "."} else f"/{normalized}/**"
 
 
 def _failed_result(request: WorkRequest, error: str) -> OperatorResult:

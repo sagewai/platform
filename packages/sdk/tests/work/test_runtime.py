@@ -34,7 +34,7 @@ from sagewai.work import (
     WorkItem,
     WorkRequest,
 )
-from sagewai.work.software import SoftwareWorkspace
+from sagewai.work.profiles.software import SoftwareWorkspace
 
 NOW = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
 
@@ -139,6 +139,7 @@ def _fake_runtime_executable(tmp_path: Path) -> Path:
                 "scoped": os.environ.get("SCOPED_TOKEN"),
                 "capabilities": [g["name"] for g in prompt["capabilities"]["grants"]],
                 "has_session": "session" in prompt,
+                "argv": sys.argv[1:],
             }}))
             result = {{
                 "project_id": prompt["request"]["project_id"],
@@ -247,6 +248,7 @@ async def test_native_runtime_uses_fake_executable_without_session_or_api_key(
     )
 
     observation = json.loads((workspace_path / "runtime-observation.json").read_text())
+    argv = observation.pop("argv")
     assert result.status == "passed"
     assert result.summary == "fake runtime completed"
     assert observation == {
@@ -257,6 +259,61 @@ async def test_native_runtime_uses_fake_executable_without_session_or_api_key(
     }
     assert provider.declared_scopes == ["credential://workspace"]
     assert not hasattr(runtime, "intercept_tool_call")
+    if runtime_type is ClaudeRuntime:
+        tools = argv[argv.index("--tools") + 1].split(",")
+        allowed_tools = argv[argv.index("--allowedTools") + 1].split(",")
+        assert tools == ["Edit", "Glob", "Grep", "Read", "Write"]
+        assert allowed_tools == [
+            "Edit(/packages/sdk/sagewai/work/**)",
+            "Read(/packages/sdk/sagewai/work/**)",
+        ]
+        assert "Bash" not in tools
+
+
+@pytest.mark.asyncio
+async def test_claude_scopes_cli_and_mcp_tools_from_grants(tmp_path: Path) -> None:
+    runtime = ClaudeRuntime(
+        executable=str(_fake_runtime_executable(tmp_path)),
+        timeout=5,
+    )
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    capabilities = CapabilitySet(
+        project_id="project-a",
+        grants=(
+            CapabilityGrant(
+                project_id="project-a",
+                name="cli:git",
+                kind="cli",
+                scope={},
+                permissions=("workspace.execute",),
+            ),
+            CapabilityGrant(
+                project_id="project-a",
+                name="mcp:github",
+                kind="mcp",
+                scope={},
+                permissions=("read",),
+            ),
+        ),
+    )
+
+    result = await runtime.run(
+        _request(),
+        _capsule(),
+        capabilities,
+        _workspace(workspace_path),
+    )
+
+    observation = json.loads((workspace_path / "runtime-observation.json").read_text())
+    argv = observation["argv"]
+    tools = argv[argv.index("--tools") + 1].split(",")
+    allowed_tools = argv[argv.index("--allowedTools") + 1].split(",")
+    assert result.status == "passed"
+    assert tools == ["Bash"]
+    assert allowed_tools == ["Bash(git *)", "mcp__github__*"]
+    assert all("curl" not in selector for selector in allowed_tools)
+    assert all("kubectl" not in selector for selector in allowed_tools)
 
 
 def test_operator_result_schema_is_structured_and_bounded() -> None:

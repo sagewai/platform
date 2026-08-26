@@ -7,131 +7,19 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""Software profile contexts, worktrees, and deterministic result checks."""
+"""Deterministic result checks for the software Work profile."""
 
 from __future__ import annotations
 
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 
-from pydantic import BaseModel, ConfigDict
-
-from sagewai.fleet.execution import run_worker_subprocess
-from sagewai.home import sagewai_home
 from sagewai.work.models import OperatorDisciplineReport
+from sagewai.work.profiles.software.models import (
+    SoftwareWorkspace,
+    WorkspaceStaleError,
+)
+from sagewai.work.profiles.software.scm import _git
 from sagewai.work.runtime import OperatorResult, WorkRequest
-
-
-class SoftwareContractContext(BaseModel):
-    """Software-specific immutable contract state."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    base_sha: str
-
-
-class SoftwareCapsuleContext(BaseModel):
-    """Software-specific context compiled for an operator."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    base_sha: str
-    current_sha: str
-    repo_instructions: tuple[str, ...]
-    verification_commands: tuple[str, ...]
-
-
-class SoftwareAttemptContext(BaseModel):
-    """Software-specific execution receipt state."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    base_sha: str
-    result_sha: str | None
-
-
-class SoftwareWorkspace(BaseModel):
-    """One isolated worktree pinned to an attempt's base revision."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
-
-    ref: str
-    project_id: str
-    work_id: str
-    attempt_id: str
-    repository: Path
-    path: Path
-    base_sha: str
-    initial_sha: str
-
-
-class WorkspaceStaleError(RuntimeError):
-    """The pinned workspace no longer has the expected Git state."""
-
-
-class SoftwareWorktreeManager:
-    """Create or resume one detached worktree per execution attempt."""
-
-    def __init__(self, *, root: Path | None = None) -> None:
-        self._root = (root or sagewai_home() / "worktrees").resolve()
-
-    async def prepare(
-        self,
-        *,
-        repository: Path,
-        project_id: str,
-        work_id: str,
-        attempt_id: str,
-        base_sha: str,
-    ) -> SoftwareWorkspace:
-        for label, value in (
-            ("project_id", project_id),
-            ("work_id", work_id),
-            ("attempt_id", attempt_id),
-        ):
-            _validate_component(label, value)
-        repository = repository.resolve()
-        path = self._root / project_id / work_id / attempt_id
-
-        if not path.exists():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            result = await _git(
-                repository,
-                "worktree",
-                "add",
-                "--detach",
-                str(path),
-                base_sha,
-            )
-            if result.returncode != 0:
-                raise WorkspaceStaleError(result.stderr)
-
-        workspace = SoftwareWorkspace(
-            ref=f"workspace://{attempt_id}",
-            project_id=project_id,
-            work_id=work_id,
-            attempt_id=attempt_id,
-            repository=repository,
-            path=path,
-            base_sha=base_sha,
-            initial_sha=base_sha,
-        )
-        await self.assert_current(workspace, expected_sha=base_sha)
-        return workspace
-
-    async def assert_current(
-        self,
-        workspace: SoftwareWorkspace,
-        *,
-        expected_sha: str,
-    ) -> None:
-        result = await _git(workspace.path, "rev-parse", "HEAD")
-        if result.returncode != 0:
-            raise WorkspaceStaleError(result.stderr)
-        actual_sha = result.stdout.strip()
-        if actual_sha != expected_sha:
-            raise WorkspaceStaleError(
-                f"workspace HEAD moved: expected {expected_sha}, found {actual_sha}"
-            )
 
 
 class SoftwareResultValidator:
@@ -199,19 +87,6 @@ class SoftwareResultValidator:
             diff_lines=diff_lines,
             verdict=verdict,
         )
-
-
-def _validate_component(label: str, value: str) -> None:
-    if not value or value in {".", ".."} or Path(value).name != value:
-        raise ValueError(f"{label} is not a safe path component")
-
-
-async def _git(cwd: Path, *args: str):
-    return await run_worker_subprocess(
-        argv=("git", *args),
-        cwd=cwd,
-        output_limit=100_000,
-    )
 
 
 async def _git_changes(workspace: SoftwareWorkspace) -> tuple[tuple[str, ...], int]:

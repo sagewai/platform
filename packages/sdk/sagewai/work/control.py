@@ -118,6 +118,23 @@ class OperatorController:
         workspace: Workspace | None,
     ) -> OperatorResult:
         self._validate_boundaries(request, capsule, capabilities, workspace)
+        workflow_name = f"work:{request.work_id}:{request.stage}"
+        durable = await self._durability_store.load_run(
+            workflow_name,
+            request.run_id,
+        )
+        if durable is not None and durable.status is StepStatus.COMPLETED:
+            if durable.output_data is None:
+                raise ValueError("completed durable run has no output")
+            persisted = OperatorResult.model_validate(durable.output_data)
+            if (
+                persisted.project_id != request.project_id
+                or persisted.work_id != request.work_id
+                or persisted.run_id != request.run_id
+            ):
+                raise ValueError("completed durable result belongs to different work")
+            return persisted
+
         scoped, violations = await self._evaluate_intents(request, capabilities)
         if violations:
             await self._append_event(
@@ -160,11 +177,6 @@ class OperatorController:
                 },
             )
 
-        workflow_name = f"work:{request.work_id}:{request.stage}"
-        durable = await self._durability_store.load_run(
-            workflow_name,
-            request.run_id,
-        )
         if durable is None:
             durable = WorkflowRun(
                 workflow_name=workflow_name,

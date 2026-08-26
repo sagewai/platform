@@ -42,15 +42,6 @@ from sagewai.work.runtime import (
     WorkRequest,
     Workspace,
 )
-from sagewai.work.software import (
-    SoftwareAttemptContext,
-    SoftwareCapsuleContext,
-    SoftwareContractContext,
-    SoftwareResultValidator,
-    SoftwareWorkspace,
-    SoftwareWorktreeManager,
-    WorkspaceStaleError,
-)
 from sagewai.work.store import WorkStore
 
 __all__ = [
@@ -73,12 +64,6 @@ __all__ = [
     "OperatorRuntime",
     "OperatorController",
     "Reversibility",
-    "SoftwareAttemptContext",
-    "SoftwareCapsuleContext",
-    "SoftwareContractContext",
-    "SoftwareResultValidator",
-    "SoftwareWorkspace",
-    "SoftwareWorktreeManager",
     "TaskCapsule",
     "TaskCapsuleCompiler",
     "WorkContract",
@@ -89,5 +74,4 @@ __all__ = [
     "WorkRequest",
     "WorkStore",
     "Workspace",
-    "WorkspaceStaleError",
 ]

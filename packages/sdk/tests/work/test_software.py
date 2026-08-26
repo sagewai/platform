@@ -17,8 +17,9 @@ from pathlib import Path
 
 import pytest
 
+import sagewai.work as work
 from sagewai.work import ActionResult, ActionScope, OperatorResult, WorkRequest
-from sagewai.work.software import (
+from sagewai.work.profiles.software import (
     SoftwareAttemptContext,
     SoftwareCapsuleContext,
     SoftwareContractContext,
@@ -83,6 +84,7 @@ def test_software_profile_contexts_round_trip_at_profile_boundary() -> None:
     assert SoftwareContractContext.model_validate(contract.model_dump()) == contract
     assert SoftwareCapsuleContext.model_validate(capsule.model_dump()) == capsule
     assert SoftwareAttemptContext.model_validate(attempt.model_dump()) == attempt
+    assert not any(name.startswith("Software") for name in work.__all__)
 
 
 @pytest.mark.asyncio
