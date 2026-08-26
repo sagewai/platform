@@ -83,6 +83,93 @@ async def test_github_create_issue_via_factory():
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_github_get_issue_via_factory():
+    respx.get("https://api.github.com/repos/octocat/hello-world/issues/42").respond(
+        200,
+        json={
+            "id": 1,
+            "number": 42,
+            "html_url": "https://github.com/octocat/hello-world/issues/42",
+            "title": "Fix the target",
+            "body": "The deterministic acceptance criteria.",
+        },
+    )
+    registry._reset()
+    registry.load()
+    callables = factory.build_callables(project_id="p1", get_credentials=_github_creds)
+
+    out = await callables["github"]({
+        "_operation": "get_issue",
+        "owner": "octocat",
+        "repo": "hello-world",
+        "number": 42,
+    })
+
+    assert out["title"] == "Fix the target"
+@pytest.mark.asyncio
+@respx.mock
+async def test_github_get_pull_request_via_factory():
+    respx.get("https://api.github.com/repos/octocat/hello-world/pulls/7").respond(
+        200,
+        json={
+            "number": 7,
+            "html_url": "https://github.com/octocat/hello-world/pull/7",
+            "state": "closed",
+            "merged": True,
+            "merge_commit_sha": "a" * 40,
+        },
+    )
+    registry._reset()
+    registry.load()
+    callables = factory.build_callables(project_id="p1", get_credentials=_github_creds)
+
+    out = await callables["github"]({
+        "_operation": "get_pull_request",
+        "owner": "octocat",
+        "repo": "hello-world",
+        "number": 7,
+    })
+
+    assert out == {
+        "number": 7,
+        "html_url": "https://github.com/octocat/hello-world/pull/7",
+        "state": "closed",
+        "merged": True,
+        "merge_commit_sha": "a" * 40,
+    }
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_github_merge_pull_request_via_factory():
+    respx.put("https://api.github.com/repos/octocat/hello-world/pulls/7/merge").respond(
+        200,
+        json={
+            "sha": "a" * 40,
+            "merged": True,
+            "message": "Pull Request successfully merged",
+        },
+    )
+    registry._reset()
+    registry.load()
+    callables = factory.build_callables(project_id="p1", get_credentials=_github_creds)
+
+    out = await callables["github"]({
+        "_operation": "merge_pull_request",
+        "owner": "octocat",
+        "repo": "hello-world",
+        "number": 7,
+    })
+
+    assert out == {
+        "sha": "a" * 40,
+        "merged": True,
+        "message": "Pull Request successfully merged",
+    }
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_github_search_code_via_factory():
     respx.get("https://api.github.com/search/code").respond(
         200,

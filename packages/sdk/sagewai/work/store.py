@@ -19,8 +19,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from sagewai.db import factory
 from sagewai.db.dialect import upsert
 from sagewai.db.models import Base, WorkEventModel, WorkItemModel
-from sagewai.work.events import WorkEvent
-from sagewai.work.models import WorkRecord
+from sagewai.work.events import WorkEvent, WorkEventType
+from sagewai.work.models import (
+    PendingAttention,
+    PendingAttentionKind,
+    WorkRecord,
+)
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -145,6 +149,130 @@ class WorkStore:
         values["created_at"] = _as_utc(values["created_at"])
         values["updated_at"] = _as_utc(values["updated_at"])
         return WorkRecord.model_validate(values)
+
+    async def pending_attention(
+        self,
+        *,
+        project_id: str | None,
+    ) -> tuple[PendingAttention, ...]:
+        """List unresolved gates, blocks, and control degradations for a project."""
+        work_query = (
+            select(self._work_items)
+            .where(self._work_items.c.project_id == project_id)
+            .order_by(self._work_items.c.created_at, self._work_items.c.work_id)
+        )
+        event_query = (
+            select(self._work_events)
+            .where(self._work_events.c.project_id == project_id)
+            .order_by(self._work_events.c.work_id, self._work_events.c.sequence)
+        )
+        async with self._engine.connect() as conn:
+            work_rows = (await conn.execute(work_query)).all()
+            event_rows = (await conn.execute(event_query)).all()
+
+        events_by_work: dict[str, list[WorkEvent]] = {}
+        for row in event_rows:
+            event = self._event_from_row(row._mapping)
+            events_by_work.setdefault(event.work_id, []).append(event)
+
+        pending: list[PendingAttention] = []
+        for row in work_rows:
+            projection = row._mapping
+            work_id = str(projection["work_id"])
+            source_ref = projection["source_ref"]
+            events = events_by_work.get(work_id, [])
+
+            decided_gate_ids = {
+                str(event.payload_json["gate_id"])
+                for event in events
+                if event.event_type is WorkEventType.GATE_DECIDED
+            }
+            for event in events:
+                if event.event_type is not WorkEventType.GATE_REQUESTED:
+                    continue
+                gate_id = str(event.payload_json["gate_id"])
+                if gate_id in decided_gate_ids:
+                    continue
+                pending.append(
+                    PendingAttention(
+                        attention_id=gate_id,
+                        project_id=project_id,
+                        work_id=work_id,
+                        kind=PendingAttentionKind.GATE_REQUESTED,
+                        source_ref=source_ref,
+                        summary=str(event.payload_json["question"]),
+                        evidence_refs=tuple(
+                            str(ref) for ref in event.payload_json.get("evidence_refs", ())
+                        ),
+                        created_at=event.created_at,
+                    )
+                )
+
+            if projection["status"] == "WORK_BLOCKED":
+                blocked = next(
+                    (
+                        event
+                        for event in reversed(events)
+                        if event.event_type is WorkEventType.WORK_BLOCKED
+                    ),
+                    None,
+                )
+                if blocked is not None:
+                    summary = blocked.payload_json.get("decision_request")
+                    if summary is None:
+                        summary = blocked.payload_json["reason"]
+                    pending.append(
+                        PendingAttention(
+                            attention_id=blocked.id,
+                            project_id=project_id,
+                            work_id=work_id,
+                            kind=PendingAttentionKind.WORK_BLOCKED,
+                            source_ref=source_ref,
+                            summary=str(summary),
+                            evidence_refs=tuple(
+                                str(ref)
+                                for ref in blocked.payload_json.get(
+                                    "evidence_refs",
+                                    (),
+                                )
+                            ),
+                            created_at=blocked.created_at,
+                        )
+                    )
+
+            degraded: dict[str, WorkEvent] = {}
+            for event in events:
+                if event.event_type is WorkEventType.CONTROL_DEGRADED:
+                    for precondition_id in event.payload_json["failed_preconditions"]:
+                        degraded[str(precondition_id)] = event
+                elif event.event_type is WorkEventType.CONTROL_RESTORED:
+                    for precondition_id in event.payload_json["precondition_ids"]:
+                        degraded.pop(str(precondition_id), None)
+            for precondition_id, event in degraded.items():
+                pending.append(
+                    PendingAttention(
+                        attention_id=precondition_id,
+                        project_id=project_id,
+                        work_id=work_id,
+                        kind=PendingAttentionKind.CONTROL_DEGRADED,
+                        source_ref=source_ref,
+                        summary=f"Control precondition failed: {precondition_id}.",
+                        evidence_refs=tuple(
+                            str(ref) for ref in event.payload_json.get("evidence_refs", ())
+                        ),
+                        created_at=event.created_at,
+                    )
+                )
+
+        pending.sort(
+            key=lambda item: (
+                item.created_at,
+                item.work_id,
+                item.kind.value,
+                item.attention_id,
+            )
+        )
+        return tuple(pending)
 
     @staticmethod
     def _event_from_row(values) -> WorkEvent:

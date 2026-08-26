@@ -10,7 +10,6 @@
 """Assert every batch-2b catalog change is wired correctly."""
 from sagewai.tools import registry
 
-
 BATCH_2B_NEW_IDS = {"hubspot_api", "greenhouse_api", "maps_route"}
 
 
@@ -35,7 +34,15 @@ def test_github_has_new_write_ops():
     registry.load()
     entry = registry.lookup("github")
     ops = set(entry.exec_["http"]["operations"].keys())
-    expected_new = {"create_issue", "create_comment", "create_pull_request", "search_code"}
+    expected_new = {
+        "create_issue",
+        "create_comment",
+        "create_pull_request",
+        "get_issue",
+        "get_pull_request",
+        "merge_pull_request",
+        "search_code",
+    }
     missing = expected_new - ops
     assert not missing, f"github missing extended ops: {missing}"
 
