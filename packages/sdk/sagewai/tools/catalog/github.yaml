@@ -32,6 +32,26 @@ exec:
             id:        { type: integer }
             name:      { type: string }
             full_name: { type: string }
+            default_branch: { type: string }
+      get_issue:
+        method: GET
+        path: /repos/{owner}/{repo}/issues/{number}
+        input_schema:
+          type: object
+          required: [owner, repo, number]
+          properties:
+            owner:  { type: string }
+            repo:   { type: string }
+            number: { type: integer }
+        output_schema:
+          type: object
+          properties:
+            id:       { type: integer }
+            number:   { type: integer }
+            html_url: { type: string }
+            title:    { type: string }
+            body:
+              type: [string, "null"]
       create_issue:
         method: POST
         path: /repos/{owner}/{repo}/issues
@@ -85,6 +105,23 @@ exec:
             id:       { type: integer }
             number:   { type: integer }
             html_url: { type: string }
+      merge_pull_request:
+        method: PUT
+        path: /repos/{owner}/{repo}/pulls/{number}/merge
+        input_schema:
+          type: object
+          required: [owner, repo, number]
+          properties:
+            owner:  { type: string }
+            repo:   { type: string }
+            number: { type: integer }
+        output_schema:
+          type: object
+          required: [sha, merged, message]
+          properties:
+            sha:     { type: string }
+            merged:  { type: boolean }
+            message: { type: string }
       search_code:
         method: GET
         path: /search/code
@@ -120,9 +157,9 @@ setup:
        → Fine-grained tokens → Generate new token.
     2. Restrict to the repositories Sagewai should access.
     3. Grant these repository permissions:
-       - `Contents: Read` (for `get_repo`, `search_code`)
+       - `Contents: Write` (for repository reads, branch push, and `merge_pull_request`)
        - `Metadata: Read` (for `get_repo`)
-       - `Issues: Write` (for `create_issue`, `create_comment`)
+       - `Issues: Write` (for `get_issue`, `create_issue`, and `create_comment`)
        - `Pull requests: Write` (for `create_pull_request`)
     4. Copy the `github_pat_...` token.
     5. Paste into Sagewai → Connections → Tools → Add GitHub.

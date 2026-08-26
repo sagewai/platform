@@ -29,6 +29,8 @@ def test_work_group_is_registered() -> None:
     assert "start" in result.output
     assert "status" in result.output
     assert "resume" in result.output
+    assert "approve" in result.output
+    assert "pending" in result.output
 
 
 def test_work_start_runs_direct_lifecycle(monkeypatch) -> None:
@@ -82,3 +84,44 @@ def test_work_resume_uses_persisted_lifecycle(monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     assert seen == ["work-1"]
     assert "WORK_BLOCKED" in result.output
+
+
+def test_work_approve_advances_the_named_canonical_gate(monkeypatch) -> None:
+    seen = []
+
+    async def fake_approve(work_id: str, gate_id: str):
+        seen.append((work_id, gate_id))
+        return SimpleNamespace(work_id=work_id, status="READY_TO_DELIVER")
+
+    monkeypatch.setattr(work_module, "_approve_work", fake_approve)
+
+    result = CliRunner().invoke(
+        work_cli,
+        ["approve", "work-1", "merge:work-1:42"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen == [("work-1", "merge:work-1:42")]
+    assert "READY_TO_DELIVER" in result.output
+
+
+def test_work_pending_lists_canonical_attention(monkeypatch) -> None:
+    async def fake_pending():
+        return (
+            SimpleNamespace(
+                kind=SimpleNamespace(value="GATE_REQUESTED"),
+                work_id="work-1",
+                attention_id="merge:work-1:42",
+                summary="Approve merge of PR #42.",
+            ),
+        )
+
+    monkeypatch.setattr(work_module, "_pending_work", fake_pending)
+
+    result = CliRunner().invoke(work_cli, ["pending"])
+
+    assert result.exit_code == 0, result.output
+    assert "GATE_REQUESTED" in result.output
+    assert "work-1" in result.output
+    assert "merge:work-1:42" in result.output
+    assert "Approve merge of PR #42." in result.output

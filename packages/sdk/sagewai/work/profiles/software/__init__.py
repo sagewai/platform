@@ -9,6 +9,17 @@
 # See COMMERCIAL-LICENSE.md for details.
 """Public API for the software Work profile."""
 
+from sagewai.work.profiles.software.github import (
+    CatalogGitHubClient,
+    GitHubIssue,
+    GitHubIssueLifecycle,
+    GitHubMergeResult,
+    GitHubPullRequest,
+    GitHubWorkContext,
+    WorktreeBranchPublisher,
+    is_github_issue_url,
+    require_merge_approval,
+)
 from sagewai.work.profiles.software.lifecycle import (
     SoftwareLifecycle,
     SoftwareStageOperator,
@@ -35,6 +46,15 @@ from sagewai.work.profiles.software.verification import (
 )
 
 __all__ = [
+    "CatalogGitHubClient",
+    "GitHubIssue",
+    "GitHubIssueLifecycle",
+    "GitHubMergeResult",
+    "GitHubPullRequest",
+    "GitHubWorkContext",
+    "WorktreeBranchPublisher",
+    "is_github_issue_url",
+    "require_merge_approval",
     "SoftwareAttemptContext",
     "SoftwareCapsuleContext",
     "SoftwareContractContext",

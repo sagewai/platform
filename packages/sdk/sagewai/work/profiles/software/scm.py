@@ -126,6 +126,45 @@ class SoftwareWorktreeManager:
                 f"workspace HEAD moved: expected {expected_sha}, found {actual_sha}"
             )
 
+    async def publish_branch(
+        self,
+        workspace: SoftwareWorkspace,
+        *,
+        branch: str,
+        commit_message: str,
+    ) -> str:
+        """Commit the reviewed workspace state and push one named branch."""
+        valid = await _git(workspace.path, "check-ref-format", "--branch", branch)
+        if valid.returncode != 0:
+            raise ValueError(f"invalid Git branch: {branch}")
+
+        status = await _git(workspace.path, "status", "--porcelain")
+        if status.returncode != 0:
+            raise WorkspaceStaleError(status.stderr)
+        if status.stdout:
+            added = await _git(workspace.path, "add", "--all")
+            if added.returncode != 0:
+                raise WorkspaceStaleError(added.stderr)
+            committed = await _git(
+                workspace.path,
+                "commit",
+                "--message",
+                commit_message,
+            )
+            if committed.returncode != 0:
+                raise WorkspaceStaleError(committed.stderr)
+
+        result_sha = await self.current_sha(workspace)
+        pushed = await _git(
+            workspace.path,
+            "push",
+            "origin",
+            f"HEAD:refs/heads/{branch}",
+        )
+        if pushed.returncode != 0:
+            raise WorkspaceStaleError(pushed.stderr)
+        return result_sha
+
 
 async def workspace_diff(
     workspace: SoftwareWorkspace,

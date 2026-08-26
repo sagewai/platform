@@ -54,6 +54,51 @@ class Reversibility(str, Enum):
     IRREVERSIBLE = "irreversible"
 
 
+class GateDecision(str, Enum):
+    """Policy decision for a material gated action."""
+
+    ALLOW = "allow"
+    REQUIRE_APPROVAL = "require_approval"
+    DENY = "deny"
+
+
+class ActionRequest(BaseModel):
+    """Policy input for one material external side effect."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    project_id: str | None
+    action: str
+    work_id: str
+    risk: str
+    reversibility: Reversibility
+    scope: str
+    evidence_refs: tuple[str, ...]
+
+
+class PendingAttentionKind(str, Enum):
+    """Canonical operator-attention categories."""
+
+    GATE_REQUESTED = "GATE_REQUESTED"
+    WORK_BLOCKED = "WORK_BLOCKED"
+    CONTROL_DEGRADED = "CONTROL_DEGRADED"
+
+
+class PendingAttention(BaseModel):
+    """One unresolved item returned by the canonical attention query."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    attention_id: str
+    project_id: str | None
+    work_id: str
+    kind: PendingAttentionKind
+    source_ref: str | None
+    summary: str
+    evidence_refs: tuple[str, ...] = ()
+    created_at: datetime
+
+
 class WorkItem(BaseModel):
     """Why a unit of work exists."""
 
