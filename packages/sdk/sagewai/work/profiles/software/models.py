@@ -12,8 +12,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
+
+from sagewai.work.models import Assumption, ReviewFinding, VerificationResult
 
 
 class SoftwareContractContext(BaseModel):
@@ -42,6 +45,52 @@ class SoftwareAttemptContext(BaseModel):
 
     base_sha: str
     result_sha: str | None
+
+
+class SoftwareVerificationCheck(BaseModel):
+    """One deterministic software verification command receipt."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str
+    command: str
+    exit_code: int
+    artifact_ref: str | None
+
+
+class SoftwareReviewFindingContext(BaseModel):
+    """Optional source location attached to a generic review finding."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    file: str | None
+    line: int | None
+
+
+class SoftwareReviewContext(BaseModel):
+    """Canonical context compiled for an independent software review."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    software: SoftwareCapsuleContext
+    diff: str
+    verification: VerificationResult
+    relevant_files: tuple[str, ...]
+    open_assumptions: tuple[Assumption, ...]
+    review_result_schema: dict[str, Any]
+
+
+class SoftwareRepairContext(BaseModel):
+    """Canonical context compiled for one bounded software repair."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    software: SoftwareCapsuleContext
+    diff: str
+    verification: VerificationResult
+    relevant_files: tuple[str, ...]
+    open_assumptions: tuple[Assumption, ...]
+    findings: tuple[ReviewFinding, ...]
 
 
 class SoftwareWorkspace(BaseModel):

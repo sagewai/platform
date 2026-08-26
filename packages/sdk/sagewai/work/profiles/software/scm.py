@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+from difflib import unified_diff
 from pathlib import Path
 
 from sagewai.fleet.execution import WorkerProcessResult, run_worker_subprocess
@@ -71,6 +72,45 @@ class SoftwareWorktreeManager:
         await self.assert_current(workspace, expected_sha=base_sha)
         return workspace
 
+    async def resume(
+        self,
+        *,
+        repository: Path,
+        project_id: str,
+        work_id: str,
+        attempt_id: str,
+        base_sha: str,
+        expected_sha: str,
+    ) -> SoftwareWorkspace:
+        """Resume the deterministic worktree only if its recorded HEAD is intact."""
+        for label, value in (
+            ("project_id", project_id),
+            ("work_id", work_id),
+            ("attempt_id", attempt_id),
+        ):
+            _validate_component(label, value)
+        workspace = SoftwareWorkspace(
+            ref=f"workspace://{attempt_id}",
+            project_id=project_id,
+            work_id=work_id,
+            attempt_id=attempt_id,
+            repository=repository.resolve(),
+            path=self._root / project_id / work_id / attempt_id,
+            base_sha=base_sha,
+            initial_sha=base_sha,
+        )
+        if not workspace.path.exists():
+            raise WorkspaceStaleError("recorded workspace does not exist")
+        await self.assert_current(workspace, expected_sha=expected_sha)
+        return workspace
+
+    async def current_sha(self, workspace: SoftwareWorkspace) -> str:
+        """Read the current Git HEAD from the isolated workspace."""
+        result = await _git(workspace.path, "rev-parse", "HEAD")
+        if result.returncode != 0:
+            raise WorkspaceStaleError(result.stderr)
+        return result.stdout.strip()
+
     async def assert_current(
         self,
         workspace: SoftwareWorkspace,
@@ -85,6 +125,59 @@ class SoftwareWorktreeManager:
             raise WorkspaceStaleError(
                 f"workspace HEAD moved: expected {expected_sha}, found {actual_sha}"
             )
+
+
+async def workspace_diff(
+    workspace: SoftwareWorkspace,
+) -> tuple[str, tuple[str, ...]]:
+    """Return the complete tracked/untracked review diff and changed paths."""
+    tracked = await _git(
+        workspace.path,
+        "diff",
+        "--no-ext-diff",
+        workspace.base_sha,
+        "--",
+    )
+    if tracked.returncode != 0:
+        raise WorkspaceStaleError(tracked.stderr)
+    tracked_names = await _git(
+        workspace.path,
+        "diff",
+        "--name-only",
+        workspace.base_sha,
+        "--",
+    )
+    if tracked_names.returncode != 0:
+        raise WorkspaceStaleError(tracked_names.stderr)
+    untracked = await _git(
+        workspace.path,
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+    )
+    if untracked.returncode != 0:
+        raise WorkspaceStaleError(untracked.stderr)
+
+    paths = set(tracked_names.stdout.splitlines())
+    untracked_paths = tuple(path for path in untracked.stdout.splitlines() if path)
+    paths.update(untracked_paths)
+    parts = [tracked.stdout]
+    for relative in untracked_paths:
+        path = workspace.path / relative
+        try:
+            lines = path.read_text().splitlines(keepends=True)
+        except UnicodeDecodeError:
+            parts.append(f"Binary file b/{relative} added\n")
+            continue
+        parts.extend(
+            unified_diff(
+                (),
+                lines,
+                fromfile="/dev/null",
+                tofile=f"b/{relative}",
+            )
+        )
+    return "".join(parts), tuple(sorted(paths))
 
 
 def _validate_component(label: str, value: str) -> None:

@@ -31,6 +31,20 @@ class ClaimClassification(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
+class Assumption(BaseModel):
+    """An explicit unresolved condition carried by a WorkItem."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str
+    statement: str
+    kind: str
+    evidence_refs: tuple[str, ...] = ()
+    confidence: Literal["low", "medium", "high"]
+    impact_if_wrong: Literal["low", "medium", "high"]
+    status: Literal["open", "validated", "rejected", "accepted_risk"]
+
+
 class Reversibility(str, Enum):
     """How a material action can be undone."""
 
@@ -158,6 +172,40 @@ class ControlPrecondition(BaseModel):
     description: str
     check_ref: str
     required_for: tuple[str, ...]
+
+
+class VerificationResult(BaseModel):
+    """Profile-neutral deterministic verification verdict."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    attempt_id: str
+    passed: bool
+    evidence_refs: tuple[str, ...]
+    profile_context: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReviewFinding(BaseModel):
+    """One typed finding from an independent reviewer."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    severity: Literal["low", "medium", "high", "critical"]
+    claim: str
+    evidence_refs: tuple[str, ...]
+    required_change: str | None
+    profile_context: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReviewResult(BaseModel):
+    """Profile-neutral independent review verdict."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    attempt_id: str
+    verdict: Literal["accept", "repair", "blocked"]
+    findings: tuple[ReviewFinding, ...]
+    evidence_refs: tuple[str, ...] = ()
 
 
 class TaskCapsule(BaseModel):
