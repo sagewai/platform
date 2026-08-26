@@ -42,6 +42,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     ARRAY,
+    DDL,
     JSON,
     BigInteger,
     Boolean,
@@ -57,6 +58,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     func,
     text,
 )
@@ -1942,3 +1944,46 @@ class WorkEventModel(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class KnowledgeItemModel(Base):
+    """One immutable item in the shared Evidence Board."""
+
+    __tablename__ = "knowledge_items"
+    __table_args__ = (
+        CheckConstraint(
+            "factness_score IN (0, 100)",
+            name="ck_knowledge_items_factness_score",
+        ),
+        Index(
+            "ix_knowledge_items_project_work_created_at",
+            "project_id",
+            "work_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    project_id: Mapped[str] = mapped_column(Text, nullable=False)
+    work_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    statement: Mapped[str] = mapped_column(Text, nullable=False)
+    source_refs: Mapped[list] = mapped_column(JSONType, nullable=False, default=list)
+    artifact_refs: Mapped[list] = mapped_column(JSONType, nullable=False, default=list)
+    factness_score: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    importance_score: Mapped[int] = mapped_column(Integer, nullable=False, server_default="50")
+    created_by: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    supersedes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+event.listen(
+    KnowledgeItemModel.__table__,
+    "after_create",
+    DDL(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_items_fts "
+        "USING fts5(item_id UNINDEXED, statement)"
+    ).execute_if(dialect="sqlite"),
+)
