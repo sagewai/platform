@@ -177,7 +177,7 @@ setup:
        → Fine-grained tokens → Generate new token.
     2. Restrict to the repositories Sagewai should access.
     3. Grant these repository permissions:
-       - `Contents: Write` (for repository reads, branch push, and `merge_pull_request`)
+       - `Contents: Write` (for repository reads and `merge_pull_request`)
        - `Metadata: Read` (for `get_repo`)
        - `Issues: Write` (for `get_issue`, `create_issue`, and `create_comment`)
        - `Pull requests: Write` (for `create_pull_request`)

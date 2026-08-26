@@ -81,6 +81,8 @@ class SoftwareWorktreeManager:
         attempt_id: str,
         base_sha: str,
         expected_sha: str,
+        published_branch: str | None = None,
+        publish_commit_message: str | None = None,
     ) -> SoftwareWorkspace:
         """Resume the deterministic worktree only if its recorded HEAD is intact."""
         for label, value in (
@@ -101,8 +103,51 @@ class SoftwareWorktreeManager:
         )
         if not workspace.path.exists():
             raise WorkspaceStaleError("recorded workspace does not exist")
-        await self.assert_current(workspace, expected_sha=expected_sha)
+        try:
+            await self.assert_current(workspace, expected_sha=expected_sha)
+        except WorkspaceStaleError:
+            if (
+                published_branch is None
+                or publish_commit_message is None
+                or not await self._matches_published_state(
+                    workspace,
+                    expected_sha=expected_sha,
+                    branch=published_branch,
+                    commit_message=publish_commit_message,
+                )
+            ):
+                raise
         return workspace
+
+    async def _matches_published_state(
+        self,
+        workspace: SoftwareWorkspace,
+        *,
+        expected_sha: str,
+        branch: str,
+        commit_message: str,
+    ) -> bool:
+        actual_sha = await self.current_sha(workspace)
+        parent = await _git(workspace.path, "rev-parse", "HEAD^")
+        message = await _git(workspace.path, "log", "-1", "--format=%B")
+        status = await _git(workspace.path, "status", "--porcelain")
+        remote = await _git(
+            workspace.path,
+            "ls-remote",
+            "--exit-code",
+            "origin",
+            f"refs/heads/{branch}",
+        )
+        if any(result.returncode != 0 for result in (parent, message, status, remote)):
+            return False
+        fields = remote.stdout.split()
+        return (
+            parent.stdout.strip() == expected_sha
+            and message.stdout.strip() == commit_message
+            and status.stdout == ""
+            and len(fields) >= 2
+            and fields[0] == actual_sha
+        )
 
     async def current_sha(self, workspace: SoftwareWorkspace) -> str:
         """Read the current Git HEAD from the isolated workspace."""

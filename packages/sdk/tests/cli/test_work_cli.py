@@ -125,3 +125,16 @@ def test_work_pending_lists_canonical_attention(monkeypatch) -> None:
     assert "work-1" in result.output
     assert "merge:work-1:42" in result.output
     assert "Approve merge of PR #42." in result.output
+
+
+def test_github_credentials_fail_before_remote_call_when_token_is_missing(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    try:
+        work_module._local_github_credentials()
+    except Exception as exc:
+        assert "GITHUB_TOKEN is required" in str(exc)
+    else:
+        raise AssertionError("missing GitHub token was accepted")

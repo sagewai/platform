@@ -30,6 +30,7 @@ from sagewai.work.profiles.software.github import (
     GitHubMergeResult,
     GitHubPullRequest,
     GitHubPullRequestState,
+    WorktreeBranchPublisher,
 )
 from tests.db.conftest import dialect_engine  # noqa: F401
 
@@ -39,8 +40,9 @@ NOW = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
 
 
 class FakeSoftwareLifecycle:
-    def __init__(self, store: WorkStore) -> None:
+    def __init__(self, store: WorkStore, *, degraded: bool = False) -> None:
         self.store = store
+        self.degraded = degraded
         self.starts = []
         self.resumes = 0
 
@@ -64,6 +66,27 @@ class FakeSoftwareLifecycle:
                     actor_type="fake_software_lifecycle",
                     actor_ref=None,
                     payload_json=payload,
+                    created_at=NOW,
+                )
+            )
+        if self.degraded:
+            events = await self.store.read_events(
+                work_item.id,
+                project_id=work_item.project_id,
+            )
+            await self.store.append_event(
+                WorkEvent(
+                    id=str(uuid.uuid4()),
+                    project_id=work_item.project_id,
+                    work_id=work_item.id,
+                    sequence=len(events) + 1,
+                    event_type=WorkEventType.CONTROL_DEGRADED,
+                    actor_type="fake_software_lifecycle",
+                    actor_ref=None,
+                    payload_json={
+                        "failed_preconditions": ["github-authority"],
+                        "evidence_refs": ["check://github-authority"],
+                    },
                     created_at=NOW,
                 )
             )
@@ -109,6 +132,7 @@ class FakeGitHub:
         self.comments = []
         self.merged_sha = None
         self.fail_after_merge_once = False
+        self.fail_create_once = False
 
     async def fetch_issue(self, issue_url: str) -> GitHubIssue:
         assert issue_url == ISSUE_URL
@@ -123,6 +147,9 @@ class FakeGitHub:
         base: str,
         body: str,
     ) -> GitHubPullRequest:
+        if self.fail_create_once:
+            self.fail_create_once = False
+            raise RuntimeError("GitHub unavailable")
         self.pull_requests.append(
             {
                 "issue": issue,
@@ -176,7 +203,18 @@ class FakeGitHub:
 
 class FakeBranchPublisher:
     def __init__(self) -> None:
+        self.validations = []
         self.calls = []
+
+    async def validate_target(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        base_sha: str,
+        default_branch: str,
+    ) -> None:
+        self.validations.append((owner, repo, base_sha, default_branch))
 
     async def publish(
         self,
@@ -212,8 +250,9 @@ def _flow(
     store: WorkStore,
     *,
     decision: GateDecision = GateDecision.REQUIRE_APPROVAL,
+    degraded: bool = False,
 ):
-    software = FakeSoftwareLifecycle(store)
+    software = FakeSoftwareLifecycle(store, degraded=degraded)
     github = FakeGitHub()
     publisher = FakeBranchPublisher()
     flow = GitHubIssueLifecycle(
@@ -251,6 +290,10 @@ async def test_issue_to_pr_requires_gate_then_records_merged_sha(
     assert assumptions == ()
     assert publisher.calls[0]["project_id"] == PROJECT_ID
     assert publisher.calls[0]["branch"] == f"sagewai/{gated.work_id}"
+    assert publisher.validations == [
+        ("octocat", "hello-world", "a" * 40, "main"),
+        ("octocat", "hello-world", "a" * 40, "main"),
+    ]
     assert github.pull_requests[0]["base"] == "main"
     assert github.comments == [
         (
@@ -272,6 +315,7 @@ async def test_issue_to_pr_requires_gate_then_records_merged_sha(
     assert delivered.pending_gate is None
     assert delivered.profile_context["github"]["merged_sha"] == "c" * 40
     assert len(github.merges) == 1
+    assert len(publisher.validations) == 2
     assert await store.pending_attention(project_id=PROJECT_ID) == ()
 
     events = await store.read_events(gated.work_id, project_id=PROJECT_ID)
@@ -289,6 +333,270 @@ async def test_issue_to_pr_requires_gate_then_records_merged_sha(
     )
     assert merged.payload_json["merged_sha"] == "c" * 40
     assert all(event.event_type is not WorkEventType.WORK_COMPLETED for event in events)
+
+
+@pytest.mark.asyncio
+async def test_remote_pr_failure_resumes_from_recorded_branch_without_rerunning_software(
+    store: WorkStore,
+) -> None:
+    flow, software, github, publisher = _flow(store)
+    github.fail_create_once = True
+
+    with pytest.raises(RuntimeError, match="GitHub unavailable"):
+        await flow.start(
+            issue_url=ISSUE_URL,
+            project_id=PROJECT_ID,
+            base_sha="a" * 40,
+        )
+
+    work_id = software.starts[0][0].id
+    events = await store.read_events(work_id, project_id=PROJECT_ID)
+    publications = [
+        event
+        for event in events
+        if event.event_type is WorkEventType.STAGE_COMPLETED
+        and event.payload_json.get("stage") == "branch_published"
+    ]
+    assert len(publications) == 1
+
+    gated = await flow.resume(work_id, project_id=PROJECT_ID)
+
+    assert gated.status == "GATE_PENDING"
+    assert len(publisher.calls) == 1
+    assert len(github.pull_requests) == 1
+    assert len(software.starts) == 1
+    assert software.resumes == 0
+
+
+@pytest.mark.asyncio
+async def test_resume_rebuilds_pr_projection_and_does_not_duplicate_merge_event(
+    store: WorkStore,
+    monkeypatch,
+) -> None:
+    flow, software, _, _ = _flow(store)
+    original_save = store.save_work
+    failed = False
+
+    async def fail_after_pr_event(record):
+        nonlocal failed
+        if not failed and record.status == "READY_TO_MERGE" and "github" in record.profile_context:
+            failed = True
+            raise RuntimeError("projection write interrupted")
+        await original_save(record)
+
+    monkeypatch.setattr(store, "save_work", fail_after_pr_event)
+    with pytest.raises(RuntimeError, match="projection write interrupted"):
+        await flow.start(
+            issue_url=ISSUE_URL,
+            project_id=PROJECT_ID,
+            base_sha="a" * 40,
+        )
+    monkeypatch.setattr(store, "save_work", original_save)
+
+    gated = await flow.resume(software.starts[0][0].id, project_id=PROJECT_ID)
+    assert gated.status == "GATE_PENDING"
+    assert gated.profile_context["github"]["pull_request_number"] == 7
+    delivered = await flow.approve(
+        gated.work_id,
+        project_id=PROJECT_ID,
+        gate_id=gated.pending_gate,
+        actor_ref="operator:arda",
+    )
+    assert delivered.status == "READY_TO_DELIVER"
+
+    resumed = await flow.resume(delivered.work_id, project_id=PROJECT_ID)
+    assert resumed.status == "READY_TO_DELIVER"
+    events = await store.read_events(delivered.work_id, project_id=PROJECT_ID)
+    merges = [
+        event
+        for event in events
+        if event.event_type is WorkEventType.STAGE_COMPLETED
+        and event.payload_json.get("stage") == "merge"
+    ]
+    assert len(merges) == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_approval_recovers_decision_recorded_before_projection(
+    store: WorkStore,
+    monkeypatch,
+) -> None:
+    flow, _, github, _ = _flow(store)
+    gated = await flow.start(
+        issue_url=ISSUE_URL,
+        project_id=PROJECT_ID,
+        base_sha="a" * 40,
+    )
+    original_save = store.save_work
+    failed = False
+
+    async def fail_after_gate_decision(record):
+        nonlocal failed
+        if not failed and record.status == "MERGE_APPROVED":
+            failed = True
+            raise RuntimeError("projection write interrupted")
+        await original_save(record)
+
+    monkeypatch.setattr(store, "save_work", fail_after_gate_decision)
+    with pytest.raises(RuntimeError, match="projection write interrupted"):
+        await flow.approve(
+            gated.work_id,
+            project_id=PROJECT_ID,
+            gate_id=gated.pending_gate,
+            actor_ref="operator:arda",
+        )
+    monkeypatch.setattr(store, "save_work", original_save)
+
+    delivered = await flow.approve(
+        gated.work_id,
+        project_id=PROJECT_ID,
+        gate_id=gated.pending_gate,
+        actor_ref="operator:arda",
+    )
+
+    assert delivered.status == "READY_TO_DELIVER"
+    assert len(github.merges) == 1
+
+
+@pytest.mark.asyncio
+async def test_control_degraded_freezes_start_resume_and_approved_merge(
+    store: WorkStore,
+) -> None:
+    frozen, software, github, publisher = _flow(store, degraded=True)
+    record = await frozen.start(
+        issue_url=ISSUE_URL,
+        project_id=PROJECT_ID,
+        base_sha="a" * 40,
+    )
+    resumed = await frozen.resume(record.work_id, project_id=PROJECT_ID)
+
+    assert record.status == resumed.status == "READY_TO_MERGE"
+    assert publisher.calls == []
+    assert github.pull_requests == []
+    assert github.merges == []
+    assert software.resumes == 0
+    control_comments = [body for _, body in github.comments if "control degraded" in body]
+    assert len(control_comments) == 1
+
+    gated_flow, _, gated_github, gated_publisher = _flow(store)
+    gated = await gated_flow.start(
+        issue_url=ISSUE_URL,
+        project_id=PROJECT_ID,
+        base_sha="a" * 40,
+    )
+    events = await store.read_events(gated.work_id, project_id=PROJECT_ID)
+    await store.append_event(
+        WorkEvent(
+            id=str(uuid.uuid4()),
+            project_id=PROJECT_ID,
+            work_id=gated.work_id,
+            sequence=events[-1].sequence + 1,
+            event_type=WorkEventType.CONTROL_DEGRADED,
+            actor_type="test",
+            actor_ref=None,
+            payload_json={
+                "failed_preconditions": ["github-authority"],
+                "evidence_refs": ["check://github-authority"],
+            },
+            created_at=NOW,
+        )
+    )
+
+    approved = await gated_flow.approve(
+        gated.work_id,
+        project_id=PROJECT_ID,
+        gate_id=gated.pending_gate,
+        actor_ref="operator:arda",
+    )
+    again = await gated_flow.resume(gated.work_id, project_id=PROJECT_ID)
+
+    assert approved.status == again.status == "MERGE_APPROVED"
+    assert len(gated_publisher.calls) == 1
+    assert len(gated_github.pull_requests) == 1
+    assert gated_github.merges == []
+    control_comments = [body for _, body in gated_github.comments if "control degraded" in body]
+    assert len(control_comments) == 1
+
+
+@pytest.mark.asyncio
+async def test_allow_policy_merges_without_requesting_operator_approval(
+    store: WorkStore,
+) -> None:
+    flow, _, github, _ = _flow(store, decision=GateDecision.ALLOW)
+
+    delivered = await flow.start(
+        issue_url=ISSUE_URL,
+        project_id=PROJECT_ID,
+        base_sha="a" * 40,
+    )
+
+    assert delivered.status == "READY_TO_DELIVER"
+    assert len(github.merges) == 1
+    events = await store.read_events(delivered.work_id, project_id=PROJECT_ID)
+    assert all(event.event_type is not WorkEventType.GATE_REQUESTED for event in events)
+    decision = next(event for event in events if event.event_type is WorkEventType.GATE_DECIDED)
+    assert decision.payload_json["decision"] == "allow"
+
+
+@pytest.mark.asyncio
+async def test_branch_publisher_rejects_unrelated_github_origin(monkeypatch, tmp_path) -> None:
+    calls = []
+
+    async def fake_subprocess(**kwargs):
+        calls.append(kwargs["argv"])
+        return type(
+            "Result",
+            (),
+            {"returncode": 0, "stdout": "git@github.com:other/repo.git\n", "stderr": ""},
+        )()
+
+    monkeypatch.setattr(
+        "sagewai.work.profiles.software.github.run_worker_subprocess",
+        fake_subprocess,
+    )
+    publisher = WorktreeBranchPublisher(
+        worktree_manager=object(),
+        repository=tmp_path,
+    )
+
+    with pytest.raises(ValueError, match="does not match issue repository"):
+        await publisher.validate_target(
+            owner="octocat",
+            repo="hello-world",
+            base_sha="a" * 40,
+            default_branch="main",
+        )
+
+    assert calls == [("git", "remote", "get-url", "origin")]
+
+
+@pytest.mark.asyncio
+async def test_branch_publisher_rejects_moved_default_branch(monkeypatch, tmp_path) -> None:
+    outputs = iter(("git@github.com:octocat/hello-world.git\n", f"{'b' * 40}\trefs/heads/main\n"))
+
+    async def fake_subprocess(**_kwargs):
+        return type(
+            "Result",
+            (),
+            {"returncode": 0, "stdout": next(outputs), "stderr": ""},
+        )()
+
+    monkeypatch.setattr(
+        "sagewai.work.profiles.software.github.run_worker_subprocess",
+        fake_subprocess,
+    )
+    publisher = WorktreeBranchPublisher(
+        worktree_manager=object(),
+        repository=tmp_path,
+    )
+
+    with pytest.raises(ValueError, match="default branch moved"):
+        await publisher.validate_target(
+            owner="octocat",
+            repo="hello-world",
+            base_sha="a" * 40,
+            default_branch="main",
+        )
 
 
 @pytest.mark.asyncio

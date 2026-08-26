@@ -376,9 +376,18 @@ class SoftwareLifecycle:
             workspace=workspace,
         )
         if result.status != "passed":
+            failed_stage = "implementation" if stage == "implement" else "repair"
             await self._block_once(
                 work_item,
-                {"reason": f"{stage}_failed", "run_id": run_id},
+                {
+                    "reason": f"{stage}_failed",
+                    "run_id": run_id,
+                    "decision_request": (
+                        f"Inspect the failed {failed_stage} evidence and decide whether to "
+                        "retry or stop the work."
+                    ),
+                    "evidence_refs": list(result.evidence_refs),
+                },
                 actor_ref=assignment.actor_ref,
             )
             return "WORK_BLOCKED"
@@ -491,14 +500,30 @@ class SoftwareLifecycle:
         if diff_after != diff_before or files_after != relevant_files:
             await self._block_once(
                 work_item,
-                {"reason": "reviewer_changed_workspace", "run_id": run_id},
+                {
+                    "reason": "reviewer_changed_workspace",
+                    "run_id": run_id,
+                    "decision_request": (
+                        "Investigate the reviewer workspace change and decide whether to retry "
+                        "review or stop the work."
+                    ),
+                    "evidence_refs": list(result.evidence_refs),
+                },
                 actor_ref=self._reviewer.actor_ref,
             )
             return "WORK_BLOCKED"
         if result.status != "passed":
             await self._block_once(
                 work_item,
-                {"reason": "review_failed", "run_id": run_id},
+                {
+                    "reason": "review_failed",
+                    "run_id": run_id,
+                    "decision_request": (
+                        "Inspect the failed independent review evidence and decide whether to "
+                        "retry or stop the work."
+                    ),
+                    "evidence_refs": list(result.evidence_refs),
+                },
                 actor_ref=self._reviewer.actor_ref,
             )
             return "WORK_BLOCKED"
@@ -507,7 +532,14 @@ class SoftwareLifecycle:
         if payload is None:
             await self._block_once(
                 work_item,
-                {"reason": "review_result_missing", "run_id": run_id},
+                {
+                    "reason": "review_result_missing",
+                    "run_id": run_id,
+                    "decision_request": (
+                        "Decide whether to retry the independent review or stop the work."
+                    ),
+                    "evidence_refs": list(result.evidence_refs),
+                },
                 actor_ref=self._reviewer.actor_ref,
             )
             return "WORK_BLOCKED"
@@ -530,7 +562,14 @@ class SoftwareLifecycle:
         if review.verdict == "blocked":
             await self._block_once(
                 work_item,
-                {"reason": "review_blocked", "run_id": run_id},
+                {
+                    "reason": "review_blocked",
+                    "run_id": run_id,
+                    "decision_request": (
+                        "Resolve the independent review blocker or stop the work."
+                    ),
+                    "evidence_refs": list(review.evidence_refs),
+                },
                 actor_ref=self._reviewer.actor_ref,
             )
             return "WORK_BLOCKED"

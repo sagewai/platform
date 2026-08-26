@@ -26,6 +26,7 @@ from sagewai.work.profiles.software import (
     SoftwareResultValidator,
     SoftwareWorktreeManager,
     WorkspaceStaleError,
+    WorktreeBranchPublisher,
 )
 
 NOW = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
@@ -139,13 +140,29 @@ async def test_worktree_publishes_reviewed_state_to_isolated_git_remote(
     )
     (workspace.path / "target.txt").write_text("reviewed\n")
 
-    result_sha = await manager.publish_branch(
-        workspace,
+    publisher = WorktreeBranchPublisher(
+        worktree_manager=manager,
+        repository=repository,
+    )
+    result_sha = await publisher.publish(
+        project_id="project-a",
+        work_id="work-1",
+        base_sha=base_sha,
+        expected_sha=base_sha,
+        branch="sagewai/work-1",
+        commit_message="feat: implement work-1",
+    )
+    recovered_sha = await publisher.publish(
+        project_id="project-a",
+        work_id="work-1",
+        base_sha=base_sha,
+        expected_sha=base_sha,
         branch="sagewai/work-1",
         commit_message="feat: implement work-1",
     )
 
     assert result_sha != base_sha
+    assert recovered_sha == result_sha
     assert _git(remote, "rev-parse", "refs/heads/sagewai/work-1") == result_sha
     assert _git(workspace.path, "status", "--short") == ""
 

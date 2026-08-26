@@ -106,6 +106,8 @@ async def test_github_get_issue_via_factory():
     })
 
     assert out["title"] == "Fix the target"
+
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_github_get_pull_request_via_factory():

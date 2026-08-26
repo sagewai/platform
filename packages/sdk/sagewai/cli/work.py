@@ -336,7 +336,10 @@ async def _build_github_lifecycle(
 
 
 def _local_github_credentials(**_kwargs) -> dict[str, str]:
-    return {"GITHUB_TOKEN": os.environ.get("GITHUB_TOKEN", "")}
+    token = os.environ.get("GITHUB_TOKEN")
+    if token is None or not token.strip():
+        raise click.ClickException("GITHUB_TOKEN is required for GitHub Work")
+    return {"GITHUB_TOKEN": token}
 
 
 async def _repository_state() -> tuple[Path, str]:

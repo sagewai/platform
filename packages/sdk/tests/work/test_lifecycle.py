@@ -192,6 +192,17 @@ class MutationRuntime:
         return _operator_result(request)
 
 
+class FailedMutationRuntime(MutationRuntime):
+    async def run(self, request, capsule, capabilities, workspace):
+        result = await super().run(request, capsule, capabilities, workspace)
+        return result.model_copy(
+            update={
+                "status": "failed",
+                "evidence_refs": ("runtime://implement-failure",),
+            }
+        )
+
+
 class ReviewRuntime:
     name = "review-runtime"
 
@@ -392,6 +403,78 @@ async def test_successful_implement_verify_review_reaches_ready_to_merge(
     serialized = json.dumps(capsule.model_dump(mode="json")).lower()
     assert "session" not in serialized
     assert "chat_history" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_failed_implementation_blocks_with_specific_question_and_evidence(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    durability = InMemoryStore()
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=durability,
+        implementer=FailedMutationRuntime(implement_text="failed", repair_text="unused"),
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+    )
+
+    record = await lifecycle.start(
+        work_item=_work_item(),
+        contract=_contract(base_sha),
+    )
+
+    assert record.status == "WORK_BLOCKED"
+    events = await work_store.read_events("work-1", project_id="project-a")
+    blocker = next(event for event in events if event.event_type is WorkEventType.WORK_BLOCKED)
+    assert blocker.payload_json == {
+        "reason": "implement_failed",
+        "run_id": "work-1:implement:1",
+        "decision_request": "Inspect the failed implementation evidence and decide whether to retry or stop the work.",
+        "evidence_refs": ["runtime://implement-failure"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_blocked_review_carries_specific_operator_question_and_evidence(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    durability = InMemoryStore()
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=durability,
+        implementer=MutationRuntime(implement_text="initial", repair_text="unused"),
+        reviewer=ReviewRuntime("blocked"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+    )
+
+    record = await lifecycle.start(
+        work_item=_work_item(),
+        contract=_contract(base_sha),
+    )
+
+    assert record.status == "WORK_BLOCKED"
+    events = await work_store.read_events("work-1", project_id="project-a")
+    blocker = next(event for event in events if event.event_type is WorkEventType.WORK_BLOCKED)
+    assert blocker.payload_json == {
+        "reason": "review_blocked",
+        "run_id": "work-1:review:1",
+        "decision_request": "Resolve the independent review blocker or stop the work.",
+        "evidence_refs": ["review://work-1:review:1"],
+    }
 
 
 @pytest.mark.asyncio
