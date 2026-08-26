@@ -93,3 +93,9 @@ def test_knowledge_query_requires_project_and_optionally_scopes_work() -> None:
 
     assert project_query.work_id is None
     assert work_query.work_id == "work-1"
+
+
+@pytest.mark.parametrize("text", [" ", "   ", "\t"])
+def test_knowledge_query_rejects_whitespace_only_text(text: str) -> None:
+    with pytest.raises(ValidationError):
+        KnowledgeQuery(text=text, project_id="project-a")

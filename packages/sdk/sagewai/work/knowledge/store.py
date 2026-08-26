@@ -79,7 +79,7 @@ class KnowledgeStore:
         return self._from_row(row._mapping)
 
     async def search(self, query: KnowledgeQuery) -> list[KnowledgeItem]:
-        """Run basic full-text search inside one project or WorkItem scope."""
+        """Run scoped literal-term search using the active database's tokenization."""
         filters = [self._items.c.project_id == query.project_id]
         if query.work_id is not None:
             filters.append(self._items.c.work_id == query.work_id)

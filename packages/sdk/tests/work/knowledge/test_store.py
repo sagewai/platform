@@ -159,7 +159,6 @@ async def test_full_text_search_respects_project_and_work_scope(
         ("read-", ["literal-evidence"]),
         ('read"back', ["literal-evidence"]),
         ("matched OR failed", []),
-        ("x*", ["literal-evidence"]),
     ],
 )
 async def test_full_text_search_treats_operator_input_as_plaintext(
@@ -174,13 +173,26 @@ async def test_full_text_search_treats_operator_input_as_plaintext(
         )
     )
     await store.publish(_item("failed-evidence", "Target verification failed"))
-    await store.publish(_item("prefix-evidence", "Xylophone only"))
 
     results = await store.search(
         KnowledgeQuery(text=query_text, project_id="project-a", work_id="work-1")
     )
 
     assert [item.id for item in results] == expected_ids
+
+
+@pytest.mark.asyncio
+async def test_full_text_search_treats_prefix_operator_as_literal_term(
+    store: KnowledgeStore,
+) -> None:
+    await store.publish(_item("exact-token-evidence", "Standalone x marker"))
+    await store.publish(_item("prefix-evidence", "Xylophone only"))
+
+    results = await store.search(
+        KnowledgeQuery(text="x*", project_id="project-a", work_id="work-1")
+    )
+
+    assert [item.id for item in results] == ["exact-token-evidence"]
 
 
 @pytest.mark.asyncio
