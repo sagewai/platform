@@ -28,6 +28,12 @@ def _as_utc(value: datetime) -> datetime:
     return value
 
 
+def _sqlite_plaintext_query(value: str) -> str:
+    """Encode operator input as literal FTS5 terms joined by implicit AND."""
+    terms = (term.replace('"', '""') for term in value.split())
+    return " ".join(f'"{term}"' for term in terms)
+
+
 class KnowledgeStore:
     """Publish and retrieve immutable project-scoped KnowledgeItems."""
 
@@ -36,15 +42,11 @@ class KnowledgeStore:
         self._items = KnowledgeItemModel.__table__
 
     async def init(self) -> None:
-        """Bootstrap the SQLite schema and local FTS index."""
+        """Bootstrap the SQLite schema."""
         if self._engine.dialect.name != "sqlite":
             return
         async with self._engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-            await conn.exec_driver_sql(
-                "CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_items_fts "
-                "USING fts5(item_id UNINDEXED, statement)"
-            )
 
     async def publish(self, item: KnowledgeItem) -> None:
         """Append one immutable knowledge item."""
@@ -100,7 +102,7 @@ class KnowledgeStore:
             select(self._items).where(*filters).order_by(self._items.c.created_at, self._items.c.id)
         )
         if self._engine.dialect.name == "sqlite":
-            statement = statement.params(search_text=query.text)
+            statement = statement.params(search_text=_sqlite_plaintext_query(query.text))
 
         async with self._engine.connect() as conn:
             rows = (await conn.execute(statement)).all()

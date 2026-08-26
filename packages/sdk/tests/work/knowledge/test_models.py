@@ -51,13 +51,18 @@ def test_knowledge_kind_vocabulary_is_exact() -> None:
 
 
 def test_unsupported_claim_defaults_to_zero_factness() -> None:
-    assert _item(source_refs=()).factness_score == 0
+    assert _item(source_refs=(), artifact_refs=()).factness_score == 0
 
 
 def test_direct_source_readback_records_full_factness() -> None:
     item = _item(factness_score=100, source_refs=("api://system/item@version",))
 
     assert item.factness_score == 100
+
+
+def test_full_factness_requires_evidence_reference() -> None:
+    with pytest.raises(ValidationError, match="requires at least one source or artifact reference"):
+        _item(factness_score=100, source_refs=(), artifact_refs=())
 
 
 @pytest.mark.parametrize("score", [1, 50, 99])

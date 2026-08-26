@@ -15,7 +15,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class KnowledgeKind(str, Enum):
@@ -48,6 +48,14 @@ class KnowledgeItem(BaseModel):
     created_by: str
     created_at: datetime
     supersedes: str | None = None
+
+    @model_validator(mode="after")
+    def require_evidence_for_full_factness(self) -> KnowledgeItem:
+        if self.factness_score == 100 and not (self.source_refs or self.artifact_refs):
+            raise ValueError(
+                "factness_score 100 requires at least one source or artifact reference"
+            )
+        return self
 
 
 class KnowledgeQuery(BaseModel):

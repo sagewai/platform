@@ -42,6 +42,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     ARRAY,
+    DDL,
     JSON,
     BigInteger,
     Boolean,
@@ -57,6 +58,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     func,
     text,
 )
@@ -1975,3 +1977,13 @@ class KnowledgeItemModel(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     supersedes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+event.listen(
+    KnowledgeItemModel.__table__,
+    "after_create",
+    DDL(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_items_fts "
+        "USING fts5(item_id UNINDEXED, statement)"
+    ).execute_if(dialect="sqlite"),
+)

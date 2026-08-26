@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from sagewai.db.engine import create_engine
+from sagewai.db.models import Base
 from sagewai.work.knowledge import (
     KnowledgeItem,
     KnowledgeKind,
@@ -60,12 +62,12 @@ async def store(dialect_engine) -> KnowledgeStore:  # noqa: F811
 
 
 @pytest.mark.asyncio
-async def test_independent_session_reads_published_finding_and_artifact(
-    dialect_engine,  # noqa: F811
-) -> None:
-    publisher = KnowledgeStore(engine=dialect_engine)
-    reader = KnowledgeStore(engine=dialect_engine)
-    await publisher.init()
+async def test_independent_engine_reads_metadata_bootstrapped_sqlite_board(tmp_path) -> None:
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'independent.db'}"
+    publisher_engine = create_engine(database_url)
+    async with publisher_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    publisher = KnowledgeStore(engine=publisher_engine)
     item = _item(
         "knowledge-1",
         "The schema migration was verified.",
@@ -74,17 +76,23 @@ async def test_independent_session_reads_published_finding_and_artifact(
     )
 
     await publisher.publish(item)
+    await publisher_engine.dispose()
 
-    matches = await reader.search(
-        KnowledgeQuery(
-            text="schema migration",
-            project_id="project-a",
-            work_id="work-1",
+    reader_engine = create_engine(database_url)
+    reader = KnowledgeStore(engine=reader_engine)
+    try:
+        matches = await reader.search(
+            KnowledgeQuery(
+                text="schema migration",
+                project_id="project-a",
+                work_id="work-1",
+            )
         )
-    )
 
-    assert matches == [item]
-    assert await reader.get(item.id, project_id="project-a") == item
+        assert matches == [item]
+        assert await reader.get(item.id, project_id="project-a") == item
+    finally:
+        await reader_engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -140,6 +148,39 @@ async def test_full_text_search_respects_project_and_work_scope(
         "a-work-2",
     ]
     assert [item.id for item in other_project_results] == ["b-work-1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("query_text", "expected_ids"),
+    [
+        ("read-back", ["literal-evidence"]),
+        ("api://system/x", ["literal-evidence"]),
+        ("read-", ["literal-evidence"]),
+        ('read"back', ["literal-evidence"]),
+        ("matched OR failed", []),
+        ("x*", ["literal-evidence"]),
+    ],
+)
+async def test_full_text_search_treats_operator_input_as_plaintext(
+    store: KnowledgeStore,
+    query_text: str,
+    expected_ids: list[str],
+) -> None:
+    await store.publish(
+        _item(
+            "literal-evidence",
+            "Target api://system/x read-back matched xylophone",
+        )
+    )
+    await store.publish(_item("failed-evidence", "Target verification failed"))
+    await store.publish(_item("prefix-evidence", "Xylophone only"))
+
+    results = await store.search(
+        KnowledgeQuery(text=query_text, project_id="project-a", work_id="work-1")
+    )
+
+    assert [item.id for item in results] == expected_ids
 
 
 @pytest.mark.asyncio
