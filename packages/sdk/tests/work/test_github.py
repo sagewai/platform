@@ -14,6 +14,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+import httpx
 import pytest
 
 from sagewai.work import (
@@ -27,6 +28,7 @@ from sagewai.work.profiles.software.github import (
     CatalogGitHubClient,
     GitHubIssue,
     GitHubIssueLifecycle,
+    GitHubMergeRejectedError,
     GitHubMergeResult,
     GitHubPullRequest,
     GitHubPullRequestState,
@@ -133,6 +135,8 @@ class FakeGitHub:
         self.merged_sha = None
         self.fail_after_merge_once = False
         self.fail_create_once = False
+        self.fail_comment_once = False
+        self.merge_rejection = None
 
     async def fetch_issue(self, issue_url: str) -> GitHubIssue:
         assert issue_url == ISSUE_URL
@@ -173,6 +177,8 @@ class FakeGitHub:
         self,
         pull_request: GitHubPullRequest,
     ) -> GitHubMergeResult:
+        if self.merge_rejection is not None:
+            raise GitHubMergeRejectedError(self.merge_rejection)
         self.merges.append(pull_request)
         self.merged_sha = "c" * 40
         result = GitHubMergeResult(
@@ -198,6 +204,9 @@ class FakeGitHub:
         )
 
     async def comment_issue(self, issue_url: str, body: str) -> None:
+        if self.fail_comment_once:
+            self.fail_comment_once = False
+            raise RuntimeError("GitHub comment unavailable")
         self.comments.append((issue_url, body))
 
 
@@ -321,6 +330,7 @@ async def test_issue_to_pr_requires_gate_then_records_merged_sha(
     events = await store.read_events(gated.work_id, project_id=PROJECT_ID)
     requested = next(event for event in events if event.event_type is WorkEventType.GATE_REQUESTED)
     assert requested.payload_json["action"]["action"] == "merge"
+    assert requested.payload_json["action"]["risk"] == "medium"
     assert requested.payload_json["action"]["reversibility"] == "irreversible"
     decided = next(event for event in events if event.event_type is WorkEventType.GATE_DECIDED)
     assert decided.actor_ref == "operator:arda"
@@ -516,6 +526,60 @@ async def test_control_degraded_freezes_start_resume_and_approved_merge(
     assert gated_github.merges == []
     control_comments = [body for _, body in gated_github.comments if "control degraded" in body]
     assert len(control_comments) == 1
+
+
+@pytest.mark.asyncio
+async def test_pending_comment_failure_is_retried_on_resume(store: WorkStore) -> None:
+    flow, _, github, _ = _flow(store)
+    github.fail_comment_once = True
+
+    with pytest.raises(RuntimeError, match="GitHub comment unavailable"):
+        await flow.start(
+            issue_url=ISSUE_URL,
+            project_id=PROJECT_ID,
+            base_sha="a" * 40,
+        )
+
+    records = await store.pending_attention(project_id=PROJECT_ID)
+    assert len(records) == 1
+    gated = await flow.resume(records[0].work_id, project_id=PROJECT_ID)
+    again = await flow.resume(records[0].work_id, project_id=PROJECT_ID)
+
+    assert gated.status == "GATE_PENDING"
+    assert again.status == "GATE_PENDING"
+    assert len(github.comments) == 1
+    assert "approval required" in github.comments[0][1]
+
+
+@pytest.mark.asyncio
+async def test_github_rejected_merge_blocks_with_specific_pending_question(
+    store: WorkStore,
+) -> None:
+    flow, _, github, _ = _flow(store)
+    gated = await flow.start(
+        issue_url=ISSUE_URL,
+        project_id=PROJECT_ID,
+        base_sha="a" * 40,
+    )
+    github.merge_rejection = "Head branch was modified"
+    github.fail_comment_once = True
+
+    with pytest.raises(RuntimeError, match="GitHub comment unavailable"):
+        await flow.approve(
+            gated.work_id,
+            project_id=PROJECT_ID,
+            gate_id=gated.pending_gate,
+            actor_ref="operator:arda",
+        )
+    blocked = await flow.resume(gated.work_id, project_id=PROJECT_ID)
+
+    assert blocked.status == "WORK_BLOCKED"
+    assert github.merges == []
+    pending = await store.pending_attention(project_id=PROJECT_ID)
+    blocker = next(item for item in pending if item.kind.value == "WORK_BLOCKED")
+    assert "Head branch was modified" in blocker.summary
+    assert "stop the work" in blocker.summary
+    assert any("Head branch was modified" in body for _, body in github.comments)
 
 
 @pytest.mark.asyncio
@@ -718,6 +782,42 @@ async def test_pending_attention_is_presented_as_concise_issue_comments(
     bodies = [body for _, body in github.comments]
     assert "Sagewai: work blocked — Choose the target branch." in bodies
     assert "Sagewai: control degraded — observability. Evidence: check://stale." in bodies
+
+
+@pytest.mark.asyncio
+async def test_catalog_client_types_github_merge_conflict() -> None:
+    async def github_callable(_payload):
+        request = httpx.Request(
+            "PUT",
+            "https://api.github.com/repos/octocat/hello-world/pulls/7/merge",
+        )
+        response = httpx.Response(
+            409,
+            request=request,
+            json={"message": "Head branch was modified"},
+        )
+        raise httpx.HTTPStatusError(
+            "merge conflict",
+            request=request,
+            response=response,
+        )
+
+    client = CatalogGitHubClient(
+        project_id=PROJECT_ID,
+        github_callable=github_callable,
+    )
+    pull_request = GitHubPullRequest(
+        project_id=PROJECT_ID,
+        owner="octocat",
+        repo="hello-world",
+        number=7,
+        url="https://github.com/octocat/hello-world/pull/7",
+        head="sagewai/work-1",
+        base="main",
+    )
+
+    with pytest.raises(GitHubMergeRejectedError, match="Head branch was modified"):
+        await client.merge_pull_request(pull_request)
 
 
 @pytest.mark.asyncio

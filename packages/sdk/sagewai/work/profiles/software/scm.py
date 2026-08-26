@@ -112,7 +112,6 @@ class SoftwareWorktreeManager:
                 or not await self._matches_published_state(
                     workspace,
                     expected_sha=expected_sha,
-                    branch=published_branch,
                     commit_message=publish_commit_message,
                 )
             ):
@@ -124,29 +123,17 @@ class SoftwareWorktreeManager:
         workspace: SoftwareWorkspace,
         *,
         expected_sha: str,
-        branch: str,
         commit_message: str,
     ) -> bool:
-        actual_sha = await self.current_sha(workspace)
         parent = await _git(workspace.path, "rev-parse", "HEAD^")
         message = await _git(workspace.path, "log", "-1", "--format=%B")
         status = await _git(workspace.path, "status", "--porcelain")
-        remote = await _git(
-            workspace.path,
-            "ls-remote",
-            "--exit-code",
-            "origin",
-            f"refs/heads/{branch}",
-        )
-        if any(result.returncode != 0 for result in (parent, message, status, remote)):
+        if any(result.returncode != 0 for result in (parent, message, status)):
             return False
-        fields = remote.stdout.split()
         return (
             parent.stdout.strip() == expected_sha
             and message.stdout.strip() == commit_message
             and status.stdout == ""
-            and len(fields) >= 2
-            and fields[0] == actual_sha
         )
 
     async def current_sha(self, workspace: SoftwareWorkspace) -> str:

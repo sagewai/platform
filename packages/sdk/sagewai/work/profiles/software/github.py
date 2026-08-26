@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
+import httpx
 from pydantic import BaseModel, ConfigDict
 
 from sagewai.fleet.execution import run_worker_subprocess
@@ -32,6 +33,7 @@ from sagewai.work.models import (
     WorkItem,
     WorkRecord,
 )
+from sagewai.work.profiles.software.lifecycle import expected_result_sha
 from sagewai.work.profiles.software.models import SoftwareContractContext
 from sagewai.work.profiles.software.scm import SoftwareWorktreeManager
 from sagewai.work.store import WorkStore
@@ -40,6 +42,10 @@ _ISSUE_PATH = re.compile(
     r"^/(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+)/"
     r"issues/(?P<number>[1-9][0-9]*)/?$"
 )
+
+
+class GitHubMergeRejectedError(RuntimeError):
+    """GitHub deterministically refused an otherwise authorized merge."""
 
 
 class GitHubIssue(BaseModel):
@@ -274,16 +280,19 @@ class CatalogGitHubClient:
         pull_request: GitHubPullRequest,
     ) -> GitHubMergeResult:
         self._validate_project(pull_request.project_id)
-        result = await self._call(
-            {
-                "_operation": "merge_pull_request",
-                "owner": pull_request.owner,
-                "repo": pull_request.repo,
-                "number": pull_request.number,
-            }
-        )
-        if result["merged"] is not True:
-            raise RuntimeError(str(result["message"]))
+        try:
+            result = await self._call(
+                {
+                    "_operation": "merge_pull_request",
+                    "owner": pull_request.owner,
+                    "repo": pull_request.repo,
+                    "number": pull_request.number,
+                }
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in {405, 409}:
+                raise
+            raise GitHubMergeRejectedError(str(exc.response.json()["message"])) from exc
         return GitHubMergeResult(
             project_id=self._project_id,
             pull_request_number=pull_request.number,
@@ -492,7 +501,10 @@ class GitHubIssueLifecycle:
         record = await self._work_store.load_work(work_id, project_id=project_id)
         if record is None:
             raise KeyError(work_id)
-        if record.status in {"READY_TO_DELIVER", "WORK_BLOCKED"}:
+        if record.status == "READY_TO_DELIVER":
+            return record
+        if record.status == "WORK_BLOCKED":
+            await self.present_pending(work_id, project_id=project_id)
             return record
 
         events = await self._events(work_id, project_id)
@@ -502,6 +514,7 @@ class GitHubIssueLifecycle:
                 raise ValueError("GATE_PENDING Work has no pending gate")
             decided = self._gate_event(events, WorkEventType.GATE_DECIDED, gate_id)
             if decided is None:
+                await self.present_pending(work_id, project_id=project_id)
                 return record
             record = await self._set_record(
                 record,
@@ -655,7 +668,7 @@ class GitHubIssueLifecycle:
                     default_branch=issue.default_branch,
                 )
                 branch = f"sagewai/{work_item.id}"
-                expected_sha = self._expected_sha(events, software.base_sha)
+                expected_sha = expected_result_sha(events, software.base_sha)
                 branch_sha = await self._branch_publisher.publish(
                     project_id=issue.project_id,
                     work_id=work_item.id,
@@ -737,7 +750,7 @@ class GitHubIssueLifecycle:
             project_id=work_item.project_id,
             action="merge",
             work_id=work_item.id,
-            risk=contract.risk,
+            risk="medium",
             reversibility=Reversibility.IRREVERSIBLE,
             scope=pull_request.url,
             evidence_refs=self._merge_evidence(
@@ -786,11 +799,13 @@ class GitHubIssueLifecycle:
             events.append(decided)
 
         if decided is None:
-            return await self._set_record(
+            record = await self._set_record(
                 record,
                 status="GATE_PENDING",
                 pending_gate=gate_id,
             )
+            await self.present_pending(work_item.id, project_id=issue.project_id)
+            return record
         if decided.payload_json["decision"] == GateDecision.DENY.value:
             await self._append(
                 work_id=work_item.id,
@@ -825,7 +840,30 @@ class GitHubIssueLifecycle:
             raise RuntimeError("canonical merge event conflicts with GitHub state")
 
         if not state.merged:
-            merge_result = await self._github.merge_pull_request(pull_request)
+            try:
+                merge_result = await self._github.merge_pull_request(pull_request)
+            except GitHubMergeRejectedError as exc:
+                await self._append(
+                    work_id=work_item.id,
+                    project_id=work_item.project_id,
+                    event_type=WorkEventType.WORK_BLOCKED,
+                    payload={
+                        "reason": "merge_rejected",
+                        "decision_request": (
+                            f"GitHub rejected the merge: {exc}. Resolve the rejection or stop "
+                            "the work."
+                        ),
+                        "evidence_refs": list(action.evidence_refs),
+                    },
+                    actor_ref="github",
+                )
+                record = await self._set_record(
+                    record,
+                    status="WORK_BLOCKED",
+                    pending_gate=None,
+                )
+                await self.present_pending(work_item.id, project_id=issue.project_id)
+                return record
             if (
                 merge_result.project_id != work_item.project_id
                 or merge_result.pull_request_number != pull_request.number
@@ -939,18 +977,6 @@ class GitHubIssueLifecycle:
         return (
             WorkItem.model_validate(created.payload_json),
             WorkContract.model_validate(accepted.payload_json),
-        )
-
-    @staticmethod
-    def _expected_sha(events: list[WorkEvent], base_sha: str) -> str:
-        return next(
-            (
-                str(event.payload_json["current_sha"])
-                for event in reversed(events)
-                if event.event_type is WorkEventType.STAGE_COMPLETED
-                and event.payload_json.get("stage") in {"implement", "repair"}
-            ),
-            base_sha,
         )
 
     @staticmethod
@@ -1100,6 +1126,7 @@ __all__ = [
     "GitHubClient",
     "GitHubIssue",
     "GitHubIssueLifecycle",
+    "GitHubMergeRejectedError",
     "GitHubMergeResult",
     "GitHubPullRequest",
     "GitHubPullRequestState",

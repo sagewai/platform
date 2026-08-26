@@ -52,6 +52,19 @@ from sagewai.work.runtime import (
 from sagewai.work.store import WorkStore
 
 
+def expected_result_sha(events: list[WorkEvent], base_sha: str) -> str:
+    """Return the latest implemented or repaired workspace SHA."""
+    return next(
+        (
+            str(event.payload_json["current_sha"])
+            for event in reversed(events)
+            if event.event_type is WorkEventType.STAGE_COMPLETED
+            and event.payload_json.get("stage") in {"implement", "repair"}
+        ),
+        base_sha,
+    )
+
+
 class _Verifier(Protocol):
     async def verify(
         self,
@@ -220,7 +233,7 @@ class SoftwareLifecycle:
                 work_id=work_id,
                 attempt_id=self._workspace_attempt_id,
                 base_sha=software.base_sha,
-                expected_sha=self._expected_sha(events, software.base_sha),
+                expected_sha=expected_result_sha(events, software.base_sha),
             )
         return await self._drive(
             work_item=work_item,
@@ -762,18 +775,6 @@ class SoftwareLifecycle:
                 else:
                     state = "WORK_BLOCKED"
         return state
-
-    @staticmethod
-    def _expected_sha(events: list[WorkEvent], base_sha: str) -> str:
-        return next(
-            (
-                str(event.payload_json["current_sha"])
-                for event in reversed(events)
-                if event.event_type is WorkEventType.STAGE_COMPLETED
-                and event.payload_json.get("stage") in {"implement", "repair"}
-            ),
-            base_sha,
-        )
 
     @staticmethod
     def _repair_count(events: list[WorkEvent]) -> int:

@@ -39,6 +39,11 @@ from sagewai.work import (
 from sagewai.work.control import OperatorController
 from sagewai.work.knowledge import KnowledgeStore
 from sagewai.work.profiles.software import (
+    GitHubIssue,
+    GitHubIssueLifecycle,
+    GitHubMergeResult,
+    GitHubPullRequest,
+    GitHubPullRequestState,
     SoftwareContractContext,
     SoftwareLifecycle,
     SoftwareReadOnlyResultValidator,
@@ -403,6 +408,120 @@ async def test_successful_implement_verify_review_reaches_ready_to_merge(
     serialized = json.dumps(capsule.model_dump(mode="json")).lower()
     assert "session" not in serialized
     assert "chat_history" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_github_flow_uses_real_software_lifecycle_events(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    durability = InMemoryStore()
+    software = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=durability,
+        implementer=MutationRuntime(implement_text="initial", repair_text="fixed"),
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_command("initial"),),
+    )
+
+    class GitHubFixture:
+        def __init__(self) -> None:
+            self.merged_sha = None
+
+        async def fetch_issue(self, issue_url):
+            return GitHubIssue(
+                project_id="project-a",
+                owner="octocat",
+                repo="hello-world",
+                number=42,
+                url=issue_url,
+                title="Change target",
+                body="deterministic verification passes",
+                default_branch="main",
+            )
+
+        async def create_pull_request(self, *, issue, title, head, base, body):
+            return GitHubPullRequest(
+                project_id=issue.project_id,
+                owner=issue.owner,
+                repo=issue.repo,
+                number=7,
+                url="https://github.com/octocat/hello-world/pull/7",
+                head=head,
+                base=base,
+            )
+
+        async def get_pull_request(self, pull_request):
+            return GitHubPullRequestState(
+                project_id=pull_request.project_id,
+                pull_request_number=pull_request.number,
+                merged=self.merged_sha is not None,
+                merge_commit_sha=self.merged_sha,
+            )
+
+        async def merge_pull_request(self, pull_request):
+            self.merged_sha = "c" * 40
+            return GitHubMergeResult(
+                project_id=pull_request.project_id,
+                pull_request_number=pull_request.number,
+                merged_sha=self.merged_sha,
+            )
+
+        async def comment_issue(self, issue_url, body):
+            return None
+
+    class PublisherFixture:
+        def __init__(self) -> None:
+            self.expected_sha = None
+
+        async def validate_target(self, **_kwargs):
+            return None
+
+        async def publish(self, *, expected_sha, **_kwargs):
+            self.expected_sha = expected_sha
+            return "b" * 40
+
+    github = GitHubFixture()
+    publisher = PublisherFixture()
+    flow = GitHubIssueLifecycle(
+        work_store=work_store,
+        software_lifecycle=software,
+        github=github,
+        branch_publisher=publisher,
+    )
+
+    gated = await flow.start(
+        issue_url="https://github.com/octocat/hello-world/issues/42",
+        project_id="project-a",
+        base_sha=base_sha,
+    )
+    delivered = await flow.approve(
+        gated.work_id,
+        project_id="project-a",
+        gate_id=gated.pending_gate,
+        actor_ref="operator:arda",
+    )
+
+    assert gated.status == "GATE_PENDING"
+    assert publisher.expected_sha == base_sha
+    assert delivered.status == "READY_TO_DELIVER"
+    events = await work_store.read_events(gated.work_id, project_id="project-a")
+    assert any(
+        event.event_type is WorkEventType.STAGE_COMPLETED
+        and event.payload_json.get("stage") == "implement"
+        for event in events
+    )
+    assert any(
+        event.event_type is WorkEventType.STAGE_COMPLETED
+        and event.payload_json.get("stage") == "merge"
+        for event in events
+    )
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,8 @@ from __future__ import annotations
 from importlib import import_module
 from types import SimpleNamespace
 
+import pytest
+from click import ClickException
 from click.testing import CliRunner
 
 from sagewai.cli import cli
@@ -132,9 +134,5 @@ def test_github_credentials_fail_before_remote_call_when_token_is_missing(
 ) -> None:
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
-    try:
+    with pytest.raises(ClickException, match="GITHUB_TOKEN is required"):
         work_module._local_github_credentials()
-    except Exception as exc:
-        assert "GITHUB_TOKEN is required" in str(exc)
-    else:
-        raise AssertionError("missing GitHub token was accepted")

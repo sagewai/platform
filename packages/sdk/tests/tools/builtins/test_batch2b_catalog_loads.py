@@ -34,6 +34,8 @@ def test_github_has_new_write_ops():
     registry._reset()
     registry.load()
     entry = registry.lookup("github")
+    assert entry.version == "0.3.0"
+    assert "merge pull requests" in entry.description.lower()
     ops = set(entry.exec_["http"]["operations"].keys())
     expected_new = {
         "create_issue",
