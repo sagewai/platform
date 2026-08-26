@@ -27,34 +27,9 @@ from pathlib import Path
 
 import httpx
 
-logger = logging.getLogger(__name__)
+from sagewai.fleet.execution import run_worker_subprocess
 
-# Default-DENY environment for `--exec` task subprocesses: a `--exec` task is
-# untrusted code, so it inherits ONLY this minimal allowlist of system variables
-# (enough to find binaries, resolve locale, and use a temp dir) plus the small
-# SAGEWAI_TASK_* IDs injected per task. EVERYTHING else is dropped — including every
-# ambient secret (SAGEWAI_ADMIN_TOKEN, SAGEWAI_MASTER_KEY, DATABASE_URL/
-# SAGEWAI_DATABASE_URL, HMAC_MASTER_SECRET, provider API keys, …) — so task code
-# can't reuse the daemon's credentials to call admin/fleet/data-plane APIs. An
-# allowlist (not a denylist) is future-proof: new secrets are denied by default.
-# Operators that need a specific value can set it inline in the --exec command.
-_EXEC_ENV_ALLOWLIST = frozenset(
-    {
-        "PATH",
-        "HOME",
-        "USER",
-        "LOGNAME",
-        "SHELL",
-        "TERM",
-        "LANG",
-        "LANGUAGE",
-        "LC_ALL",
-        "LC_CTYPE",
-        "TZ",
-        "TMPDIR",
-        "PWD",
-    }
-)
+logger = logging.getLogger(__name__)
 
 
 class _PendingApproval(Exception):
@@ -256,16 +231,17 @@ class WorkerRunner:
                 stderr=asyncio.subprocess.PIPE,
             )
         else:
-            env = {k: v for k, v in os.environ.items() if k in _EXEC_ENV_ALLOWLIST}
-            env.update(self.task_env)
-            env.update(task_ids)
-            proc = await asyncio.create_subprocess_shell(
-                self.exec_cmd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
+            result = await run_worker_subprocess(
+                command=self.exec_cmd,
+                stdin=json.dumps(task),
+                explicit_env={**self.task_env, **task_ids},
+                timeout=self.exec_timeout,
             )
+            if result.timed_out:
+                return "failed", None, "timeout"
+            if result.returncode == 0:
+                return "completed", result.stdout, None
+            return "failed", None, result.stderr
         try:
             out, err = await asyncio.wait_for(
                 proc.communicate(json.dumps(task).encode()), timeout=self.exec_timeout

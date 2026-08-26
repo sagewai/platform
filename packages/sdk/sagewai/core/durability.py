@@ -42,7 +42,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from sagewai.core.state import InMemoryStore, StepStatus, WorkflowRun
 from sagewai.errors import SagewaiTimeoutError
@@ -53,6 +53,44 @@ if TYPE_CHECKING:
     from sagewai.core.state import WorkflowStore
 
 logger = logging.getLogger(__name__)
+T = TypeVar("T")
+
+
+async def run_with_heartbeat(
+    operation: Awaitable[T],
+    *,
+    heartbeat: Callable[[], Awaitable[None]],
+    interval: float,
+    timeout: float | None = None,
+) -> T:
+    """Run an operation while a heartbeat callback remains healthy."""
+    if interval <= 0:
+        raise ValueError("heartbeat interval must be positive")
+
+    async def _heartbeat_loop() -> None:
+        while True:
+            await asyncio.sleep(interval)
+            await heartbeat()
+
+    operation_task = asyncio.ensure_future(operation)
+    heartbeat_task = asyncio.create_task(_heartbeat_loop())
+    try:
+        done, _ = await asyncio.wait(
+            {operation_task, heartbeat_task},
+            timeout=timeout,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if not done:
+            raise asyncio.TimeoutError
+        if heartbeat_task in done:
+            await heartbeat_task
+            raise RuntimeError("heartbeat loop stopped unexpectedly")
+        return await operation_task
+    finally:
+        for task in (operation_task, heartbeat_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(operation_task, heartbeat_task, return_exceptions=True)
 
 
 class StepTimeoutError(SagewaiTimeoutError):
@@ -369,35 +407,27 @@ class DurableRunner:
             StepTimeoutError: If *step_timeout* is set and exceeded.
         """
 
-        async def _heartbeat_loop() -> None:
-            while True:
-                await asyncio.sleep(self._heartbeat_interval)
-                try:
-                    await self._store.heartbeat(
-                        wf_run.workflow_name, wf_run.run_id,
-                    )
-                except Exception:
-                    logger.warning(
-                        "Heartbeat failed for %s:%s",
-                        wf_run.workflow_name,
-                        wf_run.run_id,
-                    )
-
-        heartbeat_task = asyncio.create_task(_heartbeat_loop())
-        try:
-            if self._step_timeout is not None:
-                return await asyncio.wait_for(
-                    coro, timeout=self._step_timeout,
+        async def _heartbeat() -> None:
+            try:
+                await self._store.heartbeat(
+                    wf_run.workflow_name, wf_run.run_id,
                 )
-            return await coro
+            except Exception:
+                logger.warning(
+                    "Heartbeat failed for %s:%s",
+                    wf_run.workflow_name,
+                    wf_run.run_id,
+                )
+
+        try:
+            return await run_with_heartbeat(
+                coro,
+                heartbeat=_heartbeat,
+                interval=self._heartbeat_interval,
+                timeout=self._step_timeout,
+            )
         except asyncio.TimeoutError:
             raise StepTimeoutError(step_name, self._step_timeout or 0.0)
-        finally:
-            heartbeat_task.cancel()
-            try:
-                await heartbeat_task
-            except asyncio.CancelledError:
-                pass
 
     async def _load_or_create(
         self, workflow_name: str, run_id: str, input_data: Any

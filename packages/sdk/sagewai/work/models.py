@@ -17,6 +17,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from sagewai.work.contract import WorkContract
+from sagewai.work.knowledge.models import KnowledgeItem
+
 
 class ClaimClassification(str, Enum):
     """Grounding classification for material operator claims."""
@@ -155,6 +158,23 @@ class ControlPrecondition(BaseModel):
     description: str
     check_ref: str
     required_for: tuple[str, ...]
+
+
+class TaskCapsule(BaseModel):
+    """Bounded, fresh execution context compiled from canonical state."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    project_id: str | None
+    work_id: str
+    stage: str
+    work_item: WorkItem
+    contract: WorkContract
+    knowledge_refs: tuple[str, ...]
+    knowledge_items: tuple[KnowledgeItem, ...]
+    open_assumption_ids: tuple[str, ...]
+    prior_result_refs: tuple[str, ...]
+    profile_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class WorkRecord(BaseModel):
