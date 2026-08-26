@@ -294,6 +294,7 @@ def _lifecycle(
     verifier=None,
     implementer_actor: str = "operator:implementer",
     reviewer_actor: str = "operator:reviewer",
+    repairer_actor: str | None = None,
 ) -> SoftwareLifecycle:
     compiler = TaskCapsuleCompiler(knowledge_store=knowledge_store)
     return SoftwareLifecycle(
@@ -323,7 +324,7 @@ def _lifecycle(
             ),
         ),
         repairer=SoftwareStageOperator(
-            actor_ref=implementer_actor,
+            actor_ref=repairer_actor or implementer_actor,
             runtime=repairer,
             capabilities=_write_capabilities(),
             controller=_controller(
@@ -662,7 +663,7 @@ async def test_implementer_cannot_be_assigned_as_reviewer(
     durability = InMemoryStore()
     runtime = MutationRuntime(implement_text="initial", repair_text="fixed")
 
-    with pytest.raises(ValueError, match="implementer cannot review"):
+    with pytest.raises(ValueError, match="reviewer cannot review"):
         _lifecycle(
             repository=repository,
             worktree_root=tmp_path / "worktrees",
@@ -675,4 +676,35 @@ async def test_implementer_cannot_be_assigned_as_reviewer(
             commands=(_always_pass_command(),),
             implementer_actor="operator:same",
             reviewer_actor="operator:same",
+        )
+
+
+@pytest.mark.asyncio
+async def test_repairer_cannot_be_assigned_as_reviewer(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, _ = _repository(tmp_path)
+    durability = InMemoryStore()
+
+    with pytest.raises(ValueError, match="reviewer cannot review"):
+        _lifecycle(
+            repository=repository,
+            worktree_root=tmp_path / "worktrees",
+            work_store=work_store,
+            knowledge_store=knowledge_store,
+            durability=durability,
+            implementer=MutationRuntime(
+                implement_text="initial",
+                repair_text="fixed",
+            ),
+            reviewer=ReviewRuntime("repair", "accept"),
+            repairer=MutationRuntime(
+                implement_text="unused",
+                repair_text="fixed",
+            ),
+            commands=(_always_pass_command(),),
+            reviewer_actor="operator:same",
+            repairer_actor="operator:same",
         )

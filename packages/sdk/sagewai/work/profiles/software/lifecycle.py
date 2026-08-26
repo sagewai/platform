@@ -93,8 +93,8 @@ class SoftwareLifecycle:
         repo_instructions: tuple[str, ...],
         verification_commands: tuple[str, ...],
     ) -> None:
-        if implementer.actor_ref == reviewer.actor_ref:
-            raise ValueError("implementer cannot review its own result")
+        if reviewer.actor_ref in {implementer.actor_ref, repairer.actor_ref}:
+            raise ValueError("reviewer cannot review its own result")
         if not verification_commands:
             raise ValueError("at least one verification command is required")
         self._work_store = work_store
