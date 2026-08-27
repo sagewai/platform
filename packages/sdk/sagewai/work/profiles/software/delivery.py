@@ -306,7 +306,7 @@ class DeliveryLifecycle:
                 work_id=candidate.work_id,
                 risk="high" if environment == "production" else "medium",
                 reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
-                scope=f"{environment}:{exposure.dimension}:{exposure.value}",
+                scope=(f"{candidate.id}:{environment}:" f"{exposure.dimension}:{exposure.value}"),
                 evidence_refs=evidence_refs,
             )
         )
@@ -392,7 +392,10 @@ class DeliveryLifecycle:
                 work_id=deployment.work_id,
                 risk="high",
                 reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
-                scope=f"{deployment.environment}:{exposure.dimension}:{exposure.value}",
+                scope=(
+                    f"{candidate.id}:{deployment.id}:{deployment.environment}:"
+                    f"{exposure.dimension}:{exposure.value}"
+                ),
                 evidence_refs=evidence_refs,
             )
         )
@@ -436,7 +439,10 @@ class DeliveryLifecycle:
                 work_id=deployment.work_id,
                 risk="medium",
                 reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
-                scope=deployment.provider_ref,
+                scope=(
+                    f"{candidate.id}:{known_good_candidate.id}:"
+                    f"{deployment.id}:{deployment.provider_ref}"
+                ),
                 evidence_refs=evidence_refs,
             )
         )

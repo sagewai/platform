@@ -58,12 +58,13 @@ def _candidate(
     artifact_ref: str = "artifact://candidate-1",
     digest: str = "b" * 64,
     work_id: str = WORK_ID,
+    commit_sha: str = COMMIT_SHA,
 ) -> ReleaseCandidate:
     return ReleaseCandidate(
         id=candidate_id,
         project_id=PROJECT_ID,
         work_id=work_id,
-        commit_sha=COMMIT_SHA,
+        commit_sha=commit_sha,
         artifact_ref=artifact_ref,
         artifact_digest=digest,
         config_revision="config-1",
@@ -958,6 +959,105 @@ async def test_blind_deploy_and_unapproved_deploy_are_impossible(store: WorkStor
     assert record is not None
     assert record.pending_gate is None
     assert await store.pending_attention(project_id=PROJECT_ID) == ()
+
+
+@pytest.mark.asyncio
+async def test_delivery_approval_is_bound_to_release_candidate(
+    store: WorkStore,
+) -> None:
+    lifecycle, _, provider, _, _ = _lifecycle(store)
+    candidate_one = await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    approval_policy = RecordingPolicy(GateDecision.REQUIRE_APPROVAL)
+    gated_lifecycle, _, _, _, _ = _lifecycle(
+        store,
+        deployment_provider=provider,
+        policy=approval_policy,
+    )
+    exposure = BlastRadius(dimension="traffic", value="5%")
+    with pytest.raises(DeliveryApprovalRequiredError):
+        await gated_lifecycle.deploy(
+            candidate_one,
+            environment="production",
+            exposure=exposure,
+            known_good_candidate=_known_good(),
+            evidence_refs=(),
+            expected_duration_seconds=60,
+        )
+
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None
+    assert record.pending_gate is not None
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    requested = events[-1]
+    await store.append_event(
+        WorkEvent(
+            id="approve-candidate-one",
+            project_id=PROJECT_ID,
+            work_id=WORK_ID,
+            sequence=requested.sequence + 1,
+            event_type=WorkEventType.GATE_DECIDED,
+            actor_type="human",
+            actor_ref="operator",
+            payload_json={
+                "gate_id": record.pending_gate,
+                "decision": GateDecision.ALLOW.value,
+                "action": requested.payload_json["action"],
+            },
+            created_at=NOW,
+        )
+    )
+    first_deployment = await gated_lifecycle.deploy(
+        candidate_one,
+        environment="production",
+        exposure=exposure,
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+
+    candidate_two = _candidate(
+        candidate_id="candidate-2",
+        artifact_ref="artifact://candidate-2",
+        digest="d" * 64,
+        commit_sha="e" * 40,
+    )
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    await store.append_event(
+        WorkEvent(
+            id="release-candidate-two",
+            project_id=PROJECT_ID,
+            work_id=WORK_ID,
+            sequence=events[-1].sequence + 1,
+            event_type=WorkEventType.RELEASE_CREATED,
+            actor_type="test",
+            actor_ref="release-provider",
+            payload_json={"release_candidate": candidate_two.model_dump(mode="json")},
+            created_at=NOW,
+        )
+    )
+
+    with pytest.raises(DeliveryApprovalRequiredError):
+        await gated_lifecycle.deploy(
+            candidate_two,
+            environment="production",
+            exposure=exposure,
+            known_good_candidate=_known_good(),
+            evidence_refs=(),
+            expected_duration_seconds=60,
+        )
+
+    assert provider.deployments == [first_deployment]
+    assert [request.action for request in approval_policy.requests] == [
+        "deploy_production",
+        "deploy_production",
+    ]
+    assert candidate_one.id in approval_policy.requests[0].scope
+    assert candidate_two.id in approval_policy.requests[1].scope
 
 
 @pytest.mark.parametrize("action", ("promote", "rollback"))
