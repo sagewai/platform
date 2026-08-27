@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from urllib.parse import urlparse
 
 import httpx
@@ -22,7 +23,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from sagewai.work.control import ControlCheckResult
 from sagewai.work.models import ControlPrecondition, ControlPreconditionKind
 from sagewai.work.profiles.software.delivery import (
+    BlastRadius,
     DeliveryControlRequest,
+    Deployment,
     ReleaseCandidate,
 )
 
@@ -60,6 +63,7 @@ def cloudflare_delivery_preconditions(
     """Declare the controls required by each docs delivery action."""
 
     controlled_actions = ("deploy", "promote", "rollback")
+    observed_actions = (*controlled_actions, "observe")
     return (
         ControlPrecondition(
             id="cloudflare-authority",
@@ -76,6 +80,14 @@ def cloudflare_delivery_preconditions(
             description="Docs is reachable and zone HTTP analytics remain fresh.",
             check_ref="cloudflare.observability",
             required_for=(*controlled_actions, "observe"),
+        ),
+        ControlPrecondition(
+            id="cloudflare-workspace",
+            project_id=project_id,
+            kind=ControlPreconditionKind.WORKSPACE,
+            description="The live docs deployment still matches the Work receipt.",
+            check_ref="cloudflare.workspace",
+            required_for=observed_actions,
         ),
         ControlPrecondition(
             id="cloudflare-rollback-artifact",
@@ -121,6 +133,8 @@ class CloudflareDeliveryControlProbe:
                 result = await self._observability(request, precondition.id)
             elif precondition.check_ref == "cloudflare.rollback_artifact":
                 result = await self._rollback_artifact(request, precondition.id)
+            elif precondition.check_ref == "cloudflare.workspace":
+                result = await self._workspace(request, precondition.id)
             else:
                 raise ValueError(f"unsupported Cloudflare precondition: {precondition.check_ref}")
             results.append(result)
@@ -171,6 +185,145 @@ class CloudflareDeliveryControlProbe:
             detail=detail,
             checked_at=checked_at,
         )
+
+    async def _workspace(
+        self,
+        request: DeliveryControlRequest,
+        precondition_id: str,
+    ) -> ControlCheckResult:
+        checked_at = self._now()
+        evidence_ref = (
+            f"{self._config.api_base}/accounts/{self._config.account_id}"
+            f"/workers/scripts/{self._config.script_name}/deployments"
+        )
+        detail: str | None
+        try:
+            current = await self._current_deployment()
+            if current is None:
+                detail = "current Cloudflare deployment is missing"
+            else:
+                accepted = await self._accepted_workspace_traffic(request)
+                current_traffic = _traffic_map(current["versions"])
+                receipt_matches = (
+                    request.action != "observe"
+                    or request.deployment is not None
+                    and str(current["id"]) == request.deployment.id
+                )
+                detail = (
+                    None
+                    if receipt_matches and current_traffic in accepted
+                    else "current Cloudflare deployment moved outside the Work receipt"
+                )
+        except (httpx.HTTPError, KeyError, TypeError, ValueError, InvalidOperation) as exc:
+            detail = f"Cloudflare workspace verification unavailable: {exc}"
+        return ControlCheckResult(
+            project_id=request.project_id,
+            precondition_id=precondition_id,
+            passed=detail is None,
+            evidence_refs=(evidence_ref,),
+            detail=detail,
+            checked_at=checked_at,
+        )
+
+    async def _accepted_workspace_traffic(
+        self,
+        request: DeliveryControlRequest,
+    ) -> tuple[dict[str, Decimal], ...]:
+        accepted: list[dict[str, Decimal]] = []
+        if request.action == "deploy":
+            if request.known_good_candidate is None:
+                raise ValueError("known-good rollback artifact is missing")
+            known_good = await self._required_candidate_version(request.known_good_candidate)
+            accepted.append({known_good: Decimal(100)})
+        else:
+            if request.deployment is None:
+                raise ValueError("delivery receipt is missing")
+            accepted.append(_receipt_traffic(request.deployment))
+
+        if request.action in {"deploy", "promote"}:
+            if request.target_exposure is None or request.known_good_candidate is None:
+                raise ValueError("target delivery exposure is missing")
+            candidate_version = await self._candidate_version(
+                request.candidate,
+                missing_ok=request.action == "deploy",
+            )
+            if candidate_version is not None:
+                known_good = await self._required_candidate_version(request.known_good_candidate)
+                accepted.append(
+                    _split_traffic(
+                        candidate_version,
+                        known_good,
+                        request.target_exposure,
+                    )
+                )
+        elif request.action == "rollback":
+            if request.known_good_candidate is None:
+                raise ValueError("known-good rollback artifact is missing")
+            known_good = await self._required_candidate_version(request.known_good_candidate)
+            accepted.append({known_good: Decimal(100)})
+        return tuple(accepted)
+
+    async def _required_candidate_version(self, candidate: ReleaseCandidate) -> str:
+        version_id = await self._candidate_version(candidate)
+        if version_id is None:
+            raise ValueError("Cloudflare version is missing")
+        return version_id
+
+    async def _candidate_version(
+        self,
+        candidate: ReleaseCandidate,
+        *,
+        missing_ok: bool = False,
+    ) -> str | None:
+        if candidate.artifact_ref.startswith("cloudflare-version://"):
+            version_id = candidate.artifact_ref.removeprefix("cloudflare-version://")
+            if not version_id:
+                raise ValueError("Cloudflare version id is missing")
+            return version_id
+        if not candidate.artifact_ref.startswith("cloudflare-version-tag://"):
+            if missing_ok:
+                return None
+            raise ValueError("candidate is not a Cloudflare version")
+        tag = candidate.artifact_ref.removeprefix("cloudflare-version-tag://")
+        response = await self._client.get(
+            (
+                f"{self._config.api_base}/accounts/{self._config.account_id}"
+                f"/workers/scripts/{self._config.script_name}/versions"
+            ),
+            headers={"Authorization": f"Bearer {self._api_token}"},
+            params={"deployable": "true"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        matches = [
+            str(item["id"])
+            for item in payload["result"]["items"]
+            if item.get("annotations", {}).get("workers/tag") == tag
+        ]
+        if not matches and missing_ok:
+            return None
+        if len(matches) != 1:
+            raise ValueError("Cloudflare release tag does not resolve exactly once")
+        return matches[0]
+
+    async def _current_deployment(self) -> dict | None:
+        response = await self._client.get(
+            (
+                f"{self._config.api_base}/accounts/{self._config.account_id}"
+                f"/workers/scripts/{self._config.script_name}/deployments"
+            ),
+            headers={"Authorization": f"Bearer {self._api_token}"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("success") is not True:
+            raise ValueError("Cloudflare deployment lookup failed")
+        deployments = payload["result"]["deployments"]
+        if not deployments:
+            return None
+        if any(not isinstance(item.get("created_on"), str) for item in deployments):
+            raise ValueError("Cloudflare deployment timestamp is missing")
+        return max(deployments, key=lambda item: item["created_on"])
 
     async def _observability(
         self,
@@ -358,8 +511,47 @@ def _parse_datetime(value) -> datetime | None:
     return parsed
 
 
+def _traffic_map(items) -> dict[str, Decimal]:
+    result = {str(item["version_id"]): Decimal(str(item["percentage"])) for item in items}
+    if len(result) != len(items) or sum(result.values()) != Decimal(100):
+        raise ValueError("Cloudflare deployment traffic is invalid")
+    return result
+
+
+def _receipt_traffic(deployment: Deployment) -> dict[str, Decimal]:
+    parsed = urlparse(deployment.provider_ref)
+    parts = parsed.path.strip("/").split("/")
+    if parsed.scheme != "cloudflare-deployment" or len(parts) != 2:
+        raise ValueError("delivery receipt is not a Cloudflare deployment")
+    candidate_version, rollback_version = parts
+    if deployment.status == "rolled_back":
+        return {candidate_version: Decimal(100)}
+    return _split_traffic(candidate_version, rollback_version, deployment.exposure)
+
+
+def _split_traffic(
+    candidate_version: str,
+    rollback_version: str,
+    exposure: BlastRadius,
+) -> dict[str, Decimal]:
+    if exposure.dimension != "traffic" or not exposure.value.endswith("%"):
+        raise ValueError("Cloudflare docs exposure must be a traffic percentage")
+    percentage = Decimal(exposure.value.removesuffix("%"))
+    if percentage <= 0 or percentage > 100:
+        raise ValueError("Cloudflare traffic percentage is invalid")
+    if percentage == 100:
+        return {candidate_version: Decimal(100)}
+    if candidate_version == rollback_version:
+        raise ValueError("candidate and rollback versions must differ")
+    return {
+        rollback_version: Decimal(100) - percentage,
+        candidate_version: percentage,
+    }
+
+
 __all__ = [
     "CloudflareDeliveryConfig",
     "CloudflareDeliveryControlProbe",
     "cloudflare_delivery_preconditions",
+    "cloudflare_version_digest",
 ]

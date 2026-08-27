@@ -20,6 +20,7 @@ from click.testing import CliRunner
 
 from sagewai.cli import cli
 from sagewai.cli.work import work as work_cli
+from sagewai.work import WorkEventType
 
 work_module = import_module("sagewai.cli.work")
 
@@ -142,6 +143,19 @@ def test_work_resume_uses_persisted_lifecycle(monkeypatch) -> None:
     assert "WORK_BLOCKED" in result.output
 
 
+def test_work_resume_reports_delivery_configuration_error(monkeypatch) -> None:
+    async def fake_resume(_work_id: str):
+        raise ValueError("Cloudflare docs delivery configuration is missing: TOKEN")
+
+    monkeypatch.setattr(work_module, "_resume_work", fake_resume)
+
+    result = CliRunner().invoke(work_cli, ["resume", "work-1"])
+
+    assert result.exit_code != 0
+    assert "configuration is missing" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_work_approve_advances_the_named_canonical_gate(monkeypatch) -> None:
     seen = []
 
@@ -190,3 +204,143 @@ def test_github_credentials_fail_before_remote_call_when_token_is_missing(
 
     with pytest.raises(ClickException, match="GITHUB_TOKEN is required"):
         work_module._local_github_credentials()
+
+
+@pytest.mark.asyncio
+async def test_ready_to_deliver_resume_routes_to_docs_delivery(monkeypatch) -> None:
+    record = SimpleNamespace(
+        work_id="work-1",
+        project_id="project-a",
+        status="READY_TO_DELIVER",
+        source_ref="https://github.com/octocat/repo/issues/7",
+    )
+    repository = SimpleNamespace()
+    seen = []
+
+    async def fake_status(_work_id):
+        return record
+
+    async def fake_repository_state():
+        return repository, "a" * 40
+
+    async def fake_run_docs_delivery(value, *, project_id, repository):
+        seen.append((value, project_id, repository))
+        return SimpleNamespace(work_id="work-1", status="COMPLETE")
+
+    monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
+    monkeypatch.setattr(work_module, "_status_work", fake_status)
+    monkeypatch.setattr(work_module, "_repository_state", fake_repository_state)
+    monkeypatch.setattr(work_module, "_run_docs_delivery", fake_run_docs_delivery)
+
+    result = await work_module._resume_work("work-1")
+
+    assert result.status == "COMPLETE"
+    assert seen == [(record, "project-a", repository)]
+
+
+@pytest.mark.asyncio
+async def test_delivery_gate_approval_routes_to_delivery_flow(monkeypatch) -> None:
+    record = SimpleNamespace(
+        work_id="work-1",
+        project_id="project-a",
+        status="READY_TO_DELIVER",
+        source_ref="https://github.com/octocat/repo/issues/7",
+    )
+    gate_id = "deploy_production:work-1:candidate:production:traffic:5%"
+    repository = SimpleNamespace()
+    seen = []
+
+    async def fake_status(_work_id):
+        return record
+
+    async def fake_repository_state():
+        return repository, "a" * 40
+
+    async def fake_ensure_schema():
+        return None
+
+    class FakeStore:
+        async def init(self):
+            return None
+
+        async def read_events(self, work_id, *, project_id):
+            return [
+                SimpleNamespace(
+                    event_type=WorkEventType.GATE_REQUESTED,
+                    payload_json={
+                        "gate_id": gate_id,
+                        "action": {"action": "deploy_production"},
+                    },
+                )
+            ]
+
+    async def fake_run_docs_delivery(
+        value,
+        *,
+        project_id,
+        repository,
+        approve_gate_id,
+    ):
+        seen.append((value, project_id, repository, approve_gate_id))
+        return SimpleNamespace(work_id="work-1", status="READY_TO_DELIVER")
+
+    monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
+    monkeypatch.setattr(work_module, "_status_work", fake_status)
+    monkeypatch.setattr(work_module, "_repository_state", fake_repository_state)
+    monkeypatch.setattr(work_module.factory, "ensure_schema", fake_ensure_schema)
+    monkeypatch.setattr(work_module.factory, "get_engine", lambda: object())
+    monkeypatch.setattr(work_module, "WorkStore", lambda engine: FakeStore())
+    monkeypatch.setattr(work_module, "_run_docs_delivery", fake_run_docs_delivery)
+
+    approved = await work_module._approve_work("work-1", gate_id)
+
+    assert approved.status == "READY_TO_DELIVER"
+    assert seen == [(record, "project-a", repository, gate_id)]
+
+
+def test_docs_delivery_settings_require_explicit_freshness_and_rollout(
+    monkeypatch,
+) -> None:
+    names = (
+        "CLOUDFLARE_API_TOKEN",
+        "CLOUDFLARE_ACCOUNT_ID",
+        "SAGEWAI_DOCS_KNOWN_GOOD_VERSION_ID",
+        "SAGEWAI_DOCS_KNOWN_GOOD_COMMIT_SHA",
+        "SAGEWAI_DOCS_KNOWN_GOOD_VERIFICATION_REF",
+        "SAGEWAI_DOCS_KNOWN_GOOD_REVIEW_REF",
+        "SAGEWAI_DOCS_ROLLOUT_JSON",
+        "SAGEWAI_DOCS_POLICY_EVIDENCE_REF",
+        "SAGEWAI_DOCS_ROLLBACK_OBSERVATION_SECONDS",
+        "SAGEWAI_DOCS_OBSERVATION_SAMPLE_SECONDS",
+        "SAGEWAI_DOCS_COMMAND_TIMEOUT_SECONDS",
+        "SAGEWAI_DOCS_HEARTBEAT_SECONDS",
+        "SAGEWAI_DOCS_MINIMUM_CREDENTIAL_TTL_SECONDS",
+        "SAGEWAI_DOCS_MAXIMUM_MONITORING_STALENESS_SECONDS",
+    )
+    for name in names:
+        monkeypatch.setenv(name, "value")
+    monkeypatch.setenv(
+        "SAGEWAI_DOCS_ROLLOUT_JSON",
+        '[{"exposure":"5%","observe_seconds":30},{"exposure":"100%","observe_seconds":60}]',
+    )
+    for name in (
+        "SAGEWAI_DOCS_ROLLBACK_OBSERVATION_SECONDS",
+        "SAGEWAI_DOCS_OBSERVATION_SAMPLE_SECONDS",
+        "SAGEWAI_DOCS_COMMAND_TIMEOUT_SECONDS",
+        "SAGEWAI_DOCS_HEARTBEAT_SECONDS",
+        "SAGEWAI_DOCS_MINIMUM_CREDENTIAL_TTL_SECONDS",
+        "SAGEWAI_DOCS_MAXIMUM_MONITORING_STALENESS_SECONDS",
+    ):
+        monkeypatch.setenv(name, "30")
+
+    settings = work_module._docs_delivery_settings()
+
+    assert settings["maximum_monitoring_staleness_seconds"] == 30
+    assert [step.exposure.value for step in settings["policy"].rollout] == [
+        "5%",
+        "100%",
+    ]
+
+    monkeypatch.delenv("SAGEWAI_DOCS_MAXIMUM_MONITORING_STALENESS_SECONDS")
+    with pytest.raises(ValueError, match="MAXIMUM_MONITORING_STALENESS"):
+        work_module._docs_delivery_settings()

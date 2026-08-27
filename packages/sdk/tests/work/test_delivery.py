@@ -32,6 +32,7 @@ from sagewai.work.profiles.software.delivery import (
     BlastRadius,
     DeliveryActionDeniedError,
     DeliveryApprovalRequiredError,
+    DeliveryControlLostError,
     DeliveryControlRequest,
     DeliveryLifecycle,
     Deployment,
@@ -1224,6 +1225,30 @@ async def test_failure_triage_and_verified_rollout_completion_are_persisted(
         expected_duration_seconds=60,
     )
     await lifecycle.observe(rolled_back, gates=(gate,), window_seconds=30)
+    with pytest.raises(DeliveryActionDeniedError, match="rolled-back candidate"):
+        await lifecycle.build(
+            work_id=WORK_ID,
+            project_id=PROJECT_ID,
+            commit_sha=COMMIT_SHA,
+            evidence_refs=(),
+        )
+    with pytest.raises(DeliveryActionDeniedError, match="rolled-back candidate"):
+        await lifecycle.deploy(
+            candidate,
+            environment="production",
+            exposure=BlastRadius(dimension="traffic", value="5%"),
+            known_good_candidate=_known_good(),
+            evidence_refs=(),
+            expected_duration_seconds=60,
+        )
+    with pytest.raises(DeliveryActionDeniedError, match="rolled-back deployment"):
+        await lifecycle.promote(
+            failed_deployment,
+            exposure=BlastRadius(dimension="traffic", value="20%"),
+            known_good_candidate=_known_good(),
+            evidence_refs=(),
+            expected_duration_seconds=60,
+        )
     triaged = await lifecycle.triage(
         failed_deployment,
         observation=failed,
@@ -1415,6 +1440,53 @@ async def test_monitoring_darkness_during_observation_cancels_window_and_freezes
     assert observation.cancelled is True
     pending = await store.pending_attention(project_id=PROJECT_ID)
     assert [item.attention_id for item in pending] == ["delivery-observability"]
+
+
+@pytest.mark.asyncio
+async def test_observation_provider_control_loss_freezes_without_health_or_rollback(
+    store: WorkStore,
+) -> None:
+    class UnreachableObservationProvider(DeterministicFakeObservationProvider):
+        async def observe(self, deployment, gates, window_seconds):
+            raise DeliveryControlLostError(
+                "delivery-observability",
+                "monitoring transport unavailable",
+                evidence_refs=("monitoring://unreachable",),
+            )
+
+    lifecycle, _, provider, _, _ = _lifecycle(
+        store,
+        observation_provider=UnreachableObservationProvider(({"availability": True},)),
+    )
+    candidate = await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    deployment = await lifecycle.deploy(
+        candidate,
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="5%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    gate = HealthGate(
+        id="availability",
+        project_id=PROJECT_ID,
+        description="availability",
+        check_ref="http://availability",
+        failure_verdict=HealthVerdict.FAIL,
+    )
+
+    with pytest.raises(ControlDegradedError, match="delivery-observability"):
+        await lifecycle.observe(deployment, gates=(gate,), window_seconds=30)
+
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    assert WorkEventType.CONTROL_DEGRADED in [event.event_type for event in events]
+    assert WorkEventType.OBSERVATION_RECORDED not in [event.event_type for event in events]
+    assert provider.rollbacks == []
 
 
 @pytest.mark.parametrize("action", ("promote", "rollback"))

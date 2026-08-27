@@ -35,6 +35,7 @@ from sagewai.work.profiles.software.delivery import (
     BlastRadius,
     DeliveryControlRequest,
     DeliveryLifecycle,
+    Deployment,
     HealthGate,
     HealthVerdict,
     ReleaseCandidate,
@@ -94,12 +95,31 @@ def _config(*, max_staleness: int = 120) -> CloudflareDeliveryConfig:
 
 
 def _request(action: str, *, known_good=True) -> DeliveryControlRequest:
+    deployment = None
+    target_exposure = BlastRadius(dimension="traffic", value="5%")
+    if action != "deploy":
+        deployment = Deployment(
+            id="deployment-current",
+            project_id=PROJECT_ID,
+            work_id=WORK_ID,
+            release_candidate_id=_candidate().id,
+            environment="production",
+            exposure=BlastRadius(dimension="traffic", value="100%"),
+            provider_ref=(
+                f"cloudflare-deployment://deployment-current/{VERSION_ID}/"
+                "22222222-2222-2222-2222-222222222222"
+            ),
+            status="active",
+        )
+        target_exposure = deployment.exposure
     return DeliveryControlRequest(
         project_id=PROJECT_ID,
         work_id=WORK_ID,
         action=action,
-        candidate=_candidate(),
+        candidate=_current_candidate(),
         known_good_candidate=_candidate() if known_good else None,
+        deployment=deployment,
+        target_exposure=target_exposure,
         expected_duration_seconds=600,
     )
 
@@ -178,6 +198,25 @@ def _response(request: httpx.Request, *, observed_at: datetime = NOW) -> httpx.R
                 },
             },
         )
+    if request.url.path.endswith("/deployments"):
+        assert request.method == "GET"
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "success": True,
+                "result": {
+                    "deployments": [
+                        {
+                            "id": "deployment-current",
+                            "created_on": "2026-08-27T09:59:00Z",
+                            "strategy": "percentage",
+                            "versions": [{"version_id": VERSION_ID, "percentage": 100}],
+                        }
+                    ]
+                },
+            },
+        )
     raise AssertionError(f"unexpected request: {request.url}")
 
 
@@ -244,9 +283,54 @@ async def test_real_path_preflight_checks_authority_observability_and_rollback()
     assert [result.precondition_id for result in results] == [
         "cloudflare-authority",
         "cloudflare-observability",
+        "cloudflare-workspace",
         "cloudflare-rollback-artifact",
     ]
     assert all(result.passed for result in results)
+
+
+@pytest.mark.asyncio
+async def test_workspace_precondition_fails_when_current_deployment_is_superseded() -> None:
+    def superseded(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/deployments"):
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "success": True,
+                    "result": {
+                        "deployments": [
+                            {
+                                "id": "deployment-external",
+                                "created_on": "2026-08-27T10:01:00Z",
+                                "strategy": "percentage",
+                                "versions": [
+                                    {
+                                        "version_id": ("33333333-3333-3333-3333-333333333333"),
+                                        "percentage": 100,
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                },
+            )
+        return _response(request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(superseded)) as client:
+        probe = CloudflareDeliveryControlProbe(
+            config=_config(),
+            api_token="api-token",
+            client=client,
+            now=lambda: NOW,
+        )
+        results = await _evaluate(probe, _request("observe"))
+
+    workspace = next(
+        result for result in results if result.precondition_id == "cloudflare-workspace"
+    )
+    assert workspace.passed is False
+    assert "outside the Work receipt" in (workspace.detail or "")
 
 
 @pytest.mark.asyncio
@@ -290,10 +374,11 @@ async def test_stale_monitoring_fails_even_when_endpoint_returns_200() -> None:
 
         results = await _evaluate(probe, _request("observe"))
 
-    assert len(results) == 1
-    assert results[0].precondition_id == "cloudflare-observability"
-    assert results[0].passed is False
-    assert "stale" in (results[0].detail or "")
+    observability = next(
+        result for result in results if result.precondition_id == "cloudflare-observability"
+    )
+    assert observability.passed is False
+    assert "stale" in (observability.detail or "")
 
 
 @pytest.mark.asyncio
@@ -321,9 +406,11 @@ async def test_empty_analytics_window_does_not_mean_control_was_lost() -> None:
 
         results = await _evaluate(probe, _request("observe"))
 
-    assert len(results) == 1
-    assert results[0].passed is True
-    assert results[0].detail is None
+    observability = next(
+        result for result in results if result.precondition_id == "cloudflare-observability"
+    )
+    assert observability.passed is True
+    assert observability.detail is None
 
 
 @pytest.mark.parametrize(
@@ -351,9 +438,11 @@ async def test_analytics_scope_or_shape_failure_fails_closed(payload: dict) -> N
 
         results = await _evaluate(probe, _request("observe"))
 
-    assert len(results) == 1
-    assert results[0].passed is False
-    assert "monitoring" in (results[0].detail or "").lower()
+    observability = next(
+        result for result in results if result.precondition_id == "cloudflare-observability"
+    )
+    assert observability.passed is False
+    assert "monitoring" in (observability.detail or "").lower()
 
 
 @pytest.mark.asyncio
@@ -389,7 +478,11 @@ async def test_analytics_scope_loss_freezes_lifecycle_and_surfaces_attention(
                 client=client,
                 now=lambda: NOW,
             ),
-            control_preconditions=cloudflare_delivery_preconditions(PROJECT_ID),
+            control_preconditions=tuple(
+                precondition
+                for precondition in cloudflare_delivery_preconditions(PROJECT_ID)
+                if precondition.id != "cloudflare-workspace"
+            ),
             action_policy=lambda request: GateDecision.ALLOW,
         )
         candidate = await lifecycle.build(
@@ -516,7 +609,11 @@ async def test_lifecycle_refuses_rollback_when_cloudflare_credential_expires(
                 client=client,
                 now=lambda: NOW,
             ),
-            control_preconditions=cloudflare_delivery_preconditions(PROJECT_ID),
+            control_preconditions=tuple(
+                precondition
+                for precondition in cloudflare_delivery_preconditions(PROJECT_ID)
+                if precondition.id != "cloudflare-workspace"
+            ),
             action_policy=lambda request: GateDecision.ALLOW,
         )
         candidate = await lifecycle.build(

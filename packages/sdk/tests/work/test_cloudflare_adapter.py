@@ -17,17 +17,18 @@ from pathlib import Path
 import httpx
 import pytest
 
+from sagewai.fleet.execution import WorkerProcessResult
 from sagewai.work.profiles.software.cloudflare_adapter import (
     CloudflareDeploymentReference,
     CloudflareDocsAdapterConfig,
     CloudflareDocsDeploymentProvider,
     CloudflareDocsObservationProvider,
     CloudflareDocsReleaseProvider,
-    CommandResult,
     cloudflare_static_asset_digest,
 )
 from sagewai.work.profiles.software.delivery import (
     BlastRadius,
+    DeliveryControlLostError,
     HealthGate,
     HealthVerdict,
     ReleaseCandidate,
@@ -46,10 +47,18 @@ class FakeCommandRunner:
         self.on_run = on_run
         self.calls = []
 
-    async def run(self, args, *, cwd: Path, env=None) -> CommandResult:
-        self.calls.append((tuple(args), cwd, dict(env or {})))
+    async def __call__(
+        self,
+        *,
+        argv,
+        cwd: Path,
+        explicit_env=None,
+        timeout=None,
+        output_limit=4000,
+    ) -> WorkerProcessResult:
+        self.calls.append((tuple(argv), cwd, dict(explicit_env or {}), timeout, output_limit))
         if self.on_run is not None:
-            self.on_run(tuple(args))
+            self.on_run(tuple(argv))
         return self.results.pop(0)
 
 
@@ -71,6 +80,7 @@ def _config(tmp_path: Path) -> CloudflareDocsAdapterConfig:
         script_name="docs",
         target_url="https://docs.sagewai.ai",
         observation_sample_interval_seconds=30,
+        command_timeout_seconds=300,
     )
 
 
@@ -116,6 +126,7 @@ class CloudflareState:
         self.deployments = []
         self.posts = []
         self.target_status = 200
+        self.target_statuses = []
         self.target_requests = []
 
     def add_candidate_version(self, tag: str) -> None:
@@ -130,8 +141,9 @@ class CloudflareState:
     def __call__(self, request: httpx.Request) -> httpx.Response:
         if request.url.host == "docs.sagewai.ai":
             self.target_requests.append(request)
+            status = self.target_statuses.pop(0) if self.target_statuses else self.target_status
             return httpx.Response(
-                self.target_status,
+                status,
                 request=request,
                 text="<h1>Sagewai docs</h1>",
             )
@@ -157,6 +169,7 @@ class CloudflareState:
             self.posts.append(body)
             deployment = {
                 "id": f"33333333-3333-3333-3333-{len(self.posts):012d}",
+                "created_on": f"2026-08-27T10:00:{len(self.posts):02d}Z",
                 "strategy": "percentage",
                 "versions": body["versions"],
                 "annotations": body["annotations"],
@@ -186,14 +199,14 @@ async def test_release_provider_builds_one_immutable_local_snapshot(tmp_path: Pa
     (output / "index.html").write_text("<h1>Sagewai docs</h1>", encoding="utf-8")
     runner = FakeCommandRunner(
         (
-            CommandResult(returncode=0, stdout=f"{COMMIT_SHA}\n", stderr=""),
-            CommandResult(returncode=0, stdout="", stderr=""),
-            CommandResult(returncode=0, stdout="build passed", stderr=""),
+            WorkerProcessResult(returncode=0, stdout=f"{COMMIT_SHA}\n", stderr=""),
+            WorkerProcessResult(returncode=0, stdout="", stderr=""),
+            WorkerProcessResult(returncode=0, stdout="build passed", stderr=""),
         )
     )
     provider = CloudflareDocsReleaseProvider(
         config=config,
-        command_runner=runner,
+        process_runner=runner,
         verification_ref="verification://1",
         review_ref="review://1",
     )
@@ -220,10 +233,19 @@ async def test_deployment_provider_uploads_once_promotes_same_version_and_rolls_
     config = _config(tmp_path)
     candidate = _local_candidate(config)
     state = CloudflareState()
+    state.deployments.append(
+        {
+            "id": "00000000-0000-0000-0000-000000000001",
+            "created_on": "2026-08-27T09:59:00Z",
+            "strategy": "percentage",
+            "versions": [{"version_id": OLD_VERSION_ID, "percentage": 100}],
+            "annotations": {},
+        }
+    )
     tag = candidate.artifact_ref.removeprefix("cloudflare-version-tag://")
     runner = FakeCommandRunner(
         (
-            CommandResult(
+            WorkerProcessResult(
                 returncode=0,
                 stdout=f"Uploaded docs\nWorker Version ID: {NEW_VERSION_ID}\n",
                 stderr="",
@@ -236,7 +258,7 @@ async def test_deployment_provider_uploads_once_promotes_same_version_and_rolls_
             config=config,
             api_token="token",
             client=client,
-            command_runner=runner,
+            process_runner=runner,
         )
 
         canary = await provider.deploy(
@@ -285,6 +307,7 @@ async def test_deployment_provider_recovers_uploaded_and_configured_receipts(
     state.deployments.append(
         {
             "id": "44444444-4444-4444-4444-444444444444",
+            "created_on": "2026-08-27T10:00:00Z",
             "strategy": "percentage",
             "versions": [
                 {"version_id": OLD_VERSION_ID, "percentage": 95},
@@ -299,7 +322,7 @@ async def test_deployment_provider_recovers_uploaded_and_configured_receipts(
             config=config,
             api_token="token",
             client=client,
-            command_runner=runner,
+            process_runner=runner,
         )
 
         recovered = await provider.deploy(
@@ -315,6 +338,48 @@ async def test_deployment_provider_recovers_uploaded_and_configured_receipts(
 
 
 @pytest.mark.asyncio
+async def test_deployment_refuses_when_live_traffic_is_not_known_good(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    candidate = _local_candidate(config)
+    tag = candidate.artifact_ref.removeprefix("cloudflare-version-tag://")
+    state = CloudflareState()
+    state.add_candidate_version(tag)
+    state.deployments.append(
+        {
+            "id": "77777777-7777-7777-7777-777777777777",
+            "created_on": "2026-08-27T10:00:00Z",
+            "strategy": "percentage",
+            "versions": [
+                {
+                    "version_id": "99999999-9999-9999-9999-999999999999",
+                    "percentage": 100,
+                }
+            ],
+            "annotations": {},
+        }
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(state)) as client:
+        provider = CloudflareDocsDeploymentProvider(
+            config=config,
+            api_token="token",
+            client=client,
+            process_runner=FakeCommandRunner(()),
+        )
+
+        with pytest.raises(DeliveryControlLostError, match="approved transition"):
+            await provider.deploy(
+                candidate,
+                "production",
+                BlastRadius(dimension="traffic", value="5%"),
+                _known_good(),
+            )
+
+    assert state.posts == []
+
+
+@pytest.mark.asyncio
 async def test_observation_targets_exact_version_and_samples_full_window(
     tmp_path: Path,
 ) -> None:
@@ -324,6 +389,7 @@ async def test_observation_targets_exact_version_and_samples_full_window(
     state.deployments.append(
         {
             "id": deployment_id,
+            "created_on": "2026-08-27T10:00:00Z",
             "strategy": "percentage",
             "versions": [
                 {"version_id": OLD_VERSION_ID, "percentage": 95},
@@ -389,6 +455,7 @@ async def test_observation_failure_returns_health_fail(tmp_path: Path) -> None:
     state.deployments.append(
         {
             "id": deployment_id,
+            "created_on": "2026-08-27T10:00:00Z",
             "strategy": "percentage",
             "versions": [{"version_id": NEW_VERSION_ID, "percentage": 100}],
             "annotations": {},
@@ -428,3 +495,121 @@ async def test_observation_failure_returns_health_fail(tmp_path: Path) -> None:
 
     assert result.verdict is HealthVerdict.FAIL
     assert result.gate_results[0].passed is False
+
+
+@pytest.mark.asyncio
+async def test_observation_transport_loss_is_control_loss_not_health_fail(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    state = CloudflareState()
+    deployment_id = "88888888-8888-8888-8888-888888888888"
+    state.deployments.append(
+        {
+            "id": deployment_id,
+            "created_on": "2026-08-27T10:00:00Z",
+            "strategy": "percentage",
+            "versions": [{"version_id": NEW_VERSION_ID, "percentage": 100}],
+            "annotations": {},
+        }
+    )
+    deployment = CloudflareDeploymentReference(
+        deployment_id=deployment_id,
+        candidate_version_id=NEW_VERSION_ID,
+        rollback_version_id=OLD_VERSION_ID,
+    ).to_deployment(
+        project_id=PROJECT_ID,
+        work_id=WORK_ID,
+        release_candidate_id="candidate-1",
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="100%"),
+        status="active",
+    )
+
+    def transport_loss(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "docs.sagewai.ai":
+            raise httpx.ConnectError("network unavailable", request=request)
+        return state(request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport_loss)) as client:
+        provider = CloudflareDocsObservationProvider(
+            config=config,
+            api_token="token",
+            client=client,
+        )
+        with pytest.raises(
+            DeliveryControlLostError,
+            match="endpoint reachability is unavailable",
+        ):
+            await provider.observe(
+                deployment,
+                gates=(
+                    HealthGate(
+                        id="docs-available",
+                        project_id=PROJECT_ID,
+                        description="docs available",
+                        check_ref="https://docs.sagewai.ai",
+                        failure_verdict=HealthVerdict.FAIL,
+                    ),
+                ),
+                window_seconds=1,
+            )
+
+
+@pytest.mark.asyncio
+async def test_observation_detects_a_superseding_current_deployment(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    state = CloudflareState()
+    deployment_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    state.deployments.extend(
+        [
+            {
+                "id": deployment_id,
+                "created_on": "2026-08-27T10:00:00Z",
+                "strategy": "percentage",
+                "versions": [{"version_id": NEW_VERSION_ID, "percentage": 100}],
+                "annotations": {},
+            },
+            {
+                "id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "created_on": "2026-08-27T10:01:00Z",
+                "strategy": "percentage",
+                "versions": [{"version_id": OLD_VERSION_ID, "percentage": 100}],
+                "annotations": {},
+            },
+        ]
+    )
+    deployment = CloudflareDeploymentReference(
+        deployment_id=deployment_id,
+        candidate_version_id=NEW_VERSION_ID,
+        rollback_version_id=OLD_VERSION_ID,
+    ).to_deployment(
+        project_id=PROJECT_ID,
+        work_id=WORK_ID,
+        release_candidate_id="candidate-1",
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="100%"),
+        status="active",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(state)) as client:
+        provider = CloudflareDocsObservationProvider(
+            config=config,
+            api_token="token",
+            client=client,
+        )
+        with pytest.raises(DeliveryControlLostError, match="no longer matches"):
+            await provider.observe(
+                deployment,
+                gates=(
+                    HealthGate(
+                        id="docs-available",
+                        project_id=PROJECT_ID,
+                        description="docs available",
+                        check_ref="https://docs.sagewai.ai",
+                        failure_verdict=HealthVerdict.FAIL,
+                    ),
+                ),
+                window_seconds=1,
+            )
