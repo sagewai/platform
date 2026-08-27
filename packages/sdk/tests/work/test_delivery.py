@@ -443,6 +443,66 @@ async def test_nonpassing_health_gate_never_increases_exposure(
     assert deployment.promotions == []
 
 
+@pytest.mark.parametrize("verdict", (HealthVerdict.HOLD, HealthVerdict.FAIL))
+@pytest.mark.asyncio
+async def test_later_nonpassing_receipt_blocks_promotion_from_stale_pass(
+    store: WorkStore,
+    verdict: HealthVerdict,
+) -> None:
+    gate = HealthGate(
+        id="availability",
+        project_id=PROJECT_ID,
+        description="availability",
+        check_ref="http://availability",
+        failure_verdict=verdict,
+    )
+    lifecycle, _, provider, _, _ = _lifecycle(
+        store,
+        observations=(
+            {"availability": True},
+            {"availability": False},
+        ),
+    )
+    candidate = await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    canary = await lifecycle.deploy(
+        candidate,
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="5%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    assert (
+        await lifecycle.observe(canary, gates=(gate,), window_seconds=30)
+    ).verdict is HealthVerdict.PASS
+    later_receipt = await lifecycle.promote(
+        canary,
+        exposure=BlastRadius(dimension="traffic", value="20%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    assert (
+        await lifecycle.observe(later_receipt, gates=(gate,), window_seconds=30)
+    ).verdict is verdict
+
+    with pytest.raises(DeliveryActionDeniedError, match="non-passing observation"):
+        await lifecycle.promote(
+            canary,
+            exposure=BlastRadius(dimension="traffic", value="100%"),
+            known_good_candidate=_known_good(),
+            evidence_refs=(),
+            expected_duration_seconds=60,
+        )
+
+    assert [receipt.exposure.value for receipt in provider.promotions] == ["20%"]
+
+
 @pytest.mark.asyncio
 async def test_nonpassing_observation_cannot_be_bypassed_by_redeploy(
     store: WorkStore,

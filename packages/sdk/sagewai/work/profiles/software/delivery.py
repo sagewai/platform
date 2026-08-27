@@ -372,6 +372,10 @@ class DeliveryLifecycle:
         candidate = await self._candidate_for(deployment)
         if deployment.status != "active" or await self._candidate_was_rolled_back(candidate):
             raise DeliveryActionDeniedError("rolled-back deployment cannot be promoted")
+        if await self._candidate_has_nonpassing_delivery(candidate):
+            raise DeliveryActionDeniedError(
+                "candidate has a non-passing observation or unobserved deployment"
+            )
         observation = await self._latest_observation(deployment)
         if observation is None or observation.verdict is not HealthVerdict.PASS:
             raise DeliveryActionDeniedError("promotion requires a passing observation")
