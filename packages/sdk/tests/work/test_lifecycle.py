@@ -32,6 +32,7 @@ from sagewai.work import (
     ReviewResult,
     TaskCapsuleCompiler,
     WorkContract,
+    WorkEvent,
     WorkEventType,
     WorkItem,
     WorkStore,
@@ -674,6 +675,95 @@ async def test_review_finding_reaches_repair_as_typed_canonical_context(
     assert len(repair_context.findings) == 1
     assert repair_context.findings[0].required_change == "Write the repaired target"
     assert repair_context.open_assumptions == ()
+
+
+@pytest.mark.asyncio
+async def test_delivery_triage_resumes_repair_with_failed_observation_context(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    durability = InMemoryStore()
+    repairer = MutationRuntime(implement_text="unused", repair_text="fixed")
+    reviewer = ReviewRuntime("accept", "accept")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=durability,
+        implementer=MutationRuntime(implement_text="initial", repair_text="unused"),
+        reviewer=reviewer,
+        repairer=repairer,
+        commands=(_always_pass_command(),),
+    )
+    ready = await lifecycle.start(
+        work_item=_work_item(),
+        contract=_contract(base_sha),
+    )
+    workspace = tmp_path / "worktrees" / "project-a" / "work-1" / "workspace"
+    subprocess.run(("git", "-C", str(workspace), "add", "--all"), check=True)
+    subprocess.run(
+        ("git", "-C", str(workspace), "commit", "-qm", "published change"),
+        check=True,
+    )
+    branch_sha = _git(workspace, "rev-parse", "HEAD")
+    events = await work_store.read_events("work-1", project_id="project-a")
+    await work_store.append_event(
+        WorkEvent(
+            id="branch-publication-1",
+            project_id="project-a",
+            work_id="work-1",
+            sequence=events[-1].sequence + 1,
+            event_type=WorkEventType.STAGE_COMPLETED,
+            actor_type="test",
+            actor_ref="github",
+            payload_json={
+                "stage": "branch_published",
+                "branch": "sagewai/work-1",
+                "branch_sha": branch_sha,
+            },
+            created_at=NOW,
+        )
+    )
+    events = await work_store.read_events("work-1", project_id="project-a")
+    await work_store.append_event(
+        WorkEvent(
+            id="triage-1",
+            project_id="project-a",
+            work_id="work-1",
+            sequence=events[-1].sequence + 1,
+            event_type=WorkEventType.TRIAGE_CREATED,
+            actor_type="delivery_lifecycle",
+            actor_ref="delivery_lifecycle",
+            payload_json={
+                "deployment_id": "deployment-1",
+                "observation": {
+                    "verdict": "fail",
+                    "evidence_refs": ["metrics://failed-canary"],
+                },
+                "summary": "Canary error rate exceeded the configured gate.",
+                "evidence_refs": ["metrics://failed-canary", "rollback://deployment-1"],
+            },
+            created_at=NOW,
+        )
+    )
+    await work_store.save_work(ready.model_copy(update={"status": "TRIAGE"}))
+
+    repaired = await lifecycle.resume("work-1", project_id="project-a")
+
+    assert repaired.status == "READY_TO_MERGE"
+    assert repairer.calls == 1
+    assert reviewer.calls == 2
+    capsule = repairer.capsules[0]
+    repair_context = SoftwareRepairContext.model_validate(capsule.profile_context)
+    assert repair_context.triage is not None
+    assert repair_context.triage.deployment_id == "deployment-1"
+    assert repair_context.triage.summary == "Canary error rate exceeded the configured gate."
+    assert repair_context.triage.observation["verdict"] == "fail"
+    assert "metrics://failed-canary" in capsule.prior_result_refs
+    assert "work-event://triage-1" in capsule.prior_result_refs
 
 
 @pytest.mark.asyncio

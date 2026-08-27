@@ -104,8 +104,10 @@ export SAGEWAI_DOCS_MAXIMUM_MONITORING_STALENESS_SECONDS=300
 
 The values above illustrate the input shape only. Choose rollout windows,
 credential TTL, and monitoring freshness from measured production behavior and
-record that evidence before the first state-changing action. Then resume the
-canonical Work and approve only the exact pending delivery gate:
+record that evidence before the first state-changing action. The repository must
+also be checked out at the Work's canonical merged SHA with a clean tracked
+worktree; the delivery command refuses any other local source state. Then resume
+the canonical Work and approve only the exact pending delivery gate:
 
 ```bash
 sagewai work resume <work-id>

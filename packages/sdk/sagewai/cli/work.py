@@ -210,10 +210,12 @@ async def _resume_work(work_id: str) -> WorkRecord:
     record = await _status_work(work_id)
     if record is None:
         raise KeyError(work_id)
+    if record.status == "COMPLETE":
+        return record
     repository, _ = await _repository_state()
     with ProjectContext(project_id=project_id):
         if record.source_ref and is_github_issue_url(record.source_ref):
-            if record.status in {"READY_TO_DELIVER", "TRIAGE"}:
+            if record.status == "READY_TO_DELIVER":
                 try:
                     return await _run_docs_delivery(
                         record,

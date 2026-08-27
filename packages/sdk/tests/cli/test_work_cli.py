@@ -250,6 +250,98 @@ async def test_ready_to_deliver_resume_routes_to_docs_delivery(monkeypatch) -> N
 
 
 @pytest.mark.asyncio
+async def test_complete_resume_returns_without_repository_or_remote_work(monkeypatch) -> None:
+    record = SimpleNamespace(
+        work_id="work-1",
+        project_id="project-a",
+        status="COMPLETE",
+        source_ref="https://github.com/octocat/repo/issues/7",
+    )
+
+    async def fake_status(_work_id):
+        return record
+
+    async def unexpected_repository_state():
+        raise AssertionError("terminal Work must not inspect the repository")
+
+    monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
+    monkeypatch.setattr(work_module, "_status_work", fake_status)
+    monkeypatch.setattr(work_module, "_repository_state", unexpected_repository_state)
+
+    result = await work_module._resume_work("work-1")
+
+    assert result is record
+
+
+@pytest.mark.asyncio
+async def test_triage_resume_repairs_new_merged_sha_then_redeploys(monkeypatch) -> None:
+    current = SimpleNamespace(
+        work_id="work-1",
+        project_id="project-a",
+        status="TRIAGE",
+        source_ref="https://github.com/octocat/repo/issues/7",
+        profile_context={"github": {"merged_sha": "a" * 40}},
+    )
+    repaired = SimpleNamespace(
+        work_id="work-1",
+        project_id="project-a",
+        status="READY_TO_DELIVER",
+        source_ref="https://github.com/octocat/repo/issues/7",
+        profile_context={"github": {"merged_sha": "b" * 40}},
+    )
+    completed = SimpleNamespace(work_id="work-1", status="COMPLETE")
+    repository = SimpleNamespace()
+    seen = []
+
+    async def fake_status(_work_id):
+        return current
+
+    async def fake_repository_state():
+        return repository, "a" * 40
+
+    async def fake_docs_delivery(value, *, project_id, repository):
+        nonlocal current
+        seen.append(
+            (
+                "delivery",
+                value.profile_context["github"]["merged_sha"],
+                project_id,
+                repository,
+            )
+        )
+        current = completed
+        return completed
+
+    class FakeGitHubLifecycle:
+        async def resume(self, work_id, *, project_id):
+            nonlocal current
+            seen.append(("resume", work_id, project_id))
+            current = repaired
+            return repaired
+
+    async def fake_build_github_lifecycle(*, project_id, repository):
+        seen.append(("build", project_id, repository))
+        return FakeGitHubLifecycle()
+
+    monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
+    monkeypatch.setattr(work_module, "_status_work", fake_status)
+    monkeypatch.setattr(work_module, "_repository_state", fake_repository_state)
+    monkeypatch.setattr(work_module, "_run_docs_delivery", fake_docs_delivery)
+    monkeypatch.setattr(work_module, "_build_github_lifecycle", fake_build_github_lifecycle)
+
+    repair_result = await work_module._resume_work("work-1")
+    delivery_result = await work_module._resume_work("work-1")
+
+    assert repair_result is repaired
+    assert delivery_result is completed
+    assert seen == [
+        ("build", "project-a", repository),
+        ("resume", "work-1", "project-a"),
+        ("delivery", "b" * 40, "project-a", repository),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_delivery_gate_approval_routes_to_delivery_flow(monkeypatch) -> None:
     record = SimpleNamespace(
         work_id="work-1",

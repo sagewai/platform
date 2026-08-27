@@ -376,6 +376,127 @@ async def test_issue_to_pr_requires_gate_then_records_merged_sha(
 
 
 @pytest.mark.asyncio
+async def test_delivery_triage_creates_new_reviewed_pr_and_merged_sha(
+    store: WorkStore,
+    monkeypatch,
+) -> None:
+    flow, software, github, publisher = _flow(store)
+    gated = await flow.start(
+        issue_url=ISSUE_URL,
+        project_id=PROJECT_ID,
+        base_sha="a" * 40,
+    )
+    delivered = await flow.approve(
+        gated.work_id,
+        project_id=PROJECT_ID,
+        gate_id=gated.pending_gate,
+        actor_ref="operator:arda",
+    )
+    events = await store.read_events(delivered.work_id, project_id=PROJECT_ID)
+    await store.append_event(
+        WorkEvent(
+            id="triage-1",
+            project_id=PROJECT_ID,
+            work_id=delivered.work_id,
+            sequence=events[-1].sequence + 1,
+            event_type=WorkEventType.TRIAGE_CREATED,
+            actor_type="delivery_lifecycle",
+            actor_ref="delivery_lifecycle",
+            payload_json={
+                "deployment_id": "deployment-1",
+                "observation": {"verdict": "fail"},
+                "summary": "Canary failed and rollback passed.",
+                "evidence_refs": ["observation://failed", "rollback://passed"],
+            },
+            created_at=NOW,
+        )
+    )
+    await store.save_work(delivered.model_copy(update={"status": "TRIAGE"}))
+
+    async def repair_resume(work_id: str, *, project_id: str):
+        software.resumes += 1
+        repair_events = await store.read_events(work_id, project_id=project_id)
+        await store.append_event(
+            WorkEvent(
+                id="repair-1",
+                project_id=project_id,
+                work_id=work_id,
+                sequence=repair_events[-1].sequence + 1,
+                event_type=WorkEventType.STAGE_COMPLETED,
+                actor_type="software_lifecycle",
+                actor_ref="operator:repairer",
+                payload_json={
+                    "stage": "repair",
+                    "current_sha": "d" * 40,
+                    "evidence_refs": ["repair://passed"],
+                },
+                created_at=NOW,
+            )
+        )
+        current = await store.load_work(work_id, project_id=project_id)
+        assert current is not None
+        repaired = current.model_copy(update={"status": "READY_TO_MERGE"})
+        await store.save_work(repaired)
+        return repaired
+
+    async def create_repair_pull_request(*, issue, title, head, base, body):
+        github.pull_requests.append(
+            {"issue": issue, "title": title, "head": head, "base": base, "body": body}
+        )
+        pull_request = GitHubPullRequest(
+            project_id=issue.project_id,
+            owner=issue.owner,
+            repo=issue.repo,
+            number=8,
+            url="https://github.com/octocat/hello-world/pull/8",
+            head=head,
+            base=base,
+        )
+        github.remote_pull_request = pull_request
+        return pull_request
+
+    async def merge_repair_pull_request(pull_request, *, expected_head_sha):
+        github.merges.append(
+            {"pull_request": pull_request, "expected_head_sha": expected_head_sha}
+        )
+        github.merged_sha = "e" * 40
+        return GitHubMergeResult(
+            project_id=pull_request.project_id,
+            pull_request_number=pull_request.number,
+            merged_sha=github.merged_sha,
+        )
+
+    monkeypatch.setattr(software, "resume", repair_resume)
+    monkeypatch.setattr(github, "create_pull_request", create_repair_pull_request)
+    monkeypatch.setattr(github, "merge_pull_request", merge_repair_pull_request)
+    github.remote_pull_request = None
+    github.merged_sha = None
+
+    repair_gated = await flow.resume(delivered.work_id, project_id=PROJECT_ID)
+    repaired_delivery = await flow.approve(
+        repair_gated.work_id,
+        project_id=PROJECT_ID,
+        gate_id=repair_gated.pending_gate,
+        actor_ref="operator:arda",
+    )
+
+    assert software.resumes == 1
+    assert repair_gated.pending_gate == f"merge:{delivered.work_id}:8"
+    assert repaired_delivery.status == "READY_TO_DELIVER"
+    assert repaired_delivery.profile_context["github"]["pull_request_number"] == 8
+    assert repaired_delivery.profile_context["github"]["merged_sha"] == "e" * 40
+    assert len(publisher.calls) == 2
+    assert publisher.calls[-1]["expected_sha"] == "d" * 40
+    assert publisher.validations[-1] == (
+        "octocat",
+        "hello-world",
+        "c" * 40,
+        "main",
+    )
+    assert [item["pull_request"].number for item in github.merges] == [7, 8]
+
+
+@pytest.mark.asyncio
 async def test_remote_pr_failure_resumes_from_recorded_branch_without_rerunning_software(
     store: WorkStore,
 ) -> None:

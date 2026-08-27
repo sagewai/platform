@@ -35,6 +35,7 @@ from sagewai.work.profiles.software.models import (
     SoftwareAttemptContext,
     SoftwareCapsuleContext,
     SoftwareContractContext,
+    SoftwareDeliveryTriageContext,
     SoftwareRepairContext,
     SoftwareReviewContext,
     SoftwareReviewFindingContext,
@@ -53,16 +54,17 @@ from sagewai.work.store import WorkStore
 
 
 def expected_result_sha(events: list[WorkEvent], base_sha: str) -> str:
-    """Return the latest implemented or repaired workspace SHA."""
-    return next(
-        (
-            str(event.payload_json["current_sha"])
-            for event in reversed(events)
-            if event.event_type is WorkEventType.STAGE_COMPLETED
-            and event.payload_json.get("stage") in {"implement", "repair"}
-        ),
-        base_sha,
-    )
+    """Return the latest recorded workspace HEAD, including publication commits."""
+    result_sha = base_sha
+    for event in events:
+        if event.event_type is not WorkEventType.STAGE_COMPLETED:
+            continue
+        stage = event.payload_json.get("stage")
+        if stage in {"implement", "repair"}:
+            result_sha = str(event.payload_json["current_sha"])
+        elif stage == "branch_published":
+            result_sha = str(event.payload_json["branch_sha"])
+    return result_sha
 
 
 class _Verifier(Protocol):
@@ -211,7 +213,7 @@ class SoftwareLifecycle:
         record = await self._work_store.load_work(work_id, project_id=project_id)
         if record is None:
             raise KeyError(work_id)
-        if record.status in {"READY_TO_MERGE", "WORK_BLOCKED"}:
+        if record.status in {"READY_TO_MERGE", "WORK_BLOCKED", "COMPLETE"}:
             return record
 
         events = await self._work_store.read_events(work_id, project_id=project_id)
@@ -331,6 +333,27 @@ class SoftwareLifecycle:
                 raise ValueError("repair requires a verification result")
             findings = review.findings if review is not None else ()
             review_refs = review.evidence_refs if review is not None else ()
+            triage_event = next(
+                (
+                    event
+                    for event in reversed(events)
+                    if event.event_type is WorkEventType.TRIAGE_CREATED
+                ),
+                None,
+            )
+            triage = (
+                SoftwareDeliveryTriageContext.model_validate(triage_event.payload_json)
+                if triage_event is not None
+                else None
+            )
+            triage_refs: tuple[str, ...] = ()
+            if triage_event is not None and triage is not None:
+                observation_refs = triage.observation.get("evidence_refs", ())
+                triage_refs = (
+                    *triage.evidence_refs,
+                    *(str(ref) for ref in observation_refs),
+                    f"work-event://{triage_event.id}",
+                )
             diff, relevant_files = await workspace_diff(workspace)
             context = SoftwareRepairContext(
                 software=software,
@@ -339,9 +362,12 @@ class SoftwareLifecycle:
                 relevant_files=relevant_files,
                 open_assumptions=open_assumptions,
                 findings=findings,
+                triage=triage,
             )
             profile_context = context.model_dump(mode="json")
-            prior_refs = (*verification.evidence_refs, *review_refs)
+            prior_refs = tuple(
+                dict.fromkeys((*verification.evidence_refs, *review_refs, *triage_refs))
+            )
         else:
             profile_context = software.model_dump(mode="json")
 
@@ -774,6 +800,8 @@ class SoftwareLifecycle:
                     state = "REPAIRING"
                 else:
                     state = "WORK_BLOCKED"
+            elif event.event_type is WorkEventType.TRIAGE_CREATED:
+                state = "REPAIRING"
         return state
 
     @staticmethod

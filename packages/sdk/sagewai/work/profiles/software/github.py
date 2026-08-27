@@ -550,7 +550,7 @@ class GitHubIssueLifecycle:
         record = await self._work_store.load_work(work_id, project_id=project_id)
         if record is None:
             raise KeyError(work_id)
-        if record.status == "READY_TO_DELIVER":
+        if record.status in {"READY_TO_DELIVER", "COMPLETE"}:
             return record
         if record.status == "WORK_BLOCKED":
             await self.present_pending(work_id, project_id=project_id)
@@ -709,16 +709,25 @@ class GitHubIssueLifecycle:
             return record
 
         events = await self._events(work_item.id, work_item.project_id)
-        pull_request = self._pull_request(events)
+        cycle_start = self._delivery_cycle_start(events)
+        pull_request = self._pull_request(events, after_sequence=cycle_start)
         if pull_request is None:
             software = SoftwareContractContext.model_validate(contract.profile_context)
-            publication = self._branch_publication(events)
+            publication = self._branch_publication(
+                events,
+                after_sequence=cycle_start,
+            )
             if publication is None:
+                target_base_sha = self._target_base_sha(
+                    events,
+                    initial_base_sha=software.base_sha,
+                    cycle_start=cycle_start,
+                )
                 try:
                     await self._branch_publisher.validate_target(
                         owner=issue.owner,
                         repo=issue.repo,
-                        base_sha=software.base_sha,
+                        base_sha=target_base_sha,
                         default_branch=issue.default_branch,
                     )
                 except ValueError as exc:
@@ -808,22 +817,26 @@ class GitHubIssueLifecycle:
             )
             events.append(event)
 
-        if "github" not in record.profile_context:
-            pull_request_event = self._pull_request_event(events)
-            context = GitHubWorkContext(
-                project_id=issue.project_id,
-                owner=issue.owner,
-                repo=issue.repo,
-                issue_number=issue.number,
-                issue_url=issue.url,
-                default_branch=issue.default_branch,
-                branch=pull_request.head,
-                branch_sha=str(pull_request_event.payload_json["branch_sha"]),
-                pull_request_number=pull_request.number,
-                pull_request_url=pull_request.url,
-            )
+        pull_request_event = self._pull_request_event(
+            events,
+            after_sequence=cycle_start,
+        )
+        context = GitHubWorkContext(
+            project_id=issue.project_id,
+            owner=issue.owner,
+            repo=issue.repo,
+            issue_number=issue.number,
+            issue_url=issue.url,
+            default_branch=issue.default_branch,
+            branch=pull_request.head,
+            branch_sha=str(pull_request_event.payload_json["branch_sha"]),
+            pull_request_number=pull_request.number,
+            pull_request_url=pull_request.url,
+        )
+        context_payload = context.model_dump(mode="json")
+        if record.profile_context.get("github") != context_payload:
             profile_context = dict(record.profile_context)
-            profile_context["github"] = context.model_dump(mode="json")
+            profile_context["github"] = context_payload
             record = await self._set_record(
                 record,
                 status=record.status,
@@ -936,7 +949,11 @@ class GitHubIssueLifecycle:
                 pending_gate=None,
             )
 
-        merge_event = self._merge_event(events, pull_request.number)
+        merge_event = self._merge_event(
+            events,
+            pull_request.number,
+            after_sequence=cycle_start,
+        )
         state = await self._github.get_pull_request(pull_request)
         if (
             state.project_id != work_item.project_id
@@ -1096,11 +1113,16 @@ class GitHubIssueLifecycle:
         )
 
     @staticmethod
-    def _branch_publication(events: list[WorkEvent]) -> tuple[str, str] | None:
+    def _branch_publication(
+        events: list[WorkEvent],
+        *,
+        after_sequence: int = 0,
+    ) -> tuple[str, str] | None:
         event = next(
             (
                 item
                 for item in reversed(events)
+                if item.sequence > after_sequence
                 if item.event_type is WorkEventType.STAGE_COMPLETED
                 and item.payload_json.get("stage") == "branch_published"
             ),
@@ -1111,10 +1133,15 @@ class GitHubIssueLifecycle:
         return str(event.payload_json["branch"]), str(event.payload_json["branch_sha"])
 
     @staticmethod
-    def _pull_request_event(events: list[WorkEvent]) -> WorkEvent:
+    def _pull_request_event(
+        events: list[WorkEvent],
+        *,
+        after_sequence: int = 0,
+    ) -> WorkEvent:
         return next(
             event
             for event in reversed(events)
+            if event.sequence > after_sequence
             if event.event_type is WorkEventType.STAGE_COMPLETED
             and event.payload_json.get("stage") == "pull_request"
         )
@@ -1123,25 +1150,67 @@ class GitHubIssueLifecycle:
     def _pull_request(
         cls,
         events: list[WorkEvent],
+        *,
+        after_sequence: int = 0,
     ) -> GitHubPullRequest | None:
         try:
-            event = cls._pull_request_event(events)
+            event = cls._pull_request_event(events, after_sequence=after_sequence)
         except StopIteration:
             return None
         return GitHubPullRequest.model_validate(event.payload_json["pull_request"])
 
     @staticmethod
-    def _merge_event(events: list[WorkEvent], pull_request_number: int) -> WorkEvent | None:
+    def _merge_event(
+        events: list[WorkEvent],
+        pull_request_number: int,
+        *,
+        after_sequence: int = 0,
+    ) -> WorkEvent | None:
         return next(
             (
                 event
                 for event in reversed(events)
+                if event.sequence > after_sequence
                 if event.event_type is WorkEventType.STAGE_COMPLETED
                 and event.payload_json.get("stage") == "merge"
                 and event.payload_json.get("pull_request_number") == pull_request_number
             ),
             None,
         )
+
+    @staticmethod
+    def _delivery_cycle_start(events: list[WorkEvent]) -> int:
+        return next(
+            (
+                event.sequence
+                for event in reversed(events)
+                if event.event_type is WorkEventType.TRIAGE_CREATED
+            ),
+            0,
+        )
+
+    @staticmethod
+    def _target_base_sha(
+        events: list[WorkEvent],
+        *,
+        initial_base_sha: str,
+        cycle_start: int,
+    ) -> str:
+        if cycle_start == 0:
+            return initial_base_sha
+        merge_event = next(
+            (
+                event
+                for event in reversed(events)
+                if event.sequence < cycle_start
+                and event.event_type is WorkEventType.STAGE_COMPLETED
+                and event.payload_json.get("stage") == "merge"
+            ),
+            None,
+        )
+        if merge_event is None:
+            raise ValueError("delivery repair requires a prior merged SHA")
+        return str(merge_event.payload_json["merged_sha"])
 
     @staticmethod
     def _gate_event(
