@@ -406,7 +406,11 @@ class SoftwareLifecycle:
                 if claim.classification is ClaimClassification.UNKNOWN
                 or (
                     claim.classification
-                    in {ClaimClassification.FACT, ClaimClassification.INFERENCE}
+                    in {
+                        ClaimClassification.FACT,
+                        ClaimClassification.INFERENCE,
+                        ClaimClassification.REQUIREMENT,
+                    }
                     and not claim.evidence_refs
                 )
             )
@@ -417,21 +421,35 @@ class SoftwareLifecycle:
                 }.values()
             )
             analysis_evidence_refs = tuple(
-                f"{run_id}:claim:{index}"
-                for index, claim in enumerate(analysis.claims, start=1)
-                if claim.classification
-                in {
-                    ClaimClassification.FACT,
-                    ClaimClassification.INFERENCE,
-                    ClaimClassification.DECISION,
-                    ClaimClassification.UNKNOWN,
-                }
+                dict.fromkeys(
+                    (
+                        f"{run_id}:claim:{index}"
+                        for index, claim in enumerate(analysis.claims, start=1)
+                        if claim.classification
+                        in {
+                            ClaimClassification.FACT,
+                            ClaimClassification.INFERENCE,
+                            ClaimClassification.DECISION,
+                            ClaimClassification.UNKNOWN,
+                        }
+                    ),
+                )
+            )
+            requirement_evidence_refs = tuple(
+                ref
+                for claim in analysis.claims
+                if claim.classification is ClaimClassification.REQUIREMENT
+                for ref in claim.evidence_refs
             )
             accepted = self._accepted_analysis_contract(
                 draft_contract,
                 analysis,
                 assumptions,
-                analysis_evidence_refs,
+                tuple(
+                    dict.fromkeys(
+                        (*analysis_evidence_refs, *requirement_evidence_refs)
+                    )
+                ),
             )
         except ValueError as exc:
             await self._block_once(

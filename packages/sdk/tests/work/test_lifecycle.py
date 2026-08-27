@@ -706,6 +706,52 @@ async def test_evidence_free_high_impact_inference_blocks_before_implementation(
 
 
 @pytest.mark.asyncio
+async def test_evidence_free_high_impact_requirement_blocks_before_implementation(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    implementer = MutationRuntime(implement_text="must-not-run", repair_text="fixed")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        analyzer=AnalysisRuntime(
+            claims=(
+                ClassifiedClaim(
+                    classification=ClaimClassification.REQUIREMENT,
+                    statement="A migration path is required",
+                    kind="migration",
+                    evidence_refs=(),
+                    confidence="high",
+                    impact_if_wrong="high",
+                ),
+            )
+        ),
+        implementer=implementer,
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    assert record.status == "WORK_BLOCKED"
+    assert implementer.calls == 0
+    events = await work_store.read_events("work-1", project_id="project-a")
+    assumption_event = next(
+        event for event in events if event.event_type is WorkEventType.ASSUMPTION_RECORDED
+    )
+    assert assumption_event.payload_json["statement"] == "A migration path is required"
+    assert not any(
+        event.event_type is WorkEventType.CONTRACT_ACCEPTED for event in events
+    )
+
+
+@pytest.mark.asyncio
 async def test_missing_analysis_result_blocks_with_pending_attention(
     stores,
     tmp_path: Path,
@@ -961,10 +1007,21 @@ async def test_analysis_narrows_draft_scope_and_out_of_scope_change_is_rejected(
     assert record.status == "WORK_BLOCKED"
     assert implementer.calls == 1
     events = await work_store.read_events("work-1", project_id="project-a")
+    proposed_event = next(
+        event
+        for event in events
+        if event.event_type is WorkEventType.CONTRACT_PROPOSED
+        and event.actor_ref == "operator:analyst"
+    )
     accepted_event = next(
         event for event in events if event.event_type is WorkEventType.CONTRACT_ACCEPTED
     )
+    proposed = WorkContract.model_validate(proposed_event.payload_json)
     accepted = WorkContract.model_validate(accepted_event.payload_json)
+    assert proposed.allowed_scope == ("target.txt",)
+    assert proposed.acceptance_criteria
+    assert proposed.risk == "low"
+    assert proposed_event.sequence < accepted_event.sequence
     assert accepted.allowed_scope == ("target.txt",)
     assert accepted.allowed_scope != (".",)
     reports = [
