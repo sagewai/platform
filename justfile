@@ -8,7 +8,7 @@
 #
 # Quick start:
 #   just bootstrap      # first-time setup (uv + pnpm + hooks)
-#   just smoke           # fast 35-test sanity check
+#   just smoke           # actual software Work sanity path
 #   just dev-all         # run backend + admin UI concurrently
 
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
@@ -399,12 +399,15 @@ sdk-typecheck:
 # ── Smoke ──────────────────────────────────────────────────────────────────
 # Sub-second sanity checks — no LLM calls, no services, safe to run anywhere.
 
-# Fast 35-test smoke pass (no LLM, no services) — alias for sdk-smoke
+# Daily software Work path (no LLM, no services) — alias for sdk-smoke
 smoke: sdk-smoke
 
-# Run SDK smoke tests directly (35 tests, ~0.1s)
+# Labeled intake -> merge gate -> delivery completion, entirely with safe fakes
 sdk-smoke:
-    uv run --package sagewai --group test pytest packages/sdk/tests/test_smoke.py -v -o "addopts="
+    uv run --package sagewai --group test pytest \
+        packages/sdk/tests/work/test_github.py::test_labeled_intake_starts_one_unseen_issue_once \
+        packages/sdk/tests/work/test_cloudflare_flow.py::test_flow_reaches_complete_with_same_candidate_promoted \
+        -q -o "addopts="
 
 # ── Perf ───────────────────────────────────────────────────────────────────
 # Performance micro-benchmarks with fixed time budgets that fail CI on regression.

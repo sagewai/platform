@@ -58,3 +58,25 @@ class WorkEvent(BaseModel):
     actor_ref: str | None
     payload_json: dict[str, Any]
     created_at: datetime
+
+
+def active_control_degradations(
+    events: list[WorkEvent],
+) -> dict[str, WorkEvent]:
+    """Fold control events into the active degradation receipts."""
+
+    active: dict[str, WorkEvent] = {}
+    for event in events:
+        if event.event_type is WorkEventType.CONTROL_DEGRADED:
+            for precondition_id in event.payload_json.get("failed_preconditions", ()):
+                active[str(precondition_id)] = event
+        elif event.event_type is WorkEventType.CONTROL_RESTORED:
+            for precondition_id in event.payload_json.get("precondition_ids", ()):
+                active.pop(str(precondition_id), None)
+    return active
+
+
+def active_control_precondition_ids(events: list[WorkEvent]) -> set[str]:
+    """Return the currently degraded precondition IDs."""
+
+    return set(active_control_degradations(events))

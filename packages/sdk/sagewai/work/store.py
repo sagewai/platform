@@ -19,7 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from sagewai.db import factory
 from sagewai.db.dialect import upsert
 from sagewai.db.models import Base, WorkEventModel, WorkItemModel
-from sagewai.work.events import WorkEvent, WorkEventType
+from sagewai.work.events import (
+    WorkEvent,
+    WorkEventType,
+    active_control_degradations,
+)
 from sagewai.work.models import (
     PendingAttention,
     PendingAttentionKind,
@@ -150,6 +154,32 @@ class WorkStore:
         values["updated_at"] = _as_utc(values["updated_at"])
         return WorkRecord.model_validate(values)
 
+    async def find_work_by_source_ref(
+        self,
+        source_ref: str,
+        *,
+        project_id: str | None,
+    ) -> WorkRecord | None:
+        """Find the canonical project-scoped Work projection for one source."""
+        table = self._work_items
+        query = (
+            select(table)
+            .where(
+                table.c.source_ref == source_ref,
+                table.c.project_id == project_id,
+            )
+            .order_by(table.c.created_at, table.c.work_id)
+            .limit(1)
+        )
+        async with self._engine.connect() as conn:
+            row = (await conn.execute(query)).first()
+        if row is None:
+            return None
+        values = dict(row._mapping)
+        values["created_at"] = _as_utc(values["created_at"])
+        values["updated_at"] = _as_utc(values["updated_at"])
+        return WorkRecord.model_validate(values)
+
     async def pending_attention(
         self,
         *,
@@ -240,14 +270,7 @@ class WorkStore:
                         )
                     )
 
-            degraded: dict[str, WorkEvent] = {}
-            for event in events:
-                if event.event_type is WorkEventType.CONTROL_DEGRADED:
-                    for precondition_id in event.payload_json["failed_preconditions"]:
-                        degraded[str(precondition_id)] = event
-                elif event.event_type is WorkEventType.CONTROL_RESTORED:
-                    for precondition_id in event.payload_json["precondition_ids"]:
-                        degraded.pop(str(precondition_id), None)
+            degraded = active_control_degradations(events)
             for precondition_id, event in degraded.items():
                 pending.append(
                     PendingAttention(
@@ -256,7 +279,7 @@ class WorkStore:
                         work_id=work_id,
                         kind=PendingAttentionKind.CONTROL_DEGRADED,
                         source_ref=source_ref,
-                        summary=f"Control precondition failed: {precondition_id}.",
+                        summary=str(event.payload_json.get("details") or precondition_id),
                         evidence_refs=tuple(
                             str(ref) for ref in event.payload_json.get("evidence_refs", ())
                         ),

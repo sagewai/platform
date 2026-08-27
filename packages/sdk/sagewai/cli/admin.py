@@ -163,7 +163,7 @@ def admin_serve(host: str, port: int) -> None:
     except ImportError as exc:
         click.echo(
             f"Error: missing dependency for admin serve: {exc}. "
-            "Install with: uv add 'sagewai[fastapi]'",
+            "Install Sagewai with its base dependencies: uv add sagewai",
             err=True,
         )
         raise SystemExit(1)

@@ -15,9 +15,14 @@ from sagewai.work.control import (
     ControlCheck,
     ControlCheckContext,
     ControlCheckResult,
+    ControlDegradedError,
     OperatorController,
 )
-from sagewai.work.events import WorkEvent, WorkEventType
+from sagewai.work.events import (
+    WorkEvent,
+    WorkEventType,
+    active_control_precondition_ids,
+)
 from sagewai.work.models import (
     Action,
     ActionIntent,
@@ -26,6 +31,7 @@ from sagewai.work.models import (
     ActionScope,
     Assumption,
     ClaimClassification,
+    ClassifiedClaim,
     ControlPrecondition,
     ControlPreconditionKind,
     GateDecision,
@@ -37,6 +43,8 @@ from sagewai.work.models import (
     ReviewResult,
     TaskCapsule,
     VerificationResult,
+    WorkAnalysisResult,
+    WorkContractProposal,
     WorkItem,
     WorkRecord,
 )
@@ -62,6 +70,7 @@ __all__ = [
     "Assumption",
     "CapabilitySet",
     "ClaimClassification",
+    "ClassifiedClaim",
     "ClaudeRuntime",
     "CodexRuntime",
     "ControlPrecondition",
@@ -69,6 +78,7 @@ __all__ = [
     "ControlCheck",
     "ControlCheckContext",
     "ControlCheckResult",
+    "ControlDegradedError",
     "GateDecision",
     "PendingAttention",
     "PendingAttentionKind",
@@ -84,10 +94,13 @@ __all__ = [
     "WorkContract",
     "WorkEvent",
     "VerificationResult",
+    "WorkAnalysisResult",
+    "WorkContractProposal",
     "WorkEventType",
     "WorkItem",
     "WorkRecord",
     "WorkRequest",
     "WorkStore",
     "Workspace",
+    "active_control_precondition_ids",
 ]

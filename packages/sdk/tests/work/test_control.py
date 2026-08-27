@@ -30,6 +30,7 @@ from sagewai.work import (
     Reversibility,
     TaskCapsule,
     WorkContract,
+    WorkEvent,
     WorkEventType,
     WorkItem,
     WorkRequest,
@@ -39,10 +40,46 @@ from sagewai.work.control import (
     ControlCheckContext,
     ControlCheckResult,
     OperatorController,
+    active_control_precondition_ids,
 )
 from tests.db.conftest import dialect_engine  # noqa: F401
 
 NOW = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
+
+
+def test_control_event_fold_restores_only_the_named_preconditions() -> None:
+    def event(sequence: int, event_type: WorkEventType, payload: dict) -> WorkEvent:
+        return WorkEvent(
+            id=f"event-{sequence}",
+            project_id="project-a",
+            work_id="work-1",
+            sequence=sequence,
+            event_type=event_type,
+            actor_type="test",
+            actor_ref=None,
+            payload_json=payload,
+            created_at=NOW,
+        )
+
+    events = [
+        event(
+            1,
+            WorkEventType.CONTROL_DEGRADED,
+            {"failed_preconditions": ["authority"]},
+        ),
+        event(
+            2,
+            WorkEventType.CONTROL_DEGRADED,
+            {"failed_preconditions": ["observability"]},
+        ),
+        event(
+            3,
+            WorkEventType.CONTROL_RESTORED,
+            {"precondition_ids": ["observability"]},
+        ),
+    ]
+
+    assert active_control_precondition_ids(events) == {"authority"}
 
 
 def _intent() -> ActionIntent:

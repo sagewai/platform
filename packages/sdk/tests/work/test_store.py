@@ -174,6 +174,24 @@ async def test_projection_reads_and_identity_are_project_scoped(store: WorkStore
 
 
 @pytest.mark.asyncio
+async def test_source_ref_lookup_is_project_scoped(store: WorkStore) -> None:
+    source_ref = "https://github.com/octocat/hello-world/issues/42"
+    await store.save_work(_record(source_ref=source_ref))
+
+    assert await store.find_work_by_source_ref(
+        source_ref,
+        project_id="project-a",
+    ) == _record(source_ref=source_ref)
+    assert (
+        await store.find_work_by_source_ref(
+            source_ref,
+            project_id="project-b",
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
 async def test_org_global_projection_cannot_change_project(store: WorkStore) -> None:
     await store.save_work(_record(project_id=None))
 

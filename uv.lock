@@ -4858,7 +4858,6 @@ dependencies = [
     { name = "opentelemetry-sdk" },
     { name = "pydantic" },
     { name = "pyjwt" },
-    { name = "pymilvus" },
     { name = "pypdf" },
     { name = "python-dotenv" },
     { name = "python-multipart" },
@@ -4976,6 +4975,7 @@ test = [
     { name = "jsonpath-ng" },
     { name = "kubernetes-asyncio" },
     { name = "prometheus-client" },
+    { name = "pymilvus" },
     { name = "pymodbus" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -5025,7 +5025,6 @@ requires-dist = [
     { name = "prometheus-client", marker = "extra == 'prometheus'", specifier = "==0.25.0" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pyjwt", specifier = "==2.13.0" },
-    { name = "pymilvus", specifier = "==2.6.15" },
     { name = "pymilvus", marker = "extra == 'memory'", specifier = "==2.6.15" },
     { name = "pymodbus", marker = "extra == 'modbus'", specifier = "==3.13.0" },
     { name = "pypdf", specifier = "==6.13.3" },
@@ -5034,7 +5033,7 @@ requires-dist = [
     { name = "pyyaml", specifier = "==6.0.3" },
     { name = "readability-lxml", specifier = "==0.8.4.1" },
     { name = "sagewai", extras = ["intelligence", "multimodal"], marker = "extra == 'intelligence-full'" },
-    { name = "sagewai", extras = ["memory", "fastapi", "postgres", "prometheus", "storage", "intelligence", "multimodal"], marker = "extra == 'all'" },
+    { name = "sagewai", extras = ["memory", "postgres", "prometheus", "storage", "intelligence", "multimodal"], marker = "extra == 'all'" },
     { name = "sentence-transformers", marker = "extra == 'intelligence'", specifier = "==5.5.1" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = "==2.0.50" },
     { name = "sqlite-vec", specifier = "==0.1.9" },
@@ -5047,7 +5046,7 @@ requires-dist = [
     { name = "uvicorn", specifier = "==0.49.0" },
     { name = "websockets", marker = "extra == 'websocket'", specifier = "==16.0" },
 ]
-provides-extras = ["memory", "coap", "modbus", "mqtt", "opcua", "websocket", "grpc", "fastapi", "postgres", "prometheus", "storage", "intelligence", "multimodal", "intelligence-full", "all", "sandbox", "kubernetes", "keychain", "vault"]
+provides-extras = ["memory", "coap", "modbus", "mqtt", "opcua", "websocket", "grpc", "postgres", "prometheus", "storage", "intelligence", "multimodal", "intelligence-full", "all", "sandbox", "kubernetes", "keychain", "vault"]
 
 [package.metadata.requires-dev]
 test = [
@@ -5067,6 +5066,7 @@ test = [
     { name = "jsonpath-ng", specifier = "==1.8.0" },
     { name = "kubernetes-asyncio", specifier = "==36.1.0" },
     { name = "prometheus-client", specifier = ">=0.20.0" },
+    { name = "pymilvus", specifier = "==2.6.15" },
     { name = "pymodbus", specifier = "==3.13.0" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },

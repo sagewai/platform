@@ -38,6 +38,15 @@ class SoftwareCapsuleContext(BaseModel):
     verification_commands: tuple[str, ...]
 
 
+class SoftwareAnalysisContext(BaseModel):
+    """Canonical inputs and required result contract for software analysis."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    software: SoftwareCapsuleContext
+    analysis_result_schema: dict[str, Any]
+
+
 class SoftwareAttemptContext(BaseModel):
     """Software-specific execution receipt state."""
 
@@ -80,6 +89,17 @@ class SoftwareReviewContext(BaseModel):
     review_result_schema: dict[str, Any]
 
 
+class SoftwareDeliveryTriageContext(BaseModel):
+    """Canonical failed-delivery evidence supplied to software repair."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    deployment_id: str
+    observation: dict[str, Any]
+    summary: str
+    evidence_refs: tuple[str, ...]
+
+
 class SoftwareRepairContext(BaseModel):
     """Canonical context compiled for one bounded software repair."""
 
@@ -91,6 +111,7 @@ class SoftwareRepairContext(BaseModel):
     relevant_files: tuple[str, ...]
     open_assumptions: tuple[Assumption, ...]
     findings: tuple[ReviewFinding, ...]
+    triage: SoftwareDeliveryTriageContext | None = None
 
 
 class SoftwareWorkspace(BaseModel):

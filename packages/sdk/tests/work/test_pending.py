@@ -126,7 +126,7 @@ async def test_pending_attention_is_canonical_resolved_and_project_scoped(
         _record(
             work_id="work-other",
             project_id="project-b",
-            status="GATE_PENDING",
+            status="READY_TO_MERGE",
             pending_gate="merge:work-other:8",
         )
     )
@@ -152,6 +152,7 @@ async def test_pending_attention_is_canonical_resolved_and_project_scoped(
     assert gate.summary == "Approve merge of PR #7."
     control = next(item for item in pending if item.kind is PendingAttentionKind.CONTROL_DEGRADED)
     assert control.evidence_refs == ("check://stale",)
+    assert control.summary == "observability"
 
     await store.append_event(
         _event(

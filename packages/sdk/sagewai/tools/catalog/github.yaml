@@ -1,11 +1,11 @@
 # Copyright 2026 Ali Arda Diri, Berlin, Germany
 # Licensed under AGPL-3.0-or-later. See LICENSE.
 id: github
-version: 0.2.0
+version: 0.3.0
 title: GitHub — Repository read + write
 description: |
-  Read repositories, search code, and create issues / comments / pull
-  requests on GitHub via a fine-grained personal access token.
+  Read repositories, search code, create issues / comments / pull requests,
+  and merge pull requests on GitHub via a fine-grained personal access token.
 category: developer_tools
 kind: http
 sandbox_tier: SANDBOXED
@@ -52,6 +52,33 @@ exec:
             title:    { type: string }
             body:
               type: [string, "null"]
+      list_issues:
+        method: GET
+        path: /repos/{owner}/{repo}/issues
+        input_schema:
+          type: object
+          required: [owner, repo, labels, state, sort, direction, per_page]
+          properties:
+            owner:     { type: string }
+            repo:      { type: string }
+            labels:    { type: string }
+            state:     { type: string }
+            sort:      { type: string }
+            direction: { type: string }
+            per_page:  { type: integer, minimum: 1, maximum: 100 }
+        output_schema:
+          type: array
+          items:
+            type: object
+            required: [number, html_url, title]
+            properties:
+              number:   { type: integer }
+              html_url: { type: string }
+              title:    { type: string }
+              body:
+                type: [string, "null"]
+              pull_request:
+                type: object
       create_issue:
         method: POST
         path: /repos/{owner}/{repo}/issues
@@ -86,6 +113,36 @@ exec:
             id:       { type: integer }
             html_url: { type: string }
             body:     { type: string }
+      find_pull_requests:
+        method: GET
+        path: /repos/{owner}/{repo}/pulls
+        input_schema:
+          type: object
+          required: [owner, repo, head, base, state]
+          properties:
+            owner: { type: string }
+            repo:  { type: string }
+            head:  { type: string }
+            base:  { type: string }
+            state: { type: string }
+        output_schema:
+          type: array
+          items:
+            type: object
+            required: [number, html_url, head, base]
+            properties:
+              number:   { type: integer }
+              html_url: { type: string }
+              head:
+                type: object
+                required: [ref]
+                properties:
+                  ref: { type: string }
+              base:
+                type: object
+                required: [ref]
+                properties:
+                  ref: { type: string }
       create_pull_request:
         method: POST
         path: /repos/{owner}/{repo}/pulls
@@ -130,14 +187,15 @@ exec:
         path: /repos/{owner}/{repo}/pulls/{number}/merge
         input_schema:
           type: object
-          required: [owner, repo, number]
+          required: [owner, repo, number, sha]
           properties:
             owner:  { type: string }
             repo:   { type: string }
             number: { type: integer }
+            sha:    { type: string, minLength: 40, maxLength: 40 }
         output_schema:
           type: object
-          required: [sha, merged, message]
+          required: [sha, merged]
           properties:
             sha:     { type: string }
             merged:  { type: boolean }
@@ -177,9 +235,9 @@ setup:
        → Fine-grained tokens → Generate new token.
     2. Restrict to the repositories Sagewai should access.
     3. Grant these repository permissions:
-       - `Contents: Write` (for repository reads, branch push, and `merge_pull_request`)
+       - `Contents: Write` (for repository reads and `merge_pull_request`)
        - `Metadata: Read` (for `get_repo`)
-       - `Issues: Write` (for `get_issue`, `create_issue`, and `create_comment`)
+       - `Issues: Write` (for `get_issue`, `list_issues`, `create_issue`, and `create_comment`)
        - `Pull requests: Write` (for `create_pull_request`)
     4. Copy the `github_pat_...` token.
     5. Paste into Sagewai → Connections → Tools → Add GitHub.

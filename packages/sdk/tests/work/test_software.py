@@ -26,6 +26,7 @@ from sagewai.work.profiles.software import (
     SoftwareResultValidator,
     SoftwareWorktreeManager,
     WorkspaceStaleError,
+    WorktreeBranchPublisher,
 )
 
 NOW = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
@@ -139,15 +140,77 @@ async def test_worktree_publishes_reviewed_state_to_isolated_git_remote(
     )
     (workspace.path / "target.txt").write_text("reviewed\n")
 
-    result_sha = await manager.publish_branch(
-        workspace,
+    publisher = WorktreeBranchPublisher(
+        worktree_manager=manager,
+        repository=repository,
+    )
+    result_sha = await publisher.publish(
+        project_id="project-a",
+        work_id="work-1",
+        base_sha=base_sha,
+        expected_sha=base_sha,
+        branch="sagewai/work-1",
+        commit_message="feat: implement work-1",
+    )
+    recovered_sha = await publisher.publish(
+        project_id="project-a",
+        work_id="work-1",
+        base_sha=base_sha,
+        expected_sha=base_sha,
         branch="sagewai/work-1",
         commit_message="feat: implement work-1",
     )
 
     assert result_sha != base_sha
+    assert recovered_sha == result_sha
     assert _git(remote, "rev-parse", "refs/heads/sagewai/work-1") == result_sha
     assert _git(workspace.path, "status", "--short") == ""
+
+
+@pytest.mark.asyncio
+async def test_publish_retry_pushes_existing_local_commit_after_remote_recovers(
+    tmp_path: Path,
+) -> None:
+    repository, base_sha = _repository(tmp_path)
+    remote = tmp_path / "temporarily-missing.git"
+    _git(repository, "remote", "add", "origin", str(remote))
+    manager = SoftwareWorktreeManager(root=tmp_path / "worktrees")
+    workspace = await manager.prepare(
+        repository=repository,
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="workspace",
+        base_sha=base_sha,
+    )
+    (workspace.path / "target.txt").write_text("reviewed\n")
+    publisher = WorktreeBranchPublisher(
+        worktree_manager=manager,
+        repository=repository,
+    )
+
+    with pytest.raises(WorkspaceStaleError):
+        await publisher.publish(
+            project_id="project-a",
+            work_id="work-1",
+            base_sha=base_sha,
+            expected_sha=base_sha,
+            branch="sagewai/work-1",
+            commit_message="feat: implement work-1",
+        )
+
+    committed_sha = _git(workspace.path, "rev-parse", "HEAD")
+    subprocess.run(("git", "init", "--bare", "-q", str(remote)), check=True)
+    recovered_sha = await publisher.publish(
+        project_id="project-a",
+        work_id="work-1",
+        base_sha=base_sha,
+        expected_sha=base_sha,
+        branch="sagewai/work-1",
+        commit_message="feat: implement work-1",
+    )
+
+    assert recovered_sha == committed_sha
+    assert _git(remote, "rev-parse", "refs/heads/sagewai/work-1") == committed_sha
 
 
 @pytest.mark.asyncio

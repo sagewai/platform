@@ -4,9 +4,9 @@
 
 `docs.sagewai.ai` is served by a **Cloudflare Worker** named `docs` with
 Workers Assets (see `wrangler.toml`), auto-rebuilt on every push to `main`
-via **Cloudflare Workers Builds** (dashboard-side Git integration). No
-GitHub Actions workflow runs the deploy — the trigger lives entirely on
-Cloudflare's side.
+via **Cloudflare Workers Builds** (dashboard-side Git integration). Version
+tags also trigger `.github/workflows/release-docs.yml`, which deploys the same
+Worker through Wrangler. Pull-request CI does not publish.
 
 This is the same mechanism the old `sagewai/docs` repo used. When that
 repo was archived during the 2026-04-12 monorepo migration, the original
@@ -63,6 +63,68 @@ Prereqs:
 CI does **not** publish to Cloudflare. Auto-deploy is Cloudflare's job via
 Workers Builds. CI is the safety net that catches build breakage before
 Cloudflare tries (and potentially fails silently) to pull and build.
+
+## Sagewai Work-controlled delivery
+
+The Work control plane has a mutually exclusive delivery mode for this same
+`docs` Worker. It builds an immutable static export from the merged SHA,
+uploads one inactive Worker version, advances that version through an explicit
+percentage rollout, observes `https://docs.sagewai.ai`, and can restore a
+recorded known-good version. Cloudflare documents that a Worker version
+captures its static assets and that the version-override request header can
+target a version in the current deployment.
+
+Do not use this mode while Cloudflare Workers Builds still deploys pushes to
+`main` or `.github/workflows/release-docs.yml` remains able to deploy version
+tags. Disable or govern both competing mutation paths first and record the
+current healthy Worker version as the rollback baseline. If another actor
+changes live traffic, the Work delivery refuses the transition and records
+`CONTROL_DEGRADED`.
+
+The CLI requires every policy and timing value explicitly; it supplies no
+production defaults:
+
+```bash
+export CLOUDFLARE_API_TOKEN=...
+export CLOUDFLARE_ACCOUNT_ID=...
+export SAGEWAI_DOCS_KNOWN_GOOD_VERSION_ID=...
+export SAGEWAI_DOCS_KNOWN_GOOD_COMMIT_SHA=...
+export SAGEWAI_DOCS_KNOWN_GOOD_VERIFICATION_REF=...
+export SAGEWAI_DOCS_KNOWN_GOOD_REVIEW_REF=...
+export SAGEWAI_DOCS_ROLLOUT_JSON='[{"exposure":"5%","observe_seconds":300},{"exposure":"100%","observe_seconds":900}]'
+export SAGEWAI_DOCS_POLICY_EVIDENCE_REF='file://apps/docs/CLOUDFLARE.md#sagewai-work-controlled-delivery'
+export SAGEWAI_DOCS_ROLLBACK_OBSERVATION_SECONDS=300
+export SAGEWAI_DOCS_OBSERVATION_SAMPLE_SECONDS=30
+export SAGEWAI_DOCS_COMMAND_TIMEOUT_SECONDS=900
+export SAGEWAI_DOCS_HTTP_TIMEOUT_SECONDS=10
+export SAGEWAI_DOCS_HEARTBEAT_SECONDS=15
+export SAGEWAI_DOCS_MINIMUM_CREDENTIAL_TTL_SECONDS=3600
+export SAGEWAI_DOCS_MAXIMUM_MONITORING_STALENESS_SECONDS=300
+```
+
+The values above illustrate the input shape only. Choose rollout windows,
+credential TTL, and monitoring freshness from measured production behavior and
+record that evidence before the first state-changing action. The repository must
+also be checked out at the Work's canonical merged SHA with a clean tracked
+worktree; the delivery command refuses any other local source state. Then resume
+the canonical Work and approve only the exact pending delivery gate:
+
+```bash
+sagewai work resume <work-id>
+sagewai work pending
+sagewai work approve <work-id> <gate-id>
+sagewai work resume <work-id>
+```
+
+Each deploy, promotion, and rollback gets a separate durable approval. A
+rollback is attempted only after its own authority, observability, workspace,
+and known-good-artifact checks pass; loss of any required control freezes new
+state-changing actions.
+
+Cloudflare references:
+
+- [Versions and deployments](https://developers.cloudflare.com/workers/versions-and-deployments/)
+- [Version overrides](https://developers.cloudflare.com/workers/versions-and-deployments/version-overrides/)
 
 ## Troubleshooting
 

@@ -18,8 +18,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
+import httpx
 from pydantic import BaseModel, ConfigDict
 
+from sagewai.fleet.execution import run_worker_subprocess
 from sagewai.work.contract import WorkContract
 from sagewai.work.events import WorkEvent, WorkEventType
 from sagewai.work.models import (
@@ -31,6 +33,7 @@ from sagewai.work.models import (
     WorkItem,
     WorkRecord,
 )
+from sagewai.work.profiles.software.lifecycle import expected_result_sha
 from sagewai.work.profiles.software.models import SoftwareContractContext
 from sagewai.work.profiles.software.scm import SoftwareWorktreeManager
 from sagewai.work.store import WorkStore
@@ -39,6 +42,10 @@ _ISSUE_PATH = re.compile(
     r"^/(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+)/"
     r"issues/(?P<number>[1-9][0-9]*)/?$"
 )
+
+
+class GitHubMergeRejectedError(RuntimeError):
+    """GitHub deterministically refused an otherwise authorized merge."""
 
 
 class GitHubIssue(BaseModel):
@@ -112,7 +119,23 @@ class GitHubWorkContext(BaseModel):
 class GitHubClient(Protocol):
     """Small lifecycle-facing boundary over the existing GitHub tool."""
 
+    async def list_labeled_issues(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        label: str,
+    ) -> tuple[GitHubIssue, ...]: ...
+
     async def fetch_issue(self, issue_url: str) -> GitHubIssue: ...
+
+    async def find_open_pull_request(
+        self,
+        *,
+        issue: GitHubIssue,
+        head: str,
+        base: str,
+    ) -> GitHubPullRequest | None: ...
 
     async def create_pull_request(
         self,
@@ -132,6 +155,8 @@ class GitHubClient(Protocol):
     async def merge_pull_request(
         self,
         pull_request: GitHubPullRequest,
+        *,
+        expected_head_sha: str,
     ) -> GitHubMergeResult: ...
 
     async def comment_issue(self, issue_url: str, body: str) -> None: ...
@@ -139,6 +164,15 @@ class GitHubClient(Protocol):
 
 class GitBranchPublisher(Protocol):
     """Publish the reviewed local workspace to one Git branch."""
+
+    async def validate_target(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        base_sha: str,
+        default_branch: str,
+    ) -> None: ...
 
     async def publish(
         self,
@@ -180,11 +214,46 @@ class CatalogGitHubClient:
         project_id: str,
         github_callable: Callable[
             [dict[str, Any]],
-            Awaitable[dict[str, Any]],
+            Awaitable[Any],
         ],
     ) -> None:
         self._project_id = project_id
         self._call = github_callable
+
+    async def list_labeled_issues(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        label: str,
+    ) -> tuple[GitHubIssue, ...]:
+        repository = await self._call({"_operation": "get_repo", "owner": owner, "repo": repo})
+        results = await self._call(
+            {
+                "_operation": "list_issues",
+                "owner": owner,
+                "repo": repo,
+                "labels": label,
+                "state": "open",
+                "sort": "created",
+                "direction": "asc",
+                "per_page": 100,
+            }
+        )
+        return tuple(
+            GitHubIssue(
+                project_id=self._project_id,
+                owner=owner,
+                repo=repo,
+                number=int(result["number"]),
+                url=str(result["html_url"]),
+                title=str(result["title"]),
+                body=str(result.get("body") or ""),
+                default_branch=str(repository["default_branch"]),
+            )
+            for result in results
+            if "pull_request" not in result
+        )
 
     async def fetch_issue(self, issue_url: str) -> GitHubIssue:
         owner, repo, number = _parse_issue_url(issue_url)
@@ -206,6 +275,43 @@ class CatalogGitHubClient:
             title=str(issue["title"]),
             body=str(issue.get("body") or ""),
             default_branch=str(repository["default_branch"]),
+        )
+
+    async def find_open_pull_request(
+        self,
+        *,
+        issue: GitHubIssue,
+        head: str,
+        base: str,
+    ) -> GitHubPullRequest | None:
+        self._validate_project(issue.project_id)
+        result = await self._call(
+            {
+                "_operation": "find_pull_requests",
+                "owner": issue.owner,
+                "repo": issue.repo,
+                "head": f"{issue.owner}:{head}",
+                "base": base,
+                "state": "open",
+            }
+        )
+        if not result:
+            return None
+        pull_request = result[0]
+        remote_head = str(pull_request["head"]["ref"])
+        remote_base = str(pull_request["base"]["ref"])
+        if (remote_head, remote_base) != (head, base):
+            raise ValueError(
+                "GitHub pull request search result does not match requested head/base"
+            )
+        return GitHubPullRequest(
+            project_id=self._project_id,
+            owner=issue.owner,
+            repo=issue.repo,
+            number=int(pull_request["number"]),
+            url=str(pull_request["html_url"]),
+            head=head,
+            base=base,
         )
 
     async def create_pull_request(
@@ -262,18 +368,24 @@ class CatalogGitHubClient:
     async def merge_pull_request(
         self,
         pull_request: GitHubPullRequest,
+        *,
+        expected_head_sha: str,
     ) -> GitHubMergeResult:
         self._validate_project(pull_request.project_id)
-        result = await self._call(
-            {
-                "_operation": "merge_pull_request",
-                "owner": pull_request.owner,
-                "repo": pull_request.repo,
-                "number": pull_request.number,
-            }
-        )
-        if result["merged"] is not True:
-            raise RuntimeError(str(result["message"]))
+        try:
+            result = await self._call(
+                {
+                    "_operation": "merge_pull_request",
+                    "owner": pull_request.owner,
+                    "repo": pull_request.repo,
+                    "number": pull_request.number,
+                    "sha": expected_head_sha,
+                }
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in {405, 409}:
+                raise
+            raise GitHubMergeRejectedError(str(exc.response.json()["message"])) from exc
         return GitHubMergeResult(
             project_id=self._project_id,
             pull_request_number=pull_request.number,
@@ -309,6 +421,54 @@ class WorktreeBranchPublisher:
         self._worktree_manager = worktree_manager
         self._repository = repository.resolve()
 
+    async def validate_target(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        base_sha: str,
+        default_branch: str,
+    ) -> None:
+        """Prove the local origin and GitHub base are the requested issue target."""
+        origin = await run_worker_subprocess(
+            argv=("git", "remote", "get-url", "origin"),
+            cwd=self._repository,
+        )
+        if origin.returncode != 0:
+            raise ValueError(f"cannot read Git origin: {origin.stderr.strip()}")
+        actual_owner, actual_repo = github_remote_repository(origin.stdout.strip())
+        if (actual_owner.casefold(), actual_repo.casefold()) != (
+            owner.casefold(),
+            repo.casefold(),
+        ):
+            raise ValueError(
+                "local Git origin does not match issue repository: "
+                f"expected {owner}/{repo}, found {actual_owner}/{actual_repo}"
+            )
+
+        remote = await run_worker_subprocess(
+            argv=(
+                "git",
+                "ls-remote",
+                "--exit-code",
+                "origin",
+                f"refs/heads/{default_branch}",
+            ),
+            cwd=self._repository,
+        )
+        if remote.returncode != 0:
+            raise ValueError(
+                f"cannot read GitHub default branch {default_branch}: {remote.stderr.strip()}"
+            )
+        fields = remote.stdout.split()
+        if len(fields) < 2:
+            raise ValueError(f"GitHub default branch {default_branch} returned no commit")
+        remote_sha = fields[0]
+        if remote_sha != base_sha:
+            raise ValueError(
+                f"requested base does not match GitHub default branch: expected {base_sha}, found {remote_sha}"
+            )
+
     async def publish(
         self,
         *,
@@ -326,6 +486,7 @@ class WorktreeBranchPublisher:
             attempt_id="workspace",
             base_sha=base_sha,
             expected_sha=expected_sha,
+            publish_commit_message=commit_message,
         )
         return await self._worktree_manager.publish_branch(
             workspace,
@@ -367,8 +528,56 @@ class GitHubIssueLifecycle:
     ) -> WorkRecord:
         """Fetch one issue, create canonical Work, and run through the merge gate."""
         issue = await self._github.fetch_issue(issue_url)
+        return await self._start_issue(
+            issue=issue,
+            project_id=project_id,
+            base_sha=base_sha,
+        )
+
+    async def intake_labeled(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        label: str,
+        project_id: str,
+        base_sha: str,
+    ) -> WorkRecord | None:
+        """Start the oldest labeled issue that has no canonical Work yet."""
+        issues = await self._github.list_labeled_issues(
+            owner=owner,
+            repo=repo,
+            label=label,
+        )
+        for issue in issues:
+            existing = await self._work_store.find_work_by_source_ref(
+                issue.url,
+                project_id=project_id,
+            )
+            if existing is not None:
+                continue
+            return await self._start_issue(
+                issue=issue,
+                project_id=project_id,
+                base_sha=base_sha,
+            )
+        return None
+
+    async def _start_issue(
+        self,
+        *,
+        issue: GitHubIssue,
+        project_id: str,
+        base_sha: str,
+    ) -> WorkRecord:
         if issue.project_id != project_id:
             raise ValueError("GitHub issue belongs to a different project")
+        await self._branch_publisher.validate_target(
+            owner=issue.owner,
+            repo=issue.repo,
+            base_sha=base_sha,
+            default_branch=issue.default_branch,
+        )
 
         work_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
@@ -409,6 +618,8 @@ class GitHubIssueLifecycle:
         if record.status != "READY_TO_MERGE":
             await self.present_pending(work_id, project_id=project_id)
             return record
+        events = await self._events(work_id, project_id)
+        work_item, contract = self._canonical_inputs(events)
         return await self._advance(
             work_item=work_item,
             contract=contract,
@@ -426,12 +637,26 @@ class GitHubIssueLifecycle:
         record = await self._work_store.load_work(work_id, project_id=project_id)
         if record is None:
             raise KeyError(work_id)
-        if record.status in {"READY_TO_DELIVER", "WORK_BLOCKED", "GATE_PENDING"}:
+        if record.status in {"READY_TO_DELIVER", "COMPLETE"}:
+            return record
+        if record.status == "WORK_BLOCKED":
+            await self.present_pending(work_id, project_id=project_id)
             return record
 
         events = await self._events(work_id, project_id)
-        work_item, contract = self._canonical_inputs(events)
-        if record.status not in {"READY_TO_MERGE", "MERGE_APPROVED"}:
+        if record.status == "READY_TO_MERGE" and record.pending_gate is not None:
+            gate_id = record.pending_gate
+            decided = self._gate_event(events, WorkEventType.GATE_DECIDED, gate_id)
+            if decided is None:
+                await self.present_pending(work_id, project_id=project_id)
+                return record
+            record = await self._set_record(
+                record,
+                status="MERGING",
+                pending_gate=None,
+            )
+
+        if record.status not in {"READY_TO_MERGE", "MERGING"}:
             record = await self._software_lifecycle.resume(
                 work_id,
                 project_id=project_id,
@@ -440,7 +665,7 @@ class GitHubIssueLifecycle:
                 await self.present_pending(work_id, project_id=project_id)
                 return record
             events = await self._events(work_id, project_id)
-            work_item, contract = self._canonical_inputs(events)
+        work_item, contract = self._canonical_inputs(events)
 
         source_ref = work_item.source_ref
         if source_ref is None or not is_github_issue_url(source_ref):
@@ -476,8 +701,9 @@ class GitHubIssueLifecycle:
         )
         if requested is None:
             raise ValueError(f"gate request is missing: {gate_id}")
-        if self._gate_event(events, WorkEventType.GATE_DECIDED, gate_id) is not None:
-            raise ValueError(f"gate is already decided: {gate_id}")
+        decided = self._gate_event(events, WorkEventType.GATE_DECIDED, gate_id)
+        if decided is not None:
+            return await self.resume(work_id, project_id=project_id)
 
         await self._append(
             work_id=work_id,
@@ -492,7 +718,7 @@ class GitHubIssueLifecycle:
         )
         await self._set_record(
             record,
-            status="MERGE_APPROVED",
+            status="MERGING",
             pending_gate=None,
         )
         return await self.resume(work_id, project_id=project_id)
@@ -504,16 +730,40 @@ class GitHubIssueLifecycle:
         project_id: str,
     ) -> None:
         """Reflect canonical pending attention on the source GitHub issue."""
+        events = await self._events(work_id, project_id)
+        presented = {
+            str(event.payload_json["attention_key"])
+            for event in events
+            if event.event_type is WorkEventType.EXECUTION_RECORDED
+            and event.payload_json.get("action") == "github_pending_attention_presented"
+        }
         pending = await self._work_store.pending_attention(project_id=project_id)
         for item in pending:
             if item.work_id != work_id or item.source_ref is None:
                 continue
             if not is_github_issue_url(item.source_ref):
                 continue
+            attention_key = _attention_key(item)
+            if attention_key in presented:
+                continue
             await self._github.comment_issue(
                 item.source_ref,
                 _attention_comment(item),
             )
+            await self._append(
+                work_id=work_id,
+                project_id=project_id,
+                event_type=WorkEventType.EXECUTION_RECORDED,
+                payload={
+                    "action": "github_pending_attention_presented",
+                    "attention_id": item.attention_id,
+                    "attention_key": attention_key,
+                    "kind": item.kind.value,
+                    "source_ref": item.source_ref,
+                },
+                actor_ref="github",
+            )
+            presented.add(attention_key)
 
     async def _advance(
         self,
@@ -531,7 +781,13 @@ class GitHubIssueLifecycle:
             for item in pending
             if item.work_id == work_item.id and item.kind is PendingAttentionKind.CONTROL_DEGRADED
         )
-        if controls:
+        target_control_degraded = any(
+            item.attention_id == "github-target" for item in controls
+        )
+        other_controls = tuple(
+            item for item in controls if item.attention_id != "github-target"
+        )
+        if other_controls:
             await self.present_pending(
                 work_item.id,
                 project_id=issue.project_id,
@@ -539,26 +795,101 @@ class GitHubIssueLifecycle:
             return record
 
         events = await self._events(work_item.id, work_item.project_id)
-        pull_request = self._pull_request(events)
+        cycle_start = self._delivery_cycle_start(events)
+        pull_request = self._pull_request(events, after_sequence=cycle_start)
         if pull_request is None:
             software = SoftwareContractContext.model_validate(contract.profile_context)
-            branch = f"sagewai/{work_item.id}"
-            expected_sha = self._expected_sha(events, software.base_sha)
-            branch_sha = await self._branch_publisher.publish(
-                project_id=issue.project_id,
-                work_id=work_item.id,
-                base_sha=software.base_sha,
-                expected_sha=expected_sha,
-                branch=branch,
-                commit_message=f"sagewai work {work_item.id}",
+            publication = self._branch_publication(
+                events,
+                after_sequence=cycle_start,
             )
-            pull_request = await self._github.create_pull_request(
+            if publication is None:
+                target_base_sha = self._target_base_sha(
+                    events,
+                    initial_base_sha=software.base_sha,
+                    cycle_start=cycle_start,
+                )
+                try:
+                    await self._branch_publisher.validate_target(
+                        owner=issue.owner,
+                        repo=issue.repo,
+                        base_sha=target_base_sha,
+                        default_branch=issue.default_branch,
+                    )
+                except ValueError as exc:
+                    if not target_control_degraded:
+                        event = await self._append(
+                            work_id=work_item.id,
+                            project_id=work_item.project_id,
+                            event_type=WorkEventType.CONTROL_DEGRADED,
+                            payload={
+                                "failed_preconditions": ["github-target"],
+                                "evidence_refs": [issue.url],
+                                "details": str(exc),
+                                "frozen_action_ids": [
+                                    "publish_branch",
+                                    "create_pull_request",
+                                    "merge",
+                                ],
+                            },
+                            actor_ref="control",
+                        )
+                        events.append(event)
+                    await self.present_pending(
+                        work_item.id,
+                        project_id=issue.project_id,
+                    )
+                    return record
+                if target_control_degraded:
+                    event = await self._append(
+                        work_id=work_item.id,
+                        project_id=work_item.project_id,
+                        event_type=WorkEventType.CONTROL_RESTORED,
+                        payload={
+                            "precondition_ids": ["github-target"],
+                            "evidence_refs": [issue.url],
+                        },
+                        actor_ref="control",
+                    )
+                    events.append(event)
+                branch = f"sagewai/{work_item.id}"
+                expected_sha = expected_result_sha(events, software.base_sha)
+                branch_sha = await self._branch_publisher.publish(
+                    project_id=issue.project_id,
+                    work_id=work_item.id,
+                    base_sha=software.base_sha,
+                    expected_sha=expected_sha,
+                    branch=branch,
+                    commit_message=f"sagewai work {work_item.id}",
+                )
+                event = await self._append(
+                    work_id=work_item.id,
+                    project_id=work_item.project_id,
+                    event_type=WorkEventType.STAGE_COMPLETED,
+                    payload={
+                        "stage": "branch_published",
+                        "branch": branch,
+                        "branch_sha": branch_sha,
+                    },
+                    actor_ref="github",
+                )
+                events.append(event)
+            else:
+                branch, branch_sha = publication
+
+            pull_request = await self._github.find_open_pull_request(
                 issue=issue,
-                title=issue.title,
                 head=branch,
                 base=issue.default_branch,
-                body=f"Closes #{issue.number}",
             )
+            if pull_request is None:
+                pull_request = await self._github.create_pull_request(
+                    issue=issue,
+                    title=issue.title,
+                    head=branch,
+                    base=issue.default_branch,
+                    body=f"Closes #{issue.number}",
+                )
             event = await self._append(
                 work_id=work_item.id,
                 project_id=work_item.project_id,
@@ -571,26 +902,37 @@ class GitHubIssueLifecycle:
                 actor_ref="github",
             )
             events.append(event)
-            context = GitHubWorkContext(
-                project_id=issue.project_id,
-                owner=issue.owner,
-                repo=issue.repo,
-                issue_number=issue.number,
-                issue_url=issue.url,
-                default_branch=issue.default_branch,
-                branch=branch,
-                branch_sha=branch_sha,
-                pull_request_number=pull_request.number,
-                pull_request_url=pull_request.url,
-            )
+
+        pull_request_event = self._pull_request_event(
+            events,
+            after_sequence=cycle_start,
+        )
+        context = GitHubWorkContext(
+            project_id=issue.project_id,
+            owner=issue.owner,
+            repo=issue.repo,
+            issue_number=issue.number,
+            issue_url=issue.url,
+            default_branch=issue.default_branch,
+            branch=pull_request.head,
+            branch_sha=str(pull_request_event.payload_json["branch_sha"]),
+            pull_request_number=pull_request.number,
+            pull_request_url=pull_request.url,
+        )
+        context_payload = context.model_dump(mode="json")
+        if record.profile_context.get("github") != context_payload:
             profile_context = dict(record.profile_context)
-            profile_context["github"] = context.model_dump(mode="json")
+            profile_context["github"] = context_payload
             record = await self._set_record(
                 record,
-                status="READY_TO_MERGE",
-                pending_gate=None,
+                status=record.status,
+                pending_gate=record.pending_gate,
                 profile_context=profile_context,
             )
+
+        github_context = GitHubWorkContext.model_validate(
+            record.profile_context["github"]
+        )
 
         gate_id = f"merge:{work_item.id}:{pull_request.number}"
         decided = self._gate_event(
@@ -607,7 +949,7 @@ class GitHubIssueLifecycle:
             project_id=work_item.project_id,
             action="merge",
             work_id=work_item.id,
-            risk=contract.risk,
+            risk="medium",
             reversibility=Reversibility.IRREVERSIBLE,
             scope=pull_request.url,
             evidence_refs=self._merge_evidence(
@@ -634,7 +976,7 @@ class GitHubIssueLifecycle:
                 )
                 record = await self._set_record(
                     record,
-                    status="GATE_PENDING",
+                    status="READY_TO_MERGE",
                     pending_gate=gate_id,
                 )
                 await self.present_pending(
@@ -656,11 +998,13 @@ class GitHubIssueLifecycle:
             events.append(decided)
 
         if decided is None:
-            return await self._set_record(
+            record = await self._set_record(
                 record,
-                status="GATE_PENDING",
+                status="READY_TO_MERGE",
                 pending_gate=gate_id,
             )
+            await self.present_pending(work_item.id, project_id=issue.project_id)
+            return record
         if decided.payload_json["decision"] == GateDecision.DENY.value:
             await self._append(
                 work_id=work_item.id,
@@ -684,15 +1028,56 @@ class GitHubIssueLifecycle:
             )
             return record
 
+        if record.status != "MERGING":
+            record = await self._set_record(
+                record,
+                status="MERGING",
+                pending_gate=None,
+            )
+
+        merge_event = self._merge_event(
+            events,
+            pull_request.number,
+            after_sequence=cycle_start,
+        )
         state = await self._github.get_pull_request(pull_request)
         if (
             state.project_id != work_item.project_id
             or state.pull_request_number != pull_request.number
         ):
             raise ValueError("pull request state belongs to a different WorkItem")
+        if merge_event is not None and not state.merged:
+            raise RuntimeError("canonical merge event conflicts with GitHub state")
 
+        merge_result: GitHubMergeResult | None = None
         if not state.merged:
-            merge_result = await self._github.merge_pull_request(pull_request)
+            try:
+                merge_result = await self._github.merge_pull_request(
+                    pull_request,
+                    expected_head_sha=github_context.branch_sha,
+                )
+            except GitHubMergeRejectedError as exc:
+                await self._append(
+                    work_id=work_item.id,
+                    project_id=work_item.project_id,
+                    event_type=WorkEventType.WORK_BLOCKED,
+                    payload={
+                        "reason": "merge_rejected",
+                        "decision_request": (
+                            f"GitHub rejected the merge: {exc}. Resolve the rejection or stop "
+                            "the work."
+                        ),
+                        "evidence_refs": list(action.evidence_refs),
+                    },
+                    actor_ref="github",
+                )
+                record = await self._set_record(
+                    record,
+                    status="WORK_BLOCKED",
+                    pending_gate=None,
+                )
+                await self.present_pending(work_item.id, project_id=issue.project_id)
+                return record
             if (
                 merge_result.project_id != work_item.project_id
                 or merge_result.pull_request_number != pull_request.number
@@ -709,25 +1094,31 @@ class GitHubIssueLifecycle:
             raise RuntimeError("GitHub did not report the pull request as merged")
         if state.merge_commit_sha is None:
             raise RuntimeError("GitHub did not report the merged commit SHA")
-        merge = GitHubMergeResult(
-            project_id=work_item.project_id,
-            pull_request_number=pull_request.number,
-            merged_sha=state.merge_commit_sha,
+        if (
+            merge_result is not None
+            and merge_result.merged_sha != state.merge_commit_sha
+        ):
+            raise RuntimeError("merge response SHA conflicts with GitHub read-back")
+        if merge_event is not None:
+            recorded_sha = str(merge_event.payload_json["merged_sha"])
+            if recorded_sha != state.merge_commit_sha:
+                raise RuntimeError("canonical merged SHA conflicts with GitHub state")
+        else:
+            await self._append(
+                work_id=work_item.id,
+                project_id=work_item.project_id,
+                event_type=WorkEventType.STAGE_COMPLETED,
+                payload={
+                    "stage": "merge",
+                    "pull_request_number": pull_request.number,
+                    "merged_sha": state.merge_commit_sha,
+                },
+                actor_ref="github",
+            )
+
+        github_context = github_context.model_copy(
+            update={"merged_sha": state.merge_commit_sha}
         )
-        await self._append(
-            work_id=work_item.id,
-            project_id=work_item.project_id,
-            event_type=WorkEventType.STAGE_COMPLETED,
-            payload={
-                "stage": "merge",
-                "pull_request_number": pull_request.number,
-                "merged_sha": merge.merged_sha,
-            },
-            actor_ref="github",
-        )
-        github_context = GitHubWorkContext.model_validate(
-            record.profile_context["github"]
-        ).model_copy(update={"merged_sha": merge.merged_sha})
         profile_context = dict(record.profile_context)
         profile_context["github"] = github_context.model_dump(mode="json")
         return await self._set_record(
@@ -808,30 +1199,104 @@ class GitHubIssueLifecycle:
         )
 
     @staticmethod
-    def _expected_sha(events: list[WorkEvent], base_sha: str) -> str:
-        return next(
-            (
-                str(event.payload_json["current_sha"])
-                for event in reversed(events)
-                if event.event_type is WorkEventType.STAGE_COMPLETED
-                and event.payload_json.get("stage") in {"implement", "repair"}
-            ),
-            base_sha,
-        )
-
-    @staticmethod
-    def _pull_request(
+    def _branch_publication(
         events: list[WorkEvent],
-    ) -> GitHubPullRequest | None:
-        return next(
+        *,
+        after_sequence: int = 0,
+    ) -> tuple[str, str] | None:
+        event = next(
             (
-                GitHubPullRequest.model_validate(event.payload_json["pull_request"])
-                for event in reversed(events)
-                if event.event_type is WorkEventType.STAGE_COMPLETED
-                and event.payload_json.get("stage") == "pull_request"
+                item
+                for item in reversed(events)
+                if item.sequence > after_sequence
+                if item.event_type is WorkEventType.STAGE_COMPLETED
+                and item.payload_json.get("stage") == "branch_published"
             ),
             None,
         )
+        if event is None:
+            return None
+        return str(event.payload_json["branch"]), str(event.payload_json["branch_sha"])
+
+    @staticmethod
+    def _pull_request_event(
+        events: list[WorkEvent],
+        *,
+        after_sequence: int = 0,
+    ) -> WorkEvent:
+        return next(
+            event
+            for event in reversed(events)
+            if event.sequence > after_sequence
+            if event.event_type is WorkEventType.STAGE_COMPLETED
+            and event.payload_json.get("stage") == "pull_request"
+        )
+
+    @classmethod
+    def _pull_request(
+        cls,
+        events: list[WorkEvent],
+        *,
+        after_sequence: int = 0,
+    ) -> GitHubPullRequest | None:
+        try:
+            event = cls._pull_request_event(events, after_sequence=after_sequence)
+        except StopIteration:
+            return None
+        return GitHubPullRequest.model_validate(event.payload_json["pull_request"])
+
+    @staticmethod
+    def _merge_event(
+        events: list[WorkEvent],
+        pull_request_number: int,
+        *,
+        after_sequence: int = 0,
+    ) -> WorkEvent | None:
+        return next(
+            (
+                event
+                for event in reversed(events)
+                if event.sequence > after_sequence
+                if event.event_type is WorkEventType.STAGE_COMPLETED
+                and event.payload_json.get("stage") == "merge"
+                and event.payload_json.get("pull_request_number") == pull_request_number
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _delivery_cycle_start(events: list[WorkEvent]) -> int:
+        return next(
+            (
+                event.sequence
+                for event in reversed(events)
+                if event.event_type is WorkEventType.TRIAGE_CREATED
+            ),
+            0,
+        )
+
+    @staticmethod
+    def _target_base_sha(
+        events: list[WorkEvent],
+        *,
+        initial_base_sha: str,
+        cycle_start: int,
+    ) -> str:
+        if cycle_start == 0:
+            return initial_base_sha
+        merge_event = next(
+            (
+                event
+                for event in reversed(events)
+                if event.sequence < cycle_start
+                and event.event_type is WorkEventType.STAGE_COMPLETED
+                and event.payload_json.get("stage") == "merge"
+            ),
+            None,
+        )
+        if merge_event is None:
+            raise ValueError("delivery repair requires a prior merged SHA")
+        return str(merge_event.payload_json["merged_sha"])
 
     @staticmethod
     def _gate_event(
@@ -878,6 +1343,22 @@ def is_github_issue_url(value: str) -> bool:
     return True
 
 
+def github_remote_repository(value: str) -> tuple[str, str]:
+    from urllib.parse import urlsplit
+
+    if value.startswith("git@github.com:"):
+        path = value.removeprefix("git@github.com:")
+    else:
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"https", "ssh"} or parsed.hostname != "github.com":
+            raise ValueError(f"Git origin is not a GitHub repository: {value}")
+        path = parsed.path.lstrip("/")
+    parts = path.removesuffix(".git").rstrip("/").split("/")
+    if len(parts) != 2 or not all(parts):
+        raise ValueError(f"Git origin is not a GitHub repository: {value}")
+    return parts[0], parts[1]
+
+
 def _parse_issue_url(value: str) -> tuple[str, str, int]:
     from urllib.parse import urlsplit
 
@@ -894,6 +1375,10 @@ def _parse_issue_url(value: str) -> tuple[str, str, int]:
     )
 
 
+def _attention_key(item: PendingAttention) -> str:
+    return f"{item.kind.value}:{item.attention_id}:{item.created_at.isoformat()}"
+
+
 def _attention_comment(item: PendingAttention) -> str:
     summary = item.summary.rstrip(".")
     if item.kind is PendingAttentionKind.GATE_REQUESTED:
@@ -901,9 +1386,12 @@ def _attention_comment(item: PendingAttention) -> str:
         return f"Sagewai: approval required — {summary} (gate {item.attention_id})."
     if item.kind is PendingAttentionKind.WORK_BLOCKED:
         return f"Sagewai: work blocked — {summary}."
+    control_summary = item.attention_id
+    if summary != control_summary:
+        control_summary = f"{control_summary}: {summary}"
     evidence = ", ".join(item.evidence_refs)
     suffix = f" Evidence: {evidence}." if evidence else ""
-    return f"Sagewai: control degraded — {item.attention_id}.{suffix}"
+    return f"Sagewai: control degraded — {control_summary}.{suffix}"
 
 
 __all__ = [
@@ -912,11 +1400,13 @@ __all__ = [
     "GitHubClient",
     "GitHubIssue",
     "GitHubIssueLifecycle",
+    "GitHubMergeRejectedError",
     "GitHubMergeResult",
     "GitHubPullRequest",
     "GitHubPullRequestState",
     "GitHubWorkContext",
     "WorktreeBranchPublisher",
+    "github_remote_repository",
     "is_github_issue_url",
     "require_merge_approval",
 ]

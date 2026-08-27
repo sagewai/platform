@@ -104,7 +104,7 @@ docker build -t sagewai-backend:dev apps/backend
 docker run --rm -p 8000:8000 sagewai-backend:dev
 ```
 
-If `dist/` is empty the Dockerfile falls back to `pip install sagewai[fastapi,postgres]`
+If `dist/` is empty the Dockerfile falls back to `pip install sagewai[postgres]`
 from PyPI, so the image can also be built standalone outside the monorepo.
 
 ## Release pipeline

@@ -22,7 +22,11 @@ from pydantic import BaseModel, ConfigDict
 from sagewai.core.durability import run_with_heartbeat
 from sagewai.core.state import StepStatus, WorkflowRun, WorkflowStore
 from sagewai.safety.permissions import PermissionPolicy
-from sagewai.work.events import WorkEvent, WorkEventType
+from sagewai.work.events import (
+    WorkEvent,
+    WorkEventType,
+    active_control_precondition_ids,
+)
 from sagewai.work.models import (
     ControlPrecondition,
     OperatorDisciplineReport,
@@ -47,6 +51,7 @@ class ControlCheckResult(BaseModel):
     precondition_id: str
     passed: bool
     evidence_refs: tuple[str, ...]
+    detail: str | None = None
     checked_at: datetime
 
 
@@ -353,17 +358,7 @@ class OperatorController:
             request.work_id,
             project_id=request.project_id,
         )
-        control_events = [
-            event
-            for event in events
-            if event.event_type in {WorkEventType.CONTROL_DEGRADED, WorkEventType.CONTROL_RESTORED}
-        ]
-        if (
-            not control_events
-            or control_events[-1].event_type is not WorkEventType.CONTROL_DEGRADED
-        ):
-            return set()
-        return set(control_events[-1].payload_json.get("failed_preconditions", ()))
+        return active_control_precondition_ids(events)
 
     async def _append_event(
         self,

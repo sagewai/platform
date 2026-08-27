@@ -265,3 +265,19 @@ class TestFleetExports:
             "WorkerRecord",
         ]:
             assert name in sagewai.__all__
+
+    def test_backend_services_are_subpackage_only(self) -> None:
+        import sagewai
+        import sagewai.fleet as fleet
+
+        internal_services = (
+            "FleetAuditBackend",
+            "FleetRegistry",
+            "InMemoryFleetAuditBackend",
+            "PostgresFleetAuditBackend",
+            "TaskStore",
+        )
+        for name in internal_services:
+            assert hasattr(fleet, name)
+            assert not hasattr(sagewai, name)
+            assert name not in sagewai.__all__
