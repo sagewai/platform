@@ -656,7 +656,6 @@ class GitHubIssueLifecycle:
                 pending_gate=None,
             )
 
-        work_item, contract = self._canonical_inputs(events)
         if record.status not in {"READY_TO_MERGE", "MERGING"}:
             record = await self._software_lifecycle.resume(
                 work_id,
@@ -666,7 +665,7 @@ class GitHubIssueLifecycle:
                 await self.present_pending(work_id, project_id=project_id)
                 return record
             events = await self._events(work_id, project_id)
-            work_item, contract = self._canonical_inputs(events)
+        work_item, contract = self._canonical_inputs(events)
 
         source_ref = work_item.source_ref
         if source_ref is None or not is_github_issue_url(source_ref):

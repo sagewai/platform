@@ -42,17 +42,30 @@ NOW = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
 
 
 class FakeSoftwareLifecycle:
-    def __init__(self, store: WorkStore, *, degraded: bool = False) -> None:
+    def __init__(
+        self,
+        store: WorkStore,
+        *,
+        degraded: bool = False,
+        pause_analysis: bool = False,
+    ) -> None:
         self.store = store
         self.degraded = degraded
+        self.pause_analysis = pause_analysis
         self.starts = []
         self.resumes = 0
+        self.analysis_contracts = {}
 
     async def start(self, *, work_item, contract, assumptions=()):
         self.starts.append((work_item, contract, assumptions))
+        contract_event = (
+            WorkEventType.CONTRACT_PROPOSED
+            if self.pause_analysis
+            else WorkEventType.CONTRACT_ACCEPTED
+        )
         for event_type, payload in (
             (WorkEventType.WORK_CREATED, work_item.model_dump(mode="json")),
-            (WorkEventType.CONTRACT_ACCEPTED, contract.model_dump(mode="json")),
+            (contract_event, contract.model_dump(mode="json")),
         ):
             events = await self.store.read_events(
                 work_item.id,
@@ -92,13 +105,15 @@ class FakeSoftwareLifecycle:
                     created_at=NOW,
                 )
             )
+        if self.pause_analysis:
+            self.analysis_contracts[work_item.id] = contract
         record = WorkRecord(
             work_id=work_item.id,
             project_id=work_item.project_id,
             source_ref=work_item.source_ref,
             profile=work_item.profile,
-            status="READY_TO_MERGE",
-            contract_version=contract.version,
+            status="ANALYZING" if self.pause_analysis else "READY_TO_MERGE",
+            contract_version=None if self.pause_analysis else contract.version,
             active_run_id="review-1",
             pending_gate=None,
             profile_context={"base_sha": contract.profile_context["base_sha"]},
@@ -113,6 +128,30 @@ class FakeSoftwareLifecycle:
         record = await self.store.load_work(work_id, project_id=project_id)
         if record is None:
             raise KeyError(work_id)
+        contract = self.analysis_contracts.pop(work_id, None)
+        if record.status == "ANALYZING" and contract is not None:
+            events = await self.store.read_events(work_id, project_id=project_id)
+            await self.store.append_event(
+                WorkEvent(
+                    id=str(uuid.uuid4()),
+                    project_id=project_id,
+                    work_id=work_id,
+                    sequence=len(events) + 1,
+                    event_type=WorkEventType.CONTRACT_ACCEPTED,
+                    actor_type="fake_software_lifecycle",
+                    actor_ref=None,
+                    payload_json=contract.model_dump(mode="json"),
+                    created_at=NOW,
+                )
+            )
+            record = record.model_copy(
+                update={
+                    "status": "READY_TO_MERGE",
+                    "contract_version": contract.version,
+                    "updated_at": NOW,
+                }
+            )
+            await self.store.save_work(record)
         return record
 
 
@@ -300,8 +339,13 @@ def _flow(
     *,
     decision: GateDecision = GateDecision.REQUIRE_APPROVAL,
     degraded: bool = False,
+    pause_analysis: bool = False,
 ):
-    software = FakeSoftwareLifecycle(store, degraded=degraded)
+    software = FakeSoftwareLifecycle(
+        store,
+        degraded=degraded,
+        pause_analysis=pause_analysis,
+    )
     github = FakeGitHub()
     publisher = FakeBranchPublisher()
     flow = GitHubIssueLifecycle(
@@ -573,6 +617,32 @@ async def test_remote_pr_failure_resumes_from_recorded_branch_without_rerunning_
     assert len(github.pull_requests) == 1
     assert len(software.starts) == 1
     assert software.resumes == 0
+
+
+@pytest.mark.asyncio
+async def test_resume_delegates_analyzing_work_before_loading_accepted_contract(
+    store: WorkStore,
+) -> None:
+    flow, software, _github, publisher = _flow(store, pause_analysis=True)
+
+    analyzing = await flow.start(
+        issue_url=ISSUE_URL,
+        project_id=PROJECT_ID,
+        base_sha="a" * 40,
+    )
+
+    assert analyzing.status == "ANALYZING"
+    events = await store.read_events(analyzing.work_id, project_id=PROJECT_ID)
+    assert not any(
+        event.event_type is WorkEventType.CONTRACT_ACCEPTED for event in events
+    )
+
+    gated = await flow.resume(analyzing.work_id, project_id=PROJECT_ID)
+
+    assert gated.status == "READY_TO_MERGE"
+    assert gated.pending_gate == f"merge:{analyzing.work_id}:7"
+    assert software.resumes == 1
+    assert len(publisher.calls) == 1
 
 
 @pytest.mark.asyncio

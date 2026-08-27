@@ -387,32 +387,77 @@ class SoftwareLifecycle:
                 actor_ref=self._analyst.actor_ref,
             )
             return None
-        analysis = WorkAnalysisResult.model_validate(payload)
-        if analysis.attempt_id != run_id:
-            raise ValueError("analysis result belongs to a different attempt")
-
-        analyzed_assumptions = tuple(
-            Assumption(
-                id=f"{run_id}:assumption:{index}",
-                statement=claim.statement,
-                kind=claim.kind,
-                evidence_refs=claim.evidence_refs,
-                confidence=claim.confidence,
-                impact_if_wrong=claim.impact_if_wrong,
-                status="open",
+        try:
+            analysis = WorkAnalysisResult.model_validate(payload)
+            if analysis.attempt_id != run_id:
+                raise ValueError("analysis result belongs to a different attempt")
+            analyzed_assumptions = tuple(
+                Assumption(
+                    id=f"{run_id}:assumption:{index}",
+                    statement=claim.statement,
+                    kind=claim.kind,
+                    evidence_refs=claim.evidence_refs,
+                    confidence=claim.confidence,
+                    impact_if_wrong=claim.impact_if_wrong,
+                    status="open",
+                )
+                for index, claim in enumerate(analysis.claims, start=1)
+                if claim.classification is ClaimClassification.UNKNOWN
+                or (
+                    claim.classification is ClaimClassification.FACT
+                    and not claim.evidence_refs
+                )
             )
-            for index, claim in enumerate(analysis.claims, start=1)
-            if claim.classification is ClaimClassification.UNKNOWN
-        )
-        assumptions = tuple(
-            {item.id: item for item in (*supplied_assumptions, *analyzed_assumptions)}.values()
-        )
-        accepted = self._accepted_analysis_contract(
-            draft_contract,
-            analysis,
-            assumptions,
-        )
-        await self._publish_analysis_claims(work_item, analysis.claims, run_id=run_id)
+            assumptions = tuple(
+                {
+                    item.id: item
+                    for item in (*supplied_assumptions, *analyzed_assumptions)
+                }.values()
+            )
+            accepted = self._accepted_analysis_contract(
+                draft_contract,
+                analysis,
+                assumptions,
+            )
+        except ValueError as exc:
+            await self._block_once(
+                work_item,
+                {
+                    "reason": "analysis_result_invalid",
+                    "run_id": run_id,
+                    "violations": [str(exc)],
+                    "decision_request": (
+                        "Retry analysis with a valid, surgical contract proposal."
+                    ),
+                    "evidence_refs": list(result.evidence_refs),
+                },
+                actor_ref=self._analyst.actor_ref,
+            )
+            return None
+
+        try:
+            await self._publish_analysis_claims(
+                work_item,
+                analysis.claims,
+                run_id=run_id,
+                base_sha=workspace.base_sha,
+            )
+        except ValueError as exc:
+            await self._block_once(
+                work_item,
+                {
+                    "reason": "analysis_knowledge_conflict",
+                    "run_id": run_id,
+                    "violations": [str(exc)],
+                    "decision_request": (
+                        "Inspect the conflicting analysis evidence and decide whether to "
+                        "retry with a new analysis attempt."
+                    ),
+                    "evidence_refs": list(result.evidence_refs),
+                },
+                actor_ref=self._analyst.actor_ref,
+            )
+            return None
         await self._append_once(
             work_item,
             WorkEventType.STAGE_COMPLETED,
@@ -438,18 +483,6 @@ class SoftwareLifecycle:
                     assumption.model_dump(mode="json"),
                     actor_ref=self._analyst.actor_ref,
                 )
-        await self._append_once(
-            work_item,
-            WorkEventType.CONTRACT_ACCEPTED,
-            accepted.model_dump(mode="json"),
-            actor_ref="software_lifecycle",
-        )
-        await self._set_status(
-            work_item,
-            "READY_TO_IMPLEMENT",
-            contract_version=accepted.version,
-        )
-
         unsupported = self._unsupported_assumption(assumptions)
         if unsupported is not None:
             await self._block_once(
@@ -461,6 +494,17 @@ class SoftwareLifecycle:
                 },
             )
             return None
+        await self._append_once(
+            work_item,
+            WorkEventType.CONTRACT_ACCEPTED,
+            accepted.model_dump(mode="json"),
+            actor_ref="software_lifecycle",
+        )
+        await self._set_status(
+            work_item,
+            "READY_TO_IMPLEMENT",
+            contract_version=accepted.version,
+        )
         return accepted, assumptions
 
     @staticmethod
@@ -476,6 +520,8 @@ class SoftwareLifecycle:
             raise ValueError("analysis contract requires acceptance criteria")
         if not proposal.allowed_scope:
             raise ValueError("analysis contract requires an allowed scope")
+        if proposal.design_required:
+            raise ValueError("design-required contract cannot proceed without a design stage")
         for target in proposal.allowed_scope:
             path = PurePosixPath(target)
             if target in {"", "."} or path.is_absolute() or ".." in path.parts:
@@ -504,10 +550,10 @@ class SoftwareLifecycle:
         claims: tuple[ClassifiedClaim, ...],
         *,
         run_id: str,
+        base_sha: str,
     ) -> None:
         project_id = work_item.project_id
         assert project_id is not None
-        impact = {"low": 30, "medium": 50, "high": 80}
         for index, claim in enumerate(claims, start=1):
             if claim.classification is ClaimClassification.FACT:
                 kind = KnowledgeKind.FACT
@@ -515,19 +561,26 @@ class SoftwareLifecycle:
                 kind = KnowledgeKind.QUESTION
             else:
                 continue
+            item_id = f"{run_id}:claim:{index}"
+            existing = await self._knowledge_store.get(item_id, project_id=project_id)
             item = KnowledgeItem(
-                id=f"{run_id}:claim:{index}",
+                id=item_id,
                 project_id=project_id,
                 work_id=work_item.id,
                 kind=kind,
                 statement=claim.statement,
                 source_refs=claim.evidence_refs,
-                factness_score=(100 if kind is KnowledgeKind.FACT and claim.evidence_refs else 0),
-                importance_score=impact[claim.impact_if_wrong],
+                factness_score=(
+                    100
+                    if kind is KnowledgeKind.FACT
+                    and f"git://{base_sha}" in claim.evidence_refs
+                    else 0
+                ),
                 created_by=self._analyst.actor_ref,
-                created_at=work_item.created_at,
+                created_at=(
+                    existing.created_at if existing is not None else datetime.now(timezone.utc)
+                ),
             )
-            existing = await self._knowledge_store.get(item.id, project_id=project_id)
             if existing is None:
                 await self._knowledge_store.publish(item)
             elif existing != item:

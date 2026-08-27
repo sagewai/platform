@@ -244,6 +244,35 @@ class AnalysisRuntime:
         )
 
 
+class MissingAnalysisResultRuntime:
+    name = "missing-analysis-result-runtime"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def run(self, request, capsule, capabilities, workspace):
+        self.calls += 1
+        return _operator_result(request)
+
+
+class FailingOnceKnowledgeStore:
+    def __init__(self, store: KnowledgeStore) -> None:
+        self.store = store
+        self.failed = False
+
+    async def get(self, item_id: str, *, project_id: str):
+        return await self.store.get(item_id, project_id=project_id)
+
+    async def search(self, query: KnowledgeQuery):
+        return await self.store.search(query)
+
+    async def publish(self, item):
+        if not self.failed:
+            self.failed = True
+            raise RuntimeError("simulated knowledge persistence interruption")
+        await self.store.publish(item)
+
+
 class OutOfScopeMutationRuntime(MutationRuntime):
     async def run(self, request, capsule, capabilities, workspace):
         self.calls += 1
@@ -534,6 +563,9 @@ async def test_analysis_records_high_impact_unknown_and_blocks_before_implementa
     assert assumption.statement == "A compatibility fallback is required"
     blocker = next(event for event in events if event.event_type is WorkEventType.WORK_BLOCKED)
     assert blocker.payload_json["assumption_id"] == assumption.id
+    assert not any(
+        event.event_type is WorkEventType.CONTRACT_ACCEPTED for event in events
+    )
 
     facts = await knowledge_store.search(
         KnowledgeQuery(text="repository pinned", project_id="project-a", work_id="work-1")
@@ -543,6 +575,194 @@ async def test_analysis_records_high_impact_unknown_and_blocks_before_implementa
     )
     assert [(item.kind, item.factness_score) for item in facts] == [(KnowledgeKind.FACT, 100)]
     assert [(item.kind, item.factness_score) for item in questions] == [(KnowledgeKind.QUESTION, 0)]
+
+
+@pytest.mark.asyncio
+async def test_evidence_free_fact_is_an_open_assumption_not_verified_fact(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    durability = InMemoryStore()
+    analyzer = AnalysisRuntime(
+        claims=(
+            ClassifiedClaim(
+                classification=ClaimClassification.FACT,
+                statement="An undocumented migration is required",
+                kind="migration",
+                evidence_refs=(),
+                confidence="high",
+                impact_if_wrong="high",
+            ),
+        )
+    )
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=durability,
+        analyzer=analyzer,
+        implementer=MutationRuntime(implement_text="must-not-run", repair_text="fixed"),
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    assert record.status == "WORK_BLOCKED"
+    events = await work_store.read_events("work-1", project_id="project-a")
+    assumption_event = next(
+        event for event in events if event.event_type is WorkEventType.ASSUMPTION_RECORDED
+    )
+    assumption = Assumption.model_validate(assumption_event.payload_json)
+    assert assumption.statement == "An undocumented migration is required"
+    assert assumption.status == "open"
+    assert not any(
+        event.event_type is WorkEventType.CONTRACT_ACCEPTED for event in events
+    )
+    items = await knowledge_store.search(
+        KnowledgeQuery(text="undocumented migration", project_id="project-a", work_id="work-1")
+    )
+    assert [(item.kind, item.factness_score) for item in items] == [
+        (KnowledgeKind.FACT, 0)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_missing_analysis_result_blocks_with_pending_attention(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    durability = InMemoryStore()
+    analyzer = MissingAnalysisResultRuntime()
+    implementer = MutationRuntime(implement_text="must-not-run", repair_text="fixed")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=durability,
+        analyzer=analyzer,
+        implementer=implementer,
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    assert record.status == "WORK_BLOCKED"
+    assert analyzer.calls == 1
+    assert implementer.calls == 0
+    events = await work_store.read_events("work-1", project_id="project-a")
+    blocker = next(event for event in events if event.event_type is WorkEventType.WORK_BLOCKED)
+    assert blocker.payload_json["reason"] == "analysis_result_missing"
+    pending = await work_store.pending_attention(project_id="project-a")
+    assert [(item.work_id, item.kind.value) for item in pending] == [
+        ("work-1", "WORK_BLOCKED")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_invalid_analysis_proposal_blocks_instead_of_wedging_work(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    analyzer = AnalysisRuntime(
+        proposal=WorkContractProposal(
+            goal="Change target deterministically",
+            allowed_scope=(".",),
+            acceptance_criteria=("deterministic verification passes",),
+            constraints=(),
+            non_goals=(),
+            risk="low",
+            design_required=False,
+        )
+    )
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        analyzer=analyzer,
+        implementer=MutationRuntime(implement_text="must-not-run", repair_text="fixed"),
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    assert record.status == "WORK_BLOCKED"
+    events = await work_store.read_events("work-1", project_id="project-a")
+    blocker = next(event for event in events if event.event_type is WorkEventType.WORK_BLOCKED)
+    assert blocker.payload_json["reason"] == "analysis_result_invalid"
+    assert blocker.payload_json["violations"] == [
+        "analysis contract scope is not surgical: ."
+    ]
+    assert not any(
+        event.event_type is WorkEventType.CONTRACT_ACCEPTED for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_resume_analysis_uses_completed_durable_result_without_rerunning_operator(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    failing_store = FailingOnceKnowledgeStore(knowledge_store)
+    repository, base_sha = _repository(tmp_path)
+    durability = InMemoryStore()
+    analyzer = AnalysisRuntime(
+        claims=(
+            ClassifiedClaim(
+                classification=ClaimClassification.FACT,
+                statement="The repository base is pinned",
+                kind="repository_state",
+                evidence_refs=(f"git://{base_sha}",),
+                confidence="high",
+                impact_if_wrong="medium",
+            ),
+        )
+    )
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=failing_store,
+        durability=durability,
+        analyzer=analyzer,
+        implementer=MutationRuntime(implement_text="initial", repair_text="fixed"),
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_command("initial"),),
+    )
+
+    with pytest.raises(RuntimeError, match="knowledge persistence interruption"):
+        await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    interrupted = await work_store.load_work("work-1", project_id="project-a")
+    assert interrupted is not None
+    assert interrupted.status == "ANALYZING"
+    assert analyzer.calls == 1
+
+    resumed = await lifecycle.resume("work-1", project_id="project-a")
+
+    assert resumed.status == "READY_TO_MERGE"
+    assert analyzer.calls == 1
+    facts = await knowledge_store.search(
+        KnowledgeQuery(text="repository pinned", project_id="project-a", work_id="work-1")
+    )
+    assert len(facts) == 1
 
 
 @pytest.mark.asyncio
