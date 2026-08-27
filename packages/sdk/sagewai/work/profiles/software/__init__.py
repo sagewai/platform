@@ -9,6 +9,32 @@
 # See COMMERCIAL-LICENSE.md for details.
 """Public API for the software Work profile."""
 
+from sagewai.work.profiles.software.cloudflare import (
+    CloudflareDeliveryConfig,
+    CloudflareDeliveryControlProbe,
+)
+from sagewai.work.profiles.software.delivery import (
+    BlastRadius,
+    DeliveryActionDeniedError,
+    DeliveryApprovalRequiredError,
+    DeliveryControlDegradedError,
+    DeliveryControlRequest,
+    DeliveryLifecycle,
+    DeliveryPreconditionResult,
+    Deployment,
+    DeploymentProvider,
+    DeterministicFakeControlProbe,
+    DeterministicFakeDeploymentProvider,
+    DeterministicFakeObservationProvider,
+    DeterministicFakeReleaseProvider,
+    HealthGate,
+    HealthGateResult,
+    HealthVerdict,
+    ObservationProvider,
+    ObservationResult,
+    ReleaseCandidate,
+    ReleaseProvider,
+)
 from sagewai.work.profiles.software.github import (
     CatalogGitHubClient,
     GitHubIssue,
@@ -47,13 +73,35 @@ from sagewai.work.profiles.software.verification import (
 )
 
 __all__ = [
+    "BlastRadius",
     "CatalogGitHubClient",
+    "CloudflareDeliveryConfig",
+    "CloudflareDeliveryControlProbe",
+    "DeliveryActionDeniedError",
+    "DeliveryApprovalRequiredError",
+    "DeliveryControlDegradedError",
+    "DeliveryControlRequest",
+    "DeliveryLifecycle",
+    "DeliveryPreconditionResult",
+    "Deployment",
+    "DeploymentProvider",
+    "DeterministicFakeControlProbe",
+    "DeterministicFakeDeploymentProvider",
+    "DeterministicFakeObservationProvider",
+    "DeterministicFakeReleaseProvider",
     "GitHubIssue",
     "GitHubIssueLifecycle",
     "GitHubMergeResult",
     "GitHubPullRequest",
     "GitHubPullRequestState",
     "GitHubWorkContext",
+    "HealthGate",
+    "HealthGateResult",
+    "HealthVerdict",
+    "ObservationProvider",
+    "ObservationResult",
+    "ReleaseCandidate",
+    "ReleaseProvider",
     "WorktreeBranchPublisher",
     "is_github_issue_url",
     "require_merge_approval",
