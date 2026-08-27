@@ -26,19 +26,23 @@ from sagewai.work import (
     Assumption,
     CapabilityGrant,
     CapabilitySet,
+    ClaimClassification,
+    ClassifiedClaim,
     OperatorDisciplineReport,
     OperatorResult,
     ReviewFinding,
     ReviewResult,
     TaskCapsuleCompiler,
+    WorkAnalysisResult,
     WorkContract,
+    WorkContractProposal,
     WorkEvent,
     WorkEventType,
     WorkItem,
     WorkStore,
 )
 from sagewai.work.control import OperatorController
-from sagewai.work.knowledge import KnowledgeStore
+from sagewai.work.knowledge import KnowledgeKind, KnowledgeQuery, KnowledgeStore
 from sagewai.work.profiles.software import (
     GitHubIssue,
     GitHubIssueLifecycle,
@@ -103,14 +107,19 @@ def _work_item() -> WorkItem:
     )
 
 
-def _contract(base_sha: str, *, assumption_ids: tuple[str, ...] = ()) -> WorkContract:
+def _contract(
+    base_sha: str,
+    *,
+    assumption_ids: tuple[str, ...] = (),
+    allowed_scope: tuple[str, ...] = ("target.txt",),
+) -> WorkContract:
     return WorkContract(
         id="contract-1",
         project_id="project-a",
         work_id="work-1",
         version=1,
         goal="Change target deterministically",
-        allowed_scope=("target.txt",),
+        allowed_scope=allowed_scope,
         acceptance_criteria=("deterministic verification passes",),
         constraints=(),
         non_goals=(),
@@ -195,6 +204,51 @@ class MutationRuntime:
         self.capsules.append(capsule)
         text = self.implement_text if request.stage == "implement" else self.repair_text
         (workspace.path / "target.txt").write_text(f"{text}\n")
+        return _operator_result(request)
+
+
+class AnalysisRuntime:
+    name = "analysis-runtime"
+
+    def __init__(
+        self,
+        *,
+        proposal: WorkContractProposal | None = None,
+        claims: tuple[ClassifiedClaim, ...] = (),
+    ) -> None:
+        self.proposal = proposal
+        self.claims = claims
+        self.calls = 0
+        self.capsules = []
+
+    async def run(self, request, capsule, capabilities, workspace):
+        self.calls += 1
+        self.capsules.append(capsule)
+        proposal = self.proposal or WorkContractProposal(
+            goal="Change target deterministically",
+            allowed_scope=("target.txt",),
+            acceptance_criteria=("deterministic verification passes",),
+            constraints=(),
+            non_goals=(),
+            risk="low",
+            design_required=False,
+        )
+        analysis = WorkAnalysisResult(
+            attempt_id=request.run_id,
+            proposal=proposal,
+            claims=self.claims,
+        )
+        return _operator_result(
+            request,
+            profile_context={"analysis_result": analysis.model_dump(mode="json")},
+        )
+
+
+class OutOfScopeMutationRuntime(MutationRuntime):
+    async def run(self, request, capsule, capabilities, workspace):
+        self.calls += 1
+        self.capsules.append(capsule)
+        (workspace.path / "outside.txt").write_text("outside\n")
         return _operator_result(request)
 
 
@@ -309,6 +363,7 @@ def _lifecycle(
     repairer: MutationRuntime,
     commands: tuple[str, ...],
     verifier=None,
+    analyzer: AnalysisRuntime | None = None,
     implementer_actor: str = "operator:implementer",
     reviewer_actor: str = "operator:reviewer",
     repairer_actor: str | None = None,
@@ -316,10 +371,21 @@ def _lifecycle(
     compiler = TaskCapsuleCompiler(knowledge_store=knowledge_store)
     return SoftwareLifecycle(
         work_store=work_store,
+        knowledge_store=knowledge_store,
         capsule_compiler=compiler,
         worktree_manager=SoftwareWorktreeManager(root=worktree_root),
         verifier=verifier or SoftwareVerifier(knowledge_store=knowledge_store),
         repository=repository,
+        analyst=SoftwareStageOperator(
+            actor_ref="operator:analyst",
+            runtime=analyzer or AnalysisRuntime(),
+            capabilities=_read_capabilities(),
+            controller=_controller(
+                work_store,
+                durability,
+                SoftwareReadOnlyResultValidator(),
+            ),
+        ),
         implementer=SoftwareStageOperator(
             actor_ref=implementer_actor,
             runtime=implementer,
@@ -409,6 +475,122 @@ async def test_successful_implement_verify_review_reaches_ready_to_merge(
     serialized = json.dumps(capsule.model_dump(mode="json")).lower()
     assert "session" not in serialized
     assert "chat_history" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_analysis_records_high_impact_unknown_and_blocks_before_implementation(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    durability = InMemoryStore()
+    analyzer = AnalysisRuntime(
+        claims=(
+            ClassifiedClaim(
+                classification=ClaimClassification.FACT,
+                statement="The repository base is pinned",
+                kind="repository_state",
+                evidence_refs=(f"git://{base_sha}",),
+                confidence="high",
+                impact_if_wrong="medium",
+            ),
+            ClassifiedClaim(
+                classification=ClaimClassification.UNKNOWN,
+                statement="A compatibility fallback is required",
+                kind="compatibility",
+                evidence_refs=(),
+                confidence="low",
+                impact_if_wrong="high",
+            ),
+        )
+    )
+    implementer = MutationRuntime(implement_text="must-not-run", repair_text="fixed")
+    reviewer = ReviewRuntime("accept")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=durability,
+        analyzer=analyzer,
+        implementer=implementer,
+        reviewer=reviewer,
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    assert record.status == "WORK_BLOCKED"
+    assert analyzer.calls == 1
+    assert implementer.calls == reviewer.calls == 0
+    events = await work_store.read_events("work-1", project_id="project-a")
+    assumption_event = next(
+        event for event in events if event.event_type is WorkEventType.ASSUMPTION_RECORDED
+    )
+    assumption = Assumption.model_validate(assumption_event.payload_json)
+    assert assumption.status == "open"
+    assert assumption.statement == "A compatibility fallback is required"
+    blocker = next(event for event in events if event.event_type is WorkEventType.WORK_BLOCKED)
+    assert blocker.payload_json["assumption_id"] == assumption.id
+
+    facts = await knowledge_store.search(
+        KnowledgeQuery(text="repository pinned", project_id="project-a", work_id="work-1")
+    )
+    questions = await knowledge_store.search(
+        KnowledgeQuery(text="compatibility fallback", project_id="project-a", work_id="work-1")
+    )
+    assert [(item.kind, item.factness_score) for item in facts] == [(KnowledgeKind.FACT, 100)]
+    assert [(item.kind, item.factness_score) for item in questions] == [(KnowledgeKind.QUESTION, 0)]
+
+
+@pytest.mark.asyncio
+async def test_analysis_narrows_draft_scope_and_out_of_scope_change_is_rejected(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    durability = InMemoryStore()
+    implementer = OutOfScopeMutationRuntime(
+        implement_text="unused",
+        repair_text="unused",
+    )
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=durability,
+        implementer=implementer,
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+    )
+
+    record = await lifecycle.start(
+        work_item=_work_item(),
+        contract=_contract(base_sha, allowed_scope=(".",)),
+    )
+
+    assert record.status == "WORK_BLOCKED"
+    assert implementer.calls == 1
+    events = await work_store.read_events("work-1", project_id="project-a")
+    accepted_event = next(
+        event for event in events if event.event_type is WorkEventType.CONTRACT_ACCEPTED
+    )
+    accepted = WorkContract.model_validate(accepted_event.payload_json)
+    assert accepted.allowed_scope == ("target.txt",)
+    assert accepted.allowed_scope != (".",)
+    reports = [
+        OperatorDisciplineReport.model_validate(event.payload_json)
+        for event in events
+        if event.event_type is WorkEventType.OPERATOR_DISCIPLINE_RECORDED
+    ]
+    assert any(
+        "outside.txt is outside allowed targets" in report.scope_violations for report in reports
+    )
 
 
 @pytest.mark.asyncio

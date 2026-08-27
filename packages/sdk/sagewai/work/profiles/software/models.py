@@ -38,6 +38,15 @@ class SoftwareCapsuleContext(BaseModel):
     verification_commands: tuple[str, ...]
 
 
+class SoftwareAnalysisContext(BaseModel):
+    """Canonical inputs and required result contract for software analysis."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    software: SoftwareCapsuleContext
+    analysis_result_schema: dict[str, Any]
+
+
 class SoftwareAttemptContext(BaseModel):
     """Software-specific execution receipt state."""
 

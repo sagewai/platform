@@ -65,6 +65,7 @@ from sagewai.work.profiles.software.lifecycle import (
     SoftwareStageOperator,
 )
 from sagewai.work.profiles.software.models import (
+    SoftwareAnalysisContext,
     SoftwareAttemptContext,
     SoftwareCapsuleContext,
     SoftwareContractContext,
@@ -129,6 +130,7 @@ __all__ = [
     "is_github_issue_url",
     "require_merge_approval",
     "SoftwareAttemptContext",
+    "SoftwareAnalysisContext",
     "SoftwareCapsuleContext",
     "SoftwareContractContext",
     "SoftwareDeliveryTriageContext",

@@ -395,13 +395,21 @@ async def _build_lifecycle(
         ),
     )
     codex = CodexRuntime()
+    claude = ClaudeRuntime()
     worktree_manager = SoftwareWorktreeManager()
     lifecycle = SoftwareLifecycle(
         work_store=work_store,
+        knowledge_store=knowledge_store,
         capsule_compiler=TaskCapsuleCompiler(knowledge_store=knowledge_store),
         worktree_manager=worktree_manager,
         verifier=SoftwareVerifier(knowledge_store=knowledge_store),
         repository=repository,
+        analyst=SoftwareStageOperator(
+            actor_ref="runtime:claude:analyst",
+            runtime=claude,
+            capabilities=read_capabilities,
+            controller=review_controller,
+        ),
         implementer=SoftwareStageOperator(
             actor_ref="runtime:codex:implementer",
             runtime=codex,
@@ -410,7 +418,7 @@ async def _build_lifecycle(
         ),
         reviewer=SoftwareStageOperator(
             actor_ref="runtime:claude:reviewer",
-            runtime=ClaudeRuntime(),
+            runtime=claude,
             capabilities=read_capabilities,
             controller=review_controller,
         ),

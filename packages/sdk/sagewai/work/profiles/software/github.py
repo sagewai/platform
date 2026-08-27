@@ -618,6 +618,8 @@ class GitHubIssueLifecycle:
         if record.status != "READY_TO_MERGE":
             await self.present_pending(work_id, project_id=project_id)
             return record
+        events = await self._events(work_id, project_id)
+        work_item, contract = self._canonical_inputs(events)
         return await self._advance(
             work_item=work_item,
             contract=contract,

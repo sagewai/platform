@@ -45,6 +45,43 @@ class Assumption(BaseModel):
     status: Literal["open", "validated", "rejected", "accepted_risk"]
 
 
+class ClassifiedClaim(BaseModel):
+    """One material analysis claim with explicit grounding status."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    classification: ClaimClassification
+    statement: str
+    kind: str
+    evidence_refs: tuple[str, ...] = ()
+    confidence: Literal["low", "medium", "high"]
+    impact_if_wrong: Literal["low", "medium", "high"]
+
+
+class WorkContractProposal(BaseModel):
+    """Operator-proposed contract fields awaiting deterministic acceptance."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    goal: str
+    allowed_scope: tuple[str, ...]
+    acceptance_criteria: tuple[str, ...]
+    constraints: tuple[str, ...]
+    non_goals: tuple[str, ...]
+    risk: Literal["low", "medium", "high"]
+    design_required: bool
+
+
+class WorkAnalysisResult(BaseModel):
+    """Structured output of the Work analysis stage."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    attempt_id: str
+    proposal: WorkContractProposal
+    claims: tuple[ClassifiedClaim, ...]
+
+
 class Reversibility(str, Enum):
     """How a material action can be undone."""
 
