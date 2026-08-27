@@ -405,7 +405,8 @@ class SoftwareLifecycle:
                 for index, claim in enumerate(analysis.claims, start=1)
                 if claim.classification is ClaimClassification.UNKNOWN
                 or (
-                    claim.classification is ClaimClassification.FACT
+                    claim.classification
+                    in {ClaimClassification.FACT, ClaimClassification.INFERENCE}
                     and not claim.evidence_refs
                 )
             )
@@ -415,10 +416,22 @@ class SoftwareLifecycle:
                     for item in (*supplied_assumptions, *analyzed_assumptions)
                 }.values()
             )
+            analysis_evidence_refs = tuple(
+                f"{run_id}:claim:{index}"
+                for index, claim in enumerate(analysis.claims, start=1)
+                if claim.classification
+                in {
+                    ClaimClassification.FACT,
+                    ClaimClassification.INFERENCE,
+                    ClaimClassification.DECISION,
+                    ClaimClassification.UNKNOWN,
+                }
+            )
             accepted = self._accepted_analysis_contract(
                 draft_contract,
                 analysis,
                 assumptions,
+                analysis_evidence_refs,
             )
         except ValueError as exc:
             await self._block_once(
@@ -513,6 +526,7 @@ class SoftwareLifecycle:
         draft: WorkContract,
         analysis: WorkAnalysisResult,
         assumptions: tuple[Assumption, ...],
+        analysis_evidence_refs: tuple[str, ...],
     ) -> WorkContract:
         proposal = analysis.proposal
         if not proposal.goal.strip():
@@ -541,7 +555,9 @@ class SoftwareLifecycle:
             acceptance_criteria=proposal.acceptance_criteria,
             constraints=proposal.constraints,
             non_goals=proposal.non_goals,
-            evidence_refs=draft.evidence_refs,
+            evidence_refs=tuple(
+                dict.fromkeys((*draft.evidence_refs, *analysis_evidence_refs))
+            ),
             assumption_ids=tuple(item.id for item in assumptions),
             risk=proposal.risk,
             design_required=proposal.design_required,
@@ -562,6 +578,10 @@ class SoftwareLifecycle:
         for index, claim in enumerate(claims, start=1):
             if claim.classification is ClaimClassification.FACT:
                 kind = KnowledgeKind.FACT
+            elif claim.classification is ClaimClassification.INFERENCE:
+                kind = KnowledgeKind.INFERENCE
+            elif claim.classification is ClaimClassification.DECISION:
+                kind = KnowledgeKind.DECISION
             elif claim.classification is ClaimClassification.UNKNOWN:
                 kind = KnowledgeKind.QUESTION
             else:

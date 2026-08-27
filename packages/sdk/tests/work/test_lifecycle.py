@@ -256,8 +256,10 @@ class MissingAnalysisResultRuntime:
 
 
 class FailingOnceKnowledgeStore:
-    def __init__(self, store: KnowledgeStore) -> None:
+    def __init__(self, store: KnowledgeStore, *, fail_on_publish: int = 1) -> None:
         self.store = store
+        self.fail_on_publish = fail_on_publish
+        self.publish_calls = 0
         self.failed = False
 
     async def get(self, item_id: str, *, project_id: str):
@@ -267,7 +269,8 @@ class FailingOnceKnowledgeStore:
         return await self.store.search(query)
 
     async def publish(self, item):
-        if not self.failed:
+        self.publish_calls += 1
+        if not self.failed and self.publish_calls == self.fail_on_publish:
             self.failed = True
             raise RuntimeError("simulated knowledge persistence interruption")
         await self.store.publish(item)
@@ -393,6 +396,7 @@ def _lifecycle(
     commands: tuple[str, ...],
     verifier=None,
     analyzer: AnalysisRuntime | None = None,
+    analyst_actor: str = "operator:analyst",
     implementer_actor: str = "operator:implementer",
     reviewer_actor: str = "operator:reviewer",
     repairer_actor: str | None = None,
@@ -406,7 +410,7 @@ def _lifecycle(
         verifier=verifier or SoftwareVerifier(knowledge_store=knowledge_store),
         repository=repository,
         analyst=SoftwareStageOperator(
-            actor_ref="operator:analyst",
+            actor_ref=analyst_actor,
             runtime=analyzer or AnalysisRuntime(),
             capabilities=_read_capabilities(),
             controller=_controller(
@@ -470,12 +474,25 @@ async def test_successful_implement_verify_review_reaches_ready_to_merge(
     implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
     repairer = MutationRuntime(implement_text="unused", repair_text="fixed")
     reviewer = ReviewRuntime("accept")
+    analyzer = AnalysisRuntime(
+        claims=(
+            ClassifiedClaim(
+                classification=ClaimClassification.FACT,
+                statement="The repository base is pinned",
+                kind="repository_state",
+                evidence_refs=(f"git://{base_sha}",),
+                confidence="high",
+                impact_if_wrong="medium",
+            ),
+        )
+    )
     lifecycle = _lifecycle(
         repository=repository,
         worktree_root=tmp_path / "worktrees",
         work_store=work_store,
         knowledge_store=knowledge_store,
         durability=durability,
+        analyzer=analyzer,
         implementer=implementer,
         reviewer=reviewer,
         repairer=repairer,
@@ -492,6 +509,8 @@ async def test_successful_implement_verify_review_reaches_ready_to_merge(
     assert implementer.calls == 1
     assert reviewer.calls == 1
     assert repairer.calls == 0
+    analysis_ref = "work-1:analysis:1:claim:1"
+    assert implementer.capsules[0].knowledge_refs == (analysis_ref,)
 
     capsule = reviewer.capsules[0]
     context = SoftwareReviewContext.model_validate(capsule.profile_context)
@@ -499,6 +518,7 @@ async def test_successful_implement_verify_review_reaches_ready_to_merge(
     assert context.relevant_files == ("target.txt",)
     assert "initial" in context.diff
     assert tuple(item.id for item in capsule.knowledge_items) == (
+        analysis_ref,
         *context.verification.evidence_refs,
     )
     serialized = json.dumps(capsule.model_dump(mode="json")).lower()
@@ -632,6 +652,60 @@ async def test_evidence_free_fact_is_an_open_assumption_not_verified_fact(
 
 
 @pytest.mark.asyncio
+async def test_evidence_free_high_impact_inference_blocks_before_implementation(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    implementer = MutationRuntime(implement_text="must-not-run", repair_text="fixed")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        analyzer=AnalysisRuntime(
+            claims=(
+                ClassifiedClaim(
+                    classification=ClaimClassification.INFERENCE,
+                    statement="A compatibility adapter is probably required",
+                    kind="compatibility",
+                    evidence_refs=(),
+                    confidence="low",
+                    impact_if_wrong="high",
+                ),
+            )
+        ),
+        implementer=implementer,
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    assert record.status == "WORK_BLOCKED"
+    assert implementer.calls == 0
+    events = await work_store.read_events("work-1", project_id="project-a")
+    assumption_event = next(
+        event for event in events if event.event_type is WorkEventType.ASSUMPTION_RECORDED
+    )
+    assert assumption_event.payload_json["statement"] == (
+        "A compatibility adapter is probably required"
+    )
+    assert not any(
+        event.event_type is WorkEventType.CONTRACT_ACCEPTED for event in events
+    )
+    items = await knowledge_store.search(
+        KnowledgeQuery(text="compatibility adapter", project_id="project-a", work_id="work-1")
+    )
+    assert [(item.kind, item.factness_score) for item in items] == [
+        (KnowledgeKind.INFERENCE, 0)
+    ]
+
+
+@pytest.mark.asyncio
 async def test_missing_analysis_result_blocks_with_pending_attention(
     stores,
     tmp_path: Path,
@@ -721,7 +795,7 @@ async def test_resume_analysis_uses_completed_durable_result_without_rerunning_o
     tmp_path: Path,
 ) -> None:
     work_store, knowledge_store = stores
-    failing_store = FailingOnceKnowledgeStore(knowledge_store)
+    failing_store = FailingOnceKnowledgeStore(knowledge_store, fail_on_publish=2)
     repository, base_sha = _repository(tmp_path)
     durability = InMemoryStore()
     analyzer = AnalysisRuntime(
@@ -731,6 +805,14 @@ async def test_resume_analysis_uses_completed_durable_result_without_rerunning_o
                 statement="The repository base is pinned",
                 kind="repository_state",
                 evidence_refs=(f"git://{base_sha}",),
+                confidence="high",
+                impact_if_wrong="medium",
+            ),
+            ClassifiedClaim(
+                classification=ClaimClassification.DECISION,
+                statement="Only target.txt is in scope",
+                kind="scope",
+                evidence_refs=(),
                 confidence="high",
                 impact_if_wrong="medium",
             ),
@@ -756,6 +838,11 @@ async def test_resume_analysis_uses_completed_durable_result_without_rerunning_o
     assert interrupted is not None
     assert interrupted.status == "ANALYZING"
     assert analyzer.calls == 1
+    original = await knowledge_store.get(
+        "work-1:analysis:1:claim:1",
+        project_id="project-a",
+    )
+    assert original is not None
 
     resumed = await lifecycle.resume("work-1", project_id="project-a")
 
@@ -765,6 +852,81 @@ async def test_resume_analysis_uses_completed_durable_result_without_rerunning_o
         KnowledgeQuery(text="repository pinned", project_id="project-a", work_id="work-1")
     )
     assert len(facts) == 1
+    persisted = await knowledge_store.get(original.id, project_id="project-a")
+    assert persisted is not None
+    assert persisted.created_at == original.created_at
+    decisions = await knowledge_store.search(
+        KnowledgeQuery(text="target scope", project_id="project-a", work_id="work-1")
+    )
+    assert [item.kind for item in decisions] == [KnowledgeKind.DECISION]
+
+
+@pytest.mark.asyncio
+async def test_conflicting_analysis_knowledge_blocks_on_resume(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    failing_store = FailingOnceKnowledgeStore(knowledge_store, fail_on_publish=2)
+    repository, base_sha = _repository(tmp_path)
+    durability = InMemoryStore()
+    claims = (
+        ClassifiedClaim(
+            classification=ClaimClassification.FACT,
+            statement="The repository base is pinned",
+            kind="repository_state",
+            evidence_refs=(f"git://{base_sha}",),
+            confidence="high",
+            impact_if_wrong="medium",
+        ),
+        ClassifiedClaim(
+            classification=ClaimClassification.DECISION,
+            statement="Only target.txt is in scope",
+            kind="scope",
+            evidence_refs=(),
+            confidence="high",
+            impact_if_wrong="medium",
+        ),
+    )
+    first_analyzer = AnalysisRuntime(claims=claims)
+    first = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=failing_store,
+        durability=durability,
+        analyzer=first_analyzer,
+        implementer=MutationRuntime(implement_text="must-not-run", repair_text="fixed"),
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+    )
+    with pytest.raises(RuntimeError, match="knowledge persistence interruption"):
+        await first.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    resumed_analyzer = AnalysisRuntime(claims=claims)
+    resumed = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=durability,
+        analyzer=resumed_analyzer,
+        analyst_actor="operator:replacement-analyst",
+        implementer=MutationRuntime(implement_text="must-not-run", repair_text="fixed"),
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+    )
+
+    record = await resumed.resume("work-1", project_id="project-a")
+
+    assert record.status == "WORK_BLOCKED"
+    assert first_analyzer.calls == 1
+    assert resumed_analyzer.calls == 0
+    events = await work_store.read_events("work-1", project_id="project-a")
+    blocker = next(event for event in events if event.event_type is WorkEventType.WORK_BLOCKED)
+    assert blocker.payload_json["reason"] == "analysis_knowledge_conflict"
 
 
 @pytest.mark.asyncio
