@@ -52,7 +52,6 @@ Sagewai ships optional extras for advanced features:
 | Extra | What it adds |
 |-------|-------------|
 | `sagewai[memory]` | Docling document parsing, Milvus vectors, NebulaGraph, tiktoken |
-| `sagewai[fastapi]` | FastAPI + SSE for serving agents over HTTP |
 | `sagewai[postgres]` | asyncpg + SQLAlchemy + Alembic for durable state |
 | `sagewai[storage]` | S3 and GCS archival backends |
 
@@ -315,7 +314,7 @@ The SDK ships a built-in admin API for monitoring your agents. Start it with:
 sagewai admin serve
 ```
 
-This starts a FastAPI server (requires `sagewai[fastapi]`) where you can:
+This starts the FastAPI server included with the base Sagewai installation, where you can:
 
 - View agent runs and execution traces
 - Monitor cost and token usage

@@ -141,6 +141,17 @@ class FakeGitHub:
         self.merge_rejection = None
         self.readback_sha = None
         self.remote_pull_request = None
+        self.labeled_issues = ()
+
+    async def list_labeled_issues(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        label: str,
+    ) -> tuple[GitHubIssue, ...]:
+        assert (owner, repo, label) == ("octocat", "hello-world", "sagewai")
+        return self.labeled_issues
 
     async def fetch_issue(self, issue_url: str) -> GitHubIssue:
         assert issue_url == ISSUE_URL
@@ -301,6 +312,41 @@ def _flow(
         merge_policy=lambda _request: decision,
     )
     return flow, software, github, publisher
+
+
+@pytest.mark.asyncio
+async def test_labeled_intake_starts_one_unseen_issue_once(
+    store: WorkStore,
+) -> None:
+    flow, software, github, _publisher = _flow(store)
+    github.labeled_issues = (github.issue,)
+
+    started = await flow.intake_labeled(
+        owner="octocat",
+        repo="hello-world",
+        label="sagewai",
+        project_id=PROJECT_ID,
+        base_sha="a" * 40,
+    )
+    repeated = await flow.intake_labeled(
+        owner="octocat",
+        repo="hello-world",
+        label="sagewai",
+        project_id=PROJECT_ID,
+        base_sha="a" * 40,
+    )
+
+    assert started is not None
+    assert started.source_ref == ISSUE_URL
+    assert repeated is None
+    assert len(software.starts) == 1
+    assert (
+        await store.find_work_by_source_ref(
+            ISSUE_URL,
+            project_id=PROJECT_ID,
+        )
+        == started
+    )
 
 
 @pytest.mark.asyncio
@@ -1332,3 +1378,54 @@ async def test_catalog_client_adapts_existing_github_callable() -> None:
         "create_comment",
         "merge_pull_request",
     ]
+
+
+@pytest.mark.asyncio
+async def test_catalog_client_lists_only_open_labeled_issues() -> None:
+    calls = []
+
+    async def github_callable(payload):
+        calls.append(dict(payload))
+        if payload["_operation"] == "get_repo":
+            return {"default_branch": "main"}
+        if payload["_operation"] == "list_issues":
+            return [
+                {
+                    "number": 7,
+                    "html_url": "https://github.com/octocat/hello-world/pull/7",
+                    "title": "Pull request",
+                    "body": None,
+                    "pull_request": {"url": "https://api.github.com/pulls/7"},
+                },
+                {
+                    "number": 42,
+                    "html_url": ISSUE_URL,
+                    "title": "Fix target",
+                    "body": "Acceptance",
+                },
+            ]
+        raise AssertionError(payload["_operation"])
+
+    client = CatalogGitHubClient(
+        project_id=PROJECT_ID,
+        github_callable=github_callable,
+    )
+
+    issues = await client.list_labeled_issues(
+        owner="octocat",
+        repo="hello-world",
+        label="sagewai",
+    )
+
+    assert [issue.number for issue in issues] == [42]
+    assert issues[0].default_branch == "main"
+    assert calls[1] == {
+        "_operation": "list_issues",
+        "owner": "octocat",
+        "repo": "hello-world",
+        "labels": "sagewai",
+        "state": "open",
+        "sort": "created",
+        "direction": "asc",
+        "per_page": 100,
+    }

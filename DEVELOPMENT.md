@@ -136,6 +136,5 @@ browser.
 
 ## Known Issues
 
-1. **`sagewai[fastapi]` extra is missing `uvicorn`.** Workaround: `uv pip install uvicorn` after sync.
-2. **No `/health` route on the admin FastAPI.** The Dockerfile healthcheck hits `/openapi.json` as a proxy.
-3. **VS Code extension has no `build` script yet.** `just vscode-build` is a safe no-op.
+1. **No `/health` route on the admin FastAPI.** The Dockerfile healthcheck hits `/openapi.json` as a proxy.
+2. **VS Code extension has no `build` script yet.** `just vscode-build` is a safe no-op.

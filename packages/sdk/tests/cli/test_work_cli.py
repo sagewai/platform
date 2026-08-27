@@ -41,10 +41,85 @@ def test_work_group_is_registered() -> None:
 
     assert result.exit_code == 0
     assert "start" in result.output
+    assert "intake" in result.output
     assert "status" in result.output
     assert "resume" in result.output
     assert "approve" in result.output
     assert "pending" in result.output
+
+
+def test_work_intake_runs_one_labeled_issue_scan(monkeypatch) -> None:
+    seen = []
+
+    async def fake_intake(label: str):
+        seen.append(label)
+        return SimpleNamespace(work_id="work-1", status="READY_TO_MERGE")
+
+    monkeypatch.setattr(work_module, "_intake_work", fake_intake)
+
+    result = CliRunner().invoke(work_cli, ["intake", "--label", "sagewai"])
+
+    assert result.exit_code == 0, result.output
+    assert seen == ["sagewai"]
+    assert "work-1" in result.output
+    assert "READY_TO_MERGE" in result.output
+
+
+def test_work_intake_reports_no_unseen_labeled_issue(monkeypatch) -> None:
+    async def fake_intake(_label: str):
+        return None
+
+    monkeypatch.setattr(work_module, "_intake_work", fake_intake)
+
+    result = CliRunner().invoke(work_cli, ["intake", "--label", "sagewai"])
+
+    assert result.exit_code == 0, result.output
+    assert result.output == "No new open GitHub issues labeled sagewai.\n"
+
+
+@pytest.mark.asyncio
+async def test_intake_work_targets_the_local_github_repository(monkeypatch) -> None:
+    repository = SimpleNamespace()
+    seen = []
+
+    async def fake_repository_state():
+        return repository, "a" * 40
+
+    async def fake_repository_github_target(value):
+        assert value is repository
+        return "octocat", "hello-world"
+
+    class FakeGitHubLifecycle:
+        async def intake_labeled(self, **kwargs):
+            seen.append(kwargs)
+            return SimpleNamespace(work_id="work-1", status="READY_TO_MERGE")
+
+    async def fake_build_github_lifecycle(*, project_id, repository):
+        seen.append({"build": (project_id, repository)})
+        return FakeGitHubLifecycle()
+
+    monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
+    monkeypatch.setattr(work_module, "_repository_state", fake_repository_state)
+    monkeypatch.setattr(
+        work_module,
+        "_repository_github_target",
+        fake_repository_github_target,
+    )
+    monkeypatch.setattr(work_module, "_build_github_lifecycle", fake_build_github_lifecycle)
+
+    record = await work_module._intake_work("sagewai")
+
+    assert record is not None
+    assert seen == [
+        {"build": ("project-a", repository)},
+        {
+            "owner": "octocat",
+            "repo": "hello-world",
+            "label": "sagewai",
+            "project_id": "project-a",
+            "base_sha": "a" * 40,
+        },
+    ]
 
 
 def test_work_start_runs_direct_lifecycle(monkeypatch) -> None:

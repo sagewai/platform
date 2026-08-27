@@ -109,7 +109,7 @@ asyncio.run(server.run_stdio())
 
 ```bash
 # Install with FastAPI support
-pip install 'sagewai[fastapi]'
+pip install sagewai
 
 # Start the admin API server
 sagewai admin serve --port 8000

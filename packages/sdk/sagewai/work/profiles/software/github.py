@@ -119,6 +119,14 @@ class GitHubWorkContext(BaseModel):
 class GitHubClient(Protocol):
     """Small lifecycle-facing boundary over the existing GitHub tool."""
 
+    async def list_labeled_issues(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        label: str,
+    ) -> tuple[GitHubIssue, ...]: ...
+
     async def fetch_issue(self, issue_url: str) -> GitHubIssue: ...
 
     async def find_open_pull_request(
@@ -211,6 +219,41 @@ class CatalogGitHubClient:
     ) -> None:
         self._project_id = project_id
         self._call = github_callable
+
+    async def list_labeled_issues(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        label: str,
+    ) -> tuple[GitHubIssue, ...]:
+        repository = await self._call({"_operation": "get_repo", "owner": owner, "repo": repo})
+        results = await self._call(
+            {
+                "_operation": "list_issues",
+                "owner": owner,
+                "repo": repo,
+                "labels": label,
+                "state": "open",
+                "sort": "created",
+                "direction": "asc",
+                "per_page": 100,
+            }
+        )
+        return tuple(
+            GitHubIssue(
+                project_id=self._project_id,
+                owner=owner,
+                repo=repo,
+                number=int(result["number"]),
+                url=str(result["html_url"]),
+                title=str(result["title"]),
+                body=str(result.get("body") or ""),
+                default_branch=str(repository["default_branch"]),
+            )
+            for result in results
+            if "pull_request" not in result
+        )
 
     async def fetch_issue(self, issue_url: str) -> GitHubIssue:
         owner, repo, number = _parse_issue_url(issue_url)
@@ -393,7 +436,7 @@ class WorktreeBranchPublisher:
         )
         if origin.returncode != 0:
             raise ValueError(f"cannot read Git origin: {origin.stderr.strip()}")
-        actual_owner, actual_repo = _github_remote_repository(origin.stdout.strip())
+        actual_owner, actual_repo = github_remote_repository(origin.stdout.strip())
         if (actual_owner.casefold(), actual_repo.casefold()) != (
             owner.casefold(),
             repo.casefold(),
@@ -485,6 +528,48 @@ class GitHubIssueLifecycle:
     ) -> WorkRecord:
         """Fetch one issue, create canonical Work, and run through the merge gate."""
         issue = await self._github.fetch_issue(issue_url)
+        return await self._start_issue(
+            issue=issue,
+            project_id=project_id,
+            base_sha=base_sha,
+        )
+
+    async def intake_labeled(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        label: str,
+        project_id: str,
+        base_sha: str,
+    ) -> WorkRecord | None:
+        """Start the oldest labeled issue that has no canonical Work yet."""
+        issues = await self._github.list_labeled_issues(
+            owner=owner,
+            repo=repo,
+            label=label,
+        )
+        for issue in issues:
+            existing = await self._work_store.find_work_by_source_ref(
+                issue.url,
+                project_id=project_id,
+            )
+            if existing is not None:
+                continue
+            return await self._start_issue(
+                issue=issue,
+                project_id=project_id,
+                base_sha=base_sha,
+            )
+        return None
+
+    async def _start_issue(
+        self,
+        *,
+        issue: GitHubIssue,
+        project_id: str,
+        base_sha: str,
+    ) -> WorkRecord:
         if issue.project_id != project_id:
             raise ValueError("GitHub issue belongs to a different project")
         await self._branch_publisher.validate_target(
@@ -1257,7 +1342,7 @@ def is_github_issue_url(value: str) -> bool:
     return True
 
 
-def _github_remote_repository(value: str) -> tuple[str, str]:
+def github_remote_repository(value: str) -> tuple[str, str]:
     from urllib.parse import urlsplit
 
     if value.startswith("git@github.com:"):
@@ -1320,6 +1405,7 @@ __all__ = [
     "GitHubPullRequestState",
     "GitHubWorkContext",
     "WorktreeBranchPublisher",
+    "github_remote_repository",
     "is_github_issue_url",
     "require_merge_approval",
 ]

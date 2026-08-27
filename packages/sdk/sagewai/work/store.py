@@ -154,6 +154,32 @@ class WorkStore:
         values["updated_at"] = _as_utc(values["updated_at"])
         return WorkRecord.model_validate(values)
 
+    async def find_work_by_source_ref(
+        self,
+        source_ref: str,
+        *,
+        project_id: str | None,
+    ) -> WorkRecord | None:
+        """Find the canonical project-scoped Work projection for one source."""
+        table = self._work_items
+        query = (
+            select(table)
+            .where(
+                table.c.source_ref == source_ref,
+                table.c.project_id == project_id,
+            )
+            .order_by(table.c.created_at, table.c.work_id)
+            .limit(1)
+        )
+        async with self._engine.connect() as conn:
+            row = (await conn.execute(query)).first()
+        if row is None:
+            return None
+        values = dict(row._mapping)
+        values["created_at"] = _as_utc(values["created_at"])
+        values["updated_at"] = _as_utc(values["updated_at"])
+        return WorkRecord.model_validate(values)
+
     async def pending_attention(
         self,
         *,

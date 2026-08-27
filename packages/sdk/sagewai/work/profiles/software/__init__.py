@@ -56,6 +56,7 @@ from sagewai.work.profiles.software.github import (
     GitHubPullRequestState,
     GitHubWorkContext,
     WorktreeBranchPublisher,
+    github_remote_repository,
     is_github_issue_url,
     require_merge_approval,
 )
@@ -124,6 +125,7 @@ __all__ = [
     "ReleaseCandidate",
     "ReleaseProvider",
     "WorktreeBranchPublisher",
+    "github_remote_repository",
     "is_github_issue_url",
     "require_merge_approval",
     "SoftwareAttemptContext",

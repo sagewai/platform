@@ -74,6 +74,7 @@ from sagewai.work.profiles.software import (
     WorktreeBranchPublisher,
     cloudflare_delivery_preconditions,
     cloudflare_version_digest,
+    github_remote_repository,
     is_github_issue_url,
 )
 
@@ -101,6 +102,20 @@ def work_status(work_id: str) -> None:
     record = _cli._run_async(_status_work(work_id))
     if record is None:
         raise click.ClickException(f"Work {work_id} not found")
+    _echo_record(record)
+
+
+@work.command("intake")
+@click.option("--label", required=True, help="GitHub issue label to scan.")
+def work_intake(label: str) -> None:
+    """Start at most one unseen labeled issue from the local repository."""
+    try:
+        record = _cli._run_async(_intake_work(label))
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from None
+    if record is None:
+        click.echo(f"No new open GitHub issues labeled {label}.")
+        return
     _echo_record(record)
 
 
@@ -203,6 +218,37 @@ async def _status_work(work_id: str) -> WorkRecord | None:
     store = WorkStore(engine=factory.get_engine())
     await store.init()
     return await store.load_work(work_id, project_id=project_id)
+
+
+async def _intake_work(label: str) -> WorkRecord | None:
+    label = label.strip()
+    if not label:
+        raise ValueError("GitHub intake label must not be empty")
+    project_id = resolve_project_id()
+    repository, base_sha = await _repository_state()
+    owner, repo = await _repository_github_target(repository)
+    with ProjectContext(project_id=project_id):
+        lifecycle = await _build_github_lifecycle(
+            project_id=project_id,
+            repository=repository,
+        )
+        return await lifecycle.intake_labeled(
+            owner=owner,
+            repo=repo,
+            label=label,
+            project_id=project_id,
+            base_sha=base_sha,
+        )
+
+
+async def _repository_github_target(repository: Path) -> tuple[str, str]:
+    origin = await run_worker_subprocess(
+        argv=("git", "remote", "get-url", "origin"),
+        cwd=repository,
+    )
+    if origin.returncode != 0:
+        raise ValueError(f"cannot read Git origin: {origin.stderr.strip()}")
+    return github_remote_repository(origin.stdout.strip())
 
 
 async def _resume_work(work_id: str) -> WorkRecord:
