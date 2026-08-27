@@ -109,6 +109,7 @@ async def test_start_work_routes_github_issue_to_github_lifecycle(monkeypatch) -
         ),
     ]
 
+
 def test_work_status_is_project_scoped_and_reports_not_found(monkeypatch) -> None:
     seen = []
 

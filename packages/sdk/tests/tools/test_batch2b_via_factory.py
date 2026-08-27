@@ -124,6 +124,8 @@ async def test_github_find_pull_requests_via_factory():
             {
                 "number": 7,
                 "html_url": "https://github.com/octocat/hello-world/pull/7",
+                "head": {"ref": "sagewai/work-1"},
+                "base": {"ref": "main"},
             }
         ],
     )
@@ -143,6 +145,8 @@ async def test_github_find_pull_requests_via_factory():
     assert out == [
         {
             "number": 7,
+            "head": {"ref": "sagewai/work-1"},
+            "base": {"ref": "main"},
             "html_url": "https://github.com/octocat/hello-world/pull/7",
         }
     ]

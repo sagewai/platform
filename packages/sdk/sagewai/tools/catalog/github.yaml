@@ -102,10 +102,20 @@ exec:
           type: array
           items:
             type: object
-            required: [number, html_url]
+            required: [number, html_url, head, base]
             properties:
               number:   { type: integer }
               html_url: { type: string }
+              head:
+                type: object
+                required: [ref]
+                properties:
+                  ref: { type: string }
+              base:
+                type: object
+                required: [ref]
+                properties:
+                  ref: { type: string }
       create_pull_request:
         method: POST
         path: /repos/{owner}/{repo}/pulls

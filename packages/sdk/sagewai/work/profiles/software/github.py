@@ -255,6 +255,12 @@ class CatalogGitHubClient:
         if not result:
             return None
         pull_request = result[0]
+        remote_head = str(pull_request["head"]["ref"])
+        remote_base = str(pull_request["base"]["ref"])
+        if (remote_head, remote_base) != (head, base):
+            raise ValueError(
+                "GitHub pull request search result does not match requested head/base"
+            )
         return GitHubPullRequest(
             project_id=self._project_id,
             owner=issue.owner,
@@ -553,7 +559,6 @@ class GitHubIssueLifecycle:
         events = await self._events(work_id, project_id)
         if record.status == "READY_TO_MERGE" and record.pending_gate is not None:
             gate_id = record.pending_gate
-            assert gate_id is not None
             decided = self._gate_event(events, WorkEventType.GATE_DECIDED, gate_id)
             if decided is None:
                 await self.present_pending(work_id, project_id=project_id)
@@ -1226,9 +1231,12 @@ def _attention_comment(item: PendingAttention) -> str:
         return f"Sagewai: approval required — {summary} (gate {item.attention_id})."
     if item.kind is PendingAttentionKind.WORK_BLOCKED:
         return f"Sagewai: work blocked — {summary}."
+    control_summary = item.attention_id
+    if summary != control_summary:
+        control_summary = f"{control_summary}: {summary}"
     evidence = ", ".join(item.evidence_refs)
     suffix = f" Evidence: {evidence}." if evidence else ""
-    return f"Sagewai: control degraded — {summary}.{suffix}"
+    return f"Sagewai: control degraded — {control_summary}.{suffix}"
 
 
 __all__ = [

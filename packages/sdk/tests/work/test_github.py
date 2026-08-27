@@ -670,7 +670,7 @@ async def test_target_movement_degrades_control_and_resume_restores_it(
     pending = await store.pending_attention(project_id=PROJECT_ID)
     assert [item.kind.value for item in pending] == ["CONTROL_DEGRADED"]
     assert pending[0].attention_id == "github-target"
-    assert any("requested base does not match GitHub default branch" in body for _, body in github.comments)
+    assert any("github-target: requested base does not match GitHub default branch" in body for _, body in github.comments)
 
     publisher.fail_validation_call = None
     resumed = await flow.resume(frozen.work_id, project_id=PROJECT_ID)
@@ -733,6 +733,72 @@ async def test_allow_policy_merges_without_requesting_operator_approval(
     assert all(event.event_type is not WorkEventType.GATE_REQUESTED for event in events)
     decision = next(event for event in events if event.event_type is WorkEventType.GATE_DECIDED)
     assert decision.payload_json["decision"] == "allow"
+
+
+@pytest.mark.parametrize(
+    ("results", "error"),
+    (
+        (
+            ((1, "", "missing origin"),),
+            "cannot read Git origin",
+        ),
+        (
+            ((0, "https://gitlab.com/octocat/hello-world.git\n", ""),),
+            "Git origin is not a GitHub repository",
+        ),
+        (
+            (
+                (0, "git@github.com:octocat/hello-world.git\n", ""),
+                (1, "", "network unavailable"),
+            ),
+            "cannot read GitHub default branch",
+        ),
+        (
+            (
+                (0, "git@github.com:octocat/hello-world.git\n", ""),
+                (0, "", ""),
+            ),
+            "returned no commit",
+        ),
+    ),
+)
+@pytest.mark.asyncio
+async def test_branch_publisher_surfaces_target_read_failures(
+    results,
+    error,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    responses = iter(results)
+
+    async def fake_subprocess(**_kwargs):
+        returncode, stdout, stderr = next(responses)
+        return type(
+            "Result",
+            (),
+            {
+                "returncode": returncode,
+                "stdout": stdout,
+                "stderr": stderr,
+            },
+        )()
+
+    monkeypatch.setattr(
+        "sagewai.work.profiles.software.github.run_worker_subprocess",
+        fake_subprocess,
+    )
+    publisher = WorktreeBranchPublisher(
+        worktree_manager=object(),
+        repository=tmp_path,
+    )
+
+    with pytest.raises(ValueError, match=error):
+        await publisher.validate_target(
+            owner="octocat",
+            repo="hello-world",
+            base_sha="a" * 40,
+            default_branch="main",
+        )
 
 
 @pytest.mark.parametrize(
@@ -902,6 +968,34 @@ async def test_resume_recovers_merge_completed_before_event_persistence(
     assert len(merge_events) == 1
     assert merge_events[0].payload_json["merged_sha"] == "c" * 40
 
+@pytest.mark.parametrize(
+    ("remote_sha", "error"),
+    (
+        (None, "canonical merge event conflicts with GitHub state"),
+        ("d" * 40, "canonical merged SHA conflicts with GitHub state"),
+    ),
+)
+@pytest.mark.asyncio
+async def test_canonical_merge_event_must_match_github_state(
+    store: WorkStore,
+    remote_sha,
+    error,
+) -> None:
+    flow, _, github, _ = _flow(store, decision=GateDecision.ALLOW)
+    delivered = await flow.start(
+        issue_url=ISSUE_URL,
+        project_id=PROJECT_ID,
+        base_sha="a" * 40,
+    )
+    await store.save_work(delivered.model_copy(update={"status": "MERGING"}))
+    github.merged_sha = remote_sha
+
+    with pytest.raises(RuntimeError, match=error):
+        await flow.resume(delivered.work_id, project_id=PROJECT_ID)
+
+    assert len(github.merges) == 1
+
+
 
 @pytest.mark.asyncio
 async def test_pending_attention_is_presented_as_concise_issue_comments(
@@ -1000,6 +1094,41 @@ async def test_catalog_client_types_github_merge_conflict() -> None:
 
 
 @pytest.mark.asyncio
+async def test_catalog_client_rejects_pull_request_search_identity_mismatch() -> None:
+    async def github_callable(_payload):
+        return [
+            {
+                "number": 7,
+                "html_url": "https://github.com/octocat/hello-world/pull/7",
+                "head": {"ref": "unrelated"},
+                "base": {"ref": "main"},
+            }
+        ]
+
+    client = CatalogGitHubClient(
+        project_id=PROJECT_ID,
+        github_callable=github_callable,
+    )
+    issue = GitHubIssue(
+        project_id=PROJECT_ID,
+        owner="octocat",
+        repo="hello-world",
+        number=42,
+        url=ISSUE_URL,
+        title="Fix target",
+        body="Acceptance",
+        default_branch="main",
+    )
+
+    with pytest.raises(ValueError, match="does not match requested head/base"):
+        await client.find_open_pull_request(
+            issue=issue,
+            head="sagewai/work-1",
+            base="main",
+        )
+
+
+@pytest.mark.asyncio
 async def test_catalog_client_adapts_existing_github_callable() -> None:
     calls = []
 
@@ -1020,6 +1149,8 @@ async def test_catalog_client_adapts_existing_github_callable() -> None:
                 {
                     "number": 7,
                     "html_url": "https://github.com/octocat/hello-world/pull/7",
+                    "head": {"ref": "sagewai/work-1"},
+                    "base": {"ref": "main"},
                 }
             ]
         if operation == "create_pull_request":
