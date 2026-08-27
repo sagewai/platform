@@ -433,6 +433,7 @@ async def test_github_flow_uses_real_software_lifecycle_events(
     class GitHubFixture:
         def __init__(self) -> None:
             self.merged_sha = None
+            self.expected_head_sha = None
 
         async def fetch_issue(self, issue_url):
             return GitHubIssue(
@@ -465,7 +466,8 @@ async def test_github_flow_uses_real_software_lifecycle_events(
                 merge_commit_sha=self.merged_sha,
             )
 
-        async def merge_pull_request(self, pull_request):
+        async def merge_pull_request(self, pull_request, *, expected_head_sha):
+            self.expected_head_sha = expected_head_sha
             self.merged_sha = "c" * 40
             return GitHubMergeResult(
                 project_id=pull_request.project_id,
@@ -508,8 +510,9 @@ async def test_github_flow_uses_real_software_lifecycle_events(
         actor_ref="operator:arda",
     )
 
-    assert gated.status == "GATE_PENDING"
+    assert gated.status == "READY_TO_MERGE"
     assert publisher.expected_sha == base_sha
+    assert github.expected_head_sha == "b" * 40
     assert delivered.status == "READY_TO_DELIVER"
     events = await work_store.read_events(gated.work_id, project_id="project-a")
     assert any(

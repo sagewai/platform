@@ -62,7 +62,10 @@ def work() -> None:
 @click.argument("description")
 def work_start(description: str) -> None:
     """Start local software work from DESCRIPTION."""
-    record = _cli._run_async(_start_work(description))
+    try:
+        record = _cli._run_async(_start_work(description))
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from None
     _echo_record(record)
 
 

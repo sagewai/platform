@@ -56,6 +56,59 @@ def test_work_start_runs_direct_lifecycle(monkeypatch) -> None:
     assert "COMPLETE" not in result.output
 
 
+def test_work_start_reports_target_validation_error(monkeypatch) -> None:
+    async def fake_start(_description: str):
+        raise ValueError("GitHub default branch moved")
+
+    monkeypatch.setattr(work_module, "_start_work", fake_start)
+
+    result = CliRunner().invoke(work_cli, ["start", "https://github.com/o/r/issues/1"])
+
+    assert result.exit_code != 0
+    assert "GitHub default branch moved" in result.output
+    assert "Traceback" not in result.output
+
+
+@pytest.mark.asyncio
+async def test_start_work_routes_github_issue_to_github_lifecycle(monkeypatch) -> None:
+    seen = []
+    repository = SimpleNamespace()
+
+    async def fake_repository_state():
+        return repository, "a" * 40
+
+    class FakeGitHubLifecycle:
+        async def start(
+            self,
+            *,
+            issue_url: str,
+            project_id: str,
+            base_sha: str,
+        ):
+            seen.append(("start", issue_url, project_id, base_sha))
+            return SimpleNamespace(work_id="work-1", status="READY_TO_MERGE")
+
+    async def fake_build_github_lifecycle(*, project_id, repository):
+        seen.append(("build", project_id, repository))
+        return FakeGitHubLifecycle()
+
+    monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
+    monkeypatch.setattr(work_module, "_repository_state", fake_repository_state)
+    monkeypatch.setattr(work_module, "_build_github_lifecycle", fake_build_github_lifecycle)
+
+    record = await work_module._start_work("https://github.com/octocat/repo/issues/7")
+
+    assert record.status == "READY_TO_MERGE"
+    assert seen == [
+        ("build", "project-a", repository),
+        (
+            "start",
+            "https://github.com/octocat/repo/issues/7",
+            "project-a",
+            "a" * 40,
+        ),
+    ]
+
 def test_work_status_is_project_scoped_and_reports_not_found(monkeypatch) -> None:
     seen = []
 

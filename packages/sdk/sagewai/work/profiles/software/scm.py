@@ -81,7 +81,6 @@ class SoftwareWorktreeManager:
         attempt_id: str,
         base_sha: str,
         expected_sha: str,
-        published_branch: str | None = None,
         publish_commit_message: str | None = None,
     ) -> SoftwareWorkspace:
         """Resume the deterministic worktree only if its recorded HEAD is intact."""
@@ -107,8 +106,7 @@ class SoftwareWorktreeManager:
             await self.assert_current(workspace, expected_sha=expected_sha)
         except WorkspaceStaleError:
             if (
-                published_branch is None
-                or publish_commit_message is None
+                publish_commit_message is None
                 or not await self._matches_published_state(
                     workspace,
                     expected_sha=expected_sha,

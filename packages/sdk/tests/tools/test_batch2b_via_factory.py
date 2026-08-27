@@ -161,6 +161,7 @@ async def test_github_merge_pull_request_via_factory():
         "owner": "octocat",
         "repo": "hello-world",
         "number": 7,
+        "sha": "b" * 40,
     })
 
     assert out == {

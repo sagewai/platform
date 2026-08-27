@@ -137,6 +137,7 @@ class FakeGitHub:
         self.fail_create_once = False
         self.fail_comment_once = False
         self.merge_rejection = None
+        self.readback_sha = None
 
     async def fetch_issue(self, issue_url: str) -> GitHubIssue:
         assert issue_url == ISSUE_URL
@@ -176,10 +177,17 @@ class FakeGitHub:
     async def merge_pull_request(
         self,
         pull_request: GitHubPullRequest,
+        *,
+        expected_head_sha: str,
     ) -> GitHubMergeResult:
         if self.merge_rejection is not None:
             raise GitHubMergeRejectedError(self.merge_rejection)
-        self.merges.append(pull_request)
+        self.merges.append(
+            {
+                "pull_request": pull_request,
+                "expected_head_sha": expected_head_sha,
+            }
+        )
         self.merged_sha = "c" * 40
         result = GitHubMergeResult(
             project_id=pull_request.project_id,
@@ -200,7 +208,7 @@ class FakeGitHub:
             project_id=pull_request.project_id,
             pull_request_number=pull_request.number,
             merged=self.merged_sha is not None,
-            merge_commit_sha=self.merged_sha,
+            merge_commit_sha=self.readback_sha or self.merged_sha,
         )
 
     async def comment_issue(self, issue_url: str, body: str) -> None:
@@ -214,6 +222,7 @@ class FakeBranchPublisher:
     def __init__(self) -> None:
         self.validations = []
         self.calls = []
+        self.fail_validation_call = None
 
     async def validate_target(
         self,
@@ -224,6 +233,8 @@ class FakeBranchPublisher:
         default_branch: str,
     ) -> None:
         self.validations.append((owner, repo, base_sha, default_branch))
+        if len(self.validations) == self.fail_validation_call:
+            raise ValueError("GitHub default branch moved")
 
     async def publish(
         self,
@@ -286,7 +297,7 @@ async def test_issue_to_pr_requires_gate_then_records_merged_sha(
         base_sha="a" * 40,
     )
 
-    assert gated.status == "GATE_PENDING"
+    assert gated.status == "READY_TO_MERGE"
     assert gated.pending_gate == f"merge:{gated.work_id}:7"
     assert github.merges == []
     assert len(software.starts) == 1
@@ -324,6 +335,7 @@ async def test_issue_to_pr_requires_gate_then_records_merged_sha(
     assert delivered.pending_gate is None
     assert delivered.profile_context["github"]["merged_sha"] == "c" * 40
     assert len(github.merges) == 1
+    assert github.merges[0]["expected_head_sha"] == "b" * 40
     assert len(publisher.validations) == 2
     assert await store.pending_attention(project_id=PROJECT_ID) == ()
 
@@ -371,7 +383,7 @@ async def test_remote_pr_failure_resumes_from_recorded_branch_without_rerunning_
 
     gated = await flow.resume(work_id, project_id=PROJECT_ID)
 
-    assert gated.status == "GATE_PENDING"
+    assert gated.status == "READY_TO_MERGE"
     assert len(publisher.calls) == 1
     assert len(github.pull_requests) == 1
     assert len(software.starts) == 1
@@ -404,7 +416,7 @@ async def test_resume_rebuilds_pr_projection_and_does_not_duplicate_merge_event(
     monkeypatch.setattr(store, "save_work", original_save)
 
     gated = await flow.resume(software.starts[0][0].id, project_id=PROJECT_ID)
-    assert gated.status == "GATE_PENDING"
+    assert gated.status == "READY_TO_MERGE"
     assert gated.profile_context["github"]["pull_request_number"] == 7
     delivered = await flow.approve(
         gated.work_id,
@@ -442,7 +454,7 @@ async def test_retry_approval_recovers_decision_recorded_before_projection(
 
     async def fail_after_gate_decision(record):
         nonlocal failed
-        if not failed and record.status == "MERGE_APPROVED":
+        if not failed and record.status == "MERGING":
             failed = True
             raise RuntimeError("projection write interrupted")
         await original_save(record)
@@ -520,7 +532,7 @@ async def test_control_degraded_freezes_start_resume_and_approved_merge(
     )
     again = await gated_flow.resume(gated.work_id, project_id=PROJECT_ID)
 
-    assert approved.status == again.status == "MERGE_APPROVED"
+    assert approved.status == again.status == "MERGING"
     assert len(gated_publisher.calls) == 1
     assert len(gated_github.pull_requests) == 1
     assert gated_github.merges == []
@@ -545,8 +557,8 @@ async def test_pending_comment_failure_is_retried_on_resume(store: WorkStore) ->
     gated = await flow.resume(records[0].work_id, project_id=PROJECT_ID)
     again = await flow.resume(records[0].work_id, project_id=PROJECT_ID)
 
-    assert gated.status == "GATE_PENDING"
-    assert again.status == "GATE_PENDING"
+    assert gated.status == "READY_TO_MERGE"
+    assert again.status == "READY_TO_MERGE"
     assert len(github.comments) == 1
     assert "approval required" in github.comments[0][1]
 
@@ -580,6 +592,61 @@ async def test_github_rejected_merge_blocks_with_specific_pending_question(
     assert "Head branch was modified" in blocker.summary
     assert "stop the work" in blocker.summary
     assert any("Head branch was modified" in body for _, body in github.comments)
+
+
+@pytest.mark.asyncio
+async def test_target_movement_degrades_control_and_resume_restores_it(
+    store: WorkStore,
+) -> None:
+    flow, software, github, publisher = _flow(store)
+    publisher.fail_validation_call = 2
+
+    frozen = await flow.start(
+        issue_url=ISSUE_URL,
+        project_id=PROJECT_ID,
+        base_sha="a" * 40,
+    )
+
+    assert frozen.status == "READY_TO_MERGE"
+    assert publisher.calls == []
+    assert github.pull_requests == []
+    pending = await store.pending_attention(project_id=PROJECT_ID)
+    assert [item.kind.value for item in pending] == ["CONTROL_DEGRADED"]
+    assert pending[0].attention_id == "github-target"
+    assert any("GitHub default branch moved" in body for _, body in github.comments)
+
+    publisher.fail_validation_call = None
+    resumed = await flow.resume(frozen.work_id, project_id=PROJECT_ID)
+
+    assert resumed.status == "READY_TO_MERGE"
+    assert resumed.pending_gate == f"merge:{frozen.work_id}:7"
+    assert len(software.starts) == 1
+    events = await store.read_events(frozen.work_id, project_id=PROJECT_ID)
+    assert any(
+        event.event_type is WorkEventType.CONTROL_DEGRADED
+        for event in events
+    )
+    assert any(
+        event.event_type is WorkEventType.CONTROL_RESTORED
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_merge_response_sha_must_match_github_readback(
+    store: WorkStore,
+) -> None:
+    flow, _, github, _ = _flow(store, decision=GateDecision.ALLOW)
+    github.readback_sha = "d" * 40
+
+    with pytest.raises(RuntimeError, match="merge response SHA conflicts"):
+        await flow.start(
+            issue_url=ISSUE_URL,
+            project_id=PROJECT_ID,
+            base_sha="a" * 40,
+        )
+
+    assert len(github.merges) == 1
 
 
 @pytest.mark.asyncio
@@ -705,7 +772,7 @@ async def test_resume_recovers_merge_completed_before_event_persistence(
 
     interrupted = await store.load_work(gated.work_id, project_id=PROJECT_ID)
     assert interrupted is not None
-    assert interrupted.status == "MERGE_APPROVED"
+    assert interrupted.status == "MERGING"
     assert github.merged_sha == "c" * 40
 
     delivered = await flow.resume(gated.work_id, project_id=PROJECT_ID)
@@ -817,7 +884,7 @@ async def test_catalog_client_types_github_merge_conflict() -> None:
     )
 
     with pytest.raises(GitHubMergeRejectedError, match="Head branch was modified"):
-        await client.merge_pull_request(pull_request)
+        await client.merge_pull_request(pull_request, expected_head_sha="e" * 40)
 
 
 @pytest.mark.asyncio
@@ -869,11 +936,12 @@ async def test_catalog_client_adapts_existing_github_callable() -> None:
     )
     state = await client.get_pull_request(pull_request)
     await client.comment_issue(ISSUE_URL, "Pending approval")
-    merge = await client.merge_pull_request(pull_request)
+    merge = await client.merge_pull_request(pull_request, expected_head_sha="e" * 40)
 
     assert issue.default_branch == "main"
     assert pull_request.number == 7
     assert merge.merged_sha == "d" * 40
+    assert calls[-1]["sha"] == "e" * 40
     assert state.merged is True
     assert state.merge_commit_sha == "d" * 40
     assert [call["_operation"] for call in calls] == [

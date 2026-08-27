@@ -256,7 +256,10 @@ class WorkStore:
                         work_id=work_id,
                         kind=PendingAttentionKind.CONTROL_DEGRADED,
                         source_ref=source_ref,
-                        summary=f"Control precondition failed: {precondition_id}.",
+                        summary=str(
+                            event.payload_json.get("details")
+                            or f"Control precondition failed: {precondition_id}."
+                        ),
                         evidence_refs=tuple(
                             str(ref) for ref in event.payload_json.get("evidence_refs", ())
                         ),

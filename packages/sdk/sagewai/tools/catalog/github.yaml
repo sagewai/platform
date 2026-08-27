@@ -130,11 +130,12 @@ exec:
         path: /repos/{owner}/{repo}/pulls/{number}/merge
         input_schema:
           type: object
-          required: [owner, repo, number]
+          required: [owner, repo, number, sha]
           properties:
             owner:  { type: string }
             repo:   { type: string }
             number: { type: integer }
+            sha:    { type: string, minLength: 40, maxLength: 40 }
         output_schema:
           type: object
           required: [sha, merged]
