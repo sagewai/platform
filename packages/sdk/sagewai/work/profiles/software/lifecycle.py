@@ -50,6 +50,7 @@ from sagewai.work.profiles.software.scm import (
     SoftwareWorktreeManager,
     workspace_diff,
 )
+from sagewai.work.profiles.software.verification import _normalized_target
 from sagewai.work.runtime import (
     CapabilitySet,
     OperatorRuntime,
@@ -524,7 +525,11 @@ class SoftwareLifecycle:
             raise ValueError("design-required contract cannot proceed without a design stage")
         for target in proposal.allowed_scope:
             path = PurePosixPath(target)
-            if target in {"", "."} or path.is_absolute() or ".." in path.parts:
+            if (
+                _normalized_target(target) in {"", "."}
+                or path.is_absolute()
+                or ".." in path.parts
+            ):
                 raise ValueError(f"analysis contract scope is not surgical: {target}")
         return WorkContract(
             id=f"{draft.id}:analysis",

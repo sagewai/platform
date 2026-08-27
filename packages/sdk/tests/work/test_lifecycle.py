@@ -669,16 +669,18 @@ async def test_missing_analysis_result_blocks_with_pending_attention(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("proposed_scope", [".", "./", "././", ".//"])
 async def test_invalid_analysis_proposal_blocks_instead_of_wedging_work(
     stores,
     tmp_path: Path,
+    proposed_scope: str,
 ) -> None:
     work_store, knowledge_store = stores
     repository, base_sha = _repository(tmp_path)
     analyzer = AnalysisRuntime(
         proposal=WorkContractProposal(
             goal="Change target deterministically",
-            allowed_scope=(".",),
+            allowed_scope=(proposed_scope,),
             acceptance_criteria=("deterministic verification passes",),
             constraints=(),
             non_goals=(),
@@ -706,7 +708,7 @@ async def test_invalid_analysis_proposal_blocks_instead_of_wedging_work(
     blocker = next(event for event in events if event.event_type is WorkEventType.WORK_BLOCKED)
     assert blocker.payload_json["reason"] == "analysis_result_invalid"
     assert blocker.payload_json["violations"] == [
-        "analysis contract scope is not surgical: ."
+        f"analysis contract scope is not surgical: {proposed_scope}"
     ]
     assert not any(
         event.event_type is WorkEventType.CONTRACT_ACCEPTED for event in events
