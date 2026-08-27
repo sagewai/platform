@@ -225,20 +225,24 @@ class CloudflareDeliveryControlProbe:
             )
             telemetry.raise_for_status()
             payload = telemetry.json()
-            metrics = payload["data"]["viewer"]["zones"][0]["metrics"]
             if payload.get("errors"):
                 detail = "Cloudflare monitoring query failed"
-            elif not metrics:
-                detail = None
             else:
-                latest = _parse_datetime(metrics[0]["dimensions"]["datetimeMinute"])
-                if latest is None:
-                    raise ValueError("Cloudflare monitoring timestamp is missing")
-                age = (checked_at - latest).total_seconds()
-                if age < 0 or age > self._config.maximum_monitoring_staleness_seconds:
-                    detail = "Cloudflare monitoring timestamp is stale"
-                else:
+                telemetry_zones = payload["data"]["viewer"]["zones"]
+                if len(telemetry_zones) != 1:
+                    raise ValueError("Cloudflare monitoring zone is unavailable")
+                metrics = telemetry_zones[0]["metrics"]
+                if not metrics:
                     detail = None
+                else:
+                    latest = _parse_datetime(metrics[0]["dimensions"]["datetimeMinute"])
+                    if latest is None:
+                        raise ValueError("Cloudflare monitoring timestamp is missing")
+                    age = (checked_at - latest).total_seconds()
+                    if age < 0 or age > self._config.maximum_monitoring_staleness_seconds:
+                        detail = "Cloudflare monitoring timestamp is stale"
+                    else:
+                        detail = None
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
             detail = f"Cloudflare observability unavailable: {exc}"
         return ControlCheckResult(

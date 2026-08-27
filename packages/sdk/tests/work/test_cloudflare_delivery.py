@@ -35,6 +35,8 @@ from sagewai.work.profiles.software.delivery import (
     BlastRadius,
     DeliveryControlRequest,
     DeliveryLifecycle,
+    HealthGate,
+    HealthVerdict,
     ReleaseCandidate,
 )
 from tests.db.conftest import dialect_engine  # noqa: F401
@@ -322,6 +324,103 @@ async def test_empty_analytics_window_does_not_mean_control_was_lost() -> None:
     assert len(results) == 1
     assert results[0].passed is True
     assert results[0].detail is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        {"data": {"viewer": {"zones": []}}, "errors": None},
+        {"data": None, "errors": [{"message": "zone is not available"}]},
+    ),
+)
+@pytest.mark.asyncio
+async def test_analytics_scope_or_shape_failure_fails_closed(payload: dict) -> None:
+    def invalid_analytics(request: httpx.Request) -> httpx.Response:
+        response = _response(request)
+        if request.url.path == "/client/v4/graphql":
+            return httpx.Response(200, request=request, json=payload)
+        return response
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(invalid_analytics)) as client:
+        probe = CloudflareDeliveryControlProbe(
+            config=_config(),
+            api_token="api-token",
+            client=client,
+            now=lambda: NOW,
+        )
+
+        results = await _evaluate(probe, _request("observe"))
+
+    assert len(results) == 1
+    assert results[0].passed is False
+    assert "monitoring" in (results[0].detail or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_analytics_scope_loss_freezes_lifecycle_and_surfaces_attention(
+    store: WorkStore,
+) -> None:
+    graphql_calls = 0
+
+    def loses_scope_during_observation(request: httpx.Request) -> httpx.Response:
+        nonlocal graphql_calls
+        response = _response(request)
+        if request.url.path == "/client/v4/graphql":
+            graphql_calls += 1
+            if graphql_calls > 1:
+                return httpx.Response(
+                    200,
+                    request=request,
+                    json={"data": {"viewer": {"zones": []}}, "errors": None},
+                )
+        return response
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(loses_scope_during_observation)
+    ) as client:
+        lifecycle = DeliveryLifecycle(
+            work_store=store,
+            release_provider=DeterministicFakeReleaseProvider(_current_candidate()),
+            deployment_provider=DeterministicFakeDeploymentProvider(),
+            observation_provider=DeterministicFakeObservationProvider(({"availability": True},)),
+            control_probe=CloudflareDeliveryControlProbe(
+                config=_config(),
+                api_token="api-token",
+                client=client,
+                now=lambda: NOW,
+            ),
+            control_preconditions=cloudflare_delivery_preconditions(PROJECT_ID),
+            action_policy=lambda request: GateDecision.ALLOW,
+        )
+        candidate = await lifecycle.build(
+            work_id=WORK_ID,
+            project_id=PROJECT_ID,
+            commit_sha=_current_candidate().commit_sha,
+            evidence_refs=("merge://sha",),
+        )
+        deployment = await lifecycle.deploy(
+            candidate,
+            environment="production",
+            exposure=BlastRadius(dimension="traffic", value="5%"),
+            known_good_candidate=_known_good(),
+            evidence_refs=("policy://production",),
+            expected_duration_seconds=600,
+        )
+        gate = HealthGate(
+            id="availability",
+            project_id=PROJECT_ID,
+            description="docs remains available",
+            check_ref="https://docs.sagewai.ai",
+            failure_verdict=HealthVerdict.FAIL,
+        )
+
+        with pytest.raises(ControlDegradedError, match="cloudflare-observability"):
+            await lifecycle.observe(deployment, gates=(gate,), window_seconds=60)
+
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    assert events[-1].event_type is WorkEventType.CONTROL_DEGRADED
+    pending = await store.pending_attention(project_id=PROJECT_ID)
+    assert [item.attention_id for item in pending] == ["cloudflare-observability"]
 
 
 @pytest.mark.asyncio
