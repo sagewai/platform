@@ -12,15 +12,25 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from sagewai.work.control import (
+    ControlCheckResult,
+    ControlDegradedError,
+    active_control_precondition_ids,
+)
 from sagewai.work.events import WorkEvent, WorkEventType
-from sagewai.work.models import ActionRequest, GateDecision, Reversibility
+from sagewai.work.models import (
+    ActionRequest,
+    ControlPrecondition,
+    GateDecision,
+    Reversibility,
+)
 from sagewai.work.store import WorkStore
 
 
@@ -117,19 +127,6 @@ class ObservationResult(BaseModel):
     evidence_refs: tuple[str, ...]
 
 
-class DeliveryPreconditionResult(BaseModel):
-    """Immutable result from one delivery control-precondition probe."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    project_id: str
-    precondition_id: str
-    passed: bool
-    evidence_refs: tuple[str, ...]
-    detail: str | None
-    checked_at: datetime
-
-
 class DeliveryControlRequest(BaseModel):
     """Bounded inputs for deterministic delivery pre-flight checks."""
 
@@ -166,7 +163,11 @@ class DeploymentProvider(Protocol):
         exposure: BlastRadius,
     ) -> Deployment: ...
 
-    async def rollback(self, deployment: Deployment) -> Deployment: ...
+    async def rollback(
+        self,
+        deployment: Deployment,
+        known_good_candidate: ReleaseCandidate,
+    ) -> Deployment: ...
 
 
 class ObservationProvider(Protocol):
@@ -186,11 +187,8 @@ class DeliveryControlProbe(Protocol):
     async def evaluate(
         self,
         request: DeliveryControlRequest,
-    ) -> tuple[DeliveryPreconditionResult, ...]: ...
-
-
-class DeliveryControlDegradedError(RuntimeError):
-    """Delivery is frozen because one or more control preconditions failed."""
+        preconditions: tuple[ControlPrecondition, ...],
+    ) -> tuple[ControlCheckResult, ...]: ...
 
 
 class DeliveryActionDeniedError(RuntimeError):
@@ -212,6 +210,7 @@ class DeliveryLifecycle:
         deployment_provider: DeploymentProvider,
         observation_provider: ObservationProvider,
         control_probe: DeliveryControlProbe,
+        control_preconditions: tuple[ControlPrecondition, ...],
         action_policy: Callable[[ActionRequest], GateDecision],
     ) -> None:
         self._work_store = work_store
@@ -219,6 +218,7 @@ class DeliveryLifecycle:
         self._deployment_provider = deployment_provider
         self._observation_provider = observation_provider
         self._control_probe = control_probe
+        self._control_preconditions = control_preconditions
         self._action_policy = action_policy
 
     async def build(
@@ -272,7 +272,11 @@ class DeliveryLifecycle:
         """Deploy a candidate only while authority, observation, and rollback pass."""
 
         await self._require_candidate(candidate)
-        self._validate_known_good(candidate, known_good_candidate)
+        await self._require_known_good(candidate, known_good_candidate)
+        if await self._has_deployment(candidate, environment):
+            raise DeliveryActionDeniedError(
+                "candidate already deployed to environment; use promote"
+            )
         await self._preflight(
             DeliveryControlRequest(
                 project_id=candidate.project_id,
@@ -357,7 +361,9 @@ class DeliveryLifecycle:
         """Increase exposure only after the latest health verdict is PASS."""
 
         candidate = await self._candidate_for(deployment)
-        self._validate_known_good(candidate, known_good_candidate)
+        if deployment.status != "active" or await self._was_rolled_back(deployment):
+            raise DeliveryActionDeniedError("rolled-back deployment cannot be promoted")
+        await self._require_known_good(candidate, known_good_candidate)
         observation = await self._latest_observation(deployment)
         if observation is None or observation.verdict is not HealthVerdict.PASS:
             raise DeliveryActionDeniedError("promotion requires a passing observation")
@@ -404,7 +410,7 @@ class DeliveryLifecycle:
         """Rollback only when the rollback action's own preconditions pass."""
 
         candidate = await self._candidate_for(deployment)
-        self._validate_known_good(candidate, known_good_candidate)
+        await self._require_known_good(candidate, known_good_candidate)
         await self._preflight(
             DeliveryControlRequest(
                 project_id=deployment.project_id,
@@ -427,11 +433,14 @@ class DeliveryLifecycle:
                 evidence_refs=evidence_refs,
             )
         )
-        rolled_back = await self._deployment_provider.rollback(deployment)
+        rolled_back = await self._deployment_provider.rollback(
+            deployment,
+            known_good_candidate,
+        )
         if (
             rolled_back.project_id != deployment.project_id
             or rolled_back.work_id != deployment.work_id
-            or rolled_back.release_candidate_id != deployment.release_candidate_id
+            or rolled_back.release_candidate_id != known_good_candidate.id
             or rolled_back.environment != deployment.environment
         ):
             raise ValueError("rollback result belongs to a different deployment")
@@ -440,17 +449,31 @@ class DeliveryLifecycle:
             work_id=deployment.work_id,
             event_type=WorkEventType.ROLLBACK_RECORDED,
             payload={
+                "source_deployment_id": deployment.id,
                 "deployment": rolled_back.model_dump(mode="json"),
-                "known_good_release_candidate_id": known_good_candidate.id,
+                "known_good_release_candidate": known_good_candidate.model_dump(mode="json"),
             },
             actor_ref="deployment_provider",
         )
         return rolled_back
 
     async def _preflight(self, request: DeliveryControlRequest) -> None:
-        results = await self._control_probe.evaluate(request)
-        if not results:
-            raise ValueError("delivery control probe returned no precondition results")
+        preconditions = tuple(
+            precondition
+            for precondition in self._control_preconditions
+            if request.action in precondition.required_for
+        )
+        if not preconditions:
+            raise ValueError("delivery action has no configured control preconditions")
+        if any(precondition.project_id != request.project_id for precondition in preconditions):
+            raise ValueError("delivery precondition belongs to a different project")
+        results = await self._control_probe.evaluate(request, preconditions)
+        expected_ids = {precondition.id for precondition in preconditions}
+        if (
+            len(results) != len(preconditions)
+            or {result.precondition_id for result in results} != expected_ids
+        ):
+            raise ValueError("delivery control probe did not cover every precondition")
         if any(result.project_id != request.project_id for result in results):
             raise ValueError("delivery precondition belongs to a different project")
 
@@ -479,11 +502,11 @@ class DeliveryLifecycle:
                     actor_ref="delivery_control",
                 )
             failed_ids = ", ".join(result.precondition_id for result in failed)
-            raise DeliveryControlDegradedError(failed_ids)
+            raise ControlDegradedError(failed_ids)
 
         passed_ids = {result.precondition_id for result in results}
-        if request.action != "rollback" and active - passed_ids:
-            raise DeliveryControlDegradedError(", ".join(sorted(active - passed_ids)))
+        if request.action not in {"observe", "rollback"} and active - passed_ids:
+            raise ControlDegradedError(", ".join(sorted(active - passed_ids)))
         restored = active & passed_ids
         if restored:
             await self._append(
@@ -574,11 +597,36 @@ class DeliveryLifecycle:
 
     async def _candidate_for(self, deployment: Deployment) -> ReleaseCandidate:
         await self._require_work(deployment.work_id, deployment.project_id)
-        return await self._candidate_by_id(
+        canonical_deployment = await self._deployment_by_id(
             deployment.work_id,
             deployment.project_id,
-            deployment.release_candidate_id,
+            deployment.id,
         )
+        if canonical_deployment != deployment:
+            raise ValueError("deployment is not canonical for this WorkItem")
+        try:
+            return await self._candidate_by_id(
+                deployment.work_id,
+                deployment.project_id,
+                deployment.release_candidate_id,
+            )
+        except ValueError:
+            events = await self._work_store.read_events(
+                deployment.work_id,
+                project_id=deployment.project_id,
+            )
+            for event in reversed(events):
+                if event.event_type is not WorkEventType.ROLLBACK_RECORDED:
+                    continue
+                recorded = Deployment.model_validate(event.payload_json["deployment"])
+                if recorded.id != deployment.id:
+                    continue
+                candidate = ReleaseCandidate.model_validate(
+                    event.payload_json["known_good_release_candidate"]
+                )
+                if candidate.id == deployment.release_candidate_id:
+                    return candidate
+            raise
 
     async def _candidate_by_id(
         self,
@@ -594,6 +642,55 @@ class DeliveryLifecycle:
             if candidate.id == candidate_id:
                 return candidate
         raise ValueError("release candidate is not recorded for this WorkItem")
+
+    async def _deployment_by_id(
+        self,
+        work_id: str,
+        project_id: str,
+        deployment_id: str,
+    ) -> Deployment:
+        events = await self._work_store.read_events(work_id, project_id=project_id)
+        for event in reversed(events):
+            if event.event_type not in {
+                WorkEventType.DEPLOYMENT_RECORDED,
+                WorkEventType.ROLLBACK_RECORDED,
+            }:
+                continue
+            deployment = Deployment.model_validate(event.payload_json["deployment"])
+            if deployment.id == deployment_id:
+                return deployment
+        raise ValueError("deployment is not recorded for this WorkItem")
+
+    async def _has_deployment(
+        self,
+        candidate: ReleaseCandidate,
+        environment: str,
+    ) -> bool:
+        events = await self._work_store.read_events(
+            candidate.work_id,
+            project_id=candidate.project_id,
+        )
+        for event in events:
+            if event.event_type is not WorkEventType.DEPLOYMENT_RECORDED:
+                continue
+            deployment = Deployment.model_validate(event.payload_json["deployment"])
+            if (
+                deployment.release_candidate_id == candidate.id
+                and deployment.environment == environment
+            ):
+                return True
+        return False
+
+    async def _was_rolled_back(self, deployment: Deployment) -> bool:
+        events = await self._work_store.read_events(
+            deployment.work_id,
+            project_id=deployment.project_id,
+        )
+        return any(
+            event.event_type is WorkEventType.ROLLBACK_RECORDED
+            and event.payload_json.get("source_deployment_id") == deployment.id
+            for event in events
+        )
 
     async def _latest_observation(
         self,
@@ -612,12 +709,8 @@ class DeliveryLifecycle:
         return None
 
     async def _active_degradations(self, work_id: str, project_id: str) -> set[str]:
-        pending = await self._work_store.pending_attention(project_id=project_id)
-        return {
-            item.attention_id
-            for item in pending
-            if item.work_id == work_id and item.kind.value == "CONTROL_DEGRADED"
-        }
+        events = await self._work_store.read_events(work_id, project_id=project_id)
+        return active_control_precondition_ids(events)
 
     async def _record_deployment(self, deployment: Deployment, action: str) -> None:
         await self._append(
@@ -655,13 +748,22 @@ class DeliveryLifecycle:
             )
         )
 
-    @staticmethod
-    def _validate_known_good(
+    async def _require_known_good(
+        self,
         candidate: ReleaseCandidate,
         known_good_candidate: ReleaseCandidate,
     ) -> None:
         if known_good_candidate.project_id != candidate.project_id:
             raise ValueError("known-good candidate belongs to a different project")
+        if known_good_candidate.id == candidate.id:
+            raise ValueError("known-good candidate must differ from the candidate under delivery")
+        canonical = await self._candidate_by_id(
+            known_good_candidate.work_id,
+            known_good_candidate.project_id,
+            known_good_candidate.id,
+        )
+        if canonical != known_good_candidate:
+            raise ValueError("known-good candidate is not canonical")
 
     @staticmethod
     def _validate_deployment(
@@ -711,147 +813,15 @@ class DeliveryLifecycle:
             raise ValueError("observation verdict conflicts with health gate results")
 
 
-class DeterministicFakeReleaseProvider:
-    """Return one configured candidate and record the exact build input."""
-
-    def __init__(self, candidate: ReleaseCandidate) -> None:
-        self._candidate = candidate
-        self.builds: list[str] = []
-
-    async def build(self, commit_sha: str) -> ReleaseCandidate:
-        self.builds.append(commit_sha)
-        if commit_sha != self._candidate.commit_sha:
-            raise ValueError("fake release candidate commit does not match")
-        return self._candidate
-
-
-class DeterministicFakeDeploymentProvider:
-    """Record deterministic deploy, promotion, and rollback receipts."""
-
-    def __init__(self) -> None:
-        self.deployments: list[Deployment] = []
-        self.promotions: list[Deployment] = []
-        self.rollbacks: list[Deployment] = []
-
-    async def deploy(
-        self,
-        candidate: ReleaseCandidate,
-        environment: str,
-        exposure: BlastRadius,
-    ) -> Deployment:
-        deployment = Deployment(
-            id=f"deployment-{len(self.deployments) + 1}",
-            project_id=candidate.project_id,
-            work_id=candidate.work_id,
-            release_candidate_id=candidate.id,
-            environment=environment,
-            exposure=exposure,
-            provider_ref=f"fake://deployment/{len(self.deployments) + 1}",
-            status="active",
-        )
-        self.deployments.append(deployment)
-        return deployment
-
-    async def promote(
-        self,
-        deployment: Deployment,
-        exposure: BlastRadius,
-    ) -> Deployment:
-        index = len(self.deployments) + len(self.promotions) + 1
-        promoted = deployment.model_copy(
-            update={
-                "id": f"deployment-{index}",
-                "exposure": exposure,
-                "provider_ref": f"fake://deployment/{index}",
-            }
-        )
-        self.promotions.append(promoted)
-        return promoted
-
-    async def rollback(self, deployment: Deployment) -> Deployment:
-        self.rollbacks.append(deployment)
-        return deployment.model_copy(update={"status": "rolled_back"})
-
-
-class DeterministicFakeObservationProvider:
-    """Evaluate configured boolean outcomes using each gate's failure verdict."""
-
-    def __init__(self, outcomes: Sequence[Mapping[str, bool]]) -> None:
-        self._outcomes = list(outcomes)
-        self.calls: list[tuple[str, int]] = []
-
-    async def observe(
-        self,
-        deployment: Deployment,
-        gates: tuple[HealthGate, ...],
-        window_seconds: int,
-    ) -> ObservationResult:
-        if not self._outcomes:
-            raise ValueError("no fake observation outcome configured")
-        outcomes = self._outcomes.pop(0)
-        if set(outcomes) != {gate.id for gate in gates}:
-            raise ValueError("fake outcome does not match requested health gates")
-        self.calls.append((deployment.id, window_seconds))
-        gate_results = tuple(
-            HealthGateResult(
-                project_id=deployment.project_id,
-                gate_id=gate.id,
-                passed=outcomes[gate.id],
-                evidence_refs=(f"fake-observation://{deployment.id}/{gate.id}",),
-            )
-            for gate in gates
-        )
-        failed = [gate for gate in gates if not outcomes[gate.id]]
-        verdict = HealthVerdict.PASS
-        if failed:
-            verdict = (
-                HealthVerdict.FAIL
-                if any(gate.failure_verdict is HealthVerdict.FAIL for gate in failed)
-                else HealthVerdict.HOLD
-            )
-        return ObservationResult(
-            project_id=deployment.project_id,
-            work_id=deployment.work_id,
-            deployment_id=deployment.id,
-            verdict=verdict,
-            gate_results=gate_results,
-            evidence_refs=tuple(ref for result in gate_results for ref in result.evidence_refs),
-        )
-
-
-class DeterministicFakeControlProbe:
-    """Return explicitly configured precondition results for each action."""
-
-    def __init__(
-        self,
-        results: Mapping[str, tuple[DeliveryPreconditionResult, ...]],
-    ) -> None:
-        self._results = dict(results)
-        self.requests: list[DeliveryControlRequest] = []
-
-    async def evaluate(
-        self,
-        request: DeliveryControlRequest,
-    ) -> tuple[DeliveryPreconditionResult, ...]:
-        self.requests.append(request)
-        return self._results[request.action]
-
-
 __all__ = [
     "BlastRadius",
     "DeliveryActionDeniedError",
     "DeliveryApprovalRequiredError",
-    "DeliveryControlDegradedError",
     "DeliveryControlProbe",
     "DeliveryControlRequest",
     "DeliveryLifecycle",
-    "DeliveryPreconditionResult",
     "Deployment",
     "DeploymentProvider",
-    "DeterministicFakeControlProbe",
-    "DeterministicFakeDeploymentProvider",
-    "DeterministicFakeObservationProvider",
-    "DeterministicFakeReleaseProvider",
     "HealthGate",
     "HealthGateResult",
     "HealthVerdict",

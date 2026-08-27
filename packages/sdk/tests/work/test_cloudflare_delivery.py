@@ -12,18 +12,34 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from email.utils import format_datetime
 
 import httpx
 import pytest
 
+from sagewai.work import (
+    ControlDegradedError,
+    GateDecision,
+    WorkEvent,
+    WorkEventType,
+    WorkRecord,
+    WorkStore,
+)
 from sagewai.work.profiles.software.cloudflare import (
     CloudflareDeliveryConfig,
     CloudflareDeliveryControlProbe,
+    cloudflare_delivery_preconditions,
 )
 from sagewai.work.profiles.software.delivery import (
+    BlastRadius,
     DeliveryControlRequest,
+    DeliveryLifecycle,
     ReleaseCandidate,
+)
+from tests.db.conftest import dialect_engine  # noqa: F401
+from tests.work.fakes_delivery import (
+    DeterministicFakeDeploymentProvider,
+    DeterministicFakeObservationProvider,
+    DeterministicFakeReleaseProvider,
 )
 
 NOW = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
@@ -45,6 +61,20 @@ def _candidate() -> ReleaseCandidate:
         verification_ref="verification://1",
         review_ref="review://1",
     )
+
+
+def _current_candidate() -> ReleaseCandidate:
+    return _candidate().model_copy(
+        update={
+            "id": "candidate-current",
+            "work_id": WORK_ID,
+            "artifact_ref": "artifact://candidate-current",
+        }
+    )
+
+
+def _known_good() -> ReleaseCandidate:
+    return _candidate().model_copy(update={"work_id": "work-previous"})
 
 
 def _config(*, max_staleness: int = 120) -> CloudflareDeliveryConfig:
@@ -71,8 +101,8 @@ def _request(action: str, *, known_good=True) -> DeliveryControlRequest:
 
 
 def _response(request: httpx.Request, *, observed_at: datetime = NOW) -> httpx.Response:
-    assert request.method == "GET"
     if request.url.path == "/client/v4/user/tokens/verify":
+        assert request.method == "GET"
         return httpx.Response(
             200,
             request=request,
@@ -86,12 +116,22 @@ def _response(request: httpx.Request, *, observed_at: datetime = NOW) -> httpx.R
             },
         )
     if request.url.host == "docs.sagewai.ai":
+        assert request.method == "GET"
+        return httpx.Response(200, request=request)
+    if request.url.path.endswith("/workers/observability/telemetry/query"):
+        assert request.method == "POST"
         return httpx.Response(
             200,
             request=request,
-            headers={"date": format_datetime(observed_at, usegmt=True)},
+            json={
+                "success": True,
+                "result": {
+                    "events": {"events": [{"timestamp": int(observed_at.timestamp() * 1000)}]}
+                },
+            },
         )
     if request.url.path.endswith(f"/versions/{VERSION_ID}"):
+        assert request.method == "GET"
         return httpx.Response(
             200,
             request=request,
@@ -106,18 +146,65 @@ def _response(request: httpx.Request, *, observed_at: datetime = NOW) -> httpx.R
     raise AssertionError(f"unexpected request: {request.url}")
 
 
+async def _evaluate(
+    probe: CloudflareDeliveryControlProbe,
+    request: DeliveryControlRequest,
+):
+    preconditions = tuple(
+        precondition
+        for precondition in cloudflare_delivery_preconditions(PROJECT_ID)
+        if request.action in precondition.required_for
+    )
+    return await probe.evaluate(request, preconditions)
+
+
+@pytest.fixture
+async def store(dialect_engine) -> WorkStore:  # noqa: F811
+    result = WorkStore(engine=dialect_engine)
+    await result.init()
+    await result.save_work(
+        WorkRecord(
+            work_id=WORK_ID,
+            project_id=PROJECT_ID,
+            source_ref="https://github.com/sagewai/platform/issues/1",
+            profile="software",
+            status="READY_TO_DELIVER",
+            contract_version=1,
+            active_run_id="review-1",
+            pending_gate=None,
+            profile_context={},
+            created_at=NOW,
+            updated_at=NOW,
+        )
+    )
+    known_good = _known_good()
+    await result.append_event(
+        WorkEvent(
+            id="release-known-good",
+            project_id=PROJECT_ID,
+            work_id=known_good.work_id,
+            sequence=1,
+            event_type=WorkEventType.RELEASE_CREATED,
+            actor_type="test",
+            actor_ref=None,
+            payload_json={"release_candidate": known_good.model_dump(mode="json")},
+            created_at=NOW,
+        )
+    )
+    return result
+
+
 @pytest.mark.asyncio
 async def test_real_path_preflight_checks_authority_observability_and_rollback() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(_response)) as client:
         probe = CloudflareDeliveryControlProbe(
             config=_config(),
-            deployment_token="deploy-token",
-            rollback_token="rollback-token",
+            api_token="api-token",
             client=client,
             now=lambda: NOW,
         )
 
-        results = await probe.evaluate(_request("deploy"))
+        results = await _evaluate(probe, _request("deploy"))
 
     assert [result.precondition_id for result in results] == [
         "cloudflare-deploy-authority",
@@ -129,6 +216,32 @@ async def test_real_path_preflight_checks_authority_observability_and_rollback()
 
 
 @pytest.mark.asyncio
+async def test_active_unbounded_token_has_sufficient_ttl() -> None:
+    def unbounded_token(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/client/v4/user/tokens/verify":
+            return httpx.Response(
+                200,
+                request=request,
+                json={"success": True, "result": {"status": "active"}},
+            )
+        return _response(request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(unbounded_token)) as client:
+        probe = CloudflareDeliveryControlProbe(
+            config=_config(),
+            api_token="api-token",
+            client=client,
+            now=lambda: NOW,
+        )
+
+        results = await _evaluate(probe, _request("deploy"))
+
+    authority = [result for result in results if result.precondition_id.endswith("authority")]
+    assert authority
+    assert all(result.passed for result in authority)
+
+
+@pytest.mark.asyncio
 async def test_stale_monitoring_fails_even_when_endpoint_returns_200() -> None:
     def stale_response(request: httpx.Request) -> httpx.Response:
         return _response(request, observed_at=NOW - timedelta(minutes=10))
@@ -136,13 +249,12 @@ async def test_stale_monitoring_fails_even_when_endpoint_returns_200() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(stale_response)) as client:
         probe = CloudflareDeliveryControlProbe(
             config=_config(max_staleness=60),
-            deployment_token="deploy-token",
-            rollback_token="rollback-token",
+            api_token="api-token",
             client=client,
             now=lambda: NOW,
         )
 
-        results = await probe.evaluate(_request("observe"))
+        results = await _evaluate(probe, _request("observe"))
 
     assert len(results) == 1
     assert results[0].precondition_id == "cloudflare-observability"
@@ -155,13 +267,12 @@ async def test_missing_known_good_artifact_ref_refuses_reversibility() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(_response)) as client:
         probe = CloudflareDeliveryControlProbe(
             config=_config(),
-            deployment_token="deploy-token",
-            rollback_token="rollback-token",
+            api_token="api-token",
             client=client,
             now=lambda: NOW,
         )
 
-        results = await probe.evaluate(_request("rollback", known_good=False))
+        results = await _evaluate(probe, _request("rollback", known_good=False))
 
     artifact = next(
         result for result in results if result.precondition_id == "cloudflare-rollback-artifact"
@@ -175,7 +286,7 @@ async def test_invalid_rollback_credential_fails_its_own_precondition() -> None:
     def expired_rollback(request: httpx.Request) -> httpx.Response:
         if (
             request.url.path == "/client/v4/user/tokens/verify"
-            and request.headers["authorization"] == "Bearer rollback-token"
+            and request.headers["authorization"] == "Bearer api-token"
         ):
             return httpx.Response(
                 200,
@@ -193,19 +304,86 @@ async def test_invalid_rollback_credential_fails_its_own_precondition() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(expired_rollback)) as client:
         probe = CloudflareDeliveryControlProbe(
             config=_config(),
-            deployment_token="deploy-token",
-            rollback_token="rollback-token",
+            api_token="api-token",
             client=client,
             now=lambda: NOW,
         )
 
-        results = await probe.evaluate(_request("rollback"))
+        results = await _evaluate(probe, _request("rollback"))
 
     authority = next(
         result for result in results if result.precondition_id == "cloudflare-rollback-authority"
     )
     assert authority.passed is False
     assert "expired" in (authority.detail or "")
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_refuses_rollback_when_cloudflare_credential_expires(
+    store: WorkStore,
+) -> None:
+    verification_calls = 0
+
+    def expires_before_rollback(request: httpx.Request) -> httpx.Response:
+        nonlocal verification_calls
+        if request.url.path == "/client/v4/user/tokens/verify":
+            verification_calls += 1
+            if verification_calls > 2:
+                return httpx.Response(
+                    200,
+                    request=request,
+                    json={
+                        "success": True,
+                        "result": {
+                            "status": "expired",
+                            "expires_on": (NOW - timedelta(minutes=1)).isoformat(),
+                        },
+                    },
+                )
+        return _response(request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(expires_before_rollback)) as client:
+        provider = DeterministicFakeDeploymentProvider()
+        lifecycle = DeliveryLifecycle(
+            work_store=store,
+            release_provider=DeterministicFakeReleaseProvider(_current_candidate()),
+            deployment_provider=provider,
+            observation_provider=DeterministicFakeObservationProvider(()),
+            control_probe=CloudflareDeliveryControlProbe(
+                config=_config(),
+                api_token="api-token",
+                client=client,
+                now=lambda: NOW,
+            ),
+            control_preconditions=cloudflare_delivery_preconditions(PROJECT_ID),
+            action_policy=lambda request: GateDecision.ALLOW,
+        )
+        candidate = await lifecycle.build(
+            work_id=WORK_ID,
+            project_id=PROJECT_ID,
+            commit_sha=_current_candidate().commit_sha,
+            evidence_refs=("merge://sha",),
+        )
+        deployment = await lifecycle.deploy(
+            candidate,
+            environment="production",
+            exposure=BlastRadius(dimension="traffic", value="5%"),
+            known_good_candidate=_known_good(),
+            evidence_refs=("policy://production",),
+            expected_duration_seconds=600,
+        )
+
+        with pytest.raises(ControlDegradedError, match="rollback-authority"):
+            await lifecycle.rollback(
+                deployment,
+                known_good_candidate=_known_good(),
+                evidence_refs=("observation://failed",),
+                expected_duration_seconds=600,
+            )
+
+    assert provider.rollbacks == []
+    pending = await store.pending_attention(project_id=PROJECT_ID)
+    assert [item.attention_id for item in pending] == ["cloudflare-rollback-authority"]
 
 
 @pytest.mark.asyncio
@@ -229,13 +407,12 @@ async def test_rollback_artifact_digest_must_match_remote_version() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(mismatched_digest)) as client:
         probe = CloudflareDeliveryControlProbe(
             config=_config(),
-            deployment_token="deploy-token",
-            rollback_token="rollback-token",
+            api_token="api-token",
             client=client,
             now=lambda: NOW,
         )
 
-        results = await probe.evaluate(_request("rollback"))
+        results = await _evaluate(probe, _request("rollback"))
 
     artifact = next(
         result for result in results if result.precondition_id == "cloudflare-rollback-artifact"

@@ -47,6 +47,7 @@ class ControlCheckResult(BaseModel):
     precondition_id: str
     passed: bool
     evidence_refs: tuple[str, ...]
+    detail: str | None = None
     checked_at: datetime
 
 
@@ -353,17 +354,7 @@ class OperatorController:
             request.work_id,
             project_id=request.project_id,
         )
-        control_events = [
-            event
-            for event in events
-            if event.event_type in {WorkEventType.CONTROL_DEGRADED, WorkEventType.CONTROL_RESTORED}
-        ]
-        if (
-            not control_events
-            or control_events[-1].event_type is not WorkEventType.CONTROL_DEGRADED
-        ):
-            return set()
-        return set(control_events[-1].payload_json.get("failed_preconditions", ()))
+        return active_control_precondition_ids(events)
 
     async def _append_event(
         self,
@@ -424,3 +415,15 @@ def _blocked_result(request: WorkRequest, summary: str) -> OperatorResult:
         action_results=(),
         profile_context={},
     )
+
+
+def active_control_precondition_ids(events: list[WorkEvent]) -> set[str]:
+    """Fold control events into the currently degraded precondition IDs."""
+
+    active: set[str] = set()
+    for event in events:
+        if event.event_type is WorkEventType.CONTROL_DEGRADED:
+            active.update(event.payload_json.get("failed_preconditions", ()))
+        elif event.event_type is WorkEventType.CONTROL_RESTORED:
+            active.difference_update(event.payload_json.get("precondition_ids", ()))
+    return active

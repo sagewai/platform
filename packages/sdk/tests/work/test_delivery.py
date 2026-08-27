@@ -16,25 +16,35 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from sagewai.work import GateDecision, WorkEventType, WorkRecord, WorkStore
+from sagewai.work import (
+    ControlCheckResult,
+    ControlDegradedError,
+    ControlPrecondition,
+    ControlPreconditionKind,
+    GateDecision,
+    WorkEvent,
+    WorkEventType,
+    WorkRecord,
+    WorkStore,
+)
 from sagewai.work.profiles.software.delivery import (
     BlastRadius,
     DeliveryActionDeniedError,
     DeliveryApprovalRequiredError,
-    DeliveryControlDegradedError,
     DeliveryControlRequest,
     DeliveryLifecycle,
-    DeliveryPreconditionResult,
     Deployment,
-    DeterministicFakeControlProbe,
-    DeterministicFakeDeploymentProvider,
-    DeterministicFakeObservationProvider,
-    DeterministicFakeReleaseProvider,
     HealthGate,
     HealthVerdict,
     ReleaseCandidate,
 )
 from tests.db.conftest import dialect_engine  # noqa: F401
+from tests.work.fakes_delivery import (
+    DeterministicFakeControlProbe,
+    DeterministicFakeDeploymentProvider,
+    DeterministicFakeObservationProvider,
+    DeterministicFakeReleaseProvider,
+)
 
 NOW = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
 PROJECT_ID = "project-a"
@@ -62,6 +72,15 @@ def _candidate(
     )
 
 
+def _known_good() -> ReleaseCandidate:
+    return _candidate(
+        candidate_id="known-good",
+        artifact_ref="artifact://known-good",
+        digest="c" * 64,
+        work_id="work-previous",
+    )
+
+
 def _record() -> WorkRecord:
     return WorkRecord(
         work_id=WORK_ID,
@@ -83,8 +102,8 @@ def _result(
     *,
     passed: bool = True,
     detail: str | None = None,
-) -> DeliveryPreconditionResult:
-    return DeliveryPreconditionResult(
+) -> ControlCheckResult:
+    return ControlCheckResult(
         project_id=PROJECT_ID,
         precondition_id=precondition_id,
         passed=passed,
@@ -94,10 +113,49 @@ def _result(
     )
 
 
+def _preconditions() -> tuple[ControlPrecondition, ...]:
+    all_actions = ("deploy", "promote", "observe", "rollback")
+    state_changes = ("deploy", "promote")
+    return (
+        ControlPrecondition(
+            id="delivery-authority",
+            project_id=PROJECT_ID,
+            kind=ControlPreconditionKind.AUTHORITY,
+            description="delivery authority",
+            check_ref="fake.authority",
+            required_for=state_changes,
+        ),
+        ControlPrecondition(
+            id="delivery-observability",
+            project_id=PROJECT_ID,
+            kind=ControlPreconditionKind.OBSERVABILITY,
+            description="delivery observability",
+            check_ref="fake.observability",
+            required_for=all_actions,
+        ),
+        ControlPrecondition(
+            id="rollback-artifact",
+            project_id=PROJECT_ID,
+            kind=ControlPreconditionKind.REVERSIBILITY,
+            description="delivery reversibility",
+            check_ref="fake.reversibility",
+            required_for=("deploy", "promote", "rollback"),
+        ),
+        ControlPrecondition(
+            id="rollback-authority",
+            project_id=PROJECT_ID,
+            kind=ControlPreconditionKind.AUTHORITY,
+            description="rollback authority",
+            check_ref="fake.rollback_authority",
+            required_for=("deploy", "promote", "rollback"),
+        ),
+    )
+
+
 def _passing_probe() -> DeterministicFakeControlProbe:
     authority = _result("delivery-authority")
     observability = _result("delivery-observability")
-    reversibility = _result("delivery-reversibility")
+    reversibility = _result("rollback-artifact")
     rollback_authority = _result("rollback-authority")
     return DeterministicFakeControlProbe(
         {
@@ -124,7 +182,41 @@ async def store(dialect_engine) -> WorkStore:  # noqa: F811
     result = WorkStore(engine=dialect_engine)
     await result.init()
     await result.save_work(_record())
+    known_good = _known_good()
+    await result.append_event(
+        WorkEvent(
+            id="release-known-good",
+            project_id=PROJECT_ID,
+            work_id=known_good.work_id,
+            sequence=1,
+            event_type=WorkEventType.RELEASE_CREATED,
+            actor_type="test",
+            actor_ref=None,
+            payload_json={"release_candidate": known_good.model_dump(mode="json")},
+            created_at=NOW,
+        )
+    )
     return result
+
+
+async def _record_deployment(store: WorkStore, deployment: Deployment) -> None:
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    await store.append_event(
+        WorkEvent(
+            id=f"record-{deployment.id}",
+            project_id=PROJECT_ID,
+            work_id=WORK_ID,
+            sequence=events[-1].sequence + 1,
+            event_type=WorkEventType.DEPLOYMENT_RECORDED,
+            actor_type="test",
+            actor_ref=None,
+            payload_json={
+                "action": "deploy_production",
+                "deployment": deployment.model_dump(mode="json"),
+            },
+            created_at=NOW,
+        )
+    )
 
 
 def _lifecycle(
@@ -145,6 +237,7 @@ def _lifecycle(
         deployment_provider=deployment,
         observation_provider=observation,
         control_probe=control_probe or _passing_probe(),
+        control_preconditions=_preconditions(),
         action_policy=action_policy,
     )
     return lifecycle, release, deployment, observation, action_policy
@@ -175,12 +268,7 @@ async def test_fake_lifecycle_drives_staging_canary_rollout_observation_and_roll
             {"availability": True},
         ),
     )
-    known_good = _candidate(
-        candidate_id="known-good",
-        artifact_ref="artifact://known-good",
-        digest="c" * 64,
-        work_id="work-previous",
-    )
+    known_good = _known_good()
     gate = HealthGate(
         id="availability",
         project_id=PROJECT_ID,
@@ -308,7 +396,7 @@ async def test_nonpassing_health_gate_never_increases_exposure(
         candidate,
         environment="production",
         exposure=BlastRadius(dimension="traffic", value="5%"),
-        known_good_candidate=_candidate(candidate_id="known-good"),
+        known_good_candidate=_known_good(),
         evidence_refs=(),
         expected_duration_seconds=60,
     )
@@ -319,11 +407,108 @@ async def test_nonpassing_health_gate_never_increases_exposure(
         await lifecycle.promote(
             canary,
             exposure=BlastRadius(dimension="traffic", value="20%"),
-            known_good_candidate=_candidate(candidate_id="known-good"),
+            known_good_candidate=_known_good(),
             evidence_refs=(),
             expected_duration_seconds=60,
         )
     assert deployment.promotions == []
+
+
+@pytest.mark.asyncio
+async def test_nonpassing_observation_cannot_be_bypassed_by_redeploy(
+    store: WorkStore,
+) -> None:
+    gate = HealthGate(
+        id="availability",
+        project_id=PROJECT_ID,
+        description="availability",
+        check_ref="http://availability",
+        failure_verdict=HealthVerdict.FAIL,
+    )
+    lifecycle, _, provider, _, _ = _lifecycle(
+        store,
+        observations=({"availability": False},),
+    )
+    candidate = await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    canary = await lifecycle.deploy(
+        candidate,
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="5%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    assert (
+        await lifecycle.observe(canary, gates=(gate,), window_seconds=30)
+    ).verdict is HealthVerdict.FAIL
+
+    with pytest.raises(DeliveryActionDeniedError, match="use promote"):
+        await lifecycle.deploy(
+            candidate,
+            environment="production",
+            exposure=BlastRadius(dimension="traffic", value="100%"),
+            known_good_candidate=_known_good(),
+            evidence_refs=(),
+            expected_duration_seconds=60,
+        )
+
+    assert provider.deployments == [canary]
+
+
+@pytest.mark.asyncio
+async def test_rolled_back_deployment_cannot_be_promoted(
+    store: WorkStore,
+) -> None:
+    gate = HealthGate(
+        id="availability",
+        project_id=PROJECT_ID,
+        description="availability",
+        check_ref="http://availability",
+        failure_verdict=HealthVerdict.FAIL,
+    )
+    lifecycle, _, provider, _, _ = _lifecycle(
+        store,
+        observations=({"availability": True},),
+    )
+    candidate = await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    deployment = await lifecycle.deploy(
+        candidate,
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="5%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    rolled_back = await lifecycle.rollback(
+        deployment,
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    assert (
+        await lifecycle.observe(rolled_back, gates=(gate,), window_seconds=30)
+    ).verdict is HealthVerdict.PASS
+
+    with pytest.raises(DeliveryActionDeniedError, match="cannot be promoted"):
+        await lifecycle.promote(
+            rolled_back,
+            exposure=BlastRadius(dimension="traffic", value="100%"),
+            known_good_candidate=_known_good(),
+            evidence_refs=(),
+            expected_duration_seconds=60,
+        )
+
+    assert provider.promotions == []
 
 
 @pytest.mark.parametrize(
@@ -369,11 +554,12 @@ async def test_failed_rollback_precondition_refuses_action_and_freezes_work(
         provider_ref="fake://deployment/1",
         status="active",
     )
+    await _record_deployment(store, deployment)
 
-    with pytest.raises(DeliveryControlDegradedError, match=failed_id):
+    with pytest.raises(ControlDegradedError, match=failed_id):
         await lifecycle.rollback(
             deployment,
-            known_good_candidate=_candidate(candidate_id="known-good"),
+            known_good_candidate=_known_good(),
             evidence_refs=(),
             expected_duration_seconds=60,
         )
@@ -391,7 +577,8 @@ async def test_blind_deploy_and_unapproved_deploy_are_impossible(store: WorkStor
             "deploy": (
                 _result("delivery-authority", passed=False),
                 _result("delivery-observability"),
-                _result("delivery-reversibility"),
+                _result("rollback-artifact"),
+                _result("rollback-authority"),
             )
         }
     )
@@ -403,12 +590,12 @@ async def test_blind_deploy_and_unapproved_deploy_are_impossible(store: WorkStor
         evidence_refs=(),
     )
 
-    with pytest.raises(DeliveryControlDegradedError, match="delivery-authority"):
+    with pytest.raises(ControlDegradedError, match="delivery-authority"):
         await lifecycle.deploy(
             _candidate(),
             environment="production",
             exposure=BlastRadius(dimension="traffic", value="5%"),
-            known_good_candidate=_candidate(candidate_id="known-good"),
+            known_good_candidate=_known_good(),
             evidence_refs=(),
             expected_duration_seconds=60,
         )
@@ -421,11 +608,77 @@ async def test_blind_deploy_and_unapproved_deploy_are_impossible(store: WorkStor
             _candidate(),
             environment="production",
             exposure=BlastRadius(dimension="traffic", value="5%"),
-            known_good_candidate=_candidate(candidate_id="known-good"),
+            known_good_candidate=_known_good(),
             evidence_refs=(),
             expected_duration_seconds=60,
         )
     assert provider.deployments == []
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    assert [event.event_type for event in events[-3:]] == [
+        WorkEventType.CONTROL_DEGRADED,
+        WorkEventType.CONTROL_RESTORED,
+        WorkEventType.GATE_REQUESTED,
+    ]
+    pending = await store.pending_attention(project_id=PROJECT_ID)
+    assert [item.kind.value for item in pending] == ["GATE_REQUESTED"]
+
+
+@pytest.mark.parametrize("action", ("promote", "rollback"))
+@pytest.mark.asyncio
+async def test_policy_denies_promotion_and_rollback_before_provider_side_effect(
+    store: WorkStore,
+    action: str,
+) -> None:
+    policy = RecordingPolicy()
+    lifecycle, _, provider, _, _ = _lifecycle(
+        store,
+        policy=policy,
+        observations=({"availability": True},),
+    )
+    candidate = await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    deployment = await lifecycle.deploy(
+        candidate,
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="5%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    if action == "promote":
+        gate = HealthGate(
+            id="availability",
+            project_id=PROJECT_ID,
+            description="availability",
+            check_ref="http://availability",
+            failure_verdict=HealthVerdict.FAIL,
+        )
+        await lifecycle.observe(deployment, gates=(gate,), window_seconds=30)
+    policy.decision = GateDecision.DENY
+
+    with pytest.raises(DeliveryActionDeniedError):
+        if action == "promote":
+            await lifecycle.promote(
+                deployment,
+                exposure=BlastRadius(dimension="traffic", value="100%"),
+                known_good_candidate=_known_good(),
+                evidence_refs=(),
+                expected_duration_seconds=60,
+            )
+        else:
+            await lifecycle.rollback(
+                deployment,
+                known_good_candidate=_known_good(),
+                evidence_refs=(),
+                expected_duration_seconds=60,
+            )
+
+    assert provider.promotions == []
+    assert provider.rollbacks == []
 
 
 @pytest.mark.asyncio
@@ -447,7 +700,7 @@ async def test_delivery_policy_denial_blocks_work_without_side_effect(
             candidate,
             environment="production",
             exposure=BlastRadius(dimension="traffic", value="5%"),
-            known_good_candidate=_candidate(candidate_id="known-good"),
+            known_good_candidate=_known_good(),
             evidence_refs=("policy://deny",),
             expected_duration_seconds=60,
         )

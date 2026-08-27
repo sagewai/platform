@@ -15,7 +15,9 @@ from sagewai.work.control import (
     ControlCheck,
     ControlCheckContext,
     ControlCheckResult,
+    ControlDegradedError,
     OperatorController,
+    active_control_precondition_ids,
 )
 from sagewai.work.events import WorkEvent, WorkEventType
 from sagewai.work.models import (
@@ -69,6 +71,7 @@ __all__ = [
     "ControlCheck",
     "ControlCheckContext",
     "ControlCheckResult",
+    "ControlDegradedError",
     "GateDecision",
     "PendingAttention",
     "PendingAttentionKind",
@@ -90,4 +93,5 @@ __all__ = [
     "WorkRequest",
     "WorkStore",
     "Workspace",
+    "active_control_precondition_ids",
 ]
