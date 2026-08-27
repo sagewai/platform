@@ -78,7 +78,10 @@ from sagewai.work.profiles.software.models import (
     WorkspaceStaleError,
 )
 from sagewai.work.profiles.software.scm import (
+    SOFTWARE_WORKSPACE_CHECK_REF,
+    SoftwareWorkspaceControlCheck,
     SoftwareWorktreeManager,
+    software_workspace_precondition,
     workspace_diff,
 )
 from sagewai.work.profiles.software.verification import (
@@ -144,7 +147,10 @@ __all__ = [
     "SoftwareVerificationCheck",
     "SoftwareVerifier",
     "SoftwareWorkspace",
+    "SoftwareWorkspaceControlCheck",
     "SoftwareWorktreeManager",
+    "SOFTWARE_WORKSPACE_CHECK_REF",
     "WorkspaceStaleError",
+    "software_workspace_precondition",
     "workspace_diff",
 ]

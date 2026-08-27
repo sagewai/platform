@@ -342,6 +342,8 @@ class OperatorController:
             request,
             WorkEventType.CONTROL_DEGRADED,
             {
+                "run_id": request.run_id,
+                "stage": request.stage,
                 "failed_preconditions": [result.precondition_id for result in failed],
                 "evidence_refs": [
                     evidence for result in failed for evidence in result.evidence_refs

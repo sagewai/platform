@@ -20,7 +20,11 @@ from typing import Protocol
 from sagewai.work.capsule import TaskCapsuleCompiler
 from sagewai.work.contract import WorkContract
 from sagewai.work.control import OperatorController
-from sagewai.work.events import WorkEvent, WorkEventType
+from sagewai.work.events import (
+    WorkEvent,
+    WorkEventType,
+    active_control_precondition_ids,
+)
 from sagewai.work.knowledge import KnowledgeItem, KnowledgeKind, KnowledgeStore
 from sagewai.work.models import (
     ActionIntent,
@@ -48,6 +52,7 @@ from sagewai.work.profiles.software.models import (
 )
 from sagewai.work.profiles.software.scm import (
     SoftwareWorktreeManager,
+    software_workspace_precondition,
     workspace_diff,
 )
 from sagewai.work.profiles.software.verification import _normalized_target
@@ -639,7 +644,7 @@ class SoftwareLifecycle:
         state: str,
     ) -> WorkRecord:
         while True:
-            if state in {"READY_TO_MERGE", "WORK_BLOCKED"}:
+            if state in {"READY_TO_MERGE", "WORK_BLOCKED", "CONTROL_DEGRADED"}:
                 return await self._set_status(work_item, state)
             if state in {"READY_TO_IMPLEMENT", "IMPLEMENTING"}:
                 state = await self._run_mutation(
@@ -697,8 +702,8 @@ class SoftwareLifecycle:
             if stage == "implement"
             else f"{work_item.id}:repair:{repair_number}"
         )
-        current_sha = await self._worktree_manager.current_sha(workspace)
-        software = self._software_capsule(contract, current_sha)
+        expected_sha = expected_result_sha(events, workspace.base_sha)
+        software = self._software_capsule(contract, expected_sha)
         open_assumptions = self._open_assumptions(assumptions)
         prior_refs: tuple[str, ...] = ()
         if stage == "repair":
@@ -780,7 +785,9 @@ class SoftwareLifecycle:
                     evidence_refs=contract.evidence_refs,
                 ),
             ),
-            control_preconditions=(),
+            control_preconditions=(
+                software_workspace_precondition(project_id=work_item.project_id),
+            ),
         )
         result = await assignment.controller.run(
             runtime=assignment.runtime,
@@ -790,6 +797,8 @@ class SoftwareLifecycle:
             workspace=workspace,
         )
         if result.status != "passed":
+            if await self._stop_for_control_degradation(work_item, run_id=run_id):
+                return "CONTROL_DEGRADED"
             failed_stage = "implementation" if stage == "implement" else "repair"
             await self._block_once(
                 work_item,
@@ -869,10 +878,10 @@ class SoftwareLifecycle:
         if verification is None or not verification.passed:
             raise ValueError("review requires passing deterministic verification")
         run_id = f"{work_item.id}:review:{self._review_count(events) + 1}"
-        current_sha = await self._worktree_manager.current_sha(workspace)
+        expected_sha = expected_result_sha(events, workspace.base_sha)
         diff_before, relevant_files = await workspace_diff(workspace)
         context = SoftwareReviewContext(
-            software=self._software_capsule(contract, current_sha),
+            software=self._software_capsule(contract, expected_sha),
             diff=diff_before,
             verification=verification,
             relevant_files=relevant_files,
@@ -901,7 +910,9 @@ class SoftwareLifecycle:
                 ),
             ),
             action_intents=(),
-            control_preconditions=(),
+            control_preconditions=(
+                software_workspace_precondition(project_id=work_item.project_id),
+            ),
         )
         result = await self._reviewer.controller.run(
             runtime=self._reviewer.runtime,
@@ -927,6 +938,8 @@ class SoftwareLifecycle:
             )
             return "WORK_BLOCKED"
         if result.status != "passed":
+            if await self._stop_for_control_degradation(work_item, run_id=run_id):
+                return "CONTROL_DEGRADED"
             await self._block_once(
                 work_item,
                 {
@@ -1051,6 +1064,18 @@ class SoftwareLifecycle:
             work_item.id,
             project_id=work_item.project_id,
         )
+
+    async def _stop_for_control_degradation(
+        self,
+        work_item: WorkItem,
+        *,
+        run_id: str,
+    ) -> bool:
+        events = await self._events(work_item)
+        if "software-workspace" not in active_control_precondition_ids(events):
+            return False
+        await self._set_status(work_item, "CONTROL_DEGRADED", active_run_id=run_id)
+        return True
 
     async def _append(
         self,
@@ -1201,6 +1226,14 @@ class SoftwareLifecycle:
         for event in events:
             if event.event_type is WorkEventType.WORK_BLOCKED:
                 state = "WORK_BLOCKED"
+            elif event.event_type is WorkEventType.CONTROL_DEGRADED:
+                stage = event.payload_json.get("stage")
+                if stage == "implement":
+                    state = "IMPLEMENTING"
+                elif stage == "repair":
+                    state = "REPAIRING"
+                elif stage == "review":
+                    state = "REVIEWING"
             elif event.event_type is WorkEventType.STAGE_STARTED:
                 stage = event.payload_json.get("stage")
                 if stage == "implement":

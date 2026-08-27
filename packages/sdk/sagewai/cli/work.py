@@ -46,6 +46,7 @@ from sagewai.work import (
 )
 from sagewai.work.knowledge import KnowledgeStore
 from sagewai.work.profiles.software import (
+    SOFTWARE_WORKSPACE_CHECK_REF,
     BlastRadius,
     CatalogGitHubClient,
     CloudflareDeliveryConfig,
@@ -70,6 +71,7 @@ from sagewai.work.profiles.software import (
     SoftwareResultValidator,
     SoftwareStageOperator,
     SoftwareVerifier,
+    SoftwareWorkspaceControlCheck,
     SoftwareWorktreeManager,
     WorktreeBranchPublisher,
     cloudflare_delivery_preconditions,
@@ -360,14 +362,18 @@ async def _build_lifecycle(
         work_store=work_store,
         durability_store=durability_store,
         permission_policy=permission_policy,
-        control_checks={},
+        control_checks={
+            SOFTWARE_WORKSPACE_CHECK_REF: SoftwareWorkspaceControlCheck(),
+        },
         result_validator=SoftwareResultValidator(),
     )
     review_controller = OperatorController(
         work_store=work_store,
         durability_store=durability_store,
         permission_policy=permission_policy,
-        control_checks={},
+        control_checks={
+            SOFTWARE_WORKSPACE_CHECK_REF: SoftwareWorkspaceControlCheck(),
+        },
         result_validator=SoftwareReadOnlyResultValidator(),
     )
     write_capabilities = CapabilitySet(
