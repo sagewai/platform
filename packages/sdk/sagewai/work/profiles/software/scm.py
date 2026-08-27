@@ -26,12 +26,13 @@ from sagewai.work.profiles.software.models import (
 )
 
 SOFTWARE_WORKSPACE_CHECK_REF = "software.workspace.current"
+SOFTWARE_WORKSPACE_PRECONDITION_ID = "software-workspace"
 
 
 def software_workspace_precondition(*, project_id: str | None) -> ControlPrecondition:
     """Declare the deterministic worktree-presence and HEAD control boundary."""
     return ControlPrecondition(
-        id="software-workspace",
+        id=SOFTWARE_WORKSPACE_PRECONDITION_ID,
         project_id=project_id,
         kind=ControlPreconditionKind.WORKSPACE,
         description="The recorded worktree exists and HEAD matches canonical Work state",
@@ -53,18 +54,6 @@ class SoftwareWorkspaceControlCheck:
                 passed=False,
                 evidence_refs=(),
                 detail="software workspace is unavailable",
-                checked_at=checked_at,
-            )
-        if (
-            workspace.project_id != context.request.project_id
-            or workspace.work_id != context.request.work_id
-        ):
-            return ControlCheckResult(
-                project_id=context.request.project_id,
-                precondition_id=context.precondition.id,
-                passed=False,
-                evidence_refs=(workspace.ref,),
-                detail="software workspace belongs to another WorkItem",
                 checked_at=checked_at,
             )
         if not workspace.path.exists():
@@ -244,7 +233,12 @@ class SoftwareWorktreeManager:
         *,
         expected_sha: str,
     ) -> None:
-        result = await _git(workspace.path, "rev-parse", "HEAD")
+        if not workspace.path.exists():
+            raise WorkspaceStaleError("recorded workspace does not exist")
+        try:
+            result = await _git(workspace.path, "rev-parse", "HEAD")
+        except FileNotFoundError as exc:
+            raise WorkspaceStaleError("recorded workspace does not exist") from exc
         if result.returncode != 0:
             raise WorkspaceStaleError(result.stderr)
         actual_sha = result.stdout.strip()

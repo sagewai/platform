@@ -79,6 +79,7 @@ from sagewai.work.profiles.software.models import (
 )
 from sagewai.work.profiles.software.scm import (
     SOFTWARE_WORKSPACE_CHECK_REF,
+    SOFTWARE_WORKSPACE_PRECONDITION_ID,
     SoftwareWorkspaceControlCheck,
     SoftwareWorktreeManager,
     software_workspace_precondition,
@@ -150,6 +151,7 @@ __all__ = [
     "SoftwareWorkspaceControlCheck",
     "SoftwareWorktreeManager",
     "SOFTWARE_WORKSPACE_CHECK_REF",
+    "SOFTWARE_WORKSPACE_PRECONDITION_ID",
     "WorkspaceStaleError",
     "software_workspace_precondition",
     "workspace_diff",

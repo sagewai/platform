@@ -49,8 +49,10 @@ from sagewai.work.profiles.software.models import (
     SoftwareReviewContext,
     SoftwareReviewFindingContext,
     SoftwareWorkspace,
+    WorkspaceStaleError,
 )
 from sagewai.work.profiles.software.scm import (
+    SOFTWARE_WORKSPACE_PRECONDITION_ID,
     SoftwareWorktreeManager,
     software_workspace_precondition,
     workspace_diff,
@@ -263,23 +265,38 @@ class SoftwareLifecycle:
         work_item, contract, assumptions = self._canonical_inputs(events)
         software = self._validate_inputs(work_item, contract, assumptions)
         state = self._state_from_events(events)
-        if state == "READY_TO_IMPLEMENT":
-            workspace = await self._worktree_manager.prepare(
-                repository=self._repository,
-                project_id=project_id,
-                work_id=work_id,
-                attempt_id=self._workspace_attempt_id,
-                base_sha=software.base_sha,
+        try:
+            if state == "READY_TO_IMPLEMENT":
+                workspace = await self._worktree_manager.prepare(
+                    repository=self._repository,
+                    project_id=project_id,
+                    work_id=work_id,
+                    attempt_id=self._workspace_attempt_id,
+                    base_sha=software.base_sha,
+                )
+            else:
+                workspace = await self._worktree_manager.resume(
+                    repository=self._repository,
+                    project_id=project_id,
+                    work_id=work_id,
+                    attempt_id=self._workspace_attempt_id,
+                    base_sha=software.base_sha,
+                    expected_sha=expected_result_sha(events, software.base_sha),
+                )
+        except WorkspaceStaleError as exc:
+            stage = self._operator_stage(state)
+            if stage is None:
+                raise
+            await self._record_workspace_degradation(
+                work_item,
+                stage=stage,
+                run_id=self._operator_run_id(work_item, stage=stage, events=events),
+                detail=str(exc),
+                evidence_refs=(f"workspace://{self._workspace_attempt_id}",),
             )
-        else:
-            workspace = await self._worktree_manager.resume(
-                repository=self._repository,
-                project_id=project_id,
-                work_id=work_id,
-                attempt_id=self._workspace_attempt_id,
-                base_sha=software.base_sha,
-                expected_sha=expected_result_sha(events, software.base_sha),
-            )
+            degraded = await self.status(work_id, project_id=project_id)
+            assert degraded is not None
+            return degraded
         return await self._drive(
             work_item=work_item,
             contract=contract,
@@ -644,7 +661,16 @@ class SoftwareLifecycle:
         state: str,
     ) -> WorkRecord:
         while True:
-            if state in {"READY_TO_MERGE", "WORK_BLOCKED", "CONTROL_DEGRADED"}:
+            if state == "CONTROL_DEGRADED":
+                project_id = work_item.project_id
+                assert project_id is not None
+                degraded = await self.status(
+                    work_item.id,
+                    project_id=project_id,
+                )
+                assert degraded is not None
+                return degraded
+            if state in {"READY_TO_MERGE", "WORK_BLOCKED"}:
                 return await self._set_status(work_item, state)
             if state in {"READY_TO_IMPLEMENT", "IMPLEMENTING"}:
                 state = await self._run_mutation(
@@ -703,6 +729,14 @@ class SoftwareLifecycle:
             else f"{work_item.id}:repair:{repair_number}"
         )
         expected_sha = expected_result_sha(events, workspace.base_sha)
+        if not await self._preflight_workspace(
+            work_item,
+            workspace=workspace,
+            stage=stage,
+            run_id=run_id,
+            expected_sha=expected_sha,
+        ):
+            return "CONTROL_DEGRADED"
         software = self._software_capsule(contract, expected_sha)
         open_assumptions = self._open_assumptions(assumptions)
         prior_refs: tuple[str, ...] = ()
@@ -879,6 +913,14 @@ class SoftwareLifecycle:
             raise ValueError("review requires passing deterministic verification")
         run_id = f"{work_item.id}:review:{self._review_count(events) + 1}"
         expected_sha = expected_result_sha(events, workspace.base_sha)
+        if not await self._preflight_workspace(
+            work_item,
+            workspace=workspace,
+            stage="review",
+            run_id=run_id,
+            expected_sha=expected_sha,
+        ):
+            return "CONTROL_DEGRADED"
         diff_before, relevant_files = await workspace_diff(workspace)
         context = SoftwareReviewContext(
             software=self._software_capsule(contract, expected_sha),
@@ -921,22 +963,6 @@ class SoftwareLifecycle:
             capabilities=self._reviewer.capabilities,
             workspace=workspace,
         )
-        diff_after, files_after = await workspace_diff(workspace)
-        if diff_after != diff_before or files_after != relevant_files:
-            await self._block_once(
-                work_item,
-                {
-                    "reason": "reviewer_changed_workspace",
-                    "run_id": run_id,
-                    "decision_request": (
-                        "Investigate the reviewer workspace change and decide whether to retry "
-                        "review or stop the work."
-                    ),
-                    "evidence_refs": list(result.evidence_refs),
-                },
-                actor_ref=self._reviewer.actor_ref,
-            )
-            return "WORK_BLOCKED"
         if result.status != "passed":
             if await self._stop_for_control_degradation(work_item, run_id=run_id):
                 return "CONTROL_DEGRADED"
@@ -954,7 +980,22 @@ class SoftwareLifecycle:
                 actor_ref=self._reviewer.actor_ref,
             )
             return "WORK_BLOCKED"
-
+        diff_after, files_after = await workspace_diff(workspace)
+        if diff_after != diff_before or files_after != relevant_files:
+            await self._block_once(
+                work_item,
+                {
+                    "reason": "reviewer_changed_workspace",
+                    "run_id": run_id,
+                    "decision_request": (
+                        "Investigate the reviewer workspace change and decide whether to retry "
+                        "review or stop the work."
+                    ),
+                    "evidence_refs": list(result.evidence_refs),
+                },
+                actor_ref=self._reviewer.actor_ref,
+            )
+            return "WORK_BLOCKED"
         payload = result.profile_context.get("review_result")
         if payload is None:
             await self._block_once(
@@ -1072,10 +1113,86 @@ class SoftwareLifecycle:
         run_id: str,
     ) -> bool:
         events = await self._events(work_item)
-        if "software-workspace" not in active_control_precondition_ids(events):
+        if SOFTWARE_WORKSPACE_PRECONDITION_ID not in active_control_precondition_ids(events):
             return False
         await self._set_status(work_item, "CONTROL_DEGRADED", active_run_id=run_id)
         return True
+
+    async def _preflight_workspace(
+        self,
+        work_item: WorkItem,
+        *,
+        workspace: SoftwareWorkspace,
+        stage: str,
+        run_id: str,
+        expected_sha: str,
+    ) -> bool:
+        try:
+            await self._worktree_manager.assert_current(
+                workspace,
+                expected_sha=expected_sha,
+            )
+        except WorkspaceStaleError as exc:
+            await self._record_workspace_degradation(
+                work_item,
+                stage=stage,
+                run_id=run_id,
+                detail=str(exc),
+                evidence_refs=(workspace.ref,),
+            )
+            return False
+        return True
+
+    async def _record_workspace_degradation(
+        self,
+        work_item: WorkItem,
+        *,
+        stage: str,
+        run_id: str,
+        detail: str,
+        evidence_refs: tuple[str, ...],
+    ) -> None:
+        events = await self._events(work_item)
+        if SOFTWARE_WORKSPACE_PRECONDITION_ID not in active_control_precondition_ids(events):
+            await self._append(
+                work_item,
+                WorkEventType.CONTROL_DEGRADED,
+                {
+                    "run_id": run_id,
+                    "stage": stage,
+                    "failed_preconditions": [SOFTWARE_WORKSPACE_PRECONDITION_ID],
+                    "evidence_refs": list(evidence_refs),
+                    "details": f"{SOFTWARE_WORKSPACE_PRECONDITION_ID}: {detail}",
+                    "frozen_action_ids": (
+                        [] if stage == "review" else [f"{run_id}:change"]
+                    ),
+                },
+                actor_ref="software_lifecycle",
+            )
+        await self._set_status(work_item, "CONTROL_DEGRADED", active_run_id=run_id)
+
+    @staticmethod
+    def _operator_stage(state: str) -> str | None:
+        if state in {"READY_TO_IMPLEMENT", "IMPLEMENTING"}:
+            return "implement"
+        if state == "REPAIRING":
+            return "repair"
+        if state == "REVIEWING":
+            return "review"
+        return None
+
+    def _operator_run_id(
+        self,
+        work_item: WorkItem,
+        *,
+        stage: str,
+        events: list[WorkEvent],
+    ) -> str:
+        if stage == "implement":
+            return f"{work_item.id}:implement:1"
+        if stage == "repair":
+            return f"{work_item.id}:repair:{self._repair_count(events) + 1}"
+        return f"{work_item.id}:review:{self._review_count(events) + 1}"
 
     async def _append(
         self,
