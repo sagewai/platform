@@ -282,6 +282,12 @@ class DeliveryLifecycle:
             raise DeliveryActionDeniedError(
                 "candidate already deployed to environment; use promote"
             )
+        if await self._candidate_was_rolled_back(candidate):
+            raise DeliveryActionDeniedError("rolled-back candidate cannot be deployed")
+        if await self._candidate_has_nonpassing_delivery(candidate):
+            raise DeliveryActionDeniedError(
+                "candidate has a non-passing observation or unobserved deployment"
+            )
         await self._preflight(
             DeliveryControlRequest(
                 project_id=candidate.project_id,
@@ -411,6 +417,8 @@ class DeliveryLifecycle:
         """Rollback only when the rollback action's own preconditions pass."""
 
         candidate = await self._candidate_for(deployment)
+        if deployment.status == "rolled_back":
+            raise DeliveryActionDeniedError("deployment is already rolled back")
         await self._preflight(
             DeliveryControlRequest(
                 project_id=deployment.project_id,
@@ -542,38 +550,49 @@ class DeliveryLifecycle:
             )
 
     async def _authorize(self, request: ActionRequest) -> None:
-        decision = GateDecision(self._action_policy(request))
-        if decision is GateDecision.ALLOW:
-            return
-        if decision is GateDecision.REQUIRE_APPROVAL:
-            gate_id = f"{request.action}:{request.work_id}:{request.scope}"
+        gate_id = f"{request.action}:{request.work_id}:{request.scope}"
+        events = await self._work_store.read_events(
+            request.work_id,
+            project_id=request.project_id,
+        )
+        decided = self._gate_event(events, WorkEventType.GATE_DECIDED, gate_id)
+        requested = self._gate_event(events, WorkEventType.GATE_REQUESTED, gate_id)
+        if decided is not None:
+            decision = GateDecision(decided.payload_json["decision"])
+        elif requested is not None:
+            await self._set_pending_gate(request, gate_id)
+            raise DeliveryApprovalRequiredError(request.action)
+        else:
+            decision = GateDecision(self._action_policy(request))
+            if decision is GateDecision.REQUIRE_APPROVAL:
+                await self._append(
+                    project_id=request.project_id,
+                    work_id=request.work_id,
+                    event_type=WorkEventType.GATE_REQUESTED,
+                    payload={
+                        "gate_id": gate_id,
+                        "question": f"Approve {request.action} for {request.scope}.",
+                        "action": request.model_dump(mode="json"),
+                        "evidence_refs": list(request.evidence_refs),
+                    },
+                    actor_ref="delivery_policy",
+                )
+                await self._set_pending_gate(request, gate_id)
+                raise DeliveryApprovalRequiredError(request.action)
             await self._append(
                 project_id=request.project_id,
                 work_id=request.work_id,
-                event_type=WorkEventType.GATE_REQUESTED,
+                event_type=WorkEventType.GATE_DECIDED,
                 payload={
                     "gate_id": gate_id,
-                    "question": f"Approve {request.action} for {request.scope}.",
+                    "decision": decision.value,
                     "action": request.model_dump(mode="json"),
-                    "evidence_refs": list(request.evidence_refs),
                 },
                 actor_ref="delivery_policy",
             )
-            record = await self._work_store.load_work(
-                request.work_id,
-                project_id=request.project_id,
-            )
-            if record is None:
-                raise KeyError(request.work_id)
-            await self._work_store.save_work(
-                record.model_copy(
-                    update={
-                        "pending_gate": gate_id,
-                        "updated_at": datetime.now(timezone.utc),
-                    }
-                )
-            )
-            raise DeliveryApprovalRequiredError(request.action)
+        if decision is GateDecision.ALLOW:
+            await self._clear_pending_gate(request, gate_id)
+            return
         await self._append(
             project_id=request.project_id,
             work_id=request.work_id,
@@ -601,6 +620,42 @@ class DeliveryLifecycle:
             )
         )
         raise DeliveryActionDeniedError(request.action)
+
+    async def _set_pending_gate(self, request: ActionRequest, gate_id: str) -> None:
+        record = await self._work_store.load_work(
+            request.work_id,
+            project_id=request.project_id,
+        )
+        if record is None:
+            raise KeyError(request.work_id)
+        if record.pending_gate == gate_id:
+            return
+        await self._work_store.save_work(
+            record.model_copy(
+                update={
+                    "pending_gate": gate_id,
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            )
+        )
+
+    async def _clear_pending_gate(self, request: ActionRequest, gate_id: str) -> None:
+        record = await self._work_store.load_work(
+            request.work_id,
+            project_id=request.project_id,
+        )
+        if record is None:
+            raise KeyError(request.work_id)
+        if record.pending_gate != gate_id:
+            return
+        await self._work_store.save_work(
+            record.model_copy(
+                update={
+                    "pending_gate": None,
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            )
+        )
 
     async def _require_work(self, work_id: str, project_id: str) -> None:
         if await self._work_store.load_work(work_id, project_id=project_id) is None:
@@ -714,6 +769,48 @@ class DeliveryLifecycle:
             event.event_type is WorkEventType.ROLLBACK_RECORDED
             and event.payload_json.get("source_release_candidate_id") == candidate.id
             for event in events
+        )
+
+    async def _candidate_has_nonpassing_delivery(
+        self,
+        candidate: ReleaseCandidate,
+    ) -> bool:
+        events = await self._work_store.read_events(
+            candidate.work_id,
+            project_id=candidate.project_id,
+        )
+        candidate_deployments: set[str] = set()
+        latest_verdicts: dict[str, HealthVerdict] = {}
+        for event in events:
+            if event.event_type is WorkEventType.DEPLOYMENT_RECORDED:
+                deployment = Deployment.model_validate(event.payload_json["deployment"])
+                if deployment.release_candidate_id == candidate.id:
+                    candidate_deployments.add(deployment.id)
+            elif event.event_type is WorkEventType.OBSERVATION_RECORDED:
+                observation = ObservationResult.model_validate(event.payload_json["observation"])
+                if observation.deployment_id not in candidate_deployments:
+                    continue
+                if observation.verdict is HealthVerdict.FAIL:
+                    return True
+                latest_verdicts[observation.deployment_id] = observation.verdict
+        return any(
+            latest_verdicts.get(deployment_id) is not HealthVerdict.PASS
+            for deployment_id in candidate_deployments
+        )
+
+    @staticmethod
+    def _gate_event(
+        events: list[WorkEvent],
+        event_type: WorkEventType,
+        gate_id: str,
+    ) -> WorkEvent | None:
+        return next(
+            (
+                event
+                for event in reversed(events)
+                if event.event_type is event_type and event.payload_json.get("gate_id") == gate_id
+            ),
+            None,
         )
 
     async def _latest_observation(

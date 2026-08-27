@@ -29,6 +29,7 @@ from sagewai.work.profiles.software.cloudflare import (
     CloudflareDeliveryConfig,
     CloudflareDeliveryControlProbe,
     cloudflare_delivery_preconditions,
+    cloudflare_version_digest,
 )
 from sagewai.work.profiles.software.delivery import (
     BlastRadius,
@@ -46,8 +47,8 @@ from tests.work.fakes_delivery import (
 NOW = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
 PROJECT_ID = "project-a"
 WORK_ID = "work-1"
-DIGEST = "b" * 64
 VERSION_ID = "11111111-1111-1111-1111-111111111111"
+DIGEST = cloudflare_version_digest("account-1", "docs", VERSION_ID)
 
 
 def _candidate() -> ReleaseCandidate:
@@ -134,7 +135,11 @@ def _response(request: httpx.Request, *, observed_at: datetime = NOW) -> httpx.R
     if request.url.path == "/client/v4/graphql":
         assert request.method == "POST"
         body = json.loads(request.content)
-        assert "httpRequests1mGroups" in body["query"]
+        assert "httpRequestsAdaptiveGroups" in body["query"]
+        assert "clientRequestHTTPHost" in body["query"]
+        assert "datetimeMinute" in body["query"]
+        assert " count " in body["query"]
+        assert " requests " not in body["query"]
         assert body["variables"]["zoneTag"] == "zone-1"
         assert body["variables"]["host"] == "docs.sagewai.ai"
         return httpx.Response(
@@ -147,8 +152,8 @@ def _response(request: httpx.Request, *, observed_at: datetime = NOW) -> httpx.R
                             {
                                 "metrics": [
                                     {
-                                        "requests": 1,
-                                        "dimensions": {"datetime": observed_at.isoformat()},
+                                        "count": 1,
+                                        "dimensions": {"datetimeMinute": observed_at.isoformat()},
                                     }
                                 ]
                             }
@@ -290,6 +295,36 @@ async def test_stale_monitoring_fails_even_when_endpoint_returns_200() -> None:
 
 
 @pytest.mark.asyncio
+async def test_empty_analytics_window_does_not_mean_control_was_lost() -> None:
+    def empty_window(request: httpx.Request) -> httpx.Response:
+        response = _response(request)
+        if request.url.path == "/client/v4/graphql":
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "data": {"viewer": {"zones": [{"metrics": []}]}},
+                    "errors": None,
+                },
+            )
+        return response
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(empty_window)) as client:
+        probe = CloudflareDeliveryControlProbe(
+            config=_config(),
+            api_token="api-token",
+            client=client,
+            now=lambda: NOW,
+        )
+
+        results = await _evaluate(probe, _request("observe"))
+
+    assert len(results) == 1
+    assert results[0].passed is True
+    assert results[0].detail is None
+
+
+@pytest.mark.asyncio
 async def test_missing_known_good_artifact_ref_refuses_reversibility() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(_response)) as client:
         probe = CloudflareDeliveryControlProbe(
@@ -425,7 +460,7 @@ async def test_rollback_artifact_digest_must_match_remote_version() -> None:
                     "success": True,
                     "result": {
                         "id": VERSION_ID,
-                        "resources": {"script": {"etag": "c" * 64}},
+                        "resources": {},
                     },
                 },
             )
@@ -439,7 +474,14 @@ async def test_rollback_artifact_digest_must_match_remote_version() -> None:
             now=lambda: NOW,
         )
 
-        results = await _evaluate(probe, _request("rollback"))
+        request = _request("rollback").model_copy(
+            update={
+                "known_good_candidate": _candidate().model_copy(
+                    update={"artifact_digest": "c" * 64}
+                )
+            }
+        )
+        results = await _evaluate(probe, request)
 
     artifact = next(
         result for result in results if result.precondition_id == "cloudflare-rollback-artifact"

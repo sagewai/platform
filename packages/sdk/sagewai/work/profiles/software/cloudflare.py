@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from datetime import datetime, timezone
 from urllib.parse import urlparse
@@ -24,6 +25,17 @@ from sagewai.work.profiles.software.delivery import (
     DeliveryControlRequest,
     ReleaseCandidate,
 )
+
+
+def cloudflare_version_digest(
+    account_id: str,
+    script_name: str,
+    version_id: str,
+) -> str:
+    """Digest the identity of one immutable, complete Worker version."""
+
+    identity = f"cloudflare-worker-version:{account_id}:{script_name}:{version_id}"
+    return hashlib.sha256(identity.encode()).hexdigest()
 
 
 class CloudflareDeliveryConfig(BaseModel):
@@ -193,10 +205,11 @@ class CloudflareDeliveryControlProbe:
                         "query SagewaiDeliveryMetrics($zoneTag: string, $start: "
                         "Time, $end: Time, $host: string) { viewer { "
                         "zones(filter: {zoneTag: $zoneTag}) { metrics: "
-                        "httpRequests1mGroups(filter: {datetime_geq: $start, "
+                        "httpRequestsAdaptiveGroups(filter: {datetime_geq: $start, "
                         "datetime_leq: $end, clientRequestHTTPHost: $host, "
                         'requestSource: "eyeball"}, limit: 1, orderBy: '
-                        "[datetime_DESC]) { requests dimensions { datetime } } } } }"
+                        "[datetimeMinute_DESC]) { count dimensions { "
+                        "datetimeMinute } } } } }"
                     ),
                     "variables": {
                         "zoneTag": zone_id,
@@ -213,10 +226,12 @@ class CloudflareDeliveryControlProbe:
             telemetry.raise_for_status()
             payload = telemetry.json()
             metrics = payload["data"]["viewer"]["zones"][0]["metrics"]
-            if payload.get("errors") or not metrics:
-                detail = "Cloudflare monitoring has no fresh telemetry"
+            if payload.get("errors"):
+                detail = "Cloudflare monitoring query failed"
+            elif not metrics:
+                detail = None
             else:
-                latest = _parse_datetime(metrics[0]["dimensions"]["datetime"])
+                latest = _parse_datetime(metrics[0]["dimensions"]["datetimeMinute"])
                 if latest is None:
                     raise ValueError("Cloudflare monitoring timestamp is missing")
                 age = (checked_at - latest).total_seconds()
@@ -281,7 +296,11 @@ class CloudflareDeliveryControlProbe:
             result = payload["result"]
             if payload.get("success") is not True or str(result["id"]) != version_id:
                 return "known-good rollback artifact is missing"
-            remote_digest = str(result["resources"]["script"]["etag"]).strip('"')
+            remote_digest = cloudflare_version_digest(
+                self._config.account_id,
+                self._config.script_name,
+                version_id,
+            )
             if remote_digest != candidate.artifact_digest:
                 return "known-good rollback artifact digest does not match"
         except httpx.HTTPStatusError as exc:

@@ -375,17 +375,23 @@ async def test_fake_lifecycle_drives_staging_canary_rollout_observation_and_roll
         "promote_rollout",
         "rollback",
     ]
+    assert policy.requests[0].reversibility.value == "pure"
     assert policy.requests[-1].reversibility.value == "snapshot_reversible"
 
     events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
     assert [event.event_type for event in events] == [
+        WorkEventType.GATE_DECIDED,
         WorkEventType.RELEASE_CREATED,
+        WorkEventType.GATE_DECIDED,
         WorkEventType.DEPLOYMENT_RECORDED,
         WorkEventType.OBSERVATION_RECORDED,
+        WorkEventType.GATE_DECIDED,
         WorkEventType.DEPLOYMENT_RECORDED,
         WorkEventType.OBSERVATION_RECORDED,
+        WorkEventType.GATE_DECIDED,
         WorkEventType.DEPLOYMENT_RECORDED,
         WorkEventType.OBSERVATION_RECORDED,
+        WorkEventType.GATE_DECIDED,
         WorkEventType.ROLLBACK_RECORDED,
         WorkEventType.OBSERVATION_RECORDED,
     ]
@@ -483,6 +489,52 @@ async def test_nonpassing_observation_cannot_be_bypassed_by_redeploy(
 
 
 @pytest.mark.asyncio
+async def test_failed_candidate_cannot_be_deployed_to_another_environment(
+    store: WorkStore,
+) -> None:
+    gate = HealthGate(
+        id="availability",
+        project_id=PROJECT_ID,
+        description="availability",
+        check_ref="http://availability",
+        failure_verdict=HealthVerdict.FAIL,
+    )
+    lifecycle, _, provider, _, _ = _lifecycle(
+        store,
+        observations=({"availability": False},),
+    )
+    candidate = await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    staging = await lifecycle.deploy(
+        candidate,
+        environment="staging",
+        exposure=BlastRadius(dimension="instances", value="1"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    assert (
+        await lifecycle.observe(staging, gates=(gate,), window_seconds=30)
+    ).verdict is HealthVerdict.FAIL
+
+    with pytest.raises(DeliveryActionDeniedError, match="non-passing observation"):
+        await lifecycle.deploy(
+            candidate,
+            environment="production",
+            exposure=BlastRadius(dimension="traffic", value="5%"),
+            known_good_candidate=_known_good(),
+            evidence_refs=(),
+            expected_duration_seconds=60,
+        )
+
+    assert provider.deployments == [staging]
+
+
+@pytest.mark.asyncio
 async def test_rolled_back_deployment_cannot_be_promoted(
     store: WorkStore,
 ) -> None:
@@ -517,6 +569,25 @@ async def test_rolled_back_deployment_cannot_be_promoted(
         evidence_refs=(),
         expected_duration_seconds=60,
     )
+    events_before_duplicate = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    with pytest.raises(DeliveryActionDeniedError, match="already rolled back"):
+        await lifecycle.rollback(
+            rolled_back,
+            known_good_candidate=_known_good(),
+            evidence_refs=(),
+            expected_duration_seconds=60,
+        )
+    assert await store.read_events(WORK_ID, project_id=PROJECT_ID) == events_before_duplicate
+
+    with pytest.raises(DeliveryActionDeniedError, match="rolled-back candidate"):
+        await lifecycle.deploy(
+            candidate,
+            environment="staging",
+            exposure=BlastRadius(dimension="instances", value="1"),
+            known_good_candidate=_known_good(),
+            evidence_refs=(),
+            expected_duration_seconds=60,
+        )
     assert (
         await lifecycle.observe(rolled_back, gates=(gate,), window_seconds=30)
     ).verdict is HealthVerdict.PASS
@@ -531,6 +602,7 @@ async def test_rolled_back_deployment_cannot_be_promoted(
         )
 
     assert provider.promotions == []
+    assert provider.deployments == [deployment]
 
 
 @pytest.mark.asyncio
@@ -847,6 +919,45 @@ async def test_blind_deploy_and_unapproved_deploy_are_impossible(store: WorkStor
     ]
     pending = await store.pending_attention(project_id=PROJECT_ID)
     assert [item.kind.value for item in pending] == ["GATE_REQUESTED"]
+
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None
+    assert record.pending_gate is not None
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    await store.append_event(
+        WorkEvent(
+            id="operator-approved-delivery",
+            project_id=PROJECT_ID,
+            work_id=WORK_ID,
+            sequence=events[-1].sequence + 1,
+            event_type=WorkEventType.GATE_DECIDED,
+            actor_type="human",
+            actor_ref="operator",
+            payload_json={
+                "gate_id": record.pending_gate,
+                "decision": GateDecision.ALLOW.value,
+                "action": events[-1].payload_json["action"],
+            },
+            created_at=NOW,
+        )
+    )
+
+    deployment = await lifecycle.deploy(
+        _candidate(),
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="5%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+
+    assert provider.deployments == [deployment]
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    assert sum(event.event_type is WorkEventType.GATE_REQUESTED for event in events) == 1
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None
+    assert record.pending_gate is None
+    assert await store.pending_attention(project_id=PROJECT_ID) == ()
 
 
 @pytest.mark.parametrize("action", ("promote", "rollback"))
