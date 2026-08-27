@@ -189,6 +189,8 @@ async def test_source_ref_lookup_is_project_scoped(store: WorkStore) -> None:
         )
         is None
     )
+
+
 @pytest.mark.asyncio
 async def test_org_global_projection_cannot_change_project(store: WorkStore) -> None:
     await store.save_work(_record(project_id=None))

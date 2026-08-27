@@ -54,12 +54,12 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY packages/sdk/pyproject.toml packages/sdk/README.md /build/sdk/
 RUN mkdir -p /build/sdk/sagewai && touch /build/sdk/sagewai/__init__.py
 RUN --mount=type=cache,target=/root/.cache/pip \
-        pip install "/build/sdk[fastapi,postgres]" \
+        pip install "/build/sdk[postgres]" \
     && pip uninstall -y sagewai
 
 COPY packages/sdk /build/sdk
 RUN --mount=type=cache,target=/root/.cache/pip \
-        pip install --no-deps "/build/sdk[fastapi,postgres]"
+        pip install --no-deps "/build/sdk[postgres]"
 
 # ── Stage 2: runtime ────────────────────────────────────────────────────────
 FROM python:3.13.14-slim@sha256:c33f0bc4364a6881bed1ec0cc2665e6c53c87a43e774aaeab88e6f17af105e4f AS runtime

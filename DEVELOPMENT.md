@@ -19,7 +19,7 @@ Run `just prereqs` to verify everything is installed.
 
 ```bash
 just bootstrap     # install tools, sync all deps, set up git hooks
-just smoke         # run 29 fast tests to confirm everything works
+just smoke         # run the actual software Work sanity path
 just dev-all       # start backend (:8000) + admin UI (:3008)
 ```
 
@@ -43,7 +43,7 @@ brand/                 logos, icons, favicon (source of truth)
 ### Testing
 
 ```bash
-just smoke          # 29 smoke tests, ~1s, no external deps
+just smoke          # software Work smoke, ~1s, no external deps
 just test           # full suite, 2904 tests, ~14s
 just perf           # performance micro-benchmarks
 just sdk-test       # SDK tests only
