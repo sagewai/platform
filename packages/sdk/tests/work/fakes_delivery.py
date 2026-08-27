@@ -50,6 +50,7 @@ class DeterministicFakeDeploymentProvider:
         candidate: ReleaseCandidate,
         environment: str,
         exposure: BlastRadius,
+        known_good_candidate: ReleaseCandidate,
     ) -> Deployment:
         deployment = Deployment(
             id=f"deployment-{len(self.deployments) + 1}",

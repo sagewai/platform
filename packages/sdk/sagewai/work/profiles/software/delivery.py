@@ -16,13 +16,14 @@ can change configured exposure has deterministic control preconditions.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Literal, Protocol
+from typing import Literal, Protocol, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from sagewai.core.durability import run_with_heartbeat
 from sagewai.work.control import (
     ControlCheckResult,
     ControlDegradedError,
@@ -37,8 +38,11 @@ from sagewai.work.models import (
     ControlPrecondition,
     GateDecision,
     Reversibility,
+    WorkRecord,
 )
 from sagewai.work.store import WorkStore
+
+T = TypeVar("T")
 
 
 class HealthVerdict(str, Enum):
@@ -161,6 +165,7 @@ class DeploymentProvider(Protocol):
         candidate: ReleaseCandidate,
         environment: str,
         exposure: BlastRadius,
+        known_good_candidate: ReleaseCandidate,
     ) -> Deployment: ...
 
     async def promote(
@@ -218,7 +223,10 @@ class DeliveryLifecycle:
         control_probe: DeliveryControlProbe,
         control_preconditions: tuple[ControlPrecondition, ...],
         action_policy: Callable[[ActionRequest], GateDecision],
+        heartbeat_interval: float = 30,
     ) -> None:
+        if heartbeat_interval <= 0:
+            raise ValueError("heartbeat interval must be positive")
         self._work_store = work_store
         self._release_provider = release_provider
         self._deployment_provider = deployment_provider
@@ -226,6 +234,7 @@ class DeliveryLifecycle:
         self._control_probe = control_probe
         self._control_preconditions = control_preconditions
         self._action_policy = action_policy
+        self._heartbeat_interval = heartbeat_interval
 
     async def build(
         self,
@@ -238,6 +247,9 @@ class DeliveryLifecycle:
         """Build and record one immutable candidate after action-policy approval."""
 
         await self._require_work(work_id, project_id)
+        existing = await self._candidate_by_commit(work_id, project_id, commit_sha)
+        if existing is not None:
+            return existing
         await self._authorize(
             ActionRequest(
                 project_id=project_id,
@@ -278,6 +290,9 @@ class DeliveryLifecycle:
         """Deploy a candidate only while authority, observation, and rollback pass."""
 
         await self._require_candidate(candidate)
+        existing = await self._deployment_for(candidate, environment, exposure)
+        if existing is not None:
+            return existing
         if await self._has_deployment(candidate, environment):
             raise DeliveryActionDeniedError(
                 "candidate already deployed to environment; use promote"
@@ -288,16 +303,15 @@ class DeliveryLifecycle:
             raise DeliveryActionDeniedError(
                 "candidate has a non-passing observation or unobserved deployment"
             )
-        await self._preflight(
-            DeliveryControlRequest(
-                project_id=candidate.project_id,
-                work_id=candidate.work_id,
-                action="deploy",
-                candidate=candidate,
-                known_good_candidate=known_good_candidate,
-                expected_duration_seconds=expected_duration_seconds,
-            )
+        control_request = DeliveryControlRequest(
+            project_id=candidate.project_id,
+            work_id=candidate.work_id,
+            action="deploy",
+            candidate=candidate,
+            known_good_candidate=known_good_candidate,
+            expected_duration_seconds=expected_duration_seconds,
         )
+        await self._preflight(control_request)
         action_name = "deploy_production" if environment == "production" else "deploy_staging"
         await self._authorize(
             ActionRequest(
@@ -310,10 +324,14 @@ class DeliveryLifecycle:
                 evidence_refs=evidence_refs,
             )
         )
-        deployment = await self._deployment_provider.deploy(
-            candidate,
-            environment,
-            exposure,
+        deployment = await self._run_controlled(
+            self._deployment_provider.deploy(
+                candidate,
+                environment,
+                exposure,
+                known_good_candidate,
+            ),
+            control_request,
         )
         self._validate_deployment(deployment, candidate, environment, exposure)
         await self._record_deployment(deployment, action_name)
@@ -333,20 +351,22 @@ class DeliveryLifecycle:
         candidate = await self._candidate_for(deployment)
         if any(gate.project_id != deployment.project_id for gate in gates):
             raise ValueError("health gate belongs to a different project")
-        await self._preflight(
-            DeliveryControlRequest(
-                project_id=deployment.project_id,
-                work_id=deployment.work_id,
-                action="observe",
-                candidate=candidate,
-                known_good_candidate=None,
-                expected_duration_seconds=window_seconds,
-            )
+        control_request = DeliveryControlRequest(
+            project_id=deployment.project_id,
+            work_id=deployment.work_id,
+            action="observe",
+            candidate=candidate,
+            known_good_candidate=None,
+            expected_duration_seconds=window_seconds,
         )
-        result = await self._observation_provider.observe(
-            deployment,
-            gates,
-            window_seconds,
+        await self._preflight(control_request)
+        result = await self._run_controlled(
+            self._observation_provider.observe(
+                deployment,
+                gates,
+                window_seconds,
+            ),
+            control_request,
         )
         self._validate_observation(result, deployment, gates)
         await self._append(
@@ -370,6 +390,13 @@ class DeliveryLifecycle:
         """Increase exposure only after the latest health verdict is PASS."""
 
         candidate = await self._candidate_for(deployment)
+        existing = await self._deployment_for(
+            candidate,
+            deployment.environment,
+            exposure,
+        )
+        if existing is not None:
+            return existing
         if deployment.status != "active" or await self._candidate_was_rolled_back(candidate):
             raise DeliveryActionDeniedError("rolled-back deployment cannot be promoted")
         if await self._candidate_has_nonpassing_delivery(candidate):
@@ -379,16 +406,15 @@ class DeliveryLifecycle:
         observation = await self._latest_observation(deployment)
         if observation is None or observation.verdict is not HealthVerdict.PASS:
             raise DeliveryActionDeniedError("promotion requires a passing observation")
-        await self._preflight(
-            DeliveryControlRequest(
-                project_id=deployment.project_id,
-                work_id=deployment.work_id,
-                action="promote",
-                candidate=candidate,
-                known_good_candidate=known_good_candidate,
-                expected_duration_seconds=expected_duration_seconds,
-            )
+        control_request = DeliveryControlRequest(
+            project_id=deployment.project_id,
+            work_id=deployment.work_id,
+            action="promote",
+            candidate=candidate,
+            known_good_candidate=known_good_candidate,
+            expected_duration_seconds=expected_duration_seconds,
         )
+        await self._preflight(control_request)
         await self._authorize(
             ActionRequest(
                 project_id=deployment.project_id,
@@ -403,7 +429,10 @@ class DeliveryLifecycle:
                 evidence_refs=evidence_refs,
             )
         )
-        promoted = await self._deployment_provider.promote(deployment, exposure)
+        promoted = await self._run_controlled(
+            self._deployment_provider.promote(deployment, exposure),
+            control_request,
+        )
         self._validate_deployment(
             promoted,
             candidate,
@@ -426,16 +455,18 @@ class DeliveryLifecycle:
         candidate = await self._candidate_for(deployment)
         if deployment.status == "rolled_back":
             raise DeliveryActionDeniedError("deployment is already rolled back")
-        await self._preflight(
-            DeliveryControlRequest(
-                project_id=deployment.project_id,
-                work_id=deployment.work_id,
-                action="rollback",
-                candidate=candidate,
-                known_good_candidate=known_good_candidate,
-                expected_duration_seconds=expected_duration_seconds,
-            )
+        existing = await self._rollback_for(deployment.id, deployment)
+        if existing is not None:
+            return existing
+        control_request = DeliveryControlRequest(
+            project_id=deployment.project_id,
+            work_id=deployment.work_id,
+            action="rollback",
+            candidate=candidate,
+            known_good_candidate=known_good_candidate,
+            expected_duration_seconds=expected_duration_seconds,
         )
+        await self._preflight(control_request)
         await self._authorize(
             ActionRequest(
                 project_id=deployment.project_id,
@@ -450,9 +481,12 @@ class DeliveryLifecycle:
                 evidence_refs=evidence_refs,
             )
         )
-        rolled_back = await self._deployment_provider.rollback(
-            deployment,
-            known_good_candidate,
+        rolled_back = await self._run_controlled(
+            self._deployment_provider.rollback(
+                deployment,
+                known_good_candidate,
+            ),
+            control_request,
         )
         if (
             rolled_back.project_id != deployment.project_id
@@ -475,6 +509,93 @@ class DeliveryLifecycle:
             actor_ref="deployment_provider",
         )
         return rolled_back
+
+    async def triage(
+        self,
+        deployment: Deployment,
+        *,
+        observation: ObservationResult,
+        summary: str,
+        evidence_refs: tuple[str, ...],
+    ) -> WorkRecord:
+        """Persist triage only for the canonical failed deployment observation."""
+
+        await self._candidate_for(deployment)
+        latest = await self._latest_observation(deployment)
+        if latest != observation or observation.verdict is not HealthVerdict.FAIL:
+            raise DeliveryActionDeniedError("triage requires the latest FAIL observation")
+        if await self._rollback_for(deployment.id, deployment) is None:
+            raise DeliveryActionDeniedError("triage requires a recorded rollback")
+        if await self._has_event_for_deployment(
+            deployment,
+            WorkEventType.TRIAGE_CREATED,
+        ):
+            return await self._set_work_status(deployment, "TRIAGE")
+        await self._append(
+            project_id=deployment.project_id,
+            work_id=deployment.work_id,
+            event_type=WorkEventType.TRIAGE_CREATED,
+            payload={
+                "deployment_id": deployment.id,
+                "observation": observation.model_dump(mode="json"),
+                "summary": summary,
+                "evidence_refs": list(evidence_refs),
+            },
+            actor_ref="delivery_lifecycle",
+        )
+        return await self._set_work_status(deployment, "TRIAGE")
+
+    async def complete(
+        self,
+        deployment: Deployment,
+        *,
+        required_exposure: BlastRadius,
+        observation: ObservationResult,
+        evidence_refs: tuple[str, ...],
+    ) -> WorkRecord:
+        """Complete Work only after the configured exposure has a PASS receipt."""
+
+        candidate = await self._candidate_for(deployment)
+        latest = await self._latest_observation(deployment)
+        if deployment.status != "active" or deployment.exposure != required_exposure:
+            raise DeliveryActionDeniedError("configured delivery exposure is not reached")
+        if await self._candidate_was_rolled_back(candidate):
+            raise DeliveryActionDeniedError("rolled-back candidate cannot complete Work")
+        if latest != observation or observation.verdict is not HealthVerdict.PASS:
+            raise DeliveryActionDeniedError("completion requires the latest PASS observation")
+        if await self._has_event_for_deployment(
+            deployment,
+            WorkEventType.WORK_COMPLETED,
+        ):
+            return await self._set_work_status(deployment, "COMPLETE")
+        await self._append(
+            project_id=deployment.project_id,
+            work_id=deployment.work_id,
+            event_type=WorkEventType.WORK_COMPLETED,
+            payload={
+                "deployment_id": deployment.id,
+                "release_candidate_id": candidate.id,
+                "deployment": deployment.model_dump(mode="json"),
+                "observation": observation.model_dump(mode="json"),
+                "evidence_refs": list(evidence_refs),
+            },
+            actor_ref="delivery_lifecycle",
+        )
+        return await self._set_work_status(deployment, "COMPLETE")
+
+    async def _run_controlled(
+        self,
+        operation: Awaitable[T],
+        request: DeliveryControlRequest,
+    ) -> T:
+        async def _heartbeat() -> None:
+            await self._preflight(request)
+
+        return await run_with_heartbeat(
+            operation,
+            heartbeat=_heartbeat,
+            interval=self._heartbeat_interval,
+        )
 
     async def _preflight(self, request: DeliveryControlRequest) -> None:
         preconditions = tuple(
@@ -729,6 +850,21 @@ class DeliveryLifecycle:
                 return candidate
         raise ValueError("release candidate is not recorded for this WorkItem")
 
+    async def _candidate_by_commit(
+        self,
+        work_id: str,
+        project_id: str,
+        commit_sha: str,
+    ) -> ReleaseCandidate | None:
+        events = await self._work_store.read_events(work_id, project_id=project_id)
+        for event in reversed(events):
+            if event.event_type is not WorkEventType.RELEASE_CREATED:
+                continue
+            candidate = ReleaseCandidate.model_validate(event.payload_json["release_candidate"])
+            if candidate.commit_sha == commit_sha:
+                return candidate
+        return None
+
     async def _deployment_by_id(
         self,
         work_id: str,
@@ -766,6 +902,44 @@ class DeliveryLifecycle:
             ):
                 return True
         return False
+
+    async def _deployment_for(
+        self,
+        candidate: ReleaseCandidate,
+        environment: str,
+        exposure: BlastRadius,
+    ) -> Deployment | None:
+        events = await self._work_store.read_events(
+            candidate.work_id,
+            project_id=candidate.project_id,
+        )
+        for event in reversed(events):
+            if event.event_type is not WorkEventType.DEPLOYMENT_RECORDED:
+                continue
+            deployment = Deployment.model_validate(event.payload_json["deployment"])
+            if (
+                deployment.release_candidate_id == candidate.id
+                and deployment.environment == environment
+                and deployment.exposure == exposure
+            ):
+                return deployment
+        return None
+
+    async def _rollback_for(
+        self,
+        source_deployment_id: str,
+        source: Deployment,
+    ) -> Deployment | None:
+        events = await self._work_store.read_events(
+            source.work_id,
+            project_id=source.project_id,
+        )
+        for event in reversed(events):
+            if event.event_type is not WorkEventType.ROLLBACK_RECORDED:
+                continue
+            if event.payload_json.get("source_deployment_id") == source_deployment_id:
+                return Deployment.model_validate(event.payload_json["deployment"])
+        return None
 
     async def _candidate_was_rolled_back(
         self,
@@ -858,6 +1032,21 @@ class DeliveryLifecycle:
         events = await self._work_store.read_events(work_id, project_id=project_id)
         return active_control_precondition_ids(events)
 
+    async def _has_event_for_deployment(
+        self,
+        deployment: Deployment,
+        event_type: WorkEventType,
+    ) -> bool:
+        events = await self._work_store.read_events(
+            deployment.work_id,
+            project_id=deployment.project_id,
+        )
+        return any(
+            event.event_type is event_type
+            and event.payload_json.get("deployment_id") == deployment.id
+            for event in events
+        )
+
     async def _record_deployment(self, deployment: Deployment, action: str) -> None:
         await self._append(
             project_id=deployment.project_id,
@@ -869,6 +1058,27 @@ class DeliveryLifecycle:
             },
             actor_ref="deployment_provider",
         )
+
+    async def _set_work_status(
+        self,
+        deployment: Deployment,
+        status: str,
+    ) -> WorkRecord:
+        record = await self._work_store.load_work(
+            deployment.work_id,
+            project_id=deployment.project_id,
+        )
+        if record is None:
+            raise KeyError(deployment.work_id)
+        updated = record.model_copy(
+            update={
+                "status": status,
+                "pending_gate": None,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        await self._work_store.save_work(updated)
+        return updated
 
     async def _append(
         self,

@@ -587,3 +587,51 @@ async def test_rollback_artifact_digest_must_match_remote_version() -> None:
     )
     assert artifact.passed is False
     assert artifact.detail == "known-good rollback artifact digest does not match"
+
+
+@pytest.mark.asyncio
+async def test_rollback_artifact_resolves_candidate_content_tag() -> None:
+    digest = "d" * 64
+    candidate = _candidate().model_copy(
+        update={
+            "artifact_ref": f"cloudflare-version-tag://sagewai-{digest}",
+            "artifact_digest": digest,
+        }
+    )
+
+    def tagged_version(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/versions"):
+            assert request.url.params["deployable"] == "true"
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "success": True,
+                    "result": {
+                        "items": [
+                            {
+                                "id": VERSION_ID,
+                                "annotations": {"workers/tag": f"sagewai-{digest}"},
+                            }
+                        ]
+                    },
+                },
+            )
+        return _response(request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(tagged_version)) as client:
+        probe = CloudflareDeliveryControlProbe(
+            config=_config(),
+            api_token="api-token",
+            client=client,
+            now=lambda: NOW,
+        )
+        request = _request("rollback").model_copy(update={"known_good_candidate": candidate})
+
+        results = await _evaluate(probe, request)
+
+    artifact = next(
+        result for result in results if result.precondition_id == "cloudflare-rollback-artifact"
+    )
+    assert artifact.passed is True
+    assert artifact.detail is None

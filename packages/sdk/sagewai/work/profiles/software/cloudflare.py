@@ -268,12 +268,15 @@ class CloudflareDeliveryControlProbe:
         if candidate is None:
             detail = "known-good rollback artifact is missing"
             evidence_refs: tuple[str, ...] = ()
-        elif not candidate.artifact_ref.startswith("cloudflare-version://"):
-            detail = "known-good rollback artifact is not a Cloudflare version"
-            evidence_refs = (candidate.artifact_ref,)
-        else:
+        elif candidate.artifact_ref.startswith("cloudflare-version://"):
             evidence_refs = (candidate.artifact_ref,)
             detail = await self._verify_version(candidate)
+        elif candidate.artifact_ref.startswith("cloudflare-version-tag://"):
+            evidence_refs = (candidate.artifact_ref,)
+            detail = await self._verify_version_tag(candidate)
+        else:
+            detail = "known-good rollback artifact is not a Cloudflare version"
+            evidence_refs = (candidate.artifact_ref,)
         return ControlCheckResult(
             project_id=request.project_id,
             precondition_id=precondition_id,
@@ -311,6 +314,36 @@ class CloudflareDeliveryControlProbe:
             if exc.response.status_code == 404:
                 return "known-good rollback artifact is missing"
             return f"Cloudflare rollback provider unavailable: {exc}"
+        except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+            return f"Cloudflare rollback provider unavailable: {exc}"
+        return None
+
+    async def _verify_version_tag(self, candidate: ReleaseCandidate) -> str | None:
+        tag = candidate.artifact_ref.removeprefix("cloudflare-version-tag://")
+        if tag != f"sagewai-{candidate.artifact_digest}":
+            return "known-good rollback artifact digest does not match"
+        try:
+            response = await self._client.get(
+                (
+                    f"{self._config.api_base}/accounts/{self._config.account_id}"
+                    f"/workers/scripts/{self._config.script_name}/versions"
+                ),
+                headers={"Authorization": f"Bearer {self._api_token}"},
+                params={"deployable": "true"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("success") is not True:
+                return "known-good rollback artifact is missing"
+            matches = [
+                item
+                for item in payload["result"]["items"]
+                if item.get("annotations", {}).get("workers/tag") == tag
+            ]
+            if not matches:
+                return "known-good rollback artifact is missing"
+            if len(matches) > 1:
+                return "Cloudflare rollback provider unavailable: release tag is ambiguous"
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
             return f"Cloudflare rollback provider unavailable: {exc}"
         return None

@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 import pytest
@@ -246,13 +247,15 @@ def _lifecycle(
     *,
     control_probe=None,
     deployment_provider=None,
+    observation_provider=None,
     policy=None,
     observations=({"availability": True},),
+    heartbeat_interval: float = 30,
 ):
     candidate = _candidate()
     release = DeterministicFakeReleaseProvider(candidate)
     deployment = deployment_provider or DeterministicFakeDeploymentProvider()
-    observation = DeterministicFakeObservationProvider(observations)
+    observation = observation_provider or DeterministicFakeObservationProvider(observations)
     action_policy = policy or RecordingPolicy()
     lifecycle = DeliveryLifecycle(
         work_store=store,
@@ -262,6 +265,7 @@ def _lifecycle(
         control_probe=control_probe or _passing_probe(),
         control_preconditions=_preconditions(),
         action_policy=action_policy,
+        heartbeat_interval=heartbeat_interval,
     )
     return lifecycle, release, deployment, observation, action_policy
 
@@ -1118,6 +1122,299 @@ async def test_delivery_approval_is_bound_to_release_candidate(
     ]
     assert candidate_one.id in approval_policy.requests[0].scope
     assert candidate_two.id in approval_policy.requests[1].scope
+
+
+@pytest.mark.asyncio
+async def test_completed_release_and_exact_delivery_actions_resume_without_rerun(
+    store: WorkStore,
+) -> None:
+    lifecycle, release, provider, _, _ = _lifecycle(
+        store,
+        observations=({"availability": True},),
+    )
+    candidate = await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    assert (
+        await lifecycle.build(
+            work_id=WORK_ID,
+            project_id=PROJECT_ID,
+            commit_sha=COMMIT_SHA,
+            evidence_refs=(),
+        )
+        == candidate
+    )
+    exposure = BlastRadius(dimension="traffic", value="5%")
+    deployment = await lifecycle.deploy(
+        candidate,
+        environment="production",
+        exposure=exposure,
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    assert (
+        await lifecycle.deploy(
+            candidate,
+            environment="production",
+            exposure=exposure,
+            known_good_candidate=_known_good(),
+            evidence_refs=(),
+            expected_duration_seconds=60,
+        )
+        == deployment
+    )
+
+    assert release.builds == [COMMIT_SHA]
+    assert provider.deployments == [deployment]
+
+
+@pytest.mark.asyncio
+async def test_failure_triage_and_verified_rollout_completion_are_persisted(
+    store: WorkStore,
+) -> None:
+    gate = HealthGate(
+        id="availability",
+        project_id=PROJECT_ID,
+        description="availability",
+        check_ref="http://availability",
+        failure_verdict=HealthVerdict.FAIL,
+    )
+    lifecycle, _, _, _, _ = _lifecycle(
+        store,
+        observations=(
+            {"availability": False},
+            {"availability": True},
+            {"availability": True},
+        ),
+    )
+    candidate = await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    failed_deployment = await lifecycle.deploy(
+        candidate,
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="5%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    failed = await lifecycle.observe(
+        failed_deployment,
+        gates=(gate,),
+        window_seconds=30,
+    )
+    with pytest.raises(DeliveryActionDeniedError, match="recorded rollback"):
+        await lifecycle.triage(
+            failed_deployment,
+            observation=failed,
+            summary="Canary availability failed.",
+            evidence_refs=("observation://failed",),
+        )
+    rolled_back = await lifecycle.rollback(
+        failed_deployment,
+        known_good_candidate=_known_good(),
+        evidence_refs=("observation://failed",),
+        expected_duration_seconds=60,
+    )
+    await lifecycle.observe(rolled_back, gates=(gate,), window_seconds=30)
+    triaged = await lifecycle.triage(
+        failed_deployment,
+        observation=failed,
+        summary="Canary availability failed.",
+        evidence_refs=("observation://failed",),
+    )
+    assert triaged.status == "TRIAGE"
+    resumed_triage = await lifecycle.triage(
+        failed_deployment,
+        observation=failed,
+        summary="Canary availability failed.",
+        evidence_refs=("observation://failed",),
+    )
+    assert resumed_triage.status == "TRIAGE"
+
+    repaired = _candidate(
+        candidate_id="candidate-2",
+        artifact_ref="artifact://candidate-2",
+        digest="d" * 64,
+        commit_sha="e" * 40,
+    )
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    await store.append_event(
+        WorkEvent(
+            id="release-candidate-two-for-completion",
+            project_id=PROJECT_ID,
+            work_id=WORK_ID,
+            sequence=events[-1].sequence + 1,
+            event_type=WorkEventType.RELEASE_CREATED,
+            actor_type="test",
+            actor_ref="release-provider",
+            payload_json={"release_candidate": repaired.model_dump(mode="json")},
+            created_at=NOW,
+        )
+    )
+    rollout = await lifecycle.deploy(
+        repaired,
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="100%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    passed = await lifecycle.observe(rollout, gates=(gate,), window_seconds=30)
+    completed = await lifecycle.complete(
+        rollout,
+        required_exposure=BlastRadius(dimension="traffic", value="100%"),
+        observation=passed,
+        evidence_refs=("configured://docs",),
+    )
+
+    assert completed.status == "COMPLETE"
+    resumed_completion = await lifecycle.complete(
+        rollout,
+        required_exposure=BlastRadius(dimension="traffic", value="100%"),
+        observation=passed,
+        evidence_refs=("configured://docs",),
+    )
+    assert resumed_completion.status == "COMPLETE"
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    assert sum(event.event_type is WorkEventType.TRIAGE_CREATED for event in events) == 1
+    assert sum(event.event_type is WorkEventType.WORK_COMPLETED for event in events) == 1
+    assert events[-1].event_type is WorkEventType.WORK_COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_in_flight_control_loss_cancels_provider_and_freezes_work(
+    store: WorkStore,
+) -> None:
+    class LosingProbe:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def evaluate(self, request, preconditions):
+            self.calls += 1
+            return tuple(
+                _result(
+                    precondition.id,
+                    passed=self.calls == 1 or precondition.id != "delivery-observability",
+                    detail="monitoring dark" if self.calls > 1 else None,
+                )
+                for precondition in preconditions
+            )
+
+    class BlockingProvider(DeterministicFakeDeploymentProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cancelled = False
+
+        async def deploy(self, candidate, environment, exposure, known_good_candidate):
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+
+    provider = BlockingProvider()
+    lifecycle, _, _, _, _ = _lifecycle(
+        store,
+        control_probe=LosingProbe(),
+        deployment_provider=provider,
+        heartbeat_interval=0.01,
+    )
+    candidate = await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+
+    with pytest.raises(ControlDegradedError, match="delivery-observability"):
+        await lifecycle.deploy(
+            candidate,
+            environment="production",
+            exposure=BlastRadius(dimension="traffic", value="5%"),
+            known_good_candidate=_known_good(),
+            evidence_refs=(),
+            expected_duration_seconds=60,
+        )
+
+    assert provider.cancelled is True
+    pending = await store.pending_attention(project_id=PROJECT_ID)
+    assert [item.attention_id for item in pending] == ["delivery-observability"]
+
+
+@pytest.mark.asyncio
+async def test_monitoring_darkness_during_observation_cancels_window_and_freezes_work(
+    store: WorkStore,
+) -> None:
+    class LosingProbe:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def evaluate(self, request, preconditions):
+            self.calls += 1
+            return tuple(
+                _result(
+                    precondition.id,
+                    passed=self.calls <= 2,
+                    detail="monitoring dark" if self.calls > 2 else None,
+                )
+                for precondition in preconditions
+            )
+
+    class BlockingObservationProvider(DeterministicFakeObservationProvider):
+        def __init__(self) -> None:
+            super().__init__(({"availability": True},))
+            self.cancelled = False
+
+        async def observe(self, deployment, gates, window_seconds):
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+
+    observation = BlockingObservationProvider()
+    lifecycle, _, _, _, _ = _lifecycle(
+        store,
+        control_probe=LosingProbe(),
+        observation_provider=observation,
+        heartbeat_interval=0.01,
+    )
+    candidate = await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    deployment = await lifecycle.deploy(
+        candidate,
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="5%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    gate = HealthGate(
+        id="availability",
+        project_id=PROJECT_ID,
+        description="availability",
+        check_ref="http://availability",
+        failure_verdict=HealthVerdict.FAIL,
+    )
+
+    with pytest.raises(ControlDegradedError, match="delivery-observability"):
+        await lifecycle.observe(deployment, gates=(gate,), window_seconds=60)
+
+    assert observation.cancelled is True
+    pending = await store.pending_attention(project_id=PROJECT_ID)
+    assert [item.attention_id for item in pending] == ["delivery-observability"]
 
 
 @pytest.mark.parametrize("action", ("promote", "rollback"))
