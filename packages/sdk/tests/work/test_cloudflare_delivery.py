@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -81,6 +82,7 @@ def _config(*, max_staleness: int = 120) -> CloudflareDeliveryConfig:
     return CloudflareDeliveryConfig(
         project_id=PROJECT_ID,
         account_id="account-1",
+        zone_name="sagewai.ai",
         script_name="docs",
         target_url="https://docs.sagewai.ai",
         minimum_credential_ttl_seconds=1800,
@@ -94,7 +96,6 @@ def _request(action: str, *, known_good=True) -> DeliveryControlRequest:
         work_id=WORK_ID,
         action=action,
         candidate=_candidate(),
-        deployment=None,
         known_good_candidate=_candidate() if known_good else None,
         expected_duration_seconds=600,
     )
@@ -118,16 +119,43 @@ def _response(request: httpx.Request, *, observed_at: datetime = NOW) -> httpx.R
     if request.url.host == "docs.sagewai.ai":
         assert request.method == "GET"
         return httpx.Response(200, request=request)
-    if request.url.path.endswith("/workers/observability/telemetry/query"):
-        assert request.method == "POST"
+    if request.url.path == "/client/v4/zones":
+        assert request.method == "GET"
+        assert request.url.params["name"] == "sagewai.ai"
+        assert request.url.params["account.id"] == "account-1"
         return httpx.Response(
             200,
             request=request,
             json={
                 "success": True,
-                "result": {
-                    "events": {"events": [{"timestamp": int(observed_at.timestamp() * 1000)}]}
+                "result": [{"id": "zone-1", "name": "sagewai.ai", "status": "active"}],
+            },
+        )
+    if request.url.path == "/client/v4/graphql":
+        assert request.method == "POST"
+        body = json.loads(request.content)
+        assert "httpRequests1mGroups" in body["query"]
+        assert body["variables"]["zoneTag"] == "zone-1"
+        assert body["variables"]["host"] == "docs.sagewai.ai"
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "data": {
+                    "viewer": {
+                        "zones": [
+                            {
+                                "metrics": [
+                                    {
+                                        "requests": 1,
+                                        "dimensions": {"datetime": observed_at.isoformat()},
+                                    }
+                                ]
+                            }
+                        ]
+                    }
                 },
+                "errors": None,
             },
         )
     if request.url.path.endswith(f"/versions/{VERSION_ID}"):
@@ -207,9 +235,8 @@ async def test_real_path_preflight_checks_authority_observability_and_rollback()
         results = await _evaluate(probe, _request("deploy"))
 
     assert [result.precondition_id for result in results] == [
-        "cloudflare-deploy-authority",
+        "cloudflare-authority",
         "cloudflare-observability",
-        "cloudflare-rollback-authority",
         "cloudflare-rollback-artifact",
     ]
     assert all(result.passed for result in results)
@@ -312,7 +339,7 @@ async def test_invalid_rollback_credential_fails_its_own_precondition() -> None:
         results = await _evaluate(probe, _request("rollback"))
 
     authority = next(
-        result for result in results if result.precondition_id == "cloudflare-rollback-authority"
+        result for result in results if result.precondition_id == "cloudflare-authority"
     )
     assert authority.passed is False
     assert "expired" in (authority.detail or "")
@@ -328,7 +355,7 @@ async def test_lifecycle_refuses_rollback_when_cloudflare_credential_expires(
         nonlocal verification_calls
         if request.url.path == "/client/v4/user/tokens/verify":
             verification_calls += 1
-            if verification_calls > 2:
+            if verification_calls > 1:
                 return httpx.Response(
                     200,
                     request=request,
@@ -373,7 +400,7 @@ async def test_lifecycle_refuses_rollback_when_cloudflare_credential_expires(
             expected_duration_seconds=600,
         )
 
-        with pytest.raises(ControlDegradedError, match="rollback-authority"):
+        with pytest.raises(ControlDegradedError, match="cloudflare-authority"):
             await lifecycle.rollback(
                 deployment,
                 known_good_candidate=_known_good(),
@@ -383,7 +410,7 @@ async def test_lifecycle_refuses_rollback_when_cloudflare_credential_expires(
 
     assert provider.rollbacks == []
     pending = await store.pending_attention(project_id=PROJECT_ID)
-    assert [item.attention_id for item in pending] == ["cloudflare-rollback-authority"]
+    assert [item.attention_id for item in pending] == ["cloudflare-authority"]
 
 
 @pytest.mark.asyncio

@@ -7,7 +7,11 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""Release, delivery, observation, and rollback contracts for software Work."""
+"""Release, delivery, observation, and rollback contracts for software Work.
+
+Release builds are policy-gated local PURE actions. Every provider action that
+can change configured exposure has deterministic control preconditions.
+"""
 
 from __future__ import annotations
 
@@ -22,9 +26,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from sagewai.work.control import (
     ControlCheckResult,
     ControlDegradedError,
+)
+from sagewai.work.events import (
+    WorkEvent,
+    WorkEventType,
     active_control_precondition_ids,
 )
-from sagewai.work.events import WorkEvent, WorkEventType
 from sagewai.work.models import (
     ActionRequest,
     ControlPrecondition,
@@ -88,7 +95,7 @@ class Deployment(BaseModel):
     environment: str
     exposure: BlastRadius
     provider_ref: str
-    status: str
+    status: Literal["active", "rolled_back"]
 
 
 class HealthGate(BaseModel):
@@ -136,7 +143,6 @@ class DeliveryControlRequest(BaseModel):
     work_id: str
     action: Literal["deploy", "promote", "observe", "rollback"]
     candidate: ReleaseCandidate
-    deployment: Deployment | None
     known_good_candidate: ReleaseCandidate | None
     expected_duration_seconds: int = Field(gt=0)
 
@@ -272,7 +278,6 @@ class DeliveryLifecycle:
         """Deploy a candidate only while authority, observation, and rollback pass."""
 
         await self._require_candidate(candidate)
-        await self._require_known_good(candidate, known_good_candidate)
         if await self._has_deployment(candidate, environment):
             raise DeliveryActionDeniedError(
                 "candidate already deployed to environment; use promote"
@@ -283,7 +288,6 @@ class DeliveryLifecycle:
                 work_id=candidate.work_id,
                 action="deploy",
                 candidate=candidate,
-                deployment=None,
                 known_good_candidate=known_good_candidate,
                 expected_duration_seconds=expected_duration_seconds,
             )
@@ -329,7 +333,6 @@ class DeliveryLifecycle:
                 work_id=deployment.work_id,
                 action="observe",
                 candidate=candidate,
-                deployment=deployment,
                 known_good_candidate=None,
                 expected_duration_seconds=window_seconds,
             )
@@ -361,9 +364,8 @@ class DeliveryLifecycle:
         """Increase exposure only after the latest health verdict is PASS."""
 
         candidate = await self._candidate_for(deployment)
-        if deployment.status != "active" or await self._was_rolled_back(deployment):
+        if deployment.status != "active" or await self._candidate_was_rolled_back(candidate):
             raise DeliveryActionDeniedError("rolled-back deployment cannot be promoted")
-        await self._require_known_good(candidate, known_good_candidate)
         observation = await self._latest_observation(deployment)
         if observation is None or observation.verdict is not HealthVerdict.PASS:
             raise DeliveryActionDeniedError("promotion requires a passing observation")
@@ -373,7 +375,6 @@ class DeliveryLifecycle:
                 work_id=deployment.work_id,
                 action="promote",
                 candidate=candidate,
-                deployment=deployment,
                 known_good_candidate=known_good_candidate,
                 expected_duration_seconds=expected_duration_seconds,
             )
@@ -410,14 +411,12 @@ class DeliveryLifecycle:
         """Rollback only when the rollback action's own preconditions pass."""
 
         candidate = await self._candidate_for(deployment)
-        await self._require_known_good(candidate, known_good_candidate)
         await self._preflight(
             DeliveryControlRequest(
                 project_id=deployment.project_id,
                 work_id=deployment.work_id,
                 action="rollback",
                 candidate=candidate,
-                deployment=deployment,
                 known_good_candidate=known_good_candidate,
                 expected_duration_seconds=expected_duration_seconds,
             )
@@ -442,6 +441,7 @@ class DeliveryLifecycle:
             or rolled_back.work_id != deployment.work_id
             or rolled_back.release_candidate_id != known_good_candidate.id
             or rolled_back.environment != deployment.environment
+            or rolled_back.status != "rolled_back"
         ):
             raise ValueError("rollback result belongs to a different deployment")
         await self._append(
@@ -450,6 +450,7 @@ class DeliveryLifecycle:
             event_type=WorkEventType.ROLLBACK_RECORDED,
             payload={
                 "source_deployment_id": deployment.id,
+                "source_release_candidate_id": candidate.id,
                 "deployment": rolled_back.model_dump(mode="json"),
                 "known_good_release_candidate": known_good_candidate.model_dump(mode="json"),
             },
@@ -468,6 +469,26 @@ class DeliveryLifecycle:
         if any(precondition.project_id != request.project_id for precondition in preconditions):
             raise ValueError("delivery precondition belongs to a different project")
         results = await self._control_probe.evaluate(request, preconditions)
+        known_good_problem = await self._known_good_problem(request)
+        if known_good_problem is not None:
+            reversibility_ids = {
+                precondition.id
+                for precondition in preconditions
+                if precondition.kind.value == "reversibility"
+            }
+            if not reversibility_ids:
+                raise ValueError("delivery action has no reversibility control precondition")
+            results = tuple(
+                result.model_copy(
+                    update={
+                        "passed": False,
+                        "detail": known_good_problem,
+                    }
+                )
+                if result.precondition_id in reversibility_ids
+                else result
+                for result in results
+            )
         expected_ids = {precondition.id for precondition in preconditions}
         if (
             len(results) != len(preconditions)
@@ -681,14 +702,17 @@ class DeliveryLifecycle:
                 return True
         return False
 
-    async def _was_rolled_back(self, deployment: Deployment) -> bool:
+    async def _candidate_was_rolled_back(
+        self,
+        candidate: ReleaseCandidate,
+    ) -> bool:
         events = await self._work_store.read_events(
-            deployment.work_id,
-            project_id=deployment.project_id,
+            candidate.work_id,
+            project_id=candidate.project_id,
         )
         return any(
             event.event_type is WorkEventType.ROLLBACK_RECORDED
-            and event.payload_json.get("source_deployment_id") == deployment.id
+            and event.payload_json.get("source_release_candidate_id") == candidate.id
             for event in events
         )
 
@@ -700,7 +724,22 @@ class DeliveryLifecycle:
             deployment.work_id,
             project_id=deployment.project_id,
         )
+        deployment_sequence = max(
+            (
+                event.sequence
+                for event in events
+                if event.event_type
+                in {
+                    WorkEventType.DEPLOYMENT_RECORDED,
+                    WorkEventType.ROLLBACK_RECORDED,
+                }
+                and Deployment.model_validate(event.payload_json["deployment"]) == deployment
+            ),
+            default=0,
+        )
         for event in reversed(events):
+            if event.sequence <= deployment_sequence:
+                break
             if event.event_type is not WorkEventType.OBSERVATION_RECORDED:
                 continue
             observation = ObservationResult.model_validate(event.payload_json["observation"])
@@ -748,22 +787,31 @@ class DeliveryLifecycle:
             )
         )
 
-    async def _require_known_good(
+    async def _known_good_problem(
         self,
-        candidate: ReleaseCandidate,
-        known_good_candidate: ReleaseCandidate,
-    ) -> None:
+        request: DeliveryControlRequest,
+    ) -> str | None:
+        if request.action == "observe":
+            return None
+        candidate = request.candidate
+        known_good_candidate = request.known_good_candidate
+        if known_good_candidate is None:
+            return "known-good release candidate is missing"
         if known_good_candidate.project_id != candidate.project_id:
-            raise ValueError("known-good candidate belongs to a different project")
+            return "known-good candidate belongs to a different project"
         if known_good_candidate.id == candidate.id:
-            raise ValueError("known-good candidate must differ from the candidate under delivery")
-        canonical = await self._candidate_by_id(
-            known_good_candidate.work_id,
-            known_good_candidate.project_id,
-            known_good_candidate.id,
-        )
+            return "known-good candidate must differ from the candidate under delivery"
+        try:
+            canonical = await self._candidate_by_id(
+                known_good_candidate.work_id,
+                known_good_candidate.project_id,
+                known_good_candidate.id,
+            )
+        except ValueError:
+            return "known-good release candidate is not recorded"
         if canonical != known_good_candidate:
-            raise ValueError("known-good candidate is not canonical")
+            return "known-good release candidate is not canonical"
+        return None
 
     @staticmethod
     def _validate_deployment(
@@ -778,6 +826,7 @@ class DeliveryLifecycle:
             or deployment.release_candidate_id != candidate.id
             or deployment.environment != environment
             or deployment.exposure != exposure
+            or deployment.status != "active"
         ):
             raise ValueError("deployment result does not match the requested candidate")
 

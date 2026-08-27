@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
@@ -32,6 +33,7 @@ class CloudflareDeliveryConfig(BaseModel):
 
     project_id: str
     account_id: str
+    zone_name: str
     script_name: str
     target_url: str
     minimum_credential_ttl_seconds: int = Field(gt=0)
@@ -45,32 +47,23 @@ def cloudflare_delivery_preconditions(
 ) -> tuple[ControlPrecondition, ...]:
     """Declare the controls required by each docs delivery action."""
 
-    state_changing = ("deploy", "promote")
-    rollback_capable = (*state_changing, "rollback")
+    controlled_actions = ("deploy", "promote", "rollback")
     return (
         ControlPrecondition(
-            id="cloudflare-deploy-authority",
+            id="cloudflare-authority",
             project_id=project_id,
             kind=ControlPreconditionKind.AUTHORITY,
-            description="Cloudflare delivery credential remains valid for the action.",
-            check_ref="cloudflare.deploy_authority",
-            required_for=state_changing,
+            description="Cloudflare credential remains valid for delivery and rollback.",
+            check_ref="cloudflare.authority",
+            required_for=controlled_actions,
         ),
         ControlPrecondition(
             id="cloudflare-observability",
             project_id=project_id,
             kind=ControlPreconditionKind.OBSERVABILITY,
-            description="Docs is reachable and Workers telemetry remains fresh.",
+            description="Docs is reachable and zone HTTP analytics remain fresh.",
             check_ref="cloudflare.observability",
-            required_for=(*state_changing, "observe", "rollback"),
-        ),
-        ControlPrecondition(
-            id="cloudflare-rollback-authority",
-            project_id=project_id,
-            kind=ControlPreconditionKind.AUTHORITY,
-            description="Cloudflare credential can perform a controlled rollback.",
-            check_ref="cloudflare.rollback_authority",
-            required_for=rollback_capable,
+            required_for=(*controlled_actions, "observe"),
         ),
         ControlPrecondition(
             id="cloudflare-rollback-artifact",
@@ -78,7 +71,7 @@ def cloudflare_delivery_preconditions(
             kind=ControlPreconditionKind.REVERSIBILITY,
             description="The known-good Worker version exists with the expected digest.",
             check_ref="cloudflare.rollback_artifact",
-            required_for=rollback_capable,
+            required_for=controlled_actions,
         ),
     )
 
@@ -110,10 +103,7 @@ class CloudflareDeliveryControlProbe:
         for precondition in preconditions:
             if precondition.project_id != request.project_id:
                 raise ValueError("Cloudflare precondition belongs to a different project")
-            if precondition.check_ref in {
-                "cloudflare.deploy_authority",
-                "cloudflare.rollback_authority",
-            }:
+            if precondition.check_ref == "cloudflare.authority":
                 result = await self._authority(request, precondition.id)
             elif precondition.check_ref == "cloudflare.observability":
                 result = await self._observability(request, precondition.id)
@@ -176,47 +166,60 @@ class CloudflareDeliveryControlProbe:
         precondition_id: str,
     ) -> ControlCheckResult:
         checked_at = self._now()
-        now_ms = int(checked_at.timestamp() * 1000)
         try:
             endpoint = await self._client.get(self._config.target_url)
             endpoint.raise_for_status()
+            zone_response = await self._client.get(
+                f"{self._config.api_base}/zones",
+                headers={"Authorization": f"Bearer {self._api_token}"},
+                params={
+                    "name": self._config.zone_name,
+                    "account.id": self._config.account_id,
+                    "status": "active",
+                    "per_page": 1,
+                },
+            )
+            zone_response.raise_for_status()
+            zone_payload = zone_response.json()
+            zones = zone_payload["result"]
+            if zone_payload.get("success") is not True or len(zones) != 1:
+                raise ValueError("Cloudflare zone is unavailable")
+            zone_id = str(zones[0]["id"])
             telemetry = await self._client.post(
-                (
-                    f"{self._config.api_base}/accounts/{self._config.account_id}"
-                    "/workers/observability/telemetry/query"
-                ),
+                f"{self._config.api_base}/graphql",
                 headers={"Authorization": f"Bearer {self._api_token}"},
                 json={
-                    "queryId": "sagewai-delivery-control",
-                    "timeframe": {
-                        "from": now_ms - self._config.maximum_monitoring_staleness_seconds * 1000,
-                        "to": now_ms,
-                    },
-                    "dry": True,
-                    "limit": 1,
-                    "view": "events",
-                    "parameters": {
-                        "datasets": ["cloudflare-workers"],
-                        "filterCombination": "and",
-                        "filters": [
-                            {
-                                "key": "$metadata.service",
-                                "operation": "eq",
-                                "type": "string",
-                                "value": self._config.script_name,
-                            }
-                        ],
+                    "query": (
+                        "query SagewaiDeliveryMetrics($zoneTag: string, $start: "
+                        "Time, $end: Time, $host: string) { viewer { "
+                        "zones(filter: {zoneTag: $zoneTag}) { metrics: "
+                        "httpRequests1mGroups(filter: {datetime_geq: $start, "
+                        "datetime_leq: $end, clientRequestHTTPHost: $host, "
+                        'requestSource: "eyeball"}, limit: 1, orderBy: '
+                        "[datetime_DESC]) { requests dimensions { datetime } } } } }"
+                    ),
+                    "variables": {
+                        "zoneTag": zone_id,
+                        "start": datetime.fromtimestamp(
+                            checked_at.timestamp()
+                            - self._config.maximum_monitoring_staleness_seconds,
+                            tz=timezone.utc,
+                        ).isoformat(),
+                        "end": checked_at.isoformat(),
+                        "host": urlparse(self._config.target_url).hostname,
                     },
                 },
             )
             telemetry.raise_for_status()
             payload = telemetry.json()
-            events = payload["result"]["events"]["events"]
-            if payload.get("success") is not True or not events:
+            metrics = payload["data"]["viewer"]["zones"][0]["metrics"]
+            if payload.get("errors") or not metrics:
                 detail = "Cloudflare monitoring has no fresh telemetry"
             else:
-                latest_ms = max(int(event["timestamp"]) for event in events)
-                age = (now_ms - latest_ms) / 1000
+                latest = _parse_datetime(metrics[0]["dimensions"]["datetime"])
+                if latest is None:
+                    raise ValueError("Cloudflare monitoring timestamp is missing")
+                age = (checked_at - latest).total_seconds()
                 if age < 0 or age > self._config.maximum_monitoring_staleness_seconds:
                     detail = "Cloudflare monitoring timestamp is stale"
                 else:
@@ -229,7 +232,7 @@ class CloudflareDeliveryControlProbe:
             passed=detail is None,
             evidence_refs=(
                 self._config.target_url,
-                f"cloudflare://observability/{self._config.script_name}",
+                f"cloudflare://analytics/{self._config.zone_name}",
             ),
             detail=detail,
             checked_at=checked_at,

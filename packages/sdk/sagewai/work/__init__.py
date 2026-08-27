@@ -17,9 +17,12 @@ from sagewai.work.control import (
     ControlCheckResult,
     ControlDegradedError,
     OperatorController,
+)
+from sagewai.work.events import (
+    WorkEvent,
+    WorkEventType,
     active_control_precondition_ids,
 )
-from sagewai.work.events import WorkEvent, WorkEventType
 from sagewai.work.models import (
     Action,
     ActionIntent,

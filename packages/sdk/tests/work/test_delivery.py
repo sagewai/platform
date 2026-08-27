@@ -219,16 +219,38 @@ async def _record_deployment(store: WorkStore, deployment: Deployment) -> None:
     )
 
 
+async def _record_degradation(store: WorkStore, precondition_id: str) -> None:
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    await store.append_event(
+        WorkEvent(
+            id=f"degraded-{precondition_id}",
+            project_id=PROJECT_ID,
+            work_id=WORK_ID,
+            sequence=events[-1].sequence + 1,
+            event_type=WorkEventType.CONTROL_DEGRADED,
+            actor_type="test",
+            actor_ref=None,
+            payload_json={
+                "failed_preconditions": [precondition_id],
+                "evidence_refs": [f"check://{precondition_id}"],
+                "frozen_action_ids": ["state-changing"],
+            },
+            created_at=NOW,
+        )
+    )
+
+
 def _lifecycle(
     store: WorkStore,
     *,
     control_probe=None,
+    deployment_provider=None,
     policy=None,
     observations=({"availability": True},),
 ):
     candidate = _candidate()
     release = DeterministicFakeReleaseProvider(candidate)
-    deployment = DeterministicFakeDeploymentProvider()
+    deployment = deployment_provider or DeterministicFakeDeploymentProvider()
     observation = DeterministicFakeObservationProvider(observations)
     action_policy = policy or RecordingPolicy()
     lifecycle = DeliveryLifecycle(
@@ -511,6 +533,120 @@ async def test_rolled_back_deployment_cannot_be_promoted(
     assert provider.promotions == []
 
 
+@pytest.mark.asyncio
+async def test_rollback_of_promoted_receipt_freezes_sibling_candidate_receipts(
+    store: WorkStore,
+) -> None:
+    gate = HealthGate(
+        id="availability",
+        project_id=PROJECT_ID,
+        description="availability",
+        check_ref="http://availability",
+        failure_verdict=HealthVerdict.FAIL,
+    )
+    lifecycle, _, provider, _, _ = _lifecycle(
+        store,
+        observations=({"availability": True},),
+    )
+    candidate = await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    canary = await lifecycle.deploy(
+        candidate,
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="5%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    await lifecycle.observe(canary, gates=(gate,), window_seconds=30)
+    promoted = await lifecycle.promote(
+        canary,
+        exposure=BlastRadius(dimension="traffic", value="50%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    await lifecycle.rollback(
+        promoted,
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+
+    with pytest.raises(DeliveryActionDeniedError, match="cannot be promoted"):
+        await lifecycle.promote(
+            canary,
+            exposure=BlastRadius(dimension="traffic", value="100%"),
+            known_good_candidate=_known_good(),
+            evidence_refs=(),
+            expected_duration_seconds=60,
+        )
+
+    assert len(provider.promotions) == 1
+
+
+@pytest.mark.asyncio
+async def test_provider_reusing_deployment_id_requires_new_observation(
+    store: WorkStore,
+) -> None:
+    class StableIdentityProvider(DeterministicFakeDeploymentProvider):
+        async def promote(self, deployment, exposure):
+            self.promotions.append(deployment)
+            return deployment.model_copy(update={"exposure": exposure})
+
+    gate = HealthGate(
+        id="availability",
+        project_id=PROJECT_ID,
+        description="availability",
+        check_ref="http://availability",
+        failure_verdict=HealthVerdict.FAIL,
+    )
+    provider = StableIdentityProvider()
+    lifecycle, _, _, _, _ = _lifecycle(
+        store,
+        deployment_provider=provider,
+        observations=({"availability": True},),
+    )
+    candidate = await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    canary = await lifecycle.deploy(
+        candidate,
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="5%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    await lifecycle.observe(canary, gates=(gate,), window_seconds=30)
+    promoted = await lifecycle.promote(
+        canary,
+        exposure=BlastRadius(dimension="traffic", value="20%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    assert promoted.id == canary.id
+
+    with pytest.raises(DeliveryActionDeniedError, match="passing observation"):
+        await lifecycle.promote(
+            promoted,
+            exposure=BlastRadius(dimension="traffic", value="100%"),
+            known_good_candidate=_known_good(),
+            evidence_refs=(),
+            expected_duration_seconds=60,
+        )
+
+    assert len(provider.promotions) == 1
+
+
 @pytest.mark.parametrize(
     ("failed_id", "detail"),
     (
@@ -568,6 +704,96 @@ async def test_failed_rollback_precondition_refuses_action_and_freezes_work(
     pending = await store.pending_attention(project_id=PROJECT_ID)
     assert [item.attention_id for item in pending] == [failed_id]
     assert pending[0].kind.value == "CONTROL_DEGRADED"
+
+
+@pytest.mark.asyncio
+async def test_unrecorded_known_good_candidate_degrades_reversibility(
+    store: WorkStore,
+) -> None:
+    lifecycle, _, provider, _, _ = _lifecycle(store)
+    candidate = await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    deployment = await lifecycle.deploy(
+        candidate,
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="5%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    unrecorded = _known_good().model_copy(update={"id": "unrecorded"})
+
+    with pytest.raises(ControlDegradedError, match="rollback-artifact"):
+        await lifecycle.rollback(
+            deployment,
+            known_good_candidate=unrecorded,
+            evidence_refs=(),
+            expected_duration_seconds=60,
+        )
+
+    assert provider.rollbacks == []
+    pending = await store.pending_attention(project_id=PROJECT_ID)
+    assert [item.attention_id for item in pending] == ["rollback-artifact"]
+    assert "not recorded" in pending[0].summary
+
+
+@pytest.mark.asyncio
+async def test_unrelated_degradation_freezes_promotion_but_not_observe_or_rollback(
+    store: WorkStore,
+) -> None:
+    gate = HealthGate(
+        id="availability",
+        project_id=PROJECT_ID,
+        description="availability",
+        check_ref="http://availability",
+        failure_verdict=HealthVerdict.FAIL,
+    )
+    lifecycle, _, provider, _, _ = _lifecycle(
+        store,
+        observations=({"availability": True}, {"availability": True}),
+    )
+    candidate = await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    deployment = await lifecycle.deploy(
+        candidate,
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="5%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    await lifecycle.observe(deployment, gates=(gate,), window_seconds=30)
+    await _record_degradation(store, "unrelated-authority")
+
+    assert (
+        await lifecycle.observe(deployment, gates=(gate,), window_seconds=30)
+    ).verdict is HealthVerdict.PASS
+    with pytest.raises(ControlDegradedError, match="unrelated-authority"):
+        await lifecycle.promote(
+            deployment,
+            exposure=BlastRadius(dimension="traffic", value="20%"),
+            known_good_candidate=_known_good(),
+            evidence_refs=(),
+            expected_duration_seconds=60,
+        )
+    rolled_back = await lifecycle.rollback(
+        deployment,
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+
+    assert rolled_back.status == "rolled_back"
+    assert provider.promotions == []
+    assert provider.rollbacks == [deployment]
 
 
 @pytest.mark.asyncio
@@ -719,7 +945,6 @@ def test_control_request_is_immutable() -> None:
         work_id=WORK_ID,
         action="observe",
         candidate=_candidate(),
-        deployment=None,
         known_good_candidate=None,
         expected_duration_seconds=60,
     )

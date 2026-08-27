@@ -22,7 +22,11 @@ from pydantic import BaseModel, ConfigDict
 from sagewai.core.durability import run_with_heartbeat
 from sagewai.core.state import StepStatus, WorkflowRun, WorkflowStore
 from sagewai.safety.permissions import PermissionPolicy
-from sagewai.work.events import WorkEvent, WorkEventType
+from sagewai.work.events import (
+    WorkEvent,
+    WorkEventType,
+    active_control_precondition_ids,
+)
 from sagewai.work.models import (
     ControlPrecondition,
     OperatorDisciplineReport,
@@ -415,15 +419,3 @@ def _blocked_result(request: WorkRequest, summary: str) -> OperatorResult:
         action_results=(),
         profile_context={},
     )
-
-
-def active_control_precondition_ids(events: list[WorkEvent]) -> set[str]:
-    """Fold control events into the currently degraded precondition IDs."""
-
-    active: set[str] = set()
-    for event in events:
-        if event.event_type is WorkEventType.CONTROL_DEGRADED:
-            active.update(event.payload_json.get("failed_preconditions", ()))
-        elif event.event_type is WorkEventType.CONTROL_RESTORED:
-            active.difference_update(event.payload_json.get("precondition_ids", ()))
-    return active

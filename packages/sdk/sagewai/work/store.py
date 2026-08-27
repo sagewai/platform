@@ -19,7 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from sagewai.db import factory
 from sagewai.db.dialect import upsert
 from sagewai.db.models import Base, WorkEventModel, WorkItemModel
-from sagewai.work.events import WorkEvent, WorkEventType
+from sagewai.work.events import (
+    WorkEvent,
+    WorkEventType,
+    active_control_degradations,
+)
 from sagewai.work.models import (
     PendingAttention,
     PendingAttentionKind,
@@ -240,14 +244,7 @@ class WorkStore:
                         )
                     )
 
-            degraded: dict[str, WorkEvent] = {}
-            for event in events:
-                if event.event_type is WorkEventType.CONTROL_DEGRADED:
-                    for precondition_id in event.payload_json["failed_preconditions"]:
-                        degraded[str(precondition_id)] = event
-                elif event.event_type is WorkEventType.CONTROL_RESTORED:
-                    for precondition_id in event.payload_json["precondition_ids"]:
-                        degraded.pop(str(precondition_id), None)
+            degraded = active_control_degradations(events)
             for precondition_id, event in degraded.items():
                 pending.append(
                     PendingAttention(
@@ -256,9 +253,7 @@ class WorkStore:
                         work_id=work_id,
                         kind=PendingAttentionKind.CONTROL_DEGRADED,
                         source_ref=source_ref,
-                        summary=str(
-                            event.payload_json.get("details") or precondition_id
-                        ),
+                        summary=str(event.payload_json.get("details") or precondition_id),
                         evidence_refs=tuple(
                             str(ref) for ref in event.payload_json.get("evidence_refs", ())
                         ),
