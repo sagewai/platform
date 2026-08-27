@@ -8,7 +8,7 @@
 #
 # Quick start:
 #   just bootstrap      # first-time setup (uv + pnpm + hooks)
-#   just smoke           # fast 35-test sanity check
+#   just smoke           # actual software Work sanity path
 #   just dev-all         # run backend + admin UI concurrently
 
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]

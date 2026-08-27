@@ -74,7 +74,10 @@ def test_work_intake_reports_no_unseen_labeled_issue(monkeypatch) -> None:
     result = CliRunner().invoke(work_cli, ["intake", "--label", "sagewai"])
 
     assert result.exit_code == 0, result.output
-    assert result.output == "No new open GitHub issues labeled sagewai.\n"
+    assert (
+        result.output
+        == "No unstarted issues in the oldest 100 open issues labeled sagewai.\n"
+    )
 
 
 @pytest.mark.asyncio

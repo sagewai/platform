@@ -114,7 +114,7 @@ def work_intake(label: str) -> None:
     except ValueError as exc:
         raise click.ClickException(str(exc)) from None
     if record is None:
-        click.echo(f"No new open GitHub issues labeled {label}.")
+        click.echo(f"No unstarted issues in the oldest 100 open issues labeled {label}.")
         return
     _echo_record(record)
 

@@ -170,6 +170,7 @@ test = [
     "grpcio==1.81.0",
     "grpcio-reflection==1.81.0",
     "sqlite-vec==0.1.9",
+    "pymilvus==2.6.15",
 ]
 
 [project.scripts]

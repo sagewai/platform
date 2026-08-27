@@ -169,6 +169,8 @@ async def test_projection_reads_and_identity_are_project_scoped(store: WorkStore
     await store.save_work(_record())
 
     assert await store.load_work("work-1", project_id="project-b") is None
+    with pytest.raises(ValueError, match="different project"):
+        await store.save_work(_record(project_id="project-b"))
 
 
 @pytest.mark.asyncio
@@ -187,10 +189,6 @@ async def test_source_ref_lookup_is_project_scoped(store: WorkStore) -> None:
         )
         is None
     )
-    with pytest.raises(ValueError, match="different project"):
-        await store.save_work(_record(project_id="project-b"))
-
-
 @pytest.mark.asyncio
 async def test_org_global_projection_cannot_change_project(store: WorkStore) -> None:
     await store.save_work(_record(project_id=None))
