@@ -110,6 +110,46 @@ async def test_github_get_issue_via_factory():
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_github_find_pull_requests_via_factory():
+    respx.get(
+        "https://api.github.com/repos/octocat/hello-world/pulls",
+        params={
+            "head": "octocat:sagewai/work-1",
+            "base": "main",
+            "state": "open",
+        },
+    ).respond(
+        200,
+        json=[
+            {
+                "number": 7,
+                "html_url": "https://github.com/octocat/hello-world/pull/7",
+            }
+        ],
+    )
+    registry._reset()
+    registry.load()
+    callables = factory.build_callables(project_id="p1", get_credentials=_github_creds)
+
+    out = await callables["github"]({
+        "_operation": "find_pull_requests",
+        "owner": "octocat",
+        "repo": "hello-world",
+        "head": "octocat:sagewai/work-1",
+        "base": "main",
+        "state": "open",
+    })
+
+    assert out == [
+        {
+            "number": 7,
+            "html_url": "https://github.com/octocat/hello-world/pull/7",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_github_get_pull_request_via_factory():
     respx.get("https://api.github.com/repos/octocat/hello-world/pulls/7").respond(
         200,

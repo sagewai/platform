@@ -58,14 +58,14 @@ def test_work_start_runs_direct_lifecycle(monkeypatch) -> None:
 
 def test_work_start_reports_target_validation_error(monkeypatch) -> None:
     async def fake_start(_description: str):
-        raise ValueError("GitHub default branch moved")
+        raise ValueError("requested base does not match GitHub default branch")
 
     monkeypatch.setattr(work_module, "_start_work", fake_start)
 
     result = CliRunner().invoke(work_cli, ["start", "https://github.com/o/r/issues/1"])
 
     assert result.exit_code != 0
-    assert "GitHub default branch moved" in result.output
+    assert "requested base does not match GitHub default branch" in result.output
     assert "Traceback" not in result.output
 
 

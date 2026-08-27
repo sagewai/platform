@@ -121,6 +121,14 @@ class GitHubClient(Protocol):
 
     async def fetch_issue(self, issue_url: str) -> GitHubIssue: ...
 
+    async def find_open_pull_request(
+        self,
+        *,
+        issue: GitHubIssue,
+        head: str,
+        base: str,
+    ) -> GitHubPullRequest | None: ...
+
     async def create_pull_request(
         self,
         *,
@@ -198,7 +206,7 @@ class CatalogGitHubClient:
         project_id: str,
         github_callable: Callable[
             [dict[str, Any]],
-            Awaitable[dict[str, Any]],
+            Awaitable[Any],
         ],
     ) -> None:
         self._project_id = project_id
@@ -224,6 +232,37 @@ class CatalogGitHubClient:
             title=str(issue["title"]),
             body=str(issue.get("body") or ""),
             default_branch=str(repository["default_branch"]),
+        )
+
+    async def find_open_pull_request(
+        self,
+        *,
+        issue: GitHubIssue,
+        head: str,
+        base: str,
+    ) -> GitHubPullRequest | None:
+        self._validate_project(issue.project_id)
+        result = await self._call(
+            {
+                "_operation": "find_pull_requests",
+                "owner": issue.owner,
+                "repo": issue.repo,
+                "head": f"{issue.owner}:{head}",
+                "base": base,
+                "state": "open",
+            }
+        )
+        if not result:
+            return None
+        pull_request = result[0]
+        return GitHubPullRequest(
+            project_id=self._project_id,
+            owner=issue.owner,
+            repo=issue.repo,
+            number=int(pull_request["number"]),
+            url=str(pull_request["html_url"]),
+            head=head,
+            base=base,
         )
 
     async def create_pull_request(
@@ -378,7 +417,7 @@ class WorktreeBranchPublisher:
         remote_sha = fields[0]
         if remote_sha != base_sha:
             raise ValueError(
-                f"GitHub default branch moved: expected {base_sha}, found {remote_sha}"
+                f"requested base does not match GitHub default branch: expected {base_sha}, found {remote_sha}"
             )
 
     async def publish(
@@ -687,7 +726,7 @@ class GitHubIssueLifecycle:
                                 "failed_preconditions": ["github-target"],
                                 "evidence_refs": [issue.url],
                                 "details": str(exc),
-                                "frozen_actions": [
+                                "frozen_action_ids": [
                                     "publish_branch",
                                     "create_pull_request",
                                     "merge",
@@ -738,13 +777,19 @@ class GitHubIssueLifecycle:
             else:
                 branch, branch_sha = publication
 
-            pull_request = await self._github.create_pull_request(
+            pull_request = await self._github.find_open_pull_request(
                 issue=issue,
-                title=issue.title,
                 head=branch,
                 base=issue.default_branch,
-                body=f"Closes #{issue.number}",
             )
+            if pull_request is None:
+                pull_request = await self._github.create_pull_request(
+                    issue=issue,
+                    title=issue.title,
+                    head=branch,
+                    base=issue.default_branch,
+                    body=f"Closes #{issue.number}",
+                )
             event = await self._append(
                 work_id=work_item.id,
                 project_id=work_item.project_id,
@@ -1181,9 +1226,6 @@ def _attention_comment(item: PendingAttention) -> str:
         return f"Sagewai: approval required — {summary} (gate {item.attention_id})."
     if item.kind is PendingAttentionKind.WORK_BLOCKED:
         return f"Sagewai: work blocked — {summary}."
-    prefix = "Control precondition failed: "
-    if summary.startswith(prefix):
-        summary = summary.removeprefix(prefix)
     evidence = ", ".join(item.evidence_refs)
     suffix = f" Evidence: {evidence}." if evidence else ""
     return f"Sagewai: control degraded — {summary}.{suffix}"

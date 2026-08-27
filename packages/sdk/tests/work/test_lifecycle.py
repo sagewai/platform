@@ -447,6 +447,9 @@ async def test_github_flow_uses_real_software_lifecycle_events(
                 default_branch="main",
             )
 
+        async def find_open_pull_request(self, *, issue, head, base):
+            return None
+
         async def create_pull_request(self, *, issue, title, head, base, body):
             return GitHubPullRequest(
                 project_id=issue.project_id,

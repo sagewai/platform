@@ -130,18 +130,31 @@ class FakeGitHub:
         )
         self.pull_requests = []
         self.pull_request_reads = []
+        self.pull_request_searches = []
         self.merges = []
         self.comments = []
         self.merged_sha = None
         self.fail_after_merge_once = False
         self.fail_create_once = False
+        self.fail_after_create_once = False
         self.fail_comment_once = False
         self.merge_rejection = None
         self.readback_sha = None
+        self.remote_pull_request = None
 
     async def fetch_issue(self, issue_url: str) -> GitHubIssue:
         assert issue_url == ISSUE_URL
         return self.issue
+
+    async def find_open_pull_request(
+        self,
+        *,
+        issue: GitHubIssue,
+        head: str,
+        base: str,
+    ) -> GitHubPullRequest | None:
+        self.pull_request_searches.append((issue, head, base))
+        return self.remote_pull_request
 
     async def create_pull_request(
         self,
@@ -164,7 +177,7 @@ class FakeGitHub:
                 "body": body,
             }
         )
-        return GitHubPullRequest(
+        pull_request = GitHubPullRequest(
             project_id=issue.project_id,
             owner=issue.owner,
             repo=issue.repo,
@@ -173,6 +186,11 @@ class FakeGitHub:
             head=head,
             base=base,
         )
+        self.remote_pull_request = pull_request
+        if self.fail_after_create_once:
+            self.fail_after_create_once = False
+            raise RuntimeError("connection lost after pull request creation")
+        return pull_request
 
     async def merge_pull_request(
         self,
@@ -234,7 +252,7 @@ class FakeBranchPublisher:
     ) -> None:
         self.validations.append((owner, repo, base_sha, default_branch))
         if len(self.validations) == self.fail_validation_call:
-            raise ValueError("GitHub default branch moved")
+            raise ValueError("requested base does not match GitHub default branch")
 
     async def publish(
         self,
@@ -388,6 +406,45 @@ async def test_remote_pr_failure_resumes_from_recorded_branch_without_rerunning_
     assert len(github.pull_requests) == 1
     assert len(software.starts) == 1
     assert software.resumes == 0
+
+
+@pytest.mark.asyncio
+async def test_resume_recovers_pull_request_created_before_event_persistence(
+    store: WorkStore,
+) -> None:
+    flow, software, github, _ = _flow(store)
+    github.fail_after_create_once = True
+
+    with pytest.raises(RuntimeError, match="connection lost after pull request creation"):
+        await flow.start(
+            issue_url=ISSUE_URL,
+            project_id=PROJECT_ID,
+            base_sha="a" * 40,
+        )
+
+    work_id = software.starts[0][0].id
+    events = await store.read_events(work_id, project_id=PROJECT_ID)
+    assert not any(
+        event.event_type is WorkEventType.STAGE_COMPLETED
+        and event.payload_json.get("stage") == "pull_request"
+        for event in events
+    )
+
+    gated = await flow.resume(work_id, project_id=PROJECT_ID)
+
+    assert gated.status == "READY_TO_MERGE"
+    assert len(github.pull_requests) == 1
+    assert len(github.pull_request_searches) == 2
+    assert len(software.starts) == 1
+    assert software.resumes == 0
+    events = await store.read_events(work_id, project_id=PROJECT_ID)
+    pull_requests = [
+        event
+        for event in events
+        if event.event_type is WorkEventType.STAGE_COMPLETED
+        and event.payload_json.get("stage") == "pull_request"
+    ]
+    assert len(pull_requests) == 1
 
 
 @pytest.mark.asyncio
@@ -613,7 +670,7 @@ async def test_target_movement_degrades_control_and_resume_restores_it(
     pending = await store.pending_attention(project_id=PROJECT_ID)
     assert [item.kind.value for item in pending] == ["CONTROL_DEGRADED"]
     assert pending[0].attention_id == "github-target"
-    assert any("GitHub default branch moved" in body for _, body in github.comments)
+    assert any("requested base does not match GitHub default branch" in body for _, body in github.comments)
 
     publisher.fail_validation_call = None
     resumed = await flow.resume(frozen.work_id, project_id=PROJECT_ID)
@@ -622,6 +679,15 @@ async def test_target_movement_degrades_control_and_resume_restores_it(
     assert resumed.pending_gate == f"merge:{frozen.work_id}:7"
     assert len(software.starts) == 1
     events = await store.read_events(frozen.work_id, project_id=PROJECT_ID)
+    degraded = next(
+        event for event in events if event.event_type is WorkEventType.CONTROL_DEGRADED
+    )
+    assert degraded.payload_json["frozen_action_ids"] == [
+        "publish_branch",
+        "create_pull_request",
+        "merge",
+    ]
+    assert "frozen_actions" not in degraded.payload_json
     assert any(
         event.event_type is WorkEventType.CONTROL_DEGRADED
         for event in events
@@ -669,6 +735,52 @@ async def test_allow_policy_merges_without_requesting_operator_approval(
     assert decision.payload_json["decision"] == "allow"
 
 
+@pytest.mark.parametrize(
+    "origin",
+    (
+        "https://github.com/octocat/hello-world.git",
+        "ssh://git@github.com/octocat/hello-world.git",
+    ),
+)
+@pytest.mark.asyncio
+async def test_branch_publisher_accepts_supported_github_origins(
+    origin,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    calls = []
+    outputs = iter((f"{origin}\n", f"{'a' * 40}\trefs/heads/main\n"))
+
+    async def fake_subprocess(**kwargs):
+        calls.append(kwargs["argv"])
+        return type(
+            "Result",
+            (),
+            {"returncode": 0, "stdout": next(outputs), "stderr": ""},
+        )()
+
+    monkeypatch.setattr(
+        "sagewai.work.profiles.software.github.run_worker_subprocess",
+        fake_subprocess,
+    )
+    publisher = WorktreeBranchPublisher(
+        worktree_manager=object(),
+        repository=tmp_path,
+    )
+
+    await publisher.validate_target(
+        owner="octocat",
+        repo="hello-world",
+        base_sha="a" * 40,
+        default_branch="main",
+    )
+
+    assert calls == [
+        ("git", "remote", "get-url", "origin"),
+        ("git", "ls-remote", "--exit-code", "origin", "refs/heads/main"),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_branch_publisher_rejects_unrelated_github_origin(monkeypatch, tmp_path) -> None:
     calls = []
@@ -702,7 +814,7 @@ async def test_branch_publisher_rejects_unrelated_github_origin(monkeypatch, tmp
 
 
 @pytest.mark.asyncio
-async def test_branch_publisher_rejects_moved_default_branch(monkeypatch, tmp_path) -> None:
+async def test_branch_publisher_rejects_base_not_at_default_branch(monkeypatch, tmp_path) -> None:
     outputs = iter(("git@github.com:octocat/hello-world.git\n", f"{'b' * 40}\trefs/heads/main\n"))
 
     async def fake_subprocess(**_kwargs):
@@ -721,7 +833,7 @@ async def test_branch_publisher_rejects_moved_default_branch(monkeypatch, tmp_pa
         repository=tmp_path,
     )
 
-    with pytest.raises(ValueError, match="default branch moved"):
+    with pytest.raises(ValueError, match="requested base does not match GitHub default branch"):
         await publisher.validate_target(
             owner="octocat",
             repo="hello-world",
@@ -903,6 +1015,13 @@ async def test_catalog_client_adapts_existing_github_callable() -> None:
                 "title": "Fix target",
                 "body": "Acceptance",
             }
+        if operation == "find_pull_requests":
+            return [
+                {
+                    "number": 7,
+                    "html_url": "https://github.com/octocat/hello-world/pull/7",
+                }
+            ]
         if operation == "create_pull_request":
             return {
                 "number": 7,
@@ -927,6 +1046,11 @@ async def test_catalog_client_adapts_existing_github_callable() -> None:
         github_callable=github_callable,
     )
     issue = await client.fetch_issue(ISSUE_URL)
+    found = await client.find_open_pull_request(
+        issue=issue,
+        head="sagewai/work-1",
+        base="main",
+    )
     pull_request = await client.create_pull_request(
         issue=issue,
         title=issue.title,
@@ -939,6 +1063,9 @@ async def test_catalog_client_adapts_existing_github_callable() -> None:
     merge = await client.merge_pull_request(pull_request, expected_head_sha="e" * 40)
 
     assert issue.default_branch == "main"
+    assert found is not None
+    assert found.number == 7
+    assert calls[2]["head"] == "octocat:sagewai/work-1"
     assert pull_request.number == 7
     assert merge.merged_sha == "d" * 40
     assert calls[-1]["sha"] == "e" * 40
@@ -947,6 +1074,7 @@ async def test_catalog_client_adapts_existing_github_callable() -> None:
     assert [call["_operation"] for call in calls] == [
         "get_repo",
         "get_issue",
+        "find_pull_requests",
         "create_pull_request",
         "get_pull_request",
         "create_comment",

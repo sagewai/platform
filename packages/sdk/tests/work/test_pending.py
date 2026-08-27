@@ -152,6 +152,7 @@ async def test_pending_attention_is_canonical_resolved_and_project_scoped(
     assert gate.summary == "Approve merge of PR #7."
     control = next(item for item in pending if item.kind is PendingAttentionKind.CONTROL_DEGRADED)
     assert control.evidence_refs == ("check://stale",)
+    assert control.summary == "observability"
 
     await store.append_event(
         _event(

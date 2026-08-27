@@ -8,7 +8,6 @@
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
 """Assert every batch-2b catalog change is wired correctly."""
-
 from sagewai.tools import registry
 
 BATCH_2B_NEW_IDS = {"hubspot_api", "greenhouse_api", "maps_route"}
@@ -41,6 +40,7 @@ def test_github_has_new_write_ops():
         "create_issue",
         "create_comment",
         "create_pull_request",
+        "find_pull_requests",
         "get_issue",
         "get_pull_request",
         "merge_pull_request",
