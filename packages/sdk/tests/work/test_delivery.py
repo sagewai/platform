@@ -1225,13 +1225,15 @@ async def test_failure_triage_and_verified_rollout_completion_are_persisted(
         expected_duration_seconds=60,
     )
     await lifecycle.observe(rolled_back, gates=(gate,), window_seconds=30)
-    with pytest.raises(DeliveryActionDeniedError, match="rolled-back candidate"):
+    assert (
         await lifecycle.build(
             work_id=WORK_ID,
             project_id=PROJECT_ID,
             commit_sha=COMMIT_SHA,
             evidence_refs=(),
         )
+        == candidate
+    )
     with pytest.raises(DeliveryActionDeniedError, match="rolled-back candidate"):
         await lifecycle.deploy(
             candidate,

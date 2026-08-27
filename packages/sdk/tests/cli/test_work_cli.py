@@ -401,6 +401,57 @@ async def test_delivery_gate_approval_routes_to_delivery_flow(monkeypatch) -> No
     assert seen == [(record, "project-a", repository, gate_id)]
 
 
+@pytest.mark.asyncio
+async def test_complete_delivery_approval_is_a_noop_before_repository_work(
+    monkeypatch,
+) -> None:
+    record = SimpleNamespace(
+        work_id="work-1",
+        project_id="project-a",
+        status="COMPLETE",
+        source_ref="https://github.com/octocat/repo/issues/7",
+    )
+
+    async def fake_status(_work_id):
+        return record
+
+    async def unexpected_repository_state():
+        raise AssertionError("terminal Work must not inspect the repository")
+
+    monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
+    monkeypatch.setattr(work_module, "_status_work", fake_status)
+    monkeypatch.setattr(work_module, "_repository_state", unexpected_repository_state)
+
+    result = await work_module._approve_work("work-1", "promote_rollout:stale")
+
+    assert result is record
+
+
+@pytest.mark.asyncio
+async def test_triage_rejects_stale_delivery_approval_before_repository_work(
+    monkeypatch,
+) -> None:
+    record = SimpleNamespace(
+        work_id="work-1",
+        project_id="project-a",
+        status="TRIAGE",
+        source_ref="https://github.com/octocat/repo/issues/7",
+    )
+
+    async def fake_status(_work_id):
+        return record
+
+    async def unexpected_repository_state():
+        raise AssertionError("triage approval rejection must not inspect the repository")
+
+    monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
+    monkeypatch.setattr(work_module, "_status_work", fake_status)
+    monkeypatch.setattr(work_module, "_repository_state", unexpected_repository_state)
+
+    with pytest.raises(ValueError, match="cannot approve a stale gate from TRIAGE"):
+        await work_module._approve_work("work-1", "rollback:stale")
+
+
 def test_docs_delivery_settings_require_explicit_freshness_and_rollout(
     monkeypatch,
 ) -> None:

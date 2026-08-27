@@ -24,6 +24,7 @@ from sagewai.work import (
     ControlPrecondition,
     ControlPreconditionKind,
     GateDecision,
+    Reversibility,
     WorkEventType,
     WorkRecord,
     WorkStore,
@@ -39,6 +40,7 @@ from sagewai.work.profiles.software.cloudflare_flow import (
 )
 from sagewai.work.profiles.software.delivery import (
     BlastRadius,
+    DeliveryActionDeniedError,
     DeliveryApprovalRequiredError,
     DeliveryLifecycle,
     HealthGate,
@@ -198,6 +200,56 @@ def _flow(
     )
 
 
+def _gated_flow(
+    store: WorkStore,
+    candidate: ReleaseCandidate,
+    *,
+    observations,
+    policy: CloudflareDocsDeliveryPolicy | None = None,
+):
+    deployment = DeterministicFakeDeploymentProvider()
+    lifecycle = DeliveryLifecycle(
+        work_store=store,
+        release_provider=DeterministicFakeReleaseProvider(candidate),
+        deployment_provider=deployment,
+        observation_provider=DeterministicFakeObservationProvider(observations),
+        control_probe=PassingProbe(),
+        control_preconditions=(
+            ControlPrecondition(
+                id="control",
+                project_id=PROJECT_ID,
+                kind=ControlPreconditionKind.OBSERVABILITY,
+                description="delivery control",
+                check_ref="fake.control",
+                required_for=("deploy", "promote", "observe", "rollback"),
+            ),
+            ControlPrecondition(
+                id="rollback",
+                project_id=PROJECT_ID,
+                kind=ControlPreconditionKind.REVERSIBILITY,
+                description="rollback control",
+                check_ref="fake.rollback",
+                required_for=("deploy", "promote", "rollback"),
+            ),
+        ),
+        action_policy=lambda request: (
+            GateDecision.ALLOW
+            if request.reversibility is Reversibility.PURE
+            else GateDecision.REQUIRE_APPROVAL
+        ),
+    )
+    flow = CloudflareDocsDeliveryFlow(
+        work_store=store,
+        lifecycle=lifecycle,
+        policy=policy or _policy(),
+        known_good_candidate=_known_good(),
+        health_gates=(_gate(),),
+        merged_sha=candidate.commit_sha,
+        release_evidence_refs=("merge://sha", "review://accepted"),
+    )
+    return flow, deployment, lifecycle
+
+
 @pytest.mark.asyncio
 async def test_flow_reaches_complete_with_same_candidate_promoted(store: WorkStore) -> None:
     candidate = _candidate("candidate-1", "a" * 40)
@@ -208,8 +260,15 @@ async def test_flow_reaches_complete_with_same_candidate_promoted(store: WorkSto
     )
 
     completed = await flow.resume(WORK_ID, project_id=PROJECT_ID)
+    replayed_approval = await flow.approve(
+        WORK_ID,
+        project_id=PROJECT_ID,
+        gate_id="promote_rollout:stale",
+        actor_ref="operator:arda",
+    )
 
     assert completed.status == "COMPLETE"
+    assert replayed_approval.status == "COMPLETE"
     assert [item.release_candidate_id for item in deployment.deployments] == [candidate.id]
     assert [item.release_candidate_id for item in deployment.promotions] == [candidate.id]
     assert [item.exposure.value for item in deployment.deployments] == ["5%"]
@@ -242,47 +301,10 @@ async def test_flow_persists_and_resumes_an_explicit_delivery_approval(
     store: WorkStore,
 ) -> None:
     candidate = _candidate("candidate-1", "a" * 40)
-    deployment = DeterministicFakeDeploymentProvider()
-    lifecycle = DeliveryLifecycle(
-        work_store=store,
-        release_provider=DeterministicFakeReleaseProvider(candidate),
-        deployment_provider=deployment,
-        observation_provider=DeterministicFakeObservationProvider(
-            ({"availability": True}, {"availability": True})
-        ),
-        control_probe=PassingProbe(),
-        control_preconditions=(
-            ControlPrecondition(
-                id="control",
-                project_id=PROJECT_ID,
-                kind=ControlPreconditionKind.OBSERVABILITY,
-                description="delivery control",
-                check_ref="fake.control",
-                required_for=("deploy", "promote", "observe", "rollback"),
-            ),
-            ControlPrecondition(
-                id="rollback",
-                project_id=PROJECT_ID,
-                kind=ControlPreconditionKind.REVERSIBILITY,
-                description="rollback control",
-                check_ref="fake.rollback",
-                required_for=("deploy", "promote", "rollback"),
-            ),
-        ),
-        action_policy=lambda request: (
-            GateDecision.ALLOW
-            if request.action == "build_release"
-            else GateDecision.REQUIRE_APPROVAL
-        ),
-    )
-    flow = CloudflareDocsDeliveryFlow(
-        work_store=store,
-        lifecycle=lifecycle,
-        policy=_policy(),
-        known_good_candidate=_known_good(),
-        health_gates=(_gate(),),
-        merged_sha=candidate.commit_sha,
-        release_evidence_refs=("merge://sha", "review://accepted"),
+    flow, deployment, _ = _gated_flow(
+        store,
+        candidate,
+        observations=({"availability": True}, {"availability": True}),
     )
 
     with pytest.raises(DeliveryApprovalRequiredError):
@@ -301,6 +323,158 @@ async def test_flow_persists_and_resumes_an_explicit_delivery_approval(
     with pytest.raises(DeliveryApprovalRequiredError):
         await flow.resume(WORK_ID, project_id=PROJECT_ID)
     assert len(deployment.deployments) == 1
+
+
+@pytest.mark.asyncio
+async def test_gated_failure_resumes_approved_rollback_and_reaches_triage(
+    store: WorkStore,
+) -> None:
+    candidate = _candidate("candidate-1", "a" * 40)
+    flow, deployment, _ = _gated_flow(
+        store,
+        candidate,
+        observations=({"availability": False}, {"availability": True}),
+    )
+
+    with pytest.raises(DeliveryApprovalRequiredError, match="deploy_production"):
+        await flow.resume(WORK_ID, project_id=PROJECT_ID)
+    deploy_gated = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert deploy_gated is not None and deploy_gated.pending_gate is not None
+    await flow.approve(
+        WORK_ID,
+        project_id=PROJECT_ID,
+        gate_id=deploy_gated.pending_gate,
+        actor_ref="operator:arda",
+    )
+
+    with pytest.raises(DeliveryApprovalRequiredError, match="rollback"):
+        await flow.resume(WORK_ID, project_id=PROJECT_ID)
+    rollback_gated = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert rollback_gated is not None and rollback_gated.pending_gate is not None
+    await flow.approve(
+        WORK_ID,
+        project_id=PROJECT_ID,
+        gate_id=rollback_gated.pending_gate,
+        actor_ref="operator:arda",
+    )
+
+    triaged = await flow.resume(WORK_ID, project_id=PROJECT_ID)
+
+    assert triaged.status == "TRIAGE"
+    assert len(deployment.deployments) == 1
+    assert len(deployment.rollbacks) == 1
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    requested_actions = [
+        event.payload_json["action"]["action"]
+        for event in events
+        if event.event_type is WorkEventType.GATE_REQUESTED
+    ]
+    assert requested_actions == ["deploy_production", "rollback"]
+    assert WorkEventType.ROLLBACK_RECORDED in [event.event_type for event in events]
+    assert events[-1].event_type is WorkEventType.TRIAGE_CREATED
+    with pytest.raises(DeliveryActionDeniedError, match="TRIAGE"):
+        await flow.approve(
+            WORK_ID,
+            project_id=PROJECT_ID,
+            gate_id=rollback_gated.pending_gate,
+            actor_ref="operator:arda",
+        )
+    still_triaged = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert still_triaged is not None and still_triaged.status == "TRIAGE"
+
+
+@pytest.mark.asyncio
+async def test_resume_observes_deployment_persisted_before_process_death(
+    store: WorkStore,
+) -> None:
+    candidate = _candidate("candidate-1", "a" * 40)
+    flow, deployment, lifecycle = _gated_flow(
+        store,
+        candidate,
+        observations=({"availability": True},),
+    )
+    with pytest.raises(DeliveryApprovalRequiredError, match="deploy_production"):
+        await flow.resume(WORK_ID, project_id=PROJECT_ID)
+    gated = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert gated is not None and gated.pending_gate is not None
+    await flow.approve(
+        WORK_ID,
+        project_id=PROJECT_ID,
+        gate_id=gated.pending_gate,
+        actor_ref="operator:arda",
+    )
+    persisted_candidate = await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=candidate.commit_sha,
+        evidence_refs=("merge://sha", "review://accepted"),
+    )
+    await lifecycle.deploy(
+        persisted_candidate,
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="5%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=("policy://docs-production",),
+        expected_duration_seconds=30,
+    )
+
+    with pytest.raises(DeliveryApprovalRequiredError, match="promote_rollout"):
+        await flow.resume(WORK_ID, project_id=PROJECT_ID)
+
+    assert len(deployment.deployments) == 1
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    assert sum(event.event_type is WorkEventType.OBSERVATION_RECORDED for event in events) == 1
+
+
+@pytest.mark.asyncio
+async def test_resume_observes_rollback_persisted_before_process_death(
+    store: WorkStore,
+) -> None:
+    candidate = _candidate("candidate-1", "a" * 40)
+    flow, deployment, lifecycle = _gated_flow(
+        store,
+        candidate,
+        observations=({"availability": False}, {"availability": True}),
+    )
+    with pytest.raises(DeliveryApprovalRequiredError, match="deploy_production"):
+        await flow.resume(WORK_ID, project_id=PROJECT_ID)
+    deploy_gated = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert deploy_gated is not None and deploy_gated.pending_gate is not None
+    await flow.approve(
+        WORK_ID,
+        project_id=PROJECT_ID,
+        gate_id=deploy_gated.pending_gate,
+        actor_ref="operator:arda",
+    )
+    with pytest.raises(DeliveryApprovalRequiredError, match="rollback"):
+        await flow.resume(WORK_ID, project_id=PROJECT_ID)
+    rollback_gated = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert rollback_gated is not None and rollback_gated.pending_gate is not None
+    await flow.approve(
+        WORK_ID,
+        project_id=PROJECT_ID,
+        gate_id=rollback_gated.pending_gate,
+        actor_ref="operator:arda",
+    )
+    await lifecycle.rollback(
+        deployment.deployments[0],
+        known_good_candidate=_known_good(),
+        evidence_refs=("observation://failed",),
+        expected_duration_seconds=30,
+    )
+
+    triaged = await flow.resume(WORK_ID, project_id=PROJECT_ID)
+
+    assert triaged.status == "TRIAGE"
+    assert len(deployment.rollbacks) == 1
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    rollback_index = next(
+        index
+        for index, event in enumerate(events)
+        if event.event_type is WorkEventType.ROLLBACK_RECORDED
+    )
+    assert events[rollback_index + 1].event_type is WorkEventType.OBSERVATION_RECORDED
+    assert events[-1].event_type is WorkEventType.TRIAGE_CREATED
 
 
 @pytest.mark.asyncio

@@ -272,12 +272,6 @@ class DeliveryLifecycle:
         await self._require_work(work_id, project_id)
         existing = await self._candidate_by_commit(work_id, project_id, commit_sha)
         if existing is not None:
-            if await self._candidate_was_rolled_back(existing):
-                raise DeliveryActionDeniedError("rolled-back candidate cannot be rebuilt")
-            if await self._candidate_has_nonpassing_delivery(existing):
-                raise DeliveryActionDeniedError(
-                    "candidate has a non-passing observation or unobserved deployment"
-                )
             return existing
         await self._authorize(
             ActionRequest(
@@ -351,11 +345,25 @@ class DeliveryLifecycle:
         """Approve one canonical delivery action gate without executing it."""
 
         await self._require_work(work_id, project_id)
+        record = await self._work_store.load_work(work_id, project_id=project_id)
+        if record is None:
+            raise KeyError(work_id)
+        if record.status == "COMPLETE":
+            return record
+        if record.status != "READY_TO_DELIVER":
+            raise DeliveryActionDeniedError(
+                f"delivery approval cannot resume from Work status {record.status}"
+            )
         events = await self._work_store.read_events(work_id, project_id=project_id)
         requested = self._gate_event(events, WorkEventType.GATE_REQUESTED, gate_id)
         if requested is None:
             raise ValueError("delivery gate was not requested for this WorkItem")
         decided = self._gate_event(events, WorkEventType.GATE_DECIDED, gate_id)
+        if record.pending_gate != gate_id:
+            if record.pending_gate is None and decided is not None:
+                if decided.payload_json.get("decision") == GateDecision.ALLOW.value:
+                    return record
+            raise ValueError("delivery gate is not pending for this WorkItem")
         if decided is not None:
             if decided.payload_json.get("decision") != GateDecision.ALLOW.value:
                 raise ValueError("delivery gate already has a non-allow decision")
@@ -372,9 +380,6 @@ class DeliveryLifecycle:
                 },
                 actor_ref=actor_ref,
             )
-        record = await self._work_store.load_work(work_id, project_id=project_id)
-        if record is None:
-            raise KeyError(work_id)
         updated = record.model_copy(
             update={
                 "status": "READY_TO_DELIVER",

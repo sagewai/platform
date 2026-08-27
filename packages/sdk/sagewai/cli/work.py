@@ -244,6 +244,10 @@ async def _approve_work(work_id: str, gate_id: str) -> WorkRecord:
     record = await _status_work(work_id)
     if record is None:
         raise KeyError(work_id)
+    if record.status == "COMPLETE":
+        return record
+    if record.status == "TRIAGE":
+        raise ValueError("cannot approve a stale gate from TRIAGE")
     if record.source_ref is None or not is_github_issue_url(record.source_ref):
         raise ValueError("merge approval requires GitHub-sourced Work")
     repository, _ = await _repository_state()
