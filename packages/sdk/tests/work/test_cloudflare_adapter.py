@@ -125,6 +125,7 @@ class CloudflareState:
         self.versions = []
         self.deployments = []
         self.posts = []
+        self.deployment_get_statuses = []
         self.target_status = 200
         self.target_statuses = []
         self.target_requests = []
@@ -156,6 +157,9 @@ class CloudflareState:
                 json={"success": True, "result": {"items": self.versions}},
             )
         if path.endswith("/deployments") and request.method == "GET":
+            status = self.deployment_get_statuses.pop(0) if self.deployment_get_statuses else 200
+            if status != 200:
+                return httpx.Response(status, request=request)
             return httpx.Response(
                 200,
                 request=request,

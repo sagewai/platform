@@ -11,16 +11,27 @@
 
 from __future__ import annotations
 
+import json
+from datetime import datetime, timedelta, timezone
 from importlib import import_module
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from click import ClickException
 from click.testing import CliRunner
 
 from sagewai.cli import cli
 from sagewai.cli.work import work as work_cli
-from sagewai.work import WorkEventType
+from sagewai.fleet.execution import WorkerProcessResult
+from sagewai.work import WorkEvent, WorkEventType, WorkRecord, WorkStore
+from tests.db.conftest import dialect_engine  # noqa: F401
+from tests.work.test_cloudflare_adapter import (
+    NEW_VERSION_ID,
+    OLD_VERSION_ID,
+    CloudflareState,
+    FakeCommandRunner,
+)
 
 work_module = import_module("sagewai.cli.work")
 
@@ -313,6 +324,7 @@ def test_docs_delivery_settings_require_explicit_freshness_and_rollout(
         "SAGEWAI_DOCS_ROLLBACK_OBSERVATION_SECONDS",
         "SAGEWAI_DOCS_OBSERVATION_SAMPLE_SECONDS",
         "SAGEWAI_DOCS_COMMAND_TIMEOUT_SECONDS",
+        "SAGEWAI_DOCS_HTTP_TIMEOUT_SECONDS",
         "SAGEWAI_DOCS_HEARTBEAT_SECONDS",
         "SAGEWAI_DOCS_MINIMUM_CREDENTIAL_TTL_SECONDS",
         "SAGEWAI_DOCS_MAXIMUM_MONITORING_STALENESS_SECONDS",
@@ -327,6 +339,7 @@ def test_docs_delivery_settings_require_explicit_freshness_and_rollout(
         "SAGEWAI_DOCS_ROLLBACK_OBSERVATION_SECONDS",
         "SAGEWAI_DOCS_OBSERVATION_SAMPLE_SECONDS",
         "SAGEWAI_DOCS_COMMAND_TIMEOUT_SECONDS",
+        "SAGEWAI_DOCS_HTTP_TIMEOUT_SECONDS",
         "SAGEWAI_DOCS_HEARTBEAT_SECONDS",
         "SAGEWAI_DOCS_MINIMUM_CREDENTIAL_TTL_SECONDS",
         "SAGEWAI_DOCS_MAXIMUM_MONITORING_STALENESS_SECONDS",
@@ -336,6 +349,7 @@ def test_docs_delivery_settings_require_explicit_freshness_and_rollout(
     settings = work_module._docs_delivery_settings()
 
     assert settings["maximum_monitoring_staleness_seconds"] == 30
+    assert settings["http_timeout_seconds"] == 30
     assert [step.exposure.value for step in settings["policy"].rollout] == [
         "5%",
         "100%",
@@ -344,3 +358,206 @@ def test_docs_delivery_settings_require_explicit_freshness_and_rollout(
     monkeypatch.delenv("SAGEWAI_DOCS_MAXIMUM_MONITORING_STALENESS_SECONDS")
     with pytest.raises(ValueError, match="MAXIMUM_MONITORING_STALENESS"):
         work_module._docs_delivery_settings()
+
+
+@pytest.mark.asyncio
+async def test_docs_delivery_composition_reaches_complete_with_real_adapters(
+    monkeypatch,
+    dialect_engine,  # noqa: F811
+    tmp_path,
+) -> None:
+    project_id = "project-a"
+    work_id = "work-1"
+    merged_sha = "a" * 40
+    now = datetime.now(timezone.utc)
+    repository = tmp_path / "repo"
+    docs = repository / "apps" / "docs"
+    output = docs / "out"
+    output.mkdir(parents=True)
+    (docs / "wrangler.toml").write_text(
+        'name = "docs"\ncompatibility_date = "2026-04-04"\n',
+        encoding="utf-8",
+    )
+    (output / "index.html").write_text("<h1>Sagewai docs</h1>", encoding="utf-8")
+
+    record = WorkRecord(
+        work_id=work_id,
+        project_id=project_id,
+        source_ref="https://github.com/sagewai/platform/issues/1",
+        profile="software",
+        status="READY_TO_DELIVER",
+        contract_version=1,
+        active_run_id="review-1",
+        pending_gate=None,
+        profile_context={"github": {"merged_sha": merged_sha}},
+        created_at=now,
+        updated_at=now,
+    )
+    store = WorkStore(engine=dialect_engine)
+    await store.init()
+    await store.save_work(record)
+    for sequence, event_type in enumerate(
+        (WorkEventType.VERIFICATION_RECORDED, WorkEventType.REVIEW_RECORDED),
+        start=1,
+    ):
+        await store.append_event(
+            WorkEvent(
+                id=f"evidence-{sequence}",
+                project_id=project_id,
+                work_id=work_id,
+                sequence=sequence,
+                event_type=event_type,
+                actor_type="test",
+                actor_ref="test",
+                payload_json={"passed": True},
+                created_at=now,
+            )
+        )
+
+    async def fake_ensure_schema() -> None:
+        return None
+
+    monkeypatch.setattr(work_module.factory, "ensure_schema", fake_ensure_schema)
+    monkeypatch.setattr(work_module.factory, "get_engine", lambda: dialect_engine)
+    monkeypatch.setattr(work_module.home, "data_dir", lambda: tmp_path / "data")
+    values = {
+        "CLOUDFLARE_API_TOKEN": "token",
+        "CLOUDFLARE_ACCOUNT_ID": "account-1",
+        "SAGEWAI_DOCS_KNOWN_GOOD_VERSION_ID": OLD_VERSION_ID,
+        "SAGEWAI_DOCS_KNOWN_GOOD_COMMIT_SHA": "b" * 40,
+        "SAGEWAI_DOCS_KNOWN_GOOD_VERIFICATION_REF": "verification://known-good",
+        "SAGEWAI_DOCS_KNOWN_GOOD_REVIEW_REF": "review://known-good",
+        "SAGEWAI_DOCS_ROLLOUT_JSON": json.dumps(
+            [
+                {"exposure": "5%", "observe_seconds": 1},
+                {"exposure": "100%", "observe_seconds": 1},
+            ]
+        ),
+        "SAGEWAI_DOCS_POLICY_EVIDENCE_REF": "policy://docs-production",
+        "SAGEWAI_DOCS_ROLLBACK_OBSERVATION_SECONDS": "1",
+        "SAGEWAI_DOCS_OBSERVATION_SAMPLE_SECONDS": "1",
+        "SAGEWAI_DOCS_COMMAND_TIMEOUT_SECONDS": "30",
+        "SAGEWAI_DOCS_HTTP_TIMEOUT_SECONDS": "2",
+        "SAGEWAI_DOCS_HEARTBEAT_SECONDS": "1",
+        "SAGEWAI_DOCS_MINIMUM_CREDENTIAL_TTL_SECONDS": "1",
+        "SAGEWAI_DOCS_MAXIMUM_MONITORING_STALENESS_SECONDS": "60",
+    }
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+
+    state = CloudflareState()
+    state.deployments.append(
+        {
+            "id": "00000000-0000-0000-0000-000000000001",
+            "created_on": "2026-08-27T09:59:00Z",
+            "strategy": "percentage",
+            "versions": [{"version_id": OLD_VERSION_ID, "percentage": 100}],
+            "annotations": {},
+        }
+    )
+
+    def on_run(args) -> None:
+        if "upload" in args:
+            state.add_candidate_version(args[args.index("--tag") + 1])
+
+    runner = FakeCommandRunner(
+        (
+            WorkerProcessResult(returncode=0, stdout=f"{merged_sha}\n", stderr=""),
+            WorkerProcessResult(returncode=0, stdout="", stderr=""),
+            WorkerProcessResult(returncode=0, stdout="build passed", stderr=""),
+            WorkerProcessResult(
+                returncode=0,
+                stdout=f"Worker Version ID: {NEW_VERSION_ID}\n",
+                stderr="",
+            ),
+        ),
+        on_run=on_run,
+    )
+
+    def response(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/client/v4/user/tokens/verify":
+            return httpx.Response(
+                200,
+                request=request,
+                json={"success": True, "result": {"status": "active"}},
+            )
+        if path == "/client/v4/zones":
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "success": True,
+                    "result": [{"id": "zone-1", "status": "active"}],
+                },
+            )
+        if path == "/client/v4/graphql":
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "data": {
+                        "viewer": {
+                            "zones": [
+                                {
+                                    "metrics": [
+                                        {
+                                            "count": 1,
+                                            "dimensions": {
+                                                "datetimeMinute": (
+                                                    datetime.now(timezone.utc)
+                                                    - timedelta(seconds=1)
+                                                ).isoformat()
+                                            },
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    },
+                    "errors": None,
+                },
+            )
+        if path.endswith(f"/versions/{OLD_VERSION_ID}"):
+            return httpx.Response(
+                200,
+                request=request,
+                json={"success": True, "result": {"id": OLD_VERSION_ID}},
+            )
+        return state(request)
+
+    current = record
+    for _ in range(3):
+        try:
+            current = await work_module._run_docs_delivery(
+                current,
+                project_id=project_id,
+                repository=repository,
+                process_runner=runner,
+                http_transport=httpx.MockTransport(response),
+            )
+        except work_module.DeliveryApprovalRequiredError:
+            loaded = await store.load_work(work_id, project_id=project_id)
+            assert loaded is not None
+            current = loaded
+        if current.status == "COMPLETE":
+            break
+        assert current.pending_gate is not None
+        current = await work_module._run_docs_delivery(
+            current,
+            project_id=project_id,
+            repository=repository,
+            approve_gate_id=current.pending_gate,
+            process_runner=runner,
+            http_transport=httpx.MockTransport(response),
+        )
+
+    assert current.status == "COMPLETE"
+    assert len(runner.calls) == 4
+    assert [post["versions"] for post in state.posts] == [
+        [
+            {"version_id": OLD_VERSION_ID, "percentage": 95},
+            {"version_id": NEW_VERSION_ID, "percentage": 5},
+        ],
+        [{"version_id": NEW_VERSION_ID, "percentage": 100}],
+    ]

@@ -118,7 +118,7 @@ class CloudflareDocsDeliveryFlow:
             evidence_refs=self._release_evidence_refs,
         )
 
-        for _ in range(len(self._policy.rollout) + 3):
+        for _ in range(2 * len(self._policy.rollout) + 1):
             events = await self._work_store.read_events(work_id, project_id=project_id)
             deployment_event = _latest_candidate_deployment(events, candidate.id)
             if deployment_event is None:

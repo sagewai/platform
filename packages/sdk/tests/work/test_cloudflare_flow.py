@@ -20,6 +20,7 @@ import pytest
 from sagewai.fleet.execution import WorkerProcessResult
 from sagewai.work import (
     ControlCheckResult,
+    ControlDegradedError,
     ControlPrecondition,
     ControlPreconditionKind,
     GateDecision,
@@ -87,17 +88,16 @@ def _known_good() -> ReleaseCandidate:
     return _candidate("known-good-2", "b" * 40)
 
 
-def _policy() -> CloudflareDocsDeliveryPolicy:
+def _policy(
+    exposures: tuple[str, ...] = ("5%", "100%"),
+) -> CloudflareDocsDeliveryPolicy:
     return CloudflareDocsDeliveryPolicy(
-        rollout=(
+        rollout=tuple(
             CloudflareRolloutStep(
-                exposure=BlastRadius(dimension="traffic", value="5%"),
+                exposure=BlastRadius(dimension="traffic", value=exposure),
                 observation_window_seconds=30,
-            ),
-            CloudflareRolloutStep(
-                exposure=BlastRadius(dimension="traffic", value="100%"),
-                observation_window_seconds=60,
-            ),
+            )
+            for exposure in exposures
         ),
         rollback_observation_window_seconds=30,
         evidence_ref="policy://docs-production",
@@ -155,6 +155,7 @@ def _flow(
     candidate: ReleaseCandidate,
     *,
     observations,
+    policy: CloudflareDocsDeliveryPolicy | None = None,
 ):
     deployment = DeterministicFakeDeploymentProvider()
     lifecycle = DeliveryLifecycle(
@@ -187,7 +188,7 @@ def _flow(
         CloudflareDocsDeliveryFlow(
             work_store=store,
             lifecycle=lifecycle,
-            policy=_policy(),
+            policy=policy or _policy(),
             known_good_candidate=_known_good(),
             health_gates=(_gate(),),
             merged_sha=candidate.commit_sha,
@@ -213,6 +214,27 @@ async def test_flow_reaches_complete_with_same_candidate_promoted(store: WorkSto
     assert [item.release_candidate_id for item in deployment.promotions] == [candidate.id]
     assert [item.exposure.value for item in deployment.deployments] == ["5%"]
     assert [item.exposure.value for item in deployment.promotions] == ["100%"]
+
+
+@pytest.mark.asyncio
+async def test_flow_completes_a_four_step_project_rollout(store: WorkStore) -> None:
+    candidate = _candidate("candidate-1", "a" * 40)
+    flow, deployment = _flow(
+        store,
+        candidate,
+        observations=tuple({"availability": True} for _ in range(4)),
+        policy=_policy(("5%", "20%", "50%", "100%")),
+    )
+
+    completed = await flow.resume(WORK_ID, project_id=PROJECT_ID)
+
+    assert completed.status == "COMPLETE"
+    assert [item.exposure.value for item in deployment.deployments] == ["5%"]
+    assert [item.exposure.value for item in deployment.promotions] == [
+        "20%",
+        "50%",
+        "100%",
+    ]
 
 
 @pytest.mark.asyncio
@@ -315,14 +337,19 @@ async def test_failure_restores_triages_and_new_candidate_redeploys(
 
 
 @pytest.mark.parametrize(
-    ("first_status", "expected_status"),
-    ((200, "COMPLETE"), (503, "TRIAGE")),
+    ("first_status", "deployment_get_statuses", "expected_status"),
+    (
+        (200, (), "COMPLETE"),
+        (503, (), "TRIAGE"),
+        (200, (200, 403), "CONTROL_DEGRADED"),
+    ),
 )
 @pytest.mark.asyncio
 async def test_real_adapter_runs_through_lifecycle_and_flow(
     store: WorkStore,
     tmp_path: Path,
     first_status: int,
+    deployment_get_statuses: tuple[int, ...],
     expected_status: str,
 ) -> None:
     config = _adapter_config(tmp_path)
@@ -339,6 +366,7 @@ async def test_real_adapter_runs_through_lifecycle_and_flow(
         }
     )
     state.target_statuses = [first_status]
+    state.deployment_get_statuses = list(deployment_get_statuses)
     tag = candidate.artifact_ref.removeprefix("cloudflare-version-tag://")
     runner = FakeCommandRunner(
         (
@@ -404,9 +432,20 @@ async def test_real_adapter_runs_through_lifecycle_and_flow(
             release_evidence_refs=("merge://sha", "review://accepted"),
         )
 
-        completed = await flow.resume(WORK_ID, project_id=PROJECT_ID)
+        if expected_status == "CONTROL_DEGRADED":
+            with pytest.raises(ControlDegradedError):
+                await flow.resume(WORK_ID, project_id=PROJECT_ID)
+            completed = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+        else:
+            completed = await flow.resume(WORK_ID, project_id=PROJECT_ID)
 
-    assert completed.status == expected_status
+    if expected_status == "CONTROL_DEGRADED":
+        assert completed is not None and completed.status == "READY_TO_DELIVER"
+        events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+        assert events[-1].event_type is WorkEventType.CONTROL_DEGRADED
+        assert WorkEventType.OBSERVATION_RECORDED not in [event.event_type for event in events]
+        return
+    assert completed is not None and completed.status == expected_status
     assert len(runner.calls) == 1
     expected_posts = [
         [

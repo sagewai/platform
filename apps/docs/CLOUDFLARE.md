@@ -4,9 +4,9 @@
 
 `docs.sagewai.ai` is served by a **Cloudflare Worker** named `docs` with
 Workers Assets (see `wrangler.toml`), auto-rebuilt on every push to `main`
-via **Cloudflare Workers Builds** (dashboard-side Git integration). No
-GitHub Actions workflow runs the deploy — the trigger lives entirely on
-Cloudflare's side.
+via **Cloudflare Workers Builds** (dashboard-side Git integration). Version
+tags also trigger `.github/workflows/release-docs.yml`, which deploys the same
+Worker through Wrangler. Pull-request CI does not publish.
 
 This is the same mechanism the old `sagewai/docs` repo used. When that
 repo was archived during the 2026-04-12 monorepo migration, the original
@@ -75,9 +75,11 @@ captures its static assets and that the version-override request header can
 target a version in the current deployment.
 
 Do not use this mode while Cloudflare Workers Builds still deploys pushes to
-`main`. Disable that automatic deployment first and record the current healthy
-Worker version as the rollback baseline. If another actor changes live traffic,
-the Work delivery refuses the transition and records `CONTROL_DEGRADED`.
+`main` or `.github/workflows/release-docs.yml` remains able to deploy version
+tags. Disable or govern both competing mutation paths first and record the
+current healthy Worker version as the rollback baseline. If another actor
+changes live traffic, the Work delivery refuses the transition and records
+`CONTROL_DEGRADED`.
 
 The CLI requires every policy and timing value explicitly; it supplies no
 production defaults:
@@ -94,6 +96,7 @@ export SAGEWAI_DOCS_POLICY_EVIDENCE_REF='file://apps/docs/CLOUDFLARE.md#sagewai-
 export SAGEWAI_DOCS_ROLLBACK_OBSERVATION_SECONDS=300
 export SAGEWAI_DOCS_OBSERVATION_SAMPLE_SECONDS=30
 export SAGEWAI_DOCS_COMMAND_TIMEOUT_SECONDS=900
+export SAGEWAI_DOCS_HTTP_TIMEOUT_SECONDS=10
 export SAGEWAI_DOCS_HEARTBEAT_SECONDS=15
 export SAGEWAI_DOCS_MINIMUM_CREDENTIAL_TTL_SECONDS=3600
 export SAGEWAI_DOCS_MAXIMUM_MONITORING_STALENESS_SECONDS=300

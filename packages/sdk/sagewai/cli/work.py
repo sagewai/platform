@@ -414,6 +414,8 @@ async def _run_docs_delivery(
     project_id: str,
     repository: Path,
     approve_gate_id: str | None = None,
+    process_runner=run_worker_subprocess,
+    http_transport: httpx.AsyncBaseTransport | None = None,
 ) -> WorkRecord:
     if not (repository / "apps" / "docs" / "wrangler.toml").is_file():
         raise ValueError("configured Sagewai docs delivery path is unavailable")
@@ -480,11 +482,15 @@ async def _run_docs_delivery(
         review_ref=settings["known_good_review_ref"],
     )
     token = settings["api_token"]
-    async with httpx.AsyncClient(timeout=settings["command_timeout_seconds"]) as client:
+    async with httpx.AsyncClient(
+        timeout=settings["http_timeout_seconds"],
+        transport=http_transport,
+    ) as client:
         lifecycle = DeliveryLifecycle(
             work_store=store,
             release_provider=CloudflareDocsReleaseProvider(
                 config=adapter_config,
+                process_runner=process_runner,
                 verification_ref=f"work-event://{verification_event.id}",
                 review_ref=f"work-event://{review_event.id}",
             ),
@@ -492,6 +498,7 @@ async def _run_docs_delivery(
                 config=adapter_config,
                 api_token=token,
                 client=client,
+                process_runner=process_runner,
             ),
             observation_provider=CloudflareDocsObservationProvider(
                 config=adapter_config,
@@ -555,6 +562,7 @@ def _docs_delivery_settings() -> dict:
         "SAGEWAI_DOCS_ROLLBACK_OBSERVATION_SECONDS",
         "SAGEWAI_DOCS_OBSERVATION_SAMPLE_SECONDS",
         "SAGEWAI_DOCS_COMMAND_TIMEOUT_SECONDS",
+        "SAGEWAI_DOCS_HTTP_TIMEOUT_SECONDS",
         "SAGEWAI_DOCS_HEARTBEAT_SECONDS",
         "SAGEWAI_DOCS_MINIMUM_CREDENTIAL_TTL_SECONDS",
         "SAGEWAI_DOCS_MAXIMUM_MONITORING_STALENESS_SECONDS",
@@ -590,6 +598,7 @@ def _docs_delivery_settings() -> dict:
             "known_good_review_ref": values["SAGEWAI_DOCS_KNOWN_GOOD_REVIEW_REF"],
             "observation_sample_seconds": float(values["SAGEWAI_DOCS_OBSERVATION_SAMPLE_SECONDS"]),
             "command_timeout_seconds": float(values["SAGEWAI_DOCS_COMMAND_TIMEOUT_SECONDS"]),
+            "http_timeout_seconds": float(values["SAGEWAI_DOCS_HTTP_TIMEOUT_SECONDS"]),
             "heartbeat_seconds": float(values["SAGEWAI_DOCS_HEARTBEAT_SECONDS"]),
             "minimum_credential_ttl_seconds": int(
                 values["SAGEWAI_DOCS_MINIMUM_CREDENTIAL_TTL_SECONDS"]
