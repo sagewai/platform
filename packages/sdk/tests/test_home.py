@@ -36,10 +36,12 @@ def test_dir_helpers_create_subdirs():
     assert home.config_dir().is_dir()
     assert home.db_dir().is_dir()
     assert home.data_dir().is_dir()
+    assert home.objects_dir().is_dir()
     assert home.secrets_dir().is_dir()
     assert home.config_dir().name == "config"
     assert home.db_dir().name == "db"
     assert home.data_dir().name == "data"
+    assert home.objects_dir().name == "objects"
     assert home.secrets_dir().name == "secrets"
 
 
