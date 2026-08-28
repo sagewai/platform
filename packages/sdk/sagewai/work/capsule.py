@@ -11,22 +11,11 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from sagewai.work.contract import WorkContract
 from sagewai.work.knowledge import KnowledgeItem, KnowledgeQuery, KnowledgeStore
 from sagewai.work.models import TaskCapsule, WorkItem
-
-
-def _has_meaningful_term_overlap(query: str, statement: str) -> bool:
-    """Reject a generic one-token coincidence for multi-term searches."""
-    query_terms = set(re.findall(r"[a-z0-9_]+", query.casefold()))
-    statement_terms = set(re.findall(r"[a-z0-9_]+", statement.casefold()))
-    overlap = query_terms & statement_terms
-    if len(query_terms) == 1:
-        return len(overlap) == 1
-    return len(overlap) >= 2
 
 
 class TaskCapsuleCompiler:
@@ -100,12 +89,11 @@ class TaskCapsuleCompiler:
 
                 if len(selected) < self._max_knowledge_items:
                     candidates = await self._knowledge_store.search_high_importance_project_findings_any_term(
-                        KnowledgeQuery(text=search_text, project_id=project_id)
+                        KnowledgeQuery(text=search_text, project_id=project_id),
+                        limit=self._max_knowledge_items - len(selected),
                     )
                     for item in candidates:
                         if item.id in selected_ids:
-                            continue
-                        if not _has_meaningful_term_overlap(search_text, item.statement):
                             continue
                         selected.append(item)
                         selected_ids.add(item.id)

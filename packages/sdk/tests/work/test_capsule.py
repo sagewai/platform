@@ -122,6 +122,47 @@ async def test_compiler_prioritizes_direct_refs_then_scoped_fts(
 
 
 @pytest.mark.asyncio
+async def test_compiler_bounds_fallback_to_remaining_capacity(
+    knowledge_store: KnowledgeStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    direct = _knowledge("direct", "Direct source-of-truth read-back")
+    fallback = _knowledge(
+        "fallback",
+        "Quartz metrics became stale",
+        work_id=None,
+    ).model_copy(update={"importance_score": 90})
+    await knowledge_store.publish(direct)
+    await knowledge_store.publish(fallback)
+
+    requested_limits: list[int] = []
+    original = knowledge_store.search_high_importance_project_findings_any_term
+
+    async def track_limit(query, *, limit: int):
+        requested_limits.append(limit)
+        return await original(query, limit=limit)
+
+    monkeypatch.setattr(
+        knowledge_store,
+        "search_high_importance_project_findings_any_term",
+        track_limit,
+    )
+
+    capsule = await TaskCapsuleCompiler(
+        knowledge_store=knowledge_store,
+        max_knowledge_items=2,
+    ).compile(
+        work_item=_work_item(),
+        contract=_contract(evidence_refs=(direct.id,)),
+        stage="implement",
+        search_text="Quartz metrics freshness",
+    )
+
+    assert requested_limits == [1]
+    assert capsule.knowledge_refs == (direct.id, fallback.id)
+
+
+@pytest.mark.asyncio
 async def test_compiler_builds_fresh_capsule_without_session_history(
     knowledge_store: KnowledgeStore,
 ) -> None:

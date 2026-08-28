@@ -316,6 +316,49 @@ def test_work_metrics_prints_the_read_only_event_projection(monkeypatch) -> None
     }
 
 
+@pytest.mark.asyncio
+async def test_work_metrics_queries_the_resolved_project_store(monkeypatch) -> None:
+    expected = WorkMetrics(
+        project_id="project-a",
+        work_id="work-1",
+        control_degradation_rate=0.0,
+        mean_time_to_control_restored_seconds=None,
+        scope_violation_rate=0.0,
+        repair_rate=0.0,
+        rollback_rate=0.0,
+    )
+    calls = []
+
+    async def fake_ensure_schema():
+        calls.append("schema")
+
+    class FakeStore:
+        def __init__(self, *, engine):
+            calls.append(("engine", engine))
+
+        async def init(self):
+            calls.append("init")
+
+        async def metrics(self, *, project_id, work_id):
+            calls.append(("metrics", project_id, work_id))
+            return expected
+
+    monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
+    monkeypatch.setattr(work_module.factory, "ensure_schema", fake_ensure_schema)
+    monkeypatch.setattr(work_module.factory, "get_engine", lambda: "engine")
+    monkeypatch.setattr(work_module, "WorkStore", FakeStore)
+
+    result = await work_module._work_metrics(work_id="work-1")
+
+    assert result == expected
+    assert calls == [
+        "schema",
+        ("engine", "engine"),
+        "init",
+        ("metrics", "project-a", "work-1"),
+    ]
+
+
 def test_github_credentials_fail_before_remote_call_when_token_is_missing(
     monkeypatch,
 ) -> None:

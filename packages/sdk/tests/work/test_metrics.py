@@ -64,8 +64,18 @@ async def test_store_queries_project_metrics_from_synthetic_event_stream(
             WorkEventType.OPERATOR_DISCIPLINE_RECORDED,
             payload={"scope_violations": []},
         ),
-        _event("work-1", 4, WorkEventType.DEPLOYMENT_RECORDED),
-        _event("work-1", 5, WorkEventType.DEPLOYMENT_RECORDED),
+        _event(
+            "work-1",
+            4,
+            WorkEventType.DEPLOYMENT_RECORDED,
+            payload={"action": "deploy_production"},
+        ),
+        _event(
+            "work-1",
+            5,
+            WorkEventType.DEPLOYMENT_RECORDED,
+            payload={"action": "promote_rollout"},
+        ),
         _event(
             "work-1",
             6,
@@ -107,7 +117,12 @@ async def test_store_queries_project_metrics_from_synthetic_event_stream(
             WorkEventType.OPERATOR_DISCIPLINE_RECORDED,
             payload={"scope_violations": ["outside.txt"]},
         ),
-        _event("work-2", 4, WorkEventType.DEPLOYMENT_RECORDED),
+        _event(
+            "work-2",
+            4,
+            WorkEventType.DEPLOYMENT_RECORDED,
+            payload={"action": "deploy_staging"},
+        ),
     )
 
     store = WorkStore(engine=dialect_engine)
@@ -121,7 +136,7 @@ async def test_store_queries_project_metrics_from_synthetic_event_stream(
     assert metrics.mean_time_to_control_restored_seconds == 45.0
     assert metrics.scope_violation_rate == 0.5
     assert metrics.repair_rate == 0.5
-    assert metrics.rollback_rate == pytest.approx(1 / 3)
+    assert metrics.rollback_rate == 0.5
 
 
 def test_filters_by_exact_project_and_optional_work() -> None:

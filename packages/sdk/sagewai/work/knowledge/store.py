@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 from sqlalchemy import func, insert, literal_column, or_, select, text
@@ -34,10 +35,57 @@ def _sqlite_plaintext_query(value: str) -> str:
     return " ".join(f'"{term}"' for term in terms)
 
 
-def _sqlite_any_term_query(value: str) -> str:
-    """Encode literal FTS5 terms joined by OR for bounded candidates."""
-    terms = dict.fromkeys(term.replace('"', '""') for term in value.split())
+_SEARCH_TERM_RE = re.compile(r"[a-z0-9_]+")
+_FALLBACK_IGNORED_TERMS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "by",
+        "control",
+        "details",
+        "during",
+        "failure",
+        "for",
+        "from",
+        "in",
+        "is",
+        "of",
+        "on",
+        "or",
+        "preconditions",
+        "the",
+        "to",
+        "was",
+        "were",
+        "with",
+        "work",
+    }
+)
+
+
+def _search_terms(value: str) -> tuple[str, ...]:
+    """Tokenize fallback queries and candidates with one deterministic rule."""
+    return tuple(dict.fromkeys(_SEARCH_TERM_RE.findall(value.casefold())))
+
+
+def _sqlite_any_term_query(terms: tuple[str, ...]) -> str:
+    """Encode normalized literal FTS5 terms joined by OR."""
     return " OR ".join(f'"{term}"' for term in terms)
+
+
+def _has_meaningful_term_overlap(query: str, statement: str) -> bool:
+    """Reject coincidences limited to control boilerplate or one generic term."""
+    query_terms = set(_search_terms(query)) - _FALLBACK_IGNORED_TERMS
+    statement_terms = set(_search_terms(statement)) - _FALLBACK_IGNORED_TERMS
+    overlap = query_terms & statement_terms
+    if len(query_terms) == 1:
+        return len(overlap) == 1
+    return len(overlap) >= 2
 
 
 async def insert_knowledge_item(
@@ -129,16 +177,22 @@ class KnowledgeStore:
         return [self._from_row(row._mapping) for row in rows]
 
     async def search_high_importance_project_findings_any_term(
-        self, query: KnowledgeQuery
+        self,
+        query: KnowledgeQuery,
+        *,
+        limit: int,
     ) -> list[KnowledgeItem]:
-        """Find bounded fallback candidates; callers must verify term overlap."""
+        """Return a bounded, meaningfully related project FINDING fallback."""
+        terms = _search_terms(query.text)
+        if not terms or limit < 1:
+            return []
+
         filters = [
             self._items.c.project_id == query.project_id,
             self._items.c.work_id.is_(None),
             self._items.c.kind == "finding",
             self._items.c.importance_score > 50,
         ]
-        terms = tuple(dict.fromkeys(query.text.split()))
         if self._engine.dialect.name == "sqlite":
             matched_ids = text(
                 "SELECT item_id FROM knowledge_items_fts "
@@ -157,16 +211,21 @@ class KnowledgeStore:
             .where(*filters)
             .order_by(
                 self._items.c.importance_score.desc(),
-                self._items.c.created_at,
+                self._items.c.created_at.desc(),
                 self._items.c.id,
             )
         )
         if self._engine.dialect.name == "sqlite":
-            statement = statement.params(search_text=_sqlite_any_term_query(query.text))
+            statement = statement.params(search_text=_sqlite_any_term_query(terms))
 
         async with self._engine.connect() as conn:
             rows = (await conn.execute(statement)).all()
-        return [self._from_row(row._mapping) for row in rows]
+        matches = (self._from_row(row._mapping) for row in rows)
+        return [
+            item
+            for item in matches
+            if _has_meaningful_term_overlap(query.text, item.statement)
+        ][:limit]
 
     @staticmethod
     def _from_row(values) -> KnowledgeItem:

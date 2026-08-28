@@ -60,11 +60,13 @@ class WorkStore:
         """Append one immutable event; database constraints reject duplicates."""
         event_values = event.model_dump(mode="python")
         event_values["event_type"] = event.event_type.value
-        finding = (
-            control_failure_finding(event)
-            if event.event_type is WorkEventType.CONTROL_DEGRADED
-            else None
-        )
+        finding = None
+        finding_error: ValueError | None = None
+        if event.event_type is WorkEventType.CONTROL_DEGRADED:
+            try:
+                finding = control_failure_finding(event)
+            except ValueError as exc:
+                finding_error = exc
         async with self._engine.begin() as conn:
             projection = (
                 await conn.execute(
@@ -93,6 +95,8 @@ class WorkStore:
                     finding,
                     dialect_name=self._engine.dialect.name,
                 )
+        if finding_error is not None:
+            raise finding_error
 
     async def read_events(
         self,

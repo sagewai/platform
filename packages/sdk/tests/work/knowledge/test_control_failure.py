@@ -91,11 +91,14 @@ async def test_control_event_atomically_publishes_one_reusable_project_finding(
 
     await store.publish(
         KnowledgeItem(
-            id="generic-rollout-finding",
+            id="unrelated-control-finding",
             project_id="project-a",
             work_id=None,
             kind=KnowledgeKind.FINDING,
-            statement="An unrelated service rollout failure",
+            statement=(
+                "Control failure for preconditions github-target during work work-9. "
+                "Details: github-target: base sha moved during rollout."
+            ),
             source_refs=("work-event://other",),
             factness_score=100,
             importance_score=90,
@@ -143,6 +146,40 @@ async def test_control_event_atomically_publishes_one_reusable_project_finding(
     )
 
     assert capsule.knowledge_items == (first,)
+
+
+@pytest.mark.asyncio
+async def test_control_failure_fallback_is_newest_first_and_bounded(
+    store: KnowledgeStore,
+) -> None:
+    for item_id, created_at in (
+        ("older-quartz-finding", NOW),
+        ("newer-quartz-finding", NOW.replace(minute=1)),
+    ):
+        await store.publish(
+            KnowledgeItem(
+                id=item_id,
+                project_id="project-a",
+                work_id=None,
+                kind=KnowledgeKind.FINDING,
+                statement="Quartz metrics became stale during deployment",
+                source_refs=(f"work-event://{item_id}",),
+                factness_score=100,
+                importance_score=90,
+                created_by="controller",
+                created_at=created_at,
+            )
+        )
+
+    matches = await store.search_high_importance_project_findings_any_term(
+        KnowledgeQuery(
+            text="Improve Quartz metrics freshness",
+            project_id="project-a",
+        ),
+        limit=1,
+    )
+
+    assert [item.id for item in matches] == ["newer-quartz-finding"]
 
 
 @pytest.mark.asyncio

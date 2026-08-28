@@ -28,7 +28,8 @@ class WorkMetrics(BaseModel):
     discipline reports containing at least one scope violation divided by all
     discipline reports. ``repair_rate`` is Works that started a repair divided
     by Works that started implementation. ``rollback_rate`` is successful
-    rollback records divided by deployment records.
+    rollback records divided by initial delivery deployment records; progressive
+    ``promote_rollout`` records are excluded from the denominator.
 
     Mean restoration time is calculated per restored control precondition.
     Degradations that remain active at the end of the stream are excluded.
@@ -95,7 +96,10 @@ def derive_work_metrics(
                     implemented_works.add(selected_work_id)
                 elif stage == "repair":
                     repaired_works.add(selected_work_id)
-            elif event.event_type is WorkEventType.DEPLOYMENT_RECORDED:
+            elif (
+                event.event_type is WorkEventType.DEPLOYMENT_RECORDED
+                and event.payload_json.get("action") != "promote_rollout"
+            ):
                 deployments += 1
             elif event.event_type is WorkEventType.ROLLBACK_RECORDED:
                 rollbacks += 1
