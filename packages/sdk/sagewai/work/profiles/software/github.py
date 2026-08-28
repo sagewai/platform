@@ -788,6 +788,19 @@ class GitHubIssueLifecycle:
         pending = await self._work_store.pending_attention(
             project_id=work_item.project_id,
         )
+        critical_incidents = tuple(
+            item
+            for item in pending
+            if item.work_id == work_item.id
+            and item.kind is PendingAttentionKind.PRODUCTION_INCIDENT
+            and item.severity == "critical"
+        )
+        if critical_incidents:
+            await self.present_pending(
+                work_item.id,
+                project_id=issue.project_id,
+            )
+            return record
         controls = tuple(
             item
             for item in pending

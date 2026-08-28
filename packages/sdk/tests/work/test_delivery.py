@@ -1010,6 +1010,62 @@ async def test_failed_rollback_precondition_refuses_action_and_freezes_work(
 
 
 @pytest.mark.asyncio
+async def test_rollback_refusal_records_one_critical_receipt_for_active_precondition(
+    store: WorkStore,
+) -> None:
+    probe = DeterministicFakeControlProbe(
+        {
+            "rollback": (
+                _result("rollback-authority", passed=False),
+                _result("delivery-observability"),
+                _result("rollback-artifact"),
+            )
+        }
+    )
+    lifecycle, _, provider, _, _ = _lifecycle(store, control_probe=probe)
+    await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    deployment = Deployment(
+        id="deployment-1",
+        project_id=PROJECT_ID,
+        work_id=WORK_ID,
+        release_candidate_id="candidate-1",
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="5%"),
+        provider_ref="fake://deployment/1",
+        status="active",
+    )
+    await _record_deployment(store, deployment)
+    await _record_degradation(store, "rollback-authority")
+
+    for _attempt in range(2):
+        with pytest.raises(ControlDegradedError, match="rollback-authority"):
+            await lifecycle.rollback(
+                deployment,
+                known_good_candidate=_known_good(),
+                evidence_refs=(),
+                expected_duration_seconds=60,
+            )
+
+    assert provider.rollbacks == []
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    critical = [
+        event
+        for event in events
+        if event.event_type is WorkEventType.CONTROL_DEGRADED
+        and event.payload_json.get("severity") == "critical"
+    ]
+    assert len(critical) == 1
+    assert critical[0].payload_json["action"] == "rollback"
+    assert critical[0].payload_json["deployment_id"] == deployment.id
+    assert critical[0].payload_json["failed_preconditions"] == ["rollback-authority"]
+
+
+@pytest.mark.asyncio
 async def test_unrecorded_known_good_candidate_degrades_reversibility(
     store: WorkStore,
 ) -> None:

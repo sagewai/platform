@@ -873,6 +873,74 @@ async def test_control_degraded_freezes_start_resume_and_approved_merge(
 
 
 @pytest.mark.asyncio
+async def test_critical_production_incident_freezes_approved_merge(
+    store: WorkStore,
+) -> None:
+    flow, _, github, _ = _flow(store)
+    gated = await flow.start(
+        issue_url=ISSUE_URL,
+        project_id=PROJECT_ID,
+        base_sha="a" * 40,
+    )
+    assert gated.pending_gate is not None
+    events = await store.read_events(gated.work_id, project_id=PROJECT_ID)
+    await store.append_event(
+        WorkEvent(
+            id="production-deployment",
+            project_id=PROJECT_ID,
+            work_id=gated.work_id,
+            sequence=events[-1].sequence + 1,
+            event_type=WorkEventType.DEPLOYMENT_RECORDED,
+            actor_type="test",
+            actor_ref=None,
+            payload_json={
+                "deployment": {
+                    "id": "production-1",
+                    "environment": "production",
+                }
+            },
+            created_at=NOW,
+        )
+    )
+    await store.append_event(
+        WorkEvent(
+            id="rollback-refused",
+            project_id=PROJECT_ID,
+            work_id=gated.work_id,
+            sequence=events[-1].sequence + 2,
+            event_type=WorkEventType.CONTROL_DEGRADED,
+            actor_type="delivery_control",
+            actor_ref="delivery_control",
+            payload_json={
+                "severity": "critical",
+                "action": "rollback",
+                "deployment_id": "production-1",
+                "failed_preconditions": ["rollback-authority"],
+                "details": "rollback credential expired",
+                "evidence_refs": ["check://rollback-authority"],
+                "frozen_action_ids": ["rollback"],
+            },
+            created_at=NOW,
+        )
+    )
+
+    frozen = await flow.approve(
+        gated.work_id,
+        project_id=PROJECT_ID,
+        gate_id=gated.pending_gate,
+        actor_ref="operator:arda",
+    )
+
+    assert frozen.status == "MERGING"
+    assert github.merges == []
+    incident_comments = [
+        body for _, body in github.comments if "production incident" in body
+    ]
+    assert len(incident_comments) == 1
+    assert "CRITICAL" in incident_comments[0]
+
+
+@pytest.mark.asyncio
 async def test_pending_comment_failure_is_retried_on_resume(store: WorkStore) -> None:
     flow, _, github, _ = _flow(store)
     github.fail_comment_once = True

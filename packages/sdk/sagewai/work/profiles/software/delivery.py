@@ -885,14 +885,33 @@ class DeliveryLifecycle:
     ) -> None:
         active = await self._active_degradations(request.work_id, request.project_id)
         newly_failed = tuple(result for result in failed if result.precondition_id not in active)
-        if not newly_failed:
+        failures_to_record = newly_failed
+        if request.action == "rollback" and request.deployment is not None:
+            events = await self._work_store.read_events(
+                request.work_id,
+                project_id=request.project_id,
+            )
+            if any(
+                event.event_type is WorkEventType.CONTROL_DEGRADED
+                and event.payload_json.get("severity") == "critical"
+                and event.payload_json.get("action") == "rollback"
+                and event.payload_json.get("deployment_id") == request.deployment.id
+                for event in events
+            ):
+                return
+            failures_to_record = failed
+        if not failures_to_record:
             return
         payload: dict[str, object] = {
-            "failed_preconditions": [result.precondition_id for result in newly_failed],
-            "evidence_refs": [ref for result in newly_failed for ref in result.evidence_refs],
+            "failed_preconditions": [
+                result.precondition_id for result in failures_to_record
+            ],
+            "evidence_refs": [
+                ref for result in failures_to_record for ref in result.evidence_refs
+            ],
             "details": "; ".join(
                 f"{result.precondition_id}: {result.detail or 'failed'}"
-                for result in newly_failed
+                for result in failures_to_record
             ),
             "frozen_action_ids": [request.action],
             "severity": "critical" if request.action == "rollback" else "high",
