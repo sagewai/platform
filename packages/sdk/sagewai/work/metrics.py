@@ -84,8 +84,6 @@ def derive_work_metrics(
                     if degraded_at is None:
                         continue
                     duration = (event.created_at - degraded_at).total_seconds()
-                    if duration < 0:
-                        raise ValueError("CONTROL_RESTORED precedes CONTROL_DEGRADED")
                     restoration_seconds.append(duration)
             elif event.event_type is WorkEventType.OPERATOR_DISCIPLINE_RECORDED:
                 discipline_reports += 1

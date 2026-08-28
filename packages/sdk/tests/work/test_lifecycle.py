@@ -275,6 +275,9 @@ class FailingOnceKnowledgeStore:
     async def search(self, query: KnowledgeQuery):
         return await self.store.search(query)
 
+    async def search_high_importance_project_findings_any_term(self, query: KnowledgeQuery):
+        return await self.store.search_high_importance_project_findings_any_term(query)
+
     async def publish(self, item):
         self.publish_calls += 1
         if not self.failed and self.publish_calls == self.fail_on_publish:

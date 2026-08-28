@@ -15,10 +15,11 @@ from datetime import datetime, timezone
 
 import pytest
 
+import sagewai.work.store as work_store_module
 from sagewai.work import TaskCapsuleCompiler, WorkContract, WorkItem, WorkStore
 from sagewai.work.events import WorkEvent, WorkEventType
 from sagewai.work.knowledge.control_failure import control_failure_finding
-from sagewai.work.knowledge.models import KnowledgeKind, KnowledgeQuery
+from sagewai.work.knowledge.models import KnowledgeItem, KnowledgeKind, KnowledgeQuery
 from sagewai.work.knowledge.store import KnowledgeStore
 from tests.db.conftest import dialect_engine  # noqa: F401
 
@@ -82,9 +83,26 @@ async def test_control_event_atomically_publishes_one_reusable_project_finding(
         "metrics://quartz-api/2026-08-28T12:00:00Z",
         "artifact://rollback/quartz-api",
     )
-    assert await store.search(
+    findings = await store.search(
         KnowledgeQuery(text="Quartz metrics stale", project_id="project-a")
-    ) == [first]
+    )
+    assert len(findings) == 1
+    assert findings == [first]
+
+    await store.publish(
+        KnowledgeItem(
+            id="generic-rollout-finding",
+            project_id="project-a",
+            work_id=None,
+            kind=KnowledgeKind.FINDING,
+            statement="An unrelated service rollout failure",
+            source_refs=("work-event://other",),
+            factness_score=100,
+            importance_score=90,
+            created_by="controller",
+            created_at=NOW,
+        )
+    )
 
     related_work = WorkItem(
         id="work-2",
@@ -111,14 +129,48 @@ async def test_control_event_atomically_publishes_one_reusable_project_finding(
         risk="medium",
         design_required=False,
     )
+    production_search_text = f"{related_work.title} {related_work.description}"
+    assert (
+        await store.search(KnowledgeQuery(text=production_search_text, project_id="project-a"))
+        == []
+    )
+
     capsule = await TaskCapsuleCompiler(knowledge_store=store).compile(
         work_item=related_work,
         contract=contract,
         stage="analysis",
-        search_text="Quartz metrics stale",
+        search_text=production_search_text,
     )
 
     assert capsule.knowledge_items == (first,)
+
+
+@pytest.mark.asyncio
+async def test_control_event_rolls_back_when_finding_insert_fails(
+    store: KnowledgeStore,
+    dialect_engine,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event = _degraded_event()
+    work_store = WorkStore(engine=dialect_engine)
+    await work_store.init()
+
+    async def fail_insert(*args, **kwargs) -> None:
+        raise RuntimeError("injected knowledge insert failure")
+
+    monkeypatch.setattr(work_store_module, "insert_knowledge_item", fail_insert)
+
+    with pytest.raises(RuntimeError, match="injected knowledge insert failure"):
+        await work_store.append_event(event)
+
+    assert await work_store.read_events("work-1", project_id="project-a") == []
+    assert (
+        await store.get(
+            "event-control-degraded-1:control-failure",
+            project_id="project-a",
+        )
+        is None
+    )
 
 
 def test_finding_requires_a_project_scoped_control_failure() -> None:

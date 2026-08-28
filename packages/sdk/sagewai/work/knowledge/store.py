@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import func, insert, literal_column, select, text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy import func, insert, literal_column, or_, select, text
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from sagewai.db import factory
 from sagewai.db.models import Base, KnowledgeItemModel
@@ -34,6 +34,35 @@ def _sqlite_plaintext_query(value: str) -> str:
     return " ".join(f'"{term}"' for term in terms)
 
 
+def _sqlite_any_term_query(value: str) -> str:
+    """Encode literal FTS5 terms joined by OR for bounded candidates."""
+    terms = dict.fromkeys(term.replace('"', '""') for term in value.split())
+    return " OR ".join(f'"{term}"' for term in terms)
+
+
+async def insert_knowledge_item(
+    conn: AsyncConnection,
+    item: KnowledgeItem,
+    *,
+    dialect_name: str,
+) -> None:
+    """Insert one item and its SQLite search row on an existing transaction."""
+    values = item.model_dump(mode="python")
+    values["kind"] = item.kind.value
+    values["source_refs"] = list(item.source_refs)
+    values["artifact_refs"] = list(item.artifact_refs)
+
+    await conn.execute(insert(KnowledgeItemModel.__table__).values(**values))
+    if dialect_name == "sqlite":
+        await conn.execute(
+            text(
+                "INSERT INTO knowledge_items_fts (item_id, statement) "
+                "VALUES (:item_id, :statement)"
+            ),
+            {"item_id": item.id, "statement": item.statement},
+        )
+
+
 class KnowledgeStore:
     """Publish and retrieve immutable project-scoped KnowledgeItems."""
 
@@ -50,21 +79,12 @@ class KnowledgeStore:
 
     async def publish(self, item: KnowledgeItem) -> None:
         """Append one immutable knowledge item."""
-        values = item.model_dump(mode="python")
-        values["kind"] = item.kind.value
-        values["source_refs"] = list(item.source_refs)
-        values["artifact_refs"] = list(item.artifact_refs)
-
         async with self._engine.begin() as conn:
-            await conn.execute(insert(self._items).values(**values))
-            if self._engine.dialect.name == "sqlite":
-                await conn.execute(
-                    text(
-                        "INSERT INTO knowledge_items_fts (item_id, statement) "
-                        "VALUES (:item_id, :statement)"
-                    ),
-                    {"item_id": item.id, "statement": item.statement},
-                )
+            await insert_knowledge_item(
+                conn,
+                item,
+                dialect_name=self._engine.dialect.name,
+            )
 
     async def get(self, item_id: str, *, project_id: str) -> KnowledgeItem | None:
         """Read one item without crossing its project boundary."""
@@ -103,6 +123,46 @@ class KnowledgeStore:
         )
         if self._engine.dialect.name == "sqlite":
             statement = statement.params(search_text=_sqlite_plaintext_query(query.text))
+
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(statement)).all()
+        return [self._from_row(row._mapping) for row in rows]
+
+    async def search_high_importance_project_findings_any_term(
+        self, query: KnowledgeQuery
+    ) -> list[KnowledgeItem]:
+        """Find bounded fallback candidates; callers must verify term overlap."""
+        filters = [
+            self._items.c.project_id == query.project_id,
+            self._items.c.work_id.is_(None),
+            self._items.c.kind == "finding",
+            self._items.c.importance_score > 50,
+        ]
+        terms = tuple(dict.fromkeys(query.text.split()))
+        if self._engine.dialect.name == "sqlite":
+            matched_ids = text(
+                "SELECT item_id FROM knowledge_items_fts "
+                "WHERE knowledge_items_fts MATCH :search_text"
+            )
+            filters.append(self._items.c.id.in_(matched_ids))
+        else:
+            config = literal_column("'simple'")
+            vector = func.to_tsvector(config, self._items.c.statement)
+            filters.append(
+                or_(*(vector.op("@@")(func.plainto_tsquery(config, term)) for term in terms))
+            )
+
+        statement = (
+            select(self._items)
+            .where(*filters)
+            .order_by(
+                self._items.c.importance_score.desc(),
+                self._items.c.created_at,
+                self._items.c.id,
+            )
+        )
+        if self._engine.dialect.name == "sqlite":
+            statement = statement.params(search_text=_sqlite_any_term_query(query.text))
 
         async with self._engine.connect() as conn:
             rows = (await conn.execute(statement)).all()

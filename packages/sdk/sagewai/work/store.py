@@ -13,18 +13,19 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import insert, select, text
+from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from sagewai.db import factory
 from sagewai.db.dialect import upsert
-from sagewai.db.models import Base, KnowledgeItemModel, WorkEventModel, WorkItemModel
+from sagewai.db.models import Base, WorkEventModel, WorkItemModel
 from sagewai.work.events import (
     WorkEvent,
     WorkEventType,
     active_control_degradations,
 )
 from sagewai.work.knowledge.control_failure import control_failure_finding
+from sagewai.work.knowledge.store import insert_knowledge_item
 from sagewai.work.metrics import WorkMetrics, derive_work_metrics
 from sagewai.work.models import (
     PendingAttention,
@@ -47,7 +48,6 @@ class WorkStore:
         self._engine = engine or factory.get_engine()
         self._work_items = WorkItemModel.__table__
         self._work_events = WorkEventModel.__table__
-        self._knowledge_items = KnowledgeItemModel.__table__
 
     async def init(self) -> None:
         """Bootstrap the schema on SQLite; Alembic owns PostgreSQL schema."""
@@ -88,19 +88,11 @@ class WorkStore:
 
             await conn.execute(insert(self._work_events).values(**event_values))
             if finding is not None:
-                finding_values = finding.model_dump(mode="python")
-                finding_values["kind"] = finding.kind.value
-                finding_values["source_refs"] = list(finding.source_refs)
-                finding_values["artifact_refs"] = list(finding.artifact_refs)
-                await conn.execute(insert(self._knowledge_items).values(**finding_values))
-                if self._engine.dialect.name == "sqlite":
-                    await conn.execute(
-                        text(
-                            "INSERT INTO knowledge_items_fts (item_id, statement) "
-                            "VALUES (:item_id, :statement)"
-                        ),
-                        {"item_id": finding.id, "statement": finding.statement},
-                    )
+                await insert_knowledge_item(
+                    conn,
+                    finding,
+                    dialect_name=self._engine.dialect.name,
+                )
 
     async def read_events(
         self,
@@ -122,7 +114,7 @@ class WorkStore:
     async def metrics(
         self,
         *,
-        project_id: str | None,
+        project_id: str,
         work_id: str | None = None,
     ) -> WorkMetrics:
         """Derive project- or Work-scoped metrics from the immutable event ledger."""
