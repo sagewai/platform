@@ -447,6 +447,8 @@ async def test_resume_observes_deployment_persisted_before_process_death(
     await lifecycle.deploy(
         persisted_candidate,
         environment="production",
+        risk="high",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
         exposure=BlastRadius(dimension="traffic", value="5%"),
         known_good_candidate=_known_good(),
         evidence_refs=("policy://docs-production",),

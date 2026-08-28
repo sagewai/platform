@@ -219,6 +219,16 @@ class DeliveryApprovalRequiredError(RuntimeError):
     """A delivery action is waiting at a policy approval boundary."""
 
 
+def default_delivery_action_policy(request: ActionRequest) -> GateDecision:
+    """Deny unapproved irreversible/critical delivery actions by default."""
+
+    if request.reversibility is Reversibility.IRREVERSIBLE or request.risk == "critical":
+        return GateDecision.DENY
+    if request.reversibility is Reversibility.PURE:
+        return GateDecision.ALLOW
+    return GateDecision.REQUIRE_APPROVAL
+
+
 class DeliveryControlLostError(RuntimeError):
     """A provider lost deterministic control during an active delivery action."""
 
@@ -437,6 +447,11 @@ class DeliveryLifecycle:
         if requested is None:
             raise ValueError("delivery gate was not requested for this WorkItem")
         decided = self._gate_event(events, WorkEventType.GATE_DECIDED, gate_id)
+        if decided is not None and not self._same_authorized_action(
+            decided.payload_json.get("action"),
+            requested.payload_json.get("action"),
+        ):
+            decided = None
         if record.pending_gate != gate_id:
             if record.pending_gate is None and decided is not None:
                 if decided.payload_json.get("decision") == GateDecision.ALLOW.value:
@@ -476,6 +491,8 @@ class DeliveryLifecycle:
         known_good_candidate: ReleaseCandidate,
         evidence_refs: tuple[str, ...],
         expected_duration_seconds: int,
+        risk: str,
+        reversibility: Reversibility,
     ) -> Deployment:
         """Deploy a candidate only while authority, observation, and rollback pass."""
 
@@ -509,8 +526,8 @@ class DeliveryLifecycle:
                 project_id=candidate.project_id,
                 action=action_name,
                 work_id=candidate.work_id,
-                risk="high" if environment == "production" else "medium",
-                reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
+                risk=risk,
+                reversibility=reversibility,
                 scope=(f"{candidate.id}:{environment}:{exposure.dimension}:{exposure.value}"),
                 evidence_refs=evidence_refs,
             )
@@ -936,12 +953,21 @@ class DeliveryLifecycle:
 
     async def _authorize(self, request: ActionRequest) -> None:
         gate_id = f"{request.action}:{request.work_id}:{request.scope}"
+        action = request.model_dump(mode="json")
         events = await self._work_store.read_events(
             request.work_id,
             project_id=request.project_id,
         )
         decided = self._gate_event(events, WorkEventType.GATE_DECIDED, gate_id)
         requested = self._gate_event(events, WorkEventType.GATE_REQUESTED, gate_id)
+        if decided is not None and not self._same_authorized_action(
+            decided.payload_json.get("action"), action
+        ):
+            decided = None
+        if requested is not None and not self._same_authorized_action(
+            requested.payload_json.get("action"), action
+        ):
+            requested = None
         if decided is not None:
             decision = GateDecision(decided.payload_json["decision"])
         elif requested is not None:
@@ -957,7 +983,7 @@ class DeliveryLifecycle:
                     payload={
                         "gate_id": gate_id,
                         "question": f"Approve {request.action} for {request.scope}.",
-                        "action": request.model_dump(mode="json"),
+                        "action": action,
                         "evidence_refs": list(request.evidence_refs),
                     },
                     actor_ref="delivery_policy",
@@ -971,7 +997,7 @@ class DeliveryLifecycle:
                 payload={
                     "gate_id": gate_id,
                     "decision": decision.value,
-                    "action": request.model_dump(mode="json"),
+                    "action": action,
                 },
                 actor_ref="delivery_policy",
             )
@@ -1237,6 +1263,14 @@ class DeliveryLifecycle:
         )
 
     @staticmethod
+    def _same_authorized_action(left: object, right: object) -> bool:
+        if not isinstance(left, dict) or not isinstance(right, dict):
+            return False
+        return {
+            key: value for key, value in left.items() if key != "evidence_refs"
+        } == {key: value for key, value in right.items() if key != "evidence_refs"}
+
+    @staticmethod
     def _gate_event(
         events: list[WorkEvent],
         event_type: WorkEventType,
@@ -1446,6 +1480,7 @@ __all__ = [
     "DeliveryControlProbe",
     "DeliveryControlRequest",
     "DeliveryLifecycle",
+    "default_delivery_action_policy",
     "Deployment",
     "DeploymentProvider",
     "HealthGate",

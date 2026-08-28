@@ -35,7 +35,6 @@ from sagewai.work import (
     ClaudeRuntime,
     CodexRuntime,
     ControlDegradedError,
-    GateDecision,
     OperatorController,
     PendingAttention,
     TaskCapsuleCompiler,
@@ -78,6 +77,7 @@ from sagewai.work.profiles.software import (
     WorktreeBranchPublisher,
     cloudflare_delivery_preconditions,
     cloudflare_version_digest,
+    default_delivery_action_policy,
     github_remote_repository,
     is_github_issue_url,
 )
@@ -646,11 +646,7 @@ async def _run_docs_delivery(
                 client=client,
             ),
             control_preconditions=cloudflare_delivery_preconditions(project_id),
-            action_policy=lambda request: (
-                GateDecision.ALLOW
-                if request.reversibility.value == "pure"
-                else GateDecision.REQUIRE_APPROVAL
-            ),
+            action_policy=default_delivery_action_policy,
             heartbeat_interval=settings["heartbeat_seconds"],
         )
         flow = CloudflareDocsDeliveryFlow(

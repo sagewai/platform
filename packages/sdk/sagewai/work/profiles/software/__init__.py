@@ -46,6 +46,7 @@ from sagewai.work.profiles.software.delivery import (
     ObservationResult,
     ReleaseCandidate,
     ReleaseProvider,
+    default_delivery_action_policy,
 )
 from sagewai.work.profiles.software.github import (
     CatalogGitHubClient,
@@ -115,6 +116,7 @@ __all__ = [
     "DeliveryControlRequest",
     "DeliveryLifecycle",
     "Deployment",
+    "default_delivery_action_policy",
     "DeploymentProvider",
     "GitHubIssue",
     "GitHubIssueLifecycle",

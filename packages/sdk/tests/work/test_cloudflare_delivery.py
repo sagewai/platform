@@ -20,6 +20,7 @@ import pytest
 from sagewai.work import (
     ControlDegradedError,
     GateDecision,
+    Reversibility,
     WorkEvent,
     WorkEventType,
     WorkRecord,
@@ -494,6 +495,8 @@ async def test_analytics_scope_loss_freezes_lifecycle_and_surfaces_attention(
         deployment = await lifecycle.deploy(
             candidate,
             environment="production",
+            risk="high",
+            reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
             exposure=BlastRadius(dimension="traffic", value="5%"),
             known_good_candidate=_known_good(),
             evidence_refs=("policy://production",),
@@ -625,6 +628,8 @@ async def test_lifecycle_refuses_rollback_when_cloudflare_credential_expires(
         deployment = await lifecycle.deploy(
             candidate,
             environment="production",
+            risk="high",
+            reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
             exposure=BlastRadius(dimension="traffic", value="5%"),
             known_good_candidate=_known_good(),
             evidence_refs=("policy://production",),
