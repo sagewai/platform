@@ -48,6 +48,15 @@ class SoftwareAnalysisContext(BaseModel):
     analysis_result_schema: dict[str, Any]
 
 
+class SoftwareDesignContext(BaseModel):
+    """Canonical inputs and required result contract for software design."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    software: SoftwareCapsuleContext
+    design_result_schema: dict[str, Any]
+
+
 class SoftwareAttemptContext(BaseModel):
     """Software-specific execution receipt state."""
 
