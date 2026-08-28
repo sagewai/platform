@@ -266,7 +266,11 @@ class CodexRuntime(_NativeRuntime):
             )
             if process.returncode != 0:
                 return _failed_result(request, process.stderr)
-            return self._validate_result(json.loads(result_path.read_text()), request)
+            payload = {
+                **json.loads(result_path.read_text()),
+                "output_tokens": None,
+            }
+            return self._validate_result(payload, request)
 
 
 class ClaudeRuntime(_NativeRuntime):
@@ -328,10 +332,10 @@ class ClaudeRuntime(_NativeRuntime):
         if process.returncode != 0:
             return _failed_result(request, process.stderr)
         envelope = json.loads(process.stdout)
-        payload = envelope["structured_output"]
-        usage = envelope.get("usage", {})
-        if "output_tokens" in usage:
-            payload = {**payload, "output_tokens": usage["output_tokens"]}
+        payload = {
+            **envelope["structured_output"],
+            "output_tokens": envelope.get("usage", {}).get("output_tokens"),
+        }
         return self._validate_result(payload, request)
 
 
