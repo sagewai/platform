@@ -477,18 +477,20 @@ async def test_delivery_error_presents_pending_and_preserves_error(monkeypatch) 
     record = SimpleNamespace(work_id="work-1")
     repository = SimpleNamespace()
     seen = []
+    delivery_cause = ValueError("provider rejected rollout")
     error = RuntimeError("production health gate failed")
+    presentation_error = RuntimeError("GitHub comment unavailable")
 
     async def fake_run_docs_delivery(
         _value, *, project_id, repository, approve_gate_id=None
     ):
         seen.append(("delivery", project_id, repository))
-        raise error
+        raise error from delivery_cause
 
     class FakeGitHubLifecycle:
         async def present_pending(self, work_id, *, project_id):
             seen.append(("pending", work_id, project_id))
-            raise RuntimeError("GitHub comment unavailable")
+            raise presentation_error
 
     async def fake_build_github_lifecycle(*, project_id, repository):
         seen.append(("build", project_id, repository))
@@ -509,8 +511,8 @@ async def test_delivery_error_presents_pending_and_preserves_error(monkeypatch) 
         )
 
     assert caught.value is error
-    assert isinstance(caught.value.__cause__, RuntimeError)
-    assert str(caught.value.__cause__) == "GitHub comment unavailable"
+    assert caught.value.__cause__ is delivery_cause
+    assert caught.value.__context__ is presentation_error
     assert seen == [
         ("delivery", "project-a", repository),
         ("build", "project-a", repository),

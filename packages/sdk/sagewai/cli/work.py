@@ -521,9 +521,9 @@ async def _run_docs_delivery_with_pending(
                 repository=repository,
             )
             await github.present_pending(record.work_id, project_id=project_id)
-        except Exception as presentation_error:
-            # Keep the delivery failure authoritative and retain presentation evidence.
-            raise delivery_error from presentation_error
+        except Exception:
+            # Keep the delivery cause authoritative; Python records this failure as context.
+            raise delivery_error from delivery_error.__cause__
         raise
 
     github = await _build_github_lifecycle(

@@ -133,6 +133,7 @@ class PendingAttention(BaseModel):
     kind: PendingAttentionKind
     source_ref: str | None
     summary: str
+    severity: Literal["high", "critical"] | None = None
     evidence_refs: tuple[str, ...] = ()
     created_at: datetime
 

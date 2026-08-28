@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Literal
 
 from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -254,7 +255,8 @@ class WorkStore:
             production_deployment_ids: set[str] = set()
             incident_triggers: dict[str, WorkEvent] = {}
             incident_evidence: dict[str, list[str]] = {}
-            incident_severity: dict[str, str] = {}
+            incident_severity: dict[str, Literal["high", "critical"]] = {}
+            incident_cause: dict[str, str] = {}
             incident_control_event_ids: set[str] = set()
 
             def record_incident(
@@ -262,7 +264,8 @@ class WorkStore:
                 event: WorkEvent,
                 *,
                 evidence_refs: tuple[str, ...],
-                severity: str,
+                severity: Literal["high", "critical"],
+                cause: str | None = None,
             ) -> None:
                 incident_triggers.setdefault(deployment_id, event)
                 refs = incident_evidence.setdefault(deployment_id, [])
@@ -271,6 +274,8 @@ class WorkStore:
                         refs.append(ref)
                 if severity == "critical":
                     incident_severity[deployment_id] = "critical"
+                    if cause is not None:
+                        incident_cause[deployment_id] = cause
                 else:
                     incident_severity.setdefault(deployment_id, "high")
 
@@ -313,6 +318,14 @@ class WorkStore:
                 ):
                     deployment_id = str(payload.get("deployment_id", ""))
                     if deployment_id in production_deployment_ids:
+                        failed_preconditions = ", ".join(
+                            str(item)
+                            for item in payload.get("failed_preconditions", ())
+                        )
+                        cause = f"failed preconditions: {failed_preconditions}"
+                        details = payload.get("details")
+                        if details:
+                            cause = f"{cause}; details: {details}"
                         record_incident(
                             deployment_id,
                             event,
@@ -320,6 +333,7 @@ class WorkStore:
                                 str(ref) for ref in payload.get("evidence_refs", ())
                             ),
                             severity="critical",
+                            cause=cause,
                         )
                         incident_control_event_ids.add(event.id)
 
@@ -383,7 +397,14 @@ class WorkStore:
 
             if projection["status"] != "COMPLETE":
                 for deployment_id, trigger in incident_triggers.items():
-                    severity = incident_severity[deployment_id].upper()
+                    severity = incident_severity[deployment_id]
+                    incident_summary_cause = incident_cause.get(deployment_id)
+                    summary = (
+                        f"{severity.upper()}: production incident for deployment "
+                        f"{deployment_id}"
+                    )
+                    if incident_summary_cause is not None:
+                        summary = f"{summary}; {incident_summary_cause}"
                     pending.append(
                         PendingAttention(
                             attention_id=trigger.id,
@@ -391,10 +412,8 @@ class WorkStore:
                             work_id=work_id,
                             kind=PendingAttentionKind.PRODUCTION_INCIDENT,
                             source_ref=source_ref,
-                            summary=(
-                                f"{severity}: production incident for deployment "
-                                f"{deployment_id}"
-                            ),
+                            summary=summary,
+                            severity=severity,
                             evidence_refs=tuple(incident_evidence[deployment_id]),
                             created_at=trigger.created_at,
                         )

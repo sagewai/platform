@@ -12,13 +12,14 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
 
 from sagewai.work import (
     GateDecision,
+    PendingAttentionKind,
     WorkEvent,
     WorkEventType,
     WorkRecord,
@@ -1426,6 +1427,72 @@ async def test_production_fail_and_rollback_present_one_incident_comment(
     assert len(receipts) == 1
     assert receipts[0].payload_json["kind"] == "PRODUCTION_INCIDENT"
 
+    await store.append_event(
+        WorkEvent(
+            id="rollback-refused",
+            project_id=PROJECT_ID,
+            work_id="work-1",
+            sequence=5,
+            event_type=WorkEventType.CONTROL_DEGRADED,
+            actor_type="delivery_control",
+            actor_ref="delivery_control",
+            payload_json={
+                "severity": "critical",
+                "action": "rollback",
+                "deployment_id": "production-1",
+                "failed_preconditions": ["rollback-authority"],
+                "details": "rollback credential expired",
+                "evidence_refs": ["check://rollback-authority"],
+                "frozen_action_ids": ["rollback"],
+            },
+            created_at=NOW + timedelta(seconds=1),
+        )
+    )
+    await flow.present_pending("work-1", project_id=PROJECT_ID)
+    await flow.present_pending("work-1", project_id=PROJECT_ID)
+
+    pending = [
+        item
+        for item in await store.pending_attention(project_id=PROJECT_ID)
+        if item.kind is PendingAttentionKind.PRODUCTION_INCIDENT
+    ]
+    assert len(pending) == 1
+    assert pending[0].attention_id == "fail-event"
+    assert pending[0].created_at == NOW
+    assert pending[0].severity == "critical"
+    assert pending[0].evidence_refs == (
+        "metrics://production-fail",
+        "provider://rollback-1",
+        "check://rollback-authority",
+    )
+    assert github.comments == [
+        (
+            ISSUE_URL,
+            "Sagewai: production incident — HIGH: production incident for "
+            "deployment production-1. Evidence: metrics://production-fail.",
+        ),
+        (
+            ISSUE_URL,
+            "Sagewai: production incident — CRITICAL: production incident for "
+            "deployment production-1; failed preconditions: rollback-authority; "
+            "details: rollback credential expired. Evidence: "
+            "metrics://production-fail, provider://rollback-1, "
+            "check://rollback-authority.",
+        ),
+    ]
+    events = await store.read_events("work-1", project_id=PROJECT_ID)
+    receipts = [
+        event
+        for event in events
+        if event.event_type is WorkEventType.EXECUTION_RECORDED
+        and event.payload_json.get("action") == "github_pending_attention_presented"
+    ]
+    assert len(receipts) == 2
+    assert [event.payload_json["severity"] for event in receipts] == [
+        "high",
+        "critical",
+    ]
+
 
 @pytest.mark.asyncio
 async def test_refused_production_rollback_presents_one_critical_incident_comment(
@@ -1478,7 +1545,6 @@ async def test_refused_production_rollback_presents_one_critical_incident_commen
                 "severity": "critical",
                 "action": "rollback",
                 "deployment_id": "production-1",
-                "environment": "production",
                 "failed_preconditions": [
                     "rollback-authority",
                     "rollback-observability",
@@ -1498,7 +1564,9 @@ async def test_refused_production_rollback_presents_one_critical_incident_commen
         (
             ISSUE_URL,
             "Sagewai: production incident — CRITICAL: production incident for "
-            "deployment production-1. Evidence: check://rollback-control.",
+            "deployment production-1; failed preconditions: rollback-authority, "
+            "rollback-observability; details: rollback control failed. Evidence: "
+            "check://rollback-control.",
         )
     ]
     events = await store.read_events("work-1", project_id=PROJECT_ID)

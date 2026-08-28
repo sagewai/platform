@@ -899,10 +899,7 @@ class DeliveryLifecycle:
             "action": request.action,
         }
         if request.deployment is not None:
-            payload.update(
-                deployment_id=request.deployment.id,
-                environment=request.deployment.environment,
-            )
+            payload["deployment_id"] = request.deployment.id
         await self._append(
             project_id=request.project_id,
             work_id=request.work_id,

@@ -258,6 +258,7 @@ async def test_production_fail_and_rollback_are_one_stable_incident(
     assert len(incidents) == 1
     assert incidents[0].attention_id == "work-1-event-2"
     assert incidents[0].created_at == NOW
+    assert incidents[0].severity == "high"
     assert incidents[0].summary == "HIGH: production incident for deployment production-1"
     assert incidents[0].evidence_refs == (
         "metrics://production-fail",
@@ -385,5 +386,10 @@ async def test_critical_rollback_control_loss_upserts_incident_and_suppresses_on
         (PendingAttentionKind.CONTROL_DEGRADED, "observability"),
     ]
     incident = pending[0]
-    assert incident.summary == "CRITICAL: production incident for deployment production-1"
+    assert incident.severity == "critical"
+    assert incident.summary == (
+        "CRITICAL: production incident for deployment production-1; "
+        "failed preconditions: rollback-authority; "
+        "details: rollback credential expired"
+    )
     assert incident.evidence_refs == ("check://rollback-authority",)

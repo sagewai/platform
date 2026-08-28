@@ -1001,7 +1001,7 @@ async def test_failed_rollback_precondition_refuses_action_and_freezes_work(
     assert degraded.payload_json["severity"] == "critical"
     assert degraded.payload_json["action"] == "rollback"
     assert degraded.payload_json["deployment_id"] == deployment.id
-    assert degraded.payload_json["environment"] == "production"
+    assert "environment" not in degraded.payload_json
     pending = await store.pending_attention(project_id=PROJECT_ID)
     assert len(pending) == 1
     assert pending[0].attention_id == degraded.id

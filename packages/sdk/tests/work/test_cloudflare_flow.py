@@ -527,6 +527,10 @@ async def test_failure_restores_triages_and_new_candidate_redeploys(
 
     assert triaged.status == "TRIAGING"
     assert first_provider.rollbacks
+    triaged_pending = await store.pending_attention(project_id=PROJECT_ID)
+    assert len(triaged_pending) == 1
+    assert triaged_pending[0].kind.value == "PRODUCTION_INCIDENT"
+    assert triaged_pending[0].severity == "high"
     await store.save_work(triaged.model_copy(update={"status": "READY_TO_DELIVER"}))
 
     repaired_candidate = _candidate("candidate-3", "c" * 40)
@@ -538,6 +542,7 @@ async def test_failure_restores_triages_and_new_candidate_redeploys(
     completed = await repaired_flow.resume(WORK_ID, project_id=PROJECT_ID)
 
     assert completed.status == "COMPLETE"
+    assert await store.pending_attention(project_id=PROJECT_ID) == ()
     assert [item.release_candidate_id for item in second_provider.deployments] == [
         repaired_candidate.id
     ]

@@ -759,17 +759,20 @@ class GitHubIssueLifecycle:
                 item.source_ref,
                 _attention_comment(item),
             )
+            receipt: dict[str, object] = {
+                "action": "github_pending_attention_presented",
+                "attention_id": item.attention_id,
+                "attention_key": attention_key,
+                "kind": item.kind.value,
+                "source_ref": item.source_ref,
+            }
+            if item.severity is not None:
+                receipt["severity"] = item.severity
             await self._append(
                 work_id=work_id,
                 project_id=project_id,
                 event_type=WorkEventType.EXECUTION_RECORDED,
-                payload={
-                    "action": "github_pending_attention_presented",
-                    "attention_id": item.attention_id,
-                    "attention_key": attention_key,
-                    "kind": item.kind.value,
-                    "source_ref": item.source_ref,
-                },
+                payload=receipt,
                 actor_ref="github",
             )
             presented.add(attention_key)
@@ -1385,7 +1388,10 @@ def _parse_issue_url(value: str) -> tuple[str, str, int]:
 
 
 def _attention_key(item: PendingAttention) -> str:
-    return f"{item.kind.value}:{item.attention_id}:{item.created_at.isoformat()}"
+    key = f"{item.kind.value}:{item.attention_id}:{item.created_at.isoformat()}"
+    if item.kind is PendingAttentionKind.PRODUCTION_INCIDENT:
+        return f"{key}:{item.severity}"
+    return key
 
 
 def _attention_comment(item: PendingAttention) -> str:
