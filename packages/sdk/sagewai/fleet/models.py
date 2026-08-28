@@ -19,10 +19,20 @@ Defines the Pydantic v2 models used by the Fleet subsystem:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+WORK_CAPABILITY_LABEL_PREFIX = "sagewai.work.capability."
+
+
+def capability_routing_labels(capability_names: list[str] | tuple[str, ...]) -> dict[str, str]:
+    """Map advertised capability names into the reserved routing namespace."""
+    return {
+        f"{WORK_CAPABILITY_LABEL_PREFIX}{name}": "true"
+        for name in capability_names
+    }
 
 
 class WorkerApprovalStatus(str, Enum):
@@ -46,6 +56,8 @@ class WorkerCapabilities(BaseModel):
             (e.g. ``["openai/gpt-4o", "ollama/llama3:70b"]``).
         models_canonical: Auto-filled by ``ModelNormalizer.canonical_list()``
             during registration. Used for matching at claim time.
+        capability_names: Generic execution capabilities advertised to Work
+            stage routing (for example ``runtime.claude`` or ``cli.git``).
         max_concurrent: Maximum number of concurrent workflow runs.
         labels: Arbitrary key-value metadata for label-based routing.
         pool: Worker pool name (like a Temporal task queue).
@@ -59,6 +71,10 @@ class WorkerCapabilities(BaseModel):
     models_canonical: list[str] = Field(
         default_factory=list,
         description="Normalized model names (auto-filled by ModelNormalizer)",
+    )
+    capability_names: list[str] = Field(
+        default_factory=list,
+        description="Generic execution capabilities available on this worker",
     )
     max_concurrent: int = Field(
         default=1,
@@ -77,6 +93,28 @@ class WorkerCapabilities(BaseModel):
         default="",
         description="Sagewai SDK version on the worker",
     )
+
+    @field_validator("capability_names")
+    @classmethod
+    def validate_capability_names(cls, names: list[str]) -> list[str]:
+        if any(not name or name != name.strip() for name in names):
+            raise ValueError("worker capability names must be non-empty and trimmed")
+        if len(names) != len(set(names)):
+            raise ValueError("worker capability names must be unique")
+        return names
+
+    @model_validator(mode="after")
+    def validate_reserved_labels(self) -> WorkerCapabilities:
+        if any(key.startswith(WORK_CAPABILITY_LABEL_PREFIX) for key in self.labels):
+            raise ValueError("label namespace is reserved for Work capability routing")
+        return self
+
+    def routing_labels(self) -> dict[str, str]:
+        """Return arbitrary labels plus unforgeable Work capability labels."""
+        return {
+            **self.labels,
+            **capability_routing_labels(self.capability_names),
+        }
 
 
 class WorkerRecord(BaseModel):
@@ -140,6 +178,12 @@ class WorkerRecord(BaseModel):
         exclude=True,  # credential verifier — never serialize across the auth boundary
         description="SHA-256 hash of the worker's operating secret (None until set)",
     )
+
+    def is_online(self, *, now: datetime, heartbeat_ttl: timedelta) -> bool:
+        """Evaluate liveness using an explicit caller-owned heartbeat policy."""
+        if heartbeat_ttl <= timedelta(0):
+            raise ValueError("heartbeat_ttl must be positive")
+        return self.last_heartbeat is not None and now - self.last_heartbeat <= heartbeat_ttl
 
 
 class EnrollmentKey(BaseModel):

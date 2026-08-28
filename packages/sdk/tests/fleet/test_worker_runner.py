@@ -89,13 +89,19 @@ async def _worker_org_id(app, worker_id):
 @pytest.mark.asyncio
 async def test_register_appears_in_registry(app_token):
     app, token = app_token
-    r = _runner(app, token, labels={"gpu": "a100"})
+    r = _runner(
+        app,
+        token,
+        labels={"gpu": "a100"},
+        capability_names=["runtime.claude", "cli.git"],
+    )
     wid, status = await r.register()
     assert status == "pending"
     worker = await app.state.fleet_registry.get_worker(wid)
     assert worker is not None
     assert "gpt-4o" in worker.capabilities.models_canonical
     assert worker.capabilities.labels.get("gpu") == "a100"
+    assert worker.capabilities.capability_names == ["runtime.claude", "cli.git"]
 
 
 @pytest.mark.asyncio

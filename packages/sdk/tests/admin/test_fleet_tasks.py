@@ -78,6 +78,56 @@ def test_enqueue_task_can_be_claimed_by_approved_worker(client):
     assert task["payload"]["message"] == "hi"
 
 
+def test_worker_capabilities_round_trip_and_drive_reserved_routing(client):
+    reg = client.post(
+        "/api/v1/fleet/register",
+        json={
+            "name": "claude-worker",
+            "models": [],
+            "capability_names": ["runtime.claude", "cli.git"],
+        },
+    )
+    assert reg.status_code == 201, reg.text
+    body = reg.json()
+    assert body["capabilities"]["capability_names"] == ["runtime.claude", "cli.git"]
+    worker_id = body["worker_id"]
+    detail = client.get(f"/api/v1/fleet/workers/{worker_id}")
+    assert detail.status_code == 200
+    assert detail.json()["capability_names"] == ["runtime.claude", "cli.git"]
+    client.post(f"/api/v1/fleet/workers/{worker_id}/approve")
+
+    enq = client.post(
+        "/api/v1/fleet/tasks",
+        json={
+            "labels": {
+                "sagewai.work.capability.runtime.claude": "true",
+                "sagewai.work.capability.cli.git": "true",
+            },
+            "payload": {"stage": "review"},
+        },
+    )
+    worker = TestClient(client.app)
+    claim = worker.post(
+        "/api/v1/fleet/claim",
+        headers=_wh(worker_id, body["worker_secret"]),
+        json={},
+    )
+    assert claim.status_code == 200, claim.text
+    assert claim.json()["run_id"] == enq.json()["run_id"]
+
+
+def test_worker_labels_cannot_spoof_reserved_capability(client):
+    reg = client.post(
+        "/api/v1/fleet/register",
+        json={
+            "name": "spoofed-worker",
+            "models": [],
+            "labels": {"sagewai.work.capability.runtime.claude": "true"},
+        },
+    )
+    assert reg.status_code == 400
+
+
 def test_enqueue_task_scrubs_body_project_id_label(client):
     reg = client.post(
         "/api/v1/fleet/register",

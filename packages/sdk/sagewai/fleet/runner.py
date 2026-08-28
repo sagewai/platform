@@ -57,6 +57,7 @@ class WorkerRunner:
     project: str | None = None
     name: str = "worker"
     models: list[str] = field(default_factory=list)
+    capability_names: list[str] = field(default_factory=list)
     pool: str = "default"
     labels: dict[str, str] = field(default_factory=dict)
     max_concurrent: int = 1
@@ -149,6 +150,7 @@ class WorkerRunner:
             json={
                 "name": self.name,
                 "models": self.models,
+                "capability_names": self.capability_names,
                 "pool": self.pool,
                 "labels": self.labels,
                 "max_concurrent": self.max_concurrent,

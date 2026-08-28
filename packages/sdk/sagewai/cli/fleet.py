@@ -123,6 +123,7 @@ def fleet_group() -> None:
 @click.option("--models", required=True, help="Comma-separated model list.")
 @click.option("--pool", default="default", help="Worker pool.")
 @click.option("--labels", default=None, help="Comma-separated key=value labels.")
+@click.option("--capabilities", default=None, help="Comma-separated worker capabilities.")
 @click.option("--enrollment-key", default=None, help="Enrollment key for auto-approval.")
 @click.option("--cloud-url", default=None, help="Cloud gateway URL (for remote registration).")
 def register(
@@ -131,12 +132,14 @@ def register(
     models: str,
     pool: str,
     labels: str | None,
+    capabilities: str | None,
     enrollment_key: str | None,
     cloud_url: str | None,
 ) -> None:
     """Register this machine as a fleet worker."""
     model_list = [m.strip() for m in models.split(",") if m.strip()]
     canonical = ModelNormalizer.canonical_list(model_list)
+    capability_names = [name.strip() for name in (capabilities or "").split(",") if name.strip()]
 
     parsed_labels: dict[str, str] = {}
     if labels:
@@ -149,6 +152,7 @@ def register(
     caps = WorkerCapabilities(
         models_supported=model_list,
         models_canonical=canonical,
+        capability_names=capability_names,
         max_concurrent=1,
         labels=parsed_labels,
         pool=pool,
@@ -197,6 +201,8 @@ def register(
     click.echo(f"  Pool         : {pool}")
     click.echo(f"  Models       : {', '.join(canonical)}")
     click.echo(f"  Status       : {approval.value}")
+    if capability_names:
+        click.echo(f"  Capabilities : {', '.join(capability_names)}")
     if parsed_labels:
         click.echo(f"  Labels       : {parsed_labels}")
 
@@ -206,6 +212,7 @@ def register(
 @click.option("--models", default=None, help="Comma-separated model list (required unless --worker-id).")
 @click.option("--pool", default="default", help="Worker pool.")
 @click.option("--labels", default=None, help="Comma-separated key=value labels.")
+@click.option("--capabilities", default=None, help="Comma-separated worker capabilities.")
 @click.option("--max-concurrent", default=1, type=int, help="Max in-flight tasks.")
 @click.option("--project", default=None, help="Project scope (X-Project-ID).")
 @click.option("--enrollment-key", default=None, help="Enrollment key for auto-approval.")
@@ -224,15 +231,18 @@ def register(
 @click.option("--poll-timeout", default=30.0, type=float, help="Claim long-poll seconds.")
 @click.option("--heartbeat-interval", default=10.0, type=float, help="Heartbeat cadence seconds.")
 def run(
-    name, models, pool, labels, max_concurrent, project, enrollment_key,
+    name, models, pool, labels, capabilities, max_concurrent, project, enrollment_key,
     worker_id, worker_secret, creds_file, exec_cmd, exec_timeout, envs, env_file,
     image, docker_args, register_only, once, gateway_url, poll_timeout, heartbeat_interval,
 ):
     """Run this machine as a fleet worker (register + claim/execute/report loop)."""
-    if worker_id is None and (not name or not models):
-        raise click.UsageError("--name and --models are required unless --worker-id is given.")
+    if worker_id is None and (not name or (not models and not capabilities)):
+        raise click.UsageError(
+            "--name and either --models or --capabilities are required unless --worker-id is given."
+        )
 
     model_list = [m.strip() for m in (models or "").split(",") if m.strip()]
+    capability_names = [name.strip() for name in (capabilities or "").split(",") if name.strip()]
     parsed_labels: dict[str, str] = {}
     if labels:
         for pair in labels.split(","):
@@ -262,6 +272,7 @@ def run(
         project=project,
         name=name or "worker",
         models=model_list,
+        capability_names=capability_names,
         pool=pool,
         labels=parsed_labels,
         max_concurrent=max_concurrent,
