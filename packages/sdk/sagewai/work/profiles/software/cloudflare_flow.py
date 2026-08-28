@@ -7,7 +7,7 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""Durable READY_TO_DELIVER driver for Sagewai's Cloudflare docs path."""
+"""Durable delivery-phase driver for Sagewai's Cloudflare docs path."""
 
 from __future__ import annotations
 
@@ -28,6 +28,16 @@ from sagewai.work.profiles.software.delivery import (
     ReleaseCandidate,
 )
 from sagewai.work.store import WorkStore
+
+_ACTIVE_DELIVERY_STATUSES = {
+    "READY_TO_DELIVER",
+    "RELEASING",
+    "STAGING",
+    "PRODUCTION_CANARY",
+    "PRODUCTION_ROLLOUT",
+    "SOAKING",
+    "ROLLING_BACK",
+}
 
 
 class CloudflareRolloutStep(BaseModel):
@@ -71,7 +81,7 @@ class CloudflareDocsDeliveryPolicy(BaseModel):
 
 
 class CloudflareDocsDeliveryFlow:
-    """Advance one WorkItem from READY_TO_DELIVER using durable receipts."""
+    """Advance one WorkItem through delivery using durable receipts."""
 
     def __init__(
         self,
@@ -100,7 +110,7 @@ class CloudflareDocsDeliveryFlow:
         record = await self._load(work_id, project_id)
         if record.status == "COMPLETE":
             return record
-        if record.status not in {"READY_TO_DELIVER", "TRIAGE"}:
+        if record.status not in _ACTIVE_DELIVERY_STATUSES:
             raise DeliveryActionDeniedError(
                 f"delivery cannot resume from Work status {record.status}"
             )

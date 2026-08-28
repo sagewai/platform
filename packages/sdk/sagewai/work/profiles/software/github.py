@@ -637,7 +637,16 @@ class GitHubIssueLifecycle:
         record = await self._work_store.load_work(work_id, project_id=project_id)
         if record is None:
             raise KeyError(work_id)
-        if record.status in {"READY_TO_DELIVER", "COMPLETE"}:
+        if record.status in {
+            "READY_TO_DELIVER",
+            "RELEASING",
+            "STAGING",
+            "PRODUCTION_CANARY",
+            "PRODUCTION_ROLLOUT",
+            "SOAKING",
+            "ROLLING_BACK",
+            "COMPLETE",
+        }:
             return record
         if record.status == "WORK_BLOCKED":
             await self.present_pending(work_id, project_id=project_id)
@@ -750,17 +759,20 @@ class GitHubIssueLifecycle:
                 item.source_ref,
                 _attention_comment(item),
             )
+            receipt: dict[str, object] = {
+                "action": "github_pending_attention_presented",
+                "attention_id": item.attention_id,
+                "attention_key": attention_key,
+                "kind": item.kind.value,
+                "source_ref": item.source_ref,
+            }
+            if item.severity is not None:
+                receipt["severity"] = item.severity
             await self._append(
                 work_id=work_id,
                 project_id=project_id,
                 event_type=WorkEventType.EXECUTION_RECORDED,
-                payload={
-                    "action": "github_pending_attention_presented",
-                    "attention_id": item.attention_id,
-                    "attention_key": attention_key,
-                    "kind": item.kind.value,
-                    "source_ref": item.source_ref,
-                },
+                payload=receipt,
                 actor_ref="github",
             )
             presented.add(attention_key)
@@ -776,6 +788,19 @@ class GitHubIssueLifecycle:
         pending = await self._work_store.pending_attention(
             project_id=work_item.project_id,
         )
+        critical_incidents = tuple(
+            item
+            for item in pending
+            if item.work_id == work_item.id
+            and item.kind is PendingAttentionKind.PRODUCTION_INCIDENT
+            and item.severity == "critical"
+        )
+        if critical_incidents:
+            await self.present_pending(
+                work_item.id,
+                project_id=issue.project_id,
+            )
+            return record
         controls = tuple(
             item
             for item in pending
@@ -1376,7 +1401,10 @@ def _parse_issue_url(value: str) -> tuple[str, str, int]:
 
 
 def _attention_key(item: PendingAttention) -> str:
-    return f"{item.kind.value}:{item.attention_id}:{item.created_at.isoformat()}"
+    key = f"{item.kind.value}:{item.attention_id}:{item.created_at.isoformat()}"
+    if item.kind is PendingAttentionKind.PRODUCTION_INCIDENT:
+        return f"{key}:{item.severity}"
+    return key
 
 
 def _attention_comment(item: PendingAttention) -> str:
@@ -1386,6 +1414,10 @@ def _attention_comment(item: PendingAttention) -> str:
         return f"Sagewai: approval required — {summary} (gate {item.attention_id})."
     if item.kind is PendingAttentionKind.WORK_BLOCKED:
         return f"Sagewai: work blocked — {summary}."
+    if item.kind is PendingAttentionKind.PRODUCTION_INCIDENT:
+        evidence = ", ".join(item.evidence_refs)
+        suffix = f" Evidence: {evidence}." if evidence else ""
+        return f"Sagewai: production incident — {summary}.{suffix}"
     control_summary = item.attention_id
     if summary != control_summary:
         control_summary = f"{control_summary}: {summary}"

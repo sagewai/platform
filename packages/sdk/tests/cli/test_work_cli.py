@@ -274,6 +274,12 @@ def test_work_pending_lists_canonical_attention(monkeypatch) -> None:
                 attention_id="merge:work-1:42",
                 summary="Approve merge of PR #42.",
             ),
+            SimpleNamespace(
+                kind=SimpleNamespace(value="PRODUCTION_INCIDENT"),
+                work_id="work-2",
+                attention_id="rollback-refused",
+                summary="CRITICAL: production incident for deployment production-1",
+            ),
         )
 
     monkeypatch.setattr(work_module, "_pending_work", fake_pending)
@@ -285,6 +291,81 @@ def test_work_pending_lists_canonical_attention(monkeypatch) -> None:
     assert "work-1" in result.output
     assert "merge:work-1:42" in result.output
     assert "Approve merge of PR #42." in result.output
+    assert "PRODUCTION_INCIDENT" in result.output
+    assert "rollback-refused" in result.output
+    assert "CRITICAL: production incident" in result.output
+
+
+def test_work_metrics_prints_the_read_only_event_projection(monkeypatch) -> None:
+    async def fake_metrics(*, work_id=None):
+        assert work_id == "work-1"
+        return WorkMetrics(
+            project_id="project-a",
+            work_id=work_id,
+            control_degradation_rate=0.25,
+            mean_time_to_control_restored_seconds=30.0,
+            scope_violation_rate=0.1,
+            repair_rate=0.2,
+            rollback_rate=0.05,
+        )
+
+    monkeypatch.setattr(work_module, "_work_metrics", fake_metrics)
+
+    result = CliRunner().invoke(work_cli, ["metrics", "--work-id", "work-1"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == {
+        "control_degradation_rate": 0.25,
+        "mean_time_to_control_restored_seconds": 30.0,
+        "project_id": "project-a",
+        "repair_rate": 0.2,
+        "rollback_rate": 0.05,
+        "scope_violation_rate": 0.1,
+        "work_id": "work-1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_work_metrics_queries_the_resolved_project_store(monkeypatch) -> None:
+    expected = WorkMetrics(
+        project_id="project-a",
+        work_id="work-1",
+        control_degradation_rate=0.0,
+        mean_time_to_control_restored_seconds=None,
+        scope_violation_rate=0.0,
+        repair_rate=0.0,
+        rollback_rate=0.0,
+    )
+    calls = []
+
+    async def fake_ensure_schema():
+        calls.append("schema")
+
+    class FakeStore:
+        def __init__(self, *, engine):
+            calls.append(("engine", engine))
+
+        async def init(self):
+            calls.append("init")
+
+        async def metrics(self, *, project_id, work_id):
+            calls.append(("metrics", project_id, work_id))
+            return expected
+
+    monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
+    monkeypatch.setattr(work_module.factory, "ensure_schema", fake_ensure_schema)
+    monkeypatch.setattr(work_module.factory, "get_engine", lambda: "engine")
+    monkeypatch.setattr(work_module, "WorkStore", FakeStore)
+
+    result = await work_module._work_metrics(work_id="work-1")
+
+    assert result == expected
+    assert calls == [
+        "schema",
+        ("engine", "engine"),
+        "init",
+        ("metrics", "project-a", "work-1"),
+    ]
 
 
 def test_work_metrics_prints_the_read_only_event_projection(monkeypatch) -> None:
@@ -368,12 +449,27 @@ def test_github_credentials_fail_before_remote_call_when_token_is_missing(
         work_module._local_github_credentials()
 
 
+@pytest.mark.parametrize(
+    "delivery_status",
+    (
+        "READY_TO_DELIVER",
+        "RELEASING",
+        "STAGING",
+        "PRODUCTION_CANARY",
+        "PRODUCTION_ROLLOUT",
+        "SOAKING",
+        "ROLLING_BACK",
+    ),
+)
 @pytest.mark.asyncio
-async def test_ready_to_deliver_resume_routes_to_docs_delivery(monkeypatch) -> None:
+async def test_delivery_phase_resume_routes_to_docs_delivery(
+    monkeypatch,
+    delivery_status: str,
+) -> None:
     record = SimpleNamespace(
         work_id="work-1",
         project_id="project-a",
-        status="READY_TO_DELIVER",
+        status=delivery_status,
         source_ref="https://github.com/octocat/repo/issues/7",
     )
     repository = SimpleNamespace()
@@ -385,19 +481,115 @@ async def test_ready_to_deliver_resume_routes_to_docs_delivery(monkeypatch) -> N
     async def fake_repository_state():
         return repository, "a" * 40
 
-    async def fake_run_docs_delivery(value, *, project_id, repository):
+    async def fake_run_docs_delivery(
+        value, *, project_id, repository, approve_gate_id=None
+    ):
         seen.append((value, project_id, repository))
         return SimpleNamespace(work_id="work-1", status="COMPLETE")
 
     monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
     monkeypatch.setattr(work_module, "_status_work", fake_status)
     monkeypatch.setattr(work_module, "_repository_state", fake_repository_state)
-    monkeypatch.setattr(work_module, "_run_docs_delivery", fake_run_docs_delivery)
+    monkeypatch.setattr(
+        work_module,
+        "_run_docs_delivery_with_pending",
+        fake_run_docs_delivery,
+    )
 
     result = await work_module._resume_work("work-1")
 
     assert result.status == "COMPLETE"
     assert seen == [(record, "project-a", repository)]
+
+
+@pytest.mark.asyncio
+async def test_delivery_progress_presents_pending_attention(monkeypatch) -> None:
+    record = SimpleNamespace(work_id="work-1")
+    completed = SimpleNamespace(work_id="work-1", status="COMPLETE")
+    repository = SimpleNamespace()
+    seen = []
+
+    async def fake_run_docs_delivery(
+        value, *, project_id, repository, approve_gate_id=None
+    ):
+        seen.append(("delivery", value.work_id, project_id, repository))
+        return completed
+
+    class FakeGitHubLifecycle:
+        async def present_pending(self, work_id, *, project_id):
+            seen.append(("pending", work_id, project_id))
+
+    async def fake_build_github_lifecycle(*, project_id, repository):
+        seen.append(("build", project_id, repository))
+        return FakeGitHubLifecycle()
+
+    monkeypatch.setattr(work_module, "_run_docs_delivery", fake_run_docs_delivery)
+    monkeypatch.setattr(
+        work_module,
+        "_build_github_lifecycle",
+        fake_build_github_lifecycle,
+    )
+
+    result = await work_module._run_docs_delivery_with_pending(
+        record,
+        project_id="project-a",
+        repository=repository,
+    )
+
+    assert result is completed
+    assert seen == [
+        ("delivery", "work-1", "project-a", repository),
+        ("build", "project-a", repository),
+        ("pending", "work-1", "project-a"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_delivery_error_presents_pending_and_preserves_error(monkeypatch) -> None:
+    record = SimpleNamespace(work_id="work-1")
+    repository = SimpleNamespace()
+    seen = []
+    delivery_cause = ValueError("provider rejected rollout")
+    error = RuntimeError("production health gate failed")
+    presentation_error = RuntimeError("GitHub comment unavailable")
+
+    async def fake_run_docs_delivery(
+        _value, *, project_id, repository, approve_gate_id=None
+    ):
+        seen.append(("delivery", project_id, repository))
+        raise error from delivery_cause
+
+    class FakeGitHubLifecycle:
+        async def present_pending(self, work_id, *, project_id):
+            seen.append(("pending", work_id, project_id))
+            raise presentation_error
+
+    async def fake_build_github_lifecycle(*, project_id, repository):
+        seen.append(("build", project_id, repository))
+        return FakeGitHubLifecycle()
+
+    monkeypatch.setattr(work_module, "_run_docs_delivery", fake_run_docs_delivery)
+    monkeypatch.setattr(
+        work_module,
+        "_build_github_lifecycle",
+        fake_build_github_lifecycle,
+    )
+
+    with pytest.raises(RuntimeError) as caught:
+        await work_module._run_docs_delivery_with_pending(
+            record,
+            project_id="project-a",
+            repository=repository,
+        )
+
+    assert caught.value is error
+    assert caught.value.__cause__ is delivery_cause
+    assert caught.value.__context__ is presentation_error
+    assert seen == [
+        ("delivery", "project-a", repository),
+        ("build", "project-a", repository),
+        ("pending", "work-1", "project-a"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -425,11 +617,11 @@ async def test_complete_resume_returns_without_repository_or_remote_work(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_triage_resume_repairs_new_merged_sha_then_redeploys(monkeypatch) -> None:
+async def test_triaging_resume_repairs_new_merged_sha_then_redeploys(monkeypatch) -> None:
     current = SimpleNamespace(
         work_id="work-1",
         project_id="project-a",
-        status="TRIAGE",
+        status="TRIAGING",
         source_ref="https://github.com/octocat/repo/issues/7",
         profile_context={"github": {"merged_sha": "a" * 40}},
     )
@@ -477,7 +669,11 @@ async def test_triage_resume_repairs_new_merged_sha_then_redeploys(monkeypatch) 
     monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
     monkeypatch.setattr(work_module, "_status_work", fake_status)
     monkeypatch.setattr(work_module, "_repository_state", fake_repository_state)
-    monkeypatch.setattr(work_module, "_run_docs_delivery", fake_docs_delivery)
+    monkeypatch.setattr(
+        work_module,
+        "_run_docs_delivery_with_pending",
+        fake_docs_delivery,
+    )
     monkeypatch.setattr(work_module, "_build_github_lifecycle", fake_build_github_lifecycle)
 
     repair_result = await work_module._resume_work("work-1")
@@ -544,7 +740,11 @@ async def test_delivery_gate_approval_routes_to_delivery_flow(monkeypatch) -> No
     monkeypatch.setattr(work_module.factory, "ensure_schema", fake_ensure_schema)
     monkeypatch.setattr(work_module.factory, "get_engine", lambda: object())
     monkeypatch.setattr(work_module, "WorkStore", lambda engine: FakeStore())
-    monkeypatch.setattr(work_module, "_run_docs_delivery", fake_run_docs_delivery)
+    monkeypatch.setattr(
+        work_module,
+        "_run_docs_delivery_with_pending",
+        fake_run_docs_delivery,
+    )
 
     approved = await work_module._approve_work("work-1", gate_id)
 
@@ -579,13 +779,13 @@ async def test_complete_delivery_approval_is_a_noop_before_repository_work(
 
 
 @pytest.mark.asyncio
-async def test_triage_rejects_stale_delivery_approval_before_repository_work(
+async def test_triaging_rejects_stale_delivery_approval_before_repository_work(
     monkeypatch,
 ) -> None:
     record = SimpleNamespace(
         work_id="work-1",
         project_id="project-a",
-        status="TRIAGE",
+        status="TRIAGING",
         source_ref="https://github.com/octocat/repo/issues/7",
     )
 
@@ -593,13 +793,13 @@ async def test_triage_rejects_stale_delivery_approval_before_repository_work(
         return record
 
     async def unexpected_repository_state():
-        raise AssertionError("triage approval rejection must not inspect the repository")
+        raise AssertionError("triaging approval rejection must not inspect the repository")
 
     monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
     monkeypatch.setattr(work_module, "_status_work", fake_status)
     monkeypatch.setattr(work_module, "_repository_state", unexpected_repository_state)
 
-    with pytest.raises(ValueError, match="cannot approve a stale gate from TRIAGE"):
+    with pytest.raises(ValueError, match="cannot approve a stale gate from TRIAGING"):
         await work_module._approve_work("work-1", "rollback:stale")
 
 

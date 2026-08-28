@@ -119,6 +119,7 @@ class PendingAttentionKind(str, Enum):
     GATE_REQUESTED = "GATE_REQUESTED"
     WORK_BLOCKED = "WORK_BLOCKED"
     CONTROL_DEGRADED = "CONTROL_DEGRADED"
+    PRODUCTION_INCIDENT = "PRODUCTION_INCIDENT"
 
 
 class PendingAttention(BaseModel):
@@ -132,6 +133,7 @@ class PendingAttention(BaseModel):
     kind: PendingAttentionKind
     source_ref: str | None
     summary: str
+    severity: Literal["high", "critical"] | None = None
     evidence_refs: tuple[str, ...] = ()
     created_at: datetime
 

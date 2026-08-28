@@ -284,6 +284,157 @@ def test_delivery_models_are_immutable_and_project_scoped() -> None:
 
 
 @pytest.mark.asyncio
+async def test_delivery_events_project_canonical_work_status(store: WorkStore) -> None:
+    gate = HealthGate(
+        id="availability",
+        project_id=PROJECT_ID,
+        description="availability",
+        check_ref="http://availability",
+        failure_verdict=HealthVerdict.FAIL,
+    )
+    lifecycle, _, _, _, _ = _lifecycle(
+        store,
+        observations=(
+            {"availability": True},
+            {"availability": True},
+            {"availability": True},
+            {"availability": True},
+            {"availability": False},
+            {"availability": True},
+        ),
+    )
+
+    baseline = _candidate(
+        candidate_id="baseline-current-work",
+        artifact_ref="artifact://baseline-current-work",
+        digest="d" * 64,
+        commit_sha="e" * 40,
+    )
+    await lifecycle.register_known_good(baseline, evidence_refs=("config://baseline",))
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None and record.status == "READY_TO_DELIVER"
+
+    candidate = await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=("merge://sha",),
+    )
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None and record.status == "RELEASING"
+
+    staging = await lifecycle.deploy(
+        candidate,
+        environment="staging",
+        exposure=BlastRadius(dimension="instances", value="1"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None and record.status == "STAGING"
+    await lifecycle.observe(staging, gates=(gate,), window_seconds=30)
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None and record.status == "STAGING"
+
+    deployment = await lifecycle.deploy(
+        candidate,
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="5%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None and record.status == "PRODUCTION_CANARY"
+    await lifecycle.observe(deployment, gates=(gate,), window_seconds=30)
+
+    for exposure in ("20%", "50%"):
+        deployment = await lifecycle.promote(
+            deployment,
+            exposure=BlastRadius(dimension="traffic", value=exposure),
+            known_good_candidate=_known_good(),
+            evidence_refs=(),
+            expected_duration_seconds=60,
+        )
+        record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+        assert record is not None and record.status == "PRODUCTION_CANARY"
+        await lifecycle.observe(deployment, gates=(gate,), window_seconds=30)
+
+    rollout = await lifecycle.promote(
+        deployment,
+        exposure=BlastRadius(dimension="traffic", value="100%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None and record.status == "PRODUCTION_ROLLOUT"
+    failed = await lifecycle.observe(rollout, gates=(gate,), window_seconds=30)
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None and record.status == "PRODUCTION_ROLLOUT"
+
+    rolled_back = await lifecycle.rollback(
+        rollout,
+        known_good_candidate=_known_good(),
+        evidence_refs=("observation://failed",),
+        expected_duration_seconds=60,
+    )
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None and record.status == "ROLLING_BACK"
+    await lifecycle.observe(rolled_back, gates=(gate,), window_seconds=30)
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None and record.status == "ROLLING_BACK"
+
+    triaged = await lifecycle.triage(
+        rollout,
+        observation=failed,
+        summary="Full production rollout failed.",
+        evidence_refs=("observation://failed",),
+    )
+    assert triaged.status == "TRIAGING"
+
+
+@pytest.mark.parametrize("failure_verdict", (HealthVerdict.HOLD, HealthVerdict.FAIL))
+@pytest.mark.asyncio
+async def test_nonpassing_full_rollout_does_not_project_soaking(
+    store: WorkStore,
+    failure_verdict: HealthVerdict,
+) -> None:
+    gate = HealthGate(
+        id="availability",
+        project_id=PROJECT_ID,
+        description="availability",
+        check_ref="http://availability",
+        failure_verdict=failure_verdict,
+    )
+    lifecycle, _, _, _, _ = _lifecycle(
+        store,
+        observations=({"availability": False},),
+    )
+    candidate = await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    rollout = await lifecycle.deploy(
+        candidate,
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="100%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+
+    observation = await lifecycle.observe(rollout, gates=(gate,), window_seconds=30)
+
+    assert observation.verdict is failure_verdict
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None and record.status == "PRODUCTION_ROLLOUT"
+
+
+@pytest.mark.asyncio
 async def test_fake_lifecycle_drives_staging_canary_rollout_observation_and_rollback(
     store: WorkStore,
 ) -> None:
@@ -401,6 +552,10 @@ async def test_fake_lifecycle_drives_staging_canary_rollout_observation_and_roll
         WorkEventType.ROLLBACK_RECORDED,
         WorkEventType.OBSERVATION_RECORDED,
     ]
+    rollback_event = next(
+        event for event in events if event.event_type is WorkEventType.ROLLBACK_RECORDED
+    )
+    assert rollback_event.payload_json["evidence_refs"] == ["observation://failed"]
 
 
 @pytest.mark.parametrize("verdict", (HealthVerdict.HOLD, HealthVerdict.FAIL))
@@ -839,9 +994,203 @@ async def test_failed_rollback_precondition_refuses_action_and_freezes_work(
         )
 
     assert provider.rollbacks == []
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    degraded = next(
+        event for event in events if event.event_type is WorkEventType.CONTROL_DEGRADED
+    )
+    assert degraded.payload_json["severity"] == "critical"
+    assert degraded.payload_json["action"] == "rollback"
+    assert degraded.payload_json["deployment_id"] == deployment.id
+    assert "environment" not in degraded.payload_json
     pending = await store.pending_attention(project_id=PROJECT_ID)
-    assert [item.attention_id for item in pending] == [failed_id]
-    assert pending[0].kind.value == "CONTROL_DEGRADED"
+    assert len(pending) == 1
+    assert pending[0].attention_id == degraded.id
+    assert pending[0].kind.value == "PRODUCTION_INCIDENT"
+    assert pending[0].evidence_refs == (f"check://{failed_id}",)
+
+
+@pytest.mark.asyncio
+async def test_rollback_refusal_records_one_critical_receipt_for_active_precondition(
+    store: WorkStore,
+) -> None:
+    probe = DeterministicFakeControlProbe(
+        {
+            "rollback": (
+                _result("rollback-authority", passed=False),
+                _result("delivery-observability"),
+                _result("rollback-artifact"),
+            )
+        }
+    )
+    lifecycle, _, provider, _, _ = _lifecycle(store, control_probe=probe)
+    await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    deployment = Deployment(
+        id="deployment-1",
+        project_id=PROJECT_ID,
+        work_id=WORK_ID,
+        release_candidate_id="candidate-1",
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="5%"),
+        provider_ref="fake://deployment/1",
+        status="active",
+    )
+    await _record_deployment(store, deployment)
+    await _record_degradation(store, "rollback-authority")
+
+    for _attempt in range(2):
+        with pytest.raises(ControlDegradedError, match="rollback-authority"):
+            await lifecycle.rollback(
+                deployment,
+                known_good_candidate=_known_good(),
+                evidence_refs=(),
+                expected_duration_seconds=60,
+            )
+
+    assert provider.rollbacks == []
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    critical = [
+        event
+        for event in events
+        if event.event_type is WorkEventType.CONTROL_DEGRADED
+        and event.payload_json.get("severity") == "critical"
+    ]
+    assert len(critical) == 1
+    assert critical[0].payload_json["action"] == "rollback"
+    assert critical[0].payload_json["deployment_id"] == deployment.id
+    assert critical[0].payload_json["failed_preconditions"] == ["rollback-authority"]
+
+    expanded_probe = DeterministicFakeControlProbe(
+        {
+            "rollback": (
+                _result("rollback-authority", passed=False),
+                _result("delivery-observability"),
+                _result("rollback-artifact", passed=False),
+            )
+        }
+    )
+    expanded, _, expanded_provider, _, _ = _lifecycle(
+        store,
+        control_probe=expanded_probe,
+    )
+    for _attempt in range(2):
+        with pytest.raises(ControlDegradedError):
+            await expanded.rollback(
+                deployment,
+                known_good_candidate=_known_good(),
+                evidence_refs=(),
+                expected_duration_seconds=60,
+            )
+
+    assert expanded_provider.rollbacks == []
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    critical = [
+        event
+        for event in events
+        if event.event_type is WorkEventType.CONTROL_DEGRADED
+        and event.payload_json.get("severity") == "critical"
+    ]
+    assert len(critical) == 2
+    assert critical[1].payload_json["failed_preconditions"] == ["rollback-artifact"]
+    assert critical[1].payload_json["evidence_refs"] == ["check://rollback-artifact"]
+
+    await store.append_event(
+        WorkEvent(
+            id="restore-rollback-controls",
+            project_id=PROJECT_ID,
+            work_id=WORK_ID,
+            sequence=events[-1].sequence + 1,
+            event_type=WorkEventType.CONTROL_RESTORED,
+            actor_type="test",
+            actor_ref=None,
+            payload_json={
+                "precondition_ids": ["rollback-authority", "rollback-artifact"],
+                "evidence_refs": ["check://restored"],
+            },
+            created_at=NOW,
+        )
+    )
+    restored_probe = DeterministicFakeControlProbe(
+        {
+            "rollback": (
+                _result("rollback-authority", passed=False),
+                _result("delivery-observability"),
+                _result("rollback-artifact"),
+            )
+        }
+    )
+    restored, _, _, _, _ = _lifecycle(store, control_probe=restored_probe)
+    with pytest.raises(ControlDegradedError, match="rollback-authority"):
+        await restored.rollback(
+            deployment,
+            known_good_candidate=_known_good(),
+            evidence_refs=(),
+            expected_duration_seconds=60,
+        )
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    critical = [
+        event
+        for event in events
+        if event.event_type is WorkEventType.CONTROL_DEGRADED
+        and event.payload_json.get("severity") == "critical"
+    ]
+    assert len(critical) == 3
+    assert critical[2].payload_json["failed_preconditions"] == ["rollback-authority"]
+
+
+@pytest.mark.asyncio
+async def test_staging_rollback_refusal_records_one_high_degradation(
+    store: WorkStore,
+) -> None:
+    probe = DeterministicFakeControlProbe(
+        {
+            "rollback": (
+                _result("rollback-authority", passed=False),
+                _result("delivery-observability"),
+                _result("rollback-artifact"),
+            )
+        }
+    )
+    lifecycle, _, provider, _, _ = _lifecycle(store, control_probe=probe)
+    await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    deployment = Deployment(
+        id="staging-1",
+        project_id=PROJECT_ID,
+        work_id=WORK_ID,
+        release_candidate_id="candidate-1",
+        environment="staging",
+        exposure=BlastRadius(dimension="instances", value="1"),
+        provider_ref="fake://deployment/staging-1",
+        status="active",
+    )
+    await _record_deployment(store, deployment)
+
+    for _attempt in range(2):
+        with pytest.raises(ControlDegradedError, match="rollback-authority"):
+            await lifecycle.rollback(
+                deployment,
+                known_good_candidate=_known_good(),
+                evidence_refs=(),
+                expected_duration_seconds=60,
+            )
+
+    assert provider.rollbacks == []
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    degraded = [
+        event for event in events if event.event_type is WorkEventType.CONTROL_DEGRADED
+    ]
+    assert len(degraded) == 1
+    assert degraded[0].payload_json["severity"] == "high"
+    assert degraded[0].payload_json["failed_preconditions"] == ["rollback-authority"]
 
 
 @pytest.mark.asyncio
@@ -875,8 +1224,10 @@ async def test_unrecorded_known_good_candidate_degrades_reversibility(
 
     assert provider.rollbacks == []
     pending = await store.pending_attention(project_id=PROJECT_ID)
-    assert [item.attention_id for item in pending] == ["rollback-artifact"]
-    assert "not recorded" in pending[0].summary
+    assert len(pending) == 1
+    assert pending[0].kind.value == "PRODUCTION_INCIDENT"
+    assert pending[0].evidence_refs == ("check://rollback-artifact",)
+    assert pending[0].summary.startswith("CRITICAL:")
 
 
 @pytest.mark.asyncio
@@ -964,6 +1315,10 @@ async def test_blind_deploy_and_unapproved_deploy_are_impossible(store: WorkStor
             expected_duration_seconds=60,
         )
     assert provider.deployments == []
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    assert events[-1].event_type is WorkEventType.CONTROL_DEGRADED
+    assert events[-1].payload_json["severity"] == "high"
+    assert events[-1].payload_json["action"] == "deploy"
 
     approval_policy = RecordingPolicy(GateDecision.REQUIRE_APPROVAL)
     lifecycle, _, provider, _, _ = _lifecycle(store, policy=approval_policy)
@@ -1190,6 +1545,7 @@ async def test_failure_triage_and_verified_rollout_completion_are_persisted(
             {"availability": False},
             {"availability": True},
             {"availability": True},
+            {"availability": True},
         ),
     )
     candidate = await lifecycle.build(
@@ -1257,14 +1613,14 @@ async def test_failure_triage_and_verified_rollout_completion_are_persisted(
         summary="Canary availability failed.",
         evidence_refs=("observation://failed",),
     )
-    assert triaged.status == "TRIAGE"
+    assert triaged.status == "TRIAGING"
     resumed_triage = await lifecycle.triage(
         failed_deployment,
         observation=failed,
         summary="Canary availability failed.",
         evidence_refs=("observation://failed",),
     )
-    assert resumed_triage.status == "TRIAGE"
+    assert resumed_triage.status == "TRIAGING"
 
     repaired = _candidate(
         candidate_id="candidate-2",
@@ -1310,10 +1666,14 @@ async def test_failure_triage_and_verified_rollout_completion_are_persisted(
         evidence_refs=("configured://docs",),
     )
     assert resumed_completion.status == "COMPLETE"
+    await lifecycle.observe(rollout, gates=(gate,), window_seconds=30)
+    still_complete = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert still_complete is not None and still_complete.status == "COMPLETE"
     events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
     assert sum(event.event_type is WorkEventType.TRIAGE_CREATED for event in events) == 1
     assert sum(event.event_type is WorkEventType.WORK_COMPLETED for event in events) == 1
-    assert events[-1].event_type is WorkEventType.WORK_COMPLETED
+    assert events[-2].event_type is WorkEventType.WORK_COMPLETED
+    assert events[-1].event_type is WorkEventType.OBSERVATION_RECORDED
 
 
 @pytest.mark.asyncio

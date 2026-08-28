@@ -275,6 +275,37 @@ async def test_flow_reaches_complete_with_same_candidate_promoted(store: WorkSto
     assert [item.exposure.value for item in deployment.promotions] == ["100%"]
 
 
+@pytest.mark.parametrize(
+    "delivery_status",
+    (
+        "RELEASING",
+        "STAGING",
+        "PRODUCTION_CANARY",
+        "PRODUCTION_ROLLOUT",
+        "SOAKING",
+        "ROLLING_BACK",
+    ),
+)
+@pytest.mark.asyncio
+async def test_flow_resumes_each_active_delivery_phase(
+    store: WorkStore,
+    delivery_status: str,
+) -> None:
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None
+    await store.save_work(record.model_copy(update={"status": delivery_status}))
+    candidate = _candidate("candidate-1", "a" * 40)
+    flow, _deployment = _flow(
+        store,
+        candidate,
+        observations=({"availability": True}, {"availability": True}),
+    )
+
+    completed = await flow.resume(WORK_ID, project_id=PROJECT_ID)
+
+    assert completed.status == "COMPLETE"
+
+
 @pytest.mark.asyncio
 async def test_flow_completes_a_four_step_project_rollout(store: WorkStore) -> None:
     candidate = _candidate("candidate-1", "a" * 40)
@@ -311,6 +342,7 @@ async def test_flow_persists_and_resumes_an_explicit_delivery_approval(
         await flow.resume(WORK_ID, project_id=PROJECT_ID)
     gated = await store.load_work(WORK_ID, project_id=PROJECT_ID)
     assert gated is not None and gated.pending_gate is not None
+    assert gated.status == "RELEASING"
 
     approved = await flow.approve(
         WORK_ID,
@@ -319,6 +351,7 @@ async def test_flow_persists_and_resumes_an_explicit_delivery_approval(
         actor_ref="operator:arda",
     )
     assert approved.pending_gate is None
+    assert approved.status == "RELEASING"
 
     with pytest.raises(DeliveryApprovalRequiredError):
         await flow.resume(WORK_ID, project_id=PROJECT_ID)
@@ -326,7 +359,7 @@ async def test_flow_persists_and_resumes_an_explicit_delivery_approval(
 
 
 @pytest.mark.asyncio
-async def test_gated_failure_resumes_approved_rollback_and_reaches_triage(
+async def test_gated_failure_resumes_approved_rollback_and_reaches_triaging(
     store: WorkStore,
 ) -> None:
     candidate = _candidate("candidate-1", "a" * 40)
@@ -351,16 +384,18 @@ async def test_gated_failure_resumes_approved_rollback_and_reaches_triage(
         await flow.resume(WORK_ID, project_id=PROJECT_ID)
     rollback_gated = await store.load_work(WORK_ID, project_id=PROJECT_ID)
     assert rollback_gated is not None and rollback_gated.pending_gate is not None
-    await flow.approve(
+    assert rollback_gated.status == "PRODUCTION_CANARY"
+    rollback_approved = await flow.approve(
         WORK_ID,
         project_id=PROJECT_ID,
         gate_id=rollback_gated.pending_gate,
         actor_ref="operator:arda",
     )
+    assert rollback_approved.status == "PRODUCTION_CANARY"
 
     triaged = await flow.resume(WORK_ID, project_id=PROJECT_ID)
 
-    assert triaged.status == "TRIAGE"
+    assert triaged.status == "TRIAGING"
     assert len(deployment.deployments) == 1
     assert len(deployment.rollbacks) == 1
     events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
@@ -372,7 +407,7 @@ async def test_gated_failure_resumes_approved_rollback_and_reaches_triage(
     assert requested_actions == ["deploy_production", "rollback"]
     assert WorkEventType.ROLLBACK_RECORDED in [event.event_type for event in events]
     assert events[-1].event_type is WorkEventType.TRIAGE_CREATED
-    with pytest.raises(DeliveryActionDeniedError, match="TRIAGE"):
+    with pytest.raises(DeliveryActionDeniedError, match="TRIAGING"):
         await flow.approve(
             WORK_ID,
             project_id=PROJECT_ID,
@@ -380,7 +415,7 @@ async def test_gated_failure_resumes_approved_rollback_and_reaches_triage(
             actor_ref="operator:arda",
         )
     still_triaged = await store.load_work(WORK_ID, project_id=PROJECT_ID)
-    assert still_triaged is not None and still_triaged.status == "TRIAGE"
+    assert still_triaged is not None and still_triaged.status == "TRIAGING"
 
 
 @pytest.mark.asyncio
@@ -465,7 +500,7 @@ async def test_resume_observes_rollback_persisted_before_process_death(
 
     triaged = await flow.resume(WORK_ID, project_id=PROJECT_ID)
 
-    assert triaged.status == "TRIAGE"
+    assert triaged.status == "TRIAGING"
     assert len(deployment.rollbacks) == 1
     events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
     rollback_index = next(
@@ -490,8 +525,13 @@ async def test_failure_restores_triages_and_new_candidate_redeploys(
 
     triaged = await failed_flow.resume(WORK_ID, project_id=PROJECT_ID)
 
-    assert triaged.status == "TRIAGE"
+    assert triaged.status == "TRIAGING"
     assert first_provider.rollbacks
+    triaged_pending = await store.pending_attention(project_id=PROJECT_ID)
+    assert len(triaged_pending) == 1
+    assert triaged_pending[0].kind.value == "PRODUCTION_INCIDENT"
+    assert triaged_pending[0].severity == "high"
+    await store.save_work(triaged.model_copy(update={"status": "READY_TO_DELIVER"}))
 
     repaired_candidate = _candidate("candidate-3", "c" * 40)
     repaired_flow, second_provider = _flow(
@@ -502,6 +542,7 @@ async def test_failure_restores_triages_and_new_candidate_redeploys(
     completed = await repaired_flow.resume(WORK_ID, project_id=PROJECT_ID)
 
     assert completed.status == "COMPLETE"
+    assert await store.pending_attention(project_id=PROJECT_ID) == ()
     assert [item.release_candidate_id for item in second_provider.deployments] == [
         repaired_candidate.id
     ]
@@ -514,7 +555,7 @@ async def test_failure_restores_triages_and_new_candidate_redeploys(
     ("first_status", "deployment_get_statuses", "expected_status"),
     (
         (200, (), "COMPLETE"),
-        (503, (), "TRIAGE"),
+        (503, (), "TRIAGING"),
         (200, (200, 403), "CONTROL_DEGRADED"),
     ),
 )
@@ -614,7 +655,7 @@ async def test_real_adapter_runs_through_lifecycle_and_flow(
             completed = await flow.resume(WORK_ID, project_id=PROJECT_ID)
 
     if expected_status == "CONTROL_DEGRADED":
-        assert completed is not None and completed.status == "READY_TO_DELIVER"
+        assert completed is not None and completed.status == "PRODUCTION_CANARY"
         events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
         assert events[-1].event_type is WorkEventType.CONTROL_DEGRADED
         assert WorkEventType.OBSERVATION_RECORDED not in [event.event_type for event in events]
@@ -633,7 +674,7 @@ async def test_real_adapter_runs_through_lifecycle_and_flow(
         else [{"version_id": OLD_VERSION_ID, "percentage": 100}]
     )
     assert [post["versions"] for post in state.posts] == expected_posts
-    if expected_status == "TRIAGE":
+    if expected_status == "TRIAGING":
         events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
         event_types = [event.event_type for event in events]
         assert WorkEventType.ROLLBACK_RECORDED in event_types

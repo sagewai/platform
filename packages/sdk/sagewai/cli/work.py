@@ -273,9 +273,17 @@ async def _resume_work(work_id: str) -> WorkRecord:
     repository, _ = await _repository_state()
     with ProjectContext(project_id=project_id):
         if record.source_ref and is_github_issue_url(record.source_ref):
-            if record.status == "READY_TO_DELIVER":
+            if record.status in {
+                "READY_TO_DELIVER",
+                "RELEASING",
+                "STAGING",
+                "PRODUCTION_CANARY",
+                "PRODUCTION_ROLLOUT",
+                "SOAKING",
+                "ROLLING_BACK",
+            }:
                 try:
-                    return await _run_docs_delivery(
+                    return await _run_docs_delivery_with_pending(
                         record,
                         project_id=project_id,
                         repository=repository,
@@ -304,8 +312,8 @@ async def _approve_work(work_id: str, gate_id: str) -> WorkRecord:
         raise KeyError(work_id)
     if record.status == "COMPLETE":
         return record
-    if record.status == "TRIAGE":
-        raise ValueError("cannot approve a stale gate from TRIAGE")
+    if record.status == "TRIAGING":
+        raise ValueError("cannot approve a stale gate from TRIAGING")
     if record.source_ref is None or not is_github_issue_url(record.source_ref):
         raise ValueError("merge approval requires GitHub-sourced Work")
     repository, _ = await _repository_state()
@@ -328,7 +336,7 @@ async def _approve_work(work_id: str, gate_id: str) -> WorkRecord:
             "promote_rollout",
             "rollback",
         }:
-            return await _run_docs_delivery(
+            return await _run_docs_delivery_with_pending(
                 record,
                 project_id=project_id,
                 repository=repository,
@@ -490,6 +498,40 @@ def _local_github_credentials(**_kwargs) -> dict[str, str]:
     if token is None or not token.strip():
         raise click.ClickException("GITHUB_TOKEN is required for GitHub Work")
     return {"GITHUB_TOKEN": token}
+
+
+async def _run_docs_delivery_with_pending(
+    record: WorkRecord,
+    *,
+    project_id: str,
+    repository: Path,
+    approve_gate_id: str | None = None,
+) -> WorkRecord:
+    try:
+        result = await _run_docs_delivery(
+            record,
+            project_id=project_id,
+            repository=repository,
+            approve_gate_id=approve_gate_id,
+        )
+    except Exception as delivery_error:
+        try:
+            github = await _build_github_lifecycle(
+                project_id=project_id,
+                repository=repository,
+            )
+            await github.present_pending(record.work_id, project_id=project_id)
+        except Exception:
+            # Keep the delivery cause authoritative; Python records this failure as context.
+            raise delivery_error
+        raise
+
+    github = await _build_github_lifecycle(
+        project_id=project_id,
+        repository=repository,
+    )
+    await github.present_pending(record.work_id, project_id=project_id)
+    return result
 
 
 async def _run_docs_delivery(

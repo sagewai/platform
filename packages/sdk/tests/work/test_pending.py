@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -64,6 +64,7 @@ def _event(
     *,
     work_id: str = "work-1",
     project_id: str = "project-a",
+    created_at: datetime = NOW,
 ) -> WorkEvent:
     return WorkEvent(
         id=f"{work_id}-event-{sequence}",
@@ -74,8 +75,26 @@ def _event(
         actor_type="test",
         actor_ref=None,
         payload_json=payload,
-        created_at=NOW,
+        created_at=created_at,
     )
+
+
+def _deployment(
+    deployment_id: str,
+    *,
+    environment: str,
+    status: str = "active",
+) -> dict:
+    return {
+        "id": deployment_id,
+        "project_id": "project-a",
+        "work_id": "work-1",
+        "release_candidate_id": "candidate-1",
+        "environment": environment,
+        "exposure": {"dimension": "traffic", "value": "100%"},
+        "provider_ref": f"provider://{deployment_id}",
+        "status": status,
+    }
 
 
 @pytest.mark.asyncio
@@ -174,3 +193,254 @@ async def test_pending_attention_is_canonical_resolved_and_project_scoped(
     await store.save_work(_record(status="READY_TO_DELIVER", pending_gate=None))
 
     assert await store.pending_attention(project_id="project-a") == ()
+
+
+def test_pending_attention_taxonomy_has_exactly_four_kinds() -> None:
+    assert [kind.value for kind in PendingAttentionKind] == [
+        "GATE_REQUESTED",
+        "WORK_BLOCKED",
+        "CONTROL_DEGRADED",
+        "PRODUCTION_INCIDENT",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_production_fail_and_rollback_are_one_stable_incident(
+    store: WorkStore,
+) -> None:
+    await store.save_work(_record(status="PRODUCTION_ROLLOUT", pending_gate=None))
+    await store.append_event(
+        _event(
+            1,
+            WorkEventType.DEPLOYMENT_RECORDED,
+            {"deployment": _deployment("production-1", environment="production")},
+        )
+    )
+    await store.append_event(
+        _event(
+            2,
+            WorkEventType.OBSERVATION_RECORDED,
+            {
+                "observation": {
+                    "project_id": "project-a",
+                    "work_id": "work-1",
+                    "deployment_id": "production-1",
+                    "verdict": "fail",
+                    "gate_results": [],
+                    "evidence_refs": ["metrics://production-fail"],
+                }
+            },
+        )
+    )
+    await store.append_event(
+        _event(
+            3,
+            WorkEventType.ROLLBACK_RECORDED,
+            {
+                "source_deployment_id": "production-1",
+                "deployment": _deployment(
+                    "rollback-1",
+                    environment="production",
+                    status="rolled_back",
+                ),
+                "evidence_refs": ["provider://rollback-1"],
+            },
+            created_at=NOW + timedelta(seconds=1),
+        )
+    )
+
+    incidents = [
+        item
+        for item in await store.pending_attention(project_id="project-a")
+        if item.kind is PendingAttentionKind.PRODUCTION_INCIDENT
+    ]
+
+    assert len(incidents) == 1
+    assert incidents[0].attention_id == "work-1-event-2"
+    assert incidents[0].created_at == NOW
+    assert incidents[0].severity == "high"
+    assert incidents[0].summary == "HIGH: production incident for deployment production-1"
+    assert incidents[0].evidence_refs == (
+        "metrics://production-fail",
+        "provider://rollback-1",
+    )
+
+    await store.save_work(_record(status="TRIAGING", pending_gate=None))
+    assert any(
+        item.kind is PendingAttentionKind.PRODUCTION_INCIDENT
+        for item in await store.pending_attention(project_id="project-a")
+    )
+    await store.save_work(_record(status="COMPLETE", pending_gate=None))
+    assert all(
+        item.kind is not PendingAttentionKind.PRODUCTION_INCIDENT
+        for item in await store.pending_attention(project_id="project-a")
+    )
+
+
+@pytest.mark.asyncio
+async def test_staging_fail_and_rollback_do_not_interrupt(
+    store: WorkStore,
+) -> None:
+    await store.save_work(_record(status="STAGING", pending_gate=None))
+    await store.append_event(
+        _event(
+            1,
+            WorkEventType.DEPLOYMENT_RECORDED,
+            {"deployment": _deployment("staging-1", environment="staging")},
+        )
+    )
+    await store.append_event(
+        _event(
+            2,
+            WorkEventType.OBSERVATION_RECORDED,
+            {
+                "observation": {
+                    "project_id": "project-a",
+                    "work_id": "work-1",
+                    "deployment_id": "staging-1",
+                    "verdict": "fail",
+                    "gate_results": [],
+                    "evidence_refs": ["metrics://staging-fail"],
+                }
+            },
+        )
+    )
+    await store.append_event(
+        _event(
+            3,
+            WorkEventType.ROLLBACK_RECORDED,
+            {
+                "source_deployment_id": "staging-1",
+                "deployment": _deployment(
+                    "staging-rollback-1",
+                    environment="staging",
+                    status="rolled_back",
+                ),
+            },
+        )
+    )
+
+    assert await store.pending_attention(project_id="project-a") == ()
+
+
+@pytest.mark.asyncio
+async def test_critical_rollback_control_loss_upserts_incident_and_suppresses_only_it(
+    store: WorkStore,
+) -> None:
+    await store.save_work(_record(status="CONTROL_DEGRADED", pending_gate=None))
+    await store.append_event(
+        _event(
+            1,
+            WorkEventType.DEPLOYMENT_RECORDED,
+            {"deployment": _deployment("production-1", environment="production")},
+        )
+    )
+    await store.append_event(
+        _event(
+            2,
+            WorkEventType.CONTROL_DEGRADED,
+            {
+                "severity": "critical",
+                "action": "rollback",
+                "deployment_id": "production-1",
+                "failed_preconditions": ["rollback-authority"],
+                "details": "rollback credential expired",
+                "evidence_refs": ["check://rollback-authority"],
+                "frozen_action_ids": ["rollback"],
+            },
+        )
+    )
+    await store.append_event(
+        _event(
+            3,
+            WorkEventType.CONTROL_DEGRADED,
+            {
+                "failed_preconditions": ["observability"],
+                "details": "metrics stale",
+                "evidence_refs": ["check://observability"],
+                "frozen_action_ids": ["promote"],
+            },
+            created_at=NOW + timedelta(seconds=1),
+        )
+    )
+    await store.append_event(
+        _event(
+            4,
+            WorkEventType.ROLLBACK_RECORDED,
+            {
+                "source_deployment_id": "production-1",
+                "deployment": _deployment(
+                    "rollback-1",
+                    environment="production",
+                    status="rolled_back",
+                ),
+            },
+            created_at=NOW + timedelta(seconds=2),
+        )
+    )
+
+    pending = await store.pending_attention(project_id="project-a")
+
+    assert [(item.kind, item.attention_id) for item in pending] == [
+        (PendingAttentionKind.PRODUCTION_INCIDENT, "work-1-event-2"),
+        (PendingAttentionKind.CONTROL_DEGRADED, "observability"),
+    ]
+    incident = pending[0]
+    assert incident.severity == "critical"
+    assert incident.summary == (
+        "CRITICAL: production incident for deployment production-1; "
+        "failed preconditions: rollback-authority; "
+        "details: rollback credential expired"
+    )
+    assert incident.evidence_refs == ("check://rollback-authority",)
+
+    await store.append_event(
+        _event(
+            5,
+            WorkEventType.CONTROL_RESTORED,
+            {
+                "precondition_ids": ["rollback-authority"],
+                "evidence_refs": ["check://rollback-authority-restored"],
+            },
+            created_at=NOW + timedelta(seconds=3),
+        )
+    )
+    after_restore = await store.pending_attention(project_id="project-a")
+    restored_incident = next(
+        item
+        for item in after_restore
+        if item.kind is PendingAttentionKind.PRODUCTION_INCIDENT
+    )
+    assert restored_incident.attention_id == incident.attention_id
+    assert restored_incident.created_at == incident.created_at
+    assert restored_incident.severity == "high"
+    assert restored_incident.evidence_refs == incident.evidence_refs
+    assert restored_incident.summary.startswith("HIGH: production incident")
+
+    await store.append_event(
+        _event(
+            6,
+            WorkEventType.CONTROL_DEGRADED,
+            {
+                "severity": "high",
+                "action": "deploy",
+                "failed_preconditions": ["rollback-authority"],
+                "details": "unrelated staging authority failure",
+                "evidence_refs": ["check://staging-authority"],
+                "frozen_action_ids": ["deploy"],
+            },
+            created_at=NOW + timedelta(seconds=4),
+        )
+    )
+    with_unrelated_degradation = await store.pending_attention(project_id="project-a")
+    unrelated_incident = next(
+        item
+        for item in with_unrelated_degradation
+        if item.kind is PendingAttentionKind.PRODUCTION_INCIDENT
+    )
+    assert unrelated_incident.severity == "high"
+    assert any(
+        item.kind is PendingAttentionKind.CONTROL_DEGRADED
+        and item.attention_id == "rollback-authority"
+        for item in with_unrelated_degradation
+    )

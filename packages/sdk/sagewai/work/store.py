@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Literal
 
 from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -224,7 +225,7 @@ class WorkStore:
         *,
         project_id: str | None,
     ) -> tuple[PendingAttention, ...]:
-        """List unresolved gates, blocks, and control degradations for a project."""
+        """List the four canonical unresolved attention categories for a project."""
         work_query = (
             select(self._work_items)
             .where(self._work_items.c.project_id == project_id)
@@ -250,6 +251,97 @@ class WorkStore:
             work_id = str(projection["work_id"])
             source_ref = projection["source_ref"]
             events = events_by_work.get(work_id, [])
+
+            production_deployment_ids: set[str] = set()
+            incident_triggers: dict[str, WorkEvent] = {}
+            incident_evidence: dict[str, list[str]] = {}
+            incident_severity: dict[str, Literal["high", "critical"]] = {}
+            incident_cause: dict[str, str] = {}
+            incident_critical_event_ids: dict[str, set[str]] = {}
+            incident_control_event_ids: set[str] = set()
+
+            def record_incident(
+                deployment_id: str,
+                event: WorkEvent,
+                *,
+                evidence_refs: tuple[str, ...],
+                severity: Literal["high", "critical"],
+                cause: str | None = None,
+            ) -> None:
+                incident_triggers.setdefault(deployment_id, event)
+                refs = incident_evidence.setdefault(deployment_id, [])
+                for ref in evidence_refs:
+                    if ref not in refs:
+                        refs.append(ref)
+                if severity == "critical":
+                    incident_severity[deployment_id] = "critical"
+                    if cause is not None:
+                        incident_cause[deployment_id] = cause
+                else:
+                    incident_severity.setdefault(deployment_id, "high")
+
+            for event in events:
+                payload = event.payload_json
+                if event.event_type is WorkEventType.DEPLOYMENT_RECORDED:
+                    deployment = payload["deployment"]
+                    if deployment.get("environment") == "production":
+                        production_deployment_ids.add(str(deployment["id"]))
+                elif event.event_type is WorkEventType.OBSERVATION_RECORDED:
+                    observation = payload["observation"]
+                    deployment_id = str(observation["deployment_id"])
+                    if (
+                        deployment_id in production_deployment_ids
+                        and observation.get("verdict") == "fail"
+                    ):
+                        record_incident(
+                            deployment_id,
+                            event,
+                            evidence_refs=tuple(
+                                str(ref) for ref in observation.get("evidence_refs", ())
+                            ),
+                            severity="high",
+                        )
+                elif event.event_type is WorkEventType.ROLLBACK_RECORDED:
+                    deployment_id = str(payload["source_deployment_id"])
+                    if deployment_id in production_deployment_ids:
+                        record_incident(
+                            deployment_id,
+                            event,
+                            evidence_refs=tuple(
+                                str(ref) for ref in payload.get("evidence_refs", ())
+                            ),
+                            severity="high",
+                        )
+                elif (
+                    event.event_type is WorkEventType.CONTROL_DEGRADED
+                    and payload.get("severity") == "critical"
+                    and payload.get("action") == "rollback"
+                ):
+                    deployment_id = str(payload.get("deployment_id", ""))
+                    if deployment_id in production_deployment_ids:
+                        failed_ids = tuple(
+                            str(item)
+                            for item in payload.get("failed_preconditions", ())
+                        )
+                        incident_critical_event_ids.setdefault(
+                            deployment_id,
+                            set(),
+                        ).add(event.id)
+                        failed_preconditions = ", ".join(failed_ids)
+                        cause = f"failed preconditions: {failed_preconditions}"
+                        details = payload.get("details")
+                        if details:
+                            cause = f"{cause}; details: {details}"
+                        record_incident(
+                            deployment_id,
+                            event,
+                            evidence_refs=tuple(
+                                str(ref) for ref in payload.get("evidence_refs", ())
+                            ),
+                            severity="critical",
+                            cause=cause,
+                        )
+                        incident_control_event_ids.add(event.id)
 
             decided_gate_ids = {
                 str(event.payload_json["gate_id"])
@@ -310,7 +402,45 @@ class WorkStore:
                     )
 
             degraded = active_control_degradations(events)
+            if projection["status"] != "COMPLETE":
+                for deployment_id, trigger in incident_triggers.items():
+                    severity = incident_severity[deployment_id]
+                    if severity == "critical" and not any(
+                        event.id in incident_critical_event_ids.get(
+                            deployment_id,
+                            (),
+                        )
+                        for event in degraded.values()
+                    ):
+                        severity = "high"
+                    incident_summary_cause = (
+                        incident_cause.get(deployment_id)
+                        if severity == "critical"
+                        else None
+                    )
+                    summary = (
+                        f"{severity.upper()}: production incident for deployment "
+                        f"{deployment_id}"
+                    )
+                    if incident_summary_cause is not None:
+                        summary = f"{summary}; {incident_summary_cause}"
+                    pending.append(
+                        PendingAttention(
+                            attention_id=trigger.id,
+                            project_id=project_id,
+                            work_id=work_id,
+                            kind=PendingAttentionKind.PRODUCTION_INCIDENT,
+                            source_ref=source_ref,
+                            summary=summary,
+                            severity=severity,
+                            evidence_refs=tuple(incident_evidence[deployment_id]),
+                            created_at=trigger.created_at,
+                        )
+                    )
+
             for precondition_id, event in degraded.items():
+                if event.id in incident_control_event_ids:
+                    continue
                 pending.append(
                     PendingAttention(
                         attention_id=precondition_id,
