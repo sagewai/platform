@@ -902,6 +902,9 @@ def create_admin_serve_app(
         # Must run before any store reads/writes so all tables exist.
         await _db_factory.ensure_schema()
 
+        from sagewai.work import WorkStore
+        app.state.work_store = WorkStore(engine=_db_factory.get_engine())
+
         # Eager fail-closed startup: build the SQLite schema, or (on Postgres)
         # verify the DB is reachable and migrated. Raises here rather than on the
         # first route call if Postgres is unreachable/unmigrated.
@@ -4161,6 +4164,38 @@ def create_admin_serve_app(
                        actor_label=request.state.principal.actor_label, target=token_id)
             return JSONResponse({"status": "ok"})
         return JSONResponse({"detail": "Not found"}, status_code=404)
+
+    # ── Work Control Console (canonical read surface) ───────────
+
+    @app.get("/api/v1/work/pending")
+    async def list_pending_work(request: Request) -> JSONResponse:
+        pending = await request.app.state.work_store.pending_attention(
+            project_id=_owner(_project_scope(request))
+        )
+        return JSONResponse(jsonable_encoder(pending))
+
+    @app.get("/api/v1/work")
+    async def list_active_work(request: Request) -> JSONResponse:
+        records = await request.app.state.work_store.list_work(
+            project_id=_owner(_project_scope(request)),
+            active_only=True,
+        )
+        return JSONResponse(jsonable_encoder(records))
+
+    @app.get("/api/v1/work/{work_id}")
+    async def get_work(work_id: str, request: Request) -> JSONResponse:
+        project_id = _owner(_project_scope(request))
+        record = await request.app.state.work_store.load_work(
+            work_id,
+            project_id=project_id,
+        )
+        if record is None:
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        events = await request.app.state.work_store.read_events(
+            work_id,
+            project_id=project_id,
+        )
+        return JSONResponse(jsonable_encoder({"work": record, "events": events}))
 
     # ── Fleet (real SDK integration) ────────────────────────────
     # Uses the durable PostgresFleetRegistry + PostgresTaskStore + FleetDispatcher.

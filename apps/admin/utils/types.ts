@@ -747,6 +747,100 @@ export interface Project {
   updated_at: string;
 }
 
+// ─── Work Control Plane types ───
+
+export type WorkStatus =
+  | 'ANALYZING'
+  | 'READY_TO_IMPLEMENT'
+  | 'IMPLEMENTING'
+  | 'VERIFYING'
+  | 'REVIEWING'
+  | 'REPAIRING'
+  | 'READY_TO_MERGE'
+  | 'MERGING'
+  | 'READY_TO_DELIVER'
+  | 'RELEASING'
+  | 'STAGING'
+  | 'PRODUCTION_CANARY'
+  | 'PRODUCTION_ROLLOUT'
+  | 'SOAKING'
+  | 'ROLLING_BACK'
+  | 'TRIAGING'
+  | 'WORK_BLOCKED'
+  | 'COMPLETE';
+
+export interface WorkRecord {
+  work_id: string;
+  project_id: string | null;
+  source_ref: string | null;
+  profile: string;
+  status: WorkStatus;
+  contract_version: number | null;
+  active_run_id: string | null;
+  pending_gate: string | null;
+  profile_context: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export type PendingAttentionKind =
+  | 'GATE_REQUESTED'
+  | 'WORK_BLOCKED'
+  | 'CONTROL_DEGRADED'
+  | 'PRODUCTION_INCIDENT';
+
+export interface PendingAttention {
+  attention_id: string;
+  project_id: string | null;
+  work_id: string;
+  kind: PendingAttentionKind;
+  source_ref: string | null;
+  summary: string;
+  severity: 'high' | 'critical' | null;
+  evidence_refs: string[];
+  created_at: string;
+}
+
+export type WorkEventType =
+  | 'WORK_CREATED'
+  | 'CONTRACT_PROPOSED'
+  | 'CONTRACT_ACCEPTED'
+  | 'ASSUMPTION_RECORDED'
+  | 'STAGE_STARTED'
+  | 'STAGE_COMPLETED'
+  | 'EXECUTION_RECORDED'
+  | 'VERIFICATION_RECORDED'
+  | 'REVIEW_RECORDED'
+  | 'GATE_REQUESTED'
+  | 'GATE_DECIDED'
+  | 'RELEASE_CREATED'
+  | 'DEPLOYMENT_RECORDED'
+  | 'OBSERVATION_RECORDED'
+  | 'OPERATOR_DISCIPLINE_RECORDED'
+  | 'CONTROL_DEGRADED'
+  | 'CONTROL_RESTORED'
+  | 'ROLLBACK_RECORDED'
+  | 'TRIAGE_CREATED'
+  | 'WORK_BLOCKED'
+  | 'WORK_COMPLETED';
+
+export interface WorkEvent {
+  id: string;
+  project_id: string | null;
+  work_id: string;
+  sequence: number;
+  event_type: WorkEventType;
+  actor_type: string;
+  actor_ref: string | null;
+  payload_json: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface WorkDetail {
+  work: WorkRecord;
+  events: WorkEvent[];
+}
+
 /* ─── Agent Template types ─── */
 
 export interface AgentTemplate {
