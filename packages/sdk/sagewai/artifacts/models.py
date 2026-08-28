@@ -10,11 +10,25 @@
 """Pydantic models + error classes for artifact destination resolver."""
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from sagewai.errors import SagewaiError
+
+
+class ArtifactRef(BaseModel):
+    """Immutable metadata for one content-addressed artifact object."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    digest: str
+    media_type: str
+    size_bytes: int
+    storage_ref: str
+    created_at: datetime
+    created_by: str
 
 
 class ArtifactDestinationType(str, Enum):

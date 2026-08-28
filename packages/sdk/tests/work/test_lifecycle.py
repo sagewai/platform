@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from sagewai.artifacts import LocalArtifactStore
 from sagewai.core.state import InMemoryStore
 from sagewai.safety.permissions import PermissionPolicy
 from sagewai.work import (
@@ -529,6 +530,7 @@ def _lifecycle(
     implementer_actor: str = "operator:implementer",
     reviewer_actor: str = "operator:reviewer",
     repairer_actor: str | None = None,
+    artifact_root: Path | None = None,
 ) -> SoftwareLifecycle:
     compiler = TaskCapsuleCompiler(knowledge_store=knowledge_store)
     return SoftwareLifecycle(
@@ -537,6 +539,9 @@ def _lifecycle(
         capsule_compiler=compiler,
         worktree_manager=SoftwareWorktreeManager(root=worktree_root),
         verifier=verifier or SoftwareVerifier(knowledge_store=knowledge_store),
+        artifact_store=LocalArtifactStore(
+            root=artifact_root or worktree_root.parent / "objects"
+        ),
         repository=repository,
         analyst=SoftwareStageOperator(
             actor_ref=analyst_actor,
@@ -651,6 +656,12 @@ async def test_successful_implement_verify_review_reaches_ready_to_merge(
     assert context.verification.passed is True
     assert context.relevant_files == ("target.txt",)
     assert "initial" in context.diff
+    assert context.diff_artifact.media_type == "text/x-diff"
+    assert context.diff_artifact.created_by == "software.lifecycle"
+    fresh_artifact_store = LocalArtifactStore(root=tmp_path / "objects")
+    assert fresh_artifact_store.read(context.diff_artifact.storage_ref) == (
+        context.diff.encode()
+    )
     assert tuple(item.id for item in capsule.knowledge_items) == (
         analysis_ref,
         *context.verification.evidence_refs,
@@ -1562,6 +1573,18 @@ async def test_review_finding_reaches_repair_as_typed_canonical_context(
     assert repair_precondition.kind is ControlPreconditionKind.WORKSPACE
     assert repair_precondition.required_for == ("implement", "repair", "review")
     repair_context = SoftwareRepairContext.model_validate(repairer.capsules[0].profile_context)
+    first_review_context = SoftwareReviewContext.model_validate(
+        reviewer.capsules[0].profile_context
+    )
+    assert repair_context.diff == first_review_context.diff
+    assert repair_context.diff_artifact.storage_ref == (
+        first_review_context.diff_artifact.storage_ref
+    )
+    assert repair_context.diff_artifact.media_type == "text/x-diff"
+    independent_store = LocalArtifactStore(root=tmp_path / "objects")
+    assert independent_store.read(repair_context.diff_artifact.storage_ref) == (
+        repair_context.diff.encode()
+    )
     assert len(repair_context.findings) == 1
     assert repair_context.findings[0].required_change == "Write the repaired target"
     assert repair_context.open_assumptions == ()

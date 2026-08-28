@@ -18,7 +18,7 @@ from sqlalchemy import func, insert, literal_column, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from sagewai.db import factory
-from sagewai.db.models import Base, KnowledgeItemModel
+from sagewai.db.models import Base, KnowledgeItemModel, KnowledgeSourceRefModel
 from sagewai.work.knowledge.models import KnowledgeItem, KnowledgeQuery
 
 
@@ -101,6 +101,19 @@ async def insert_knowledge_item(
     values["artifact_refs"] = list(item.artifact_refs)
 
     await conn.execute(insert(KnowledgeItemModel.__table__).values(**values))
+    source_refs = tuple(dict.fromkeys(item.source_refs))
+    if source_refs:
+        await conn.execute(
+            insert(KnowledgeSourceRefModel),
+            [
+                {
+                    "knowledge_item_id": item.id,
+                    "project_id": item.project_id,
+                    "source_ref": source_ref,
+                }
+                for source_ref in source_refs
+            ],
+        )
     if dialect_name == "sqlite":
         await conn.execute(
             text(
@@ -117,6 +130,7 @@ class KnowledgeStore:
     def __init__(self, *, engine: AsyncEngine | None = None) -> None:
         self._engine = engine or factory.get_engine()
         self._items = KnowledgeItemModel.__table__
+        self._source_refs = KnowledgeSourceRefModel.__table__
 
     async def init(self) -> None:
         """Bootstrap the SQLite schema."""
@@ -124,6 +138,17 @@ class KnowledgeStore:
             return
         async with self._engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(
+                text(
+                    "INSERT OR IGNORE INTO knowledge_source_refs "
+                    "(knowledge_item_id, project_id, source_ref) "
+                    "SELECT DISTINCT knowledge.id, knowledge.project_id, source.value "
+                    "FROM knowledge_items AS knowledge "
+                    "CROSS JOIN json_each(knowledge.source_refs) AS source "
+                    "WHERE source.type = :source_type"
+                ),
+                {"source_type": "text"},
+            )
 
     async def publish(self, item: KnowledgeItem) -> None:
         """Append one immutable knowledge item."""
@@ -145,6 +170,34 @@ class KnowledgeStore:
         if row is None:
             return None
         return self._from_row(row._mapping)
+
+    async def find_by_source_ref(
+        self,
+        source_ref: str,
+        *,
+        project_id: str,
+        work_id: str | None = None,
+    ) -> list[KnowledgeItem]:
+        """Resolve an exact source ref through the project-scoped navigation index."""
+        filters = [
+            self._source_refs.c.project_id == project_id,
+            self._source_refs.c.source_ref == source_ref,
+            self._items.c.project_id == project_id,
+        ]
+        if work_id is not None:
+            filters.append(self._items.c.work_id == work_id)
+        statement = (
+            select(self._items)
+            .join(
+                self._source_refs,
+                self._source_refs.c.knowledge_item_id == self._items.c.id,
+            )
+            .where(*filters)
+            .order_by(self._items.c.created_at, self._items.c.id)
+        )
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(statement)).all()
+        return [self._from_row(row._mapping) for row in rows]
 
     async def search(self, query: KnowledgeQuery) -> list[KnowledgeItem]:
         """Run scoped literal-term search using the active database's tokenization."""

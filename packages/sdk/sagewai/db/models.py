@@ -1979,6 +1979,33 @@ class KnowledgeItemModel(Base):
     supersedes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class KnowledgeSourceRefModel(Base):
+    """Derivative exact-lookup index over canonical KnowledgeItem source refs."""
+
+    __tablename__ = "knowledge_source_refs"
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "knowledge_item_id",
+            "source_ref",
+            name="pk_knowledge_source_refs",
+        ),
+        Index(
+            "ix_knowledge_source_refs_project_ref_item",
+            "project_id",
+            "source_ref",
+            "knowledge_item_id",
+        ),
+    )
+
+    knowledge_item_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("knowledge_items.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    project_id: Mapped[str] = mapped_column(Text, nullable=False)
+    source_ref: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 event.listen(
     KnowledgeItemModel.__table__,
     "after_create",

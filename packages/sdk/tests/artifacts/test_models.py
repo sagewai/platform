@@ -10,6 +10,8 @@
 """Tests for sagewai.artifacts.models — Plan ART."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 from pydantic import ValidationError
 
@@ -19,10 +21,27 @@ from sagewai.artifacts.models import (
     ArtifactDestinationConfigError,
     ArtifactDestinationError,
     ArtifactDestinationType,
+    ArtifactRef,
     ArtifactUploadError,
     ArtifactUploadResult,
 )
 from sagewai.errors import SagewaiError
+
+
+def test_artifact_ref_is_frozen_and_rejects_extra_fields():
+    ref = ArtifactRef(
+        digest="sha256:" + "a" * 64,
+        media_type="text/plain",
+        size_bytes=7,
+        storage_ref="artifact://sha256:" + "a" * 64,
+        created_at=datetime(2026, 8, 28, tzinfo=timezone.utc),
+        created_by="test",
+    )
+
+    with pytest.raises(ValidationError):
+        ref.size_bytes = 8
+    with pytest.raises(ValidationError):
+        ArtifactRef.model_validate({**ref.model_dump(), "extra": True})
 
 
 def test_artifact_destination_type_values():
