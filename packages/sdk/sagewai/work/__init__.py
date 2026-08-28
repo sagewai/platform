@@ -22,12 +22,14 @@ from sagewai.work.events import (
     WorkEvent,
     WorkEventType,
     active_control_precondition_ids,
+    execution_attempt_from_events,
 )
 from sagewai.work.fleet import FleetOperatorRuntime
 from sagewai.work.metrics import WorkMetrics
 from sagewai.work.models import (
     Action,
     ActionIntent,
+    ActionPlan,
     ActionRequest,
     ActionResult,
     ActionScope,
@@ -36,6 +38,7 @@ from sagewai.work.models import (
     ClassifiedClaim,
     ControlPrecondition,
     ControlPreconditionKind,
+    ExecutionAttempt,
     GateDecision,
     OperatorDisciplineReport,
     PendingAttention,
@@ -50,6 +53,7 @@ from sagewai.work.models import (
     WorkItem,
     WorkRecord,
 )
+from sagewai.work.profile import WorkProfile
 from sagewai.work.runtime import (
     CapabilityGrant,
     CapabilitySet,
@@ -64,6 +68,7 @@ from sagewai.work.store import WorkStore
 
 __all__ = [
     "Action",
+    "ActionPlan",
     "ActionRequest",
     "ActionIntent",
     "ActionResult",
@@ -82,6 +87,7 @@ __all__ = [
     "ControlCheckResult",
     "ControlDegradedError",
     "FleetOperatorRuntime",
+    "ExecutionAttempt",
     "GateDecision",
     "PendingAttention",
     "PendingAttentionKind",
@@ -104,7 +110,9 @@ __all__ = [
     "WorkItem",
     "WorkRecord",
     "WorkRequest",
+    "WorkProfile",
     "WorkStore",
     "Workspace",
     "active_control_precondition_ids",
+    "execution_attempt_from_events",
 ]

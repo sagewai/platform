@@ -15,7 +15,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from sagewai.work.contract import WorkContract
 from sagewai.work.knowledge.models import KnowledgeItem
@@ -187,6 +187,28 @@ class ActionResult(BaseModel):
     completed_at: datetime
 
 
+class ActionPlan(BaseModel):
+    """Small profile-supplied plan of material actions for one WorkItem."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    project_id: str | None
+    work_id: str
+    profile: str
+    actions: tuple[Action, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_actions(self) -> ActionPlan:
+        for action in self.actions:
+            if action.project_id != self.project_id:
+                raise ValueError("action belongs to a different project")
+            if action.work_id != self.work_id:
+                raise ValueError("action belongs to different work")
+            if action.profile != self.profile:
+                raise ValueError("action belongs to a different profile")
+        return self
+
+
 class ActionScope(BaseModel):
     """Explicit boundary for a stage or action."""
 
@@ -256,6 +278,24 @@ class ControlPrecondition(BaseModel):
     description: str
     check_ref: str
     required_for: tuple[str, ...]
+
+
+class ExecutionAttempt(BaseModel):
+    """Canonical profile-neutral receipt for one operator execution."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str
+    project_id: str | None
+    work_id: str
+    stage: str
+    runtime: str
+    workspace_ref: str | None
+    artifact_refs: tuple[str, ...]
+    status: Literal["running", "passed", "failed", "blocked"]
+    started_at: datetime
+    completed_at: datetime | None
+    profile_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class VerificationResult(BaseModel):

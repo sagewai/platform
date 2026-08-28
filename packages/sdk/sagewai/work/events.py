@@ -17,6 +17,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from sagewai.work.models import ExecutionAttempt
+
 
 class WorkEventType(str, Enum):
     """Initial durable Work-domain event vocabulary."""
@@ -80,3 +82,83 @@ def active_control_precondition_ids(events: list[WorkEvent]) -> set[str]:
     """Return the currently degraded precondition IDs."""
 
     return set(active_control_degradations(events))
+
+
+def execution_attempt_from_events(
+    events: list[WorkEvent],
+    run_id: str,
+) -> ExecutionAttempt | None:
+    """Project one canonical attempt receipt from the existing Work events."""
+
+    started = next(
+        (
+            event
+            for event in events
+            if event.event_type is WorkEventType.STAGE_STARTED
+            and event.payload_json.get("run_id") == run_id
+        ),
+        None,
+    )
+    if started is None:
+        return None
+    execution = next(
+        (
+            event
+            for event in reversed(events)
+            if event.event_type is WorkEventType.EXECUTION_RECORDED
+            and event.payload_json.get("run_id") == run_id
+        ),
+        None,
+    )
+    completed = next(
+        (
+            event
+            for event in reversed(events)
+            if event.event_type is WorkEventType.STAGE_COMPLETED
+            and event.payload_json.get("run_id") == run_id
+        ),
+        None,
+    )
+    degraded = next(
+        (
+            event
+            for event in reversed(events)
+            if event.event_type is WorkEventType.CONTROL_DEGRADED
+            and event.payload_json.get("run_id") == run_id
+        ),
+        None,
+    )
+    status = "running"
+    completed_at = None
+    if execution is not None:
+        status = str(execution.payload_json["status"])
+        completed_at = execution.created_at
+    elif degraded is not None:
+        status = "blocked"
+        completed_at = degraded.created_at
+    profile_context = (
+        completed.payload_json.get("profile_context", {})
+        if completed is not None
+        else execution.payload_json.get("profile_context", {})
+        if execution is not None
+        else {}
+    )
+    return ExecutionAttempt.model_validate(
+        {
+            "id": run_id,
+            "project_id": started.project_id,
+            "work_id": started.work_id,
+            "stage": started.payload_json["stage"],
+            "runtime": started.payload_json["runtime"],
+            "workspace_ref": started.payload_json.get("workspace_ref"),
+            "artifact_refs": (
+                execution.payload_json.get("artifact_refs", ())
+                if execution is not None
+                else ()
+            ),
+            "status": status,
+            "started_at": started.created_at,
+            "completed_at": completed_at,
+            "profile_context": profile_context,
+        }
+    )
