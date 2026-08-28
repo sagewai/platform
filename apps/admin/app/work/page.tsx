@@ -59,6 +59,8 @@ export default function WorkControlPage() {
     let cancelled = false;
     setLoading(true);
     setError('');
+    setWork([]);
+    setPending([]);
 
     Promise.all([
       adminApi.listActiveWork(),

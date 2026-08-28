@@ -767,6 +767,7 @@ export type WorkStatus =
   | 'ROLLING_BACK'
   | 'TRIAGING'
   | 'WORK_BLOCKED'
+  | 'CONTROL_DEGRADED'
   | 'COMPLETE';
 
 export interface WorkRecord {

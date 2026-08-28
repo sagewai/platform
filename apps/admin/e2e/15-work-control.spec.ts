@@ -12,6 +12,14 @@ const project = {
   updated_at: '2026-08-28T08:00:00Z',
 };
 
+const isolatedProject = {
+  ...project,
+  id: 'project-isolated',
+  slug: 'isolated',
+  name: 'Isolated Project',
+  environment: 'staging',
+};
+
 const work = {
   work_id: 'work-console-1',
   project_id: project.id,
@@ -122,13 +130,22 @@ const events = [
   },
 ];
 
-async function mockWorkApi(page: Page, onScopedRequest?: () => void) {
+async function mockWorkApi(
+  page: Page,
+  onScopedRequest?: () => void,
+  failedProjectId?: string,
+) {
   await page.route('**/api/v1/projects', async (route) => {
-    await route.fulfill({ json: [project] });
+    await route.fulfill({ json: [project, isolatedProject] });
   });
   await page.route('**/api/v1/work**', async (route) => {
-    if (route.request().headers()['x-project-id'] === project.id) {
+    const projectId = route.request().headers()['x-project-id'];
+    if (projectId === project.id) {
       onScopedRequest?.();
+    }
+    if (projectId === failedProjectId) {
+      await route.fulfill({ status: 503, json: { detail: 'project unavailable' } });
+      return;
     }
     const pathname = new URL(route.request().url()).pathname;
     if (pathname === '/api/v1/work/pending') {
@@ -146,7 +163,11 @@ async function mockWorkApi(page: Page, onScopedRequest?: () => void) {
 test.describe('Work Control Console', () => {
   test('shows project-scoped active Work and canonical pending attention', async ({ page }) => {
     let scopedRequests = 0;
-    await mockWorkApi(page, () => { scopedRequests += 1; });
+    await mockWorkApi(
+      page,
+      () => { scopedRequests += 1; },
+      isolatedProject.id,
+    );
 
     await page.goto('/work');
 
@@ -161,6 +182,14 @@ test.describe('Work Control Console', () => {
       '/work/work-console-1',
     );
     await expect.poll(() => scopedRequests).toBeGreaterThan(0);
+
+    await page.getByRole('button', { name: /Console Project/ }).click();
+    await page.getByRole('button', { name: /Isolated Project/ }).click();
+    await expect(page.getByRole('alert')).toContainText(
+      'Failed to load Work control state.',
+    );
+    await expect(page.getByText('work-console-1')).toHaveCount(0);
+    await expect(page.getByText('Approve production delivery?')).toHaveCount(0);
   });
 
   test('shows canonical event actors, delivery history, and Evidence Board references', async ({ page }) => {
