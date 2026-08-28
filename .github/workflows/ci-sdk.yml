@@ -38,6 +38,40 @@ jobs:
       - run: uv sync --all-packages --group test
       - run: uv run --package sagewai pytest packages/sdk/tests/ -m "not integration" -o "addopts="
 
+  postgres-persistence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: sagewai
+          POSTGRES_USER: sagewai
+          POSTGRES_PASSWORD: sagewai
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sagewai -d sagewai"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      SAGEWAI_DATABASE_URL: postgresql+asyncpg://sagewai:sagewai@localhost:5432/sagewai
+      SAGEWAI_TEST_DATABASE_URL: postgresql+asyncpg://sagewai:sagewai@localhost:5432/sagewai
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          python-version: '3.13'
+          enable-cache: true
+      - run: uv sync --all-packages --group test
+      - run: >-
+          uv run --package sagewai pytest
+          packages/sdk/tests/work/test_store.py
+          packages/sdk/tests/work/knowledge/test_store.py
+          packages/sdk/tests/db/test_migration_021_work_domain.py
+          -o "addopts="
+
   lint:
     # Advisory only: the SDK isn't ruff-clean yet (~360 findings tracked
     # separately), so this surfaces lint drift without gating the merge.
