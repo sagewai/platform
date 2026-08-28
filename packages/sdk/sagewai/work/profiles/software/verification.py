@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from typing import Literal
 
+from sagewai.artifacts import LocalArtifactStore
 from sagewai.fleet.execution import run_worker_subprocess
 from sagewai.work.knowledge import KnowledgeItem, KnowledgeKind, KnowledgeStore
 from sagewai.work.models import OperatorDisciplineReport, VerificationResult, WorkItem
@@ -27,6 +28,8 @@ from sagewai.work.profiles.software.models import (
 )
 from sagewai.work.profiles.software.scm import _git
 from sagewai.work.runtime import OperatorResult, WorkRequest, Workspace
+
+_VERIFICATION_INLINE_LIMIT_BYTES = 4000
 
 
 class SoftwareResultValidator:
@@ -157,9 +160,11 @@ class SoftwareVerifier:
         self,
         *,
         knowledge_store: KnowledgeStore,
+        artifact_store: LocalArtifactStore | None = None,
         timeout: float = 600,
     ) -> None:
         self._knowledge_store = knowledge_store
+        self._artifact_store = artifact_store
         self._timeout = timeout
 
     async def verify(
@@ -189,8 +194,25 @@ class SoftwareVerifier:
                 argv=argv,
                 cwd=workspace.path,
                 timeout=self._timeout,
-                output_limit=4000,
+                output_limit=None,
             )
+            output = f"stdout:\n{process.stdout}\nstderr:\n{process.stderr}"
+            output_bytes = output.encode()
+            artifact_ref = None
+            artifact_refs: tuple[str, ...] = ()
+            if len(output_bytes) > _VERIFICATION_INLINE_LIMIT_BYTES:
+                if self._artifact_store is None:
+                    self._artifact_store = LocalArtifactStore()
+                artifact = self._artifact_store.put_bytes(
+                    output_bytes,
+                    media_type="text/plain",
+                    created_by="software.verifier",
+                )
+                artifact_ref = artifact.storage_ref
+                artifact_refs = (artifact_ref,)
+                evidence = f"artifact_ref: {artifact_ref}"
+            else:
+                evidence = output
             source_ref = f"command://{work_item.id}/{attempt_id}/{index}"
             item = KnowledgeItem(
                 id=str(uuid.uuid4()),
@@ -201,10 +223,10 @@ class SoftwareVerifier:
                     f"command: {command}\n"
                     f"exit_code: {process.returncode}\n"
                     f"timed_out: {str(process.timed_out).lower()}\n"
-                    f"stdout:\n{process.stdout}\n"
-                    f"stderr:\n{process.stderr}"
+                    f"{evidence}"
                 ),
                 source_refs=(source_ref,),
+                artifact_refs=artifact_refs,
                 factness_score=100,
                 created_by="software.verifier",
                 created_at=datetime.now(timezone.utc),
@@ -216,7 +238,7 @@ class SoftwareVerifier:
                     name=f"command-{index}",
                     command=command,
                     exit_code=process.returncode,
-                    artifact_ref=None,
+                    artifact_ref=artifact_ref,
                 )
             )
             passed = passed and process.returncode == 0 and not process.timed_out

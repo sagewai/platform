@@ -14,10 +14,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
+from sqlalchemy import func, insert, select
 from sqlalchemy.exc import IntegrityError
 
 from sagewai.db.engine import create_engine
-from sagewai.db.models import Base
+from sagewai.db.models import Base, KnowledgeItemModel, KnowledgeSourceRefModel
 from sagewai.work.knowledge import (
     KnowledgeItem,
     KnowledgeKind,
@@ -113,6 +114,86 @@ async def test_get_is_project_scoped(store: KnowledgeStore) -> None:
     await store.publish(_item("knowledge-1", "Scoped finding"))
 
     assert await store.get("knowledge-1", project_id="project-b") is None
+
+
+@pytest.mark.asyncio
+async def test_source_ref_lookup_is_exact_and_project_and_work_scoped(
+    store: KnowledgeStore,
+) -> None:
+    source_ref = "repo://commit/path.py#L10"
+    items = (
+        _item(
+            "a-work-1",
+            "Statement deliberately omits the opaque reference",
+            source_refs=(source_ref,),
+        ),
+        _item(
+            "a-work-2",
+            "Second canonical finding",
+            work_id="work-2",
+            source_refs=(source_ref,),
+        ),
+        _item(
+            "a-prefix-only",
+            "Similar references are not exact matches",
+            source_refs=(f"{source_ref}/suffix",),
+        ),
+        _item(
+            "b-work-1",
+            "Another project must not leak",
+            project_id="project-b",
+            source_refs=(source_ref,),
+        ),
+    )
+    for item in items:
+        await store.publish(item)
+
+    assert [
+        item.id for item in await store.find_by_source_ref(source_ref, project_id="project-a")
+    ] == ["a-work-1", "a-work-2"]
+    assert [
+        item.id
+        for item in await store.find_by_source_ref(
+            source_ref,
+            project_id="project-a",
+            work_id="work-1",
+        )
+    ] == ["a-work-1"]
+    assert [
+        item.id for item in await store.find_by_source_ref(source_ref, project_id="project-b")
+    ] == ["b-work-1"]
+    assert await store.find_by_source_ref("repo://commit/path.py", project_id="project-a") == []
+
+
+@pytest.mark.asyncio
+async def test_sqlite_init_backfills_existing_source_refs(tmp_path) -> None:
+    database_path = tmp_path / "existing.db"
+    engine = create_engine(f"sqlite+aiosqlite:///{database_path}")
+    item = _item(
+        "legacy-item",
+        "Existing canonical item",
+        source_refs=("command://legacy/readback",),
+    )
+    values = item.model_dump(mode="python")
+    values["kind"] = item.kind.value
+    values["source_refs"] = list(item.source_refs)
+    values["artifact_refs"] = list(item.artifact_refs)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(insert(KnowledgeItemModel.__table__).values(**values))
+        indexed = await conn.scalar(select(func.count()).select_from(KnowledgeSourceRefModel))
+        assert indexed == 0
+
+    store = KnowledgeStore(engine=engine)
+    await store.init()
+
+    try:
+        assert await store.find_by_source_ref(
+            "command://legacy/readback",
+            project_id="project-a",
+        ) == [item]
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio

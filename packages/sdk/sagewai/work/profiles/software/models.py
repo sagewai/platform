@@ -16,6 +16,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from sagewai.artifacts.models import ArtifactRef
 from sagewai.work.models import Assumption, ReviewFinding, VerificationResult
 
 
@@ -83,6 +84,7 @@ class SoftwareReviewContext(BaseModel):
 
     software: SoftwareCapsuleContext
     diff: str
+    diff_artifact: ArtifactRef
     verification: VerificationResult
     relevant_files: tuple[str, ...]
     open_assumptions: tuple[Assumption, ...]
@@ -107,6 +109,7 @@ class SoftwareRepairContext(BaseModel):
 
     software: SoftwareCapsuleContext
     diff: str
+    diff_artifact: ArtifactRef
     verification: VerificationResult
     relevant_files: tuple[str, ...]
     open_assumptions: tuple[Assumption, ...]
