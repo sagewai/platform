@@ -349,12 +349,28 @@ def test_work_metrics_prints_the_read_only_event_projection(monkeypatch) -> None
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.output) == {
+        "artifact_bytes_referenced": None,
         "control_degradation_rate": 0.25,
+        "false_positive_blocked_rate": None,
+        "knowledge_items_considered": None,
+        "knowledge_items_selected": None,
+        "mean_blind_window_seconds": None,
+        "mean_changed_files_per_accepted_work_item": None,
+        "mean_diff_lines_per_accepted_change": None,
         "mean_time_to_control_restored_seconds": 30.0,
+        "missing_context_repair_rate": None,
+        "permission_escalation_accuracy": None,
+        "profile": None,
         "project_id": "project-a",
         "repair_rate": 0.2,
+        "retrieval_hit_rate": None,
+        "risk_classification_accuracy": None,
         "rollback_rate": 0.05,
+        "runtime": None,
         "scope_violation_rate": 0.1,
+        "task_capsule_tokens": None,
+        "unsupported_claim_rate": None,
+        "verbosity_output_token_ratio": None,
         "work_id": "work-1",
     }
 

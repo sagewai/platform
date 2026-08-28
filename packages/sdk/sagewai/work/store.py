@@ -121,8 +121,10 @@ class WorkStore:
         *,
         project_id: str,
         work_id: str | None = None,
+        profile: str | None = None,
+        runtime: str | None = None,
     ) -> WorkMetrics:
-        """Derive project- or Work-scoped metrics from the immutable event ledger."""
+        """Derive project-, Work-, profile-, or runtime-scoped event metrics."""
 
         table = self._work_events
         filters = [table.c.project_id == project_id]
@@ -135,6 +137,8 @@ class WorkStore:
             (self._event_from_row(row._mapping) for row in rows),
             project_id=project_id,
             work_id=work_id,
+            profile=profile,
+            runtime=runtime,
         )
 
     async def save_work(self, record: WorkRecord) -> None:
