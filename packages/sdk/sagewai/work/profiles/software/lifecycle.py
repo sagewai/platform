@@ -40,6 +40,7 @@ from sagewai.work.models import (
     TaskCapsule,
     VerificationResult,
     WorkAnalysisResult,
+    WorkDesignResult,
     WorkItem,
     WorkRecord,
 )
@@ -50,6 +51,7 @@ from sagewai.work.profiles.software.models import (
     SoftwareCapsuleContext,
     SoftwareContractContext,
     SoftwareDeliveryTriageContext,
+    SoftwareDesignContext,
     SoftwareRepairContext,
     SoftwareReviewContext,
     SoftwareReviewFindingContext,
@@ -305,7 +307,7 @@ class SoftwareLifecycle:
             contract=contract,
             assumptions=assumptions,
             workspace=workspace,
-            state="READY_TO_IMPLEMENT",
+            state=self._post_contract_state(contract),
         )
 
     async def resume(
@@ -348,7 +350,7 @@ class SoftwareLifecycle:
                 contract=contract,
                 assumptions=assumptions,
                 workspace=workspace,
-                state="READY_TO_IMPLEMENT",
+                state=self._post_contract_state(contract),
             )
         work_item, contract, assumptions = self._canonical_inputs(events)
         software = self._validate_inputs(work_item, contract, assumptions)
@@ -644,7 +646,7 @@ class SoftwareLifecycle:
         )
         await self._set_status(
             work_item,
-            "READY_TO_IMPLEMENT",
+            self._post_contract_state(accepted),
             contract_version=accepted.version,
         )
         return accepted, assumptions
@@ -663,8 +665,6 @@ class SoftwareLifecycle:
             raise ValueError("analysis contract requires acceptance criteria")
         if not proposal.allowed_scope:
             raise ValueError("analysis contract requires an allowed scope")
-        if proposal.design_required:
-            raise ValueError("design-required contract cannot proceed without a design stage")
         for target in proposal.allowed_scope:
             path = PurePosixPath(target)
             if (
@@ -739,6 +739,181 @@ class SoftwareLifecycle:
             elif existing != item:
                 raise ValueError(f"analysis knowledge id has conflicting content: {item.id}")
 
+    async def _run_design(
+        self,
+        *,
+        work_item: WorkItem,
+        contract: WorkContract,
+        assumptions: tuple[Assumption, ...],
+        workspace: SoftwareWorkspace,
+    ) -> str:
+        run_id = f"{work_item.id}:design:1"
+        expected_sha = expected_result_sha(await self._events(work_item), workspace.base_sha)
+        if not await self._preflight_workspace(
+            work_item,
+            workspace=workspace,
+            stage="design",
+            run_id=run_id,
+            expected_sha=expected_sha,
+        ):
+            return "CONTROL_DEGRADED"
+        context = SoftwareDesignContext(
+            software=self._software_capsule(contract, expected_sha),
+            design_result_schema=WorkDesignResult.model_json_schema(),
+        )
+        capsule = await self._capsule_compiler.compile(
+            work_item=work_item,
+            contract=contract,
+            stage="design",
+            search_text=contract.goal,
+            open_assumption_ids=tuple(item.id for item in self._open_assumptions(assumptions)),
+            prior_result_refs=contract.evidence_refs,
+            profile_context=context.model_dump(mode="json"),
+        )
+        request = WorkRequest(
+            project_id=work_item.project_id,
+            work_id=work_item.id,
+            run_id=run_id,
+            stage="design",
+            action_scope=ActionScope(
+                objective="Design the smallest sufficient change within the accepted contract",
+                allowed_targets=contract.allowed_scope,
+                allowed_capabilities=tuple(
+                    grant.name for grant in self._analyst.capabilities.grants
+                ),
+            ),
+            action_intents=(),
+            control_preconditions=(
+                software_workspace_precondition(project_id=work_item.project_id),
+            ),
+        )
+        diff_before, files_before = await workspace_diff(workspace)
+        result = await self._analyst.controller.run(
+            runtime=self._analyst.runtime,
+            request=request,
+            capsule=capsule,
+            capabilities=self._analyst.capabilities,
+            workspace=workspace,
+        )
+        diff_after, files_after = await workspace_diff(workspace)
+        if diff_after != diff_before or files_after != files_before:
+            await self._block_once(
+                work_item,
+                {
+                    "reason": "designer_changed_workspace",
+                    "run_id": run_id,
+                    "decision_request": (
+                        "Investigate the design workspace change and decide whether to "
+                        "retry design or stop the work."
+                    ),
+                    "evidence_refs": list(result.evidence_refs),
+                },
+                actor_ref=self._analyst.actor_ref,
+            )
+            return "WORK_BLOCKED"
+        if result.status != "passed":
+            if await self._stop_for_control_degradation(work_item, run_id=run_id):
+                return "CONTROL_DEGRADED"
+            await self._block_once(
+                work_item,
+                {
+                    "reason": "design_failed",
+                    "run_id": run_id,
+                    "decision_request": (
+                        "Inspect the failed design evidence and decide whether to retry "
+                        "or stop the work."
+                    ),
+                    "evidence_refs": list(result.evidence_refs),
+                },
+                actor_ref=self._analyst.actor_ref,
+            )
+            return "WORK_BLOCKED"
+        payload = result.profile_context.get("design_result")
+        if payload is None:
+            await self._block_once(
+                work_item,
+                {
+                    "reason": "design_result_missing",
+                    "run_id": run_id,
+                    "decision_request": "Retry design with the required structured result.",
+                    "evidence_refs": list(result.evidence_refs),
+                },
+                actor_ref=self._analyst.actor_ref,
+            )
+            return "WORK_BLOCKED"
+        try:
+            design = WorkDesignResult.model_validate(payload)
+            if design.attempt_id != run_id:
+                raise ValueError("design result belongs to a different attempt")
+        except ValueError as exc:
+            await self._block_once(
+                work_item,
+                {
+                    "reason": "design_result_invalid",
+                    "run_id": run_id,
+                    "violations": [str(exc)],
+                    "decision_request": "Retry design with a valid structured result.",
+                    "evidence_refs": list(result.evidence_refs),
+                },
+                actor_ref=self._analyst.actor_ref,
+            )
+            return "WORK_BLOCKED"
+        try:
+            await self._publish_analysis_claims(
+                work_item,
+                design.claims,
+                run_id=run_id,
+                base_sha=workspace.base_sha,
+            )
+        except ValueError as exc:
+            await self._block_once(
+                work_item,
+                {
+                    "reason": "design_knowledge_conflict",
+                    "run_id": run_id,
+                    "violations": [str(exc)],
+                    "decision_request": (
+                        "Inspect the conflicting design evidence and decide whether to retry."
+                    ),
+                    "evidence_refs": list(result.evidence_refs),
+                },
+                actor_ref=self._analyst.actor_ref,
+            )
+            return "WORK_BLOCKED"
+        design_assumptions = self._assumptions_from_claims(design.claims, run_id=run_id)
+        for assumption in design_assumptions:
+            await self._append_once(
+                work_item,
+                WorkEventType.ASSUMPTION_RECORDED,
+                assumption.model_dump(mode="json"),
+                actor_ref=self._analyst.actor_ref,
+            )
+        if design_assumptions:
+            await self._block_once(
+                work_item,
+                {
+                    "reason": "design_assumption_unresolved",
+                    "assumption_ids": [item.id for item in design_assumptions],
+                    "decision_request": "Provide evidence or revise the accepted contract.",
+                    "evidence_refs": list(result.evidence_refs),
+                },
+                actor_ref=self._analyst.actor_ref,
+            )
+            return "WORK_BLOCKED"
+        await self._append_once(
+            work_item,
+            WorkEventType.STAGE_COMPLETED,
+            {
+                "stage": "design",
+                "run_id": run_id,
+                "evidence_refs": list(result.evidence_refs),
+                "artifact_refs": list(result.artifact_refs),
+            },
+            actor_ref=self._analyst.actor_ref,
+        )
+        await self._set_status(work_item, "READY_TO_IMPLEMENT", active_run_id=run_id)
+        return "READY_TO_IMPLEMENT"
+
     async def _drive(
         self,
         *,
@@ -760,6 +935,14 @@ class SoftwareLifecycle:
                 return degraded
             if state in {"READY_TO_MERGE", "WORK_BLOCKED"}:
                 return await self._set_status(work_item, state)
+            if state == "DESIGNING":
+                state = await self._run_design(
+                    work_item=work_item,
+                    contract=contract,
+                    assumptions=assumptions,
+                    workspace=workspace,
+                )
+                continue
             if state in {"READY_TO_IMPLEMENT", "IMPLEMENTING"}:
                 state = await self._run_mutation(
                     stage="implement",
@@ -833,7 +1016,7 @@ class SoftwareLifecycle:
             return "CONTROL_DEGRADED"
         software = self._software_capsule(contract, expected_sha)
         open_assumptions = self._open_assumptions(assumptions)
-        prior_refs: tuple[str, ...] = ()
+        prior_refs = self._design_refs(events)
         referenced_artifacts: tuple[ArtifactRef, ...] = ()
         diff_workspace_path: str | None = None
         diff_artifact: ArtifactRef | None = None
@@ -885,7 +1068,9 @@ class SoftwareLifecycle:
             )
             profile_context = context.model_dump(mode="json")
             prior_refs = tuple(
-                dict.fromkeys((*verification.evidence_refs, *review_refs, *triage_refs))
+                dict.fromkeys(
+                    (*prior_refs, *verification.evidence_refs, *review_refs, *triage_refs)
+                )
             )
             referenced_artifacts = (diff_artifact,)
         else:
@@ -1119,7 +1304,9 @@ class SoftwareLifecycle:
             stage="review",
             search_text=contract.goal,
             open_assumption_ids=tuple(item.id for item in self._open_assumptions(assumptions)),
-            prior_result_refs=verification.evidence_refs,
+            prior_result_refs=tuple(
+                dict.fromkeys((*self._design_refs(events), *verification.evidence_refs))
+            ),
             profile_context=context.model_dump(mode="json"),
             referenced_artifacts=(diff_artifact,),
         )
@@ -1276,6 +1463,39 @@ class SoftwareLifecycle:
         return SoftwareContractContext.model_validate(contract.profile_context)
 
     @staticmethod
+    def _post_contract_state(contract: WorkContract) -> str:
+        return "DESIGNING" if contract.design_required else "READY_TO_IMPLEMENT"
+
+    @staticmethod
+    def _assumptions_from_claims(
+        claims: tuple[ClassifiedClaim, ...],
+        *,
+        run_id: str,
+    ) -> tuple[Assumption, ...]:
+        return tuple(
+            Assumption(
+                id=f"{run_id}:assumption:{index}",
+                statement=claim.statement,
+                kind=claim.kind,
+                evidence_refs=claim.evidence_refs,
+                confidence=claim.confidence,
+                impact_if_wrong=claim.impact_if_wrong,
+                status="open",
+            )
+            for index, claim in enumerate(claims, start=1)
+            if claim.classification is ClaimClassification.UNKNOWN
+            or (
+                claim.classification
+                in {
+                    ClaimClassification.FACT,
+                    ClaimClassification.INFERENCE,
+                    ClaimClassification.REQUIREMENT,
+                }
+                and not claim.evidence_refs
+            )
+        )
+
+    @staticmethod
     def _unsupported_assumption(
         assumptions: tuple[Assumption, ...],
     ) -> Assumption | None:
@@ -1373,7 +1593,7 @@ class SoftwareLifecycle:
                     "evidence_refs": list(evidence_refs),
                     "details": f"{SOFTWARE_WORKSPACE_PRECONDITION_ID}: {detail}",
                     "frozen_action_ids": (
-                        [] if stage == "review" else [f"{run_id}:change"]
+                        [] if stage in {"design", "review"} else [f"{run_id}:change"]
                     ),
                 },
                 actor_ref="software_lifecycle",
@@ -1382,6 +1602,8 @@ class SoftwareLifecycle:
 
     @staticmethod
     def _operator_stage(state: str) -> str | None:
+        if state == "DESIGNING":
+            return "design"
         if state in {"READY_TO_IMPLEMENT", "IMPLEMENTING"}:
             return "implement"
         if state == "REPAIRING":
@@ -1397,6 +1619,8 @@ class SoftwareLifecycle:
         stage: str,
         events: list[WorkEvent],
     ) -> str:
+        if stage == "design":
+            return f"{work_item.id}:design:1"
         if stage == "implement":
             return f"{work_item.id}:implement:1"
         if stage == "repair":
@@ -1548,13 +1772,27 @@ class SoftwareLifecycle:
 
     @staticmethod
     def _state_from_events(events: list[WorkEvent]) -> str:
-        state = "READY_TO_IMPLEMENT"
+        accepted = next(
+            (
+                WorkContract.model_validate(event.payload_json)
+                for event in reversed(events)
+                if event.event_type is WorkEventType.CONTRACT_ACCEPTED
+            ),
+            None,
+        )
+        state = (
+            SoftwareLifecycle._post_contract_state(accepted)
+            if accepted is not None
+            else "READY_TO_IMPLEMENT"
+        )
         for event in events:
             if event.event_type is WorkEventType.WORK_BLOCKED:
                 state = "WORK_BLOCKED"
             elif event.event_type is WorkEventType.CONTROL_DEGRADED:
                 stage = event.payload_json.get("stage")
-                if stage == "implement":
+                if stage == "design":
+                    state = "DESIGNING"
+                elif stage == "implement":
                     state = "IMPLEMENTING"
                 elif stage == "repair":
                     state = "REPAIRING"
@@ -1562,14 +1800,19 @@ class SoftwareLifecycle:
                     state = "REVIEWING"
             elif event.event_type is WorkEventType.STAGE_STARTED:
                 stage = event.payload_json.get("stage")
-                if stage == "implement":
+                if stage == "design":
+                    state = "DESIGNING"
+                elif stage == "implement":
                     state = "IMPLEMENTING"
                 elif stage == "repair":
                     state = "REPAIRING"
                 elif stage == "review":
                     state = "REVIEWING"
             elif event.event_type is WorkEventType.STAGE_COMPLETED:
-                if event.payload_json.get("stage") in {"implement", "repair"}:
+                stage = event.payload_json.get("stage")
+                if stage == "design":
+                    state = "READY_TO_IMPLEMENT"
+                elif stage in {"implement", "repair"}:
                     state = "VERIFYING"
             elif event.event_type is WorkEventType.VERIFICATION_RECORDED:
                 result = VerificationResult.model_validate(event.payload_json)
@@ -1597,6 +1840,28 @@ class SoftwareLifecycle:
     @staticmethod
     def _review_count(events: list[WorkEvent]) -> int:
         return sum(event.event_type is WorkEventType.REVIEW_RECORDED for event in events)
+
+    @staticmethod
+    def _design_refs(events: list[WorkEvent]) -> tuple[str, ...]:
+        completed = next(
+            (
+                event
+                for event in reversed(events)
+                if event.event_type is WorkEventType.STAGE_COMPLETED
+                and event.payload_json.get("stage") == "design"
+            ),
+            None,
+        )
+        if completed is None:
+            return ()
+        return tuple(
+            dict.fromkeys(
+                (
+                    *(str(ref) for ref in completed.payload_json.get("evidence_refs", ())),
+                    *(str(ref) for ref in completed.payload_json.get("artifact_refs", ())),
+                )
+            )
+        )
 
     @staticmethod
     def _accepted_contract_scope_violations(

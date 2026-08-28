@@ -41,6 +41,7 @@ from sagewai.work import (
     WorkAnalysisResult,
     WorkContract,
     WorkContractProposal,
+    WorkDesignResult,
     WorkEvent,
     WorkEventType,
     WorkItem,
@@ -301,6 +302,50 @@ class AnalysisRuntime:
         return _operator_result(
             request,
             profile_context={"analysis_result": analysis.model_dump(mode="json")},
+        )
+
+
+class AnalysisAndDesignRuntime(AnalysisRuntime):
+    def __init__(
+        self,
+        *,
+        design_claims: tuple[ClassifiedClaim, ...] = (),
+        mutate_during_design: bool = False,
+    ) -> None:
+        super().__init__(
+            proposal=WorkContractProposal(
+                goal="Change target deterministically",
+                allowed_scope=("target.txt",),
+                acceptance_criteria=("deterministic verification passes",),
+                constraints=(),
+                non_goals=(),
+                risk="low",
+                design_required=True,
+            ),
+            claims=(),
+        )
+        self.design_claims = design_claims
+        self.mutate_during_design = mutate_during_design
+        self.design_calls = 0
+        self.design_capsules = []
+        self.design_requests = []
+
+    async def run(self, request, capsule, capabilities, workspace):
+        if request.stage == "analysis":
+            return await super().run(request, capsule, capabilities, workspace)
+        assert request.stage == "design"
+        self.design_calls += 1
+        self.design_capsules.append(capsule)
+        self.design_requests.append(request)
+        if self.mutate_during_design:
+            (workspace.path / "target.txt").write_text("design mutation\n")
+        design = WorkDesignResult(
+            attempt_id=request.run_id,
+            claims=self.design_claims,
+        )
+        return _operator_result(
+            request,
+            profile_context={"design_result": design.model_dump(mode="json")},
         )
 
 
@@ -807,6 +852,236 @@ async def test_successful_implement_verify_review_reaches_ready_to_merge(
         ),
     }
     assert "chat_history" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_design_required_runs_read_only_design_before_implementation(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    planner = AnalysisAndDesignRuntime(
+        design_claims=(
+            ClassifiedClaim(
+                classification=ClaimClassification.DECISION,
+                statement="Use the existing target file",
+                kind="design",
+                evidence_refs=(),
+                confidence="high",
+                impact_if_wrong="medium",
+            ),
+        )
+    )
+    implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        analyzer=planner,
+        implementer=implementer,
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_command("initial"),),
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    assert record.status == "READY_TO_MERGE"
+    assert planner.calls == 1
+    assert planner.design_calls == 1
+    assert planner.design_requests[0].action_intents == ()
+    assert planner.design_capsules[0].stage == "design"
+    assert implementer.calls == 1
+    assert implementer.capsules[0].prior_result_refs == ("runtime://work-1:design:1",)
+    events = await work_store.read_events("work-1", project_id="project-a")
+    completed_stages = [
+        event.payload_json["stage"]
+        for event in events
+        if event.event_type is WorkEventType.STAGE_COMPLETED
+    ]
+    assert completed_stages == ["analysis", "design", "implement"]
+    design = await knowledge_store.search(
+        KnowledgeQuery(text="existing target", project_id="project-a", work_id="work-1")
+    )
+    assert [item.kind for item in design] == [KnowledgeKind.DECISION]
+
+
+@pytest.mark.asyncio
+async def test_design_not_required_skips_design(stores, tmp_path: Path) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    analyzer = AnalysisRuntime()
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        analyzer=analyzer,
+        implementer=MutationRuntime(implement_text="initial", repair_text="fixed"),
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_command("initial"),),
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    assert record.status == "READY_TO_MERGE"
+    assert analyzer.calls == 1
+    events = await work_store.read_events("work-1", project_id="project-a")
+    assert not any(
+        event.payload_json.get("stage") == "design"
+        for event in events
+        if event.event_type in {WorkEventType.STAGE_STARTED, WorkEventType.STAGE_COMPLETED}
+    )
+
+
+@pytest.mark.asyncio
+async def test_resume_design_uses_completed_result_without_rerunning_operator(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    failing_store = FailingOnceKnowledgeStore(knowledge_store)
+    repository, base_sha = _repository(tmp_path)
+    planner = AnalysisAndDesignRuntime(
+        design_claims=(
+            ClassifiedClaim(
+                classification=ClaimClassification.DECISION,
+                statement="Reuse the current implementation boundary",
+                kind="design",
+                evidence_refs=(),
+                confidence="high",
+                impact_if_wrong="medium",
+            ),
+        )
+    )
+    implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=failing_store,
+        durability=InMemoryStore(),
+        analyzer=planner,
+        implementer=implementer,
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_command("initial"),),
+    )
+
+    with pytest.raises(RuntimeError, match="knowledge persistence interruption"):
+        await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    interrupted = await work_store.load_work("work-1", project_id="project-a")
+    assert interrupted is not None and interrupted.status == "DESIGNING"
+    assert planner.design_calls == 1
+
+    resumed = await lifecycle.resume("work-1", project_id="project-a")
+
+    assert resumed.status == "READY_TO_MERGE"
+    assert planner.design_calls == 1
+    assert implementer.calls == 1
+    events = await work_store.read_events("work-1", project_id="project-a")
+    assert (
+        sum(
+            event.event_type is WorkEventType.STAGE_COMPLETED
+            and event.payload_json.get("stage") == "design"
+            for event in events
+        )
+        == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_design_workspace_mutation_blocks_before_implementation(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    planner = AnalysisAndDesignRuntime(mutate_during_design=True)
+    implementer = MutationRuntime(implement_text="must-not-run", repair_text="fixed")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        analyzer=planner,
+        implementer=implementer,
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    assert record.status == "WORK_BLOCKED"
+    assert planner.design_calls == 1
+    assert implementer.calls == 0
+    events = await work_store.read_events("work-1", project_id="project-a")
+    blocker = next(event for event in events if event.event_type is WorkEventType.WORK_BLOCKED)
+    assert blocker.payload_json["reason"] == "designer_changed_workspace"
+
+
+@pytest.mark.asyncio
+async def test_design_unsupported_claim_blocks_before_implementation(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    planner = AnalysisAndDesignRuntime(
+        design_claims=(
+            ClassifiedClaim(
+                classification=ClaimClassification.UNKNOWN,
+                statement="A compatibility fallback may be required",
+                kind="compatibility",
+                evidence_refs=(),
+                confidence="low",
+                impact_if_wrong="high",
+            ),
+        )
+    )
+    implementer = MutationRuntime(implement_text="must-not-run", repair_text="fixed")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        analyzer=planner,
+        implementer=implementer,
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    assert record.status == "WORK_BLOCKED"
+    assert implementer.calls == 0
+    events = await work_store.read_events("work-1", project_id="project-a")
+    assumption_event = next(
+        event for event in events if event.event_type is WorkEventType.ASSUMPTION_RECORDED
+    )
+    assert assumption_event.payload_json["statement"] == (
+        "A compatibility fallback may be required"
+    )
+    blocker = next(event for event in events if event.event_type is WorkEventType.WORK_BLOCKED)
+    assert blocker.payload_json["reason"] == "design_assumption_unresolved"
+    questions = await knowledge_store.search(
+        KnowledgeQuery(
+            text="compatibility fallback",
+            project_id="project-a",
+            work_id="work-1",
+        )
+    )
+    assert [item.kind for item in questions] == [KnowledgeKind.QUESTION]
 
 
 @pytest.mark.asyncio

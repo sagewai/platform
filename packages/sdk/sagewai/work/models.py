@@ -82,6 +82,15 @@ class WorkAnalysisResult(BaseModel):
     claims: tuple[ClassifiedClaim, ...]
 
 
+class WorkDesignResult(BaseModel):
+    """Structured output of an optional Work design stage."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    attempt_id: str
+    claims: tuple[ClassifiedClaim, ...]
+
+
 class Reversibility(str, Enum):
     """How a material action can be undone."""
 

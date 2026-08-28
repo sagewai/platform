@@ -50,6 +50,7 @@ from sagewai.work.models import (
     VerificationResult,
     WorkAnalysisResult,
     WorkContractProposal,
+    WorkDesignResult,
     WorkItem,
     WorkRecord,
 )
@@ -106,6 +107,7 @@ __all__ = [
     "VerificationResult",
     "WorkAnalysisResult",
     "WorkContractProposal",
+    "WorkDesignResult",
     "WorkEventType",
     "WorkItem",
     "WorkRecord",
