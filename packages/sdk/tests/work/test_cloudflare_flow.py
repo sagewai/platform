@@ -342,6 +342,7 @@ async def test_flow_persists_and_resumes_an_explicit_delivery_approval(
         await flow.resume(WORK_ID, project_id=PROJECT_ID)
     gated = await store.load_work(WORK_ID, project_id=PROJECT_ID)
     assert gated is not None and gated.pending_gate is not None
+    assert gated.status == "RELEASING"
 
     approved = await flow.approve(
         WORK_ID,
@@ -350,6 +351,7 @@ async def test_flow_persists_and_resumes_an_explicit_delivery_approval(
         actor_ref="operator:arda",
     )
     assert approved.pending_gate is None
+    assert approved.status == "RELEASING"
 
     with pytest.raises(DeliveryApprovalRequiredError):
         await flow.resume(WORK_ID, project_id=PROJECT_ID)
@@ -382,12 +384,14 @@ async def test_gated_failure_resumes_approved_rollback_and_reaches_triaging(
         await flow.resume(WORK_ID, project_id=PROJECT_ID)
     rollback_gated = await store.load_work(WORK_ID, project_id=PROJECT_ID)
     assert rollback_gated is not None and rollback_gated.pending_gate is not None
-    await flow.approve(
+    assert rollback_gated.status == "PRODUCTION_CANARY"
+    rollback_approved = await flow.approve(
         WORK_ID,
         project_id=PROJECT_ID,
         gate_id=rollback_gated.pending_gate,
         actor_ref="operator:arda",
     )
+    assert rollback_approved.status == "PRODUCTION_CANARY"
 
     triaged = await flow.resume(WORK_ID, project_id=PROJECT_ID)
 

@@ -284,7 +284,8 @@ def _project_delivery_status(events: list[WorkEvent]) -> str | None:
             if observation.deployment_id in rollback_deployment_ids:
                 status = "ROLLING_BACK"
             elif (
-                observed_deployment is not None
+                observation.verdict is HealthVerdict.PASS
+                and observed_deployment is not None
                 and _production_traffic_percent(observed_deployment) == Decimal(100)
             ):
                 status = "SOAKING"
@@ -1288,6 +1289,8 @@ class DeliveryLifecycle:
         record = await self._work_store.load_work(work_id, project_id=project_id)
         if record is None:
             raise KeyError(work_id)
+        if record.status == "COMPLETE":
+            return record
         events = await self._work_store.read_events(work_id, project_id=project_id)
         status = _project_delivery_status(events)
         if status is None or status == record.status:

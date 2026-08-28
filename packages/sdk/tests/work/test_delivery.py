@@ -372,7 +372,7 @@ async def test_delivery_events_project_canonical_work_status(store: WorkStore) -
     assert record is not None and record.status == "PRODUCTION_ROLLOUT"
     failed = await lifecycle.observe(rollout, gates=(gate,), window_seconds=30)
     record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
-    assert record is not None and record.status == "SOAKING"
+    assert record is not None and record.status == "PRODUCTION_ROLLOUT"
 
     rolled_back = await lifecycle.rollback(
         rollout,
@@ -393,6 +393,45 @@ async def test_delivery_events_project_canonical_work_status(store: WorkStore) -
         evidence_refs=("observation://failed",),
     )
     assert triaged.status == "TRIAGING"
+
+
+@pytest.mark.parametrize("failure_verdict", (HealthVerdict.HOLD, HealthVerdict.FAIL))
+@pytest.mark.asyncio
+async def test_nonpassing_full_rollout_does_not_project_soaking(
+    store: WorkStore,
+    failure_verdict: HealthVerdict,
+) -> None:
+    gate = HealthGate(
+        id="availability",
+        project_id=PROJECT_ID,
+        description="availability",
+        check_ref="http://availability",
+        failure_verdict=failure_verdict,
+    )
+    lifecycle, _, _, _, _ = _lifecycle(
+        store,
+        observations=({"availability": False},),
+    )
+    candidate = await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    rollout = await lifecycle.deploy(
+        candidate,
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="100%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+
+    observation = await lifecycle.observe(rollout, gates=(gate,), window_seconds=30)
+
+    assert observation.verdict is failure_verdict
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None and record.status == "PRODUCTION_ROLLOUT"
 
 
 @pytest.mark.asyncio
@@ -1302,6 +1341,7 @@ async def test_failure_triage_and_verified_rollout_completion_are_persisted(
             {"availability": False},
             {"availability": True},
             {"availability": True},
+            {"availability": True},
         ),
     )
     candidate = await lifecycle.build(
@@ -1422,10 +1462,14 @@ async def test_failure_triage_and_verified_rollout_completion_are_persisted(
         evidence_refs=("configured://docs",),
     )
     assert resumed_completion.status == "COMPLETE"
+    await lifecycle.observe(rollout, gates=(gate,), window_seconds=30)
+    still_complete = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert still_complete is not None and still_complete.status == "COMPLETE"
     events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
     assert sum(event.event_type is WorkEventType.TRIAGE_CREATED for event in events) == 1
     assert sum(event.event_type is WorkEventType.WORK_COMPLETED for event in events) == 1
-    assert events[-1].event_type is WorkEventType.WORK_COMPLETED
+    assert events[-2].event_type is WorkEventType.WORK_COMPLETED
+    assert events[-1].event_type is WorkEventType.OBSERVATION_RECORDED
 
 
 @pytest.mark.asyncio
