@@ -13,17 +13,19 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import insert, select
+from sqlalchemy import insert, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from sagewai.db import factory
 from sagewai.db.dialect import upsert
-from sagewai.db.models import Base, WorkEventModel, WorkItemModel
+from sagewai.db.models import Base, KnowledgeItemModel, WorkEventModel, WorkItemModel
 from sagewai.work.events import (
     WorkEvent,
     WorkEventType,
     active_control_degradations,
 )
+from sagewai.work.knowledge.control_failure import control_failure_finding
+from sagewai.work.metrics import WorkMetrics, derive_work_metrics
 from sagewai.work.models import (
     PendingAttention,
     PendingAttentionKind,
@@ -45,6 +47,7 @@ class WorkStore:
         self._engine = engine or factory.get_engine()
         self._work_items = WorkItemModel.__table__
         self._work_events = WorkEventModel.__table__
+        self._knowledge_items = KnowledgeItemModel.__table__
 
     async def init(self) -> None:
         """Bootstrap the schema on SQLite; Alembic owns PostgreSQL schema."""
@@ -55,8 +58,13 @@ class WorkStore:
 
     async def append_event(self, event: WorkEvent) -> None:
         """Append one immutable event; database constraints reject duplicates."""
-        values = event.model_dump(mode="python")
-        values["event_type"] = event.event_type.value
+        event_values = event.model_dump(mode="python")
+        event_values["event_type"] = event.event_type.value
+        finding = (
+            control_failure_finding(event)
+            if event.event_type is WorkEventType.CONTROL_DEGRADED
+            else None
+        )
         async with self._engine.begin() as conn:
             projection = (
                 await conn.execute(
@@ -78,7 +86,21 @@ class WorkStore:
             if existing_event is not None and existing_event.project_id != event.project_id:
                 raise ValueError("work_id belongs to a different project")
 
-            await conn.execute(insert(self._work_events).values(**values))
+            await conn.execute(insert(self._work_events).values(**event_values))
+            if finding is not None:
+                finding_values = finding.model_dump(mode="python")
+                finding_values["kind"] = finding.kind.value
+                finding_values["source_refs"] = list(finding.source_refs)
+                finding_values["artifact_refs"] = list(finding.artifact_refs)
+                await conn.execute(insert(self._knowledge_items).values(**finding_values))
+                if self._engine.dialect.name == "sqlite":
+                    await conn.execute(
+                        text(
+                            "INSERT INTO knowledge_items_fts (item_id, statement) "
+                            "VALUES (:item_id, :statement)"
+                        ),
+                        {"item_id": finding.id, "statement": finding.statement},
+                    )
 
     async def read_events(
         self,
@@ -96,6 +118,27 @@ class WorkStore:
         async with self._engine.connect() as conn:
             rows = (await conn.execute(query)).all()
         return [self._event_from_row(row._mapping) for row in rows]
+
+    async def metrics(
+        self,
+        *,
+        project_id: str | None,
+        work_id: str | None = None,
+    ) -> WorkMetrics:
+        """Derive project- or Work-scoped metrics from the immutable event ledger."""
+
+        table = self._work_events
+        filters = [table.c.project_id == project_id]
+        if work_id is not None:
+            filters.append(table.c.work_id == work_id)
+        query = select(table).where(*filters).order_by(table.c.work_id, table.c.sequence)
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(query)).all()
+        return derive_work_metrics(
+            (self._event_from_row(row._mapping) for row in rows),
+            project_id=project_id,
+            work_id=work_id,
+        )
 
     async def save_work(self, record: WorkRecord) -> None:
         """Insert or replace the current projection for one WorkItem."""

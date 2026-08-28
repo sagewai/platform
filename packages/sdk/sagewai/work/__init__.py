@@ -23,6 +23,7 @@ from sagewai.work.events import (
     WorkEventType,
     active_control_precondition_ids,
 )
+from sagewai.work.metrics import WorkMetrics
 from sagewai.work.models import (
     Action,
     ActionIntent,
@@ -93,6 +94,7 @@ __all__ = [
     "TaskCapsuleCompiler",
     "WorkContract",
     "WorkEvent",
+    "WorkMetrics",
     "VerificationResult",
     "WorkAnalysisResult",
     "WorkContractProposal",

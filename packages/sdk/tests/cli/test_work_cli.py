@@ -24,7 +24,7 @@ from click.testing import CliRunner
 from sagewai.cli import cli
 from sagewai.cli.work import work as work_cli
 from sagewai.fleet.execution import WorkerProcessResult
-from sagewai.work import WorkEvent, WorkEventType, WorkRecord, WorkStore
+from sagewai.work import WorkEvent, WorkEventType, WorkMetrics, WorkRecord, WorkStore
 from tests.db.conftest import dialect_engine  # noqa: F401
 from tests.work.test_cloudflare_adapter import (
     NEW_VERSION_ID,
@@ -46,6 +46,7 @@ def test_work_group_is_registered() -> None:
     assert "resume" in result.output
     assert "approve" in result.output
     assert "pending" in result.output
+    assert "metrics" in result.output
 
 
 def test_work_intake_runs_one_labeled_issue_scan(monkeypatch) -> None:
@@ -284,6 +285,35 @@ def test_work_pending_lists_canonical_attention(monkeypatch) -> None:
     assert "work-1" in result.output
     assert "merge:work-1:42" in result.output
     assert "Approve merge of PR #42." in result.output
+
+
+def test_work_metrics_prints_the_read_only_event_projection(monkeypatch) -> None:
+    async def fake_metrics(*, work_id=None):
+        assert work_id == "work-1"
+        return WorkMetrics(
+            project_id="project-a",
+            work_id=work_id,
+            control_degradation_rate=0.25,
+            mean_time_to_control_restored_seconds=30.0,
+            scope_violation_rate=0.1,
+            repair_rate=0.2,
+            rollback_rate=0.05,
+        )
+
+    monkeypatch.setattr(work_module, "_work_metrics", fake_metrics)
+
+    result = CliRunner().invoke(work_cli, ["metrics", "--work-id", "work-1"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == {
+        "control_degradation_rate": 0.25,
+        "mean_time_to_control_restored_seconds": 30.0,
+        "project_id": "project-a",
+        "repair_rate": 0.2,
+        "rollback_rate": 0.05,
+        "scope_violation_rate": 0.1,
+        "work_id": "work-1",
+    }
 
 
 def test_github_credentials_fail_before_remote_call_when_token_is_missing(
