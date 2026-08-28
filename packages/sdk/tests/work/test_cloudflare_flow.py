@@ -328,6 +328,86 @@ async def test_flow_completes_a_four_step_project_rollout(store: WorkStore) -> N
 
 
 @pytest.mark.asyncio
+async def test_production_soak_regression_rolls_back_and_links_triage(
+    store: WorkStore,
+) -> None:
+    candidate = _candidate("candidate-1", "a" * 40)
+    flow, provider = _flow(
+        store,
+        candidate,
+        observations=(
+            {"availability": True},
+            {"availability": False},
+            {"availability": True},
+        ),
+    )
+
+    triaged = await flow.resume(WORK_ID, project_id=PROJECT_ID)
+
+    assert triaged.status == "TRIAGING"
+    assert [item.exposure.value for item in provider.deployments] == ["5%"]
+    assert [item.exposure.value for item in provider.promotions] == ["100%"]
+    assert [item.id for item in provider.rollbacks] == [provider.promotions[0].id]
+
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    candidate_event = next(
+        event
+        for event in events
+        if event.event_type is WorkEventType.RELEASE_CREATED
+        and event.payload_json.get("known_good_baseline") is not True
+    )
+    production_deployment_event = next(
+        event
+        for event in events
+        if event.event_type is WorkEventType.DEPLOYMENT_RECORDED
+        and event.payload_json["deployment"]["exposure"]["value"] == "100%"
+    )
+    canary_observation_event = next(
+        event
+        for event in events
+        if event.event_type is WorkEventType.OBSERVATION_RECORDED
+        and event.payload_json["observation"]["deployment_id"]
+        == provider.deployments[0].id
+    )
+    failed_observation_event = next(
+        event
+        for event in events
+        if event.event_type is WorkEventType.OBSERVATION_RECORDED
+        and event.payload_json["observation"]["verdict"] == "fail"
+    )
+    rollback_event = next(
+        event for event in events if event.event_type is WorkEventType.ROLLBACK_RECORDED
+    )
+    triage_event = next(
+        event for event in events if event.event_type is WorkEventType.TRIAGE_CREATED
+    )
+
+    release = candidate_event.payload_json["release_candidate"]
+    production_deployment = production_deployment_event.payload_json["deployment"]
+    canary_observation = canary_observation_event.payload_json["observation"]
+    failure = failed_observation_event.payload_json["observation"]
+    assert release["id"] == candidate.id
+    assert release["work_id"] == WORK_ID
+    assert release["commit_sha"] == candidate.commit_sha
+    assert production_deployment["release_candidate_id"] == release["id"]
+    assert production_deployment["work_id"] == release["work_id"]
+    assert canary_observation["verdict"] == "pass"
+    assert canary_observation_event.sequence < production_deployment_event.sequence
+    assert production_deployment_event.sequence < failed_observation_event.sequence
+    assert failed_observation_event.sequence < rollback_event.sequence
+    assert rollback_event.sequence < triage_event.sequence
+    assert failure["deployment_id"] == production_deployment["id"]
+    assert rollback_event.payload_json["source_deployment_id"] == production_deployment["id"]
+    assert rollback_event.payload_json["source_release_candidate_id"] == release["id"]
+    assert triage_event.payload_json["deployment_id"] == production_deployment["id"]
+    assert triage_event.payload_json["observation"] == failure
+    assert triage_event.payload_json["evidence_refs"] == [
+        f"fake-observation://{production_deployment['id']}/availability",
+        "fake-observation://rollback-1/availability",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_flow_persists_and_resumes_an_explicit_delivery_approval(
     store: WorkStore,
 ) -> None:
