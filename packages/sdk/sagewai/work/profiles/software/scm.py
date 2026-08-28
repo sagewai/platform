@@ -37,7 +37,7 @@ def software_workspace_precondition(*, project_id: str | None) -> ControlPrecond
         kind=ControlPreconditionKind.WORKSPACE,
         description="The recorded worktree exists and HEAD matches canonical Work state",
         check_ref=SOFTWARE_WORKSPACE_CHECK_REF,
-        required_for=("implement", "repair", "review"),
+        required_for=("design", "implement", "repair", "review"),
     )
 
 
