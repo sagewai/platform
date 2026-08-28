@@ -245,6 +245,10 @@ class DeliveryControlLostError(RuntimeError):
         self.evidence_refs = evidence_refs
 
 
+class _RollbackProviderError(RuntimeError):
+    """A failure raised specifically by the rollback provider operation."""
+
+
 _DELIVERY_STATUS_EVENTS = {
     WorkEventType.RELEASE_CREATED,
     WorkEventType.DEPLOYMENT_RECORDED,
@@ -708,19 +712,17 @@ class DeliveryLifecycle:
         )
         try:
             rolled_back = await self._run_controlled(
-                self._deployment_provider.rollback(
+                self._run_rollback_provider(
                     deployment,
                     known_good_candidate,
                 ),
                 control_request,
             )
-        except ControlDegradedError:
-            raise
-        except Exception as exc:
+        except _RollbackProviderError as exc:
             await self.record_rollback_failure(
                 deployment,
                 failure_id="rollback-provider",
-                detail=f"{type(exc).__name__}: {exc}",
+                detail=str(exc),
                 evidence_refs=evidence_refs,
             )
             raise DeliveryActionDeniedError(
@@ -748,6 +750,23 @@ class DeliveryLifecycle:
             actor_ref="deployment_provider",
         )
         return rolled_back
+
+    async def _run_rollback_provider(
+        self,
+        deployment: Deployment,
+        known_good_candidate: ReleaseCandidate,
+    ) -> Deployment:
+        try:
+            return await self._deployment_provider.rollback(
+                deployment,
+                known_good_candidate,
+            )
+        except (ControlDegradedError, DeliveryControlLostError):
+            raise
+        except Exception as exc:
+            raise _RollbackProviderError(
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
 
     async def record_rollback_failure(
         self,

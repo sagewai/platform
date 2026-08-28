@@ -1133,6 +1133,75 @@ async def test_rollback_provider_failure_escalates_once_and_is_not_retried(
 
 
 @pytest.mark.asyncio
+async def test_rollback_heartbeat_error_is_not_recorded_as_provider_failure(
+    store: WorkStore,
+) -> None:
+    class BrokenHeartbeatProbe:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def evaluate(self, request, preconditions):
+            self.calls += 1
+            if self.calls > 1:
+                raise RuntimeError("control probe crashed")
+            return tuple(_result(precondition.id) for precondition in preconditions)
+
+    class BlockingRollbackProvider(DeterministicFakeDeploymentProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cancelled = False
+
+        async def rollback(self, deployment, known_good_candidate):
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+
+    provider = BlockingRollbackProvider()
+    lifecycle, _, _, _, _ = _lifecycle(
+        store,
+        control_probe=BrokenHeartbeatProbe(),
+        deployment_provider=provider,
+        heartbeat_interval=0.01,
+    )
+    await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    deployment = Deployment(
+        id="deployment-1",
+        project_id=PROJECT_ID,
+        work_id=WORK_ID,
+        release_candidate_id="candidate-1",
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="5%"),
+        provider_ref="fake://deployment/1",
+        status="active",
+    )
+    await _record_deployment(store, deployment)
+
+    with pytest.raises(RuntimeError, match="control probe crashed"):
+        await lifecycle.rollback(
+            deployment,
+            known_good_candidate=_known_good(),
+            evidence_refs=("observation://failed",),
+            expected_duration_seconds=60,
+        )
+
+    assert provider.cancelled is True
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    assert not any(
+        event.event_type is WorkEventType.CONTROL_DEGRADED
+        and "rollback-provider"
+        in event.payload_json.get("failed_preconditions", ())
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
 async def test_rollback_refusal_records_one_critical_receipt_for_active_precondition(
     store: WorkStore,
 ) -> None:
@@ -1955,7 +2024,7 @@ async def test_credential_expiry_mid_deploy_restores_and_resumes_same_candidate(
 
     assert provider.cancelled is True
     assert provider.deployments == []
-    restored, _, _, _, _ = _lifecycle(
+    restored, resumed_release, _, _, _ = _lifecycle(
         store,
         control_probe=_passing_probe(),
         deployment_provider=provider,
@@ -1971,6 +2040,7 @@ async def test_credential_expiry_mid_deploy_restores_and_resumes_same_candidate(
 
     assert resumed_candidate == candidate
     assert release.builds == [COMMIT_SHA]
+    assert resumed_release.builds == []
     assert provider.attempts == 2
     assert provider.deployments == [deployment]
     events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
