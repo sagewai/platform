@@ -515,6 +515,50 @@ async def test_resume_observes_rollback_persisted_before_process_death(
 
 
 @pytest.mark.asyncio
+async def test_failed_rollback_verification_escalates_once_with_evidence(
+    store: WorkStore,
+) -> None:
+    candidate = _candidate("candidate-1", "a" * 40)
+    flow, provider = _flow(
+        store,
+        candidate,
+        observations=({"availability": False}, {"availability": False}),
+    )
+
+    for _attempt in range(2):
+        with pytest.raises(
+            DeliveryActionDeniedError,
+            match="rollback verification did not pass",
+        ):
+            await flow.resume(WORK_ID, project_id=PROJECT_ID)
+
+    assert len(provider.deployments) == 1
+    assert len(provider.rollbacks) == 1
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    critical = [
+        event
+        for event in events
+        if event.event_type is WorkEventType.CONTROL_DEGRADED
+        and event.payload_json.get("failed_preconditions")
+        == ["rollback-verification"]
+    ]
+    assert len(critical) == 1
+    assert critical[0].payload_json["severity"] == "critical"
+    assert critical[0].payload_json["deployment_id"] == provider.deployments[0].id
+    assert critical[0].payload_json["evidence_refs"] == [
+        "fake-observation://rollback-1/availability"
+    ]
+    pending = await store.pending_attention(project_id=PROJECT_ID)
+    assert len(pending) == 1
+    assert pending[0].kind.value == "PRODUCTION_INCIDENT"
+    assert pending[0].severity == "critical"
+    assert pending[0].evidence_refs == (
+        "fake-observation://deployment-1/availability",
+        "fake-observation://rollback-1/availability",
+    )
+
+
+@pytest.mark.asyncio
 async def test_failure_restores_triages_and_new_candidate_redeploys(
     store: WorkStore,
 ) -> None:

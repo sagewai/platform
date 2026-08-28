@@ -239,6 +239,15 @@ class CloudflareDocsDeliveryFlow:
                 window_seconds=self._policy.rollback_observation_window_seconds,
             )
         if rollback_observation.verdict is not HealthVerdict.PASS:
+            await self._lifecycle.record_rollback_failure(
+                deployment,
+                failure_id="rollback-verification",
+                detail=(
+                    "rollback verification verdict "
+                    f"{rollback_observation.verdict.value}"
+                ),
+                evidence_refs=rollback_observation.evidence_refs,
+            )
             raise DeliveryActionDeniedError("rollback verification did not pass")
         return await self._lifecycle.triage(
             deployment,
