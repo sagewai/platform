@@ -139,6 +139,55 @@ async def test_store_queries_project_metrics_from_synthetic_event_stream(
     assert metrics.rollback_rate == 0.5
 
 
+@pytest.mark.asyncio
+async def test_store_exposes_profile_and_runtime_dimensions(
+    dialect_engine,  # noqa: F811
+) -> None:
+    events = (
+        _event(
+            "work-1",
+            1,
+            WorkEventType.WORK_CREATED,
+            payload={"profile": "software"},
+        ),
+        _event(
+            "work-1",
+            2,
+            WorkEventType.STAGE_STARTED,
+            payload={
+                "stage": "implement",
+                "run_id": "implement-1",
+                "runtime": "codex",
+                "knowledge_items_considered": 2,
+                "knowledge_items_selected": 1,
+                "artifact_bytes_referenced": 10,
+            },
+        ),
+        _event(
+            "work-2",
+            1,
+            WorkEventType.WORK_CREATED,
+            payload={"profile": "research"},
+        ),
+    )
+    store = WorkStore(engine=dialect_engine)
+    await store.init()
+    for event in events:
+        await store.append_event(event)
+
+    metrics = await store.metrics(
+        project_id="project-a",
+        profile="software",
+        runtime="codex",
+    )
+
+    assert metrics.profile == "software"
+    assert metrics.runtime == "codex"
+    assert metrics.knowledge_items_considered == 2
+    assert metrics.knowledge_items_selected == 1
+    assert metrics.artifact_bytes_referenced == 10
+
+
 def test_filters_by_exact_project_and_optional_work() -> None:
     events = (
         _event("work-1", 1, WorkEventType.WORK_CREATED),
@@ -199,3 +248,241 @@ def test_excludes_unrestored_control_incidents_and_is_immutable() -> None:
     assert metrics.mean_time_to_control_restored_seconds == 15.0
     with pytest.raises(ValidationError):
         metrics.rollback_rate = 1.0
+
+
+def test_derives_named_operator_metrics_only_from_canonical_outcomes() -> None:
+    events = (
+        _event(
+            "work-1",
+            1,
+            WorkEventType.WORK_CREATED,
+            payload={"profile": "software"},
+        ),
+        _event(
+            "work-1",
+            2,
+            WorkEventType.STAGE_STARTED,
+            payload={
+                "stage": "implement",
+                "run_id": "implement-1",
+                "runtime": "codex",
+                "knowledge_items_considered": 4,
+                "knowledge_items_selected": 2,
+                "artifact_bytes_referenced": 100,
+            },
+        ),
+        _event(
+            "work-1",
+            3,
+            WorkEventType.OPERATOR_DISCIPLINE_RECORDED,
+            payload={
+                "run_id": "implement-1",
+                "unsupported_claims": [],
+                "scope_violations": [],
+                "permission_violations": [],
+                "risk_mismatches": [],
+                "changed_files": 2,
+                "diff_lines": 20,
+            },
+        ),
+        _event(
+            "work-1",
+            4,
+            WorkEventType.STAGE_COMPLETED,
+            payload={"stage": "implement", "run_id": "implement-1"},
+        ),
+        _event(
+            "work-1",
+            5,
+            WorkEventType.REVIEW_RECORDED,
+            payload={
+                "attempt_id": "review-1",
+                "verdict": "accept",
+                "unsupported_claims": [],
+            },
+        ),
+        _event(
+            "work-1",
+            6,
+            WorkEventType.CONTROL_DEGRADED,
+            seconds=10,
+            payload={
+                "run_id": "implement-1",
+                "failed_preconditions": ["observability"],
+            },
+        ),
+        _event(
+            "work-1",
+            7,
+            WorkEventType.CONTROL_DEGRADED,
+            seconds=20,
+            payload={
+                "run_id": "implement-1",
+                "failed_preconditions": ["authority"],
+            },
+        ),
+        _event(
+            "work-1",
+            8,
+            WorkEventType.CONTROL_RESTORED,
+            seconds=30,
+            payload={"precondition_ids": ["observability"]},
+        ),
+        _event(
+            "work-1",
+            9,
+            WorkEventType.CONTROL_RESTORED,
+            seconds=40,
+            payload={"precondition_ids": ["authority"]},
+        ),
+        _event(
+            "work-2",
+            1,
+            WorkEventType.WORK_CREATED,
+            payload={"profile": "software"},
+        ),
+        _event(
+            "work-2",
+            2,
+            WorkEventType.STAGE_STARTED,
+            payload={
+                "stage": "implement",
+                "run_id": "implement-2",
+                "runtime": "claude",
+                "knowledge_items_considered": 3,
+                "knowledge_items_selected": 0,
+                "artifact_bytes_referenced": 50,
+            },
+        ),
+        _event(
+            "work-2",
+            3,
+            WorkEventType.OPERATOR_DISCIPLINE_RECORDED,
+            payload={
+                "run_id": "implement-2",
+                "unsupported_claims": [],
+                "scope_violations": [],
+                "permission_violations": ["permission"],
+                "risk_mismatches": ["risk"],
+                "changed_files": None,
+                "diff_lines": None,
+            },
+        ),
+        _event(
+            "work-2",
+            4,
+            WorkEventType.REVIEW_RECORDED,
+            payload={
+                "attempt_id": "review-2",
+                "verdict": "repair",
+                "unsupported_claims": ["unsupported"],
+            },
+        ),
+        _event(
+            "other-profile",
+            1,
+            WorkEventType.WORK_CREATED,
+            payload={"profile": "research"},
+        ),
+        _event(
+            "other-profile",
+            2,
+            WorkEventType.STAGE_STARTED,
+            payload={
+                "stage": "execute",
+                "run_id": "execute-1",
+                "runtime": "codex",
+                "knowledge_items_considered": 99,
+                "knowledge_items_selected": 99,
+                "artifact_bytes_referenced": 99,
+            },
+        ),
+        _event(
+            "other-profile",
+            3,
+            WorkEventType.REVIEW_RECORDED,
+            payload={
+                "attempt_id": "review-3",
+                "verdict": "repair",
+                "unsupported_claims": ["other-profile-claim"],
+            },
+        ),
+    )
+
+    metrics = derive_work_metrics(
+        events,
+        project_id="project-a",
+        profile="software",
+    )
+    codex_metrics = derive_work_metrics(
+        events,
+        project_id="project-a",
+        profile="software",
+        runtime="codex",
+    )
+    work_metrics = derive_work_metrics(
+        events,
+        project_id="project-a",
+        work_id="work-1",
+        profile="software",
+    )
+
+    assert metrics.profile == "software"
+    assert metrics.runtime is None
+    assert metrics.knowledge_items_considered == 7
+    assert metrics.knowledge_items_selected == 2
+    assert metrics.artifact_bytes_referenced == 150
+    assert metrics.task_capsule_tokens is None
+    assert metrics.retrieval_hit_rate is None
+    assert metrics.unsupported_claim_rate == 0.5
+    assert metrics.risk_classification_accuracy is None
+    assert metrics.permission_escalation_accuracy is None
+    assert metrics.mean_changed_files_per_accepted_work_item == 2.0
+    assert metrics.mean_diff_lines_per_accepted_change == 20.0
+    assert metrics.mean_time_to_control_restored_seconds == 20.0
+    assert metrics.mean_blind_window_seconds == 30.0
+    assert metrics.missing_context_repair_rate is None
+    assert metrics.false_positive_blocked_rate is None
+    assert metrics.verbosity_output_token_ratio is None
+
+    assert codex_metrics.runtime == "codex"
+    assert codex_metrics.knowledge_items_considered == 4
+    assert codex_metrics.knowledge_items_selected == 2
+    assert codex_metrics.artifact_bytes_referenced == 100
+    assert codex_metrics.task_capsule_tokens is None
+    assert codex_metrics.retrieval_hit_rate is None
+    assert codex_metrics.unsupported_claim_rate is None
+    assert codex_metrics.risk_classification_accuracy is None
+    assert codex_metrics.permission_escalation_accuracy is None
+    assert codex_metrics.mean_changed_files_per_accepted_work_item == 2.0
+    assert codex_metrics.mean_diff_lines_per_accepted_change == 20.0
+    assert codex_metrics.mean_blind_window_seconds == 30.0
+
+    assert work_metrics.work_id == "work-1"
+    assert work_metrics.knowledge_items_considered == 4
+    assert work_metrics.unsupported_claim_rate == 0.0
+
+
+def test_unknown_metric_denominators_remain_unavailable() -> None:
+    metrics = derive_work_metrics(
+        (_event("work-1", 1, WorkEventType.WORK_CREATED),),
+        project_id="project-a",
+    )
+
+    assert metrics.knowledge_items_considered is None
+    assert metrics.knowledge_items_selected is None
+    assert metrics.artifact_bytes_referenced is None
+    assert metrics.task_capsule_tokens is None
+    assert metrics.retrieval_hit_rate is None
+    assert metrics.unsupported_claim_rate is None
+    assert metrics.risk_classification_accuracy is None
+    assert metrics.permission_escalation_accuracy is None
+    assert metrics.mean_changed_files_per_accepted_work_item is None
+    assert metrics.mean_diff_lines_per_accepted_change is None
+    assert metrics.missing_context_repair_rate is None
+    assert metrics.false_positive_blocked_rate is None
+    assert metrics.verbosity_output_token_ratio is None
+    assert metrics.mean_blind_window_seconds is None
+    assert metrics.scope_violation_rate is None
+    assert metrics.repair_rate is None
+    assert metrics.rollback_rate is None
