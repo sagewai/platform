@@ -48,6 +48,8 @@ class WorkMetrics(BaseModel):
     missing-context repair cause, risk/permission accuracy, false-positive
     blocking, and verbosity are not adjudicated by the current canonical event
     vocabulary, so those metrics remain ``None`` instead of using a proxy.
+    Runtime-specific repair rate attributes a later repair to the Work's initial
+    implementation runtime, not to the runtime selected to perform the repair.
 
     ``profile`` filters WorkItems using their canonical ``WORK_CREATED`` payload.
     ``runtime`` filters only events attributable through a canonical run ID;
@@ -119,6 +121,20 @@ def derive_work_metrics(
         if isinstance(run_id, str) and isinstance(event_runtime, str):
             run_runtimes[(event.work_id, run_id)] = event_runtime
 
+    implementation_runtimes: dict[str, str] = {}
+    for selected_work_id, work_events in by_work.items():
+        for event in sorted(work_events, key=lambda item: item.sequence):
+            if (
+                event.event_type is WorkEventType.STAGE_STARTED
+                and event.payload_json.get("stage") == "implement"
+            ):
+                run_id = event.payload_json.get("run_id")
+                if isinstance(run_id, str):
+                    implementation_runtime = run_runtimes.get((selected_work_id, run_id))
+                    if implementation_runtime is not None:
+                        implementation_runtimes[selected_work_id] = implementation_runtime
+                break
+
     runtime_works = {
         selected_work_id
         for (selected_work_id, _), event_runtime in run_runtimes.items()
@@ -137,7 +153,8 @@ def derive_work_metrics(
     rollbacks = 0
     restoration_seconds: list[float] = []
     blind_window_seconds: list[float] = []
-    accepted_reports: list[dict | None] = []
+    accepted_work_reports: list[dict | None] = []
+    accepted_change_reports: list[dict | None] = []
     considered_values: list[int | None] = []
     selected_values: list[int | None] = []
     artifact_byte_values: list[int | None] = []
@@ -148,7 +165,7 @@ def derive_work_metrics(
         blind_window_started_at: datetime | None = None
         reports_by_run: dict[str, dict] = {}
         latest_change_run_id: str | None = None
-        accepted_change_run_id: str | None = None
+        accepted_change_run_ids: list[str] = []
 
         for event in ordered:
             payload = event.payload_json
@@ -188,17 +205,26 @@ def derive_work_metrics(
                     scope_violation_reports += 1
                 if isinstance(event_run_id, str):
                     reports_by_run[event_run_id] = payload
-            elif event.event_type is WorkEventType.STAGE_STARTED and runtime_matches:
+            elif event.event_type is WorkEventType.STAGE_STARTED:
                 stage = payload.get("stage")
-                if stage == "implement":
-                    implemented_works.add(selected_work_id)
-                elif stage == "repair":
-                    repaired_works.add(selected_work_id)
-                considered_values.append(_nonnegative_int(payload.get("knowledge_items_considered")))
-                selected_values.append(_nonnegative_int(payload.get("knowledge_items_selected")))
-                artifact_byte_values.append(
-                    _nonnegative_int(payload.get("artifact_bytes_referenced"))
+                implementation_matches = (
+                    runtime is None
+                    or implementation_runtimes.get(selected_work_id) == runtime
                 )
+                if stage == "implement" and implementation_matches:
+                    implemented_works.add(selected_work_id)
+                elif stage == "repair" and implementation_matches:
+                    repaired_works.add(selected_work_id)
+                if runtime_matches:
+                    considered_values.append(
+                        _nonnegative_int(payload.get("knowledge_items_considered"))
+                    )
+                    selected_values.append(
+                        _nonnegative_int(payload.get("knowledge_items_selected"))
+                    )
+                    artifact_byte_values.append(
+                        _nonnegative_int(payload.get("artifact_bytes_referenced"))
+                    )
             elif (
                 runtime is None
                 and event.event_type is WorkEventType.DEPLOYMENT_RECORDED
@@ -213,8 +239,12 @@ def derive_work_metrics(
                     review_checks += 1
                     if payload.get("unsupported_claims"):
                         unsupported_claim_reviews += 1
-                if payload.get("verdict") == "accept" and latest_change_run_id is not None:
-                    accepted_change_run_id = latest_change_run_id
+                if (
+                    payload.get("verdict") == "accept"
+                    and latest_change_run_id is not None
+                    and latest_change_run_id not in accepted_change_run_ids
+                ):
+                    accepted_change_run_ids.append(latest_change_run_id)
             elif (
                 event.event_type is WorkEventType.STAGE_COMPLETED
                 and payload.get("stage") in {"implement", "repair"}
@@ -222,11 +252,19 @@ def derive_work_metrics(
             ):
                 latest_change_run_id = event_run_id
 
-        if accepted_change_run_id is not None and (
-            runtime is None
-            or run_runtimes.get((selected_work_id, accepted_change_run_id)) == runtime
-        ):
-            accepted_reports.append(reports_by_run.get(accepted_change_run_id))
+        eligible_accepted_run_ids = [
+            run_id
+            for run_id in accepted_change_run_ids
+            if runtime is None
+            or run_runtimes.get((selected_work_id, run_id)) == runtime
+        ]
+        accepted_change_reports.extend(
+            reports_by_run.get(run_id) for run_id in eligible_accepted_run_ids
+        )
+        if accepted_change_run_ids:
+            final_run_id = accepted_change_run_ids[-1]
+            if runtime is None or run_runtimes.get((selected_work_id, final_run_id)) == runtime:
+                accepted_work_reports.append(reports_by_run.get(final_run_id))
 
     repair_works = len(implemented_works & repaired_works)
     control_rate = _optional_rate(len(degraded_works), observed_works)
@@ -252,11 +290,11 @@ def derive_work_metrics(
             review_checks,
         ),
         mean_changed_files_per_accepted_work_item=_complete_report_mean(
-            accepted_reports,
+            accepted_work_reports,
             "changed_files",
         ),
         mean_diff_lines_per_accepted_change=_complete_report_mean(
-            accepted_reports,
+            accepted_change_reports,
             "diff_lines",
         ),
         mean_blind_window_seconds=_mean(blind_window_seconds),
