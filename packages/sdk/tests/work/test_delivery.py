@@ -552,6 +552,10 @@ async def test_fake_lifecycle_drives_staging_canary_rollout_observation_and_roll
         WorkEventType.ROLLBACK_RECORDED,
         WorkEventType.OBSERVATION_RECORDED,
     ]
+    rollback_event = next(
+        event for event in events if event.event_type is WorkEventType.ROLLBACK_RECORDED
+    )
+    assert rollback_event.payload_json["evidence_refs"] == ["observation://failed"]
 
 
 @pytest.mark.parametrize("verdict", (HealthVerdict.HOLD, HealthVerdict.FAIL))
@@ -990,9 +994,19 @@ async def test_failed_rollback_precondition_refuses_action_and_freezes_work(
         )
 
     assert provider.rollbacks == []
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    degraded = next(
+        event for event in events if event.event_type is WorkEventType.CONTROL_DEGRADED
+    )
+    assert degraded.payload_json["severity"] == "critical"
+    assert degraded.payload_json["action"] == "rollback"
+    assert degraded.payload_json["deployment_id"] == deployment.id
+    assert degraded.payload_json["environment"] == "production"
     pending = await store.pending_attention(project_id=PROJECT_ID)
-    assert [item.attention_id for item in pending] == [failed_id]
-    assert pending[0].kind.value == "CONTROL_DEGRADED"
+    assert len(pending) == 1
+    assert pending[0].attention_id == degraded.id
+    assert pending[0].kind.value == "PRODUCTION_INCIDENT"
+    assert pending[0].evidence_refs == (f"check://{failed_id}",)
 
 
 @pytest.mark.asyncio
@@ -1026,8 +1040,10 @@ async def test_unrecorded_known_good_candidate_degrades_reversibility(
 
     assert provider.rollbacks == []
     pending = await store.pending_attention(project_id=PROJECT_ID)
-    assert [item.attention_id for item in pending] == ["rollback-artifact"]
-    assert "not recorded" in pending[0].summary
+    assert len(pending) == 1
+    assert pending[0].kind.value == "PRODUCTION_INCIDENT"
+    assert pending[0].evidence_refs == ("check://rollback-artifact",)
+    assert pending[0].summary.startswith("CRITICAL:")
 
 
 @pytest.mark.asyncio
@@ -1115,6 +1131,10 @@ async def test_blind_deploy_and_unapproved_deploy_are_impossible(store: WorkStor
             expected_duration_seconds=60,
         )
     assert provider.deployments == []
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    assert events[-1].event_type is WorkEventType.CONTROL_DEGRADED
+    assert events[-1].payload_json["severity"] == "high"
+    assert events[-1].payload_json["action"] == "deploy"
 
     approval_policy = RecordingPolicy(GateDecision.REQUIRE_APPROVAL)
     lifecycle, _, provider, _, _ = _lifecycle(store, policy=approval_policy)

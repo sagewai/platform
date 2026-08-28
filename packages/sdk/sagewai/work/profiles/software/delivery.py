@@ -700,6 +700,7 @@ class DeliveryLifecycle:
                 "source_release_candidate_id": candidate.id,
                 "deployment": rolled_back.model_dump(mode="json"),
                 "known_good_release_candidate": known_good_candidate.model_dump(mode="json"),
+                "evidence_refs": list(evidence_refs),
             },
             actor_ref="deployment_provider",
         )
@@ -886,19 +887,27 @@ class DeliveryLifecycle:
         newly_failed = tuple(result for result in failed if result.precondition_id not in active)
         if not newly_failed:
             return
+        payload: dict[str, object] = {
+            "failed_preconditions": [result.precondition_id for result in newly_failed],
+            "evidence_refs": [ref for result in newly_failed for ref in result.evidence_refs],
+            "details": "; ".join(
+                f"{result.precondition_id}: {result.detail or 'failed'}"
+                for result in newly_failed
+            ),
+            "frozen_action_ids": [request.action],
+            "severity": "critical" if request.action == "rollback" else "high",
+            "action": request.action,
+        }
+        if request.deployment is not None:
+            payload.update(
+                deployment_id=request.deployment.id,
+                environment=request.deployment.environment,
+            )
         await self._append(
             project_id=request.project_id,
             work_id=request.work_id,
             event_type=WorkEventType.CONTROL_DEGRADED,
-            payload={
-                "failed_preconditions": [result.precondition_id for result in newly_failed],
-                "evidence_refs": [ref for result in newly_failed for ref in result.evidence_refs],
-                "details": "; ".join(
-                    f"{result.precondition_id}: {result.detail or 'failed'}"
-                    for result in newly_failed
-                ),
-                "frozen_action_ids": [request.action],
-            },
+            payload=payload,
             actor_ref="delivery_control",
         )
 

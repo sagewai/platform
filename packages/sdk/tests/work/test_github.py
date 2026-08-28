@@ -1332,6 +1332,188 @@ async def test_pending_attention_is_presented_as_concise_issue_comments(
 
 
 @pytest.mark.asyncio
+async def test_production_fail_and_rollback_present_one_incident_comment(
+    store: WorkStore,
+) -> None:
+    flow, _, github, _ = _flow(store)
+    await store.save_work(
+        WorkRecord(
+            work_id="work-1",
+            project_id=PROJECT_ID,
+            source_ref=ISSUE_URL,
+            profile="software",
+            status="ROLLING_BACK",
+            contract_version=1,
+            active_run_id=None,
+            pending_gate=None,
+            profile_context={"base_sha": "a" * 40},
+            created_at=NOW,
+            updated_at=NOW,
+        )
+    )
+    await store.append_event(
+        WorkEvent(
+            id="deployment-event",
+            project_id=PROJECT_ID,
+            work_id="work-1",
+            sequence=1,
+            event_type=WorkEventType.DEPLOYMENT_RECORDED,
+            actor_type="test",
+            actor_ref=None,
+            payload_json={
+                "deployment": {
+                    "id": "production-1",
+                    "environment": "production",
+                }
+            },
+            created_at=NOW,
+        )
+    )
+    await store.append_event(
+        WorkEvent(
+            id="fail-event",
+            project_id=PROJECT_ID,
+            work_id="work-1",
+            sequence=2,
+            event_type=WorkEventType.OBSERVATION_RECORDED,
+            actor_type="test",
+            actor_ref=None,
+            payload_json={
+                "observation": {
+                    "deployment_id": "production-1",
+                    "verdict": "fail",
+                    "evidence_refs": ["metrics://production-fail"],
+                }
+            },
+            created_at=NOW,
+        )
+    )
+
+    await flow.present_pending("work-1", project_id=PROJECT_ID)
+
+    await store.append_event(
+        WorkEvent(
+            id="rollback-event",
+            project_id=PROJECT_ID,
+            work_id="work-1",
+            sequence=4,
+            event_type=WorkEventType.ROLLBACK_RECORDED,
+            actor_type="test",
+            actor_ref=None,
+            payload_json={
+                "source_deployment_id": "production-1",
+                "evidence_refs": ["provider://rollback-1"],
+            },
+            created_at=NOW,
+        )
+    )
+    await flow.present_pending("work-1", project_id=PROJECT_ID)
+
+    assert github.comments == [
+        (
+            ISSUE_URL,
+            "Sagewai: production incident — HIGH: production incident for "
+            "deployment production-1. Evidence: metrics://production-fail.",
+        )
+    ]
+    events = await store.read_events("work-1", project_id=PROJECT_ID)
+    receipts = [
+        event
+        for event in events
+        if event.event_type is WorkEventType.EXECUTION_RECORDED
+        and event.payload_json.get("action") == "github_pending_attention_presented"
+    ]
+    assert len(receipts) == 1
+    assert receipts[0].payload_json["kind"] == "PRODUCTION_INCIDENT"
+
+
+@pytest.mark.asyncio
+async def test_refused_production_rollback_presents_one_critical_incident_comment(
+    store: WorkStore,
+) -> None:
+    flow, _, github, _ = _flow(store)
+    await store.save_work(
+        WorkRecord(
+            work_id="work-1",
+            project_id=PROJECT_ID,
+            source_ref=ISSUE_URL,
+            profile="software",
+            status="CONTROL_DEGRADED",
+            contract_version=1,
+            active_run_id=None,
+            pending_gate=None,
+            profile_context={"base_sha": "a" * 40},
+            created_at=NOW,
+            updated_at=NOW,
+        )
+    )
+    await store.append_event(
+        WorkEvent(
+            id="deployment-event",
+            project_id=PROJECT_ID,
+            work_id="work-1",
+            sequence=1,
+            event_type=WorkEventType.DEPLOYMENT_RECORDED,
+            actor_type="test",
+            actor_ref=None,
+            payload_json={
+                "deployment": {
+                    "id": "production-1",
+                    "environment": "production",
+                }
+            },
+            created_at=NOW,
+        )
+    )
+    await store.append_event(
+        WorkEvent(
+            id="rollback-refused",
+            project_id=PROJECT_ID,
+            work_id="work-1",
+            sequence=2,
+            event_type=WorkEventType.CONTROL_DEGRADED,
+            actor_type="delivery_control",
+            actor_ref="delivery_control",
+            payload_json={
+                "severity": "critical",
+                "action": "rollback",
+                "deployment_id": "production-1",
+                "environment": "production",
+                "failed_preconditions": [
+                    "rollback-authority",
+                    "rollback-observability",
+                ],
+                "details": "rollback control failed",
+                "evidence_refs": ["check://rollback-control"],
+                "frozen_action_ids": ["rollback"],
+            },
+            created_at=NOW,
+        )
+    )
+
+    await flow.present_pending("work-1", project_id=PROJECT_ID)
+    await flow.present_pending("work-1", project_id=PROJECT_ID)
+
+    assert github.comments == [
+        (
+            ISSUE_URL,
+            "Sagewai: production incident — CRITICAL: production incident for "
+            "deployment production-1. Evidence: check://rollback-control.",
+        )
+    ]
+    events = await store.read_events("work-1", project_id=PROJECT_ID)
+    receipts = [
+        event
+        for event in events
+        if event.event_type is WorkEventType.EXECUTION_RECORDED
+        and event.payload_json.get("action") == "github_pending_attention_presented"
+    ]
+    assert len(receipts) == 1
+    assert receipts[0].payload_json["attention_id"] == "rollback-refused"
+    assert receipts[0].payload_json["kind"] == "PRODUCTION_INCIDENT"
+
+
+@pytest.mark.asyncio
 async def test_catalog_client_types_github_merge_conflict() -> None:
     async def github_callable(_payload):
         request = httpx.Request(

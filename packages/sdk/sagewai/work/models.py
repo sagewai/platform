@@ -119,6 +119,7 @@ class PendingAttentionKind(str, Enum):
     GATE_REQUESTED = "GATE_REQUESTED"
     WORK_BLOCKED = "WORK_BLOCKED"
     CONTROL_DEGRADED = "CONTROL_DEGRADED"
+    PRODUCTION_INCIDENT = "PRODUCTION_INCIDENT"
 
 
 class PendingAttention(BaseModel):

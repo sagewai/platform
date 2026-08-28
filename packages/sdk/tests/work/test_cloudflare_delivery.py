@@ -640,8 +640,19 @@ async def test_lifecycle_refuses_rollback_when_cloudflare_credential_expires(
             )
 
     assert provider.rollbacks == []
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    degraded = next(
+        event for event in events if event.event_type is WorkEventType.CONTROL_DEGRADED
+    )
+    assert degraded.payload_json["severity"] == "critical"
+    assert degraded.payload_json["action"] == "rollback"
+    assert degraded.payload_json["deployment_id"] == deployment.id
+    assert "cloudflare-authority" in degraded.payload_json["failed_preconditions"]
     pending = await store.pending_attention(project_id=PROJECT_ID)
-    assert [item.attention_id for item in pending] == ["cloudflare-authority"]
+    assert len(pending) == 1
+    assert pending[0].attention_id == degraded.id
+    assert pending[0].kind.value == "PRODUCTION_INCIDENT"
+    assert pending[0].evidence_refs == tuple(degraded.payload_json["evidence_refs"])
 
 
 @pytest.mark.asyncio

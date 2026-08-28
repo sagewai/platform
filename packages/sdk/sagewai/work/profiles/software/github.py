@@ -1395,6 +1395,10 @@ def _attention_comment(item: PendingAttention) -> str:
         return f"Sagewai: approval required — {summary} (gate {item.attention_id})."
     if item.kind is PendingAttentionKind.WORK_BLOCKED:
         return f"Sagewai: work blocked — {summary}."
+    if item.kind is PendingAttentionKind.PRODUCTION_INCIDENT:
+        evidence = ", ".join(item.evidence_refs)
+        suffix = f" Evidence: {evidence}." if evidence else ""
+        return f"Sagewai: production incident — {summary}.{suffix}"
     control_summary = item.attention_id
     if summary != control_summary:
         control_summary = f"{control_summary}: {summary}"

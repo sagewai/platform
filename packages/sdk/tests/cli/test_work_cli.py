@@ -274,6 +274,12 @@ def test_work_pending_lists_canonical_attention(monkeypatch) -> None:
                 attention_id="merge:work-1:42",
                 summary="Approve merge of PR #42.",
             ),
+            SimpleNamespace(
+                kind=SimpleNamespace(value="PRODUCTION_INCIDENT"),
+                work_id="work-2",
+                attention_id="rollback-refused",
+                summary="CRITICAL: production incident for deployment production-1",
+            ),
         )
 
     monkeypatch.setattr(work_module, "_pending_work", fake_pending)
@@ -285,6 +291,9 @@ def test_work_pending_lists_canonical_attention(monkeypatch) -> None:
     assert "work-1" in result.output
     assert "merge:work-1:42" in result.output
     assert "Approve merge of PR #42." in result.output
+    assert "PRODUCTION_INCIDENT" in result.output
+    assert "rollback-refused" in result.output
+    assert "CRITICAL: production incident" in result.output
 
 
 def test_work_metrics_prints_the_read_only_event_projection(monkeypatch) -> None:
@@ -400,19 +409,113 @@ async def test_delivery_phase_resume_routes_to_docs_delivery(
     async def fake_repository_state():
         return repository, "a" * 40
 
-    async def fake_run_docs_delivery(value, *, project_id, repository):
+    async def fake_run_docs_delivery(
+        value, *, project_id, repository, approve_gate_id=None
+    ):
         seen.append((value, project_id, repository))
         return SimpleNamespace(work_id="work-1", status="COMPLETE")
 
     monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
     monkeypatch.setattr(work_module, "_status_work", fake_status)
     monkeypatch.setattr(work_module, "_repository_state", fake_repository_state)
-    monkeypatch.setattr(work_module, "_run_docs_delivery", fake_run_docs_delivery)
+    monkeypatch.setattr(
+        work_module,
+        "_run_docs_delivery_with_pending",
+        fake_run_docs_delivery,
+    )
 
     result = await work_module._resume_work("work-1")
 
     assert result.status == "COMPLETE"
     assert seen == [(record, "project-a", repository)]
+
+
+@pytest.mark.asyncio
+async def test_delivery_progress_presents_pending_attention(monkeypatch) -> None:
+    record = SimpleNamespace(work_id="work-1")
+    completed = SimpleNamespace(work_id="work-1", status="COMPLETE")
+    repository = SimpleNamespace()
+    seen = []
+
+    async def fake_run_docs_delivery(
+        value, *, project_id, repository, approve_gate_id=None
+    ):
+        seen.append(("delivery", value.work_id, project_id, repository))
+        return completed
+
+    class FakeGitHubLifecycle:
+        async def present_pending(self, work_id, *, project_id):
+            seen.append(("pending", work_id, project_id))
+
+    async def fake_build_github_lifecycle(*, project_id, repository):
+        seen.append(("build", project_id, repository))
+        return FakeGitHubLifecycle()
+
+    monkeypatch.setattr(work_module, "_run_docs_delivery", fake_run_docs_delivery)
+    monkeypatch.setattr(
+        work_module,
+        "_build_github_lifecycle",
+        fake_build_github_lifecycle,
+    )
+
+    result = await work_module._run_docs_delivery_with_pending(
+        record,
+        project_id="project-a",
+        repository=repository,
+    )
+
+    assert result is completed
+    assert seen == [
+        ("delivery", "work-1", "project-a", repository),
+        ("build", "project-a", repository),
+        ("pending", "work-1", "project-a"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_delivery_error_presents_pending_and_preserves_error(monkeypatch) -> None:
+    record = SimpleNamespace(work_id="work-1")
+    repository = SimpleNamespace()
+    seen = []
+    error = RuntimeError("production health gate failed")
+
+    async def fake_run_docs_delivery(
+        _value, *, project_id, repository, approve_gate_id=None
+    ):
+        seen.append(("delivery", project_id, repository))
+        raise error
+
+    class FakeGitHubLifecycle:
+        async def present_pending(self, work_id, *, project_id):
+            seen.append(("pending", work_id, project_id))
+            raise RuntimeError("GitHub comment unavailable")
+
+    async def fake_build_github_lifecycle(*, project_id, repository):
+        seen.append(("build", project_id, repository))
+        return FakeGitHubLifecycle()
+
+    monkeypatch.setattr(work_module, "_run_docs_delivery", fake_run_docs_delivery)
+    monkeypatch.setattr(
+        work_module,
+        "_build_github_lifecycle",
+        fake_build_github_lifecycle,
+    )
+
+    with pytest.raises(RuntimeError) as caught:
+        await work_module._run_docs_delivery_with_pending(
+            record,
+            project_id="project-a",
+            repository=repository,
+        )
+
+    assert caught.value is error
+    assert isinstance(caught.value.__cause__, RuntimeError)
+    assert str(caught.value.__cause__) == "GitHub comment unavailable"
+    assert seen == [
+        ("delivery", "project-a", repository),
+        ("build", "project-a", repository),
+        ("pending", "work-1", "project-a"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -492,7 +595,11 @@ async def test_triaging_resume_repairs_new_merged_sha_then_redeploys(monkeypatch
     monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
     monkeypatch.setattr(work_module, "_status_work", fake_status)
     monkeypatch.setattr(work_module, "_repository_state", fake_repository_state)
-    monkeypatch.setattr(work_module, "_run_docs_delivery", fake_docs_delivery)
+    monkeypatch.setattr(
+        work_module,
+        "_run_docs_delivery_with_pending",
+        fake_docs_delivery,
+    )
     monkeypatch.setattr(work_module, "_build_github_lifecycle", fake_build_github_lifecycle)
 
     repair_result = await work_module._resume_work("work-1")
@@ -559,7 +666,11 @@ async def test_delivery_gate_approval_routes_to_delivery_flow(monkeypatch) -> No
     monkeypatch.setattr(work_module.factory, "ensure_schema", fake_ensure_schema)
     monkeypatch.setattr(work_module.factory, "get_engine", lambda: object())
     monkeypatch.setattr(work_module, "WorkStore", lambda engine: FakeStore())
-    monkeypatch.setattr(work_module, "_run_docs_delivery", fake_run_docs_delivery)
+    monkeypatch.setattr(
+        work_module,
+        "_run_docs_delivery_with_pending",
+        fake_run_docs_delivery,
+    )
 
     approved = await work_module._approve_work("work-1", gate_id)
 
