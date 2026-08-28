@@ -331,11 +331,13 @@ def test_work_pending_lists_canonical_attention(monkeypatch) -> None:
 
 
 def test_work_metrics_prints_the_read_only_event_projection(monkeypatch) -> None:
-    async def fake_metrics(*, work_id=None):
-        assert work_id == "work-1"
+    async def fake_metrics(*, work_id=None, profile=None, runtime=None):
+        assert (work_id, profile, runtime) == ("work-1", "software", "codex")
         return WorkMetrics(
             project_id="project-a",
             work_id=work_id,
+            profile=profile,
+            runtime=runtime,
             control_degradation_rate=0.25,
             mean_time_to_control_restored_seconds=30.0,
             scope_violation_rate=0.1,
@@ -345,16 +347,43 @@ def test_work_metrics_prints_the_read_only_event_projection(monkeypatch) -> None
 
     monkeypatch.setattr(work_module, "_work_metrics", fake_metrics)
 
-    result = CliRunner().invoke(work_cli, ["metrics", "--work-id", "work-1"])
+    result = CliRunner().invoke(
+        work_cli,
+        [
+            "metrics",
+            "--work-id",
+            "work-1",
+            "--profile",
+            "software",
+            "--runtime",
+            "codex",
+        ],
+    )
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.output) == {
+        "artifact_bytes_referenced": None,
         "control_degradation_rate": 0.25,
+        "false_positive_blocked_rate": None,
+        "knowledge_items_considered": None,
+        "knowledge_items_selected": None,
+        "mean_blind_window_seconds": None,
+        "mean_changed_files_per_accepted_work_item": None,
+        "mean_diff_lines_per_accepted_change": None,
         "mean_time_to_control_restored_seconds": 30.0,
+        "missing_context_repair_rate": None,
+        "permission_escalation_accuracy": None,
+        "profile": "software",
         "project_id": "project-a",
         "repair_rate": 0.2,
+        "retrieval_hit_rate": None,
+        "risk_classification_accuracy": None,
         "rollback_rate": 0.05,
+        "runtime": "codex",
         "scope_violation_rate": 0.1,
+        "task_capsule_tokens": None,
+        "unsupported_claim_rate": None,
+        "verbosity_output_token_ratio": None,
         "work_id": "work-1",
     }
 
@@ -382,8 +411,8 @@ async def test_work_metrics_queries_the_resolved_project_store(monkeypatch) -> N
         async def init(self):
             calls.append("init")
 
-        async def metrics(self, *, project_id, work_id):
-            calls.append(("metrics", project_id, work_id))
+        async def metrics(self, *, project_id, work_id, profile, runtime):
+            calls.append(("metrics", project_id, work_id, profile, runtime))
             return expected
 
     monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
@@ -391,14 +420,18 @@ async def test_work_metrics_queries_the_resolved_project_store(monkeypatch) -> N
     monkeypatch.setattr(work_module.factory, "get_engine", lambda: "engine")
     monkeypatch.setattr(work_module, "WorkStore", FakeStore)
 
-    result = await work_module._work_metrics(work_id="work-1")
+    result = await work_module._work_metrics(
+        work_id="work-1",
+        profile="software",
+        runtime="codex",
+    )
 
     assert result == expected
     assert calls == [
         "schema",
         ("engine", "engine"),
         "init",
-        ("metrics", "project-a", "work-1"),
+        ("metrics", "project-a", "work-1", "software", "codex"),
     ]
 
 

@@ -162,10 +162,18 @@ def work_pending() -> None:
 
 @work.command("metrics")
 @click.option("--work-id", default=None, help="Limit metrics to one WorkItem.")
-def work_metrics(work_id: str | None) -> None:
+@click.option("--profile", default=None, help="Limit metrics to one Work profile.")
+@click.option("--runtime", default=None, help="Limit attributable metrics to one runtime.")
+def work_metrics(
+    work_id: str | None,
+    profile: str | None,
+    runtime: str | None,
+) -> None:
     """Show read-only discipline and control metrics from Work events."""
 
-    metrics = _cli._run_async(_work_metrics(work_id=work_id))
+    metrics = _cli._run_async(
+        _work_metrics(work_id=work_id, profile=profile, runtime=runtime)
+    )
     click.echo(json.dumps(metrics.model_dump(mode="json"), sort_keys=True))
 
 
@@ -364,12 +372,22 @@ async def _pending_work() -> tuple[PendingAttention, ...]:
     return await store.pending_attention(project_id=project_id)
 
 
-async def _work_metrics(*, work_id: str | None = None) -> WorkMetrics:
+async def _work_metrics(
+    *,
+    work_id: str | None = None,
+    profile: str | None = None,
+    runtime: str | None = None,
+) -> WorkMetrics:
     project_id = resolve_project_id()
     await factory.ensure_schema()
     store = WorkStore(engine=factory.get_engine())
     await store.init()
-    return await store.metrics(project_id=project_id, work_id=work_id)
+    return await store.metrics(
+        project_id=project_id,
+        work_id=work_id,
+        profile=profile,
+        runtime=runtime,
+    )
 
 
 async def _build_lifecycle(
