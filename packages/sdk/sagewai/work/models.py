@@ -290,10 +290,24 @@ class ReviewResult(BaseModel):
     verdict: Literal["accept", "repair", "blocked"]
     findings: tuple[ReviewFinding, ...]
     evidence_refs: tuple[str, ...] = ()
-    introduced_assumptions: tuple[str, ...]
-    unsupported_claims: tuple[str, ...]
-    scope_expansions: tuple[str, ...]
-    unsupported_implementation_choices: tuple[str, ...]
+    introduced_assumptions: tuple[str, ...] = Field(
+        description="What new assumptions were introduced?"
+    )
+    unsupported_claims: tuple[str, ...] = Field(
+        description=(
+            "Which claims are unsupported by the WorkItem, repo evidence, accepted "
+            "contract, or project policy?"
+        )
+    )
+    scope_expansions: tuple[str, ...] = Field(
+        description="Did implementation solve a wider problem than requested?"
+    )
+    unsupported_implementation_choices: tuple[str, ...] = Field(
+        description=(
+            "Was backward compatibility, migration, fallback, abstraction, or defensive "
+            "behavior added without evidence?"
+        )
+    )
 
 
 class TaskCapsule(BaseModel):
