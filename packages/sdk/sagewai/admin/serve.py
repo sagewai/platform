@@ -4247,12 +4247,16 @@ def create_admin_serve_app(
         pid = _project_scope(request)
         labels = dict(body.get("labels") or {})
         labels.pop("project_id", None)  # never trust a body-supplied project scope
-        caps = WorkerCapabilities(
-            models_supported=body.get("models", []),
-            pool=body.get("pool", "default"),
-            labels=labels,
-            max_concurrent=body.get("max_concurrent", 1),
-        )
+        try:
+            caps = WorkerCapabilities(
+                models_supported=body.get("models", []),
+                capability_names=body.get("capability_names", []),
+                pool=body.get("pool", "default"),
+                labels=labels,
+                max_concurrent=body.get("max_concurrent", 1),
+            )
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
         import hashlib as _hashlib
         import secrets as _secrets
 
@@ -4275,6 +4279,7 @@ def create_admin_serve_app(
             "status": worker.approval_status.value,
             "capabilities": {
                 "models": caps.models_supported,
+                "capability_names": caps.capability_names,
                 "pool": caps.pool,
                 "labels": caps.labels,
                 "max_concurrent": caps.max_concurrent,
@@ -4305,7 +4310,7 @@ def create_admin_serve_app(
             project_id=worker.project_id,
             models_canonical=caps.models_canonical,
             pool=caps.pool,
-            labels=caps.labels,
+            labels=caps.routing_labels(),
             poll_timeout=poll_timeout,
         )
         if task:
@@ -4449,6 +4454,7 @@ def create_admin_serve_app(
             "status": w.approval_status.value,
             "pool": w.capabilities.pool,
             "models": w.capabilities.models_supported,
+            "capability_names": w.capabilities.capability_names,
             "labels": w.capabilities.labels,
             "max_concurrent": w.capabilities.max_concurrent,
             "last_heartbeat": w.last_heartbeat.isoformat() if w.last_heartbeat else None,

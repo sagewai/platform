@@ -1108,6 +1108,7 @@ export type FleetWorkerStatus = 'pending' | 'approved' | 'rejected' | 'revoked';
 export interface FleetWorkerCapabilities {
   models_supported: string[];
   models_canonical: string[];
+  capability_names: string[];
   max_concurrent: number;
   labels: Record<string, string>;
   pool: string;

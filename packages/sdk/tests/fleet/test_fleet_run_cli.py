@@ -18,7 +18,8 @@ from sagewai.cli.fleet import fleet_group
 def test_run_help_lists_key_options():
     res = CliRunner().invoke(fleet_group, ["run", "--help"])
     assert res.exit_code == 0
-    for opt in ("--name", "--models", "--pool", "--labels", "--max-concurrent",
+    for opt in ("--name", "--models", "--pool", "--labels", "--capabilities",
+                "--max-concurrent",
                 "--exec", "--exec-timeout", "--env", "--env-file", "--image",
                 "--docker-arg", "--register-only", "--once", "--worker-id",
                 "--enrollment-key"):
@@ -87,13 +88,15 @@ def test_run_register_only_invokes_register(monkeypatch):
     res = CliRunner().invoke(
         fleet_group,
         ["run", "--name", "w1", "--models", "gpt-4o,ollama/llama3:70b",
-         "--labels", "gpu=a100,zone=us", "--register-only"],
+         "--labels", "gpu=a100,zone=us",
+         "--capabilities", "runtime.claude,cli.git", "--register-only"],
     )
     assert res.exit_code == 0, res.output
     assert "wid-123" in res.output
     assert calls["name"] == "w1"
     assert calls["models"] == ["gpt-4o", "ollama/llama3:70b"]
     assert calls["labels"] == {"gpu": "a100", "zone": "us"}
+    assert calls["capability_names"] == ["runtime.claude", "cli.git"]
 
 
 def test_run_register_only_passes_task_isolation_options(monkeypatch):

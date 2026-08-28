@@ -23,6 +23,7 @@ from sagewai.work.events import (
     WorkEventType,
     active_control_precondition_ids,
 )
+from sagewai.work.fleet import FleetOperatorRuntime
 from sagewai.work.metrics import WorkMetrics
 from sagewai.work.models import (
     Action,
@@ -80,6 +81,7 @@ __all__ = [
     "ControlCheckContext",
     "ControlCheckResult",
     "ControlDegradedError",
+    "FleetOperatorRuntime",
     "GateDecision",
     "PendingAttention",
     "PendingAttentionKind",

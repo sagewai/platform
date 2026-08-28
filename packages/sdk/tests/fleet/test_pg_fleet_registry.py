@@ -32,7 +32,10 @@ async def test_register_persists_across_instances(reg):
     r, engine = reg
     w = await r.register_worker(
         name="w1", org_id="o", project_id="pa",
-        capabilities=WorkerCapabilities(models_supported=["gpt-4o"]),
+        capabilities=WorkerCapabilities(
+            models_supported=["gpt-4o"],
+            capability_names=["runtime.claude", "cli.git"],
+        ),
         secret_hash="deadbeef",
     )
     # a NEW registry instance on the same engine reads it back (persistence)
@@ -42,6 +45,7 @@ async def test_register_persists_across_instances(reg):
     assert got.secret_hash == "deadbeef"           # secret survives "restart"
     assert got.project_id == "pa"                   # first-class project
     assert "gpt-4o" in got.capabilities.models_canonical
+    assert got.capabilities.capability_names == ["runtime.claude", "cli.git"]
 
 
 @pytest.mark.asyncio
