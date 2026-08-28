@@ -945,6 +945,7 @@ class SoftwareLifecycle:
             capabilities=assignment.capabilities,
             workspace=workspace,
         )
+        profile_verification: VerificationResult | None = None
         if result.action_results:
             profile_verification = await self._profile.verify(
                 work_item,
@@ -952,8 +953,6 @@ class SoftwareLifecycle:
             )
             if profile_verification.attempt_id != run_id:
                 raise ValueError("profile verification belongs to a different attempt")
-            if result.status == "passed" and not profile_verification.passed:
-                result = result.model_copy(update={"status": "blocked"})
         if result.status != "passed":
             if await self._stop_for_control_degradation(work_item, run_id=run_id):
                 return "CONTROL_DEGRADED"
@@ -997,6 +996,9 @@ class SoftwareLifecycle:
             )
             return "WORK_BLOCKED"
 
+        if profile_verification is None:
+            raise ValueError("passed software execution requires action verification")
+
         result_sha = await self._worktree_manager.current_sha(workspace)
         await self._append(
             work_item,
@@ -1011,6 +1013,7 @@ class SoftwareLifecycle:
                     base_sha=workspace.base_sha,
                     result_sha=result_sha,
                 ).model_dump(mode="json"),
+                "profile_verification": profile_verification.model_dump(mode="json"),
             },
             actor_ref=assignment.actor_ref,
         )
@@ -1024,12 +1027,36 @@ class SoftwareLifecycle:
         workspace: SoftwareWorkspace,
     ) -> str:
         events = await self._events(work_item)
-        attempt_id = f"{work_item.id}:verify:{self._verification_count(events) + 1}"
-        result = await self._verifier.verify(
+        completed = next(
+            event
+            for event in reversed(events)
+            if event.event_type is WorkEventType.STAGE_COMPLETED
+            and event.payload_json.get("stage") in {"implement", "repair"}
+        )
+        attempt_id = str(completed.payload_json["run_id"])
+        profile_result = VerificationResult.model_validate(
+            completed.payload_json["profile_verification"]
+        )
+        if profile_result.attempt_id != attempt_id:
+            raise ValueError("profile verification belongs to a different attempt")
+        deterministic = await self._verifier.verify(
             work_item=work_item,
             attempt_id=attempt_id,
             workspace=workspace,
             commands=self._verification_commands,
+        )
+        result = VerificationResult(
+            attempt_id=attempt_id,
+            passed=profile_result.passed and deterministic.passed,
+            evidence_refs=tuple(
+                dict.fromkeys(
+                    (*profile_result.evidence_refs, *deterministic.evidence_refs)
+                )
+            ),
+            profile_context={
+                **profile_result.profile_context,
+                **deterministic.profile_context,
+            },
         )
         await self._append(
             work_item,
@@ -1566,10 +1593,6 @@ class SoftwareLifecycle:
             and event.payload_json.get("stage") == "repair"
             for event in events
         )
-
-    @staticmethod
-    def _verification_count(events: list[WorkEvent]) -> int:
-        return sum(event.event_type is WorkEventType.VERIFICATION_RECORDED for event in events)
 
     @staticmethod
     def _review_count(events: list[WorkEvent]) -> int:
