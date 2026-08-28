@@ -200,6 +200,7 @@ class OperatorController:
                 "run_id": request.run_id,
                 "stage": request.stage,
                 "runtime": runtime.name,
+                "workspace_ref": workspace.ref if workspace is not None else None,
                 "action_intents": [
                     intent.model_dump(mode="json") for intent in request.action_intents
                 ],

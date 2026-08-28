@@ -78,6 +78,7 @@ from sagewai.work.profiles.software.models import (
     SoftwareWorkspace,
     WorkspaceStaleError,
 )
+from sagewai.work.profiles.software.profile import SoftwareProfile
 from sagewai.work.profiles.software.scm import (
     SOFTWARE_WORKSPACE_CHECK_REF,
     SOFTWARE_WORKSPACE_PRECONDITION_ID,
@@ -141,6 +142,7 @@ __all__ = [
     "SoftwareContractContext",
     "SoftwareDeliveryTriageContext",
     "SoftwareLifecycle",
+    "SoftwareProfile",
     "SoftwareReadOnlyResultValidator",
     "SoftwareRepairContext",
     "SoftwareResultValidator",

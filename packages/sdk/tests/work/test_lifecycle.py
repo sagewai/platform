@@ -44,6 +44,7 @@ from sagewai.work import (
     WorkEventType,
     WorkItem,
     WorkStore,
+    execution_attempt_from_events,
 )
 from sagewai.work.control import OperatorController
 from sagewai.work.knowledge import KnowledgeKind, KnowledgeQuery, KnowledgeStore
@@ -56,6 +57,7 @@ from sagewai.work.profiles.software import (
     GitHubPullRequestState,
     SoftwareContractContext,
     SoftwareLifecycle,
+    SoftwareProfile,
     SoftwareReadOnlyResultValidator,
     SoftwareRepairContext,
     SoftwareResultValidator,
@@ -214,6 +216,20 @@ class MutationRuntime:
         text = self.implement_text if request.stage == "implement" else self.repair_text
         (workspace.path / "target.txt").write_text(f"{text}\n")
         return _operator_result(request)
+
+
+class RecordingSoftwareProfile(SoftwareProfile):
+    def __init__(self) -> None:
+        self.prepare_calls = 0
+        self.verify_calls = 0
+
+    async def prepare(self, work, contract):
+        self.prepare_calls += 1
+        return await super().prepare(work, contract)
+
+    async def verify(self, work, actions):
+        self.verify_calls += 1
+        return await super().verify(work, actions)
 
 
 class DiffReadingMutationRuntime(MutationRuntime):
@@ -600,6 +616,7 @@ def _lifecycle(
     analyzer: AnalysisRuntime | None = None,
     analyst_actor: str = "operator:analyst",
     implementer_actor: str = "operator:implementer",
+    profile: SoftwareProfile | None = None,
     reviewer_actor: str = "operator:reviewer",
     repairer_actor: str | None = None,
     artifact_root: Path | None = None,
@@ -613,6 +630,7 @@ def _lifecycle(
         artifact_store=artifact_store,
     )
     return SoftwareLifecycle(
+        profile=profile or SoftwareProfile(),
         work_store=work_store,
         knowledge_store=knowledge_store,
         capsule_compiler=compiler,
@@ -702,6 +720,7 @@ async def test_successful_implement_verify_review_reaches_ready_to_merge(
             ),
         )
     )
+    profile = RecordingSoftwareProfile()
     lifecycle = _lifecycle(
         repository=repository,
         worktree_root=tmp_path / "worktrees",
@@ -712,6 +731,7 @@ async def test_successful_implement_verify_review_reaches_ready_to_merge(
         implementer=implementer,
         reviewer=reviewer,
         repairer=repairer,
+        profile=profile,
         commands=(_command("initial"),),
     )
 
@@ -723,6 +743,8 @@ async def test_successful_implement_verify_review_reaches_ready_to_merge(
     assert record.status == "READY_TO_MERGE"
     assert record.status != "COMPLETE"
     assert implementer.calls == 1
+    assert profile.prepare_calls == 1
+    assert profile.verify_calls == 1
     assert reviewer.calls == 1
     assert repairer.calls == 0
     for request in (*implementer.requests, *reviewer.requests):
@@ -750,6 +772,24 @@ async def test_successful_implement_verify_review_reaches_ready_to_merge(
     )
     serialized = json.dumps(capsule.model_dump(mode="json")).lower()
     assert "session" not in serialized
+    events = await work_store.read_events("work-1", project_id="project-a")
+    attempt = execution_attempt_from_events(events, "work-1:implement:1")
+    assert attempt is not None
+    assert attempt.project_id == "project-a"
+    assert attempt.work_id == "work-1"
+    assert attempt.stage == "implement"
+    assert attempt.runtime == "mutation-runtime"
+    assert attempt.workspace_ref == "workspace://workspace"
+    assert attempt.status == "passed"
+    assert attempt.completed_at is not None
+    assert attempt.profile_context == {
+        "base_sha": base_sha,
+        "result_sha": _git(
+            tmp_path / "worktrees/project-a/work-1/workspace",
+            "rev-parse",
+            "HEAD",
+        ),
+    }
     assert "chat_history" not in serialized
 
 
