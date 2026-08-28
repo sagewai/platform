@@ -18,11 +18,13 @@ import pytest
 from pydantic import ValidationError
 
 from sagewai.work import (
+    ActionRequest,
     ControlCheckResult,
     ControlDegradedError,
     ControlPrecondition,
     ControlPreconditionKind,
     GateDecision,
+    Reversibility,
     WorkEvent,
     WorkEventType,
     WorkRecord,
@@ -39,6 +41,7 @@ from sagewai.work.profiles.software.delivery import (
     HealthGate,
     HealthVerdict,
     ReleaseCandidate,
+    default_delivery_action_policy,
 )
 from tests.db.conftest import dialect_engine  # noqa: F401
 from tests.work.fakes_delivery import (
@@ -178,6 +181,35 @@ class RecordingPolicy:
     def __call__(self, request):
         self.requests.append(request)
         return self.decision
+
+
+@pytest.mark.parametrize(
+    ("risk", "reversibility", "expected"),
+    (
+        ("low", Reversibility.PURE, GateDecision.ALLOW),
+        ("critical", Reversibility.PURE, GateDecision.DENY),
+        ("low", Reversibility.SNAPSHOT_REVERSIBLE, GateDecision.REQUIRE_APPROVAL),
+        ("high", Reversibility.COMPENSATABLE, GateDecision.REQUIRE_APPROVAL),
+        ("low", Reversibility.IRREVERSIBLE, GateDecision.DENY),
+        ("critical", Reversibility.SNAPSHOT_REVERSIBLE, GateDecision.DENY),
+    ),
+)
+def test_default_delivery_action_policy(
+    risk: str,
+    reversibility: Reversibility,
+    expected: GateDecision,
+) -> None:
+    request = ActionRequest(
+        project_id=PROJECT_ID,
+        action="execute_migration",
+        work_id=WORK_ID,
+        risk=risk,
+        reversibility=reversibility,
+        scope="database://project-a/schema",
+        evidence_refs=("policy://request-claims-approval",),
+    )
+
+    assert default_delivery_action_policy(request) is expected
 
 
 @pytest.fixture
@@ -1939,6 +1971,65 @@ async def test_delivery_policy_denial_blocks_work_without_side_effect(
     assert record.status == "WORK_BLOCKED"
     pending = await store.pending_attention(project_id=PROJECT_ID)
     assert [item.kind.value for item in pending] == ["WORK_BLOCKED"]
+
+
+@pytest.mark.asyncio
+async def test_critical_irreversible_action_is_denied_without_side_effect(
+    store: WorkStore,
+) -> None:
+    lifecycle, release, provider, observation, _ = _lifecycle(
+        store,
+        policy=default_delivery_action_policy,
+    )
+    request = ActionRequest(
+        project_id=PROJECT_ID,
+        action="execute_migration",
+        work_id=WORK_ID,
+        risk="critical",
+        reversibility=Reversibility.IRREVERSIBLE,
+        scope="database://project-a/schema",
+        evidence_refs=("policy://request-claims-approval",),
+    )
+
+    with pytest.raises(DeliveryActionDeniedError, match="execute_migration"):
+        await lifecycle._authorize(request)
+
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    assert [
+        event.event_type
+        for event in events
+        if event.event_type
+        in {
+            WorkEventType.GATE_REQUESTED,
+            WorkEventType.GATE_DECIDED,
+            WorkEventType.WORK_BLOCKED,
+        }
+    ] == [WorkEventType.GATE_DECIDED, WorkEventType.WORK_BLOCKED]
+    denied = next(event for event in events if event.event_type is WorkEventType.GATE_DECIDED)
+    assert denied.payload_json["decision"] == GateDecision.DENY.value
+    assert denied.payload_json["action"] == request.model_dump(mode="json")
+
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None
+    assert record.status == "WORK_BLOCKED"
+    assert record.pending_gate is None
+    pending = await store.pending_attention(project_id=PROJECT_ID)
+    assert [item.kind.value for item in pending] == ["WORK_BLOCKED"]
+
+    gate_id = f"{request.action}:{request.work_id}:{request.scope}"
+    with pytest.raises(DeliveryActionDeniedError, match="cannot resume"):
+        await lifecycle.approve(
+            WORK_ID,
+            project_id=PROJECT_ID,
+            gate_id=gate_id,
+            actor_ref="operator:arda",
+        )
+
+    assert release.builds == []
+    assert provider.deployments == []
+    assert provider.promotions == []
+    assert provider.rollbacks == []
+    assert observation.calls == []
 
 
 def test_control_request_is_immutable() -> None:

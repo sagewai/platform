@@ -219,6 +219,16 @@ class DeliveryApprovalRequiredError(RuntimeError):
     """A delivery action is waiting at a policy approval boundary."""
 
 
+def default_delivery_action_policy(request: ActionRequest) -> GateDecision:
+    """Deny unapproved irreversible/critical delivery actions by default."""
+
+    if request.reversibility is Reversibility.IRREVERSIBLE or request.risk == "critical":
+        return GateDecision.DENY
+    if request.reversibility is Reversibility.PURE:
+        return GateDecision.ALLOW
+    return GateDecision.REQUIRE_APPROVAL
+
+
 class DeliveryControlLostError(RuntimeError):
     """A provider lost deterministic control during an active delivery action."""
 
@@ -1446,6 +1456,7 @@ __all__ = [
     "DeliveryControlProbe",
     "DeliveryControlRequest",
     "DeliveryLifecycle",
+    "default_delivery_action_policy",
     "Deployment",
     "DeploymentProvider",
     "HealthGate",
