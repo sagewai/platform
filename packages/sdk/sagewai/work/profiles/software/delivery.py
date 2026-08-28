@@ -18,6 +18,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Literal, Protocol, TypeVar
 
@@ -233,6 +234,73 @@ class DeliveryControlLostError(RuntimeError):
         self.evidence_refs = evidence_refs
 
 
+_DELIVERY_STATUS_EVENTS = {
+    WorkEventType.RELEASE_CREATED,
+    WorkEventType.DEPLOYMENT_RECORDED,
+    WorkEventType.OBSERVATION_RECORDED,
+    WorkEventType.ROLLBACK_RECORDED,
+    WorkEventType.TRIAGE_CREATED,
+    WorkEventType.WORK_COMPLETED,
+}
+
+
+def _production_traffic_percent(deployment: Deployment) -> Decimal | None:
+    if (
+        deployment.environment != "production"
+        or deployment.exposure.dimension != "traffic"
+        or not deployment.exposure.value.endswith("%")
+    ):
+        return None
+    try:
+        return Decimal(deployment.exposure.value[:-1])
+    except InvalidOperation:
+        return None
+
+
+def _project_delivery_status(events: list[WorkEvent]) -> str | None:
+    """Fold canonical delivery events into the current software Work phase."""
+
+    status: str | None = None
+    deployments: dict[str, Deployment] = {}
+    rollback_deployment_ids: set[str] = set()
+
+    for event in sorted(events, key=lambda item: item.sequence):
+        if event.event_type is WorkEventType.RELEASE_CREATED:
+            if event.payload_json.get("known_good_baseline") is not True:
+                status = "RELEASING"
+        elif event.event_type is WorkEventType.DEPLOYMENT_RECORDED:
+            deployment = Deployment.model_validate(event.payload_json["deployment"])
+            deployments[deployment.id] = deployment
+            traffic = _production_traffic_percent(deployment)
+            if deployment.environment == "staging":
+                status = "STAGING"
+            elif traffic is not None and Decimal(0) <= traffic < Decimal(100):
+                status = "PRODUCTION_CANARY"
+            elif traffic == Decimal(100):
+                status = "PRODUCTION_ROLLOUT"
+        elif event.event_type is WorkEventType.OBSERVATION_RECORDED:
+            observation = ObservationResult.model_validate(event.payload_json["observation"])
+            observed_deployment = deployments.get(observation.deployment_id)
+            if observation.deployment_id in rollback_deployment_ids:
+                status = "ROLLING_BACK"
+            elif (
+                observed_deployment is not None
+                and _production_traffic_percent(observed_deployment) == Decimal(100)
+            ):
+                status = "SOAKING"
+        elif event.event_type is WorkEventType.ROLLBACK_RECORDED:
+            deployment = Deployment.model_validate(event.payload_json["deployment"])
+            deployments[deployment.id] = deployment
+            rollback_deployment_ids.add(deployment.id)
+            status = "ROLLING_BACK"
+        elif event.event_type is WorkEventType.TRIAGE_CREATED:
+            status = "TRIAGING"
+        elif event.event_type is WorkEventType.WORK_COMPLETED:
+            status = "COMPLETE"
+
+    return status
+
+
 class DeliveryLifecycle:
     """Persist and enforce release promotion using provider contracts."""
 
@@ -350,7 +418,15 @@ class DeliveryLifecycle:
             raise KeyError(work_id)
         if record.status == "COMPLETE":
             return record
-        if record.status != "READY_TO_DELIVER":
+        if record.status not in {
+            "READY_TO_DELIVER",
+            "RELEASING",
+            "STAGING",
+            "PRODUCTION_CANARY",
+            "PRODUCTION_ROLLOUT",
+            "SOAKING",
+            "ROLLING_BACK",
+        }:
             raise DeliveryActionDeniedError(
                 f"delivery approval cannot resume from Work status {record.status}"
             )
@@ -382,7 +458,6 @@ class DeliveryLifecycle:
             )
         updated = record.model_copy(
             update={
-                "status": "READY_TO_DELIVER",
                 "pending_gate": None,
                 "updated_at": datetime.now(timezone.utc),
             }
@@ -655,7 +730,7 @@ class DeliveryLifecycle:
             deployment,
             WorkEventType.TRIAGE_CREATED,
         ):
-            return await self._set_work_status(deployment, "TRIAGE")
+            return await self._project_work_status(deployment.work_id, deployment.project_id)
         await self._append(
             project_id=deployment.project_id,
             work_id=deployment.work_id,
@@ -668,7 +743,7 @@ class DeliveryLifecycle:
             },
             actor_ref="delivery_lifecycle",
         )
-        return await self._set_work_status(deployment, "TRIAGE")
+        return await self._project_work_status(deployment.work_id, deployment.project_id)
 
     async def complete(
         self,
@@ -692,7 +767,7 @@ class DeliveryLifecycle:
             deployment,
             WorkEventType.WORK_COMPLETED,
         ):
-            return await self._set_work_status(deployment, "COMPLETE")
+            return await self._project_work_status(deployment.work_id, deployment.project_id)
         await self._append(
             project_id=deployment.project_id,
             work_id=deployment.work_id,
@@ -706,7 +781,7 @@ class DeliveryLifecycle:
             },
             actor_ref="delivery_lifecycle",
         )
-        return await self._set_work_status(deployment, "COMPLETE")
+        return await self._project_work_status(deployment.work_id, deployment.project_id)
 
     async def _run_controlled(
         self,
@@ -1205,17 +1280,18 @@ class DeliveryLifecycle:
             actor_ref="deployment_provider",
         )
 
-    async def _set_work_status(
+    async def _project_work_status(
         self,
-        deployment: Deployment,
-        status: str,
+        work_id: str,
+        project_id: str,
     ) -> WorkRecord:
-        record = await self._work_store.load_work(
-            deployment.work_id,
-            project_id=deployment.project_id,
-        )
+        record = await self._work_store.load_work(work_id, project_id=project_id)
         if record is None:
-            raise KeyError(deployment.work_id)
+            raise KeyError(work_id)
+        events = await self._work_store.read_events(work_id, project_id=project_id)
+        status = _project_delivery_status(events)
+        if status is None or status == record.status:
+            return record
         updated = record.model_copy(
             update={
                 "status": status,
@@ -1249,6 +1325,8 @@ class DeliveryLifecycle:
                 created_at=datetime.now(timezone.utc),
             )
         )
+        if event_type in _DELIVERY_STATUS_EVENTS:
+            await self._project_work_status(work_id, project_id)
 
     async def _known_good_problem(
         self,

@@ -637,7 +637,16 @@ class GitHubIssueLifecycle:
         record = await self._work_store.load_work(work_id, project_id=project_id)
         if record is None:
             raise KeyError(work_id)
-        if record.status in {"READY_TO_DELIVER", "COMPLETE"}:
+        if record.status in {
+            "READY_TO_DELIVER",
+            "RELEASING",
+            "STAGING",
+            "PRODUCTION_CANARY",
+            "PRODUCTION_ROLLOUT",
+            "SOAKING",
+            "ROLLING_BACK",
+            "COMPLETE",
+        }:
             return record
         if record.status == "WORK_BLOCKED":
             await self.present_pending(work_id, project_id=project_id)

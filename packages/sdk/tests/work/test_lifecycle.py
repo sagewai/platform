@@ -1440,7 +1440,7 @@ async def test_delivery_triage_resumes_repair_with_failed_observation_context(
             created_at=NOW,
         )
     )
-    await work_store.save_work(ready.model_copy(update={"status": "TRIAGE"}))
+    await work_store.save_work(ready.model_copy(update={"status": "TRIAGING"}))
 
     repaired = await lifecycle.resume("work-1", project_id="project-a")
 

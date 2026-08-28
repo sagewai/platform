@@ -501,7 +501,7 @@ async def test_delivery_triage_creates_new_reviewed_pr_and_merged_sha(
             created_at=NOW,
         )
     )
-    await store.save_work(delivered.model_copy(update={"status": "TRIAGE"}))
+    await store.save_work(delivered.model_copy(update={"status": "TRIAGING"}))
 
     async def repair_resume(work_id: str, *, project_id: str):
         software.resumes += 1
@@ -730,6 +730,43 @@ async def test_resume_rebuilds_pr_projection_and_does_not_duplicate_merge_event(
         and event.payload_json.get("stage") == "merge"
     ]
     assert len(merges) == 1
+
+
+@pytest.mark.parametrize(
+    "delivery_status",
+    (
+        "READY_TO_DELIVER",
+        "RELEASING",
+        "STAGING",
+        "PRODUCTION_CANARY",
+        "PRODUCTION_ROLLOUT",
+        "SOAKING",
+        "ROLLING_BACK",
+    ),
+)
+@pytest.mark.asyncio
+async def test_delivery_phase_resume_does_not_reenter_software_lifecycle(
+    store: WorkStore,
+    delivery_status: str,
+) -> None:
+    flow, software, _github, _publisher = _flow(store)
+    gated = await flow.start(
+        issue_url=ISSUE_URL,
+        project_id=PROJECT_ID,
+        base_sha="a" * 40,
+    )
+    delivered = await flow.approve(
+        gated.work_id,
+        project_id=PROJECT_ID,
+        gate_id=gated.pending_gate,
+        actor_ref="operator:arda",
+    )
+    await store.save_work(delivered.model_copy(update={"status": delivery_status}))
+
+    resumed = await flow.resume(delivered.work_id, project_id=PROJECT_ID)
+
+    assert resumed.status == delivery_status
+    assert software.resumes == 0
 
 
 @pytest.mark.asyncio

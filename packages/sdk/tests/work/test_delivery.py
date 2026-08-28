@@ -284,6 +284,118 @@ def test_delivery_models_are_immutable_and_project_scoped() -> None:
 
 
 @pytest.mark.asyncio
+async def test_delivery_events_project_canonical_work_status(store: WorkStore) -> None:
+    gate = HealthGate(
+        id="availability",
+        project_id=PROJECT_ID,
+        description="availability",
+        check_ref="http://availability",
+        failure_verdict=HealthVerdict.FAIL,
+    )
+    lifecycle, _, _, _, _ = _lifecycle(
+        store,
+        observations=(
+            {"availability": True},
+            {"availability": True},
+            {"availability": True},
+            {"availability": True},
+            {"availability": False},
+            {"availability": True},
+        ),
+    )
+
+    baseline = _candidate(
+        candidate_id="baseline-current-work",
+        artifact_ref="artifact://baseline-current-work",
+        digest="d" * 64,
+        commit_sha="e" * 40,
+    )
+    await lifecycle.register_known_good(baseline, evidence_refs=("config://baseline",))
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None and record.status == "READY_TO_DELIVER"
+
+    candidate = await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=("merge://sha",),
+    )
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None and record.status == "RELEASING"
+
+    staging = await lifecycle.deploy(
+        candidate,
+        environment="staging",
+        exposure=BlastRadius(dimension="instances", value="1"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None and record.status == "STAGING"
+    await lifecycle.observe(staging, gates=(gate,), window_seconds=30)
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None and record.status == "STAGING"
+
+    deployment = await lifecycle.deploy(
+        candidate,
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="5%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None and record.status == "PRODUCTION_CANARY"
+    await lifecycle.observe(deployment, gates=(gate,), window_seconds=30)
+
+    for exposure in ("20%", "50%"):
+        deployment = await lifecycle.promote(
+            deployment,
+            exposure=BlastRadius(dimension="traffic", value=exposure),
+            known_good_candidate=_known_good(),
+            evidence_refs=(),
+            expected_duration_seconds=60,
+        )
+        record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+        assert record is not None and record.status == "PRODUCTION_CANARY"
+        await lifecycle.observe(deployment, gates=(gate,), window_seconds=30)
+
+    rollout = await lifecycle.promote(
+        deployment,
+        exposure=BlastRadius(dimension="traffic", value="100%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=(),
+        expected_duration_seconds=60,
+    )
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None and record.status == "PRODUCTION_ROLLOUT"
+    failed = await lifecycle.observe(rollout, gates=(gate,), window_seconds=30)
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None and record.status == "SOAKING"
+
+    rolled_back = await lifecycle.rollback(
+        rollout,
+        known_good_candidate=_known_good(),
+        evidence_refs=("observation://failed",),
+        expected_duration_seconds=60,
+    )
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None and record.status == "ROLLING_BACK"
+    await lifecycle.observe(rolled_back, gates=(gate,), window_seconds=30)
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None and record.status == "ROLLING_BACK"
+
+    triaged = await lifecycle.triage(
+        rollout,
+        observation=failed,
+        summary="Full production rollout failed.",
+        evidence_refs=("observation://failed",),
+    )
+    assert triaged.status == "TRIAGING"
+
+
+@pytest.mark.asyncio
 async def test_fake_lifecycle_drives_staging_canary_rollout_observation_and_rollback(
     store: WorkStore,
 ) -> None:
@@ -1257,14 +1369,14 @@ async def test_failure_triage_and_verified_rollout_completion_are_persisted(
         summary="Canary availability failed.",
         evidence_refs=("observation://failed",),
     )
-    assert triaged.status == "TRIAGE"
+    assert triaged.status == "TRIAGING"
     resumed_triage = await lifecycle.triage(
         failed_deployment,
         observation=failed,
         summary="Canary availability failed.",
         evidence_refs=("observation://failed",),
     )
-    assert resumed_triage.status == "TRIAGE"
+    assert resumed_triage.status == "TRIAGING"
 
     repaired = _candidate(
         candidate_id="candidate-2",

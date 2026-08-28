@@ -368,12 +368,27 @@ def test_github_credentials_fail_before_remote_call_when_token_is_missing(
         work_module._local_github_credentials()
 
 
+@pytest.mark.parametrize(
+    "delivery_status",
+    (
+        "READY_TO_DELIVER",
+        "RELEASING",
+        "STAGING",
+        "PRODUCTION_CANARY",
+        "PRODUCTION_ROLLOUT",
+        "SOAKING",
+        "ROLLING_BACK",
+    ),
+)
 @pytest.mark.asyncio
-async def test_ready_to_deliver_resume_routes_to_docs_delivery(monkeypatch) -> None:
+async def test_delivery_phase_resume_routes_to_docs_delivery(
+    monkeypatch,
+    delivery_status: str,
+) -> None:
     record = SimpleNamespace(
         work_id="work-1",
         project_id="project-a",
-        status="READY_TO_DELIVER",
+        status=delivery_status,
         source_ref="https://github.com/octocat/repo/issues/7",
     )
     repository = SimpleNamespace()
@@ -425,11 +440,11 @@ async def test_complete_resume_returns_without_repository_or_remote_work(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_triage_resume_repairs_new_merged_sha_then_redeploys(monkeypatch) -> None:
+async def test_triaging_resume_repairs_new_merged_sha_then_redeploys(monkeypatch) -> None:
     current = SimpleNamespace(
         work_id="work-1",
         project_id="project-a",
-        status="TRIAGE",
+        status="TRIAGING",
         source_ref="https://github.com/octocat/repo/issues/7",
         profile_context={"github": {"merged_sha": "a" * 40}},
     )
@@ -579,13 +594,13 @@ async def test_complete_delivery_approval_is_a_noop_before_repository_work(
 
 
 @pytest.mark.asyncio
-async def test_triage_rejects_stale_delivery_approval_before_repository_work(
+async def test_triaging_rejects_stale_delivery_approval_before_repository_work(
     monkeypatch,
 ) -> None:
     record = SimpleNamespace(
         work_id="work-1",
         project_id="project-a",
-        status="TRIAGE",
+        status="TRIAGING",
         source_ref="https://github.com/octocat/repo/issues/7",
     )
 
@@ -593,13 +608,13 @@ async def test_triage_rejects_stale_delivery_approval_before_repository_work(
         return record
 
     async def unexpected_repository_state():
-        raise AssertionError("triage approval rejection must not inspect the repository")
+        raise AssertionError("triaging approval rejection must not inspect the repository")
 
     monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
     monkeypatch.setattr(work_module, "_status_work", fake_status)
     monkeypatch.setattr(work_module, "_repository_state", unexpected_repository_state)
 
-    with pytest.raises(ValueError, match="cannot approve a stale gate from TRIAGE"):
+    with pytest.raises(ValueError, match="cannot approve a stale gate from TRIAGING"):
         await work_module._approve_work("work-1", "rollback:stale")
 
 
