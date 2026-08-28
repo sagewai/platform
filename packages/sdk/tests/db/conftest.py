@@ -13,6 +13,7 @@ Yields a schema-loaded AsyncEngine for each configured dialect:
 - SQLite always (in-process, via aiosqlite).
 - PostgreSQL only when SAGEWAI_TEST_DATABASE_URL is set.
 """
+
 import os
 
 import pytest_asyncio
@@ -36,5 +37,10 @@ async def dialect_engine(request, tmp_path):
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.drop_all)
             await conn.run_sync(Base.metadata.create_all)
-    yield engine
-    await engine.dispose()
+    try:
+        yield engine
+    finally:
+        if request.param == "postgres":
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.drop_all)
+        await engine.dispose()
