@@ -54,7 +54,7 @@ async def run_worker_subprocess(
     explicit_env: Mapping[str, str] | None = None,
     cwd: Path | None = None,
     timeout: float | None = None,
-    output_limit: int = 4000,
+    output_limit: int | None = 4000,
 ) -> WorkerProcessResult:
     """Run one command with only system variables plus explicitly scoped env."""
     if (argv is None) == (command is None):
@@ -94,8 +94,13 @@ async def run_worker_subprocess(
         await process.wait()
         raise
 
+    decoded_stdout = stdout.decode(errors="replace")
+    decoded_stderr = stderr.decode(errors="replace")
+    if output_limit is not None:
+        decoded_stdout = decoded_stdout[:output_limit]
+        decoded_stderr = decoded_stderr[:output_limit]
     return WorkerProcessResult(
         returncode=process.returncode or 0,
-        stdout=stdout.decode(errors="replace")[:output_limit],
-        stderr=stderr.decode(errors="replace")[:output_limit],
+        stdout=decoded_stdout,
+        stderr=decoded_stderr,
     )

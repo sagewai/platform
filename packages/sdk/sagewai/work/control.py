@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from collections.abc import Mapping
@@ -140,14 +141,14 @@ class OperatorController:
                 raise ValueError("completed durable result belongs to different work")
             return persisted
 
-        scoped, violations = await self._evaluate_intents(request, capabilities)
-        if violations:
-            await self._append_event(
+        risk_mismatches = self._risk_mismatches(request, capsule)
+        scoped, permission_violations = await self._evaluate_intents(request, capabilities)
+        if permission_violations or risk_mismatches:
+            return await self._record_intent_block(
                 request,
-                WorkEventType.WORK_BLOCKED,
-                {"reason": "action_intent_policy", "violations": violations},
+                permission_violations=tuple(permission_violations),
+                risk_mismatches=risk_mismatches,
             )
-            return _blocked_result(request, "; ".join(violations))
 
         preconditions = self._applicable_preconditions(request)
         frozen_precondition_ids = await self._frozen_precondition_ids(request)
@@ -203,6 +204,15 @@ class OperatorController:
                     intent.model_dump(mode="json") for intent in request.action_intents
                 ],
                 "capability_names": [grant.name for grant in scoped.grants],
+                "knowledge_items_considered": capsule.knowledge_items_considered,
+                "knowledge_items_selected": len(capsule.knowledge_items),
+                "artifact_bytes_referenced": capsule.artifact_bytes_referenced,
+                "capsule_size_bytes": len(
+                    json.dumps(
+                        capsule.model_dump(mode="json"),
+                        sort_keys=True,
+                    ).encode("utf-8")
+                ),
             },
         )
 
@@ -254,6 +264,53 @@ class OperatorController:
             result.model_dump(mode="json"),
         )
         return result
+
+    @staticmethod
+    def _risk_mismatches(
+        request: WorkRequest,
+        capsule: TaskCapsule,
+    ) -> tuple[str, ...]:
+        risk_rank = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+        accepted_risk = capsule.contract.risk
+        return tuple(
+            f"{intent.action_id} risk {intent.risk} exceeds accepted contract risk {accepted_risk}"
+            for intent in request.action_intents
+            if risk_rank[intent.risk] > risk_rank[accepted_risk]
+        )
+
+    async def _record_intent_block(
+        self,
+        request: WorkRequest,
+        *,
+        permission_violations: tuple[str, ...],
+        risk_mismatches: tuple[str, ...],
+    ) -> OperatorResult:
+        report = OperatorDisciplineReport(
+            project_id=request.project_id,
+            work_id=request.work_id,
+            run_id=request.run_id,
+            unsupported_claims=(),
+            scope_violations=(),
+            permission_violations=permission_violations,
+            risk_mismatches=risk_mismatches,
+            unnecessary_changes=(),
+            output_tokens=None,
+            changed_files=None,
+            diff_lines=None,
+            verdict="blocked",
+        )
+        await self._append_event(
+            request,
+            WorkEventType.OPERATOR_DISCIPLINE_RECORDED,
+            report.model_dump(mode="json"),
+        )
+        violations = (*permission_violations, *risk_mismatches)
+        await self._append_event(
+            request,
+            WorkEventType.WORK_BLOCKED,
+            {"reason": "action_intent_policy", "violations": list(violations)},
+        )
+        return _blocked_result(request, "; ".join(violations))
 
     async def _evaluate_intents(
         self,

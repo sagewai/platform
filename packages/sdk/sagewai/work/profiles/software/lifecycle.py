@@ -11,12 +11,15 @@
 
 from __future__ import annotations
 
+import shutil
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Protocol
 
+from sagewai.artifacts.models import ArtifactRef
+from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.work.capsule import TaskCapsuleCompiler
 from sagewai.work.contract import WorkContract
 from sagewai.work.control import OperatorController
@@ -32,8 +35,10 @@ from sagewai.work.models import (
     Assumption,
     ClaimClassification,
     ClassifiedClaim,
+    OperatorDisciplineReport,
     Reversibility,
     ReviewResult,
+    TaskCapsule,
     VerificationResult,
     WorkAnalysisResult,
     WorkItem,
@@ -60,10 +65,83 @@ from sagewai.work.profiles.software.scm import (
 from sagewai.work.profiles.software.verification import _normalized_target
 from sagewai.work.runtime import (
     CapabilitySet,
+    OperatorResult,
     OperatorRuntime,
     WorkRequest,
+    Workspace,
 )
 from sagewai.work.store import WorkStore
+
+
+def _store_diff_context(
+    *,
+    artifact_store: LocalArtifactStore,
+    raw_diff: str,
+    max_inline_diff_bytes: int,
+) -> tuple[str | None, ArtifactRef]:
+    diff_bytes = raw_diff.encode("utf-8")
+    artifact = artifact_store.put_bytes(
+        diff_bytes,
+        media_type="text/x-diff",
+        created_by="software.lifecycle",
+    )
+    inline_diff = raw_diff if len(diff_bytes) <= max_inline_diff_bytes else None
+    return inline_diff, artifact
+
+
+_DIFF_WORKSPACE_PATH = ".sagewai-context/diff.patch"
+
+
+def _diff_workspace_target(workspace: SoftwareWorkspace, relative_path: str) -> Path:
+    relative = PurePosixPath(relative_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("diff workspace path must stay inside the workspace")
+    root = workspace.path.resolve()
+    target = (root / Path(*relative.parts)).resolve()
+    if not target.is_relative_to(root):
+        raise ValueError("diff workspace path must stay inside the workspace")
+    return target
+
+
+@dataclass
+class _DiffMaterializingRuntime:
+    delegate: OperatorRuntime
+    artifact_store: LocalArtifactStore
+    artifact: ArtifactRef
+    relative_path: str
+    name: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.name = self.delegate.name
+
+    async def run(
+        self,
+        request: WorkRequest,
+        capsule: TaskCapsule,
+        capabilities: CapabilitySet,
+        workspace: Workspace | None,
+    ) -> OperatorResult:
+        if not isinstance(workspace, SoftwareWorkspace):
+            raise ValueError("diff materialization requires a software workspace")
+        target = _diff_workspace_target(workspace, self.relative_path)
+        parent_existed = target.parent.exists()
+        if target.exists() or target.is_symlink():
+            raise WorkspaceStaleError(f"diff workspace path already exists: {self.relative_path}")
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with (
+                self.artifact_store.resolve(self.artifact.storage_ref).open("rb") as source,
+                target.open("xb") as destination,
+            ):
+                shutil.copyfileobj(source, destination)
+            return await self.delegate.run(request, capsule, capabilities, workspace)
+        finally:
+            target.unlink(missing_ok=True)
+            if not parent_existed:
+                try:
+                    target.parent.rmdir()
+                except OSError:
+                    pass
 
 
 def expected_result_sha(events: list[WorkEvent], base_sha: str) -> str:
@@ -122,16 +200,22 @@ class SoftwareLifecycle:
         repairer: SoftwareStageOperator,
         repo_instructions: tuple[str, ...],
         verification_commands: tuple[str, ...],
+        artifact_store: LocalArtifactStore | None = None,
+        max_inline_diff_bytes: int = 4000,
     ) -> None:
         if reviewer.actor_ref in {implementer.actor_ref, repairer.actor_ref}:
             raise ValueError("reviewer cannot review its own result")
         if not verification_commands:
             raise ValueError("at least one verification command is required")
+        if max_inline_diff_bytes < 0:
+            raise ValueError("max_inline_diff_bytes cannot be negative")
         self._work_store = work_store
         self._knowledge_store = knowledge_store
         self._capsule_compiler = capsule_compiler
         self._worktree_manager = worktree_manager
         self._verifier = verifier
+        self._artifact_store = artifact_store or LocalArtifactStore()
+        self._max_inline_diff_bytes = max_inline_diff_bytes
         self._repository = repository.resolve()
         self._analyst = analyst
         self._implementer = implementer
@@ -740,6 +824,9 @@ class SoftwareLifecycle:
         software = self._software_capsule(contract, expected_sha)
         open_assumptions = self._open_assumptions(assumptions)
         prior_refs: tuple[str, ...] = ()
+        referenced_artifacts: tuple[ArtifactRef, ...] = ()
+        diff_workspace_path: str | None = None
+        diff_artifact: ArtifactRef | None = None
         if stage == "repair":
             verification = self._latest_verification(events)
             review = self._latest_review(events)
@@ -768,10 +855,18 @@ class SoftwareLifecycle:
                     *(str(ref) for ref in observation_refs),
                     f"work-event://{triage_event.id}",
                 )
-            diff, relevant_files = await workspace_diff(workspace)
+            raw_diff, relevant_files = await workspace_diff(workspace)
+            inline_diff, diff_artifact = _store_diff_context(
+                artifact_store=self._artifact_store,
+                raw_diff=raw_diff,
+                max_inline_diff_bytes=self._max_inline_diff_bytes,
+            )
+            diff_workspace_path = _DIFF_WORKSPACE_PATH if inline_diff is None else None
             context = SoftwareRepairContext(
                 software=software,
-                diff=diff,
+                diff=inline_diff,
+                diff_artifact=diff_artifact,
+                diff_workspace_path=diff_workspace_path,
                 verification=verification,
                 relevant_files=relevant_files,
                 open_assumptions=open_assumptions,
@@ -782,6 +877,7 @@ class SoftwareLifecycle:
             prior_refs = tuple(
                 dict.fromkeys((*verification.evidence_refs, *review_refs, *triage_refs))
             )
+            referenced_artifacts = (diff_artifact,)
         else:
             profile_context = software.model_dump(mode="json")
 
@@ -793,6 +889,7 @@ class SoftwareLifecycle:
             open_assumption_ids=tuple(item.id for item in open_assumptions),
             prior_result_refs=prior_refs,
             profile_context=profile_context,
+            referenced_artifacts=referenced_artifacts,
         )
         action_id = f"{run_id}:change"
         request = WorkRequest(
@@ -823,8 +920,17 @@ class SoftwareLifecycle:
                 software_workspace_precondition(project_id=work_item.project_id),
             ),
         )
+        runtime = assignment.runtime
+        if diff_workspace_path is not None:
+            assert diff_artifact is not None
+            runtime = _DiffMaterializingRuntime(
+                delegate=runtime,
+                artifact_store=self._artifact_store,
+                artifact=diff_artifact,
+                relative_path=diff_workspace_path,
+            )
         result = await assignment.controller.run(
-            runtime=assignment.runtime,
+            runtime=runtime,
             request=request,
             capsule=capsule,
             capabilities=assignment.capabilities,
@@ -833,6 +939,30 @@ class SoftwareLifecycle:
         if result.status != "passed":
             if await self._stop_for_control_degradation(work_item, run_id=run_id):
                 return "CONTROL_DEGRADED"
+            report = self._discipline_report(
+                await self._events(work_item),
+                run_id=run_id,
+            )
+            contract_scope_violations = (
+                self._accepted_contract_scope_violations(report) if report is not None else ()
+            )
+            if contract_scope_violations:
+                await self._block_once(
+                    work_item,
+                    {
+                        "reason": "contract_drift",
+                        "run_id": run_id,
+                        "accepted_contract_version": contract.version,
+                        "required_contract_version": contract.version + 1,
+                        "violations": list(contract_scope_violations),
+                        "decision_request": (
+                            "Create and accept a new WorkContract version or stop the work."
+                        ),
+                        "evidence_refs": list(result.evidence_refs),
+                    },
+                    actor_ref=assignment.actor_ref,
+                )
+                return "WORK_BLOCKED"
             failed_stage = "implementation" if stage == "implement" else "repair"
             await self._block_once(
                 work_item,
@@ -922,9 +1052,17 @@ class SoftwareLifecycle:
         ):
             return "CONTROL_DEGRADED"
         diff_before, relevant_files = await workspace_diff(workspace)
+        inline_diff, diff_artifact = _store_diff_context(
+            artifact_store=self._artifact_store,
+            raw_diff=diff_before,
+            max_inline_diff_bytes=self._max_inline_diff_bytes,
+        )
+        diff_workspace_path = _DIFF_WORKSPACE_PATH if inline_diff is None else None
         context = SoftwareReviewContext(
             software=self._software_capsule(contract, expected_sha),
-            diff=diff_before,
+            diff=inline_diff,
+            diff_artifact=diff_artifact,
+            diff_workspace_path=diff_workspace_path,
             verification=verification,
             relevant_files=relevant_files,
             open_assumptions=self._open_assumptions(assumptions),
@@ -938,6 +1076,7 @@ class SoftwareLifecycle:
             open_assumption_ids=tuple(item.id for item in self._open_assumptions(assumptions)),
             prior_result_refs=verification.evidence_refs,
             profile_context=context.model_dump(mode="json"),
+            referenced_artifacts=(diff_artifact,),
         )
         request = WorkRequest(
             project_id=work_item.project_id,
@@ -956,8 +1095,16 @@ class SoftwareLifecycle:
                 software_workspace_precondition(project_id=work_item.project_id),
             ),
         )
+        review_runtime = self._reviewer.runtime
+        if diff_workspace_path is not None:
+            review_runtime = _DiffMaterializingRuntime(
+                delegate=review_runtime,
+                artifact_store=self._artifact_store,
+                artifact=diff_artifact,
+                relative_path=diff_workspace_path,
+            )
         result = await self._reviewer.controller.run(
-            runtime=self._reviewer.runtime,
+            runtime=review_runtime,
             request=request,
             capsule=capsule,
             capabilities=self._reviewer.capabilities,
@@ -1011,7 +1158,24 @@ class SoftwareLifecycle:
                 actor_ref=self._reviewer.actor_ref,
             )
             return "WORK_BLOCKED"
-        review = ReviewResult.model_validate(payload)
+        try:
+            review = ReviewResult.model_validate(payload)
+        except ValueError as exc:
+            await self._block_once(
+                work_item,
+                {
+                    "reason": "review_result_invalid",
+                    "run_id": run_id,
+                    "violations": [str(exc)],
+                    "decision_request": (
+                        "Retry independent review with all required semantic answers "
+                        "or stop the work."
+                    ),
+                    "evidence_refs": list(result.evidence_refs),
+                },
+                actor_ref=self._reviewer.actor_ref,
+            )
+            return "WORK_BLOCKED"
         if review.attempt_id != run_id:
             raise ValueError("review result belongs to a different attempt")
         for finding in review.findings:
@@ -1392,6 +1556,32 @@ class SoftwareLifecycle:
     @staticmethod
     def _review_count(events: list[WorkEvent]) -> int:
         return sum(event.event_type is WorkEventType.REVIEW_RECORDED for event in events)
+
+    @staticmethod
+    def _accepted_contract_scope_violations(
+        report: OperatorDisciplineReport,
+    ) -> tuple[str, ...]:
+        """Select only accepted-contract target-boundary violations."""
+        suffixes = (" is outside allowed targets", " is forbidden")
+        return tuple(
+            violation for violation in report.scope_violations if violation.endswith(suffixes)
+        )
+
+    @staticmethod
+    def _discipline_report(
+        events: list[WorkEvent],
+        *,
+        run_id: str,
+    ) -> OperatorDisciplineReport | None:
+        return next(
+            (
+                OperatorDisciplineReport.model_validate(event.payload_json)
+                for event in reversed(events)
+                if event.event_type is WorkEventType.OPERATOR_DISCIPLINE_RECORDED
+                and event.payload_json.get("run_id") == run_id
+            ),
+            None,
+        )
 
     @staticmethod
     def _latest_verification(

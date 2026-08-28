@@ -104,6 +104,8 @@ def _capsule() -> TaskCapsule:
         contract=contract,
         knowledge_refs=(),
         knowledge_items=(),
+        knowledge_items_considered=0,
+        artifact_bytes_referenced=0,
         open_assumption_ids=(),
         prior_result_refs=(),
     )
@@ -152,6 +154,7 @@ def _fake_runtime_executable(tmp_path: Path) -> Path:
                 "changes": ["runtime-observation.json"],
                 "verification": ["fake executable"],
                 "risks": [],
+                "output_tokens": 999,
                 "action_results": [{{
                     "project_id": prompt["request"]["project_id"],
                     "action_id": "action-1",
@@ -167,7 +170,10 @@ def _fake_runtime_executable(tmp_path: Path) -> Path:
                 output = pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1])
                 output.write_text(json.dumps(result))
             else:
-                print(json.dumps({{"structured_output": result}}))
+                print(json.dumps({{
+                    "structured_output": result,
+                    "usage": {{"output_tokens": 123}},
+                }}))
             """
         )
     )
@@ -251,6 +257,7 @@ async def test_native_runtime_uses_fake_executable_without_session_or_api_key(
     argv = observation.pop("argv")
     assert result.status == "passed"
     assert result.summary == "fake runtime completed"
+    assert result.output_tokens == (123 if runtime_type is ClaudeRuntime else None)
     assert observation == {
         "ambient": None,
         "scoped": "worker-local-token",

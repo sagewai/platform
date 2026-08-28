@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,12 +20,17 @@ from types import SimpleNamespace
 import pytest
 
 import sagewai.work as work
-from sagewai.work import ActionResult, ActionScope, OperatorResult, WorkRequest
+from sagewai.artifacts import LocalArtifactStore
+from sagewai.work import ActionResult, ActionScope, OperatorResult, WorkItem, WorkRequest
+from sagewai.work.knowledge import KnowledgeStore
 from sagewai.work.profiles.software import (
     SoftwareAttemptContext,
     SoftwareCapsuleContext,
     SoftwareContractContext,
+    SoftwareReadOnlyResultValidator,
     SoftwareResultValidator,
+    SoftwareVerificationCheck,
+    SoftwareVerifier,
     SoftwareWorkspace,
     SoftwareWorkspaceControlCheck,
     SoftwareWorktreeManager,
@@ -32,6 +38,7 @@ from sagewai.work.profiles.software import (
     WorktreeBranchPublisher,
     software_workspace_precondition,
 )
+from tests.db.conftest import dialect_engine  # noqa: F401
 
 NOW = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
 
@@ -59,7 +66,11 @@ def _repository(tmp_path: Path) -> tuple[Path, str]:
     return repository, _git(repository, "rev-parse", "HEAD")
 
 
-def _result(*, action_results: tuple[ActionResult, ...] = ()) -> OperatorResult:
+def _result(
+    *,
+    action_results: tuple[ActionResult, ...] = (),
+    output_tokens: int | None = None,
+) -> OperatorResult:
     return OperatorResult(
         project_id="project-a",
         work_id="work-1",
@@ -72,6 +83,7 @@ def _result(*, action_results: tuple[ActionResult, ...] = ()) -> OperatorResult:
         verification=("git diff",),
         risks=(),
         action_results=action_results,
+        output_tokens=output_tokens,
         profile_context={},
     )
 
@@ -295,3 +307,162 @@ async def test_post_run_validator_rejects_scope_and_undeclared_effects(
     assert "undeclared change: outside.txt" in report.scope_violations
     assert report.changed_files == 1
     assert report.diff_lines == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "validator",
+    [SoftwareResultValidator(), SoftwareReadOnlyResultValidator()],
+)
+async def test_result_validator_records_runtime_output_tokens(
+    validator,
+    tmp_path: Path,
+) -> None:
+    repository, base_sha = _repository(tmp_path)
+    workspace = SoftwareWorkspace(
+        ref="workspace://attempt-1",
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="attempt-1",
+        repository=repository,
+        path=repository,
+        base_sha=base_sha,
+        initial_sha=base_sha,
+    )
+    request = WorkRequest(
+        project_id="project-a",
+        work_id="work-1",
+        run_id="run-1",
+        stage="review",
+        action_scope=ActionScope(objective="Review the implementation", allowed_targets=()),
+        action_intents=(),
+        control_preconditions=(),
+    )
+
+    report = await validator.validate(
+        request=request,
+        result=_result(output_tokens=73),
+        workspace=workspace,
+    )
+
+    assert report.output_tokens == 73
+
+
+@pytest.mark.asyncio
+async def test_large_verification_output_is_deduplicated_artifact_evidence(
+    dialect_engine,  # noqa: F811
+    tmp_path: Path,
+) -> None:
+    repository, base_sha = _repository(tmp_path)
+    workspace = SoftwareWorkspace(
+        ref="workspace://verify",
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="verify",
+        repository=repository,
+        path=repository,
+        base_sha=base_sha,
+        initial_sha=base_sha,
+    )
+    work_item = WorkItem(
+        id="work-1",
+        project_id="project-a",
+        profile="software",
+        source="local",
+        source_ref=None,
+        title="Verify output",
+        description="Store large verification output",
+        created_at=NOW,
+    )
+    knowledge_store = KnowledgeStore(engine=dialect_engine)
+    await knowledge_store.init()
+    object_root = tmp_path / "objects"
+    verifier = SoftwareVerifier(
+        knowledge_store=knowledge_store,
+        artifact_store=LocalArtifactStore(root=object_root),
+    )
+    command = f"{sys.executable} -c \"import sys; sys.stdout.write('x' * 5001)\""
+
+    result = await verifier.verify(
+        work_item=work_item,
+        attempt_id="attempt-1",
+        workspace=workspace,
+        commands=(command, command),
+    )
+
+    checks = tuple(
+        SoftwareVerificationCheck.model_validate(check)
+        for check in result.profile_context["checks"]
+    )
+    assert result.passed is True
+    assert checks[0].artifact_ref is not None
+    assert checks[1].artifact_ref == checks[0].artifact_ref
+    items = [
+        await knowledge_store.get(item_id, project_id="project-a")
+        for item_id in result.evidence_refs
+    ]
+    assert all(item is not None for item in items)
+    assert all(item.project_id == "project-a" for item in items if item is not None)
+    assert all(item.work_id == "work-1" for item in items if item is not None)
+    assert all(item.created_by == "software.verifier" for item in items if item is not None)
+    assert all(
+        item.artifact_refs == (checks[0].artifact_ref,) for item in items if item is not None
+    )
+    assert all("x" * 100 not in item.statement for item in items if item is not None)
+    assert [path for path in object_root.rglob("*") if path.is_file()] == [
+        LocalArtifactStore(root=object_root).resolve(checks[0].artifact_ref)
+    ]
+    assert (
+        LocalArtifactStore(root=object_root).read(checks[0].artifact_ref)
+        == ("stdout:\n" + "x" * 5001 + "\nstderr:\n").encode()
+    )
+
+
+@pytest.mark.asyncio
+async def test_small_verification_output_remains_inline(
+    dialect_engine,  # noqa: F811
+    tmp_path: Path,
+) -> None:
+    repository, base_sha = _repository(tmp_path)
+    workspace = SoftwareWorkspace(
+        ref="workspace://verify",
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="verify",
+        repository=repository,
+        path=repository,
+        base_sha=base_sha,
+        initial_sha=base_sha,
+    )
+    work_item = WorkItem(
+        id="work-1",
+        project_id="project-a",
+        profile="software",
+        source="local",
+        source_ref=None,
+        title="Verify output",
+        description="Keep small verification output inline",
+        created_at=NOW,
+    )
+    knowledge_store = KnowledgeStore(engine=dialect_engine)
+    await knowledge_store.init()
+    verifier = SoftwareVerifier(
+        knowledge_store=knowledge_store,
+        artifact_store=LocalArtifactStore(root=tmp_path / "objects"),
+    )
+    command = f"{sys.executable} -c \"print('small-output')\""
+
+    result = await verifier.verify(
+        work_item=work_item,
+        attempt_id="attempt-1",
+        workspace=workspace,
+        commands=(command,),
+    )
+
+    check = SoftwareVerificationCheck.model_validate(result.profile_context["checks"][0])
+    item = await knowledge_store.get(result.evidence_refs[0], project_id="project-a")
+    assert check.artifact_ref is None
+    assert item is not None
+    assert item.artifact_refs == ()
+    assert "stdout:\nsmall-output" in item.statement
+    assert not (tmp_path / "objects").exists()

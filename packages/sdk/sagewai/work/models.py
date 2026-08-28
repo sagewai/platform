@@ -290,6 +290,24 @@ class ReviewResult(BaseModel):
     verdict: Literal["accept", "repair", "blocked"]
     findings: tuple[ReviewFinding, ...]
     evidence_refs: tuple[str, ...] = ()
+    introduced_assumptions: tuple[str, ...] = Field(
+        description="What new assumptions were introduced?"
+    )
+    unsupported_claims: tuple[str, ...] = Field(
+        description=(
+            "Which claims are unsupported by the WorkItem, repo evidence, accepted "
+            "contract, or project policy?"
+        )
+    )
+    scope_expansions: tuple[str, ...] = Field(
+        description="Did implementation solve a wider problem than requested?"
+    )
+    unsupported_implementation_choices: tuple[str, ...] = Field(
+        description=(
+            "Was backward compatibility, migration, fallback, abstraction, or defensive "
+            "behavior added without evidence?"
+        )
+    )
 
 
 class TaskCapsule(BaseModel):
@@ -304,6 +322,8 @@ class TaskCapsule(BaseModel):
     contract: WorkContract
     knowledge_refs: tuple[str, ...]
     knowledge_items: tuple[KnowledgeItem, ...]
+    knowledge_items_considered: int = Field(ge=0)
+    artifact_bytes_referenced: int = Field(ge=0)
     open_assumption_ids: tuple[str, ...]
     prior_result_refs: tuple[str, ...]
     profile_context: dict[str, Any] = Field(default_factory=dict)

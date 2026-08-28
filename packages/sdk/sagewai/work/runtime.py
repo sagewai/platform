@@ -121,6 +121,7 @@ class OperatorResult(BaseModel):
     verification: tuple[BoundedText, ...] = Field(max_length=100)
     risks: tuple[BoundedText, ...] = Field(max_length=100)
     action_results: tuple[ActionResult, ...] = Field(max_length=100)
+    output_tokens: int | None = None
     profile_context: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -265,7 +266,11 @@ class CodexRuntime(_NativeRuntime):
             )
             if process.returncode != 0:
                 return _failed_result(request, process.stderr)
-            return self._validate_result(json.loads(result_path.read_text()), request)
+            payload = {
+                **json.loads(result_path.read_text()),
+                "output_tokens": None,
+            }
+            return self._validate_result(payload, request)
 
 
 class ClaudeRuntime(_NativeRuntime):
@@ -327,7 +332,11 @@ class ClaudeRuntime(_NativeRuntime):
         if process.returncode != 0:
             return _failed_result(request, process.stderr)
         envelope = json.loads(process.stdout)
-        return self._validate_result(envelope["structured_output"], request)
+        payload = {
+            **envelope["structured_output"],
+            "output_tokens": envelope.get("usage", {}).get("output_tokens"),
+        }
+        return self._validate_result(payload, request)
 
 
 def _claude_tool_scope(
