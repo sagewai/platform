@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from sagewai.artifacts import ArtifactRef, LocalArtifactStore
 from sagewai.work.contract import WorkContract
 from sagewai.work.knowledge import KnowledgeItem, KnowledgeQuery, KnowledgeStore
 from sagewai.work.models import TaskCapsule, WorkItem
@@ -25,11 +26,13 @@ class TaskCapsuleCompiler:
         self,
         *,
         knowledge_store: KnowledgeStore,
+        artifact_store: LocalArtifactStore | None = None,
         max_knowledge_items: int = 20,
     ) -> None:
         if max_knowledge_items < 1:
             raise ValueError("max_knowledge_items must be positive")
         self._knowledge_store = knowledge_store
+        self._artifact_store = artifact_store or LocalArtifactStore()
         self._max_knowledge_items = max_knowledge_items
 
     async def compile(
@@ -41,6 +44,7 @@ class TaskCapsuleCompiler:
         search_text: str | None = None,
         open_assumption_ids: tuple[str, ...] = (),
         prior_result_refs: tuple[str, ...] = (),
+        referenced_artifacts: tuple[ArtifactRef, ...] = (),
         profile_context: dict[str, Any] | None = None,
     ) -> TaskCapsule:
         """Build a new capsule; direct item references precede FTS results."""
@@ -51,12 +55,16 @@ class TaskCapsuleCompiler:
 
         selected: list[KnowledgeItem] = []
         selected_ids: set[str] = set()
+        considered_ids: set[str] = set()
         project_id = work_item.project_id
 
         if project_id is not None:
             for item_id in contract.evidence_refs:
                 item = await self._knowledge_store.get(item_id, project_id=project_id)
                 if item is not None:
+                    considered_ids.add(item.id)
+                    if item.id in selected_ids:
+                        continue
                     selected.append(item)
                     selected_ids.add(item.id)
                     if len(selected) == self._max_knowledge_items:
@@ -68,7 +76,10 @@ class TaskCapsuleCompiler:
                 if item_id in selected_ids:
                     continue
                 item = await self._knowledge_store.get(item_id, project_id=project_id)
-                if item is None or item.work_id not in {None, work_item.id}:
+                if item is None:
+                    continue
+                considered_ids.add(item.id)
+                if item.work_id not in {None, work_item.id}:
                     continue
                 selected.append(item)
                 selected_ids.add(item.id)
@@ -77,6 +88,7 @@ class TaskCapsuleCompiler:
                 matches = await self._knowledge_store.search(
                     KnowledgeQuery(text=search_text, project_id=project_id)
                 )
+                considered_ids.update(item.id for item in matches)
                 for item in matches:
                     if item.id in selected_ids:
                         continue
@@ -92,6 +104,7 @@ class TaskCapsuleCompiler:
                         KnowledgeQuery(text=search_text, project_id=project_id),
                         limit=self._max_knowledge_items - len(selected),
                     )
+                    considered_ids.update(item.id for item in candidates)
                     for item in candidates:
                         if item.id in selected_ids:
                             continue
@@ -99,6 +112,22 @@ class TaskCapsuleCompiler:
                         selected_ids.add(item.id)
                         if len(selected) == self._max_knowledge_items:
                             break
+
+        artifact_refs: dict[str, ArtifactRef | None] = {
+            artifact.storage_ref: artifact for artifact in referenced_artifacts
+        }
+        for item in selected:
+            for storage_ref in item.artifact_refs:
+                artifact_refs.setdefault(storage_ref, None)
+        artifact_bytes_referenced = 0
+        for storage_ref, artifact in artifact_refs.items():
+            try:
+                path = self._artifact_store.resolve(storage_ref)
+            except ValueError:
+                if artifact is not None:
+                    artifact_bytes_referenced += artifact.size_bytes
+            else:
+                artifact_bytes_referenced += path.stat().st_size
 
         return TaskCapsule(
             project_id=project_id,
@@ -108,6 +137,8 @@ class TaskCapsuleCompiler:
             contract=contract,
             knowledge_refs=tuple(item.id for item in selected),
             knowledge_items=tuple(selected),
+            knowledge_items_considered=len(considered_ids),
+            artifact_bytes_referenced=artifact_bytes_referenced,
             open_assumption_ids=open_assumption_ids,
             prior_result_refs=prior_result_refs,
             profile_context=profile_context or {},

@@ -23,6 +23,7 @@ from pydantic import ValidationError
 
 import sagewai.cli as _cli
 from sagewai import home
+from sagewai.artifacts import LocalArtifactStore
 from sagewai.core.context import ProjectContext, resolve_project_id
 from sagewai.db import factory
 from sagewai.fleet.execution import run_worker_subprocess
@@ -429,12 +430,20 @@ async def _build_lifecycle(
     codex = CodexRuntime()
     claude = ClaudeRuntime()
     worktree_manager = SoftwareWorktreeManager()
+    artifact_store = LocalArtifactStore()
     lifecycle = SoftwareLifecycle(
         work_store=work_store,
         knowledge_store=knowledge_store,
-        capsule_compiler=TaskCapsuleCompiler(knowledge_store=knowledge_store),
+        capsule_compiler=TaskCapsuleCompiler(
+            knowledge_store=knowledge_store,
+            artifact_store=artifact_store,
+        ),
         worktree_manager=worktree_manager,
-        verifier=SoftwareVerifier(knowledge_store=knowledge_store),
+        verifier=SoftwareVerifier(
+            knowledge_store=knowledge_store,
+            artifact_store=artifact_store,
+        ),
+        artifact_store=artifact_store,
         repository=repository,
         analyst=SoftwareStageOperator(
             actor_ref="runtime:claude:analyst",
