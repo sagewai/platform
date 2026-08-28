@@ -152,6 +152,7 @@ def _fake_runtime_executable(tmp_path: Path) -> Path:
                 "changes": ["runtime-observation.json"],
                 "verification": ["fake executable"],
                 "risks": [],
+                "output_tokens": 999,
                 "action_results": [{{
                     "project_id": prompt["request"]["project_id"],
                     "action_id": "action-1",
