@@ -130,6 +130,9 @@ import type {
   ToolRegistryEntry,
   ToolConnectionMetadata,
   ToolTestResult,
+  PendingAttention,
+  WorkDetail,
+  WorkRecord,
 } from './types';
 import { createConnectionsApi } from './connections-api';
 
@@ -147,6 +150,16 @@ const analyticsClient = createFetchClient(ANALYTICS_URL, clientOpts);
 export const adminApi = {
   /* ─── Unified connections (PR5) — talks to /api/v1/admin/connections/... ─── */
   connections: createConnectionsApi(analyticsClient),
+
+  /* ─── Work control plane ─── */
+  listActiveWork: () =>
+    analyticsClient.get<WorkRecord[]>('/api/v1/work'),
+
+  listPendingWorkAttention: () =>
+    analyticsClient.get<PendingAttention[]>('/api/v1/work/pending'),
+
+  getWork: (workId: string) =>
+    analyticsClient.get<WorkDetail>(`/api/v1/work/${encodeURIComponent(workId)}`),
 
   /* ─── Core admin endpoints ─── */
   listAgents: () => client.get<AgentSummary[]>('/agents'),

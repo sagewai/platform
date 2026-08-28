@@ -30,6 +30,7 @@ import {
   Cog,
   Search,
   Zap,
+  ListChecks,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useSidebar, SidebarToggle } from '@/components/ui/legacy';
@@ -73,6 +74,17 @@ export const ALL_GROUPS: NavGroup[] = [
     items: [
       { href: '/', label: 'Dashboard' },
       { href: '/playground', label: 'Playground' },
+    ],
+  },
+
+  /* ── WORK CONTROL ── */
+  {
+    id: 'work',
+    label: 'Work Control',
+    icon: ListChecks,
+    defaultHref: '/work',
+    items: [
+      { href: '/work', label: 'Active Work' },
     ],
   },
 

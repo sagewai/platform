@@ -194,6 +194,29 @@ class WorkStore:
         values["updated_at"] = _as_utc(values["updated_at"])
         return WorkRecord.model_validate(values)
 
+    async def list_work(
+        self,
+        *,
+        project_id: str | None,
+        active_only: bool = False,
+    ) -> list[WorkRecord]:
+        """List exact-project Work projections in deterministic creation order."""
+        table = self._work_items
+        query = select(table).where(table.c.project_id == project_id)
+        if active_only:
+            query = query.where(table.c.status != "COMPLETE")
+        query = query.order_by(table.c.created_at, table.c.work_id)
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(query)).all()
+
+        records: list[WorkRecord] = []
+        for row in rows:
+            values = dict(row._mapping)
+            values["created_at"] = _as_utc(values["created_at"])
+            values["updated_at"] = _as_utc(values["updated_at"])
+            records.append(WorkRecord.model_validate(values))
+        return records
+
     async def find_work_by_source_ref(
         self,
         source_ref: str,
