@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Protocol
 
+from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.work.capsule import TaskCapsuleCompiler
 from sagewai.work.contract import WorkContract
 from sagewai.work.control import OperatorController
@@ -123,6 +124,7 @@ class SoftwareLifecycle:
         repairer: SoftwareStageOperator,
         repo_instructions: tuple[str, ...],
         verification_commands: tuple[str, ...],
+        artifact_store: LocalArtifactStore | None = None,
     ) -> None:
         if reviewer.actor_ref in {implementer.actor_ref, repairer.actor_ref}:
             raise ValueError("reviewer cannot review its own result")
@@ -133,6 +135,7 @@ class SoftwareLifecycle:
         self._capsule_compiler = capsule_compiler
         self._worktree_manager = worktree_manager
         self._verifier = verifier
+        self._artifact_store = artifact_store or LocalArtifactStore()
         self._repository = repository.resolve()
         self._analyst = analyst
         self._implementer = implementer
@@ -770,9 +773,15 @@ class SoftwareLifecycle:
                     f"work-event://{triage_event.id}",
                 )
             diff, relevant_files = await workspace_diff(workspace)
+            diff_artifact = self._artifact_store.put_bytes(
+                diff.encode("utf-8"),
+                media_type="text/x-diff",
+                created_by="software.lifecycle",
+            )
             context = SoftwareRepairContext(
                 software=software,
                 diff=diff,
+                diff_artifact=diff_artifact,
                 verification=verification,
                 relevant_files=relevant_files,
                 open_assumptions=open_assumptions,
@@ -947,9 +956,15 @@ class SoftwareLifecycle:
         ):
             return "CONTROL_DEGRADED"
         diff_before, relevant_files = await workspace_diff(workspace)
+        diff_artifact = self._artifact_store.put_bytes(
+            diff_before.encode("utf-8"),
+            media_type="text/x-diff",
+            created_by="software.lifecycle",
+        )
         context = SoftwareReviewContext(
             software=self._software_capsule(contract, expected_sha),
             diff=diff_before,
+            diff_artifact=diff_artifact,
             verification=verification,
             relevant_files=relevant_files,
             open_assumptions=self._open_assumptions(assumptions),
