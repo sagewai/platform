@@ -325,8 +325,21 @@ async def test_declared_intents_are_evaluated_before_runtime_and_capabilities_ar
         workspace=None,
     )
 
+    events = await work_store.read_events("work-1", project_id="project-a")
     assert blocked.status == "blocked"
     assert runtime.started == 0
+    assert [event.event_type for event in events] == [
+        WorkEventType.OPERATOR_DISCIPLINE_RECORDED,
+        WorkEventType.WORK_BLOCKED,
+    ]
+    assert events[0].payload_json["permission_violations"] == [
+        "Tool denied by name: workspace.write"
+    ]
+    assert events[0].payload_json["risk_mismatches"] == []
+    assert events[0].payload_json["changed_files"] is None
+    assert events[0].payload_json["diff_lines"] is None
+    assert events[0].payload_json["output_tokens"] is None
+    assert events[0].payload_json["verdict"] == "blocked"
 
     allowed_runtime = RecordingRuntime()
     passed = await _controller(work_store, InMemoryStore()).run(
@@ -339,6 +352,103 @@ async def test_declared_intents_are_evaluated_before_runtime_and_capabilities_ar
 
     assert passed.status == "passed"
     assert [grant.name for grant in allowed_runtime.capabilities.grants] == ["filesystem.write"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("violation_kind", ("missing_grant", "missing_permission"))
+async def test_missing_capability_authority_is_recorded_before_blocking(
+    work_store: WorkStore,
+    violation_kind: str,
+) -> None:
+    capabilities = _capabilities()
+    if violation_kind == "missing_grant":
+        capabilities = capabilities.model_copy(update={"grants": ()})
+        expected = "action-1 has no capability grant"
+    else:
+        grant = capabilities.grants[0].model_copy(update={"permissions": ()})
+        capabilities = capabilities.model_copy(update={"grants": (grant,)})
+        expected = "action-1 permission is outside the capability grant"
+    runtime = RecordingRuntime()
+
+    result = await _controller(work_store, InMemoryStore()).run(
+        runtime=runtime,
+        request=_request(),
+        capsule=_capsule(),
+        capabilities=capabilities,
+        workspace=None,
+    )
+
+    events = await work_store.read_events("work-1", project_id="project-a")
+    assert result.status == "blocked"
+    assert runtime.started == 0
+    assert [event.event_type for event in events] == [
+        WorkEventType.OPERATOR_DISCIPLINE_RECORDED,
+        WorkEventType.WORK_BLOCKED,
+    ]
+    assert events[0].payload_json["permission_violations"] == [expected]
+
+
+@pytest.mark.asyncio
+async def test_intent_above_accepted_contract_risk_is_recorded_before_runtime(
+    work_store: WorkStore,
+) -> None:
+    request = _request().model_copy(
+        update={"action_intents": (_intent().model_copy(update={"risk": "high"}),)}
+    )
+    runtime = RecordingRuntime()
+
+    result = await _controller(work_store, InMemoryStore()).run(
+        runtime=runtime,
+        request=request,
+        capsule=_capsule(),
+        capabilities=_capabilities(),
+        workspace=None,
+    )
+
+    events = await work_store.read_events("work-1", project_id="project-a")
+    assert result.status == "blocked"
+    assert runtime.started == 0
+    assert [event.event_type for event in events] == [
+        WorkEventType.OPERATOR_DISCIPLINE_RECORDED,
+        WorkEventType.WORK_BLOCKED,
+    ]
+    assert events[0].payload_json["permission_violations"] == []
+    assert events[0].payload_json["risk_mismatches"] == [
+        "action-1 risk high exceeds accepted contract risk low"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_all_intent_discipline_failures_are_recorded_together(
+    work_store: WorkStore,
+) -> None:
+    request = _request().model_copy(
+        update={"action_intents": (_intent().model_copy(update={"risk": "high"}),)}
+    )
+    runtime = RecordingRuntime()
+    controller = _controller(
+        work_store,
+        InMemoryStore(),
+        permission_policy=PermissionPolicy(deny_names=["workspace.write"]),
+    )
+
+    result = await controller.run(
+        runtime=runtime,
+        request=request,
+        capsule=_capsule(),
+        capabilities=_capabilities(),
+        workspace=None,
+    )
+
+    events = await work_store.read_events("work-1", project_id="project-a")
+    assert result.status == "blocked"
+    assert runtime.started == 0
+    assert events[0].payload_json["permission_violations"] == [
+        "Tool denied by name: workspace.write"
+    ]
+    assert events[0].payload_json["risk_mismatches"] == [
+        "action-1 risk high exceeds accepted contract risk low"
+    ]
 
 
 @pytest.mark.asyncio

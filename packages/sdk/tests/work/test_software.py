@@ -24,6 +24,7 @@ from sagewai.work.profiles.software import (
     SoftwareAttemptContext,
     SoftwareCapsuleContext,
     SoftwareContractContext,
+    SoftwareReadOnlyResultValidator,
     SoftwareResultValidator,
     SoftwareWorkspace,
     SoftwareWorkspaceControlCheck,
@@ -59,7 +60,11 @@ def _repository(tmp_path: Path) -> tuple[Path, str]:
     return repository, _git(repository, "rev-parse", "HEAD")
 
 
-def _result(*, action_results: tuple[ActionResult, ...] = ()) -> OperatorResult:
+def _result(
+    *,
+    action_results: tuple[ActionResult, ...] = (),
+    output_tokens: int | None = None,
+) -> OperatorResult:
     return OperatorResult(
         project_id="project-a",
         work_id="work-1",
@@ -72,6 +77,7 @@ def _result(*, action_results: tuple[ActionResult, ...] = ()) -> OperatorResult:
         verification=("git diff",),
         risks=(),
         action_results=action_results,
+        output_tokens=output_tokens,
         profile_context={},
     )
 
@@ -295,3 +301,42 @@ async def test_post_run_validator_rejects_scope_and_undeclared_effects(
     assert "undeclared change: outside.txt" in report.scope_violations
     assert report.changed_files == 1
     assert report.diff_lines == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "validator",
+    [SoftwareResultValidator(), SoftwareReadOnlyResultValidator()],
+)
+async def test_result_validator_records_runtime_output_tokens(
+    validator,
+    tmp_path: Path,
+) -> None:
+    repository, base_sha = _repository(tmp_path)
+    workspace = SoftwareWorkspace(
+        ref="workspace://attempt-1",
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="attempt-1",
+        repository=repository,
+        path=repository,
+        base_sha=base_sha,
+        initial_sha=base_sha,
+    )
+    request = WorkRequest(
+        project_id="project-a",
+        work_id="work-1",
+        run_id="run-1",
+        stage="review",
+        action_scope=ActionScope(objective="Review the implementation", allowed_targets=()),
+        action_intents=(),
+        control_preconditions=(),
+    )
+
+    report = await validator.validate(
+        request=request,
+        result=_result(output_tokens=73),
+        workspace=workspace,
+    )
+
+    assert report.output_tokens == 73

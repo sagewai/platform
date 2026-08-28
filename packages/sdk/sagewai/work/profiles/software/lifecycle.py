@@ -32,6 +32,7 @@ from sagewai.work.models import (
     Assumption,
     ClaimClassification,
     ClassifiedClaim,
+    OperatorDisciplineReport,
     Reversibility,
     ReviewResult,
     VerificationResult,
@@ -833,6 +834,27 @@ class SoftwareLifecycle:
         if result.status != "passed":
             if await self._stop_for_control_degradation(work_item, run_id=run_id):
                 return "CONTROL_DEGRADED"
+            report = self._discipline_report(
+                await self._events(work_item),
+                run_id=run_id,
+            )
+            if report is not None and report.scope_violations:
+                await self._block_once(
+                    work_item,
+                    {
+                        "reason": "contract_drift",
+                        "run_id": run_id,
+                        "accepted_contract_version": contract.version,
+                        "required_contract_version": contract.version + 1,
+                        "violations": list(report.scope_violations),
+                        "decision_request": (
+                            "Create and accept a new WorkContract version or stop the work."
+                        ),
+                        "evidence_refs": list(result.evidence_refs),
+                    },
+                    actor_ref=assignment.actor_ref,
+                )
+                return "WORK_BLOCKED"
             failed_stage = "implementation" if stage == "implement" else "repair"
             await self._block_once(
                 work_item,
@@ -1011,12 +1033,29 @@ class SoftwareLifecycle:
                 actor_ref=self._reviewer.actor_ref,
             )
             return "WORK_BLOCKED"
-        review = ReviewResult.model_validate(payload)
-        if review.attempt_id != run_id:
-            raise ValueError("review result belongs to a different attempt")
-        for finding in review.findings:
-            if finding.profile_context:
-                SoftwareReviewFindingContext.model_validate(finding.profile_context)
+        try:
+            review = ReviewResult.model_validate(payload)
+            if review.attempt_id != run_id:
+                raise ValueError("review result belongs to a different attempt")
+            for finding in review.findings:
+                if finding.profile_context:
+                    SoftwareReviewFindingContext.model_validate(finding.profile_context)
+        except ValueError as exc:
+            await self._block_once(
+                work_item,
+                {
+                    "reason": "review_result_invalid",
+                    "run_id": run_id,
+                    "violations": [str(exc)],
+                    "decision_request": (
+                        "Retry independent review with all required semantic answers "
+                        "or stop the work."
+                    ),
+                    "evidence_refs": list(result.evidence_refs),
+                },
+                actor_ref=self._reviewer.actor_ref,
+            )
+            return "WORK_BLOCKED"
         await self._append(
             work_item,
             WorkEventType.REVIEW_RECORDED,
@@ -1392,6 +1431,22 @@ class SoftwareLifecycle:
     @staticmethod
     def _review_count(events: list[WorkEvent]) -> int:
         return sum(event.event_type is WorkEventType.REVIEW_RECORDED for event in events)
+
+    @staticmethod
+    def _discipline_report(
+        events: list[WorkEvent],
+        *,
+        run_id: str,
+    ) -> OperatorDisciplineReport | None:
+        return next(
+            (
+                OperatorDisciplineReport.model_validate(event.payload_json)
+                for event in reversed(events)
+                if event.event_type is WorkEventType.OPERATOR_DISCIPLINE_RECORDED
+                and event.payload_json.get("run_id") == run_id
+            ),
+            None,
+        )
 
     @staticmethod
     def _latest_verification(
