@@ -48,7 +48,7 @@ from sagewai.work import (
     WorkStore,
     execution_attempt_from_events,
 )
-from sagewai.work.control import OperatorController
+from sagewai.work.control import ControlCheckResult, OperatorController
 from sagewai.work.knowledge import KnowledgeKind, KnowledgeQuery, KnowledgeStore
 from sagewai.work.profiles.software import (
     SOFTWARE_WORKSPACE_CHECK_REF,
@@ -349,6 +349,23 @@ class AnalysisAndDesignRuntime(AnalysisRuntime):
         )
 
 
+class RestoringWorkspaceControlCheck:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def evaluate(self, context):
+        self.calls += 1
+        passed = self.calls > 1
+        return ControlCheckResult(
+            project_id=context.request.project_id,
+            precondition_id=context.precondition.id,
+            passed=passed,
+            evidence_refs=("check://design-workspace",),
+            detail=None if passed else "design workspace control unavailable",
+            checked_at=datetime.now(timezone.utc),
+        )
+
+
 class MissingAnalysisResultRuntime:
     name = "missing-analysis-result-runtime"
 
@@ -610,13 +627,16 @@ def _controller(
     work_store: WorkStore,
     durability: InMemoryStore,
     validator,
+    workspace_control_check=None,
 ) -> OperatorController:
     return OperatorController(
         work_store=work_store,
         durability_store=durability,
         permission_policy=PermissionPolicy(),
         control_checks={
-            SOFTWARE_WORKSPACE_CHECK_REF: SoftwareWorkspaceControlCheck(),
+            SOFTWARE_WORKSPACE_CHECK_REF: (
+                workspace_control_check or SoftwareWorkspaceControlCheck()
+            ),
         },
         result_validator=validator,
         heartbeat_interval=0.01,
@@ -673,6 +693,7 @@ def _lifecycle(
     commands: tuple[str, ...],
     verifier=None,
     analyzer: AnalysisRuntime | None = None,
+    analyst_control_check=None,
     analyst_actor: str = "operator:analyst",
     implementer_actor: str = "operator:implementer",
     profile: SoftwareProfile | None = None,
@@ -709,6 +730,7 @@ def _lifecycle(
                 work_store,
                 durability,
                 SoftwareReadOnlyResultValidator(),
+                workspace_control_check=analyst_control_check,
             ),
         ),
         implementer=SoftwareStageOperator(
@@ -865,7 +887,7 @@ async def test_design_required_runs_read_only_design_before_implementation(
         design_claims=(
             ClassifiedClaim(
                 classification=ClaimClassification.DECISION,
-                statement="Use the existing target file",
+                statement="Cobalt lattice remains the selected topology",
                 kind="design",
                 evidence_refs=(),
                 confidence="high",
@@ -895,8 +917,22 @@ async def test_design_required_runs_read_only_design_before_implementation(
     assert planner.design_requests[0].action_intents == ()
     assert planner.design_capsules[0].stage == "design"
     assert implementer.calls == 1
-    assert implementer.capsules[0].prior_result_refs == ("runtime://work-1:design:1",)
+    design_ref = "work-1:design:1:claim:1"
+    implement_capsule = implementer.capsules[0]
+    assert implement_capsule.prior_result_refs == (
+        design_ref,
+        "runtime://work-1:design:1",
+    )
+    assert design_ref in implement_capsule.knowledge_refs
+    assert design_ref in tuple(item.id for item in implement_capsule.knowledge_items)
     events = await work_store.read_events("work-1", project_id="project-a")
+    design_completed = next(
+        event
+        for event in events
+        if event.event_type is WorkEventType.STAGE_COMPLETED
+        and event.payload_json.get("stage") == "design"
+    )
+    assert design_completed.payload_json["knowledge_refs"] == [design_ref]
     completed_stages = [
         event.payload_json["stage"]
         for event in events
@@ -904,9 +940,63 @@ async def test_design_required_runs_read_only_design_before_implementation(
     ]
     assert completed_stages == ["analysis", "design", "implement"]
     design = await knowledge_store.search(
-        KnowledgeQuery(text="existing target", project_id="project-a", work_id="work-1")
+        KnowledgeQuery(text="cobalt lattice", project_id="project-a", work_id="work-1")
     )
     assert [item.kind for item in design] == [KnowledgeKind.DECISION]
+
+
+@pytest.mark.asyncio
+async def test_design_knowledge_is_direct_context_for_review_and_repair(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    planner = AnalysisAndDesignRuntime(
+        design_claims=(
+            ClassifiedClaim(
+                classification=ClaimClassification.DECISION,
+                statement="Cobalt lattice remains the selected topology",
+                kind="design",
+                evidence_refs=(),
+                confidence="high",
+                impact_if_wrong="medium",
+            ),
+        )
+    )
+    implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
+    reviewer = ReviewRuntime("repair", "accept")
+    repairer = MutationRuntime(implement_text="unused", repair_text="fixed")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        analyzer=planner,
+        implementer=implementer,
+        reviewer=reviewer,
+        repairer=repairer,
+        commands=(_always_pass_command(),),
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    assert record.status == "READY_TO_MERGE"
+    assert implementer.calls == 1
+    assert reviewer.calls == 2
+    assert repairer.calls == 1
+    design_ref = "work-1:design:1:claim:1"
+    later_capsules = (
+        implementer.capsules[0],
+        reviewer.capsules[0],
+        repairer.capsules[0],
+        reviewer.capsules[1],
+    )
+    for capsule in later_capsules:
+        assert design_ref in capsule.prior_result_refs
+        assert design_ref in capsule.knowledge_refs
+        assert design_ref in tuple(item.id for item in capsule.knowledge_items)
 
 
 @pytest.mark.asyncio
@@ -994,6 +1084,71 @@ async def test_resume_design_uses_completed_result_without_rerunning_operator(
         )
         == 1
     )
+
+
+@pytest.mark.asyncio
+async def test_restored_design_control_resumes_same_run_without_duplicate_execution(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    planner = AnalysisAndDesignRuntime()
+    implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
+    control_check = RestoringWorkspaceControlCheck()
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        analyzer=planner,
+        analyst_control_check=control_check,
+        implementer=implementer,
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_command("initial"),),
+    )
+
+    degraded = await lifecycle.start(
+        work_item=_work_item(),
+        contract=_contract(base_sha),
+    )
+
+    assert degraded.status == "CONTROL_DEGRADED"
+    assert planner.design_calls == 0
+
+    resumed = await lifecycle.resume("work-1", project_id="project-a")
+
+    assert resumed.status == "READY_TO_MERGE"
+    assert planner.design_calls == 1
+    assert planner.design_requests[0].run_id == "work-1:design:1"
+    assert implementer.calls == 1
+    events = await work_store.read_events("work-1", project_id="project-a")
+    control_events = [
+        event.event_type
+        for event in events
+        if event.event_type
+        in {WorkEventType.CONTROL_DEGRADED, WorkEventType.CONTROL_RESTORED}
+    ]
+    assert control_events == [
+        WorkEventType.CONTROL_DEGRADED,
+        WorkEventType.CONTROL_RESTORED,
+    ]
+    completed_design = [
+        event
+        for event in events
+        if event.event_type is WorkEventType.STAGE_COMPLETED
+        and event.payload_json.get("run_id") == "work-1:design:1"
+    ]
+    recorded_design = [
+        event
+        for event in events
+        if event.event_type is WorkEventType.EXECUTION_RECORDED
+        and event.payload_json.get("run_id") == "work-1:design:1"
+    ]
+    assert len(completed_design) == 1
+    assert len(recorded_design) == 1
 
 
 @pytest.mark.asyncio
@@ -2040,7 +2195,7 @@ async def test_review_finding_reaches_repair_as_typed_canonical_context(
     assert repairer.calls == 1
     repair_precondition = repairer.requests[0].control_preconditions[0]
     assert repair_precondition.kind is ControlPreconditionKind.WORKSPACE
-    assert repair_precondition.required_for == ("implement", "repair", "review")
+    assert repair_precondition.required_for == ("design", "implement", "repair", "review")
     repair_context = SoftwareRepairContext.model_validate(repairer.capsules[0].profile_context)
     first_review_context = SoftwareReviewContext.model_validate(
         reviewer.capsules[0].profile_context

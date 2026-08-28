@@ -700,9 +700,10 @@ class SoftwareLifecycle:
         *,
         run_id: str,
         base_sha: str,
-    ) -> None:
+    ) -> tuple[str, ...]:
         project_id = work_item.project_id
         assert project_id is not None
+        published_ids: list[str] = []
         for index, claim in enumerate(claims, start=1):
             if claim.classification is ClaimClassification.FACT:
                 kind = KnowledgeKind.FACT
@@ -738,6 +739,8 @@ class SoftwareLifecycle:
                 await self._knowledge_store.publish(item)
             elif existing != item:
                 raise ValueError(f"analysis knowledge id has conflicting content: {item.id}")
+            published_ids.append(item_id)
+        return tuple(published_ids)
 
     async def _run_design(
         self,
@@ -859,7 +862,7 @@ class SoftwareLifecycle:
             )
             return "WORK_BLOCKED"
         try:
-            await self._publish_analysis_claims(
+            design_knowledge_refs = await self._publish_analysis_claims(
                 work_item,
                 design.claims,
                 run_id=run_id,
@@ -908,6 +911,7 @@ class SoftwareLifecycle:
                 "run_id": run_id,
                 "evidence_refs": list(result.evidence_refs),
                 "artifact_refs": list(result.artifact_refs),
+                "knowledge_refs": list(design_knowledge_refs),
             },
             actor_ref=self._analyst.actor_ref,
         )
@@ -1857,6 +1861,7 @@ class SoftwareLifecycle:
         return tuple(
             dict.fromkeys(
                 (
+                    *(str(ref) for ref in completed.payload_json.get("knowledge_refs", ())),
                     *(str(ref) for ref in completed.payload_json.get("evidence_refs", ())),
                     *(str(ref) for ref in completed.payload_json.get("artifact_refs", ())),
                 )
