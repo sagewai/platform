@@ -399,6 +399,14 @@ async def test_production_soak_regression_rolls_back_and_links_triage(
     assert failure["deployment_id"] == production_deployment["id"]
     assert rollback_event.payload_json["source_deployment_id"] == production_deployment["id"]
     assert rollback_event.payload_json["source_release_candidate_id"] == release["id"]
+    assert (
+        rollback_event.payload_json["deployment"]["release_candidate_id"]
+        == "known-good-2"
+    )
+    assert (
+        rollback_event.payload_json["known_good_release_candidate"]["id"]
+        == "known-good-2"
+    )
     assert triage_event.payload_json["deployment_id"] == production_deployment["id"]
     assert triage_event.payload_json["observation"] == failure
     assert triage_event.payload_json["evidence_refs"] == [
