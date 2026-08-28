@@ -87,6 +87,19 @@ class TaskCapsuleCompiler:
                     if len(selected) == self._max_knowledge_items:
                         break
 
+                if len(selected) < self._max_knowledge_items:
+                    candidates = await self._knowledge_store.search_high_importance_project_findings_any_term(
+                        KnowledgeQuery(text=search_text, project_id=project_id),
+                        limit=self._max_knowledge_items - len(selected),
+                    )
+                    for item in candidates:
+                        if item.id in selected_ids:
+                            continue
+                        selected.append(item)
+                        selected_ids.add(item.id)
+                        if len(selected) == self._max_knowledge_items:
+                            break
+
         return TaskCapsule(
             project_id=project_id,
             work_id=work_item.id,

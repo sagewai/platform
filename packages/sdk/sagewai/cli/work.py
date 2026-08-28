@@ -41,6 +41,7 @@ from sagewai.work import (
     WorkContract,
     WorkEventType,
     WorkItem,
+    WorkMetrics,
     WorkRecord,
     WorkStore,
 )
@@ -155,6 +156,15 @@ def work_pending() -> None:
         return
     for item in pending:
         click.echo(f"{item.kind.value} {item.work_id} {item.attention_id}: {item.summary}")
+
+
+@work.command("metrics")
+@click.option("--work-id", default=None, help="Limit metrics to one WorkItem.")
+def work_metrics(work_id: str | None) -> None:
+    """Show read-only discipline and control metrics from Work events."""
+
+    metrics = _cli._run_async(_work_metrics(work_id=work_id))
+    click.echo(json.dumps(metrics.model_dump(mode="json"), sort_keys=True))
 
 
 def _echo_record(record: WorkRecord) -> None:
@@ -342,6 +352,14 @@ async def _pending_work() -> tuple[PendingAttention, ...]:
     store = WorkStore(engine=factory.get_engine())
     await store.init()
     return await store.pending_attention(project_id=project_id)
+
+
+async def _work_metrics(*, work_id: str | None = None) -> WorkMetrics:
+    project_id = resolve_project_id()
+    await factory.ensure_schema()
+    store = WorkStore(engine=factory.get_engine())
+    await store.init()
+    return await store.metrics(project_id=project_id, work_id=work_id)
 
 
 async def _build_lifecycle(

@@ -24,6 +24,9 @@ from sagewai.work.events import (
     WorkEventType,
     active_control_degradations,
 )
+from sagewai.work.knowledge.control_failure import control_failure_finding
+from sagewai.work.knowledge.store import insert_knowledge_item
+from sagewai.work.metrics import WorkMetrics, derive_work_metrics
 from sagewai.work.models import (
     PendingAttention,
     PendingAttentionKind,
@@ -55,8 +58,15 @@ class WorkStore:
 
     async def append_event(self, event: WorkEvent) -> None:
         """Append one immutable event; database constraints reject duplicates."""
-        values = event.model_dump(mode="python")
-        values["event_type"] = event.event_type.value
+        event_values = event.model_dump(mode="python")
+        event_values["event_type"] = event.event_type.value
+        finding = None
+        finding_error: ValueError | None = None
+        if event.event_type is WorkEventType.CONTROL_DEGRADED:
+            try:
+                finding = control_failure_finding(event)
+            except ValueError as exc:
+                finding_error = exc
         async with self._engine.begin() as conn:
             projection = (
                 await conn.execute(
@@ -78,7 +88,15 @@ class WorkStore:
             if existing_event is not None and existing_event.project_id != event.project_id:
                 raise ValueError("work_id belongs to a different project")
 
-            await conn.execute(insert(self._work_events).values(**values))
+            await conn.execute(insert(self._work_events).values(**event_values))
+            if finding is not None:
+                await insert_knowledge_item(
+                    conn,
+                    finding,
+                    dialect_name=self._engine.dialect.name,
+                )
+        if finding_error is not None:
+            raise finding_error
 
     async def read_events(
         self,
@@ -96,6 +114,27 @@ class WorkStore:
         async with self._engine.connect() as conn:
             rows = (await conn.execute(query)).all()
         return [self._event_from_row(row._mapping) for row in rows]
+
+    async def metrics(
+        self,
+        *,
+        project_id: str,
+        work_id: str | None = None,
+    ) -> WorkMetrics:
+        """Derive project- or Work-scoped metrics from the immutable event ledger."""
+
+        table = self._work_events
+        filters = [table.c.project_id == project_id]
+        if work_id is not None:
+            filters.append(table.c.work_id == work_id)
+        query = select(table).where(*filters).order_by(table.c.work_id, table.c.sequence)
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(query)).all()
+        return derive_work_metrics(
+            (self._event_from_row(row._mapping) for row in rows),
+            project_id=project_id,
+            work_id=work_id,
+        )
 
     async def save_work(self, record: WorkRecord) -> None:
         """Insert or replace the current projection for one WorkItem."""

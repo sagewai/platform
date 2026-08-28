@@ -11,10 +11,11 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
-from sqlalchemy import func, insert, literal_column, select, text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy import func, insert, literal_column, or_, select, text
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from sagewai.db import factory
 from sagewai.db.models import Base, KnowledgeItemModel
@@ -34,6 +35,82 @@ def _sqlite_plaintext_query(value: str) -> str:
     return " ".join(f'"{term}"' for term in terms)
 
 
+_SEARCH_TERM_RE = re.compile(r"[a-z0-9_]+")
+_FALLBACK_IGNORED_TERMS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "by",
+        "control",
+        "details",
+        "during",
+        "failure",
+        "for",
+        "from",
+        "in",
+        "is",
+        "of",
+        "on",
+        "or",
+        "preconditions",
+        "the",
+        "to",
+        "was",
+        "were",
+        "with",
+        "work",
+    }
+)
+
+
+def _search_terms(value: str) -> tuple[str, ...]:
+    """Tokenize fallback queries and candidates with one deterministic rule."""
+    return tuple(dict.fromkeys(_SEARCH_TERM_RE.findall(value.casefold())))
+
+
+def _sqlite_any_term_query(terms: tuple[str, ...]) -> str:
+    """Encode normalized literal FTS5 terms joined by OR."""
+    return " OR ".join(f'"{term}"' for term in terms)
+
+
+def _has_meaningful_term_overlap(query: str, statement: str) -> bool:
+    """Reject coincidences limited to control boilerplate or one generic term."""
+    query_terms = set(_search_terms(query)) - _FALLBACK_IGNORED_TERMS
+    statement_terms = set(_search_terms(statement)) - _FALLBACK_IGNORED_TERMS
+    overlap = query_terms & statement_terms
+    if len(query_terms) == 1:
+        return len(overlap) == 1
+    return len(overlap) >= 2
+
+
+async def insert_knowledge_item(
+    conn: AsyncConnection,
+    item: KnowledgeItem,
+    *,
+    dialect_name: str,
+) -> None:
+    """Insert one item and its SQLite search row on an existing transaction."""
+    values = item.model_dump(mode="python")
+    values["kind"] = item.kind.value
+    values["source_refs"] = list(item.source_refs)
+    values["artifact_refs"] = list(item.artifact_refs)
+
+    await conn.execute(insert(KnowledgeItemModel.__table__).values(**values))
+    if dialect_name == "sqlite":
+        await conn.execute(
+            text(
+                "INSERT INTO knowledge_items_fts (item_id, statement) "
+                "VALUES (:item_id, :statement)"
+            ),
+            {"item_id": item.id, "statement": item.statement},
+        )
+
+
 class KnowledgeStore:
     """Publish and retrieve immutable project-scoped KnowledgeItems."""
 
@@ -50,21 +127,12 @@ class KnowledgeStore:
 
     async def publish(self, item: KnowledgeItem) -> None:
         """Append one immutable knowledge item."""
-        values = item.model_dump(mode="python")
-        values["kind"] = item.kind.value
-        values["source_refs"] = list(item.source_refs)
-        values["artifact_refs"] = list(item.artifact_refs)
-
         async with self._engine.begin() as conn:
-            await conn.execute(insert(self._items).values(**values))
-            if self._engine.dialect.name == "sqlite":
-                await conn.execute(
-                    text(
-                        "INSERT INTO knowledge_items_fts (item_id, statement) "
-                        "VALUES (:item_id, :statement)"
-                    ),
-                    {"item_id": item.id, "statement": item.statement},
-                )
+            await insert_knowledge_item(
+                conn,
+                item,
+                dialect_name=self._engine.dialect.name,
+            )
 
     async def get(self, item_id: str, *, project_id: str) -> KnowledgeItem | None:
         """Read one item without crossing its project boundary."""
@@ -107,6 +175,57 @@ class KnowledgeStore:
         async with self._engine.connect() as conn:
             rows = (await conn.execute(statement)).all()
         return [self._from_row(row._mapping) for row in rows]
+
+    async def search_high_importance_project_findings_any_term(
+        self,
+        query: KnowledgeQuery,
+        *,
+        limit: int,
+    ) -> list[KnowledgeItem]:
+        """Return a bounded, meaningfully related project FINDING fallback."""
+        terms = _search_terms(query.text)
+        if not terms or limit < 1:
+            return []
+
+        filters = [
+            self._items.c.project_id == query.project_id,
+            self._items.c.work_id.is_(None),
+            self._items.c.kind == "finding",
+            self._items.c.importance_score > 50,
+        ]
+        if self._engine.dialect.name == "sqlite":
+            matched_ids = text(
+                "SELECT item_id FROM knowledge_items_fts "
+                "WHERE knowledge_items_fts MATCH :search_text"
+            )
+            filters.append(self._items.c.id.in_(matched_ids))
+        else:
+            config = literal_column("'simple'")
+            vector = func.to_tsvector(config, self._items.c.statement)
+            filters.append(
+                or_(*(vector.op("@@")(func.plainto_tsquery(config, term)) for term in terms))
+            )
+
+        statement = (
+            select(self._items)
+            .where(*filters)
+            .order_by(
+                self._items.c.importance_score.desc(),
+                self._items.c.created_at.desc(),
+                self._items.c.id,
+            )
+        )
+        if self._engine.dialect.name == "sqlite":
+            statement = statement.params(search_text=_sqlite_any_term_query(terms))
+
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(statement)).all()
+        matches = (self._from_row(row._mapping) for row in rows)
+        return [
+            item
+            for item in matches
+            if _has_meaningful_term_overlap(query.text, item.statement)
+        ][:limit]
 
     @staticmethod
     def _from_row(values) -> KnowledgeItem:
