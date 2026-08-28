@@ -2061,6 +2061,28 @@ async def test_critical_irreversible_action_is_denied_without_side_effect(
             created_at=NOW,
         )
     )
+    exposure = BlastRadius(dimension="traffic", value="5%")
+    with pytest.raises(DeliveryApprovalRequiredError, match="deploy_production"):
+        await lifecycle.deploy(
+            candidate,
+            environment="production",
+            exposure=exposure,
+            known_good_candidate=_known_good(),
+            evidence_refs=("policy://reversible",),
+            expected_duration_seconds=60,
+            risk="high",
+            reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
+        )
+    record = await store.load_work(WORK_ID, project_id=PROJECT_ID)
+    assert record is not None and record.pending_gate is not None
+    await lifecycle.approve(
+        WORK_ID,
+        project_id=PROJECT_ID,
+        gate_id=record.pending_gate,
+        actor_ref="operator:arda",
+    )
+    assert provider.deployments == []
+
     request = ActionRequest(
         project_id=PROJECT_ID,
         action="deploy_production",
@@ -2084,7 +2106,7 @@ async def test_critical_irreversible_action_is_denied_without_side_effect(
         )
 
     events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
-    assert [
+    control_events = [
         event.event_type
         for event in events
         if event.event_type
@@ -2093,8 +2115,17 @@ async def test_critical_irreversible_action_is_denied_without_side_effect(
             WorkEventType.GATE_DECIDED,
             WorkEventType.WORK_BLOCKED,
         }
-    ] == [WorkEventType.GATE_DECIDED, WorkEventType.WORK_BLOCKED]
-    denied = next(event for event in events if event.event_type is WorkEventType.GATE_DECIDED)
+    ]
+    assert control_events[-2:] == [
+        WorkEventType.GATE_DECIDED,
+        WorkEventType.WORK_BLOCKED,
+    ]
+    assert control_events.count(WorkEventType.GATE_REQUESTED) == 1
+    denied = next(
+        event
+        for event in reversed(events)
+        if event.event_type is WorkEventType.GATE_DECIDED
+    )
     assert denied.payload_json["decision"] == GateDecision.DENY.value
     assert denied.payload_json["action"] == request.model_dump(mode="json")
 

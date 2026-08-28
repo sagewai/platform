@@ -447,6 +447,11 @@ class DeliveryLifecycle:
         if requested is None:
             raise ValueError("delivery gate was not requested for this WorkItem")
         decided = self._gate_event(events, WorkEventType.GATE_DECIDED, gate_id)
+        if decided is not None and not self._same_authorized_action(
+            decided.payload_json.get("action"),
+            requested.payload_json.get("action"),
+        ):
+            decided = None
         if record.pending_gate != gate_id:
             if record.pending_gate is None and decided is not None:
                 if decided.payload_json.get("decision") == GateDecision.ALLOW.value:
@@ -948,12 +953,21 @@ class DeliveryLifecycle:
 
     async def _authorize(self, request: ActionRequest) -> None:
         gate_id = f"{request.action}:{request.work_id}:{request.scope}"
+        action = request.model_dump(mode="json")
         events = await self._work_store.read_events(
             request.work_id,
             project_id=request.project_id,
         )
         decided = self._gate_event(events, WorkEventType.GATE_DECIDED, gate_id)
         requested = self._gate_event(events, WorkEventType.GATE_REQUESTED, gate_id)
+        if decided is not None and not self._same_authorized_action(
+            decided.payload_json.get("action"), action
+        ):
+            decided = None
+        if requested is not None and not self._same_authorized_action(
+            requested.payload_json.get("action"), action
+        ):
+            requested = None
         if decided is not None:
             decision = GateDecision(decided.payload_json["decision"])
         elif requested is not None:
@@ -969,7 +983,7 @@ class DeliveryLifecycle:
                     payload={
                         "gate_id": gate_id,
                         "question": f"Approve {request.action} for {request.scope}.",
-                        "action": request.model_dump(mode="json"),
+                        "action": action,
                         "evidence_refs": list(request.evidence_refs),
                     },
                     actor_ref="delivery_policy",
@@ -983,7 +997,7 @@ class DeliveryLifecycle:
                 payload={
                     "gate_id": gate_id,
                     "decision": decision.value,
-                    "action": request.model_dump(mode="json"),
+                    "action": action,
                 },
                 actor_ref="delivery_policy",
             )
@@ -1247,6 +1261,14 @@ class DeliveryLifecycle:
             latest_verdicts.get(deployment_id) is not HealthVerdict.PASS
             for deployment_id in candidate_deployments
         )
+
+    @staticmethod
+    def _same_authorized_action(left: object, right: object) -> bool:
+        if not isinstance(left, dict) or not isinstance(right, dict):
+            return False
+        return {
+            key: value for key, value in left.items() if key != "evidence_refs"
+        } == {key: value for key, value in right.items() if key != "evidence_refs"}
 
     @staticmethod
     def _gate_event(
