@@ -463,6 +463,103 @@ def test_derives_named_operator_metrics_only_from_canonical_outcomes() -> None:
     assert work_metrics.unsupported_claim_rate == 0.0
 
 
+def test_acceptance_means_distinguish_work_items_from_changes() -> None:
+    events = (
+        _event("work-1", 1, WorkEventType.WORK_CREATED, payload={"profile": "software"}),
+        _event(
+            "work-1",
+            2,
+            WorkEventType.STAGE_STARTED,
+            payload={
+                "stage": "implement",
+                "run_id": "implement-1",
+                "runtime": "codex",
+                "knowledge_items_considered": 0,
+                "knowledge_items_selected": 0,
+                "artifact_bytes_referenced": 0,
+            },
+        ),
+        _event(
+            "work-1",
+            3,
+            WorkEventType.OPERATOR_DISCIPLINE_RECORDED,
+            payload={"run_id": "implement-1", "changed_files": 2, "diff_lines": 10},
+        ),
+        _event(
+            "work-1",
+            4,
+            WorkEventType.STAGE_COMPLETED,
+            payload={"stage": "implement", "run_id": "implement-1"},
+        ),
+        _event(
+            "work-1",
+            5,
+            WorkEventType.REVIEW_RECORDED,
+            payload={"verdict": "accept", "unsupported_claims": []},
+        ),
+        _event(
+            "work-1",
+            6,
+            WorkEventType.STAGE_STARTED,
+            payload={
+                "stage": "repair",
+                "run_id": "repair-1",
+                "runtime": "claude",
+                "knowledge_items_considered": 0,
+                "knowledge_items_selected": 0,
+                "artifact_bytes_referenced": 0,
+            },
+        ),
+        _event(
+            "work-1",
+            7,
+            WorkEventType.OPERATOR_DISCIPLINE_RECORDED,
+            payload={"run_id": "repair-1", "changed_files": 3, "diff_lines": 30},
+        ),
+        _event(
+            "work-1",
+            8,
+            WorkEventType.STAGE_COMPLETED,
+            payload={"stage": "repair", "run_id": "repair-1"},
+        ),
+        _event(
+            "work-1",
+            9,
+            WorkEventType.REVIEW_RECORDED,
+            payload={"verdict": "accept", "unsupported_claims": []},
+        ),
+    )
+
+    metrics = derive_work_metrics(events, project_id="project-a")
+
+    assert metrics.mean_changed_files_per_accepted_work_item == 3.0
+    assert metrics.mean_diff_lines_per_accepted_change == 20.0
+
+
+def test_repair_rate_is_attributed_to_the_implementation_runtime() -> None:
+    events = (
+        _event("work-1", 1, WorkEventType.WORK_CREATED, payload={"profile": "software"}),
+        _event(
+            "work-1",
+            2,
+            WorkEventType.STAGE_STARTED,
+            payload={"stage": "implement", "run_id": "implement-1", "runtime": "codex"},
+        ),
+        _event(
+            "work-1",
+            3,
+            WorkEventType.STAGE_STARTED,
+            payload={"stage": "repair", "run_id": "repair-1", "runtime": "claude"},
+        ),
+    )
+
+    codex_metrics = derive_work_metrics(events, project_id="project-a", runtime="codex")
+    claude_metrics = derive_work_metrics(events, project_id="project-a", runtime="claude")
+
+    assert codex_metrics.repair_rate == 1.0
+    assert claude_metrics.repair_rate is None
+
+
 def test_unknown_metric_denominators_remain_unavailable() -> None:
     metrics = derive_work_metrics(
         (_event("work-1", 1, WorkEventType.WORK_CREATED),),
