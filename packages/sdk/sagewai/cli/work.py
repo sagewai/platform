@@ -68,6 +68,7 @@ from sagewai.work.profiles.software import (
     ReleaseCandidate,
     SoftwareContractContext,
     SoftwareLifecycle,
+    SoftwareProfile,
     SoftwareReadOnlyResultValidator,
     SoftwareResultValidator,
     SoftwareStageOperator,
@@ -432,6 +433,7 @@ async def _build_lifecycle(
     worktree_manager = SoftwareWorktreeManager()
     artifact_store = LocalArtifactStore()
     lifecycle = SoftwareLifecycle(
+        profile=SoftwareProfile(),
         work_store=work_store,
         knowledge_store=knowledge_store,
         capsule_compiler=TaskCapsuleCompiler(

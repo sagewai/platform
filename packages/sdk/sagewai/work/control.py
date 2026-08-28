@@ -176,6 +176,7 @@ class OperatorController:
                 request,
                 WorkEventType.CONTROL_RESTORED,
                 {
+                    "run_id": request.run_id,
                     "precondition_ids": [precondition.id for precondition in preconditions],
                     "evidence_refs": [
                         evidence for result in checks for evidence in result.evidence_refs
@@ -200,6 +201,7 @@ class OperatorController:
                 "run_id": request.run_id,
                 "stage": request.stage,
                 "runtime": runtime.name,
+                "workspace_ref": workspace.ref if workspace is not None else None,
                 "action_intents": [
                     intent.model_dump(mode="json") for intent in request.action_intents
                 ],

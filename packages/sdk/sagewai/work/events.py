@@ -17,6 +17,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from sagewai.work.models import ExecutionAttempt
+
 
 class WorkEventType(str, Enum):
     """Initial durable Work-domain event vocabulary."""
@@ -80,3 +82,73 @@ def active_control_precondition_ids(events: list[WorkEvent]) -> set[str]:
     """Return the currently degraded precondition IDs."""
 
     return set(active_control_degradations(events))
+
+
+def execution_attempt_from_events(
+    events: list[WorkEvent],
+    run_id: str,
+) -> ExecutionAttempt | None:
+    """Project one canonical attempt receipt from the existing Work events."""
+
+    ordered = sorted(events, key=lambda event: event.sequence)
+    started = next(
+        (
+            event
+            for event in reversed(ordered)
+            if event.event_type is WorkEventType.STAGE_STARTED
+            and event.payload_json.get("run_id") == run_id
+        ),
+        None,
+    )
+    if started is None:
+        return None
+
+    scoped = (
+        event
+        for event in ordered
+        if event.sequence >= started.sequence
+        and event.project_id == started.project_id
+        and event.work_id == started.work_id
+        and event.payload_json.get("run_id") == run_id
+    )
+    status = "running"
+    completed_at: datetime | None = None
+    runtime = str(started.payload_json["runtime"])
+    workspace_ref = started.payload_json.get("workspace_ref")
+    artifact_refs: tuple[str, ...] = ()
+    profile_context: dict[str, Any] = {}
+    for event in scoped:
+        if event.event_type is WorkEventType.STAGE_STARTED:
+            status = "running"
+            completed_at = None
+            runtime = str(event.payload_json["runtime"])
+            workspace_ref = event.payload_json.get("workspace_ref")
+        elif event.event_type is WorkEventType.CONTROL_DEGRADED:
+            status = "blocked"
+            completed_at = event.created_at
+        elif event.event_type is WorkEventType.CONTROL_RESTORED:
+            status = "running"
+            completed_at = None
+        elif event.event_type is WorkEventType.EXECUTION_RECORDED:
+            status = str(event.payload_json["status"])
+            completed_at = event.created_at
+            artifact_refs = tuple(event.payload_json.get("artifact_refs", ()))
+            profile_context = dict(event.payload_json.get("profile_context", {}))
+        elif event.event_type is WorkEventType.STAGE_COMPLETED:
+            profile_context = dict(event.payload_json.get("profile_context", {}))
+
+    return ExecutionAttempt.model_validate(
+        {
+            "id": run_id,
+            "project_id": started.project_id,
+            "work_id": started.work_id,
+            "stage": started.payload_json["stage"],
+            "runtime": runtime,
+            "workspace_ref": workspace_ref,
+            "artifact_refs": artifact_refs,
+            "status": status,
+            "started_at": started.created_at,
+            "completed_at": completed_at,
+            "profile_context": profile_context,
+        }
+    )
