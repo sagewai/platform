@@ -176,6 +176,31 @@ def test_review_requires_every_semantic_independent_check_answer() -> None:
         )
 
 
+def test_review_schema_asks_the_four_semantic_independent_check_questions() -> None:
+    properties = ReviewResult.model_json_schema()["properties"]
+
+    assert {
+        name: properties[name]["description"]
+        for name in (
+            "introduced_assumptions",
+            "unsupported_claims",
+            "scope_expansions",
+            "unsupported_implementation_choices",
+        )
+    } == {
+        "introduced_assumptions": "What new assumptions were introduced?",
+        "unsupported_claims": (
+            "Which claims are unsupported by the WorkItem, repo evidence, accepted "
+            "contract, or project policy?"
+        ),
+        "scope_expansions": "Did implementation solve a wider problem than requested?",
+        "unsupported_implementation_choices": (
+            "Was backward compatibility, migration, fallback, abstraction, or defensive "
+            "behavior added without evidence?"
+        ),
+    }
+
+
 def test_action_and_discipline_models_match_the_generic_contract() -> None:
     scope = ActionScope(
         objective="Implement PR 1",

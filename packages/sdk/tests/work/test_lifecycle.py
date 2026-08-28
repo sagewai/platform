@@ -309,6 +309,18 @@ class FailedMutationRuntime(MutationRuntime):
         )
 
 
+class FailedWithoutActionReceiptRuntime(MutationRuntime):
+    async def run(self, request, capsule, capabilities, workspace):
+        result = await super().run(request, capsule, capabilities, workspace)
+        return result.model_copy(
+            update={
+                "status": "failed",
+                "evidence_refs": ("runtime://native-failure",),
+                "action_results": (),
+            }
+        )
+
+
 class ReviewRuntime:
     name = "review-runtime"
 
@@ -365,6 +377,41 @@ class InvalidReviewRuntime(ReviewRuntime):
                     "evidence_refs": [f"review://{request.run_id}"],
                 }
             },
+        )
+
+
+class WrongAttemptReviewRuntime(ReviewRuntime):
+    async def run(self, request, capsule, capabilities, workspace):
+        result = await super().run(request, capsule, capabilities, workspace)
+        payload = dict(result.profile_context["review_result"])
+        payload["attempt_id"] = "another-review-attempt"
+        return result.model_copy(update={"profile_context": {"review_result": payload}})
+
+
+class InvalidFindingContextReviewRuntime(ReviewRuntime):
+    async def run(self, request, capsule, capabilities, workspace):
+        self.calls += 1
+        review = ReviewResult(
+            attempt_id=request.run_id,
+            verdict="repair",
+            findings=(
+                ReviewFinding(
+                    severity="high",
+                    claim="The target needs repair",
+                    evidence_refs=(f"review://{request.run_id}",),
+                    required_change="Write the repaired target",
+                    profile_context={"unexpected": True},
+                ),
+            ),
+            evidence_refs=(f"review://{request.run_id}",),
+            introduced_assumptions=(),
+            unsupported_claims=(),
+            scope_expansions=(),
+            unsupported_implementation_choices=(),
+        )
+        return _operator_result(
+            request,
+            profile_context={"review_result": review.model_dump(mode="json")},
         )
 
 
@@ -1125,10 +1172,7 @@ async def test_analysis_narrows_draft_scope_and_out_of_scope_change_is_rejected(
         "run_id": "work-1:implement:1",
         "accepted_contract_version": accepted.version,
         "required_contract_version": accepted.version + 1,
-        "violations": [
-            "outside.txt is outside allowed targets",
-            "undeclared change: outside.txt",
-        ],
+        "violations": ["outside.txt is outside allowed targets"],
         "decision_request": "Create and accept a new WorkContract version or stop the work.",
         "evidence_refs": ["runtime://work-1:implement:1"],
     }
@@ -1301,6 +1345,44 @@ async def test_failed_implementation_blocks_with_specific_question_and_evidence(
 
 
 @pytest.mark.asyncio
+async def test_failed_implementation_without_action_receipt_is_not_contract_drift(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        implementer=FailedWithoutActionReceiptRuntime(
+            implement_text="failed",
+            repair_text="unused",
+        ),
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+    )
+
+    record = await lifecycle.start(
+        work_item=_work_item(),
+        contract=_contract(base_sha),
+    )
+
+    assert record.status == "WORK_BLOCKED"
+    events = await work_store.read_events("work-1", project_id="project-a")
+    blocker = next(event for event in events if event.event_type is WorkEventType.WORK_BLOCKED)
+    assert blocker.payload_json == {
+        "reason": "implement_failed",
+        "run_id": "work-1:implement:1",
+        "decision_request": "Inspect the failed implementation evidence and decide whether to retry or stop the work.",
+        "evidence_refs": ["runtime://native-failure"],
+    }
+
+
+@pytest.mark.asyncio
 async def test_blocked_review_carries_specific_operator_question_and_evidence(
     stores,
     tmp_path: Path,
@@ -1368,6 +1450,44 @@ async def test_invalid_review_result_blocks_without_recording_review(
     assert blocker.payload_json["run_id"] == "work-1:review:1"
     assert blocker.payload_json["evidence_refs"] == ["runtime://work-1:review:1"]
     assert not any(event.event_type is WorkEventType.REVIEW_RECORDED for event in events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reviewer", "error"),
+    [
+        (WrongAttemptReviewRuntime(), "review result belongs to a different attempt"),
+        (InvalidFindingContextReviewRuntime(), "Extra inputs are not permitted"),
+    ],
+)
+async def test_review_integrity_errors_remain_hard_failures(
+    stores,
+    tmp_path: Path,
+    reviewer,
+    error: str,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        implementer=MutationRuntime(implement_text="initial", repair_text="unused"),
+        reviewer=reviewer,
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+    )
+
+    with pytest.raises(ValueError, match=error):
+        await lifecycle.start(
+            work_item=_work_item(),
+            contract=_contract(base_sha),
+        )
+
+    events = await work_store.read_events("work-1", project_id="project-a")
+    assert not any(event.event_type is WorkEventType.WORK_BLOCKED for event in events)
 
 
 @pytest.mark.asyncio

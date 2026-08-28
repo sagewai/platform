@@ -838,7 +838,10 @@ class SoftwareLifecycle:
                 await self._events(work_item),
                 run_id=run_id,
             )
-            if report is not None and report.scope_violations:
+            contract_scope_violations = (
+                self._accepted_contract_scope_violations(report) if report is not None else ()
+            )
+            if contract_scope_violations:
                 await self._block_once(
                     work_item,
                     {
@@ -846,7 +849,7 @@ class SoftwareLifecycle:
                         "run_id": run_id,
                         "accepted_contract_version": contract.version,
                         "required_contract_version": contract.version + 1,
-                        "violations": list(report.scope_violations),
+                        "violations": list(contract_scope_violations),
                         "decision_request": (
                             "Create and accept a new WorkContract version or stop the work."
                         ),
@@ -1035,11 +1038,6 @@ class SoftwareLifecycle:
             return "WORK_BLOCKED"
         try:
             review = ReviewResult.model_validate(payload)
-            if review.attempt_id != run_id:
-                raise ValueError("review result belongs to a different attempt")
-            for finding in review.findings:
-                if finding.profile_context:
-                    SoftwareReviewFindingContext.model_validate(finding.profile_context)
         except ValueError as exc:
             await self._block_once(
                 work_item,
@@ -1056,6 +1054,11 @@ class SoftwareLifecycle:
                 actor_ref=self._reviewer.actor_ref,
             )
             return "WORK_BLOCKED"
+        if review.attempt_id != run_id:
+            raise ValueError("review result belongs to a different attempt")
+        for finding in review.findings:
+            if finding.profile_context:
+                SoftwareReviewFindingContext.model_validate(finding.profile_context)
         await self._append(
             work_item,
             WorkEventType.REVIEW_RECORDED,
@@ -1431,6 +1434,16 @@ class SoftwareLifecycle:
     @staticmethod
     def _review_count(events: list[WorkEvent]) -> int:
         return sum(event.event_type is WorkEventType.REVIEW_RECORDED for event in events)
+
+    @staticmethod
+    def _accepted_contract_scope_violations(
+        report: OperatorDisciplineReport,
+    ) -> tuple[str, ...]:
+        """Select only accepted-contract target-boundary violations."""
+        suffixes = (" is outside allowed targets", " is forbidden")
+        return tuple(
+            violation for violation in report.scope_violations if violation.endswith(suffixes)
+        )
 
     @staticmethod
     def _discipline_report(
