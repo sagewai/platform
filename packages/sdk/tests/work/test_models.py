@@ -151,12 +151,29 @@ def test_assumption_verification_and_review_models_are_typed_and_immutable() -> 
         verdict="repair",
         findings=(finding,),
         evidence_refs=("review://review-1",),
+        introduced_assumptions=("A compatibility path is required",),
+        unsupported_claims=("The compatibility path is supported",),
+        scope_expansions=("Support legacy callers",),
+        unsupported_implementation_choices=("backward compatibility",),
     )
 
     assert verification.passed is False
     assert review.findings == (finding,)
+    assert review.introduced_assumptions == ("A compatibility path is required",)
     with pytest.raises(ValidationError):
         assumption.status = "validated"  # type: ignore[misc]
+
+
+def test_review_requires_every_semantic_independent_check_answer() -> None:
+    with pytest.raises(ValidationError):
+        ReviewResult.model_validate(
+            {
+                "attempt_id": "review-1",
+                "verdict": "accept",
+                "findings": [],
+                "evidence_refs": ["review://review-1"],
+            }
+        )
 
 
 def test_action_and_discipline_models_match_the_generic_contract() -> None:

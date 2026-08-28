@@ -339,10 +339,32 @@ class ReviewRuntime:
             verdict=verdict,
             findings=findings,
             evidence_refs=(f"review://{request.run_id}",),
+            introduced_assumptions=(),
+            unsupported_claims=(),
+            scope_expansions=(),
+            unsupported_implementation_choices=(),
         )
         return _operator_result(
             request,
             profile_context={"review_result": review.model_dump(mode="json")},
+        )
+
+
+class InvalidReviewRuntime(ReviewRuntime):
+    async def run(self, request, capsule, capabilities, workspace):
+        self.calls += 1
+        self.capsules.append(capsule)
+        self.requests.append(request)
+        return _operator_result(
+            request,
+            profile_context={
+                "review_result": {
+                    "attempt_id": request.run_id,
+                    "verdict": "accept",
+                    "findings": [],
+                    "evidence_refs": [f"review://{request.run_id}"],
+                }
+            },
         )
 
 
@@ -1097,6 +1119,29 @@ async def test_analysis_narrows_draft_scope_and_out_of_scope_change_is_rejected(
     assert any(
         "outside.txt is outside allowed targets" in report.scope_violations for report in reports
     )
+    blocker = next(event for event in events if event.event_type is WorkEventType.WORK_BLOCKED)
+    assert blocker.payload_json == {
+        "reason": "contract_drift",
+        "run_id": "work-1:implement:1",
+        "accepted_contract_version": accepted.version,
+        "required_contract_version": accepted.version + 1,
+        "violations": [
+            "outside.txt is outside allowed targets",
+            "undeclared change: outside.txt",
+        ],
+        "decision_request": "Create and accept a new WorkContract version or stop the work.",
+        "evidence_refs": ["runtime://work-1:implement:1"],
+    }
+    assert accepted.version == 2
+    assert not any(
+        event.event_type is WorkEventType.STAGE_COMPLETED
+        and event.payload_json.get("stage") == "implement"
+        for event in events
+    )
+    assert not any(
+        event.event_type in {WorkEventType.VERIFICATION_RECORDED, WorkEventType.REVIEW_RECORDED}
+        for event in events
+    )
 
 
 @pytest.mark.asyncio
@@ -1289,6 +1334,40 @@ async def test_blocked_review_carries_specific_operator_question_and_evidence(
         "decision_request": "Resolve the independent review blocker or stop the work.",
         "evidence_refs": ["review://work-1:review:1"],
     }
+
+
+@pytest.mark.asyncio
+async def test_invalid_review_result_blocks_without_recording_review(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    durability = InMemoryStore()
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=durability,
+        implementer=MutationRuntime(implement_text="initial", repair_text="unused"),
+        reviewer=InvalidReviewRuntime(),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+    )
+
+    record = await lifecycle.start(
+        work_item=_work_item(),
+        contract=_contract(base_sha),
+    )
+
+    assert record.status == "WORK_BLOCKED"
+    events = await work_store.read_events("work-1", project_id="project-a")
+    blocker = next(event for event in events if event.event_type is WorkEventType.WORK_BLOCKED)
+    assert blocker.payload_json["reason"] == "review_result_invalid"
+    assert blocker.payload_json["run_id"] == "work-1:review:1"
+    assert blocker.payload_json["evidence_refs"] == ["runtime://work-1:review:1"]
+    assert not any(event.event_type is WorkEventType.REVIEW_RECORDED for event in events)
 
 
 @pytest.mark.asyncio

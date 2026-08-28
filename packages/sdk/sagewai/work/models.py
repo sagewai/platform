@@ -290,6 +290,10 @@ class ReviewResult(BaseModel):
     verdict: Literal["accept", "repair", "blocked"]
     findings: tuple[ReviewFinding, ...]
     evidence_refs: tuple[str, ...] = ()
+    introduced_assumptions: tuple[str, ...]
+    unsupported_claims: tuple[str, ...]
+    scope_expansions: tuple[str, ...]
+    unsupported_implementation_choices: tuple[str, ...]
 
 
 class TaskCapsule(BaseModel):

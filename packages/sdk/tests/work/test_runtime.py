@@ -167,7 +167,10 @@ def _fake_runtime_executable(tmp_path: Path) -> Path:
                 output = pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1])
                 output.write_text(json.dumps(result))
             else:
-                print(json.dumps({{"structured_output": result}}))
+                print(json.dumps({{
+                    "structured_output": result,
+                    "usage": {{"output_tokens": 123}},
+                }}))
             """
         )
     )
@@ -251,6 +254,7 @@ async def test_native_runtime_uses_fake_executable_without_session_or_api_key(
     argv = observation.pop("argv")
     assert result.status == "passed"
     assert result.summary == "fake runtime completed"
+    assert result.output_tokens == (123 if runtime_type is ClaudeRuntime else None)
     assert observation == {
         "ambient": None,
         "scoped": "worker-local-token",
