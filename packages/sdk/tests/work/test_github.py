@@ -939,6 +939,29 @@ async def test_critical_production_incident_freezes_approved_merge(
     assert len(incident_comments) == 1
     assert "CRITICAL" in incident_comments[0]
 
+    events = await store.read_events(gated.work_id, project_id=PROJECT_ID)
+    await store.append_event(
+        WorkEvent(
+            id="rollback-control-restored",
+            project_id=PROJECT_ID,
+            work_id=gated.work_id,
+            sequence=events[-1].sequence + 1,
+            event_type=WorkEventType.CONTROL_RESTORED,
+            actor_type="delivery_control",
+            actor_ref="delivery_control",
+            payload_json={
+                "precondition_ids": ["rollback-authority"],
+                "evidence_refs": ["check://rollback-authority-restored"],
+            },
+            created_at=NOW,
+        )
+    )
+
+    resumed = await flow.resume(gated.work_id, project_id=PROJECT_ID)
+
+    assert resumed.status == "READY_TO_DELIVER"
+    assert len(github.merges) == 1
+
 
 @pytest.mark.asyncio
 async def test_pending_comment_failure_is_retried_on_resume(store: WorkStore) -> None:

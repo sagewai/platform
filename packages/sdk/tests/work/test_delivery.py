@@ -1064,6 +1064,134 @@ async def test_rollback_refusal_records_one_critical_receipt_for_active_precondi
     assert critical[0].payload_json["deployment_id"] == deployment.id
     assert critical[0].payload_json["failed_preconditions"] == ["rollback-authority"]
 
+    expanded_probe = DeterministicFakeControlProbe(
+        {
+            "rollback": (
+                _result("rollback-authority", passed=False),
+                _result("delivery-observability"),
+                _result("rollback-artifact", passed=False),
+            )
+        }
+    )
+    expanded, _, expanded_provider, _, _ = _lifecycle(
+        store,
+        control_probe=expanded_probe,
+    )
+    for _attempt in range(2):
+        with pytest.raises(ControlDegradedError):
+            await expanded.rollback(
+                deployment,
+                known_good_candidate=_known_good(),
+                evidence_refs=(),
+                expected_duration_seconds=60,
+            )
+
+    assert expanded_provider.rollbacks == []
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    critical = [
+        event
+        for event in events
+        if event.event_type is WorkEventType.CONTROL_DEGRADED
+        and event.payload_json.get("severity") == "critical"
+    ]
+    assert len(critical) == 2
+    assert critical[1].payload_json["failed_preconditions"] == ["rollback-artifact"]
+    assert critical[1].payload_json["evidence_refs"] == ["check://rollback-artifact"]
+
+    await store.append_event(
+        WorkEvent(
+            id="restore-rollback-controls",
+            project_id=PROJECT_ID,
+            work_id=WORK_ID,
+            sequence=events[-1].sequence + 1,
+            event_type=WorkEventType.CONTROL_RESTORED,
+            actor_type="test",
+            actor_ref=None,
+            payload_json={
+                "precondition_ids": ["rollback-authority", "rollback-artifact"],
+                "evidence_refs": ["check://restored"],
+            },
+            created_at=NOW,
+        )
+    )
+    restored_probe = DeterministicFakeControlProbe(
+        {
+            "rollback": (
+                _result("rollback-authority", passed=False),
+                _result("delivery-observability"),
+                _result("rollback-artifact"),
+            )
+        }
+    )
+    restored, _, _, _, _ = _lifecycle(store, control_probe=restored_probe)
+    with pytest.raises(ControlDegradedError, match="rollback-authority"):
+        await restored.rollback(
+            deployment,
+            known_good_candidate=_known_good(),
+            evidence_refs=(),
+            expected_duration_seconds=60,
+        )
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    critical = [
+        event
+        for event in events
+        if event.event_type is WorkEventType.CONTROL_DEGRADED
+        and event.payload_json.get("severity") == "critical"
+    ]
+    assert len(critical) == 3
+    assert critical[2].payload_json["failed_preconditions"] == ["rollback-authority"]
+
+
+@pytest.mark.asyncio
+async def test_staging_rollback_refusal_records_one_high_degradation(
+    store: WorkStore,
+) -> None:
+    probe = DeterministicFakeControlProbe(
+        {
+            "rollback": (
+                _result("rollback-authority", passed=False),
+                _result("delivery-observability"),
+                _result("rollback-artifact"),
+            )
+        }
+    )
+    lifecycle, _, provider, _, _ = _lifecycle(store, control_probe=probe)
+    await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    deployment = Deployment(
+        id="staging-1",
+        project_id=PROJECT_ID,
+        work_id=WORK_ID,
+        release_candidate_id="candidate-1",
+        environment="staging",
+        exposure=BlastRadius(dimension="instances", value="1"),
+        provider_ref="fake://deployment/staging-1",
+        status="active",
+    )
+    await _record_deployment(store, deployment)
+
+    for _attempt in range(2):
+        with pytest.raises(ControlDegradedError, match="rollback-authority"):
+            await lifecycle.rollback(
+                deployment,
+                known_good_candidate=_known_good(),
+                evidence_refs=(),
+                expected_duration_seconds=60,
+            )
+
+    assert provider.rollbacks == []
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    degraded = [
+        event for event in events if event.event_type is WorkEventType.CONTROL_DEGRADED
+    ]
+    assert len(degraded) == 1
+    assert degraded[0].payload_json["severity"] == "high"
+    assert degraded[0].payload_json["failed_preconditions"] == ["rollback-authority"]
+
 
 @pytest.mark.asyncio
 async def test_unrecorded_known_good_candidate_degrades_reversibility(

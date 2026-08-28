@@ -257,6 +257,7 @@ class WorkStore:
             incident_evidence: dict[str, list[str]] = {}
             incident_severity: dict[str, Literal["high", "critical"]] = {}
             incident_cause: dict[str, str] = {}
+            incident_critical_event_ids: dict[str, set[str]] = {}
             incident_control_event_ids: set[str] = set()
 
             def record_incident(
@@ -318,10 +319,15 @@ class WorkStore:
                 ):
                     deployment_id = str(payload.get("deployment_id", ""))
                     if deployment_id in production_deployment_ids:
-                        failed_preconditions = ", ".join(
+                        failed_ids = tuple(
                             str(item)
                             for item in payload.get("failed_preconditions", ())
                         )
+                        incident_critical_event_ids.setdefault(
+                            deployment_id,
+                            set(),
+                        ).add(event.id)
+                        failed_preconditions = ", ".join(failed_ids)
                         cause = f"failed preconditions: {failed_preconditions}"
                         details = payload.get("details")
                         if details:
@@ -395,10 +401,23 @@ class WorkStore:
                         )
                     )
 
+            degraded = active_control_degradations(events)
             if projection["status"] != "COMPLETE":
                 for deployment_id, trigger in incident_triggers.items():
                     severity = incident_severity[deployment_id]
-                    incident_summary_cause = incident_cause.get(deployment_id)
+                    if severity == "critical" and not any(
+                        event.id in incident_critical_event_ids.get(
+                            deployment_id,
+                            (),
+                        )
+                        for event in degraded.values()
+                    ):
+                        severity = "high"
+                    incident_summary_cause = (
+                        incident_cause.get(deployment_id)
+                        if severity == "critical"
+                        else None
+                    )
                     summary = (
                         f"{severity.upper()}: production incident for deployment "
                         f"{deployment_id}"
@@ -419,7 +438,6 @@ class WorkStore:
                         )
                     )
 
-            degraded = active_control_degradations(events)
             for precondition_id, event in degraded.items():
                 if event.id in incident_control_event_ids:
                     continue

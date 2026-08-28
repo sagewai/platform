@@ -393,3 +393,54 @@ async def test_critical_rollback_control_loss_upserts_incident_and_suppresses_on
         "details: rollback credential expired"
     )
     assert incident.evidence_refs == ("check://rollback-authority",)
+
+    await store.append_event(
+        _event(
+            5,
+            WorkEventType.CONTROL_RESTORED,
+            {
+                "precondition_ids": ["rollback-authority"],
+                "evidence_refs": ["check://rollback-authority-restored"],
+            },
+            created_at=NOW + timedelta(seconds=3),
+        )
+    )
+    after_restore = await store.pending_attention(project_id="project-a")
+    restored_incident = next(
+        item
+        for item in after_restore
+        if item.kind is PendingAttentionKind.PRODUCTION_INCIDENT
+    )
+    assert restored_incident.attention_id == incident.attention_id
+    assert restored_incident.created_at == incident.created_at
+    assert restored_incident.severity == "high"
+    assert restored_incident.evidence_refs == incident.evidence_refs
+    assert restored_incident.summary.startswith("HIGH: production incident")
+
+    await store.append_event(
+        _event(
+            6,
+            WorkEventType.CONTROL_DEGRADED,
+            {
+                "severity": "high",
+                "action": "deploy",
+                "failed_preconditions": ["rollback-authority"],
+                "details": "unrelated staging authority failure",
+                "evidence_refs": ["check://staging-authority"],
+                "frozen_action_ids": ["deploy"],
+            },
+            created_at=NOW + timedelta(seconds=4),
+        )
+    )
+    with_unrelated_degradation = await store.pending_attention(project_id="project-a")
+    unrelated_incident = next(
+        item
+        for item in with_unrelated_degradation
+        if item.kind is PendingAttentionKind.PRODUCTION_INCIDENT
+    )
+    assert unrelated_incident.severity == "high"
+    assert any(
+        item.kind is PendingAttentionKind.CONTROL_DEGRADED
+        and item.attention_id == "rollback-authority"
+        for item in with_unrelated_degradation
+    )

@@ -32,6 +32,7 @@ from sagewai.work.control import (
 from sagewai.work.events import (
     WorkEvent,
     WorkEventType,
+    active_control_degradations,
     active_control_precondition_ids,
 )
 from sagewai.work.models import (
@@ -886,20 +887,26 @@ class DeliveryLifecycle:
         active = await self._active_degradations(request.work_id, request.project_id)
         newly_failed = tuple(result for result in failed if result.precondition_id not in active)
         failures_to_record = newly_failed
-        if request.action == "rollback" and request.deployment is not None:
+        production_rollback = (
+            request.action == "rollback"
+            and request.deployment is not None
+            and request.deployment.environment == "production"
+        )
+        if production_rollback:
             events = await self._work_store.read_events(
                 request.work_id,
                 project_id=request.project_id,
             )
-            if any(
-                event.event_type is WorkEventType.CONTROL_DEGRADED
-                and event.payload_json.get("severity") == "critical"
+            covered = {
+                precondition_id
+                for precondition_id, event in active_control_degradations(events).items()
+                if event.payload_json.get("severity") == "critical"
                 and event.payload_json.get("action") == "rollback"
                 and event.payload_json.get("deployment_id") == request.deployment.id
-                for event in events
-            ):
-                return
-            failures_to_record = failed
+            }
+            failures_to_record = tuple(
+                result for result in failed if result.precondition_id not in covered
+            )
         if not failures_to_record:
             return
         payload: dict[str, object] = {
@@ -914,7 +921,7 @@ class DeliveryLifecycle:
                 for result in failures_to_record
             ),
             "frozen_action_ids": [request.action],
-            "severity": "critical" if request.action == "rollback" else "high",
+            "severity": "critical" if production_rollback else "high",
             "action": request.action,
         }
         if request.deployment is not None:
