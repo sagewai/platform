@@ -342,10 +342,16 @@ class OperatorController:
             request,
             WorkEventType.CONTROL_DEGRADED,
             {
+                "run_id": request.run_id,
+                "stage": request.stage,
                 "failed_preconditions": [result.precondition_id for result in failed],
                 "evidence_refs": [
                     evidence for result in failed for evidence in result.evidence_refs
                 ],
+                "details": "; ".join(
+                    f"{result.precondition_id}: {result.detail or 'failed'}"
+                    for result in failed
+                ),
                 "frozen_action_ids": [intent.action_id for intent in request.action_intents],
             },
         )

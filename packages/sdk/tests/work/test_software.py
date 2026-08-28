@@ -14,6 +14,7 @@ from __future__ import annotations
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,9 +25,12 @@ from sagewai.work.profiles.software import (
     SoftwareCapsuleContext,
     SoftwareContractContext,
     SoftwareResultValidator,
+    SoftwareWorkspace,
+    SoftwareWorkspaceControlCheck,
     SoftwareWorktreeManager,
     WorkspaceStaleError,
     WorktreeBranchPublisher,
+    software_workspace_precondition,
 )
 
 NOW = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
@@ -86,6 +90,41 @@ def test_software_profile_contexts_round_trip_at_profile_boundary() -> None:
     assert SoftwareCapsuleContext.model_validate(capsule.model_dump()) == capsule
     assert SoftwareAttemptContext.model_validate(attempt.model_dump()) == attempt
     assert not any(name.startswith("Software") for name in work.__all__)
+
+
+@pytest.mark.asyncio
+async def test_workspace_control_check_fails_when_worktree_is_missing(tmp_path: Path) -> None:
+    expected_sha = "a" * 40
+    precondition = software_workspace_precondition(project_id="project-a")
+    workspace = SoftwareWorkspace(
+        ref="workspace://workspace",
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="workspace",
+        repository=tmp_path / "repository",
+        path=tmp_path / "missing",
+        base_sha=expected_sha,
+        initial_sha=expected_sha,
+    )
+    result = await SoftwareWorkspaceControlCheck().evaluate(
+        SimpleNamespace(
+            request=SimpleNamespace(project_id="project-a", work_id="work-1"),
+            precondition=precondition,
+            capsule=SimpleNamespace(
+                profile_context=SoftwareCapsuleContext(
+                    base_sha=expected_sha,
+                    current_sha=expected_sha,
+                    repo_instructions=(),
+                    verification_commands=("just smoke",),
+                ).model_dump(mode="json")
+            ),
+            workspace=workspace,
+        )
+    )
+
+    assert result.passed is False
+    assert result.evidence_refs == ("workspace://workspace",)
+    assert result.detail == "recorded workspace does not exist"
 
 
 @pytest.mark.asyncio

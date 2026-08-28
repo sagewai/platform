@@ -11,15 +11,101 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from difflib import unified_diff
 from pathlib import Path
 
 from sagewai.fleet.execution import WorkerProcessResult, run_worker_subprocess
 from sagewai.home import sagewai_home
+from sagewai.work.control import ControlCheckContext, ControlCheckResult
+from sagewai.work.models import ControlPrecondition, ControlPreconditionKind
 from sagewai.work.profiles.software.models import (
+    SoftwareCapsuleContext,
     SoftwareWorkspace,
     WorkspaceStaleError,
 )
+
+SOFTWARE_WORKSPACE_CHECK_REF = "software.workspace.current"
+SOFTWARE_WORKSPACE_PRECONDITION_ID = "software-workspace"
+
+
+def software_workspace_precondition(*, project_id: str | None) -> ControlPrecondition:
+    """Declare the deterministic worktree-presence and HEAD control boundary."""
+    return ControlPrecondition(
+        id=SOFTWARE_WORKSPACE_PRECONDITION_ID,
+        project_id=project_id,
+        kind=ControlPreconditionKind.WORKSPACE,
+        description="The recorded worktree exists and HEAD matches canonical Work state",
+        check_ref=SOFTWARE_WORKSPACE_CHECK_REF,
+        required_for=("implement", "repair", "review"),
+    )
+
+
+class SoftwareWorkspaceControlCheck:
+    """Verify that a software operator still has its canonical pinned worktree."""
+
+    async def evaluate(self, context: ControlCheckContext) -> ControlCheckResult:
+        workspace = context.workspace
+        checked_at = datetime.now(timezone.utc)
+        if not isinstance(workspace, SoftwareWorkspace):
+            return ControlCheckResult(
+                project_id=context.request.project_id,
+                precondition_id=context.precondition.id,
+                passed=False,
+                evidence_refs=(),
+                detail="software workspace is unavailable",
+                checked_at=checked_at,
+            )
+        if not workspace.path.exists():
+            return ControlCheckResult(
+                project_id=context.request.project_id,
+                precondition_id=context.precondition.id,
+                passed=False,
+                evidence_refs=(workspace.ref,),
+                detail="recorded workspace does not exist",
+                checked_at=checked_at,
+            )
+
+        profile_context = context.capsule.profile_context
+        software_context = profile_context.get("software", profile_context)
+        try:
+            expected_sha = SoftwareCapsuleContext.model_validate(
+                software_context
+            ).current_sha
+        except (TypeError, ValueError):
+            return ControlCheckResult(
+                project_id=context.request.project_id,
+                precondition_id=context.precondition.id,
+                passed=False,
+                evidence_refs=(workspace.ref,),
+                detail="capsule has no canonical workspace HEAD",
+                checked_at=checked_at,
+            )
+
+        result = await _git(workspace.path, "rev-parse", "HEAD")
+        if result.returncode != 0:
+            return ControlCheckResult(
+                project_id=context.request.project_id,
+                precondition_id=context.precondition.id,
+                passed=False,
+                evidence_refs=(workspace.ref,),
+                detail=result.stderr.strip() or "workspace HEAD is unreadable",
+                checked_at=checked_at,
+            )
+        actual_sha = result.stdout.strip()
+        passed = actual_sha == expected_sha
+        return ControlCheckResult(
+            project_id=context.request.project_id,
+            precondition_id=context.precondition.id,
+            passed=passed,
+            evidence_refs=(workspace.ref, f"git://{actual_sha}"),
+            detail=(
+                None
+                if passed
+                else f"workspace HEAD moved: expected {expected_sha}, found {actual_sha}"
+            ),
+            checked_at=checked_at,
+        )
 
 
 class SoftwareWorktreeManager:
@@ -147,7 +233,12 @@ class SoftwareWorktreeManager:
         *,
         expected_sha: str,
     ) -> None:
-        result = await _git(workspace.path, "rev-parse", "HEAD")
+        if not workspace.path.exists():
+            raise WorkspaceStaleError("recorded workspace does not exist")
+        try:
+            result = await _git(workspace.path, "rev-parse", "HEAD")
+        except FileNotFoundError as exc:
+            raise WorkspaceStaleError("recorded workspace does not exist") from exc
         if result.returncode != 0:
             raise WorkspaceStaleError(result.stderr)
         actual_sha = result.stdout.strip()

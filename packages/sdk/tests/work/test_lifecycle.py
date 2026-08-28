@@ -11,7 +11,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -28,6 +30,7 @@ from sagewai.work import (
     CapabilitySet,
     ClaimClassification,
     ClassifiedClaim,
+    ControlPreconditionKind,
     OperatorDisciplineReport,
     OperatorResult,
     ReviewFinding,
@@ -44,6 +47,7 @@ from sagewai.work import (
 from sagewai.work.control import OperatorController
 from sagewai.work.knowledge import KnowledgeKind, KnowledgeQuery, KnowledgeStore
 from sagewai.work.profiles.software import (
+    SOFTWARE_WORKSPACE_CHECK_REF,
     GitHubIssue,
     GitHubIssueLifecycle,
     GitHubMergeResult,
@@ -57,6 +61,7 @@ from sagewai.work.profiles.software import (
     SoftwareReviewContext,
     SoftwareStageOperator,
     SoftwareVerifier,
+    SoftwareWorkspaceControlCheck,
     SoftwareWorktreeManager,
     WorkspaceStaleError,
 )
@@ -198,10 +203,12 @@ class MutationRuntime:
         self.repair_text = repair_text
         self.calls = 0
         self.capsules = []
+        self.requests = []
 
     async def run(self, request, capsule, capabilities, workspace):
         self.calls += 1
         self.capsules.append(capsule)
+        self.requests.append(request)
         text = self.implement_text if request.stage == "implement" else self.repair_text
         (workspace.path / "target.txt").write_text(f"{text}\n")
         return _operator_result(request)
@@ -302,10 +309,12 @@ class ReviewRuntime:
         self.verdicts = list(verdicts)
         self.calls = 0
         self.capsules = []
+        self.requests = []
 
     async def run(self, request, capsule, capabilities, workspace):
         self.calls += 1
         self.capsules.append(capsule)
+        self.requests.append(request)
         verdict = self.verdicts.pop(0) if self.verdicts else "accept"
         findings = ()
         if verdict == "repair":
@@ -335,6 +344,48 @@ class CrashVerifier:
         raise RuntimeError("simulated restart")
 
 
+class MoveHeadAfterVerifier:
+    def __init__(self, delegate: SoftwareVerifier) -> None:
+        self.delegate = delegate
+        self.calls = 0
+
+    async def verify(self, **kwargs):
+        self.calls += 1
+        result = await self.delegate.verify(**kwargs)
+        workspace = kwargs["workspace"]
+        subprocess.run(
+            ("git", "-C", str(workspace.path), "commit", "--allow-empty", "-qm", "moved"),
+            check=True,
+        )
+        return result
+
+
+class RemoveWorkspaceAfterVerifier:
+    def __init__(self, delegate: SoftwareVerifier) -> None:
+        self.delegate = delegate
+
+    async def verify(self, **kwargs):
+        result = await self.delegate.verify(**kwargs)
+        shutil.rmtree(kwargs["workspace"].path)
+        return result
+
+
+class HideWorkspaceDuringFirstReviewRuntime(ReviewRuntime):
+    def __init__(self, *verdicts: str) -> None:
+        super().__init__(*verdicts)
+        self.hidden_path: Path | None = None
+
+    async def run(self, request, capsule, capabilities, workspace):
+        if self.calls == 0:
+            self.calls += 1
+            self.capsules.append(capsule)
+            self.requests.append(request)
+            self.hidden_path = workspace.path.with_name("workspace-hidden")
+            workspace.path.rename(self.hidden_path)
+            await asyncio.Event().wait()
+        return await super().run(request, capsule, capabilities, workspace)
+
+
 class PassingValidator:
     async def validate(self, *, request, result, workspace):
         return OperatorDisciplineReport(
@@ -362,7 +413,9 @@ def _controller(
         work_store=work_store,
         durability_store=durability,
         permission_policy=PermissionPolicy(),
-        control_checks={},
+        control_checks={
+            SOFTWARE_WORKSPACE_CHECK_REF: SoftwareWorkspaceControlCheck(),
+        },
         result_validator=validator,
         heartbeat_interval=0.01,
     )
@@ -509,6 +562,11 @@ async def test_successful_implement_verify_review_reaches_ready_to_merge(
     assert implementer.calls == 1
     assert reviewer.calls == 1
     assert repairer.calls == 0
+    for request in (*implementer.requests, *reviewer.requests):
+        assert len(request.control_preconditions) == 1
+        precondition = request.control_preconditions[0]
+        assert precondition.kind is ControlPreconditionKind.WORKSPACE
+        assert precondition.check_ref == SOFTWARE_WORKSPACE_CHECK_REF
     analysis_ref = "work-1:analysis:1:claim:1"
     assert implementer.capsules[0].knowledge_refs == (analysis_ref,)
 
@@ -1294,6 +1352,9 @@ async def test_review_finding_reaches_repair_as_typed_canonical_context(
     assert record.status == "READY_TO_MERGE"
     assert reviewer.calls == 2
     assert repairer.calls == 1
+    repair_precondition = repairer.requests[0].control_preconditions[0]
+    assert repair_precondition.kind is ControlPreconditionKind.WORKSPACE
+    assert repair_precondition.required_for == ("implement", "repair", "review")
     repair_context = SoftwareRepairContext.model_validate(repairer.capsules[0].profile_context)
     assert len(repair_context.findings) == 1
     assert repair_context.findings[0].required_change == "Write the repaired target"
@@ -1487,6 +1548,206 @@ async def test_restart_resume_does_not_rerun_completed_implementation(
         and event.payload_json["stage"] == "implement"
     ]
     assert len(completed) == 1
+
+
+@pytest.mark.asyncio
+async def test_restored_workspace_resumes_review_without_rerunning_completed_stages(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    durability = InMemoryStore()
+    implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
+    reviewer = ReviewRuntime("accept")
+    verifier = MoveHeadAfterVerifier(SoftwareVerifier(knowledge_store=knowledge_store))
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=durability,
+        implementer=implementer,
+        reviewer=reviewer,
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_command("initial"),),
+        verifier=verifier,
+    )
+
+    degraded = await lifecycle.start(
+        work_item=_work_item(),
+        contract=_contract(base_sha),
+    )
+
+    assert degraded.status == "CONTROL_DEGRADED"
+    assert implementer.calls == 1
+    assert verifier.calls == 1
+    assert reviewer.calls == 0
+
+    workspace = tmp_path / "worktrees" / "project-a" / "work-1" / "workspace"
+    subprocess.run(
+        ("git", "-C", str(workspace), "checkout", "--detach", "-q", base_sha),
+        check=True,
+    )
+    resumed = await lifecycle.resume("work-1", project_id="project-a")
+
+    assert resumed.status == "READY_TO_MERGE"
+    assert implementer.calls == 1
+    assert verifier.calls == 1
+    assert reviewer.calls == 1
+    events = await work_store.read_events("work-1", project_id="project-a")
+    control_events = [
+        event.event_type
+        for event in events
+        if event.event_type
+        in {WorkEventType.CONTROL_DEGRADED, WorkEventType.CONTROL_RESTORED}
+    ]
+    assert control_events == [
+        WorkEventType.CONTROL_DEGRADED,
+        WorkEventType.CONTROL_RESTORED,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_missing_workspace_before_review_degrades_before_capsule_read(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    reviewer = ReviewRuntime("accept")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        implementer=MutationRuntime(implement_text="initial", repair_text="fixed"),
+        reviewer=reviewer,
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_command("initial"),),
+        verifier=RemoveWorkspaceAfterVerifier(
+            SoftwareVerifier(knowledge_store=knowledge_store)
+        ),
+    )
+
+    record = await lifecycle.start(
+        work_item=_work_item(),
+        contract=_contract(base_sha),
+    )
+
+    assert record.status == "CONTROL_DEGRADED"
+    assert reviewer.calls == 0
+    events = await work_store.read_events("work-1", project_id="project-a")
+    degraded = next(
+        event for event in events if event.event_type is WorkEventType.CONTROL_DEGRADED
+    )
+    assert degraded.payload_json["stage"] == "review"
+    assert degraded.payload_json["details"] == (
+        "software-workspace: recorded workspace does not exist"
+    )
+    still_degraded = await lifecycle.resume("work-1", project_id="project-a")
+    assert still_degraded.status == "CONTROL_DEGRADED"
+    events = await work_store.read_events("work-1", project_id="project-a")
+    assert sum(
+        event.event_type is WorkEventType.CONTROL_DEGRADED for event in events
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_missing_workspace_before_repair_degrades_before_capsule_read(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    repairer = MutationRuntime(implement_text="unused", repair_text="fixed")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        implementer=MutationRuntime(implement_text="initial", repair_text="fixed"),
+        reviewer=ReviewRuntime("accept"),
+        repairer=repairer,
+        commands=(_always_fail_command(),),
+        verifier=RemoveWorkspaceAfterVerifier(
+            SoftwareVerifier(knowledge_store=knowledge_store)
+        ),
+    )
+
+    record = await lifecycle.start(
+        work_item=_work_item(),
+        contract=_contract(base_sha),
+    )
+
+    assert record.status == "CONTROL_DEGRADED"
+    assert repairer.calls == 0
+    events = await work_store.read_events("work-1", project_id="project-a")
+    degraded = next(
+        event for event in events if event.event_type is WorkEventType.CONTROL_DEGRADED
+    )
+    assert degraded.payload_json["stage"] == "repair"
+    assert degraded.payload_json["frozen_action_ids"] == ["work-1:repair:1:change"]
+
+
+@pytest.mark.asyncio
+async def test_inflight_review_workspace_loss_restores_without_replaying_prior_stages(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
+    reviewer = HideWorkspaceDuringFirstReviewRuntime("accept")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        implementer=implementer,
+        reviewer=reviewer,
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_command("initial"),),
+    )
+
+    degraded = await lifecycle.start(
+        work_item=_work_item(),
+        contract=_contract(base_sha),
+    )
+
+    assert degraded.status == "CONTROL_DEGRADED"
+    assert implementer.calls == 1
+    events = await work_store.read_events("work-1", project_id="project-a")
+    degraded_event = next(
+        event for event in events if event.event_type is WorkEventType.CONTROL_DEGRADED
+    )
+    assert degraded_event.payload_json["details"] == (
+        "software-workspace: recorded workspace does not exist"
+    )
+    workspace = tmp_path / "worktrees" / "project-a" / "work-1" / "workspace"
+    assert reviewer.hidden_path is not None
+    reviewer.hidden_path.rename(workspace)
+    resumed = await lifecycle.resume("work-1", project_id="project-a")
+
+    assert resumed.status == "READY_TO_MERGE"
+    assert implementer.calls == 1
+    assert reviewer.calls == 2
+    events = await work_store.read_events("work-1", project_id="project-a")
+    control_events = [
+        event.event_type
+        for event in events
+        if event.event_type
+        in {WorkEventType.CONTROL_DEGRADED, WorkEventType.CONTROL_RESTORED}
+    ]
+    assert control_events == [
+        WorkEventType.CONTROL_DEGRADED,
+        WorkEventType.CONTROL_RESTORED,
+    ]
+    pending = await work_store.pending_attention(project_id="project-a")
+    assert pending == ()
 
 
 @pytest.mark.asyncio
