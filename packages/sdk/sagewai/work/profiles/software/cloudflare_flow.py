@@ -16,7 +16,7 @@ from decimal import Decimal, InvalidOperation
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from sagewai.work.events import WorkEvent, WorkEventType
-from sagewai.work.models import WorkRecord
+from sagewai.work.models import Reversibility, WorkRecord
 from sagewai.work.profiles.software.delivery import (
     BlastRadius,
     DeliveryActionDeniedError,
@@ -135,6 +135,8 @@ class CloudflareDocsDeliveryFlow:
                 await self._lifecycle.deploy(
                     candidate,
                     environment="production",
+                    risk="high",
+                    reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
                     exposure=self._policy.rollout[0].exposure,
                     known_good_candidate=self._known_good,
                     evidence_refs=(self._policy.evidence_ref,),

@@ -486,6 +486,8 @@ class DeliveryLifecycle:
         known_good_candidate: ReleaseCandidate,
         evidence_refs: tuple[str, ...],
         expected_duration_seconds: int,
+        risk: str,
+        reversibility: Reversibility,
     ) -> Deployment:
         """Deploy a candidate only while authority, observation, and rollback pass."""
 
@@ -519,8 +521,8 @@ class DeliveryLifecycle:
                 project_id=candidate.project_id,
                 action=action_name,
                 work_id=candidate.work_id,
-                risk="high" if environment == "production" else "medium",
-                reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
+                risk=risk,
+                reversibility=reversibility,
                 scope=(f"{candidate.id}:{environment}:{exposure.dimension}:{exposure.value}"),
                 evidence_refs=evidence_refs,
             )

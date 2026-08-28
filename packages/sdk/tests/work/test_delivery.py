@@ -358,6 +358,8 @@ async def test_delivery_events_project_canonical_work_status(store: WorkStore) -
     staging = await lifecycle.deploy(
         candidate,
         environment="staging",
+        risk="medium",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
         exposure=BlastRadius(dimension="instances", value="1"),
         known_good_candidate=_known_good(),
         evidence_refs=(),
@@ -372,6 +374,8 @@ async def test_delivery_events_project_canonical_work_status(store: WorkStore) -
     deployment = await lifecycle.deploy(
         candidate,
         environment="production",
+        risk="high",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
         exposure=BlastRadius(dimension="traffic", value="5%"),
         known_good_candidate=_known_good(),
         evidence_refs=(),
@@ -453,6 +457,8 @@ async def test_nonpassing_full_rollout_does_not_project_soaking(
     rollout = await lifecycle.deploy(
         candidate,
         environment="production",
+        risk="high",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
         exposure=BlastRadius(dimension="traffic", value="100%"),
         known_good_candidate=_known_good(),
         evidence_refs=(),
@@ -497,6 +503,8 @@ async def test_fake_lifecycle_drives_staging_canary_rollout_observation_and_roll
     staging = await lifecycle.deploy(
         candidate,
         environment="staging",
+        risk="medium",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
         exposure=BlastRadius(dimension="instances", value="1"),
         known_good_candidate=known_good,
         evidence_refs=("policy://staging",),
@@ -509,6 +517,8 @@ async def test_fake_lifecycle_drives_staging_canary_rollout_observation_and_roll
     canary = await lifecycle.deploy(
         candidate,
         environment="production",
+        risk="high",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
         exposure=BlastRadius(dimension="traffic", value="5%"),
         known_good_candidate=known_good,
         evidence_refs=("policy://canary",),
@@ -616,6 +626,8 @@ async def test_nonpassing_health_gate_never_increases_exposure(
     canary = await lifecycle.deploy(
         candidate,
         environment="production",
+        risk="high",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
         exposure=BlastRadius(dimension="traffic", value="5%"),
         known_good_candidate=_known_good(),
         evidence_refs=(),
@@ -664,6 +676,8 @@ async def test_later_nonpassing_receipt_blocks_promotion_from_stale_pass(
     canary = await lifecycle.deploy(
         candidate,
         environment="production",
+        risk="high",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
         exposure=BlastRadius(dimension="traffic", value="5%"),
         known_good_candidate=_known_good(),
         evidence_refs=(),
@@ -719,6 +733,8 @@ async def test_nonpassing_observation_cannot_be_bypassed_by_redeploy(
     canary = await lifecycle.deploy(
         candidate,
         environment="production",
+        risk="high",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
         exposure=BlastRadius(dimension="traffic", value="5%"),
         known_good_candidate=_known_good(),
         evidence_refs=(),
@@ -732,6 +748,8 @@ async def test_nonpassing_observation_cannot_be_bypassed_by_redeploy(
         await lifecycle.deploy(
             candidate,
             environment="production",
+            risk="high",
+            reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
             exposure=BlastRadius(dimension="traffic", value="100%"),
             known_good_candidate=_known_good(),
             evidence_refs=(),
@@ -765,6 +783,8 @@ async def test_failed_candidate_cannot_be_deployed_to_another_environment(
     staging = await lifecycle.deploy(
         candidate,
         environment="staging",
+        risk="medium",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
         exposure=BlastRadius(dimension="instances", value="1"),
         known_good_candidate=_known_good(),
         evidence_refs=(),
@@ -778,6 +798,8 @@ async def test_failed_candidate_cannot_be_deployed_to_another_environment(
         await lifecycle.deploy(
             candidate,
             environment="production",
+            risk="high",
+            reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
             exposure=BlastRadius(dimension="traffic", value="5%"),
             known_good_candidate=_known_good(),
             evidence_refs=(),
@@ -811,6 +833,8 @@ async def test_rolled_back_deployment_cannot_be_promoted(
     deployment = await lifecycle.deploy(
         candidate,
         environment="production",
+        risk="high",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
         exposure=BlastRadius(dimension="traffic", value="5%"),
         known_good_candidate=_known_good(),
         evidence_refs=(),
@@ -836,6 +860,8 @@ async def test_rolled_back_deployment_cannot_be_promoted(
         await lifecycle.deploy(
             candidate,
             environment="staging",
+            risk="medium",
+            reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
             exposure=BlastRadius(dimension="instances", value="1"),
             known_good_candidate=_known_good(),
             evidence_refs=(),
@@ -882,6 +908,8 @@ async def test_rollback_of_promoted_receipt_freezes_sibling_candidate_receipts(
     canary = await lifecycle.deploy(
         candidate,
         environment="production",
+        risk="high",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
         exposure=BlastRadius(dimension="traffic", value="5%"),
         known_good_candidate=_known_good(),
         evidence_refs=(),
@@ -945,6 +973,8 @@ async def test_provider_reusing_deployment_id_requires_new_observation(
     canary = await lifecycle.deploy(
         candidate,
         environment="production",
+        risk="high",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
         exposure=BlastRadius(dimension="traffic", value="5%"),
         known_good_candidate=_known_good(),
         evidence_refs=(),
@@ -1239,6 +1269,8 @@ async def test_unrecorded_known_good_candidate_degrades_reversibility(
     deployment = await lifecycle.deploy(
         candidate,
         environment="production",
+        risk="high",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
         exposure=BlastRadius(dimension="traffic", value="5%"),
         known_good_candidate=_known_good(),
         evidence_refs=(),
@@ -1286,6 +1318,8 @@ async def test_unrelated_degradation_freezes_promotion_but_not_observe_or_rollba
     deployment = await lifecycle.deploy(
         candidate,
         environment="production",
+        risk="high",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
         exposure=BlastRadius(dimension="traffic", value="5%"),
         known_good_candidate=_known_good(),
         evidence_refs=(),
@@ -1341,6 +1375,8 @@ async def test_blind_deploy_and_unapproved_deploy_are_impossible(store: WorkStor
         await lifecycle.deploy(
             _candidate(),
             environment="production",
+            risk="high",
+            reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
             exposure=BlastRadius(dimension="traffic", value="5%"),
             known_good_candidate=_known_good(),
             evidence_refs=(),
@@ -1358,6 +1394,8 @@ async def test_blind_deploy_and_unapproved_deploy_are_impossible(store: WorkStor
         await lifecycle.deploy(
             _candidate(),
             environment="production",
+            risk="high",
+            reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
             exposure=BlastRadius(dimension="traffic", value="5%"),
             known_good_candidate=_known_good(),
             evidence_refs=(),
@@ -1398,6 +1436,8 @@ async def test_blind_deploy_and_unapproved_deploy_are_impossible(store: WorkStor
     deployment = await lifecycle.deploy(
         _candidate(),
         environment="production",
+        risk="high",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
         exposure=BlastRadius(dimension="traffic", value="5%"),
         known_good_candidate=_known_good(),
         evidence_refs=(),
@@ -1435,6 +1475,8 @@ async def test_delivery_approval_is_bound_to_release_candidate(
         await gated_lifecycle.deploy(
             candidate_one,
             environment="production",
+            risk="high",
+            reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
             exposure=exposure,
             known_good_candidate=_known_good(),
             evidence_refs=(),
@@ -1466,6 +1508,8 @@ async def test_delivery_approval_is_bound_to_release_candidate(
     first_deployment = await gated_lifecycle.deploy(
         candidate_one,
         environment="production",
+        risk="high",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
         exposure=exposure,
         known_good_candidate=_known_good(),
         evidence_refs=(),
@@ -1497,6 +1541,8 @@ async def test_delivery_approval_is_bound_to_release_candidate(
         await gated_lifecycle.deploy(
             candidate_two,
             environment="production",
+            risk="high",
+            reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
             exposure=exposure,
             known_good_candidate=_known_good(),
             evidence_refs=(),
@@ -1539,6 +1585,8 @@ async def test_completed_release_and_exact_delivery_actions_resume_without_rerun
     deployment = await lifecycle.deploy(
         candidate,
         environment="production",
+        risk="high",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
         exposure=exposure,
         known_good_candidate=_known_good(),
         evidence_refs=(),
@@ -1548,6 +1596,8 @@ async def test_completed_release_and_exact_delivery_actions_resume_without_rerun
         await lifecycle.deploy(
             candidate,
             environment="production",
+            risk="high",
+            reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
             exposure=exposure,
             known_good_candidate=_known_good(),
             evidence_refs=(),
@@ -1589,6 +1639,8 @@ async def test_failure_triage_and_verified_rollout_completion_are_persisted(
     failed_deployment = await lifecycle.deploy(
         candidate,
         environment="production",
+        risk="high",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
         exposure=BlastRadius(dimension="traffic", value="5%"),
         known_good_candidate=_known_good(),
         evidence_refs=(),
@@ -1626,6 +1678,8 @@ async def test_failure_triage_and_verified_rollout_completion_are_persisted(
         await lifecycle.deploy(
             candidate,
             environment="production",
+            risk="high",
+            reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
             exposure=BlastRadius(dimension="traffic", value="5%"),
             known_good_candidate=_known_good(),
             evidence_refs=(),
@@ -1677,6 +1731,8 @@ async def test_failure_triage_and_verified_rollout_completion_are_persisted(
     rollout = await lifecycle.deploy(
         repaired,
         environment="production",
+        risk="high",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
         exposure=BlastRadius(dimension="traffic", value="100%"),
         known_good_candidate=_known_good(),
         evidence_refs=(),
@@ -1757,6 +1813,8 @@ async def test_in_flight_control_loss_cancels_provider_and_freezes_work(
         await lifecycle.deploy(
             candidate,
             environment="production",
+            risk="high",
+            reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
             exposure=BlastRadius(dimension="traffic", value="5%"),
             known_good_candidate=_known_good(),
             evidence_refs=(),
@@ -1815,6 +1873,8 @@ async def test_monitoring_darkness_during_observation_cancels_window_and_freezes
     deployment = await lifecycle.deploy(
         candidate,
         environment="production",
+        risk="high",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
         exposure=BlastRadius(dimension="traffic", value="5%"),
         known_good_candidate=_known_good(),
         evidence_refs=(),
@@ -1861,6 +1921,8 @@ async def test_observation_provider_control_loss_freezes_without_health_or_rollb
     deployment = await lifecycle.deploy(
         candidate,
         environment="production",
+        risk="high",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
         exposure=BlastRadius(dimension="traffic", value="5%"),
         known_good_candidate=_known_good(),
         evidence_refs=(),
@@ -1904,6 +1966,8 @@ async def test_policy_denies_promotion_and_rollback_before_provider_side_effect(
     deployment = await lifecycle.deploy(
         candidate,
         environment="production",
+        risk="high",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
         exposure=BlastRadius(dimension="traffic", value="5%"),
         known_good_candidate=_known_good(),
         evidence_refs=(),
@@ -1959,6 +2023,8 @@ async def test_delivery_policy_denial_blocks_work_without_side_effect(
         await lifecycle.deploy(
             candidate,
             environment="production",
+            risk="high",
+            reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
             exposure=BlastRadius(dimension="traffic", value="5%"),
             known_good_candidate=_known_good(),
             evidence_refs=("policy://deny",),
@@ -1981,18 +2047,41 @@ async def test_critical_irreversible_action_is_denied_without_side_effect(
         store,
         policy=default_delivery_action_policy,
     )
+    candidate = _candidate()
+    await store.append_event(
+        WorkEvent(
+            id="release-candidate",
+            project_id=PROJECT_ID,
+            work_id=WORK_ID,
+            sequence=1,
+            event_type=WorkEventType.RELEASE_CREATED,
+            actor_type="test",
+            actor_ref=None,
+            payload_json={"release_candidate": candidate.model_dump(mode="json")},
+            created_at=NOW,
+        )
+    )
     request = ActionRequest(
         project_id=PROJECT_ID,
-        action="execute_migration",
+        action="deploy_production",
         work_id=WORK_ID,
         risk="critical",
         reversibility=Reversibility.IRREVERSIBLE,
-        scope="database://project-a/schema",
+        scope=f"{candidate.id}:production:traffic:5%",
         evidence_refs=("policy://request-claims-approval",),
     )
 
-    with pytest.raises(DeliveryActionDeniedError, match="execute_migration"):
-        await lifecycle._authorize(request)
+    with pytest.raises(DeliveryActionDeniedError, match="deploy_production"):
+        await lifecycle.deploy(
+            candidate,
+            environment="production",
+            exposure=BlastRadius(dimension="traffic", value="5%"),
+            known_good_candidate=_known_good(),
+            evidence_refs=request.evidence_refs,
+            expected_duration_seconds=60,
+            risk=request.risk,
+            reversibility=request.reversibility,
+        )
 
     events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
     assert [
