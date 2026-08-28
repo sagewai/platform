@@ -37,6 +37,7 @@ from sagewai.work import (
     ReviewFinding,
     ReviewResult,
     TaskCapsuleCompiler,
+    VerificationResult,
     WorkAnalysisResult,
     WorkContract,
     WorkContractProposal,
@@ -232,6 +233,12 @@ class RecordingSoftwareProfile(SoftwareProfile):
         return await super().verify(work, actions)
 
 
+class CrashingSoftwareProfile(RecordingSoftwareProfile):
+    async def verify(self, work, actions):
+        await super().verify(work, actions)
+        raise RuntimeError("simulated profile verification restart")
+
+
 class DiffReadingMutationRuntime(MutationRuntime):
     def __init__(
         self,
@@ -365,6 +372,13 @@ class FailedWithoutActionReceiptRuntime(MutationRuntime):
                 "action_results": (),
             }
         )
+
+
+class PassedWithFailedActionReceiptRuntime(MutationRuntime):
+    async def run(self, request, capsule, capabilities, workspace):
+        result = await super().run(request, capsule, capabilities, workspace)
+        failed = result.action_results[0].model_copy(update={"status": "failed"})
+        return result.model_copy(update={"action_results": (failed,)})
 
 
 class ReviewRuntime:
@@ -766,9 +780,11 @@ async def test_successful_implement_verify_review_reaches_ready_to_merge(
     assert fresh_artifact_store.read(context.diff_artifact.storage_ref) == (
         context.diff.encode()
     )
+    assert capsule.prior_result_refs == context.verification.evidence_refs
+    assert context.verification.evidence_refs[0] == "runtime://work-1:implement:1"
     assert tuple(item.id for item in capsule.knowledge_items) == (
         analysis_ref,
-        *context.verification.evidence_refs,
+        context.verification.evidence_refs[-1],
     )
     serialized = json.dumps(capsule.model_dump(mode="json")).lower()
     assert "session" not in serialized
@@ -1442,6 +1458,56 @@ async def test_github_flow_uses_real_software_lifecycle_events(
 
 
 @pytest.mark.asyncio
+async def test_failed_action_receipt_uses_canonical_verification_transition(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    durability = InMemoryStore()
+    profile = RecordingSoftwareProfile()
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=durability,
+        profile=profile,
+        implementer=PassedWithFailedActionReceiptRuntime(
+            implement_text="initial", repair_text="unused"
+        ),
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+    )
+
+    record = await lifecycle.start(
+        work_item=_work_item(),
+        contract=_contract(base_sha),
+    )
+
+    assert record.status == "READY_TO_MERGE"
+    assert profile.verify_calls == 2
+    events = await work_store.read_events("work-1", project_id="project-a")
+    execution = next(
+        event
+        for event in events
+        if event.event_type is WorkEventType.EXECUTION_RECORDED
+        and event.payload_json["run_id"] == "work-1:implement:1"
+    )
+    assert execution.payload_json["status"] == "passed"
+    verifications = [
+        VerificationResult.model_validate(event.payload_json)
+        for event in events
+        if event.event_type is WorkEventType.VERIFICATION_RECORDED
+    ]
+    assert [result.passed for result in verifications] == [False, True]
+    attempt = execution_attempt_from_events(events, "work-1:implement:1")
+    assert attempt is not None
+    assert attempt.status == "passed"
+
+
+@pytest.mark.asyncio
 async def test_failed_implementation_blocks_with_specific_question_and_evidence(
     stores,
     tmp_path: Path,
@@ -1864,6 +1930,84 @@ async def test_review_repair_budget_emits_one_specific_work_blocked(
 
 
 @pytest.mark.asyncio
+async def test_profile_verification_crash_resumes_persisted_execution(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    durability = InMemoryStore()
+    first_implementer = MutationRuntime(implement_text="initial", repair_text="unused")
+    first_profile = CrashingSoftwareProfile()
+    first = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=durability,
+        profile=first_profile,
+        implementer=first_implementer,
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+    )
+
+    with pytest.raises(RuntimeError, match="profile verification restart"):
+        await first.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    interrupted_events = await work_store.read_events("work-1", project_id="project-a")
+    assert sum(
+        event.event_type is WorkEventType.EXECUTION_RECORDED
+        and event.payload_json.get("run_id") == "work-1:implement:1"
+        for event in interrupted_events
+    ) == 1
+    assert not any(
+        event.event_type is WorkEventType.STAGE_COMPLETED
+        and event.payload_json.get("run_id") == "work-1:implement:1"
+        for event in interrupted_events
+    )
+
+    resumed_implementer = MutationRuntime(implement_text="must-not-run", repair_text="unused")
+    resumed_profile = RecordingSoftwareProfile()
+    resumed = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=durability,
+        profile=resumed_profile,
+        implementer=resumed_implementer,
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+    )
+
+    record = await resumed.resume("work-1", project_id="project-a")
+
+    assert record.status == "READY_TO_MERGE"
+    assert first_implementer.calls == 1
+    assert resumed_implementer.calls == 0
+    assert first_profile.verify_calls == 1
+    assert resumed_profile.verify_calls == 1
+    events = await work_store.read_events("work-1", project_id="project-a")
+    assert sum(
+        event.event_type is WorkEventType.EXECUTION_RECORDED
+        and event.payload_json.get("run_id") == "work-1:implement:1"
+        for event in events
+    ) == 1
+    assert sum(
+        event.event_type is WorkEventType.STAGE_COMPLETED
+        and event.payload_json.get("run_id") == "work-1:implement:1"
+        for event in events
+    ) == 1
+    assert sum(
+        event.event_type is WorkEventType.VERIFICATION_RECORDED
+        and event.payload_json.get("attempt_id") == "work-1:implement:1"
+        for event in events
+    ) == 1
+
+
+@pytest.mark.asyncio
 async def test_restart_resume_does_not_rerun_completed_implementation(
     stores,
     tmp_path: Path,
@@ -1872,12 +2016,14 @@ async def test_restart_resume_does_not_rerun_completed_implementation(
     repository, base_sha = _repository(tmp_path)
     durability = InMemoryStore()
     first_implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
+    first_profile = RecordingSoftwareProfile()
     first = _lifecycle(
         repository=repository,
         worktree_root=tmp_path / "worktrees",
         work_store=work_store,
         knowledge_store=knowledge_store,
         durability=durability,
+        profile=first_profile,
         implementer=first_implementer,
         reviewer=ReviewRuntime("accept"),
         repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
@@ -1892,6 +2038,7 @@ async def test_restart_resume_does_not_rerun_completed_implementation(
         )
 
     resumed_implementer = MutationRuntime(implement_text="must-not-run", repair_text="fixed")
+    resumed_profile = RecordingSoftwareProfile()
     resumed_reviewer = ReviewRuntime("accept")
     resumed = _lifecycle(
         repository=repository,
@@ -1899,6 +2046,7 @@ async def test_restart_resume_does_not_rerun_completed_implementation(
         work_store=work_store,
         knowledge_store=knowledge_store,
         durability=durability,
+        profile=resumed_profile,
         implementer=resumed_implementer,
         reviewer=resumed_reviewer,
         repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
@@ -1910,6 +2058,8 @@ async def test_restart_resume_does_not_rerun_completed_implementation(
     assert record.status == "READY_TO_MERGE"
     assert first_implementer.calls == 1
     assert resumed_implementer.calls == 0
+    assert first_profile.verify_calls == 1
+    assert resumed_profile.verify_calls == 0
     assert resumed_reviewer.calls == 1
     events = await work_store.read_events("work-1", project_id="project-a")
     completed = [

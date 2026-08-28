@@ -1,0 +1,175 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+#
+# This file is part of Sagewai, licensed under the GNU Affero General
+# Public License v3.0 or later (AGPL-3.0-or-later). You may use,
+# modify, and distribute this file under the terms of the AGPL.
+# See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
+#
+# This file is also available under a commercial license.
+# See COMMERCIAL-LICENSE.md for details.
+"""Tests for canonical execution-attempt projections."""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from sagewai.work import WorkEvent, WorkEventType, execution_attempt_from_events
+
+NOW = datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)
+RUN_ID = "work-1:implement:1"
+
+
+def _event(
+    sequence: int,
+    event_type: WorkEventType,
+    payload: dict,
+    *,
+    project_id: str = "project-a",
+    work_id: str = "work-1",
+) -> WorkEvent:
+    return WorkEvent(
+        id=f"{project_id}:{work_id}:{sequence}:{event_type.value}",
+        project_id=project_id,
+        work_id=work_id,
+        sequence=sequence,
+        event_type=event_type,
+        actor_type="test",
+        actor_ref=None,
+        payload_json=payload,
+        created_at=NOW + timedelta(seconds=sequence),
+    )
+
+
+def _started(
+    sequence: int = 1,
+    *,
+    runtime: str = "codex",
+    workspace_ref: str = "workspace://first",
+    project_id: str = "project-a",
+    work_id: str = "work-1",
+) -> WorkEvent:
+    return _event(
+        sequence,
+        WorkEventType.STAGE_STARTED,
+        {
+            "run_id": RUN_ID,
+            "stage": "implement",
+            "runtime": runtime,
+            "workspace_ref": workspace_ref,
+        },
+        project_id=project_id,
+        work_id=work_id,
+    )
+
+
+@pytest.mark.parametrize(
+    ("terminal_type", "terminal_status", "expected_status"),
+    [
+        (None, None, "running"),
+        (WorkEventType.EXECUTION_RECORDED, "passed", "passed"),
+        (WorkEventType.EXECUTION_RECORDED, "failed", "failed"),
+        (WorkEventType.EXECUTION_RECORDED, "blocked", "blocked"),
+        (WorkEventType.CONTROL_DEGRADED, None, "blocked"),
+    ],
+)
+def test_execution_attempt_projects_each_runtime_status(
+    terminal_type: WorkEventType | None,
+    terminal_status: str | None,
+    expected_status: str,
+) -> None:
+    events = [_started()]
+    if terminal_type is WorkEventType.EXECUTION_RECORDED:
+        events.append(
+            _event(
+                2,
+                terminal_type,
+                {
+                    "run_id": RUN_ID,
+                    "status": terminal_status,
+                    "artifact_refs": ["artifact://result"],
+                    "profile_context": {"opaque": True},
+                },
+            )
+        )
+    elif terminal_type is WorkEventType.CONTROL_DEGRADED:
+        events.append(
+            _event(
+                2,
+                terminal_type,
+                {"run_id": RUN_ID, "failed_preconditions": ["workspace"]},
+            )
+        )
+
+    attempt = execution_attempt_from_events(events, RUN_ID)
+
+    assert attempt is not None
+    assert attempt.status == expected_status
+    assert attempt.completed_at == (None if terminal_type is None else events[-1].created_at)
+    assert attempt.artifact_refs == (
+        ("artifact://result",)
+        if terminal_type is WorkEventType.EXECUTION_RECORDED
+        else ()
+    )
+
+
+def test_execution_attempt_folds_restoration_and_resumed_start_in_sequence() -> None:
+    first = _started()
+    resumed = _started(
+        3, runtime="replacement-codex", workspace_ref="workspace://resumed"
+    )
+    events = [
+        _event(
+            5,
+            WorkEventType.CONTROL_RESTORED,
+            {"run_id": RUN_ID, "precondition_ids": ["workspace"]},
+        ),
+        _event(
+            4,
+            WorkEventType.CONTROL_DEGRADED,
+            {"run_id": RUN_ID, "failed_preconditions": ["workspace"]},
+        ),
+        resumed,
+        _event(
+            2,
+            WorkEventType.CONTROL_DEGRADED,
+            {"run_id": RUN_ID, "failed_preconditions": ["workspace"]},
+        ),
+        first,
+    ]
+
+    attempt = execution_attempt_from_events(events, RUN_ID)
+
+    assert attempt is not None
+    assert attempt.status == "running"
+    assert attempt.runtime == "replacement-codex"
+    assert attempt.workspace_ref == "workspace://resumed"
+    assert attempt.started_at == resumed.created_at
+    assert attempt.completed_at is None
+
+
+def test_execution_attempt_ignores_same_run_from_another_project_and_work() -> None:
+    events = [
+        _started(project_id="project-b", work_id="work-other"),
+        _started(2),
+        _event(
+            3,
+            WorkEventType.EXECUTION_RECORDED,
+            {"run_id": RUN_ID, "status": "failed", "artifact_refs": []},
+            project_id="project-b",
+            work_id="work-other",
+        ),
+        _event(
+            3,
+            WorkEventType.EXECUTION_RECORDED,
+            {"run_id": RUN_ID, "status": "passed", "artifact_refs": []},
+        ),
+    ]
+
+    attempt = execution_attempt_from_events(events, RUN_ID)
+
+    assert attempt is not None
+    assert attempt.project_id == "project-a"
+    assert attempt.work_id == "work-1"
+    assert attempt.status == "passed"
