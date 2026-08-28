@@ -23,6 +23,8 @@ new uploader registers itself and the type literal extends.
 
 from sagewai.artifacts.github_uploader import GitHubUploader
 from sagewai.artifacts.local_uploader import LocalUploader
+from sagewai.artifacts.models import ArtifactRef as ArtifactRef
+from sagewai.artifacts.object_store import LocalArtifactStore as LocalArtifactStore
 from sagewai.artifacts.refs import register_uploader
 from sagewai.artifacts.s3_uploader import S3Uploader
 

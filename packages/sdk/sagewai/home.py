@@ -15,6 +15,7 @@ Single resolver for the on-disk layout used by a local install:
       config/    admin-state.json, connections.json
       db/        sagewai.db   (SQLite: stores + sqlite-vec vectors)
       data/      artifacts, run outputs, scratch
+      objects/   content-addressed artifact objects
       secrets/   master.key, profiles.json   (0700)
 
 ``SAGEWAI_HOME`` overrides the base. Per-file env overrides
@@ -65,6 +66,11 @@ def db_dir() -> Path:
 def data_dir() -> Path:
     """Artifacts, run outputs, caches, scratch."""
     return _subdir("data")
+
+
+def objects_dir() -> Path:
+    """Content-addressed artifact objects."""
+    return _subdir("objects")
 
 
 def secrets_dir() -> Path:
