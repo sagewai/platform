@@ -245,6 +245,10 @@ class DeliveryControlLostError(RuntimeError):
         self.evidence_refs = evidence_refs
 
 
+class _RollbackProviderError(RuntimeError):
+    """A failure raised specifically by the rollback provider operation."""
+
+
 _DELIVERY_STATUS_EVENTS = {
     WorkEventType.RELEASE_CREATED,
     WorkEventType.DEPLOYMENT_RECORDED,
@@ -667,6 +671,18 @@ class DeliveryLifecycle:
         candidate = await self._candidate_for(deployment)
         if deployment.status == "rolled_back":
             raise DeliveryActionDeniedError("deployment is already rolled back")
+        events = await self._work_store.read_events(
+            deployment.work_id,
+            project_id=deployment.project_id,
+        )
+        provider_failure = active_control_degradations(events).get("rollback-provider")
+        if (
+            provider_failure is not None
+            and provider_failure.payload_json.get("deployment_id") == deployment.id
+        ):
+            raise DeliveryActionDeniedError(
+                "rollback provider failed; explicit recovery is required"
+            )
         existing = await self._rollback_for(deployment.id, deployment)
         if existing is not None:
             return existing
@@ -694,13 +710,24 @@ class DeliveryLifecycle:
                 evidence_refs=evidence_refs,
             )
         )
-        rolled_back = await self._run_controlled(
-            self._deployment_provider.rollback(
+        try:
+            rolled_back = await self._run_controlled(
+                self._run_rollback_provider(
+                    deployment,
+                    known_good_candidate,
+                ),
+                control_request,
+            )
+        except _RollbackProviderError as exc:
+            await self.record_rollback_failure(
                 deployment,
-                known_good_candidate,
-            ),
-            control_request,
-        )
+                failure_id="rollback-provider",
+                detail=str(exc),
+                evidence_refs=evidence_refs,
+            )
+            raise DeliveryActionDeniedError(
+                "rollback provider failed; explicit recovery is required"
+            ) from exc
         if (
             rolled_back.project_id != deployment.project_id
             or rolled_back.work_id != deployment.work_id
@@ -723,6 +750,57 @@ class DeliveryLifecycle:
             actor_ref="deployment_provider",
         )
         return rolled_back
+
+    async def _run_rollback_provider(
+        self,
+        deployment: Deployment,
+        known_good_candidate: ReleaseCandidate,
+    ) -> Deployment:
+        try:
+            return await self._deployment_provider.rollback(
+                deployment,
+                known_good_candidate,
+            )
+        except (ControlDegradedError, DeliveryControlLostError):
+            raise
+        except Exception as exc:
+            raise _RollbackProviderError(
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+
+    async def record_rollback_failure(
+        self,
+        deployment: Deployment,
+        *,
+        failure_id: Literal["rollback-provider", "rollback-verification"],
+        detail: str,
+        evidence_refs: tuple[str, ...],
+    ) -> None:
+        """Freeze a failed production rollback as one critical incident."""
+
+        candidate = await self._candidate_for(deployment)
+        request = DeliveryControlRequest(
+            project_id=deployment.project_id,
+            work_id=deployment.work_id,
+            action="rollback",
+            candidate=candidate,
+            known_good_candidate=None,
+            deployment=deployment,
+            expected_duration_seconds=1,
+        )
+        await self._record_control_degradation(
+            request,
+            (
+                ControlCheckResult(
+                    project_id=deployment.project_id,
+                    precondition_id=failure_id,
+                    passed=False,
+                    evidence_refs=evidence_refs,
+                    detail=detail,
+                    checked_at=datetime.now(timezone.utc),
+                ),
+            ),
+        )
 
     async def triage(
         self,

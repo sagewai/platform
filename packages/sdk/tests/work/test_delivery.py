@@ -1072,6 +1072,136 @@ async def test_failed_rollback_precondition_refuses_action_and_freezes_work(
 
 
 @pytest.mark.asyncio
+async def test_rollback_provider_failure_escalates_once_and_is_not_retried(
+    store: WorkStore,
+) -> None:
+    class FailingRollbackProvider(DeterministicFakeDeploymentProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.rollback_attempts = 0
+
+        async def rollback(self, deployment, known_good_candidate):
+            self.rollback_attempts += 1
+            raise RuntimeError("provider rejected rollback")
+
+    provider = FailingRollbackProvider()
+    lifecycle, _, _, _, _ = _lifecycle(store, deployment_provider=provider)
+    await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    deployment = Deployment(
+        id="deployment-1",
+        project_id=PROJECT_ID,
+        work_id=WORK_ID,
+        release_candidate_id="candidate-1",
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="5%"),
+        provider_ref="fake://deployment/1",
+        status="active",
+    )
+    await _record_deployment(store, deployment)
+
+    for _attempt in range(2):
+        with pytest.raises(DeliveryActionDeniedError, match="rollback provider failed"):
+            await lifecycle.rollback(
+                deployment,
+                known_good_candidate=_known_good(),
+                evidence_refs=("observation://failed",),
+                expected_duration_seconds=60,
+            )
+
+    assert provider.rollback_attempts == 1
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    critical = [
+        event
+        for event in events
+        if event.event_type is WorkEventType.CONTROL_DEGRADED
+        and event.payload_json.get("failed_preconditions") == ["rollback-provider"]
+    ]
+    assert len(critical) == 1
+    assert critical[0].payload_json["severity"] == "critical"
+    assert critical[0].payload_json["deployment_id"] == deployment.id
+    assert critical[0].payload_json["evidence_refs"] == ["observation://failed"]
+    assert "RuntimeError: provider rejected rollback" in critical[0].payload_json["details"]
+    pending = await store.pending_attention(project_id=PROJECT_ID)
+    assert len(pending) == 1
+    assert pending[0].kind.value == "PRODUCTION_INCIDENT"
+    assert pending[0].severity == "critical"
+
+
+@pytest.mark.asyncio
+async def test_rollback_heartbeat_error_is_not_recorded_as_provider_failure(
+    store: WorkStore,
+) -> None:
+    class BrokenHeartbeatProbe:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def evaluate(self, request, preconditions):
+            self.calls += 1
+            if self.calls > 1:
+                raise RuntimeError("control probe crashed")
+            return tuple(_result(precondition.id) for precondition in preconditions)
+
+    class BlockingRollbackProvider(DeterministicFakeDeploymentProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cancelled = False
+
+        async def rollback(self, deployment, known_good_candidate):
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+
+    provider = BlockingRollbackProvider()
+    lifecycle, _, _, _, _ = _lifecycle(
+        store,
+        control_probe=BrokenHeartbeatProbe(),
+        deployment_provider=provider,
+        heartbeat_interval=0.01,
+    )
+    await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    deployment = Deployment(
+        id="deployment-1",
+        project_id=PROJECT_ID,
+        work_id=WORK_ID,
+        release_candidate_id="candidate-1",
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="5%"),
+        provider_ref="fake://deployment/1",
+        status="active",
+    )
+    await _record_deployment(store, deployment)
+
+    with pytest.raises(RuntimeError, match="control probe crashed"):
+        await lifecycle.rollback(
+            deployment,
+            known_good_candidate=_known_good(),
+            evidence_refs=("observation://failed",),
+            expected_duration_seconds=60,
+        )
+
+    assert provider.cancelled is True
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    assert not any(
+        event.event_type is WorkEventType.CONTROL_DEGRADED
+        and "rollback-provider"
+        in event.payload_json.get("failed_preconditions", ())
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
 async def test_rollback_refusal_records_one_critical_receipt_for_active_precondition(
     store: WorkStore,
 ) -> None:
@@ -1824,6 +1954,102 @@ async def test_in_flight_control_loss_cancels_provider_and_freezes_work(
     assert provider.cancelled is True
     pending = await store.pending_attention(project_id=PROJECT_ID)
     assert [item.attention_id for item in pending] == ["delivery-observability"]
+
+
+@pytest.mark.asyncio
+async def test_credential_expiry_mid_deploy_restores_and_resumes_same_candidate(
+    store: WorkStore,
+) -> None:
+    class ExpiringAuthorityProbe:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def evaluate(self, request, preconditions):
+            self.calls += 1
+            return tuple(
+                _result(
+                    precondition.id,
+                    passed=self.calls == 1 or precondition.id != "delivery-authority",
+                    detail="credential expired" if self.calls > 1 else None,
+                )
+                for precondition in preconditions
+            )
+
+    class ResumableProvider(DeterministicFakeDeploymentProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts = 0
+            self.cancelled = False
+
+        async def deploy(self, candidate, environment, exposure, known_good_candidate):
+            self.attempts += 1
+            if self.attempts == 1:
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    self.cancelled = True
+                    raise
+            return await super().deploy(
+                candidate,
+                environment,
+                exposure,
+                known_good_candidate,
+            )
+
+    provider = ResumableProvider()
+    lifecycle, release, _, _, _ = _lifecycle(
+        store,
+        control_probe=ExpiringAuthorityProbe(),
+        deployment_provider=provider,
+        heartbeat_interval=0.01,
+    )
+    candidate = await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+
+    request = dict(
+        environment="production",
+        risk="high",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
+        exposure=BlastRadius(dimension="traffic", value="5%"),
+        known_good_candidate=_known_good(),
+        evidence_refs=("policy://docs",),
+        expected_duration_seconds=60,
+    )
+    with pytest.raises(ControlDegradedError, match="delivery-authority"):
+        await lifecycle.deploy(candidate, **request)
+
+    assert provider.cancelled is True
+    assert provider.deployments == []
+    restored, resumed_release, _, _, _ = _lifecycle(
+        store,
+        control_probe=_passing_probe(),
+        deployment_provider=provider,
+        heartbeat_interval=0.01,
+    )
+    resumed_candidate = await restored.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    deployment = await restored.deploy(resumed_candidate, **request)
+
+    assert resumed_candidate == candidate
+    assert release.builds == [COMMIT_SHA]
+    assert resumed_release.builds == []
+    assert provider.attempts == 2
+    assert provider.deployments == [deployment]
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    assert [
+        event.event_type
+        for event in events
+        if event.event_type
+        in {WorkEventType.CONTROL_DEGRADED, WorkEventType.CONTROL_RESTORED}
+    ] == [WorkEventType.CONTROL_DEGRADED, WorkEventType.CONTROL_RESTORED]
 
 
 @pytest.mark.asyncio
