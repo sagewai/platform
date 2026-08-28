@@ -83,8 +83,9 @@ class SoftwareReviewContext(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     software: SoftwareCapsuleContext
-    diff: str
+    diff: str | None
     diff_artifact: ArtifactRef
+    diff_workspace_path: str | None
     verification: VerificationResult
     relevant_files: tuple[str, ...]
     open_assumptions: tuple[Assumption, ...]
@@ -108,8 +109,9 @@ class SoftwareRepairContext(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     software: SoftwareCapsuleContext
-    diff: str
+    diff: str | None
     diff_artifact: ArtifactRef
+    diff_workspace_path: str | None
     verification: VerificationResult
     relevant_files: tuple[str, ...]
     open_assumptions: tuple[Assumption, ...]

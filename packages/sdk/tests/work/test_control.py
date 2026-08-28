@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timezone
 
 import pytest
@@ -162,6 +163,8 @@ def _capsule() -> TaskCapsule:
         contract=contract,
         knowledge_refs=(),
         knowledge_items=(),
+        knowledge_items_considered=4,
+        artifact_bytes_referenced=123,
         open_assumption_ids=(),
         prior_result_refs=(),
     )
@@ -558,6 +561,30 @@ async def test_completed_run_returns_persisted_result_without_reexecution(
     assert runtime.started == 1
     assert sum(event.event_type is WorkEventType.STAGE_STARTED for event in events) == 1
     assert sum(event.event_type is WorkEventType.EXECUTION_RECORDED for event in events) == 1
+
+
+@pytest.mark.asyncio
+async def test_stage_started_records_capsule_efficiency_measurements(
+    work_store: WorkStore,
+) -> None:
+    capsule = _capsule()
+
+    await _controller(work_store, InMemoryStore()).run(
+        runtime=RecordingRuntime(),
+        request=_request(),
+        capsule=capsule,
+        capabilities=_capabilities(),
+        workspace=None,
+    )
+
+    events = await work_store.read_events("work-1", project_id="project-a")
+    started = next(event for event in events if event.event_type is WorkEventType.STAGE_STARTED)
+    assert started.payload_json["knowledge_items_considered"] == 4
+    assert started.payload_json["knowledge_items_selected"] == 0
+    assert started.payload_json["artifact_bytes_referenced"] == 123
+    assert started.payload_json["capsule_size_bytes"] == len(
+        json.dumps(capsule.model_dump(mode="json"), sort_keys=True).encode("utf-8")
+    )
 
 
 @pytest.mark.asyncio

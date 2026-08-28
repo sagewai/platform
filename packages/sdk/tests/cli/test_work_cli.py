@@ -23,6 +23,7 @@ from click.testing import CliRunner
 
 from sagewai.cli import cli
 from sagewai.cli.work import work as work_cli
+from sagewai.core.state import InMemoryStore
 from sagewai.fleet.execution import WorkerProcessResult
 from sagewai.work import WorkEvent, WorkEventType, WorkMetrics, WorkRecord, WorkStore
 from tests.db.conftest import dialect_engine  # noqa: F401
@@ -34,6 +35,39 @@ from tests.work.test_cloudflare_adapter import (
 )
 
 work_module = import_module("sagewai.cli.work")
+
+
+@pytest.mark.asyncio
+async def test_build_lifecycle_shares_one_artifact_store(
+    monkeypatch,
+    dialect_engine,  # noqa: F811
+    tmp_path,
+) -> None:
+    async def fake_ensure_schema() -> None:
+        return None
+
+    async def fake_workflow_store():
+        return InMemoryStore()
+
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    monkeypatch.setenv("SAGEWAI_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(work_module.factory, "ensure_schema", fake_ensure_schema)
+    monkeypatch.setattr(work_module.factory, "get_engine", lambda: dialect_engine)
+    monkeypatch.setattr(
+        work_module.factory,
+        "get_workflow_store",
+        fake_workflow_store,
+    )
+
+    lifecycle, _, _ = await work_module._build_lifecycle(
+        project_id="project-a",
+        repository=repository,
+    )
+
+    artifact_store = lifecycle._artifact_store
+    assert lifecycle._capsule_compiler._artifact_store is artifact_store
+    assert lifecycle._verifier._artifact_store is artifact_store
 
 
 def test_work_group_is_registered() -> None:

@@ -322,6 +322,8 @@ class TaskCapsule(BaseModel):
     contract: WorkContract
     knowledge_refs: tuple[str, ...]
     knowledge_items: tuple[KnowledgeItem, ...]
+    knowledge_items_considered: int = Field(ge=0)
+    artifact_bytes_referenced: int = Field(ge=0)
     open_assumption_ids: tuple[str, ...]
     prior_result_refs: tuple[str, ...]
     profile_context: dict[str, Any] = Field(default_factory=dict)

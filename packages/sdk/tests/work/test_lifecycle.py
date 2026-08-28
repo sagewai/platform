@@ -66,6 +66,7 @@ from sagewai.work.profiles.software import (
     SoftwareWorktreeManager,
     WorkspaceStaleError,
 )
+from sagewai.work.profiles.software.lifecycle import _store_diff_context
 from tests.db.conftest import dialect_engine  # noqa: F401
 
 NOW = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
@@ -215,6 +216,34 @@ class MutationRuntime:
         return _operator_result(request)
 
 
+class DiffReadingMutationRuntime(MutationRuntime):
+    def __init__(
+        self,
+        *,
+        implement_text: str,
+        repair_text: str,
+        artifact_store: LocalArtifactStore,
+    ) -> None:
+        super().__init__(implement_text=implement_text, repair_text=repair_text)
+        self.artifact_store = artifact_store
+        self.materialized_paths: list[Path] = []
+        self.materialized_diffs: list[bytes] = []
+
+    async def run(self, request, capsule, capabilities, workspace):
+        if request.stage == "repair":
+            context = SoftwareRepairContext.model_validate(capsule.profile_context)
+            assert context.diff is None
+            assert context.diff_workspace_path is not None
+            materialized = workspace.path / context.diff_workspace_path
+            self.materialized_paths.append(materialized)
+            self.materialized_diffs.append(materialized.read_bytes())
+            assert (
+                materialized.stat().st_ino
+                != self.artifact_store.resolve(context.diff_artifact.storage_ref).stat().st_ino
+            )
+        return await super().run(request, capsule, capabilities, workspace)
+
+
 class AnalysisRuntime:
     name = "analysis-runtime"
 
@@ -361,6 +390,27 @@ class ReviewRuntime:
             request,
             profile_context={"review_result": review.model_dump(mode="json")},
         )
+
+
+class DiffReadingReviewRuntime(ReviewRuntime):
+    def __init__(self, artifact_store: LocalArtifactStore, *verdicts: str) -> None:
+        super().__init__(*verdicts)
+        self.artifact_store = artifact_store
+        self.materialized_paths: list[Path] = []
+        self.materialized_diffs: list[bytes] = []
+
+    async def run(self, request, capsule, capabilities, workspace):
+        context = SoftwareReviewContext.model_validate(capsule.profile_context)
+        if context.diff is None:
+            assert context.diff_workspace_path is not None
+            materialized = workspace.path / context.diff_workspace_path
+            self.materialized_paths.append(materialized)
+            self.materialized_diffs.append(materialized.read_bytes())
+            assert (
+                materialized.stat().st_ino
+                != self.artifact_store.resolve(context.diff_artifact.storage_ref).stat().st_ino
+            )
+        return await super().run(request, capsule, capabilities, workspace)
 
 
 class InvalidReviewRuntime(ReviewRuntime):
@@ -513,6 +563,28 @@ def _always_fail_command() -> str:
     return f'{sys.executable} -c "raise SystemExit(1)"'
 
 
+def test_diff_context_limit_uses_exact_utf8_bytes_and_keeps_artifact(
+    tmp_path: Path,
+) -> None:
+    store = LocalArtifactStore(root=tmp_path / "objects")
+
+    inline, at_limit = _store_diff_context(
+        artifact_store=store,
+        raw_diff="é",
+        max_inline_diff_bytes=2,
+    )
+    omitted, above_limit = _store_diff_context(
+        artifact_store=store,
+        raw_diff="é",
+        max_inline_diff_bytes=1,
+    )
+
+    assert inline == "é"
+    assert omitted is None
+    assert above_limit.storage_ref == at_limit.storage_ref
+    assert store.read(above_limit.storage_ref) == "é".encode()
+
+
 def _lifecycle(
     *,
     repository: Path,
@@ -531,17 +603,26 @@ def _lifecycle(
     reviewer_actor: str = "operator:reviewer",
     repairer_actor: str | None = None,
     artifact_root: Path | None = None,
+    max_inline_diff_bytes: int = 4000,
 ) -> SoftwareLifecycle:
-    compiler = TaskCapsuleCompiler(knowledge_store=knowledge_store)
+    artifact_store = LocalArtifactStore(
+        root=artifact_root or worktree_root.parent / "objects"
+    )
+    compiler = TaskCapsuleCompiler(
+        knowledge_store=knowledge_store,
+        artifact_store=artifact_store,
+    )
     return SoftwareLifecycle(
         work_store=work_store,
         knowledge_store=knowledge_store,
         capsule_compiler=compiler,
         worktree_manager=SoftwareWorktreeManager(root=worktree_root),
-        verifier=verifier or SoftwareVerifier(knowledge_store=knowledge_store),
-        artifact_store=LocalArtifactStore(
-            root=artifact_root or worktree_root.parent / "objects"
+        verifier=verifier
+        or SoftwareVerifier(
+            knowledge_store=knowledge_store,
+            artifact_store=artifact_store,
         ),
+        artifact_store=artifact_store,
         repository=repository,
         analyst=SoftwareStageOperator(
             actor_ref=analyst_actor,
@@ -585,6 +666,7 @@ def _lifecycle(
         ),
         repo_instructions=("AGENTS.md",),
         verification_commands=commands,
+        max_inline_diff_bytes=max_inline_diff_bytes,
     )
 
 
@@ -1546,9 +1628,15 @@ async def test_review_finding_reaches_repair_as_typed_canonical_context(
     work_store, knowledge_store = stores
     repository, base_sha = _repository(tmp_path)
     durability = InMemoryStore()
-    implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
-    repairer = MutationRuntime(implement_text="unused", repair_text="fixed")
-    reviewer = ReviewRuntime("repair", "accept")
+    artifact_store = LocalArtifactStore(root=tmp_path / "objects")
+    large_initial = "initial-" * 1000
+    implementer = MutationRuntime(implement_text=large_initial, repair_text="fixed")
+    repairer = DiffReadingMutationRuntime(
+        implement_text="unused",
+        repair_text="fixed",
+        artifact_store=artifact_store,
+    )
+    reviewer = DiffReadingReviewRuntime(artifact_store, "repair", "accept")
     lifecycle = _lifecycle(
         repository=repository,
         worktree_root=tmp_path / "worktrees",
@@ -1576,15 +1664,29 @@ async def test_review_finding_reaches_repair_as_typed_canonical_context(
     first_review_context = SoftwareReviewContext.model_validate(
         reviewer.capsules[0].profile_context
     )
-    assert repair_context.diff == first_review_context.diff
+    assert repair_context.diff is None
+    assert first_review_context.diff is None
     assert repair_context.diff_artifact.storage_ref == (
         first_review_context.diff_artifact.storage_ref
     )
     assert repair_context.diff_artifact.media_type == "text/x-diff"
     independent_store = LocalArtifactStore(root=tmp_path / "objects")
-    assert independent_store.read(repair_context.diff_artifact.storage_ref) == (
-        repair_context.diff.encode()
+    raw_diff = independent_store.read(repair_context.diff_artifact.storage_ref)
+    assert b"initial" in raw_diff
+    assert repair_context.diff_artifact.size_bytes == len(raw_diff)
+    assert reviewer.materialized_diffs[0] == raw_diff
+    assert repairer.materialized_diffs == [raw_diff]
+    assert all(not path.exists() for path in reviewer.materialized_paths)
+    assert all(not path.exists() for path in repairer.materialized_paths)
+    assert "initial" not in json.dumps(repairer.capsules[0].model_dump(mode="json"))
+    events = await work_store.read_events("work-1", project_id="project-a")
+    repair_started = next(
+        event
+        for event in events
+        if event.event_type is WorkEventType.STAGE_STARTED
+        and event.payload_json["stage"] == "repair"
     )
+    assert repair_started.payload_json["artifact_bytes_referenced"] == len(raw_diff)
     assert len(repair_context.findings) == 1
     assert repair_context.findings[0].required_change == "Write the repaired target"
     assert repair_context.open_assumptions == ()
@@ -2118,4 +2220,27 @@ async def test_repairer_cannot_be_assigned_as_reviewer(
             commands=(_always_pass_command(),),
             reviewer_actor="operator:same",
             repairer_actor="operator:same",
+        )
+
+
+@pytest.mark.asyncio
+async def test_negative_inline_diff_limit_is_rejected(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, _ = _repository(tmp_path)
+
+    with pytest.raises(ValueError, match="max_inline_diff_bytes cannot be negative"):
+        _lifecycle(
+            repository=repository,
+            worktree_root=tmp_path / "worktrees",
+            work_store=work_store,
+            knowledge_store=knowledge_store,
+            durability=InMemoryStore(),
+            implementer=MutationRuntime(implement_text="initial", repair_text="fixed"),
+            reviewer=ReviewRuntime("accept"),
+            repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+            commands=(_always_pass_command(),),
+            max_inline_diff_bytes=-1,
         )

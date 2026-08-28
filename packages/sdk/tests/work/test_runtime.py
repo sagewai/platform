@@ -104,6 +104,8 @@ def _capsule() -> TaskCapsule:
         contract=contract,
         knowledge_refs=(),
         knowledge_items=(),
+        knowledge_items_considered=0,
+        artifact_bytes_referenced=0,
         open_assumption_ids=(),
         prior_result_refs=(),
     )

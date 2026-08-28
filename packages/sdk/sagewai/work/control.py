@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from collections.abc import Mapping
@@ -203,6 +204,15 @@ class OperatorController:
                     intent.model_dump(mode="json") for intent in request.action_intents
                 ],
                 "capability_names": [grant.name for grant in scoped.grants],
+                "knowledge_items_considered": capsule.knowledge_items_considered,
+                "knowledge_items_selected": len(capsule.knowledge_items),
+                "artifact_bytes_referenced": capsule.artifact_bytes_referenced,
+                "capsule_size_bytes": len(
+                    json.dumps(
+                        capsule.model_dump(mode="json"),
+                        sort_keys=True,
+                    ).encode("utf-8")
+                ),
             },
         )
 
