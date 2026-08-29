@@ -15,11 +15,13 @@ from datetime import datetime, timedelta, timezone
 from functools import partial
 
 import pytest
+from click.testing import CliRunner
 from fastapi.encoders import jsonable_encoder
 from fastapi.testclient import TestClient
 
 from sagewai.admin.serve import create_admin_serve_app
 from sagewai.admin.state_file import AdminStateFile
+from sagewai.cli import cli
 from sagewai.db import factory
 from sagewai.work import WorkEvent, WorkEventType, WorkRecord
 
@@ -209,7 +211,20 @@ def test_pending_attention_matches_canonical_project_query(tmp_path) -> None:
         )
 
         response = client.get("/api/v1/work/pending")
+        cli_response = CliRunner().invoke(
+            cli,
+            ["work", "--project", "project-a", "pending"],
+        )
 
     assert response.status_code == 200
     assert response.json() == jsonable_encoder(expected)
     assert [item["work_id"] for item in response.json()] == [blocked.work_id]
+    assert cli_response.exit_code == 0, cli_response.output
+    assert cli_response.output.splitlines() == [
+        (
+            f"{item['kind']} {item['work_id']} {item['attention_id']}: "
+            f"{item['summary']}"
+        )
+        for item in response.json()
+    ]
+    assert foreign.work_id not in cli_response.output
