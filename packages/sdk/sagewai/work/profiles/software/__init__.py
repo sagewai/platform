@@ -89,6 +89,7 @@ from sagewai.work.profiles.software.scm import (
     workspace_diff,
 )
 from sagewai.work.profiles.software.verification import (
+    SOFTWARE_VERIFICATION_ISOLATION_PRECONDITION_ID,
     SandboxedVerificationRunner,
     SoftwareReadOnlyResultValidator,
     SoftwareResultValidator,
@@ -140,6 +141,7 @@ __all__ = [
     "github_remote_repository",
     "is_github_issue_url",
     "require_merge_approval",
+    "SOFTWARE_VERIFICATION_ISOLATION_PRECONDITION_ID",
     "SandboxedVerificationRunner",
     "SoftwareAttemptContext",
     "SoftwareAnalysisContext",

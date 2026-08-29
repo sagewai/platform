@@ -366,6 +366,7 @@ class DockerBackend:
         resource_limits: ResourceLimits,
         workdir_mount: Path | None,
         lifetime: SandboxLifetime,
+        user: str | None = None,
     ) -> DockerSandboxHandle:
         sandbox_id = f"sgw-{uuid.uuid4().hex[:12]}"
         binds: list[str] = []
@@ -405,6 +406,8 @@ class DockerBackend:
             "HostConfig": host_config,
         }
 
+        if user is not None:
+            container_config["User"] = user
         container = await self._client.containers.create(
             config=container_config, name=sandbox_id
         )

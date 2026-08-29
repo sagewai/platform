@@ -64,7 +64,11 @@ from sagewai.work.profiles.software.scm import (
     software_workspace_precondition,
     workspace_diff,
 )
-from sagewai.work.profiles.software.verification import _normalized_target
+from sagewai.work.profiles.software.verification import (
+    SOFTWARE_VERIFICATION_ISOLATION_PRECONDITION_ID,
+    VerificationIsolationError,
+    _normalized_target,
+)
 from sagewai.work.runtime import (
     CapabilitySet,
     OperatorResult,
@@ -1228,12 +1232,54 @@ class SoftwareLifecycle:
         )
         if profile_result.attempt_id != attempt_id:
             raise ValueError("profile verification belongs to a different attempt")
-        deterministic = await self._verifier.verify(
-            work_item=work_item,
-            attempt_id=attempt_id,
-            workspace=workspace,
-            commands=self._verification_commands,
+        isolation_was_degraded = (
+            SOFTWARE_VERIFICATION_ISOLATION_PRECONDITION_ID
+            in active_control_precondition_ids(events)
         )
+        try:
+            deterministic = await self._verifier.verify(
+                work_item=work_item,
+                attempt_id=attempt_id,
+                workspace=workspace,
+                commands=self._verification_commands,
+            )
+        except VerificationIsolationError as exc:
+            if not isolation_was_degraded:
+                await self._append(
+                    work_item,
+                    WorkEventType.CONTROL_DEGRADED,
+                    {
+                        "run_id": attempt_id,
+                        "stage": "verification",
+                        "failed_preconditions": [
+                            SOFTWARE_VERIFICATION_ISOLATION_PRECONDITION_ID
+                        ],
+                        "evidence_refs": [workspace.ref],
+                        "details": str(exc),
+                        "frozen_action_ids": [],
+                    },
+                    actor_ref="software.verifier",
+                )
+            await self._set_status(
+                work_item,
+                "CONTROL_DEGRADED",
+                active_run_id=attempt_id,
+            )
+            return "CONTROL_DEGRADED"
+        if isolation_was_degraded:
+            await self._append(
+                work_item,
+                WorkEventType.CONTROL_RESTORED,
+                {
+                    "run_id": attempt_id,
+                    "stage": "verification",
+                    "precondition_ids": [
+                        SOFTWARE_VERIFICATION_ISOLATION_PRECONDITION_ID
+                    ],
+                    "evidence_refs": list(deterministic.evidence_refs),
+                },
+                actor_ref="software.verifier",
+            )
         result = VerificationResult(
             attempt_id=attempt_id,
             passed=profile_result.passed and deterministic.passed,
@@ -1800,6 +1846,8 @@ class SoftwareLifecycle:
                     state = "IMPLEMENTING"
                 elif stage == "repair":
                     state = "REPAIRING"
+                elif stage == "verification":
+                    state = "VERIFYING"
                 elif stage == "review":
                     state = "REVIEWING"
             elif event.event_type is WorkEventType.STAGE_STARTED:

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import shutil
 import tempfile
@@ -35,12 +36,12 @@ from sagewai.work.models import OperatorDisciplineReport, VerificationResult, Wo
 from sagewai.work.profiles.software.models import (
     SoftwareVerificationCheck,
     SoftwareWorkspace,
-    WorkspaceStaleError,
 )
-from sagewai.work.profiles.software.scm import _git
 from sagewai.work.runtime import OperatorResult, WorkRequest, Workspace
 
 _VERIFICATION_INLINE_LIMIT_BYTES = 4000
+SOFTWARE_VERIFICATION_ISOLATION_PRECONDITION_ID = "software.verification.isolation"
+_DIGEST_PINNED_IMAGE = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
 
 
 class SoftwareResultValidator:
@@ -113,28 +114,38 @@ class SoftwareResultValidator:
 
 
 async def _git_changes(workspace: SoftwareWorkspace) -> tuple[tuple[str, ...], int]:
-    tracked = await _git(workspace.path, "diff", "--numstat", workspace.base_sha, "--")
-    if tracked.returncode != 0:
-        raise WorkspaceStaleError(tracked.stderr)
-    untracked = await _git(
-        workspace.path,
-        "ls-files",
-        "--others",
-        "--exclude-standard",
-    )
-    if untracked.returncode != 0:
-        raise WorkspaceStaleError(untracked.stderr)
+    with tempfile.TemporaryDirectory(prefix="sagewai-git-inspection-") as root:
+        trusted = Path(root) / "repository"
+        await _prepare_trusted_repository(workspace, trusted)
+        tracked = await _checked_git(
+            trusted,
+            f"--work-tree={workspace.path}",
+            "diff",
+            "--numstat",
+            "--no-ext-diff",
+            "--no-textconv",
+            workspace.base_sha,
+            "--",
+        )
+        untracked = await _checked_git(
+            trusted,
+            f"--work-tree={workspace.path}",
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            *_trusted_exclude_args(workspace.repository),
+        )
 
     files: set[str] = set()
     diff_lines = 0
-    for line in tracked.stdout.splitlines():
+    for line in tracked.splitlines():
         added, deleted, changed_file = line.split("\t", 2)
         files.add(changed_file)
         if added != "-":
             diff_lines += int(added)
         if deleted != "-":
             diff_lines += int(deleted)
-    for changed_file in untracked.stdout.splitlines():
+    for changed_file in untracked.splitlines():
         files.add(changed_file)
         try:
             diff_lines += len((workspace.path / changed_file).read_text().splitlines())
@@ -186,12 +197,12 @@ class VerificationCommandRunner(Protocol):
 def _docker_backend() -> SandboxBackend:
     try:
         from sagewai.sandbox.docker_backend import DockerBackend
-    except ImportError as exc:
+
+        return DockerBackend()
+    except (ImportError, RuntimeError) as exc:
         raise VerificationIsolationError(
             "Docker verification backend is unavailable; install sagewai[sandbox]"
         ) from exc
-
-    return DockerBackend()
 
 
 class SandboxedVerificationRunner:
@@ -204,8 +215,8 @@ class SandboxedVerificationRunner:
         backend_factory: Callable[[], SandboxBackend] = _docker_backend,
         resource_limits: ResourceLimits | None = None,
     ) -> None:
-        if not image.strip():
-            raise ValueError("verification sandbox image cannot be empty")
+        if not _DIGEST_PINNED_IMAGE.fullmatch(image):
+            raise ValueError("verification sandbox image must be digest-pinned")
         self._image = image
         self._backend_factory = backend_factory
         self._resource_limits = resource_limits or ResourceLimits()
@@ -220,13 +231,19 @@ class SandboxedVerificationRunner:
         commands: tuple[tuple[str, ...], ...],
         timeout: float,
     ) -> tuple[WorkerProcessResult, ...]:
-        backend = self._backend_factory()
+        backend: SandboxBackend | None = None
+        try:
+            backend = self._backend_factory()
+        except Exception as exc:
+            raise VerificationIsolationError(
+                f"verification sandbox backend is unavailable: {exc}"
+            ) from exc
         handle = None
         try:
             with tempfile.TemporaryDirectory(prefix="sagewai-verification-") as root:
                 try:
                     snapshot = Path(root) / "workspace"
-                    await _create_verification_snapshot(workspace.path, snapshot)
+                    await _create_verification_snapshot(workspace, snapshot)
                     try:
                         handle = await backend.start(
                             project_id=project_id,
@@ -238,6 +255,7 @@ class SandboxedVerificationRunner:
                             resource_limits=self._resource_limits,
                             workdir_mount=snapshot,
                             lifetime=SandboxLifetime.PER_RUN,
+                            user=f"{os.getuid()}:{os.getgid()}",
                         )
                     except Exception as exc:
                         raise VerificationIsolationError(
@@ -275,74 +293,121 @@ class SandboxedVerificationRunner:
                         await handle.stop()
                         handle = None
         finally:
-            close = getattr(backend, "close", None)
-            if close is not None:
-                await close()
+            if backend is not None:
+                await backend.close()
 
 
 def _image_digest(image: str) -> str:
-    if "@sha256:" in image:
-        return "sha256:" + image.rsplit("@sha256:", 1)[1]
-    if image.startswith("sha256:"):
-        return image
-    return ""
+    return "sha256:" + image.rsplit("@sha256:", 1)[1]
 
 
-async def _create_verification_snapshot(source: Path, destination: Path) -> None:
-    head = await _checked_git(source, "rev-parse", "HEAD")
+def _trusted_git_env() -> dict[str, str]:
+    return {
+        "HOME": os.devnull,
+        "XDG_CONFIG_HOME": os.devnull,
+        "GIT_ATTR_NOSYSTEM": "1",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_OPTIONAL_LOCKS": "0",
+    }
+
+
+def _trusted_git_argv(*args: str) -> tuple[str, ...]:
+    return (
+        "git",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        f"core.hooksPath={os.devnull}",
+        *args,
+    )
+
+
+async def _prepare_trusted_repository(
+    workspace: SoftwareWorkspace,
+    destination: Path,
+) -> None:
+    repository = workspace.repository.resolve()
+    if not repository.is_dir():
+        raise VerificationIsolationError("trusted repository is unavailable")
     clone = await run_worker_subprocess(
-        argv=(
-            "git",
+        argv=_trusted_git_argv(
             "clone",
             "--quiet",
             "--no-hardlinks",
             "--no-checkout",
-            str(source),
+            str(repository),
             str(destination),
         ),
-        cwd=source.parent,
+        cwd=repository.parent,
+        explicit_env=_trusted_git_env(),
         output_limit=None,
     )
     if clone.returncode != 0:
-        raise VerificationIsolationError(f"cannot clone verification snapshot: {clone.stderr}")
-    await _checked_git(destination, "checkout", "--quiet", "--detach", head.strip())
+        raise VerificationIsolationError(f"cannot prepare trusted repository: {clone.stderr}")
+    await _checked_git(
+        destination,
+        "checkout",
+        "--quiet",
+        "--detach",
+        workspace.base_sha,
+    )
 
+
+def _trusted_exclude_args(repository: Path) -> tuple[str, ...]:
+    git_dir = repository / ".git"
+    if not git_dir.is_dir() and (repository / "objects").is_dir():
+        git_dir = repository
+    exclude = git_dir / "info" / "exclude"
+    return (f"--exclude-from={exclude}",) if exclude.is_file() else ()
+
+
+async def _create_verification_snapshot(
+    workspace: SoftwareWorkspace,
+    destination: Path,
+) -> None:
+    await _prepare_trusted_repository(workspace, destination)
     diff = await _checked_git(
-        source,
+        destination,
+        f"--work-tree={workspace.path}",
         "diff",
         "--binary",
         "--no-ext-diff",
         "--no-textconv",
-        "HEAD",
+        workspace.base_sha,
         "--",
     )
     if diff:
-        apply_result = await run_worker_subprocess(
-            argv=("git", "apply", "--binary", "--whitespace=nowarn", "--"),
+        await _checked_git(
+            destination,
+            "apply",
+            "--binary",
+            "--whitespace=nowarn",
+            "--",
             stdin=diff,
-            cwd=destination,
-            output_limit=None,
         )
-        if apply_result.returncode != 0:
-            raise VerificationIsolationError(
-                f"cannot apply worktree changes to verification snapshot: {apply_result.stderr}"
-            )
 
     untracked = await _checked_git(
-        source,
+        destination,
+        f"--work-tree={workspace.path}",
         "ls-files",
         "--others",
         "--exclude-standard",
+        *_trusted_exclude_args(workspace.repository),
         "-z",
     )
     for relative in filter(None, untracked.split("\0")):
-        _copy_untracked(source, destination, relative)
+        _copy_untracked(workspace.path, destination, relative)
     await _checked_git(destination, "remote", "remove", "origin")
 
 
-async def _checked_git(cwd: Path, *args: str) -> str:
+async def _checked_git(cwd: Path, *args: str, stdin: str = "") -> str:
     result = await run_worker_subprocess(
-        argv=("git", *args),
+        argv=_trusted_git_argv(*args),
+        stdin=stdin,
+        explicit_env=_trusted_git_env(),
         cwd=cwd,
         output_limit=None,
     )
@@ -358,6 +423,8 @@ def _copy_untracked(source: Path, destination: Path, relative: str) -> None:
     if path.is_absolute() or ".." in path.parts or ".git" in path.parts:
         raise VerificationIsolationError(f"unsafe untracked path: {relative}")
     src = source.joinpath(*path.parts)
+    if src.is_dir():
+        raise VerificationIsolationError(f"untracked directory is not allowed: {relative}")
     dst = destination.joinpath(*path.parts)
     current = destination
     for part in path.parts[:-1]:
@@ -367,8 +434,6 @@ def _copy_untracked(source: Path, destination: Path, relative: str) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     if src.is_symlink():
         dst.symlink_to(os.readlink(src))
-    elif src.is_dir():
-        shutil.copytree(src, dst, symlinks=True)
     else:
         shutil.copy2(src, dst, follow_symlinks=False)
 

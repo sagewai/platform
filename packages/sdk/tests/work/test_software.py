@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import os
 import shlex
 import subprocess
 import sys
@@ -373,6 +374,55 @@ async def test_post_run_validator_rejects_scope_and_undeclared_effects(
 
 
 @pytest.mark.asyncio
+async def test_result_validator_does_not_run_worktree_git_filters(tmp_path: Path) -> None:
+    repository, base_sha = _repository(tmp_path)
+    (repository / ".gitattributes").write_text("*.txt filter=escape\n")
+    (repository / "tracked.txt").write_text("base\n")
+    _git(repository, "add", ".gitattributes", "tracked.txt")
+    _git(repository, "commit", "-m", "declare filter")
+    base_sha = _git(repository, "rev-parse", "HEAD")
+    marker = tmp_path / "validator-filter-executed"
+    _git(
+        repository,
+        "config",
+        "filter.escape.clean",
+        f"sh -c 'touch {shlex.quote(str(marker))}; cat'",
+    )
+    (repository / "tracked.txt").write_text("operator output\n")
+    workspace = SoftwareWorkspace(
+        ref="workspace://attempt-1",
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="attempt-1",
+        repository=repository,
+        path=repository,
+        base_sha=base_sha,
+        initial_sha=base_sha,
+    )
+    request = WorkRequest(
+        project_id="project-a",
+        work_id="work-1",
+        run_id="run-1",
+        stage="implement",
+        action_scope=ActionScope(
+            objective="Change tracked.txt",
+            allowed_targets=("tracked.txt",),
+        ),
+        action_intents=(),
+        control_preconditions=(),
+    )
+
+    report = await SoftwareResultValidator().validate(
+        request=request,
+        result=_result(),
+        workspace=workspace,
+    )
+
+    assert report.changed_files == 1
+    assert not marker.exists()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "validator",
     [SoftwareResultValidator(), SoftwareReadOnlyResultValidator()],
@@ -414,6 +464,17 @@ async def test_result_validator_records_runtime_output_tokens(
 @pytest.mark.asyncio
 async def test_verification_runs_in_disposable_networkless_sandbox(tmp_path: Path) -> None:
     repository, base_sha = _repository(tmp_path)
+    (repository / ".gitattributes").write_text("*.md filter=escape\n")
+    _git(repository, "add", ".gitattributes")
+    _git(repository, "commit", "-m", "declare filter")
+    base_sha = _git(repository, "rev-parse", "HEAD")
+    host_marker = tmp_path / "host-filter-executed"
+    _git(
+        repository,
+        "config",
+        "filter.escape.clean",
+        f"sh -c 'touch {shlex.quote(str(host_marker))}; cat'",
+    )
     (repository / "README.md").write_text("changed\n")
     (repository / "new.txt").write_text("new\n")
     (repository / ".git" / "info" / "exclude").write_text("host-secret.txt\n")
@@ -452,12 +513,14 @@ async def test_verification_runs_in_disposable_networkless_sandbox(tmp_path: Pat
     assert backend.start_kwargs["env"] == {}
     assert backend.start_kwargs["network_policy"] is NetworkPolicy.NONE
     assert backend.start_kwargs["lifetime"] is SandboxLifetime.PER_RUN
+    assert backend.start_kwargs["user"] == f"{os.getuid()}:{os.getgid()}"
     snapshot = backend.start_kwargs["workdir_mount"]
     assert not snapshot.exists()
     assert backend.handle.calls[0].args == {"command": shlex.join(command)}
     assert backend.handle.stopped is True
     assert backend.closed is True
     assert not (repository / "verification-generated.txt").exists()
+    assert not host_marker.exists()
     assert (repository / "host-secret.txt").read_text() == "outside verification scope\n"
 
 
@@ -499,6 +562,49 @@ async def test_verification_sandbox_unavailability_fails_closed(tmp_path: Path) 
     assert backend.start_calls == 1
     assert backend.closed is True
     assert not escaped.exists()
+
+
+@pytest.mark.asyncio
+async def test_verification_rejects_untracked_embedded_repository(tmp_path: Path) -> None:
+    repository, base_sha = _repository(tmp_path)
+    nested = repository / "nested"
+    nested.mkdir()
+    _git(nested, "init")
+    (nested / ".gitignore").write_text("secret.txt\n")
+    (nested / "secret.txt").write_text("must not enter verification\n")
+    workspace = SoftwareWorkspace(
+        ref="workspace://verify",
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="verify",
+        repository=repository,
+        path=repository,
+        base_sha=base_sha,
+        initial_sha=base_sha,
+    )
+    backend = _RecordingSandboxBackend()
+    runner = SandboxedVerificationRunner(
+        image="example.invalid/verifier@sha256:" + "a" * 64,
+        backend_factory=lambda: backend,
+    )
+
+    with pytest.raises(VerificationIsolationError, match="untracked directory"):
+        await runner.run(
+            project_id="project-a",
+            work_id="work-1",
+            attempt_id="attempt-1",
+            workspace=workspace,
+            commands=(("true",),),
+            timeout=30,
+        )
+
+    assert backend.start_kwargs is None
+    assert backend.closed is True
+
+
+def test_verification_requires_digest_pinned_image() -> None:
+    with pytest.raises(ValueError, match="digest-pinned"):
+        SandboxedVerificationRunner(image="example.invalid/verifier:latest")
 
 
 @pytest.mark.asyncio
