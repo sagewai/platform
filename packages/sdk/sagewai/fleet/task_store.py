@@ -20,7 +20,9 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sagewai._project_scope import project_scope_key
 from sagewai.fleet.dispatcher import _TERMINAL_STATUSES, NotTaskOwnerError
+from sagewai.fleet.models import WORKER_ID_ROUTING_LABEL
 from sagewai.sandbox.models import NetworkPolicy, SandboxImageVariant, SandboxMode
 
 
@@ -60,14 +62,33 @@ class PostgresTaskStore:
 
                 await conn.run_sync(Base.metadata.create_all)
                 await conn.run_sync(add_missing_sqlite_columns)
+                from sagewai.db.sqlite_fleet_task_scope import (
+                    upgrade_sqlite_fleet_task_scope,
+                )
+
+                await conn.run_sync(upgrade_sqlite_fleet_task_scope)
             # Fail-closed on BOTH dialects: a fleet_tasks missing lease_expires_at/attempts
             # raises HERE, not at first claim/renew/reap.
             try:
                 await conn.execute(
-                    text("SELECT run_id, status, lease_expires_at, attempts FROM fleet_tasks LIMIT 0")
+                    text(
+                        "SELECT run_id, org_id, project_scope_key, status, "
+                        "lease_expires_at, attempts FROM fleet_tasks LIMIT 0"
+                    )
                 )
             except (OperationalError, ProgrammingError) as exc:
                 raise RuntimeError(self._unmigrated_hint(eng.dialect.name)) from exc
+            def _primary_key(sync_conn):
+                from sqlalchemy import inspect
+
+                return inspect(sync_conn).get_pk_constraint("fleet_tasks")[
+                    "constrained_columns"
+                ]
+
+            if await conn.run_sync(_primary_key) != [
+                "org_id", "project_scope_key", "run_id"
+            ]:
+                raise RuntimeError(self._unmigrated_hint(eng.dialect.name))
         self._inited = True
 
     @staticmethod
@@ -117,6 +138,14 @@ class PostgresTaskStore:
             return func.now() + func.make_interval(0, 0, 0, 0, 0, 0, self._lease_ttl_seconds)
         return _now() + timedelta(seconds=self._lease_ttl_seconds)
 
+    @staticmethod
+    def _identity_clause(t, *, run_id, org_id, project_id):
+        return (
+            (t.c.run_id == run_id)
+            & (t.c.org_id == org_id)
+            & (t.c.project_scope_key == project_scope_key(project_id))
+        )
+
     # -- mapping --------------------------------------------------------
     @staticmethod
     def _claimed_view(row, worker_id, claimed_at) -> dict[str, Any]:
@@ -138,6 +167,10 @@ class PostgresTaskStore:
             "pool": m["pool"], "model": m["model"], "worker_id": m["worker_id"],
             "claimed_at": _iso(m["claimed_at"]), "error": m["error"], "output": m["output"],
             "reported_at": _iso(m["reported_at"]), "created_at": _iso(m["created_at"]),
+            "selected_worker_id": (m["labels"] or {}).get(WORKER_ID_ROUTING_LABEL),
+            "workspace_input_digest": (
+                (m["payload"] or {}).get("workspace") or {}
+            ).get("input_digest"),
         }
 
     # -- enqueue --------------------------------------------------------
@@ -150,6 +183,7 @@ class PostgresTaskStore:
                 run_id=task["run_id"],
                 org_id=task["org_id"],
                 project_id=task.get("project_id"),
+                project_scope_key=project_scope_key(task.get("project_id")),
                 pool=task.get("pool", "default"),
                 model=task.get("model"),
                 labels=task.get("labels") or {},
@@ -164,16 +198,58 @@ class PostgresTaskStore:
         t = self._tasks
         async with self._connect() as conn:
             row = (await conn.execute(select(t).where(
-                (t.c.run_id == run_id) & (t.c.org_id == org_id)
-                & (t.c.project_id == project_id)
+                self._identity_clause(
+                    t, run_id=run_id, org_id=org_id, project_id=project_id
+                )
             ))).first()
         return self._status_view(row) if row else None
+
+    async def retarget_task(
+        self,
+        run_id,
+        *,
+        org_id,
+        project_id,
+        expected_worker_id,
+        selected_worker_id,
+    ):
+        from sqlalchemy import select, update
+
+        t = self._tasks
+        async with self._begin() as conn:
+            row = (await conn.execute(select(t).where(
+                self._identity_clause(
+                    t, run_id=run_id, org_id=org_id, project_id=project_id
+                )
+                & (t.c.status == "pending")
+            ))).first()
+            if row is None:
+                return False
+            labels = row._mapping["labels"] or {}
+            if labels.get(WORKER_ID_ROUTING_LABEL) != expected_worker_id:
+                return False
+            replacement = {
+                **labels,
+                WORKER_ID_ROUTING_LABEL: selected_worker_id,
+            }
+            result = await conn.execute(
+                update(t).where(
+                    self._identity_clause(
+                        t, run_id=run_id, org_id=org_id, project_id=project_id
+                    )
+                    & (t.c.status == "pending")
+                    & (t.c.labels == labels)
+                ).values(labels=replacement)
+            )
+            return result.rowcount == 1
+
 
     async def list_tasks(self, *, org_id, project_id, status=None, limit=50) -> list[dict[str, Any]]:
         from sqlalchemy import select
 
         t = self._tasks
-        q = select(t).where((t.c.org_id == org_id) & (t.c.project_id == project_id))
+        q = select(t).where((t.c.org_id == org_id)
+            & (t.c.project_scope_key == project_scope_key(project_id)))
         if status is not None:
             q = q.where(t.c.status == status)
         q = q.order_by(t.c.created_at.desc()).limit(limit)
@@ -194,9 +270,9 @@ class PostgresTaskStore:
         worker_labels = labels or {}
         base = (
             (t.c.status == "pending")
-            & (t.c.org_id == org_id)        # exact org (durable store requires org)
+            & (t.c.org_id == org_id)
             & (t.c.pool == pool)
-            & (t.c.project_id == project_id)  # None -> IS NULL (org-global)
+            & (t.c.project_scope_key == project_scope_key(project_id))
             & or_(t.c.model.is_(None), t.c.model.in_(models_canonical))
         )
         is_pg = self._engine.dialect.name == "postgresql"
@@ -228,7 +304,13 @@ class PostgresTaskStore:
                     continue  # (no-op on PG where SQL already filtered)
                 now = _now()
                 upd = await conn.execute(
-                    update(t).where((t.c.run_id == m["run_id"]) & (t.c.status == "pending"))
+                    update(t).where(
+                        self._identity_clause(
+                            t, run_id=m["run_id"], org_id=m["org_id"],
+                            project_id=m["project_id"],
+                        )
+                        & (t.c.status == "pending")
+                    )
                     .values(status="claimed", worker_id=worker_id, claimed_at=now,
                             lease_expires_at=self._lease_expr(), attempts=t.c.attempts + 1)
                 )
@@ -236,7 +318,9 @@ class PostgresTaskStore:
                     return self._claimed_view(row, worker_id, now)
         return None
 
-    async def report_task(self, run_id, status, output, error, *, worker_id) -> None:
+    async def report_task(
+        self, run_id, status, output, error, *, worker_id, org_id, project_id
+    ) -> None:
         if status not in _TERMINAL_STATUSES:
             raise ValueError(
                 f"Invalid report status {status!r} (only 'completed'/'failed' may be reported)"
@@ -247,7 +331,9 @@ class PostgresTaskStore:
         async with self._begin() as conn:
             upd = await conn.execute(
                 update(t).where(
-                    (t.c.run_id == run_id)
+                    self._identity_clause(
+                        t, run_id=run_id, org_id=org_id, project_id=project_id
+                    )
                     & (t.c.worker_id == worker_id)
                     & (t.c.status == "claimed")
                 ).values(status=status, output=output, error=error,
@@ -255,7 +341,11 @@ class PostgresTaskStore:
             )
             if upd.rowcount == 1:
                 return
-            row = (await conn.execute(select(t).where(t.c.run_id == run_id))).first()
+            row = (await conn.execute(select(t).where(
+                    self._identity_clause(
+                        t, run_id=run_id, org_id=org_id, project_id=project_id
+                    )
+                ))).first()
         if row is None:
             raise NotTaskOwnerError(run_id)
         m = row._mapping

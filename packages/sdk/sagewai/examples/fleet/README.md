@@ -20,6 +20,35 @@ sagewai fleet enqueue --agent helper -m "…"  ──►│   gateway queues a t
 > Wiring Autopilot *multi-step missions* to remote workers is a separate, deferred track
 > (sagewai/atelier#59) and does not affect this path.
 
+## Native Work operators
+
+Fleet can run the same durable software Work lifecycle on machines that keep
+their own Codex or Claude authentication. Start project-scoped workers from a
+trusted local checkout and advertise only the runtime they can execute:
+
+```bash
+sagewai fleet run --name codex-worker --project my-project \
+  --capabilities runtime.codex,filesystem.write \
+  --work-repository /path/to/platform
+
+sagewai fleet run --name claude-worker --project my-project \
+  --capabilities runtime.claude,filesystem.read \
+  --work-repository /path/to/platform
+```
+
+Then select Fleet execution explicitly when starting or resuming Work:
+
+```bash
+sagewai work --project my-project --execution fleet --fleet-org my-org \
+  start "the accepted software outcome"
+```
+
+The control plane persists Work state and sends a credential-free workspace
+snapshot. Each selected worker uses its local native CLI authentication; Codex
+or Claude credentials are never submitted to the control plane. If a selected
+worker disappears, the existing Fleet lease recovery can reassign only the
+unfinished stage to another compatible project-scoped worker.
+
 ## Fastest path — `just` (single-user, local)
 
 On your own machine these recipes run the whole loop with **auto-auth** (loopback

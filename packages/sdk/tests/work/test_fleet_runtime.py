@@ -14,12 +14,12 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
 from sagewai.fleet import (
+    FleetDispatcher,
     InMemoryFleetRegistry,
     InMemoryTaskStore,
     WorkerCapabilities,
@@ -31,6 +31,7 @@ from sagewai.work import (
     ActionScope,
     CapabilityGrant,
     CapabilitySet,
+    FleetOperatorResultEnvelope,
     FleetOperatorRuntime,
     NoCompatibleWorkerError,
     OperatorResult,
@@ -41,13 +42,6 @@ from sagewai.work import (
 )
 
 NOW = datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)
-
-
-class _Workspace:
-    ref = "workspace://attempt-1"
-    project_id = "project-a"
-    work_id = "work-1"
-    path = Path("/worker-local/sagewai/work-1")
 
 
 def _request() -> WorkRequest:
@@ -131,17 +125,18 @@ def _capabilities() -> CapabilitySet:
     )
 
 
-async def _compatible_registry() -> InMemoryFleetRegistry:
+async def _compatible_registry(*, workers: int = 1) -> InMemoryFleetRegistry:
     registry = InMemoryFleetRegistry()
-    worker = await registry.register_worker(
-        "claude-worker",
-        "org-a",
-        WorkerCapabilities(capability_names=["runtime.claude", "cli.git"]),
-        project_id="project-a",
-        secret_hash="worker-local-secret-hash",
-    )
-    await registry.approve_worker(worker.id, approved_by="test")
-    await registry.heartbeat(worker.id)
+    for index in range(workers):
+        worker = await registry.register_worker(
+            f"claude-worker-{index + 1}",
+            "org-a",
+            WorkerCapabilities(capability_names=["runtime.claude", "cli.git"]),
+            project_id="project-a",
+            secret_hash="worker-local-secret-hash",
+        )
+        await registry.approve_worker(worker.id, approved_by="test")
+        await registry.heartbeat(worker.id)
     return registry
 
 
@@ -249,7 +244,12 @@ async def test_fleet_runtime_matches_capabilities_and_resumes_after_worker_loss(
 ) -> None:
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "worker-secret-value")
     store = InMemoryTaskStore(lease_ttl_seconds=0.01)
-    registry = await _compatible_registry()
+    registry = await _compatible_registry(workers=2)
+    workers = sorted(
+        await registry.list_workers("org-a", project_id="project-a"),
+        key=lambda worker: (worker.registered_at, worker.id),
+    )
+    first_worker, replacement_worker = workers
     runtime = FleetOperatorRuntime(
         store=store,
         registry=registry,
@@ -261,45 +261,36 @@ async def test_fleet_runtime_matches_capabilities_and_resumes_after_worker_loss(
     request = _request()
     capsule = _capsule()
     capabilities = _capabilities()
-    workspace = _Workspace()
 
-    first_waiter = asyncio.create_task(
-        runtime.run(request, capsule, capabilities, workspace=workspace)
-    )
+    first_waiter = asyncio.create_task(runtime.run(request, capsule, capabilities, workspace=None))
     await _wait_for_status(store, "pending")
     first_waiter.cancel()
     with pytest.raises(asyncio.CancelledError):
         await first_waiter
 
-    # A retry reattaches to the existing run_id instead of enqueuing a second task.
-    waiter = asyncio.create_task(runtime.run(request, capsule, capabilities, workspace=workspace))
+    waiter = asyncio.create_task(runtime.run(request, capsule, capabilities, workspace=None))
     await asyncio.sleep(0)
     assert len(await store.list_tasks(org_id="org-a", project_id="project-a")) == 1
 
-    codex_worker = WorkerCapabilities(
-        capability_names=["runtime.codex", "cli.git"],
-    )
+    dispatcher = FleetDispatcher(store=store, poll_interval=0.001, poll_timeout=0.01)
     assert (
-        await store.claim_task(
-            "worker-codex",
-            "org-a",
-            [],
-            "default",
-            codex_worker.routing_labels(),
+        await dispatcher.claim(
+            worker_id="not-selected",
+            org_id="org-a",
+            models_canonical=[],
+            labels=WorkerCapabilities(
+                capability_names=["runtime.claude", "cli.git"]
+            ).routing_labels(),
             project_id="project-a",
         )
         is None
     )
 
-    claude_worker = WorkerCapabilities(
-        capability_names=["runtime.claude", "cli.git"],
-    )
-    claimed = await store.claim_task(
-        "worker-claude-1",
-        "org-a",
-        [],
-        "default",
-        claude_worker.routing_labels(),
+    claimed = await dispatcher.claim(
+        worker_id=first_worker.id,
+        org_id="org-a",
+        models_canonical=[],
+        labels=first_worker.capabilities.routing_labels(),
         project_id="project-a",
     )
     assert claimed is not None
@@ -308,23 +299,32 @@ async def test_fleet_runtime_matches_capabilities_and_resumes_after_worker_loss(
         "runtime.claude",
         "cli.git",
     ]
-    assert claimed["payload"]["workspace_ref"] == workspace.ref
+    assert claimed["payload"]["workspace"] is None
     payload_json = json.dumps(claimed["payload"])
-    assert str(workspace.path) not in payload_json
+    assert "credential://" not in payload_json
     assert "worker-secret-value" not in payload_json
 
-    # The first worker disappears. Existing lease/reaper behavior preserves the
-    # durable task and lets a second compatible worker resume the same run.
-    store._claimed[request.run_id]["lease_expires_at"] = datetime.now(timezone.utc) - timedelta(
+    store._claimed[("org-a", "p:project-a", request.run_id)]["lease_expires_at"] = datetime.now(timezone.utc) - timedelta(
         seconds=1
     )
     assert await store.reap_expired_leases() == {"failed": 0, "requeued": 1}
-    resumed = await store.claim_task(
-        "worker-claude-2",
-        "org-a",
-        [],
-        "default",
-        claude_worker.routing_labels(),
+    registry._workers[first_worker.id] = first_worker.model_copy(
+        update={"last_heartbeat": NOW - timedelta(minutes=5)}
+    )
+
+    for _ in range(100):
+        status = await store.get_task(request.run_id, org_id="org-a", project_id="project-a")
+        if status is not None and status["selected_worker_id"] == replacement_worker.id:
+            break
+        await asyncio.sleep(0.001)
+    else:
+        raise AssertionError("Fleet task was not retargeted after worker loss")
+
+    resumed = await dispatcher.claim(
+        worker_id=replacement_worker.id,
+        org_id="org-a",
+        models_canonical=[],
+        labels=replacement_worker.capabilities.routing_labels(),
         project_id="project-a",
     )
     assert resumed is not None
@@ -335,19 +335,17 @@ async def test_fleet_runtime_matches_capabilities_and_resumes_after_worker_loss(
     await store.report_task(
         request.run_id,
         "completed",
-        expected.model_dump_json(),
+        FleetOperatorResultEnvelope(
+            result=expected,
+            workspace_result=None,
+        ).model_dump_json(),
         None,
-        worker_id="worker-claude-2",
-    )
-    actual = await asyncio.wait_for(waiter, timeout=1)
-    assert actual == expected
-    persisted = await store.get_task(
-        request.run_id,
+        worker_id=replacement_worker.id,
         org_id="org-a",
         project_id="project-a",
     )
-    assert persisted is not None
-    assert OperatorResult.model_validate_json(persisted["output"]) == expected
+    actual = await asyncio.wait_for(waiter, timeout=1)
+    assert actual == expected
 
 
 @pytest.mark.asyncio
@@ -366,21 +364,27 @@ async def test_fleet_runtime_rejects_result_for_another_run() -> None:
         runtime.run(_request(), _capsule(), _capabilities(), workspace=None)
     )
     await _wait_for_status(store, "pending")
-    worker = WorkerCapabilities(capability_names=["runtime.claude", "cli.git"])
-    await store.claim_task(
-        "worker-claude",
-        "org-a",
-        [],
-        "default",
-        worker.routing_labels(),
+    status = await store.get_task("run-1", org_id="org-a", project_id="project-a")
+    assert status is not None
+    worker_id = status["selected_worker_id"]
+    claimed = await FleetDispatcher(store=store, poll_interval=0.001, poll_timeout=0.01).claim(
+        worker_id=worker_id,
+        org_id="org-a",
+        models_canonical=[],
+        labels=WorkerCapabilities(capability_names=["runtime.claude", "cli.git"]).routing_labels(),
         project_id="project-a",
     )
+    assert claimed is not None
     await store.report_task(
         "run-1",
         "completed",
-        _result(run_id="another-run").model_dump_json(),
+        FleetOperatorResultEnvelope(
+            result=_result(run_id="another-run"), workspace_result=None
+        ).model_dump_json(),
         None,
-        worker_id="worker-claude",
+        worker_id=worker_id,
+        org_id="org-a",
+        project_id="project-a",
     )
 
     with pytest.raises(ValueError, match="different request"):
@@ -403,15 +407,17 @@ async def test_fleet_runtime_rejects_serialized_nested_result_from_another_proje
         runtime.run(_request(), _capsule(), _capabilities(), workspace=None)
     )
     await _wait_for_status(store, "pending")
-    worker = WorkerCapabilities(capability_names=["runtime.claude", "cli.git"])
-    await store.claim_task(
-        "worker-claude",
-        "org-a",
-        [],
-        "default",
-        worker.routing_labels(),
+    status = await store.get_task("run-1", org_id="org-a", project_id="project-a")
+    assert status is not None
+    worker_id = status["selected_worker_id"]
+    claimed = await FleetDispatcher(store=store, poll_interval=0.001, poll_timeout=0.01).claim(
+        worker_id=worker_id,
+        org_id="org-a",
+        models_canonical=[],
+        labels=WorkerCapabilities(capability_names=["runtime.claude", "cli.git"]).routing_labels(),
         project_id="project-a",
     )
+    assert claimed is not None
     hostile_result = _result().model_dump(mode="json")
     hostile_result["action_results"] = [
         {
@@ -427,10 +433,74 @@ async def test_fleet_runtime_rejects_serialized_nested_result_from_another_proje
     await store.report_task(
         "run-1",
         "completed",
-        json.dumps(hostile_result),
+        json.dumps(
+            {"kind": "work.operator.result", "result": hostile_result, "workspace_result": None}
+        ),
         None,
-        worker_id="worker-claude",
+        worker_id=worker_id,
+        org_id="org-a",
+        project_id="project-a",
     )
 
     with pytest.raises(ValidationError, match="action result belongs to a different project"):
         await asyncio.wait_for(waiter, timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_fleet_runtime_returns_durable_failed_result_after_attempt_exhaustion() -> None:
+    store = InMemoryTaskStore(lease_ttl_seconds=0.01, max_attempts=1)
+    registry = await _compatible_registry()
+    runtime = FleetOperatorRuntime(
+        store=store,
+        registry=registry,
+        org_id="org-a",
+        runtime_capability="runtime.claude",
+        poll_interval_seconds=0.001,
+        heartbeat_ttl=timedelta(seconds=30),
+    )
+    request = _request()
+    waiter = asyncio.create_task(
+        runtime.run(request, _capsule(), _capabilities(), workspace=None)
+    )
+    await _wait_for_status(store, "pending")
+    status = await store.get_task(
+        request.run_id, org_id="org-a", project_id="project-a"
+    )
+    assert status is not None
+    worker_id = status["selected_worker_id"]
+    claimed = await FleetDispatcher(
+        store=store, poll_interval=0.001, poll_timeout=0.01
+    ).claim(
+        worker_id=worker_id,
+        org_id="org-a",
+        models_canonical=[],
+        labels=WorkerCapabilities(
+            capability_names=["runtime.claude", "cli.git"]
+        ).routing_labels(),
+        project_id="project-a",
+    )
+    assert claimed is not None
+    store._claimed[("org-a", "p:project-a", request.run_id)][
+        "lease_expires_at"
+    ] = datetime.now(timezone.utc) - timedelta(seconds=1)
+    assert await store.reap_expired_leases() == {"failed": 1, "requeued": 0}
+
+    failed = await asyncio.wait_for(waiter, timeout=1)
+    assert failed == OperatorResult(
+        project_id="project-a",
+        work_id="work-1",
+        run_id=request.run_id,
+        status="failed",
+        summary="lease expired after max attempts",
+        evidence_refs=(),
+        artifact_refs=(),
+        changes=(),
+        verification=(),
+        risks=(),
+        action_results=(),
+        profile_context={},
+    )
+    assert await runtime.run(
+        request, _capsule(), _capabilities(), workspace=None
+    ) == failed
+    assert len(await store.list_tasks(org_id="org-a", project_id="project-a")) == 1

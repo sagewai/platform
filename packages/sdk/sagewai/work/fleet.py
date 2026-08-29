@@ -13,10 +13,15 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from typing import Any, Literal, Protocol
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from sagewai.fleet.dispatcher import TaskStore
 from sagewai.fleet.models import (
+    WORKER_ID_ROUTING_LABEL,
     WorkerApprovalStatus,
+    WorkerRecord,
     capability_routing_labels,
 )
 from sagewai.fleet.registry import FleetRegistry
@@ -28,13 +33,96 @@ from sagewai.work.runtime import (
     Workspace,
 )
 
+_SHA256_PATTERN = r"^[0-9a-f]{64}$"
+
+
+class FleetWorkspaceTransfer(BaseModel):
+    """Profile-neutral opaque workspace input sent to one selected worker."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    ref: str
+    project_id: str | None
+    work_id: str
+    kind: str
+    input_digest: str = Field(pattern=_SHA256_PATTERN)
+    payload: dict[str, Any]
+
+
+class FleetWorkspaceTransferResult(BaseModel):
+    """Profile-neutral opaque workspace result returned by one worker."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    ref: str
+    project_id: str | None
+    work_id: str
+    kind: str
+    input_digest: str = Field(pattern=_SHA256_PATTERN)
+    result_digest: str = Field(pattern=_SHA256_PATTERN)
+    payload: dict[str, Any]
+
+
+class FleetOperatorTaskPayload(BaseModel):
+    """Typed, credential-free Work task transported over Fleet."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["work.operator"] = "work.operator"
+    request: WorkRequest
+    capsule: TaskCapsule
+    capabilities: CapabilitySet
+    required_capabilities: tuple[str, ...]
+    workspace: FleetWorkspaceTransfer | None
+
+    @model_validator(mode="after")
+    def validate_transport_boundary(self) -> FleetOperatorTaskPayload:
+        if any(grant.credential_ref is not None for grant in self.capabilities.grants):
+            raise ValueError("Fleet task capabilities must not carry credential references")
+        if (
+            self.capsule.project_id != self.request.project_id
+            or self.capsule.work_id != self.request.work_id
+            or self.capsule.stage != self.request.stage
+            or self.capabilities.project_id != self.request.project_id
+        ):
+            raise ValueError("Fleet task inputs belong to a different request")
+        if self.workspace is not None and (
+            self.workspace.project_id != self.request.project_id
+            or self.workspace.work_id != self.request.work_id
+        ):
+            raise ValueError("Fleet workspace belongs to a different request")
+        return self
+
+
+class FleetOperatorResultEnvelope(BaseModel):
+    """Typed result transported from a Fleet worker."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["work.operator.result"] = "work.operator.result"
+    result: OperatorResult
+    workspace_result: FleetWorkspaceTransferResult | None
+
+
+class FleetWorkspaceTransport(Protocol):
+    """Profile-owned central snapshot and returned-delta application seam."""
+
+    async def snapshot(self, workspace: Workspace) -> FleetWorkspaceTransfer: ...
+
+    async def apply(
+        self,
+        workspace: Workspace,
+        snapshot: FleetWorkspaceTransfer,
+        result: FleetWorkspaceTransferResult,
+    ) -> None: ...
+
 
 class NoCompatibleWorkerError(RuntimeError):
     """No approved online worker can satisfy a Work stage."""
 
 
 class FleetOperatorRuntime:
-    """Dispatch one Work stage to a capability-matched Fleet worker."""
+    """Dispatch one Work stage to one deterministically selected Fleet worker."""
 
     def __init__(
         self,
@@ -45,6 +133,7 @@ class FleetOperatorRuntime:
         runtime_capability: str,
         poll_interval_seconds: float,
         heartbeat_ttl: timedelta,
+        workspace_transport: FleetWorkspaceTransport | None = None,
     ) -> None:
         if poll_interval_seconds <= 0:
             raise ValueError("poll_interval_seconds must be positive")
@@ -56,14 +145,16 @@ class FleetOperatorRuntime:
         self._runtime_capability = runtime_capability
         self._poll_interval_seconds = poll_interval_seconds
         self._heartbeat_ttl = heartbeat_ttl
+        self._workspace_transport = workspace_transport
         self.name = f"fleet:{runtime_capability}"
 
-    async def _require_compatible_worker(
+    async def _select_worker(
         self,
         *,
         project_id: str | None,
         required_capabilities: tuple[str, ...],
-    ) -> None:
+        preferred_worker_id: str | None = None,
+    ) -> WorkerRecord:
         workers = await self._registry.list_workers(
             self._org_id,
             status=WorkerApprovalStatus.APPROVED,
@@ -72,14 +163,68 @@ class FleetOperatorRuntime:
         )
         now = datetime.now(timezone.utc)
         required = set(required_capabilities)
-        if not any(
-            worker.is_online(now=now, heartbeat_ttl=self._heartbeat_ttl)
-            and required.issubset(worker.capabilities.capability_names)
-            for worker in workers
-        ):
+        compatible = sorted(
+            (
+                worker
+                for worker in workers
+                if worker.is_online(now=now, heartbeat_ttl=self._heartbeat_ttl)
+                and required.issubset(worker.capabilities.capability_names)
+            ),
+            key=lambda worker: (worker.registered_at, worker.id),
+        )
+        if preferred_worker_id is not None:
+            preferred = next(
+                (worker for worker in compatible if worker.id == preferred_worker_id),
+                None,
+            )
+            if preferred is not None:
+                return preferred
+        if not compatible:
             raise NoCompatibleWorkerError(
                 "no approved online worker satisfies the required stage capabilities"
             )
+        return compatible[0]
+
+    @staticmethod
+    def _transport_capabilities(capabilities: CapabilitySet) -> CapabilitySet:
+        return CapabilitySet(
+            project_id=capabilities.project_id,
+            grants=tuple(
+                grant.model_copy(update={"credential_ref": None}) for grant in capabilities.grants
+            ),
+        )
+
+    async def _snapshot(self, workspace: Workspace | None) -> FleetWorkspaceTransfer | None:
+        if workspace is None:
+            return None
+        if self._workspace_transport is None:
+            raise ValueError("Fleet workspace transport is not configured")
+        return await self._workspace_transport.snapshot(workspace)
+
+    @staticmethod
+    def _validate_result_identity(
+        *,
+        request: WorkRequest,
+        result: OperatorResult,
+    ) -> None:
+        if (
+            result.project_id != request.project_id
+            or result.work_id != request.work_id
+            or result.run_id != request.run_id
+        ):
+            raise ValueError("operator result belongs to a different request")
+
+    @staticmethod
+    def _validate_workspace_result_identity(
+        snapshot: FleetWorkspaceTransfer, result: FleetWorkspaceTransferResult
+    ) -> None:
+        if (
+            result.ref != snapshot.ref
+            or result.project_id != snapshot.project_id
+            or result.work_id != snapshot.work_id
+            or result.kind != snapshot.kind
+        ):
+            raise ValueError("workspace result belongs to a different snapshot")
 
     async def run(
         self,
@@ -93,15 +238,23 @@ class FleetOperatorRuntime:
                 (self._runtime_capability, *(grant.name for grant in capabilities.grants))
             )
         )
+        snapshot = await self._snapshot(workspace)
         existing = await self._store.get_task(
             request.run_id,
             org_id=self._org_id,
             project_id=request.project_id,
         )
         if existing is None:
-            await self._require_compatible_worker(
+            selected = await self._select_worker(
                 project_id=request.project_id,
                 required_capabilities=required_capabilities,
+            )
+            payload = FleetOperatorTaskPayload(
+                request=request,
+                capsule=capsule,
+                capabilities=self._transport_capabilities(capabilities),
+                required_capabilities=required_capabilities,
+                workspace=snapshot,
             )
             await self._store.enqueue(
                 {
@@ -109,15 +262,11 @@ class FleetOperatorRuntime:
                     "org_id": self._org_id,
                     "project_id": request.project_id,
                     "pool": "default",
-                    "labels": capability_routing_labels(required_capabilities),
-                    "payload": {
-                        "kind": "work.operator",
-                        "request": request.model_dump(mode="json"),
-                        "capsule": capsule.model_dump(mode="json"),
-                        "capabilities": capabilities.model_dump(mode="json"),
-                        "required_capabilities": list(required_capabilities),
-                        "workspace_ref": workspace.ref if workspace is not None else None,
+                    "labels": {
+                        **capability_routing_labels(required_capabilities),
+                        WORKER_ID_ROUTING_LABEL: selected.id,
                     },
+                    "payload": payload.model_dump(mode="json"),
                 }
             )
 
@@ -129,18 +278,69 @@ class FleetOperatorRuntime:
             )
             if task is None:
                 raise RuntimeError("fleet task disappeared from canonical storage")
+            task_input_digest = task.get("workspace_input_digest")
+            if task["status"] != "completed" and (
+                (snapshot is None) != (task_input_digest is None)
+                or (snapshot is not None and task_input_digest != snapshot.input_digest)
+            ):
+                raise ValueError("canonical workspace changed after Fleet dispatch")
             if task["status"] == "failed":
-                raise RuntimeError(task.get("error") or "fleet worker failed")
+                return _failed_result(
+                    request, task.get("error") or "fleet worker failed"
+                )
+            if task["status"] == "pending":
+                selected_worker_id = task.get("selected_worker_id")
+                selected = await self._select_worker(
+                    project_id=request.project_id,
+                    required_capabilities=required_capabilities,
+                    preferred_worker_id=selected_worker_id,
+                )
+                if selected.id != selected_worker_id:
+                    await self._store.retarget_task(
+                        request.run_id,
+                        org_id=self._org_id,
+                        project_id=request.project_id,
+                        expected_worker_id=selected_worker_id,
+                        selected_worker_id=selected.id,
+                    )
             if task["status"] == "completed":
                 output = task.get("output")
                 if not output:
                     raise ValueError("fleet worker completed without an OperatorResult")
-                result = OperatorResult.model_validate_json(output)
-                if (
-                    result.project_id != request.project_id
-                    or result.work_id != request.work_id
-                    or result.run_id != request.run_id
-                ):
-                    raise ValueError("operator result belongs to a different request")
-                return result
+                envelope = FleetOperatorResultEnvelope.model_validate_json(output)
+                self._validate_result_identity(request=request, result=envelope.result)
+                if snapshot is None:
+                    if envelope.workspace_result is not None:
+                        raise ValueError("workspace result returned for a workspace-free task")
+                else:
+                    if envelope.workspace_result is None:
+                        raise ValueError("fleet worker completed without a workspace result")
+                    if task_input_digest != envelope.workspace_result.input_digest:
+                        raise ValueError(
+                            "workspace result input does not match dispatched snapshot"
+                        )
+                    self._validate_workspace_result_identity(snapshot, envelope.workspace_result)
+                    assert self._workspace_transport is not None
+                    assert workspace is not None
+                    await self._workspace_transport.apply(
+                        workspace, snapshot, envelope.workspace_result
+                    )
+                return envelope.result
             await asyncio.sleep(self._poll_interval_seconds)
+
+
+def _failed_result(request: WorkRequest, summary: str) -> OperatorResult:
+    return OperatorResult(
+        project_id=request.project_id,
+        work_id=request.work_id,
+        run_id=request.run_id,
+        status="failed",
+        summary=summary[:4000],
+        evidence_refs=(),
+        artifact_refs=(),
+        changes=(),
+        verification=(),
+        risks=(),
+        action_results=(),
+        profile_context={},
+    )

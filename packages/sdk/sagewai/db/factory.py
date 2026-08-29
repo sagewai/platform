@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from sagewai import home
 from sagewai.db.engine import create_engine
 from sagewai.db.models import Base
+from sagewai.db.sqlite_fleet_task_scope import upgrade_sqlite_fleet_task_scope
 from sagewai.db.sqlite_workflow_scope import upgrade_sqlite_workflow_scope
 
 logger = logging.getLogger(__name__)
@@ -136,6 +137,7 @@ async def ensure_schema() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(add_missing_sqlite_columns)
+        await conn.run_sync(upgrade_sqlite_fleet_task_scope)
         await conn.run_sync(upgrade_sqlite_workflow_scope)
 
 

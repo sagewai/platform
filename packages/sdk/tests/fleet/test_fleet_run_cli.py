@@ -71,7 +71,9 @@ def test_enqueue_posts_task(monkeypatch):
     assert "run-123" in res.output
 
 
-def test_run_register_only_invokes_register(monkeypatch):
+def test_run_register_only_invokes_register(monkeypatch, tmp_path):
+    repository = tmp_path / "repository"
+    repository.mkdir()
     calls = {}
 
     class _FakeRunner:
@@ -89,7 +91,10 @@ def test_run_register_only_invokes_register(monkeypatch):
         fleet_group,
         ["run", "--name", "w1", "--models", "gpt-4o,ollama/llama3:70b",
          "--labels", "gpu=a100,zone=us",
-         "--capabilities", "runtime.claude,cli.git", "--register-only"],
+         "--capabilities", "runtime.claude,cli.git",
+         "--project", "project-a",
+         "--work-repository", str(repository),
+         "--register-only"],
     )
     assert res.exit_code == 0, res.output
     assert "wid-123" in res.output
@@ -97,6 +102,8 @@ def test_run_register_only_invokes_register(monkeypatch):
     assert calls["models"] == ["gpt-4o", "ollama/llama3:70b"]
     assert calls["labels"] == {"gpu": "a100", "zone": "us"}
     assert calls["capability_names"] == ["runtime.claude", "cli.git"]
+    assert calls["project"] == "project-a"
+    assert calls["task_handler"] is not None
 
 
 def test_run_register_only_passes_task_isolation_options(monkeypatch):

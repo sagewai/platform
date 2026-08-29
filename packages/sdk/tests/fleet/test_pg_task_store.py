@@ -24,6 +24,7 @@ from sqlalchemy import text, update
 
 from sagewai.db.engine import create_engine
 from sagewai.fleet.dispatcher import NotTaskOwnerError
+from sagewai.fleet.models import WORKER_ID_ROUTING_LABEL
 from sagewai.fleet.task_store import PostgresTaskStore
 
 # Run every test on SQLite always, and on real Postgres when SAGEWAI_TEST_DATABASE_URL
@@ -69,6 +70,65 @@ async def test_enqueue_persists_across_instances(store):
     s2 = PostgresTaskStore(engine=engine)  # fresh instance = "restart"
     got = await s2.get_task("r1", org_id="o", project_id=None)
     assert got is not None and got["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_same_run_id_isolated_across_project_and_global_scopes(store):
+    s, _ = store
+    run_id = "same"
+    await s.enqueue(_task(run_id=run_id, project="alpha", labels={
+        WORKER_ID_ROUTING_LABEL: "worker-alpha"
+    }))
+    await s.enqueue(_task(run_id=run_id, project="beta", labels={
+        WORKER_ID_ROUTING_LABEL: "worker-beta"
+    }))
+    await s.enqueue(_task(run_id=run_id, project=None, labels={
+        WORKER_ID_ROUTING_LABEL: "worker-global"
+    }))
+
+    assert await s.retarget_task(
+        run_id,
+        org_id="o",
+        project_id="alpha",
+        expected_worker_id="worker-alpha",
+        selected_worker_id="worker-alpha-2",
+    )
+    assert (await s.get_task(run_id, org_id="o", project_id="alpha"))[
+        "selected_worker_id"
+    ] == "worker-alpha-2"
+    assert (await s.get_task(run_id, org_id="o", project_id="beta"))[
+        "selected_worker_id"
+    ] == "worker-beta"
+    assert (await s.get_task(run_id, org_id="o", project_id=None))[
+        "selected_worker_id"
+    ] == "worker-global"
+
+    alpha = await s.claim_task(
+        "worker-alpha-2", "o", [], "default",
+        {WORKER_ID_ROUTING_LABEL: "worker-alpha-2"}, project_id="alpha",
+    )
+    beta = await s.claim_task(
+        "worker-beta", "o", [], "default",
+        {WORKER_ID_ROUTING_LABEL: "worker-beta"}, project_id="beta",
+    )
+    global_task = await s.claim_task(
+        "worker-global", "o", [], "default",
+        {WORKER_ID_ROUTING_LABEL: "worker-global"}, project_id=None,
+    )
+    assert alpha and beta and global_task
+
+    with pytest.raises(NotTaskOwnerError):
+        await s.report_task(
+            run_id, "completed", "wrong scope", None,
+            worker_id="worker-alpha-2", org_id="o", project_id="beta",
+        )
+    await s.report_task(
+        run_id, "completed", "alpha", None,
+        worker_id="worker-alpha-2", org_id="o", project_id="alpha",
+    )
+    assert (await s.get_task(run_id, org_id="o", project_id="alpha"))["status"] == "completed"
+    assert (await s.get_task(run_id, org_id="o", project_id="beta"))["status"] == "claimed"
+    assert (await s.get_task(run_id, org_id="o", project_id=None))["status"] == "claimed"
 
 
 @pytest.mark.asyncio
@@ -118,7 +178,7 @@ async def test_report_validates_status(store):
     await s.enqueue(_task(run_id="r1"))
     await s.claim_task("w", "o", [], "default", {}, project_id=None)
     with pytest.raises(ValueError):
-        await s.report_task("r1", "pending", None, None, worker_id="w")  # non-terminal rejected
+        await s.report_task("r1", "pending", None, None, worker_id="w", org_id="o", project_id=None)  # non-terminal rejected
     # the row is untouched (still claimed)
     assert (await s.get_task("r1", org_id="o", project_id=None))["status"] == "claimed"
 
@@ -130,17 +190,17 @@ async def test_report_ownership_and_idempotency(store):
     await s.claim_task("w", "o", [], "default", {}, project_id=None)
     # foreign worker -> NotTaskOwnerError
     with pytest.raises(NotTaskOwnerError):
-        await s.report_task("r1", "completed", "x", None, worker_id="other")
-    await s.report_task("r1", "completed", "out", None, worker_id="w")
+        await s.report_task("r1", "completed", "x", None, worker_id="other", org_id="o", project_id=None)
+    await s.report_task("r1", "completed", "out", None, worker_id="w", org_id="o", project_id=None)
     assert (await s.get_task("r1", org_id="o", project_id=None))["status"] == "completed"
     # idempotent lost-ack: same worker + same status -> no error
-    await s.report_task("r1", "completed", "out", None, worker_id="w")
+    await s.report_task("r1", "completed", "out", None, worker_id="w", org_id="o", project_id=None)
     # different terminal status on a terminal row -> NotTaskOwnerError
     with pytest.raises(NotTaskOwnerError):
-        await s.report_task("r1", "failed", None, "boom", worker_id="w")
+        await s.report_task("r1", "failed", None, "boom", worker_id="w", org_id="o", project_id=None)
     # unknown run -> NotTaskOwnerError
     with pytest.raises(NotTaskOwnerError):
-        await s.report_task("nope", "completed", None, None, worker_id="w")
+        await s.report_task("nope", "completed", None, None, worker_id="w", org_id="o", project_id=None)
 
 
 @pytest.mark.asyncio
@@ -171,7 +231,7 @@ async def test_report_clears_lease(store):
     s, engine = store
     await s.enqueue(_task(run_id="r1"))
     await s.claim_task("w", "o", [], "default", {}, project_id=None)
-    await s.report_task("r1", "completed", "out", None, worker_id="w")
+    await s.report_task("r1", "completed", "out", None, worker_id="w", org_id="o", project_id=None)
     async with engine.connect() as conn:
         lease = (await conn.execute(text(
             "SELECT lease_expires_at FROM fleet_tasks WHERE run_id='r1'"
@@ -195,11 +255,23 @@ async def test_init_upgrades_019_shaped_sqlite(tmp_path):
             "output TEXT, error TEXT, reported_at TIMESTAMP, "
             "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"
         ))
+        await conn.execute(text(
+            "INSERT INTO fleet_tasks "
+            "(run_id, org_id, project_id, labels, payload) "
+            "VALUES ('kept', 'org', 'project', '{}', '{\"kept\": true}')"
+        ))
     await PostgresTaskStore(engine=eng).init()  # must NOT raise — upgrades in place
     async with eng.connect() as conn:
-        res = await conn.exec_driver_sql("PRAGMA table_info(fleet_tasks)")
-        cols = {r[1] for r in res}
+        rows = (await conn.exec_driver_sql("PRAGMA table_info(fleet_tasks)")).all()
+        cols = {row[1] for row in rows}
+        primary_key = [row[1] for row in sorted(rows, key=lambda row: row[5]) if row[5]]
+        kept = (await conn.exec_driver_sql(
+            "SELECT project_scope_key, json_extract(payload, '$.kept') "
+            "FROM fleet_tasks WHERE run_id = 'kept'"
+        )).one()
     assert "lease_expires_at" in cols and "attempts" in cols
+    assert primary_key == ["org_id", "project_scope_key", "run_id"]
+    assert kept == ("p:project", 1)
     await eng.dispose()
 
 
@@ -280,4 +352,53 @@ async def test_reap_vs_late_report_race(store):
     await _force_lease_past(engine, "r1")
     await s.reap_expired_leases()  # requeued to pending, worker cleared
     with pytest.raises(NotTaskOwnerError):
-        await s.report_task("r1", "completed", "x", None, worker_id="w")
+        await s.report_task("r1", "completed", "x", None, worker_id="w", org_id="o", project_id=None)
+
+@pytest.mark.asyncio
+
+async def test_retarget_pending_task_is_exact_scope_and_worker_cas(store):
+    s, _ = store
+    await s.enqueue(
+        _task(
+            run_id="retarget",
+            org="org-a",
+            project="project-a",
+            labels={WORKER_ID_ROUTING_LABEL: "worker-a"},
+            payload={
+                "workspace": {"input_digest": "a" * 64}
+            },
+        )
+    )
+    status = await s.get_task(
+        "retarget", org_id="org-a", project_id="project-a"
+    )
+    assert status is not None
+    assert status["selected_worker_id"] == "worker-a"
+    assert status["workspace_input_digest"] == "a" * 64
+
+    assert not await s.retarget_task(
+        "retarget",
+        org_id="org-a",
+        project_id="project-a",
+        expected_worker_id="wrong-worker",
+        selected_worker_id="worker-b",
+    )
+    assert await s.retarget_task(
+        "retarget",
+        org_id="org-a",
+        project_id="project-a",
+        expected_worker_id="worker-a",
+        selected_worker_id="worker-b",
+    )
+    assert not await s.retarget_task(
+        "retarget",
+        org_id="org-a",
+        project_id="project-a",
+        expected_worker_id="worker-a",
+        selected_worker_id="worker-c",
+    )
+    status = await s.get_task(
+        "retarget", org_id="org-a", project_id="project-a"
+    )
+    assert status is not None
+    assert status["selected_worker_id"] == "worker-b"

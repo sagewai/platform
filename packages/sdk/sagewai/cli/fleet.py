@@ -29,10 +29,10 @@ import os
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import click
 
-from sagewai.fleet.runner import RegistrationError, TerminalAuthError, WorkerRunner
 from sagewai.fleet.models import (
     EnrollmentKey,
     WorkerApprovalStatus,
@@ -40,7 +40,11 @@ from sagewai.fleet.models import (
     WorkerRecord,
 )
 from sagewai.fleet.normalizer import ModelNormalizer
-
+from sagewai.fleet.runner import RegistrationError, TerminalAuthError, WorkerRunner
+from sagewai.work.profiles.software.fleet_worker import (
+    SoftwareFleetTaskHandler,
+    SoftwareFleetWorkspaceResolver,
+)
 
 # ---------------------------------------------------------------------------
 # In-memory registry for local/demo use (gateway will use Postgres)
@@ -215,6 +219,17 @@ def register(
 @click.option("--capabilities", default=None, help="Comma-separated worker capabilities.")
 @click.option("--max-concurrent", default=1, type=int, help="Max in-flight tasks.")
 @click.option("--project", default=None, help="Project scope (X-Project-ID).")
+@click.option(
+    "--work-repository",
+    type=click.Path(
+        path_type=Path,
+        exists=True,
+        file_okay=False,
+        resolve_path=True,
+    ),
+    default=None,
+    help="Trusted local repository for native Work operator tasks.",
+)
 @click.option("--enrollment-key", default=None, help="Enrollment key for auto-approval.")
 @click.option("--worker-id", default=None, help="Reuse an approved worker; skip registration.")
 @click.option("--worker-secret", default=None, help="Worker secret (else $SAGEWAI_WORKER_SECRET / creds file).")
@@ -231,7 +246,7 @@ def register(
 @click.option("--poll-timeout", default=30.0, type=float, help="Claim long-poll seconds.")
 @click.option("--heartbeat-interval", default=10.0, type=float, help="Heartbeat cadence seconds.")
 def run(
-    name, models, pool, labels, capabilities, max_concurrent, project, enrollment_key,
+    name, models, pool, labels, capabilities, max_concurrent, project, work_repository, enrollment_key,
     worker_id, worker_secret, creds_file, exec_cmd, exec_timeout, envs, env_file,
     image, docker_args, register_only, once, gateway_url, poll_timeout, heartbeat_interval,
 ):
@@ -243,6 +258,33 @@ def run(
 
     model_list = [m.strip() for m in (models or "").split(",") if m.strip()]
     capability_names = [name.strip() for name in (capabilities or "").split(",") if name.strip()]
+    native_runtime_capabilities = {
+        name for name in capability_names
+        if name in {"runtime.codex", "runtime.claude"}
+    }
+    task_handler = None
+    if native_runtime_capabilities:
+        if not project:
+            raise click.UsageError(
+                "--project is required for native Work operator capabilities."
+            )
+        if work_repository is None:
+            raise click.UsageError(
+                "--work-repository is required for native Work operator capabilities."
+            )
+        if exec_cmd is not None or image is not None:
+            raise click.UsageError(
+                "native Work operator capabilities cannot be combined with --exec or --image."
+            )
+        task_handler = SoftwareFleetTaskHandler(
+            workspace_resolver=SoftwareFleetWorkspaceResolver(
+                repository=work_repository,
+            ),
+        )
+    elif work_repository is not None:
+        raise click.UsageError(
+            "--work-repository requires runtime.codex or runtime.claude capability."
+        )
     parsed_labels: dict[str, str] = {}
     if labels:
         for pair in labels.split(","):
@@ -287,6 +329,7 @@ def run(
         docker_args=list(docker_args),
         poll_timeout=poll_timeout,
         heartbeat_interval=heartbeat_interval,
+        task_handler=task_handler,
     )
 
     async def _drive():

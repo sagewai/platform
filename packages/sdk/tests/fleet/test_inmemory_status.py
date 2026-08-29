@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from sagewai.fleet.dispatcher import InMemoryTaskStore, TaskStore
+from sagewai.fleet.dispatcher import InMemoryTaskStore, NotTaskOwnerError, TaskStore
 
 
 @pytest.mark.asyncio
@@ -34,9 +34,40 @@ async def test_status_reflects_claim_and_report():
     await s.enqueue({"run_id": "r1", "org_id": "o", "project_id": None, "pool": "default"})
     await s.claim_task("w", "o", [], "default", {}, project_id=None)
     assert (await s.get_task("r1", org_id="o", project_id=None))["status"] == "claimed"
-    await s.report_task("r1", "completed", "out", None, worker_id="w")
+    await s.report_task(
+        "r1", "completed", "out", None, worker_id="w", org_id="o", project_id=None
+    )
     done = await s.get_task("r1", org_id="o", project_id=None)
     assert done["status"] == "completed" and done["output"] == "out"
+
+
+@pytest.mark.asyncio
+async def test_same_run_id_isolated_across_project_and_global_scopes():
+    s = InMemoryTaskStore()
+    for project_id in ("alpha", "beta", None):
+        await s.enqueue({
+            "run_id": "same",
+            "org_id": "o",
+            "project_id": project_id,
+            "pool": "default",
+        })
+        await s.claim_task(
+            f"worker-{project_id or 'global'}",
+            "o", [], "default", {}, project_id=project_id,
+        )
+
+    with pytest.raises(NotTaskOwnerError):
+        await s.report_task(
+            "same", "completed", "wrong scope", None,
+            worker_id="worker-alpha", org_id="o", project_id="beta",
+        )
+    await s.report_task(
+        "same", "completed", "alpha", None,
+        worker_id="worker-alpha", org_id="o", project_id="alpha",
+    )
+    assert (await s.get_task("same", org_id="o", project_id="alpha"))["status"] == "completed"
+    assert (await s.get_task("same", org_id="o", project_id="beta"))["status"] == "claimed"
+    assert (await s.get_task("same", org_id="o", project_id=None))["status"] == "claimed"
 
 
 @pytest.mark.asyncio
@@ -46,5 +77,7 @@ async def test_report_rejects_non_terminal_status():
     await s.enqueue({"run_id": "r1", "org_id": "o", "project_id": None, "pool": "default"})
     await s.claim_task("w", "o", [], "default", {}, project_id=None)
     with pytest.raises(ValueError):
-        await s.report_task("r1", "pending", None, None, worker_id="w")
+        await s.report_task(
+            "r1", "pending", None, None, worker_id="w", org_id="o", project_id=None
+        )
     assert (await s.get_task("r1", org_id="o", project_id=None))["status"] == "claimed"

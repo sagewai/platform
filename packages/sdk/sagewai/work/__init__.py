@@ -30,7 +30,15 @@ from sagewai.work.events import (
     active_control_precondition_ids,
     execution_attempt_from_events,
 )
-from sagewai.work.fleet import FleetOperatorRuntime, NoCompatibleWorkerError
+from sagewai.work.fleet import (
+    FleetOperatorResultEnvelope,
+    FleetOperatorRuntime,
+    FleetOperatorTaskPayload,
+    FleetWorkspaceTransfer,
+    FleetWorkspaceTransferResult,
+    FleetWorkspaceTransport,
+    NoCompatibleWorkerError,
+)
 from sagewai.work.metrics import WorkMetrics
 from sagewai.work.models import (
     Action,
@@ -100,6 +108,11 @@ __all__ = [
     "CompletionEvaluation",
     "CriterionVerification",
     "FleetOperatorRuntime",
+    "FleetOperatorResultEnvelope",
+    "FleetOperatorTaskPayload",
+    "FleetWorkspaceTransferResult",
+    "FleetWorkspaceTransfer",
+    "FleetWorkspaceTransport",
     "NoCompatibleWorkerError",
     "ExecutionAttempt",
     "GateDecision",

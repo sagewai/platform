@@ -20,12 +20,15 @@ from click import ClickException
 from click.testing import CliRunner
 
 from sagewai.cli import cli
+from sagewai.cli.fleet import fleet_group
 from sagewai.cli.work import work as work_cli
 from sagewai.core.state import InMemoryStore
 from sagewai.work import WorkEventType, WorkMetrics
+from sagewai.work.profiles.software import SoftwareStageOperator
 from tests.db.conftest import dialect_engine  # noqa: F401
 
 work_module = import_module("sagewai.cli.work")
+fleet_module = import_module("sagewai.cli.fleet")
 
 
 @pytest.mark.asyncio
@@ -85,6 +88,8 @@ def test_work_group_is_registered() -> None:
     assert "pending" in result.output
     assert "metrics" in result.output
     assert "--project" in result.output
+    assert "--execution" in result.output
+    assert "--fleet-org" in result.output
 
 
 @pytest.mark.parametrize(
@@ -109,6 +114,33 @@ def test_every_work_command_rejects_omitted_project_scope(
 
     assert result.exit_code == 2
     assert "Missing option '--project'" in result.output
+
+
+def test_work_fleet_execution_context_is_explicit(monkeypatch) -> None:
+    seen = []
+
+    async def fake_pending(*, project_id):
+        seen.append((project_id, work_module._work_execution_config()))
+        return ()
+
+    monkeypatch.setattr(work_module, "_pending_work", fake_pending)
+
+    result = CliRunner().invoke(
+        work_cli,
+        [
+            "--project",
+            "project-a",
+            "--execution",
+            "fleet",
+            "--fleet-org",
+            "org-a",
+            "pending",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen == [("project-a", ("fleet", "org-a"))]
+
 
 
 def test_work_global_scope_is_explicit_none(monkeypatch) -> None:
@@ -779,3 +811,181 @@ async def test_triaging_rejects_stale_delivery_approval_before_repository_work(
             "rollback:stale",
             project_id="project-a",
         )
+
+
+def test_work_fleet_execution_requires_explicit_org() -> None:
+    result = CliRunner().invoke(
+        work_cli,
+        ["--project", "project-a", "--execution", "fleet", "pending"],
+    )
+
+    assert result.exit_code == 2
+    assert "--fleet-org is required with --execution fleet" in result.output
+
+
+@pytest.mark.asyncio
+async def test_build_lifecycle_composes_persistent_fleet_stages(
+    monkeypatch,
+    dialect_engine,  # noqa: F811
+    tmp_path,
+) -> None:
+    initialized = []
+    fleet_calls = []
+
+    class FakeRegistry:
+        def __init__(self, *, engine):
+            assert engine is dialect_engine
+
+        async def init(self):
+            initialized.append("registry")
+
+    class FakeTaskStore:
+        def __init__(self, *, engine):
+            assert engine is dialect_engine
+
+        async def init(self):
+            initialized.append("tasks")
+
+    class FakeTransport:
+        def __init__(self, *, repository_ref):
+            assert repository_ref == "github://sagewai/platform"
+
+    async def fake_ensure_schema() -> None:
+        return None
+
+    async def fake_workflow_store():
+        return InMemoryStore()
+
+    async def fake_repository_ref(_repository):
+        return "github://sagewai/platform"
+
+    def fake_fleet(cls, **kwargs):
+        fleet_calls.append(kwargs)
+        return cls(
+            actor_ref=kwargs["actor_ref"],
+            runtime=SimpleNamespace(name=f"fleet:{kwargs['runtime_capability']}"),
+            capabilities=kwargs["capabilities"],
+            controller=kwargs["controller"],
+        )
+
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    monkeypatch.setenv("SAGEWAI_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv(
+        "SAGEWAI_WORK_VERIFICATION_IMAGE",
+        "example.invalid/verifier@sha256:" + "a" * 64,
+    )
+    monkeypatch.setattr(work_module.factory, "ensure_schema", fake_ensure_schema)
+    monkeypatch.setattr(work_module.factory, "get_engine", lambda: dialect_engine)
+    monkeypatch.setattr(work_module.factory, "get_workflow_store", fake_workflow_store)
+    monkeypatch.setattr(work_module, "PostgresFleetRegistry", FakeRegistry)
+    monkeypatch.setattr(work_module, "PostgresTaskStore", FakeTaskStore)
+    monkeypatch.setattr(work_module, "SoftwareFleetWorkspaceTransport", FakeTransport)
+    monkeypatch.setattr(work_module, "_software_repository_ref", fake_repository_ref)
+    monkeypatch.setattr(SoftwareStageOperator, "fleet", classmethod(fake_fleet))
+
+    lifecycle, _, _ = await work_module._build_lifecycle(
+        project_id="project-a",
+        repository=repository,
+        execution="fleet",
+        fleet_org="org-a",
+    )
+
+    assert initialized == ["registry", "tasks"]
+    assert [call["runtime_capability"] for call in fleet_calls] == [
+        "runtime.claude",
+        "runtime.codex",
+        "runtime.claude",
+        "runtime.codex",
+    ]
+    assert all(call["org_id"] == "org-a" for call in fleet_calls)
+    assert all(
+        call["workspace_transport"].__class__ is FakeTransport
+        for call in fleet_calls
+    )
+    assert lifecycle._analyst.runtime.name == "fleet:runtime.claude"
+    assert lifecycle._implementer.runtime.name == "fleet:runtime.codex"
+    assert lifecycle._reviewer.runtime.name == "fleet:runtime.claude"
+    assert lifecycle._repairer.runtime.name == "fleet:runtime.codex"
+
+
+def test_fleet_native_runtime_requires_explicit_project_and_repository(tmp_path) -> None:
+    missing_project = CliRunner().invoke(
+        fleet_group,
+        [
+            "run",
+            "--name",
+            "worker",
+            "--capabilities",
+            "runtime.claude",
+            "--register-only",
+        ],
+    )
+    assert missing_project.exit_code == 2
+    assert "--project is required" in missing_project.output
+
+    missing_repository = CliRunner().invoke(
+        fleet_group,
+        [
+            "run",
+            "--name",
+            "worker",
+            "--capabilities",
+            "runtime.claude",
+            "--project",
+            "project-a",
+            "--register-only",
+        ],
+    )
+    assert missing_repository.exit_code == 2
+    assert "--work-repository is required" in missing_repository.output
+
+
+def test_fleet_native_runtime_builds_typed_local_handler(monkeypatch, tmp_path) -> None:
+    seen = {}
+
+    class FakeResolver:
+        def __init__(self, *, repository):
+            seen["repository"] = repository
+
+    class FakeHandler:
+        def __init__(self, *, workspace_resolver):
+            seen["resolver"] = workspace_resolver
+
+    class FakeRunner:
+        def __init__(self, **kwargs):
+            seen["runner"] = kwargs
+
+        async def register(self):
+            return "worker-1", "approved"
+
+        async def aclose(self):
+            return None
+
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    monkeypatch.setattr(fleet_module, "SoftwareFleetWorkspaceResolver", FakeResolver)
+    monkeypatch.setattr(fleet_module, "SoftwareFleetTaskHandler", FakeHandler)
+    monkeypatch.setattr(fleet_module, "WorkerRunner", FakeRunner)
+
+    result = CliRunner().invoke(
+        fleet_group,
+        [
+            "run",
+            "--name",
+            "worker",
+            "--capabilities",
+            "runtime.codex,runtime.claude",
+            "--project",
+            "project-a",
+            "--work-repository",
+            str(repository),
+            "--register-only",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen["repository"] == repository.resolve()
+    assert seen["runner"]["project"] == "project-a"
+    assert seen["runner"]["task_handler"].__class__ is FakeHandler
+    assert "token" not in seen["runner"]["task_handler"].__dict__

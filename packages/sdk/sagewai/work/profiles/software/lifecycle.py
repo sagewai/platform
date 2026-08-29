@@ -31,7 +31,7 @@ from sagewai.work.events import (
     WorkEventType,
     active_control_precondition_ids,
 )
-from sagewai.work.fleet import FleetOperatorRuntime
+from sagewai.work.fleet import FleetOperatorRuntime, FleetWorkspaceTransport
 from sagewai.work.knowledge import KnowledgeItem, KnowledgeKind, KnowledgeStore
 from sagewai.work.models import (
     ActionIntent,
@@ -220,6 +220,7 @@ class SoftwareStageOperator:
         runtime_capability: str,
         poll_interval_seconds: float,
         heartbeat_ttl: timedelta,
+        workspace_transport: FleetWorkspaceTransport,
         capabilities: CapabilitySet,
         controller: OperatorController,
     ) -> SoftwareStageOperator:
@@ -233,6 +234,7 @@ class SoftwareStageOperator:
                 runtime_capability=runtime_capability,
                 poll_interval_seconds=poll_interval_seconds,
                 heartbeat_ttl=heartbeat_ttl,
+                workspace_transport=workspace_transport,
             ),
             capabilities=capabilities,
             controller=controller,
