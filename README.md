@@ -4,9 +4,9 @@
     <img alt="Sagewai" src="brand/sagewai_logo.svg" width="360">
   </picture>
 
-  <h3>The factory that runs itself.</h3>
+  <h3>Safe, durable control for autonomous work.</h3>
 
-  <p><strong>Sagewai is the autonomous agent platform: describe the goal, we design the agents, run them in production, and fine-tune local models so every run gets cheaper.</strong></p>
+  <p><strong>Sagewai turns a bounded WorkContract into a verified outcome with durable evidence, explicit gates, Codex implementation, and independent Claude review.</strong></p>
 
   [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](./LICENSE)
   [![PyPI](https://img.shields.io/pypi/v/sagewai.svg)](https://pypi.org/project/sagewai/)
@@ -29,17 +29,17 @@
 
 ## What is Sagewai
 
-Sagewai is an open-source platform for building and running AI agents in production. You write an agent in a few lines of Python, give it tools and memory, and run it — on your machine or as a fleet of workers on your own hardware. One interface reaches 100+ models (OpenAI, Anthropic, Google, Mistral, local Ollama via LiteLLM), so you are not locked to a provider.
+Sagewai is an open-source Work control plane. Give it a software goal or a GitHub issue and it persists a project-scoped WorkItem and WorkContract, compiles grounded evidence for each stage, lets Codex implement, lets Claude independently verify the result, and resumes from durable state after interruption. The lifecycle—not either model's chat history—is authoritative.
 
 In practice that means you can:
 
-- **Build** an agent with the **SDK** — multi-model, tools over MCP, typed memory, and guardrails in one import.
-- **Run** it across your own machines with **Fleet** — capability-based dispatch, project isolation, and sandboxed execution (Docker or Kubernetes).
-- **Keep secrets scoped** with **Sealed** — per-workload identity and external secret backends (e.g. HashiCorp Vault), with redaction, per-key ACLs, and just-in-time credentials. *(The identity model, the Vault backend, and the admin controls ship today; runtime enforcement is still maturing — see [v1.0 status](#v10-status).)*
-- **See what it costs** with **Observatory** — OpenTelemetry traces, metrics, and a per-model / per-team spend breakdown.
-- **Drive the cost down** with the **Training Loop** — capture good production runs and fine-tune a local model from them. *(v1.0 ships run capture; the end-to-end capture → fine-tune → deploy loop is on the [v1.1 roadmap](#v10-status).)*
+- **Bound the work** with a versioned contract, explicit scope, acceptance criteria, assumptions, risk, and permissions.
+- **Keep the evidence** as durable events, verification receipts, artifacts, and an Evidence Board that survives model sessions and process restarts.
+- **Separate implementation from review**: Codex performs write stages; Claude performs read-only analysis and review; failed review enters a bounded repair loop.
+- **Stop safely** at approval, blocked, or degraded-control states and surface them through the CLI and Work Control Console.
+- **Execute locally by default**, or dispatch credential-free stages to compatible, project-scoped Fleet workers. Codex and Claude authentication remains on each worker.
 
-**Autopilot** sits on top: describe a goal in plain English and it assembles and runs the agent for you. *(v1.0 runs linear plans; branched/conditional plans are in progress.)*
+The agent SDK, workflows, Autopilot, Sealed, Observatory, and Training Loop remain in the repository. They are retained capabilities, not the primary Work lifecycle described here. See the [evolution decisions](./docs/architecture/work-control-plane-evolution.md) for the current boundaries.
 
 All AGPL-3.0. Install with `uv pip install sagewai` (or `pip install sagewai` inside a virtualenv), or clone the repo and build the full stack from source with `just stack-up`. Self-hostable on your own hardware.
 
@@ -64,23 +64,35 @@ pip install sagewai
 sagewai --version
 ```
 
-**Your first agent** — set an API key for your provider, or point at a local Ollama model:
-
-```python
-import asyncio
-from sagewai.engines.universal import UniversalAgent
-
-# export OPENAI_API_KEY=...  (or ANTHROPIC_API_KEY, or use model="ollama/llama3.2")
-agent = UniversalAgent(name="hello", model="gpt-4o-mini")
-print(asyncio.run(agent.chat("Explain event loops in one paragraph.")))
-```
-
-**CLI + admin API:**
+Run Work from a Git repository with a deterministic `just smoke` check; Sagewai also loads `AGENTS.md` when the repository provides it. Install and authenticate the native `codex` and `claude` CLIs on the machine doing the work; Sagewai uses their existing local authentication and does not collect those credentials. Verification always runs without network access in a disposable container, so select an immutable image containing this repository's locked test toolchain:
 
 ```bash
-sagewai doctor                     # check your environment
-sagewai admin serve --port 8000    # admin API; interactive API docs at http://localhost:8000/docs
+export SAGEWAI_WORK_VERIFICATION_IMAGE='registry.example/verifier@sha256:<digest>'
+
+# Every command names its project. Use "global" only for org-global Work.
+sagewai work --project my-project start "Add the accepted change and tests"
+
+# Replace WORK_ID with the ID printed by start.
+sagewai work --project my-project status WORK_ID
+sagewai work --project my-project pending
+sagewai work --project my-project resume WORK_ID
 ```
+
+`start` persists the WorkItem, contract, evidence, stage receipts, and repository result. A successful uncontracted software run ends at a verified commit; it does not imply a deployment.
+
+For a GitHub issue, provide a token authorized for the target repository and pass the issue URL. The lifecycle opens a pull request and stops at the named merge gate. Use the exact IDs reported by `pending`:
+
+```bash
+export GITHUB_TOKEN=ghp_...
+sagewai work --project my-project start https://github.com/OWNER/REPO/issues/123
+sagewai work --project my-project pending
+sagewai work --project my-project approve WORK_ID GATE_ID
+sagewai work --project my-project resume WORK_ID
+```
+
+Local execution is the default. To use Fleet, start approved project-scoped workers from trusted checkouts that advertise `runtime.codex` or `runtime.claude`, then add `--execution fleet --fleet-org ORG_ID` before the subcommand. Native CLI authentication remains on those workers; the control plane sends no Codex or Claude credential. See the [Fleet Work example](./packages/sdk/sagewai/examples/fleet/README.md#native-work-operators).
+
+`sagewai admin serve --port 8000` exposes the authenticated Work API. For the browser Work Control Console, run `just stack-up` from a source checkout and open http://localhost:3008. A fresh full-stack install still requires the first-time setup wizard; there are no default credentials and setup is never bypassed.
 
 **Full stack with the web admin UI.** The admin UI ships as a container, so the full stack runs via Docker (or Podman). Sagewai is open source — **clone the repo and build the images from your own checkout** (nothing is pulled from a registry except the stock `postgres` + `redis`):
 
@@ -148,7 +160,7 @@ Sagewai is a monorepo. The packages and apps:
 | Path | What it is | Published as |
 |---|---|---|
 | [`packages/sdk`](./packages/sdk) | The `sagewai` Python package | `pip install sagewai` |
-| [`apps/admin`](./apps/admin) | Next.js admin UI — agents, workflows, traces | `ghcr.io/sagewai/admin` |
+| [`apps/admin`](./apps/admin) | Next.js Work Control Console and retained admin surfaces | `ghcr.io/sagewai/admin` |
 | [`apps/backend`](./apps/backend) | Docker image wrapping the SDK (`sagewai admin serve`) | `ghcr.io/sagewai/backend` |
 | [`apps/docs`](./apps/docs) | Docs site (Next.js, deployed to Cloudflare) | [docs.sagewai.ai](https://docs.sagewai.ai) |
 | [`apps/vscode-extension`](./apps/vscode-extension) | VS Code extension | VS Code Marketplace |
@@ -158,6 +170,7 @@ Inside the SDK — [`packages/sdk/sagewai/`](./packages/sdk/sagewai) — the sub
 | Subpackage | Responsibility |
 |---|---|
 | `cli` | The `sagewai` command-line entrypoints |
+| `work` | Durable Work kernel, evidence, operator runtimes, and profiles |
 | `engines` | Agent runtimes (`UniversalAgent`, workflows) |
 | `autopilot` | Goal → agent-graph planning and missions |
 | `fleet` | Distributed workers, dispatch, enrollment |

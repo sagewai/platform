@@ -1,331 +1,221 @@
 import { HowToJsonLd, SoftwareApplicationJsonLd } from '@/components/structured-data';
 
 export const metadata = {
-  title: 'Quickstart — build an agent in 15 minutes',
+  title: 'Quickstart — run durable software Work',
   description:
-    'Install the Sagewai SDK, create a Sealed Identity, and run a Claude Code agent inside an isolated sandbox. End-to-end production-shape quickstart.',
+    'Run a project-scoped software Work lifecycle with durable evidence, Codex implementation, Claude review, deterministic verification, and explicit approval gates.',
   alternates: { canonical: 'https://docs.sagewai.ai/docs/get-started/quickstart' },
   openGraph: {
-    title: 'Sagewai Quickstart — production-shape agents in 15 minutes',
+    title: 'Sagewai Quickstart — controlled autonomous Work',
     description:
-      'Pip-install, scaffold an admin server, store credentials in a Sealed Identity, and dispatch Claude Code into an isolated sandbox.',
+      'Turn a bounded software goal into a verified repository outcome with durable state and independent review.',
     url: 'https://docs.sagewai.ai/docs/get-started/quickstart',
   },
 };
 
 <HowToJsonLd
-  name="Build a production-shape Sagewai agent in 15 minutes"
-  description="Install the SDK, create a Sealed Identity, define a workflow that runs Claude Code inside an isolated Docker sandbox, and ship the artifact to GitHub."
+  name="Run controlled software Work with Sagewai"
+  description="Install Sagewai, configure isolated verification, start project-scoped Work, and operate durable status, pending, approval, and resume controls."
   path="/docs/get-started/quickstart"
-  totalTime="PT15M"
   steps={[
     {
-      name: 'Install the SDK and bring up an admin server',
-      text: 'Install the SDK with uv pip install sagewai (the admin server is included in the base install), then run sagewai admin serve to start the local control plane on http://localhost:8000.',
+      name: 'Install and prepare the native operators',
+      text: 'Install Sagewai plus the Codex and Claude CLIs, authenticate each native CLI locally, and select a digest-pinned verification image.',
     },
     {
-      name: 'Create a Sealed Identity for your customer',
-      text: 'Use the admin UI or sagewai sealed create to store an Anthropic API key and a GitHub personal access token under a single isolated identity.',
+      name: 'Start project-scoped Work',
+      text: 'Run sagewai work with an explicit project and a bounded software outcome or GitHub issue.',
     },
     {
-      name: 'Define a workflow with a Claude Code step',
-      text: 'Write a Python module that registers a workflow with one execution-mode-3 step pointing at your portfolio repo as the artifact target.',
-    },
-    {
-      name: 'Trigger the workflow and watch the artifact land',
-      text: 'Run sagewai run portfolio-site. The worker dispatches Claude Code inside an isolated sandbox, resolving credentials from the Sealed Identity (live runtime injection is experimental — see the status note); the result is committed back to GitHub.',
+      name: 'Operate durable attention',
+      text: 'Inspect status and pending attention, approve only the exact named gate, and resume from canonical persisted state.',
     },
   ]}
 />
 <SoftwareApplicationJsonLd />
 
-# Quickstart — Build a portfolio site with Claude Code
+# Quickstart — Run durable software Work
 
-This quickstart takes about 15 minutes. You will:
+Sagewai's primary path is a Work control plane for safely coordinating Codex
+and Claude. A software goal becomes a project-scoped WorkItem and versioned
+WorkContract. Codex performs write stages, Claude performs independent analysis
+and review, and deterministic verification runs before completion. Events,
+evidence, assumptions, gates, and stage results are persisted outside either
+model's session.
 
-1. Install the SDK and bring up an admin server.
-2. Create a Sealed Identity holding your Anthropic and GitHub
-   credentials.
-3. Define a workflow that dispatches **Claude Code** inside an
-   isolated Docker sandbox to build a portfolio site.
-4. Trigger the workflow and watch the artifact commit to GitHub.
-
-If you want a hello-world agent with no sandbox or per-customer
-credentials, start with [Minimal Setup](/docs/get-started/minimal-setup) instead.
-This page exercises the full stack.
-
-> **What happens, in one sentence:** Sagewai's worker dispatches a CLI
-> agent (Claude Code) inside an identity-isolated Docker sandbox, with
-> your customer's credentials resolved from their Sealed Identity. See
-> [Architecture: Execution modes — Mode 3](/docs/architecture/execution-modes#mode-3--full-cli-agent)
-> for the full topology.
->
-> **Status note.** This quickstart walks through the *designed* Sealed
-> flow. The identity model, the Vault backend, and the admin profile
-> controls ship today, and the Identity's key names resolve at
-> enqueue time. The runtime enforcement that the prose below
-> describes — live secret injection into the running sandbox and
-> scrubbing on release — is **experimental and not yet wired into the
-> default worker path** (the secret provider is unset by default). See
-> the [Security tiers](/docs/architecture/security-tiers) page and the
-> SDK README's Sealed section for what to rely on today.
-
----
+This quickstart uses local execution. No deployment platform is involved: an
+uncontracted successful run ends at a verified repository outcome.
 
 ## Prerequisites
 
-- Python 3.10 or later (`uv` recommended for venv management)
-- Docker installed and running (the default sandbox backend)
-- An Anthropic API key (Claude Code uses this — Tier-2 in
-  Sagewai terminology)
-- A GitHub personal access token with `repo` scope (artifact upload
-  uses this — also Tier-2)
-- A target GitHub repository to receive the generated site
-  (an empty repo is fine)
-- An operator-side LLM key for orchestration (the "Tier-1" key —
-  see [Security tiers](/docs/architecture/security-tiers)). For this
-  quickstart, set `ORCHESTRATION_OPENAI_KEY` or use a local Ollama URL.
-
----
+- Python 3.10 or later (`uv` is recommended).
+- A Git repository with a deterministic `just smoke` recipe. Sagewai loads
+  `AGENTS.md` when the repository provides it.
+- Docker available for isolated verification.
+- The native `codex` and `claude` CLIs installed and authenticated on this
+  machine. Sagewai reuses their local authentication; it does not ask you to
+  submit those credentials to the control plane.
+- An immutable, digest-pinned verification image containing `just`, `uv`, and
+  the repository's locked test dependencies. Verification has no host fallback
+  and runs with no network or inherited credentials.
 
 ## 1. Install Sagewai
 
-```bash
-# uv (recommended) — creates the environment and installs in one step:
-uv venv && uv pip install 'sagewai[postgres]'
-
-# OR with pip — create a virtualenv first (a system-wide install is blocked on
-# macOS/Homebrew and many Linux distros with 'externally-managed-environment'):
-python3 -m venv .venv && source .venv/bin/activate
-pip install 'sagewai[postgres]'
-```
-
-The admin server is part of the base install — no extra needed. By
-default Sagewai persists all state to SQLite at `~/.sagewai/db/sagewai.db`
-(zero setup, durable across restarts). The `postgres` extra adds asyncpg
-and Alembic for production-scale or multi-process deployments.
-
----
-
-## 2. Bring up the admin server + a worker
-
-In one terminal, start the admin server:
+Install into an isolated environment:
 
 ```bash
-sagewai admin serve --host 0.0.0.0 --port 8000
+uv venv && uv pip install sagewai
+# Or from a platform checkout:
+# just bootstrap
+
+sagewai --version
+codex --version
+claude --version
 ```
 
-Open http://localhost:8000 in a browser and complete the first-time
-setup wizard (org name, admin email, admin password — see the
-[Admin Panel guide](/docs/guides/admin-panel)). This creates the
-operator account.
-
-In a second terminal, start a worker with the Docker sandbox backend:
+Select the verification image maintained for the repository:
 
 ```bash
-export ORCHESTRATION_OPENAI_KEY=sk-...   # Tier-1 — orchestration brain
-
-sagewai worker start \
-    --pool default \
-    --sandbox-mode per_run \
-    --sandbox-backend docker \
-    --sandbox-image ghcr.io/sagewai/sandbox-claude-code:latest \
-    --sandbox-network egress-only
+export SAGEWAI_WORK_VERIFICATION_IMAGE='registry.example/verifier@sha256:<digest>'
 ```
 
-The worker registers with the admin server, advertises capability
-labels (`sandbox.backend=docker`, `sandbox.image_variants=claude-code`),
-and is ready to claim runs.
+The default software verification command is `just smoke`. The image must
+already contain everything that command needs because verification is
+networkless. See the repository's `DEVELOPMENT.md` for the complete isolation
+contract.
 
----
+## 2. Start local Work
 
-## 3. Create a Sealed Identity for your customer credentials
-
-A **Sealed Identity** is a named bundle of Tier-2 credentials and
-behavior knobs. Claude Code reads its API key from `os.environ`
-inside the sandbox; the env values come from the Identity at
-sandbox-start time.
-
-In the admin panel, go to **Sealed → Profiles → Create**. Name the
-profile `portfolio-customer-X` and add:
-
-```
-ANTHROPIC_API_KEY=sk-ant-...     ← Claude Code uses this
-GITHUB_TOKEN=ghp_...              ← git push uses this
-```
-
-The profile is stored encrypted at rest (Fernet) in
-`~/.sagewai/profiles.json`. The admin server holds the master key;
-the worker host and control plane never see the plaintext values
-again. See [Security tiers](/docs/architecture/security-tiers) for
-the trust boundary.
-
----
-
-## 4. Define the workflow
-
-> **Note on the code below.** The decorator API for per-step modes
-> is still stabilising — the canonical reference is the
-> [Execution modes architecture page](/docs/architecture/execution-modes#mixing-modes-within-a-workflow).
-> The example here matches the shape that page commits to. If a
-> parameter name has evolved by the time you read this, the
-> [Workflows reference](/docs/api-reference/workflows) is the
-> authoritative API.
-
-Create `build_portfolio.py`:
-
-```python
-import asyncio
-from sagewai import DurableWorkflow, UniversalAgent
-from sagewai.core.stores.postgres import PostgresStore
-from sagewai.sandbox import SandboxMode
-
-store = PostgresStore(database_url="postgresql://localhost/sagewai")
-
-planner = UniversalAgent(
-    name="planner",
-    model="gpt-4o-mini",  # Tier-1 LLM — operator pays
-)
-
-wf = DurableWorkflow(name="portfolio-builder", store=store)
-
-@wf.step("plan")
-async def plan(brief: str) -> dict:
-    """Mode 0 — pure orchestration on the worker."""
-    result = await planner.chat(
-        f"Extract structured requirements from this portfolio brief: {brief}"
-    )
-    return {"brief": brief, "requirements": result}
-
-@wf.step(
-    "build_site",
-    sandbox_mode=SandboxMode.PER_RUN,
-    sandbox_image="ghcr.io/sagewai/sandbox-claude-code:latest",
-    security_profile_ref="portfolio-customer-X",
-    cli_agent="claude-code",
-    artifact_destination={
-        "kind": "github",
-        "repo": "your-org/portfolio-site",
-        "branch": "main",
-    },
-)
-async def build_site(plan: dict) -> str:
-    """Mode 3 — Claude Code in a sandbox, push to GitHub."""
-    return await wf.dispatch_cli_agent(
-        prompt=f"Scaffold a Next.js portfolio site per this brief: {plan['requirements']}",
-        workdir="/workspace",
-    )
-
-@wf.step("summarise")
-async def summarise(artifact_url: str) -> str:
-    """Mode 0 — orchestration."""
-    result = await planner.chat(
-        f"Write a one-paragraph completion message for site at {artifact_url}"
-    )
-    return result
-
-async def main():
-    await store.initialize()
-    run_id = await wf.enqueue(input_data={"brief": "Modern minimal portfolio for a senior product designer named Sam Park."})
-    print(f"Enqueued: {run_id}")
-
-asyncio.run(main())
-```
-
-Three steps, three modes:
-
-| Step | Mode | Why |
-|---|---|---|
-| `plan` | 0 (Bare) | Pure orchestration; Tier-1 LLM call on the worker. |
-| `build_site` | 3 (Full + CLI agent) | Claude Code does the actual work, with customer credentials injected into the sandbox env. |
-| `summarise` | 0 (Bare) | Tier-1 again. No sandbox cost for a one-line summary. |
-
-Selecting mode per-step keeps sandbox costs where they are justified — see
-[Execution modes — Mixing modes within a workflow](/docs/architecture/execution-modes#mixing-modes-within-a-workflow).
-
----
-
-## 5. Run it
+Run from the Git repository Sagewai should change. Every command requires an
+exact project slug; use `global` only when the Work is intentionally
+organization-global.
 
 ```bash
-python build_portfolio.py
+cd /path/to/repository
+sagewai work --project my-project start \
+  "Add the bounded change, its tests, and no unrelated refactor"
 ```
 
-Watch the admin panel's **Runs** view. You'll see:
+`start` runs the software profile through analysis, contract acceptance,
+implementation, verification, independent review, and bounded repair when
+needed. It prints the durable Work ID and current status. The accepted contract,
+Evidence Board references, operator receipts, and repository evidence remain
+queryable after either model exits.
 
-1. `plan` step completes in ~500ms (Mode 0 — Tier-1 LLM call).
-2. `build_site` enters `running`. The worker acquires a Docker
-   sandbox, injects the `portfolio-customer-X` Identity, and spawns
-   Claude Code as a subprocess. Claude Code edits files in
-   `/workspace`, then `git push`s to your repo using `GITHUB_TOKEN`.
-   This typically takes 5–15 minutes.
-3. `summarise` completes in ~500ms.
+The initial description is a goal, not permission to edit everything. The
+analysis stage must produce a surgical scope and acceptance criteria before a
+write stage can proceed.
 
-Check your GitHub repo — there's a portfolio site there. Check the
-admin **Audit** view — every secret-injection, cascade-resolution,
-and pool-reset event is recorded.
+## 3. Inspect and resume canonical state
 
----
+Replace `WORK_ID` with the value printed by `start`:
 
-## What happened
-
-```mermaid
-flowchart TD
-    Term["your terminal"]
-    CP1["control plane: admin server<br/>workflow_runs.status='pending'"]
-    WF["worker fleet: 1 worker<br/>claims run; resolves Identity<br/>(Tier-1: ORCHESTRATION_OPENAI_KEY)"]
-    SA["Sagewai Agent on worker host<br/>plan step (Mode 0) — Tier-1 LLM"]
-    SB["Docker sandbox<br/>Identity env injected<br/>(Tier-2: ANTHROPIC_API_KEY, GITHUB_TOKEN)"]
-    TR["tool runner spawns Claude Code<br/>Claude Code → Anthropic API → /workspace"]
-    GP["git push to your repo<br/>→ artifact destination"]
-    CP2["control plane: admin server<br/>workflow_runs.status='completed'"]
-    Term -->|enqueue| CP1
-    CP1 --> WF --> SA --> SB --> TR --> GP --> CP2
+```bash
+sagewai work --project my-project status WORK_ID
+sagewai work --project my-project pending
+sagewai work --project my-project resume WORK_ID
 ```
 
-Three things to note:
+- `status` reads the canonical persisted Work record.
+- `pending` lists only attention for the named project, including blocked
+  questions, approval gates, and degraded-control conditions.
+- `resume` continues only unfinished stages. It does not depend on a Codex or
+  Claude chat session and does not rerun a completed implementation merely
+  because a later remote operation failed.
 
-1. **Your Tier-2 credentials never reached the worker host.** They
-   were injected into the sandbox env directly from the Sealed
-   profile and scrubbed on sandbox release.
-2. **The control plane never executed a workflow step.** It persisted,
-   scheduled, and queried state — workers did the actual work.
-3. **Mode selection was per-step.** The cheap orchestration steps ran
-   on the worker; only the CLI-agent step paid the sandbox-startup cost.
+Use the same `--project` value for the complete lifecycle. Project omission is
+an error, not an implicit global query.
 
----
+## 4. Optional GitHub issue intake and approval
+
+GitHub is an integration surface, not a second lifecycle store. For issue-based
+Work, provide a token authorized for the target repository and pass the issue
+URL:
+
+```bash
+export GITHUB_TOKEN=ghp_...
+sagewai work --project my-project start \
+  https://github.com/OWNER/REPOSITORY/issues/123
+```
+
+The lifecycle records the issue, creates a pull request after verified
+implementation, and surfaces the exact merge gate through both GitHub and the
+canonical pending query:
+
+```bash
+sagewai work --project my-project pending
+sagewai work --project my-project approve WORK_ID GATE_ID
+sagewai work --project my-project resume WORK_ID
+```
+
+`approve` is a real authorization decision and may merge the named pull request.
+Run it only when you intend to authorize that exact gate. With no delivery
+extension in the WorkContract, a verified merged repository outcome completes
+the Work; it does not deploy anything.
+
+For minimal labeled intake, use one explicit label:
+
+```bash
+sagewai work --project my-project intake --label sagewai
+```
+
+The command starts at most one unseen issue from the oldest 100 open issues with
+that label. It is an invoked intake command, not a background poller or webhook.
+
+## 5. Optional Fleet workers
+
+Local execution is the default. Fleet is useful when Codex and Claude should run
+on separate machines. Each worker must be approved, scoped to the same project,
+started from a trusted checkout, and advertise only the native runtime it can
+execute:
+
+```bash
+sagewai fleet run --name codex-worker --project my-project \
+  --capabilities runtime.codex,filesystem.write \
+  --work-repository /path/to/repository
+
+sagewai fleet run --name claude-worker --project my-project \
+  --capabilities runtime.claude,filesystem.read \
+  --work-repository /path/to/repository
+```
+
+Start or resume Work with Fleet selected explicitly:
+
+```bash
+sagewai work --project my-project \
+  --execution fleet --fleet-org ORG_ID \
+  start "Add the bounded change and tests"
+```
+
+The control plane persists Work state and dispatches credential-free stage
+payloads to compatible workers. Codex and Claude authentication stays on each
+worker. If a worker disappears, lease recovery can reassign the unfinished
+stage without erasing Work state or rerunning completed stages.
+
+## 6. Work API and Control Console
+
+`sagewai admin serve --port 8000` exposes the authenticated Work API. To run the
+backend together with the responsive Work Control Console from a source
+checkout, use `just stack-up` and open http://localhost:3008.
+
+A fresh stack always begins at `/setup`. Complete the organization and admin
+account wizard before using authenticated routes. There are no default
+credentials, and the setup boundary is never skipped.
+
+The CLI, API, and console read the same project-scoped canonical Work store and
+pending-attention query. The console adds active Work, timeline, evidence,
+operator activity, gates, degraded control, and Fleet status without becoming a
+second lifecycle owner.
 
 ## What to read next
 
-### Learn the model
-
-- **[Architecture: Runtime topology](/docs/architecture/runtime-topology)** —
-  how a workflow run executes end-to-end.
-- **[Architecture: Security tiers](/docs/architecture/security-tiers)** —
-  Tier-1 vs Tier-2, the trust boundary, what Sagewai promises.
-- **[Architecture: Execution modes](/docs/architecture/execution-modes)** —
-  the five modes a step can run in, with the same portfolio-site
-  example walked through.
-- **[Architecture: Sandbox backends](/docs/architecture/sandbox-backends)** —
-  Docker, Kubernetes, Lambda, and how to pick.
-
-### Go deeper on the SDK
-
-- **[Minimal Setup](/docs/get-started/minimal-setup)** — the
-  no-sandbox, no-Identity flow if you want to start from a
-  hello-world agent first.
-- **[Agents](/docs/core-concepts/agents)** — UniversalAgent,
-  composition patterns.
-- **[Workflows](/docs/core-concepts/workflows)** — durable workflows,
-  approval gates.
-- **[Sandboxing handbook](/docs/guides/sandboxing)** — operator-level
-  sandbox configuration (CLI flags, fallbacks, debugging).
-
-### Operate
-
-- **[Self-Hosted Deployment](/docs/guides/self-hosted)** — production
-  install.
-- **[Fleet Architecture](/docs/guides/fleet-architecture)** — multi-worker
-  topology.
-- **[Hardware Requirements](/docs/get-started/prerequisites)** —
-  sizing.
+- [Persistence](/docs/guides/persistence) — local SQLite and PostgreSQL-backed
+  durable state.
+- [Fleet Architecture](/docs/guides/fleet-architecture) — worker enrollment,
+  project isolation, heartbeats, and recovery.
+- [Admin Panel](/docs/guides/admin-panel) — first-time setup and authenticated
+  administration.
+- [Architecture](/docs/architecture) — runtime and security boundaries.
+- The retained [Minimal Setup](/docs/get-started/minimal-setup), Agents, and
+  Workflows pages cover lower-level SDK capabilities; they are not the primary
+  Work lifecycle.
