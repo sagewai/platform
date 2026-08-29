@@ -187,7 +187,7 @@ Common tasks (run `just` for the full list):
 
 | Recipe | What it runs |
 |---|---|
-| `just smoke` | Fast smoke tests (no LLM, no services) |
+| `just smoke` | Exercises the core software Work lifecycle with safe fakes; no LLM calls or external service calls |
 | `just test` | Full SDK unit suite |
 | `just dev-all` | Backend + admin UI on localhost (no containers) |
 | `just stack-up` | Full container stack, building backend+admin images locally (postgres + redis + backend + admin) |
