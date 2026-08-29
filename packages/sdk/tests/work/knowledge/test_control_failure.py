@@ -210,7 +210,7 @@ async def test_control_event_rolls_back_when_finding_insert_fails(
     )
 
 
-def test_finding_requires_a_project_scoped_control_failure() -> None:
+def test_finding_supports_global_control_failure() -> None:
     event = _degraded_event()
 
     with pytest.raises(ValueError, match="CONTROL_DEGRADED"):
@@ -218,5 +218,7 @@ def test_finding_requires_a_project_scoped_control_failure() -> None:
             event.model_copy(update={"event_type": WorkEventType.CONTROL_RESTORED})
         )
 
-    with pytest.raises(ValueError, match="project-scoped"):
-        control_failure_finding(event.model_copy(update={"project_id": None}))
+    finding = control_failure_finding(event.model_copy(update={"project_id": None}))
+
+    assert finding.project_id is None
+    assert finding.work_id is None

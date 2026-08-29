@@ -27,6 +27,40 @@ depends_on = None
 _SCOPE_SQL = "CASE WHEN project_id IS NULL THEN 'g:' ELSE 'p:' || project_id END"
 
 
+def _add_assumption_project_id(bind: sa.Connection) -> None:
+    if bind.dialect.name == "sqlite":
+        op.execute(
+            sa.text(
+                "UPDATE work_events SET payload_json = "
+                "json_set(payload_json, '$.project_id', project_id) "
+                "WHERE event_type = 'ASSUMPTION_RECORDED'"
+            )
+        )
+        return
+    op.execute(
+        sa.text(
+            "UPDATE work_events SET payload_json = jsonb_set("
+            "payload_json, '{project_id}', "
+            "CASE WHEN project_id IS NULL THEN 'null'::jsonb ELSE to_jsonb(project_id) END, true) "
+            "WHERE event_type = 'ASSUMPTION_RECORDED'"
+        )
+    )
+
+
+def _remove_assumption_project_id(bind: sa.Connection) -> None:
+    expression = (
+        "json_remove(payload_json, '$.project_id')"
+        if bind.dialect.name == "sqlite"
+        else "payload_json - 'project_id'"
+    )
+    op.execute(
+        sa.text(
+            f"UPDATE work_events SET payload_json = {expression} "
+            "WHERE event_type = 'ASSUMPTION_RECORDED'"
+        )
+    )
+
+
 def _json_type() -> sa.types.TypeEngine:
     return sa.JSON().with_variant(postgresql.JSONB(), "postgresql")
 
@@ -456,10 +490,12 @@ def _postgres_downgrade() -> None:
 
 
 def upgrade() -> None:
-    if op.get_bind().dialect.name == "sqlite":
+    bind = op.get_bind()
+    if bind.dialect.name == "sqlite":
         _sqlite_rebuild(scoped=True)
     else:
         _postgres_upgrade()
+    _add_assumption_project_id(bind)
 
 
 def downgrade() -> None:
@@ -469,3 +505,4 @@ def downgrade() -> None:
         _sqlite_rebuild(scoped=False)
     else:
         _postgres_downgrade()
+    _remove_assumption_project_id(bind)

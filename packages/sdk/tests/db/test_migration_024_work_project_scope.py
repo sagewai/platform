@@ -36,6 +36,36 @@ def test_migration_024_revision_chain() -> None:
     assert callable(mod.upgrade) and callable(mod.downgrade)
 
 
+@pytest.mark.parametrize(
+    ("dialect", "add_fragment", "remove_fragment"),
+    [
+        (sqlite.dialect(), "json_set(payload_json", "json_remove(payload_json"),
+        (postgresql.dialect(), "jsonb_set(payload_json", "payload_json - 'project_id'"),
+    ],
+)
+def test_assumption_payload_mutation_uses_dialect_json_operators(
+    monkeypatch, dialect, add_fragment: str, remove_fragment: str
+) -> None:
+    mod = importlib.import_module("sagewai.db.migrations.versions.024_work_project_scope")
+    executed: list[str] = []
+
+    class RecordingOp:
+        def execute(self, statement) -> None:
+            executed.append(str(statement))
+
+    monkeypatch.setattr(mod, "op", RecordingOp())
+    bind = type("Bind", (), {"dialect": dialect})()
+
+    mod._add_assumption_project_id(bind)
+    mod._remove_assumption_project_id(bind)
+
+    assert add_fragment in executed[0]
+    assert remove_fragment in executed[1]
+    assert all("event_type = 'ASSUMPTION_RECORDED'" in statement for statement in executed)
+    if dialect.name == "postgresql":
+        assert "CASE WHEN project_id IS NULL THEN 'null'::jsonb" in executed[0]
+
+
 @pytest.mark.parametrize("dialect", [sqlite.dialect(), postgresql.dialect()])
 def test_scoped_models_compile_with_non_null_composite_identities(dialect) -> None:
     work_items = str(CreateTable(WorkItemModel.__table__).compile(dialect=dialect))
@@ -128,7 +158,11 @@ def _seed_legacy_rows(connection: sa.Connection) -> None:
     connection.exec_driver_sql(
         "INSERT INTO work_events VALUES "
         "('global-event', NULL, 'global-work', 1, 'WORK_CREATED', 'system', NULL, '{}', '2026-01-01'), "
-        "('project-event', 'alpha', 'project-work', 1, 'WORK_CREATED', 'system', NULL, '{}', '2026-01-01')"
+        "('project-event', 'alpha', 'project-work', 1, 'WORK_CREATED', 'system', NULL, '{}', '2026-01-01'), "
+        "('global-assumption', NULL, 'global-work', 2, 'ASSUMPTION_RECORDED', 'system', NULL, "
+        "json_object('id', 'global-assumption', 'statement', 'global'), '2026-01-01'), "
+        "('project-assumption', 'alpha', 'project-work', 2, 'ASSUMPTION_RECORDED', "
+        "'system', NULL, json_object('id', 'project-assumption', 'statement', 'project'), '2026-01-01')"
     )
     connection.exec_driver_sql(
         "INSERT INTO knowledge_items VALUES "
@@ -162,6 +196,18 @@ def test_sqlite_upgrade_backfills_scope_and_preserves_rows() -> None:
         assert connection.exec_driver_sql(
             "SELECT project_scope_key FROM work_events WHERE id = 'global-event'"
         ).scalar_one() == "g:"
+        assumption_projects = connection.exec_driver_sql(
+            "SELECT id, json_extract(payload_json, '$.project_id') FROM work_events "
+            "WHERE event_type = 'ASSUMPTION_RECORDED' ORDER BY id"
+        ).all()
+        assert assumption_projects == [
+            ("global-assumption", None),
+            ("project-assumption", "alpha"),
+        ]
+        assert connection.exec_driver_sql(
+            "SELECT json_type(payload_json, '$.project_id') FROM work_events "
+            "WHERE id = 'global-assumption'"
+        ).scalar_one() == "null"
         assert connection.exec_driver_sql(
             "SELECT project_scope_key FROM knowledge_items WHERE id = 'knowledge-1'"
         ).scalar_one() == "p:alpha"
@@ -224,6 +270,10 @@ def test_sqlite_safe_downgrade_restores_legacy_schema_and_data() -> None:
         _run_migration(connection, "upgrade")
 
         _run_migration(connection, "downgrade")
+        assert connection.exec_driver_sql(
+            "SELECT COUNT(*) FROM work_events WHERE event_type = 'ASSUMPTION_RECORDED' "
+            "AND json_type(payload_json, '$.project_id') IS NULL"
+        ).scalar_one() == 2
 
         assert "project_scope_key" not in {
             row[1] for row in connection.exec_driver_sql("PRAGMA table_info(work_items)")

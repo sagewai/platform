@@ -96,6 +96,8 @@ class WorkRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_project_scope(self) -> WorkRequest:
+        if self.action_scope.project_id != self.project_id:
+            raise ValueError("action scope belongs to a different project")
         for intent in self.action_intents:
             if intent.project_id != self.project_id:
                 raise ValueError("action intent belongs to a different project")

@@ -390,6 +390,7 @@ async def test_post_run_validator_rejects_scope_and_undeclared_effects(
         run_id="run-1",
         stage="implement",
         action_scope=ActionScope(
+            project_id="project-a",
             objective="Change only the SDK Work package",
             allowed_targets=("packages/sdk/sagewai/work",),
             forbidden_targets=("outside.txt",),
@@ -489,7 +490,9 @@ async def test_result_validator_records_runtime_output_tokens(
         work_id="work-1",
         run_id="run-1",
         stage="review",
-        action_scope=ActionScope(objective="Review the implementation", allowed_targets=()),
+        action_scope=ActionScope(
+            project_id="project-a", objective="Review the implementation", allowed_targets=()
+        ),
         action_intents=(),
         control_preconditions=(),
     )
@@ -829,11 +832,14 @@ async def test_large_verification_output_is_deduplicated_artifact_evidence(
         item.artifact_refs == (checks[0].artifact_ref,) for item in items if item is not None
     )
     assert all("x" * 100 not in item.statement for item in items if item is not None)
-    assert [path for path in object_root.rglob("*") if path.is_file()] == [
-        LocalArtifactStore(root=object_root).resolve(checks[0].artifact_ref)
-    ]
+    stored_files = [path for path in object_root.rglob("*") if path.is_file()]
+    resolved = LocalArtifactStore(root=object_root).resolve(
+        checks[0].artifact_ref, project_id="project-a"
+    )
+    assert resolved in stored_files
+    assert len({(path.stat().st_dev, path.stat().st_ino) for path in stored_files}) == 1
     assert (
-        LocalArtifactStore(root=object_root).read(checks[0].artifact_ref)
+        LocalArtifactStore(root=object_root).read(checks[0].artifact_ref, project_id="project-a")
         == ("stdout:\n" + "x" * 5001 + "\nstderr:\n").encode()
     )
 
