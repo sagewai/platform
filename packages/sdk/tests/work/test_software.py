@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shlex
 import subprocess
@@ -42,6 +43,7 @@ from sagewai.work.profiles.software import (
     WorkspaceStaleError,
     WorktreeBranchPublisher,
     software_workspace_precondition,
+    workspace_diff,
 )
 from tests.db.conftest import dialect_engine  # noqa: F401
 from tests.work.fakes_verification import LocalVerificationRunner
@@ -172,6 +174,55 @@ def _repository(tmp_path: Path) -> tuple[Path, str]:
     return repository, _git(repository, "rev-parse", "HEAD")
 
 
+def _verification_contract() -> work.WorkContract:
+    return work.WorkContract(
+        id="contract-1",
+        project_id="project-a",
+        work_id="work-1",
+        version=1,
+        goal="Verify the software change",
+        allowed_scope=("README.md",),
+        acceptance_criteria=(
+            work.AcceptanceCriterion(
+                id="criterion-repository",
+                project_id="project-a",
+                statement="repository outcome is verified",
+                verification_kind="deterministic",
+            ),
+            work.AcceptanceCriterion(
+                id="criterion-execution",
+                project_id="project-a",
+                statement="verification commands pass",
+                verification_kind="deterministic",
+            ),
+            work.AcceptanceCriterion(
+                id="criterion-profile",
+                project_id="project-a",
+                statement="profile action succeeds",
+                verification_kind="profile",
+            ),
+            work.AcceptanceCriterion(
+                id="criterion-policy",
+                project_id="project-a",
+                statement="policy authorizes completion",
+                verification_kind="policy",
+            ),
+        ),
+        constraints=(),
+        non_goals=(),
+        evidence_refs=("issue://1",),
+        assumption_ids=(),
+        risk="low",
+        design_required=False,
+        profile_context=SoftwareContractContext(
+            project_id="project-a",
+            base_sha="a" * 40,
+            repository_outcome="verified_commit",
+            repository_criterion_id="criterion-repository",
+        ).model_dump(mode="json"),
+    )
+
+
 def _result(
     *,
     action_results: tuple[ActionResult, ...] = (),
@@ -195,7 +246,12 @@ def _result(
 
 
 def test_software_profile_contexts_round_trip_at_profile_boundary() -> None:
-    contract = SoftwareContractContext(base_sha="a" * 40)
+    contract = SoftwareContractContext(
+        project_id="project-a",
+        base_sha="a" * 40,
+        repository_outcome="verified_commit",
+        repository_criterion_id="criterion-repository",
+    )
     capsule = SoftwareCapsuleContext(
         base_sha="a" * 40,
         current_sha="b" * 40,
@@ -277,6 +333,58 @@ async def test_worktree_is_pinned_retryable_and_detects_unexpected_head_movement
     _git(resumed.path, "commit", "-m", "unexpected head")
     with pytest.raises(WorkspaceStaleError, match="HEAD moved"):
         await manager.assert_current(resumed, expected_sha=base_sha)
+
+
+@pytest.mark.asyncio
+async def test_reviewed_diff_is_canonical_before_and_after_committing_untracked_file(
+    tmp_path: Path,
+) -> None:
+    repository, base_sha = _repository(tmp_path)
+    manager = SoftwareWorktreeManager(root=tmp_path / "worktrees")
+    workspace = await manager.prepare(
+        repository=repository,
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="attempt-1",
+        base_sha=base_sha,
+    )
+    (workspace.path / "target.txt").write_text("reviewed\n")
+    reviewed_diff, reviewed_files = await workspace_diff(workspace)
+    reviewed_digest = f"sha256:{hashlib.sha256(reviewed_diff.encode()).hexdigest()}"
+
+    result_sha = await manager.commit_reviewed(
+        workspace,
+        expected_sha=base_sha,
+        expected_diff_digest=reviewed_digest,
+        commit_message="sagewai work work-1",
+    )
+    committed_diff, committed_files = await workspace_diff(workspace)
+
+    assert result_sha != base_sha
+    assert committed_diff == reviewed_diff
+    assert committed_files == reviewed_files == ("target.txt",)
+
+@pytest.mark.asyncio
+async def test_workspace_diff_captures_content_beyond_preview_limit(
+    tmp_path: Path,
+) -> None:
+    repository, base_sha = _repository(tmp_path)
+    workspace = await SoftwareWorktreeManager(root=tmp_path / "worktrees").prepare(
+        repository=repository,
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="attempt-1",
+        base_sha=base_sha,
+    )
+    tail_marker = "reviewed-tail-marker"
+    (workspace.path / "target.txt").write_text(f"{'x' * 100_100}{tail_marker}\n")
+
+    reviewed_diff, reviewed_files = await workspace_diff(workspace)
+
+    assert len(reviewed_diff) > 100_000
+    assert tail_marker in reviewed_diff
+    assert reviewed_files == ("target.txt",)
+
 
 
 @pytest.mark.asyncio
@@ -809,6 +917,8 @@ async def test_large_verification_output_is_deduplicated_artifact_evidence(
 
     result = await verifier.verify(
         work_item=work_item,
+        contract=_verification_contract(),
+        criterion_ids=("criterion-execution",),
         attempt_id="attempt-1",
         workspace=workspace,
         commands=(command, command),
@@ -819,6 +929,11 @@ async def test_large_verification_output_is_deduplicated_artifact_evidence(
         for check in result.profile_context["checks"]
     )
     assert result.passed is True
+    assert result.project_id == "project-a"
+    assert result.contract_id == "contract-1"
+    assert result.stage == "verification"
+    assert tuple(item.criterion_id for item in result.criterion_results) == ("criterion-execution",)
+    assert result.criterion_results[0].evidence_refs == result.evidence_refs
     assert checks[0].artifact_ref is not None
     assert checks[1].artifact_ref == checks[0].artifact_ref
     items = [
@@ -882,6 +997,8 @@ async def test_small_verification_output_remains_inline(
 
     result = await verifier.verify(
         work_item=work_item,
+        contract=_verification_contract(),
+        criterion_ids=("criterion-execution",),
         attempt_id="attempt-1",
         workspace=workspace,
         commands=(command,),
@@ -894,3 +1011,13 @@ async def test_small_verification_output_remains_inline(
     assert item.artifact_refs == ()
     assert "stdout:\nsmall-output" in item.statement
     assert not (tmp_path / "objects").exists()
+    for mismatched_id in ("criterion-repository", "criterion-profile", "criterion-policy"):
+        with pytest.raises(ValueError, match="criterion subset"):
+            await verifier.verify(
+                work_item=work_item,
+                contract=_verification_contract(),
+                criterion_ids=(mismatched_id,),
+                attempt_id="attempt-1",
+                workspace=workspace,
+                commands=(command,),
+            )

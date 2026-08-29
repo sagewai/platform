@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from sagewai.artifacts import LocalArtifactStore
-from sagewai.work import TaskCapsule, WorkContract, WorkItem
+from sagewai.work import AcceptanceCriterion, TaskCapsule, WorkContract, WorkItem
 from sagewai.work.capsule import TaskCapsuleCompiler
 from sagewai.work.knowledge import KnowledgeItem, KnowledgeKind, KnowledgeStore
 from tests.db.conftest import dialect_engine  # noqa: F401
@@ -51,7 +51,14 @@ def _contract(
         version=1,
         goal="Compile a bounded capsule",
         allowed_scope=("packages/sdk/sagewai/work",),
-        acceptance_criteria=("canonical context is sufficient",),
+        acceptance_criteria=(
+            AcceptanceCriterion(
+                id="criterion-canonical-context",
+                project_id=project_id,
+                statement="canonical context is sufficient",
+                verification_kind="deterministic",
+            ),
+        ),
         constraints=("no chat history",),
         non_goals=(),
         evidence_refs=evidence_refs,
@@ -391,6 +398,8 @@ def test_task_capsule_rejects_nested_work_ownership_mismatch(
         prior_result_refs=(),
     ).model_dump()
     values[field][nested_field] = nested_value
+    if field == "contract" and nested_field == "project_id":
+        values[field]["acceptance_criteria"][0]["project_id"] = nested_value
 
     with pytest.raises(ValueError, match=message):
         TaskCapsule.model_validate(values)

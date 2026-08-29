@@ -21,6 +21,7 @@ import pytest
 from pydantic import ValidationError
 
 from sagewai.work import (
+    AcceptanceCriterion,
     ActionIntent,
     ActionScope,
     CapabilityGrant,
@@ -89,7 +90,14 @@ def _capsule() -> TaskCapsule:
         version=1,
         goal="Implement runtime",
         allowed_scope=("packages/sdk/sagewai/work",),
-        acceptance_criteria=("fake executable passes",),
+        acceptance_criteria=(
+            AcceptanceCriterion(
+                id="criterion-runtime-executable",
+                project_id="project-a",
+                statement="fake executable passes",
+                verification_kind="deterministic",
+            ),
+        ),
         constraints=(),
         non_goals=(),
         evidence_refs=(),

@@ -26,12 +26,15 @@ from sagewai.work import (
     ClaimClassification,
     ControlPrecondition,
     ControlPreconditionKind,
+    CriterionVerification,
     OperatorDisciplineReport,
+    ProposedAcceptanceCriterion,
     Reversibility,
     ReviewFinding,
     ReviewResult,
     VerificationResult,
     WorkContract,
+    WorkContractProposal,
     WorkEventType,
     WorkItem,
     WorkRecord,
@@ -48,7 +51,14 @@ def _contract(**updates) -> WorkContract:
         "version": 1,
         "goal": "Add the generic Work domain",
         "allowed_scope": ("packages/sdk/sagewai/work",),
-        "acceptance_criteria": ("the store is append-only",),
+        "acceptance_criteria": (
+            {
+                "id": "criterion-1",
+                "project_id": "project-a",
+                "statement": "the store is append-only",
+                "verification_kind": "deterministic",
+            },
+        ),
         "constraints": ("reuse the database layer",),
         "non_goals": ("GitHub integration",),
         "evidence_refs": ("repo://base/AGENTS.md",),
@@ -60,6 +70,29 @@ def _contract(**updates) -> WorkContract:
     }
     values.update(updates)
     return WorkContract.model_validate(values)
+
+
+def test_contract_proposal_requires_typed_explicit_verification_kind() -> None:
+    proposal = WorkContractProposal(
+        goal="Prove the change",
+        allowed_scope=("target.txt",),
+        acceptance_criteria=(
+            ProposedAcceptanceCriterion(
+                statement="commands pass",
+                verification_kind="deterministic",
+            ),
+        ),
+        constraints=(),
+        non_goals=(),
+        risk="low",
+        design_required=False,
+    )
+
+    assert proposal.acceptance_criteria[0].verification_kind == "deterministic"
+    values = proposal.model_dump()
+    values["acceptance_criteria"] = ("legacy criterion",)
+    with pytest.raises(ValidationError):
+        WorkContractProposal.model_validate(values)
 
 
 def test_work_item_is_frozen_and_project_scoped() -> None:
@@ -135,8 +168,20 @@ def test_assumption_verification_and_review_models_are_typed_and_immutable() -> 
         status="open",
     )
     verification = VerificationResult(
+        project_id="project-a",
+        contract_id="contract-1",
         attempt_id="verify-1",
+        stage="verification",
         passed=False,
+        criterion_results=(
+            CriterionVerification(
+                project_id="project-a",
+                contract_id="contract-1",
+                criterion_id="criterion-1",
+                passed=False,
+                evidence_refs=("knowledge-verification-1",),
+            ),
+        ),
         evidence_refs=("knowledge-verification-1",),
         profile_context={"checks": [{"command": "just smoke", "exit_code": 1}]},
     )

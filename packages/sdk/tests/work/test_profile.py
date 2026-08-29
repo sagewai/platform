@@ -17,6 +17,7 @@ import pytest
 from pydantic import ValidationError
 
 from sagewai.work import (
+    AcceptanceCriterion,
     Action,
     ActionPlan,
     ActionResult,
@@ -51,16 +52,44 @@ def _contract(*, project_id: str = "project-a") -> WorkContract:
         version=1,
         goal="Change target deterministically",
         allowed_scope=("target.txt",),
-        acceptance_criteria=("deterministic verification passes",),
+        acceptance_criteria=(
+            AcceptanceCriterion(
+                id="criterion-repository",
+                project_id=project_id,
+                statement="deterministic verification passes",
+                verification_kind="deterministic",
+            ),
+            AcceptanceCriterion(
+                id="criterion-execution",
+                project_id=project_id,
+                statement="implementation matches the accepted scope",
+                verification_kind="profile",
+            ),
+            AcceptanceCriterion(
+                id="criterion-command",
+                project_id=project_id,
+                statement="verification commands pass",
+                verification_kind="deterministic",
+            ),
+            AcceptanceCriterion(
+                id="criterion-policy",
+                project_id=project_id,
+                statement="policy authorizes completion",
+                verification_kind="policy",
+            ),
+        ),
         constraints=(),
         non_goals=(),
         evidence_refs=("issue://1",),
         assumption_ids=(),
         risk="low",
         design_required=False,
-        profile_context=SoftwareContractContext(base_sha="a" * 40).model_dump(
-            mode="json"
-        ),
+        profile_context=SoftwareContractContext(
+            project_id=project_id,
+            base_sha="a" * 40,
+            repository_outcome="verified_commit",
+            repository_criterion_id="criterion-repository",
+        ).model_dump(mode="json"),
     )
 
 
@@ -80,10 +109,16 @@ async def test_software_profile_prepares_and_verifies_one_scoped_action() -> Non
     assert action.work_id == work_item.id
     assert action.capability == "filesystem.write"
     assert action.scope == {"allowed_targets": ["target.txt"]}
-    assert action.verification == ("deterministic verification passes",)
+    assert action.verification == (
+        "criterion-execution",
+        "criterion-command",
+        "criterion-policy",
+    )
 
     result = await profile.verify(
         work_item,
+        _contract(),
+        ("criterion-execution",),
         (
             ActionResult(
                 project_id="project-a",
@@ -98,8 +133,47 @@ async def test_software_profile_prepares_and_verifies_one_scoped_action() -> Non
     )
 
     assert result.attempt_id == "work-1:implement:1"
+    assert result.project_id == "project-a"
+    assert result.contract_id == "contract-1"
+    assert result.stage == "execution"
     assert result.passed is True
     assert result.evidence_refs == ("runtime://work-1:implement:1",)
+    assert tuple(item.criterion_id for item in result.criterion_results) == ("criterion-execution",)
+    assert result.criterion_results[0].evidence_refs == result.evidence_refs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "criterion_ids",
+    [
+        (),
+        ("criterion-unknown",),
+        ("criterion-command",),
+        ("criterion-policy",),
+        ("criterion-repository",),
+        ("criterion-repository", "criterion-repository"),
+    ],
+)
+async def test_software_profile_rejects_invalid_criterion_subset(
+    criterion_ids: tuple[str, ...],
+) -> None:
+    with pytest.raises(ValueError):
+        await SoftwareProfile().verify(
+            _work_item(),
+            _contract(),
+            criterion_ids,
+            (
+                ActionResult(
+                    project_id="project-a",
+                    action_id="work-1:implement:1:change",
+                    status="succeeded",
+                    external_ref=None,
+                    evidence_refs=("runtime://work-1:implement:1",),
+                    started_at=NOW,
+                    completed_at=NOW,
+                ),
+            ),
+        )
 
 
 def test_action_plan_rejects_cross_project_actions() -> None:

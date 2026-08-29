@@ -415,7 +415,12 @@ async def test_issue_to_pr_requires_gate_then_records_merged_sha(
     assert work_item.source_ref == ISSUE_URL
     assert work_item.project_id == PROJECT_ID
     assert contract.goal == github.issue.title
-    assert contract.acceptance_criteria == (github.issue.body,)
+    assert len(contract.acceptance_criteria) == 1
+    repository_criterion = contract.acceptance_criteria[0]
+    assert repository_criterion.id == f"{contract.id}:repository"
+    assert repository_criterion.project_id == PROJECT_ID
+    assert repository_criterion.statement == "produce the accepted repository outcome"
+    assert repository_criterion.verification_kind == "profile"
     assert assumptions == ()
     assert publisher.calls[0]["project_id"] == PROJECT_ID
     assert publisher.calls[0]["branch"] == f"sagewai/{gated.work_id}"

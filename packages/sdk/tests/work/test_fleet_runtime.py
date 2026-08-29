@@ -22,6 +22,7 @@ from pydantic import ValidationError
 from sagewai.fleet import InMemoryTaskStore, WorkerCapabilities, WorkerRecord
 from sagewai.fleet.models import WORK_CAPABILITY_LABEL_PREFIX
 from sagewai.work import (
+    AcceptanceCriterion,
     ActionScope,
     CapabilityGrant,
     CapabilitySet,
@@ -78,7 +79,14 @@ def _capsule() -> TaskCapsule:
         version=1,
         goal="Review on a compatible worker",
         allowed_scope=("packages/sdk/sagewai/work",),
-        acceptance_criteria=("structured result returned",),
+        acceptance_criteria=(
+            AcceptanceCriterion(
+                id="criterion-structured-result",
+                project_id="project-a",
+                statement="structured result returned",
+                verification_kind="deterministic",
+            ),
+        ),
         constraints=(),
         non_goals=(),
         evidence_refs=(),

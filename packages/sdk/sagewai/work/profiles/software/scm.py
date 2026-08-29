@@ -11,8 +11,8 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
-from difflib import unified_diff
 from pathlib import Path
 
 from sagewai.fleet.execution import WorkerProcessResult, run_worker_subprocess
@@ -247,17 +247,33 @@ class SoftwareWorktreeManager:
                 f"workspace HEAD moved: expected {expected_sha}, found {actual_sha}"
             )
 
-    async def publish_branch(
+    async def commit_reviewed(
         self,
         workspace: SoftwareWorkspace,
         *,
-        branch: str,
+        expected_sha: str,
         commit_message: str,
+        expected_diff_digest: str | None = None,
     ) -> str:
-        """Commit the reviewed workspace state and push one named branch."""
-        valid = await _git(workspace.path, "check-ref-format", "--branch", branch)
-        if valid.returncode != 0:
-            raise ValueError(f"invalid Git branch: {branch}")
+        """Commit reviewed local state, accepting only one matching restart commit."""
+        if expected_diff_digest is not None:
+            reviewed_diff, _ = await workspace_diff(workspace)
+            actual_diff_digest = (
+                f"sha256:{hashlib.sha256(reviewed_diff.encode()).hexdigest()}"
+            )
+            if actual_diff_digest != expected_diff_digest:
+                raise WorkspaceStaleError("reviewed diff digest changed")
+        actual_sha = await self.current_sha(workspace)
+        if actual_sha != expected_sha:
+            if await self._matches_published_state(
+                workspace,
+                expected_sha=expected_sha,
+                commit_message=commit_message,
+            ):
+                return actual_sha
+            raise WorkspaceStaleError(
+                f"workspace HEAD moved: expected {expected_sha}, found {actual_sha}"
+            )
 
         status = await _git(workspace.path, "status", "--porcelain")
         if status.returncode != 0:
@@ -274,8 +290,27 @@ class SoftwareWorktreeManager:
             )
             if committed.returncode != 0:
                 raise WorkspaceStaleError(committed.stderr)
+        return await self.current_sha(workspace)
 
-        result_sha = await self.current_sha(workspace)
+
+    async def publish_branch(
+        self,
+        workspace: SoftwareWorkspace,
+        *,
+        branch: str,
+        commit_message: str,
+    ) -> str:
+        """Commit the reviewed workspace state and push one named branch."""
+        valid = await _git(workspace.path, "check-ref-format", "--branch", branch)
+        if valid.returncode != 0:
+            raise ValueError(f"invalid Git branch: {branch}")
+
+        expected_sha = await self.current_sha(workspace)
+        result_sha = await self.commit_reviewed(
+            workspace,
+            expected_sha=expected_sha,
+            commit_message=commit_message,
+        )
         pushed = await _git(
             workspace.path,
             "push",
@@ -290,22 +325,14 @@ class SoftwareWorktreeManager:
 async def workspace_diff(
     workspace: SoftwareWorkspace,
 ) -> tuple[str, tuple[str, ...]]:
-    """Return the complete tracked/untracked review diff and changed paths."""
-    tracked = await _git(
-        workspace.path,
-        "diff",
-        "--no-ext-diff",
-        workspace.base_sha,
-        "--",
-    )
-    if tracked.returncode != 0:
-        raise WorkspaceStaleError(tracked.stderr)
+    """Return a stable Git-native diff for all tracked and untracked paths."""
     tracked_names = await _git(
         workspace.path,
         "diff",
         "--name-only",
         workspace.base_sha,
         "--",
+        output_limit=None,
     )
     if tracked_names.returncode != 0:
         raise WorkspaceStaleError(tracked_names.stderr)
@@ -314,30 +341,49 @@ async def workspace_diff(
         "ls-files",
         "--others",
         "--exclude-standard",
+        output_limit=None,
     )
     if untracked.returncode != 0:
         raise WorkspaceStaleError(untracked.stderr)
 
-    paths = set(tracked_names.stdout.splitlines())
-    untracked_paths = tuple(path for path in untracked.stdout.splitlines() if path)
-    paths.update(untracked_paths)
-    parts = [tracked.stdout]
-    for relative in untracked_paths:
-        path = workspace.path / relative
-        try:
-            lines = path.read_text().splitlines(keepends=True)
-        except UnicodeDecodeError:
-            parts.append(f"Binary file b/{relative} added\n")
-            continue
-        parts.extend(
-            unified_diff(
-                (),
-                lines,
-                fromfile="/dev/null",
-                tofile=f"b/{relative}",
-            )
+    untracked_paths = {path for path in untracked.stdout.splitlines() if path}
+    paths = tuple(
+        sorted(
+            {path for path in tracked_names.stdout.splitlines() if path}
+            | untracked_paths
         )
-    return "".join(parts), tuple(sorted(paths))
+    )
+    parts: list[str] = []
+    for relative in paths:
+        if relative in untracked_paths:
+            diff = await _git(
+                workspace.path,
+                "diff",
+                "--no-ext-diff",
+                "--binary",
+                "--no-index",
+                "--",
+                "/dev/null",
+                relative,
+                output_limit=None,
+            )
+            if diff.returncode not in {0, 1}:
+                raise WorkspaceStaleError(diff.stderr)
+        else:
+            diff = await _git(
+                workspace.path,
+                "diff",
+                "--no-ext-diff",
+                "--binary",
+                workspace.base_sha,
+                "--",
+                relative,
+                output_limit=None,
+            )
+            if diff.returncode != 0:
+                raise WorkspaceStaleError(diff.stderr)
+        parts.append(diff.stdout)
+    return "".join(parts), paths
 
 
 def _validate_component(label: str, value: str) -> None:
@@ -345,9 +391,13 @@ def _validate_component(label: str, value: str) -> None:
         raise ValueError(f"{label} is not a safe path component")
 
 
-async def _git(cwd: Path, *args: str) -> WorkerProcessResult:
+async def _git(
+    cwd: Path,
+    *args: str,
+    output_limit: int | None = 100_000,
+) -> WorkerProcessResult:
     return await run_worker_subprocess(
         argv=("git", *args),
         cwd=cwd,
-        output_limit=100_000,
+        output_limit=output_limit,
     )

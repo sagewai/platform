@@ -11,11 +11,16 @@
 
 from __future__ import annotations
 
+from sagewai.work.completion import (
+    validate_criterion_subset,
+    validate_verification_result,
+)
 from sagewai.work.contract import WorkContract
 from sagewai.work.models import (
     Action,
     ActionPlan,
     ActionResult,
+    CriterionVerification,
     Reversibility,
     VerificationResult,
     WorkItem,
@@ -42,7 +47,17 @@ class SoftwareProfile:
             raise ValueError("contract belongs to different work")
         if not contract.allowed_scope:
             raise ValueError("software contract requires an allowed scope")
-        SoftwareContractContext.model_validate(contract.profile_context)
+        context = SoftwareContractContext.model_validate(contract.profile_context)
+        context.validate_contract(contract)
+        delivery_criterion_ids = (
+            set(context.delivery.criterion_ids) if context.delivery is not None else set()
+        )
+        execution_criterion_ids = tuple(
+            criterion.id
+            for criterion in contract.acceptance_criteria
+            if criterion.id != context.repository_criterion_id
+            and criterion.id not in delivery_criterion_ids
+        )
         action = Action(
             id=f"{work.id}:change",
             project_id=work.project_id,
@@ -55,7 +70,7 @@ class SoftwareProfile:
             expected_effect=contract.goal,
             reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
             preconditions=(SOFTWARE_WORKSPACE_PRECONDITION_ID,),
-            verification=contract.acceptance_criteria,
+            verification=execution_criterion_ids,
         )
         return ActionPlan(
             project_id=work.project_id,
@@ -67,10 +82,34 @@ class SoftwareProfile:
     async def verify(
         self,
         work: WorkItem,
+        contract: WorkContract,
+        criterion_ids: tuple[str, ...],
         actions: tuple[ActionResult, ...],
     ) -> VerificationResult:
+        if work.project_id is None:
+            raise ValueError("software profile verification requires a project")
+        if work.profile != self.name:
+            raise ValueError("work belongs to a different profile")
+        if contract.project_id != work.project_id or contract.work_id != work.id:
+            raise ValueError("contract belongs to different work")
+        context = SoftwareContractContext.model_validate(contract.profile_context)
+        context.validate_contract(contract)
+        delivery_criterion_ids = (
+            set(context.delivery.criterion_ids) if context.delivery is not None else set()
+        )
+        execution_criterion_ids = tuple(
+            criterion.id
+            for criterion in contract.acceptance_criteria
+            if criterion.id != context.repository_criterion_id
+            and criterion.id not in delivery_criterion_ids
+            and criterion.verification_kind == "profile"
+        )
+        validate_criterion_subset(contract, criterion_ids)
+        if criterion_ids != execution_criterion_ids:
+            raise ValueError("criterion subset does not match the software execution action")
         if not actions:
             raise ValueError("software profile verification requires action results")
+
         attempts: set[str] = set()
         for result in actions:
             if result.project_id != work.project_id:
@@ -83,10 +122,28 @@ class SoftwareProfile:
             attempts.add(result.action_id[: -len(suffix)])
         if len(attempts) != 1:
             raise ValueError("action results belong to different attempts")
-        return VerificationResult(
-            attempt_id=attempts.pop(),
-            passed=all(result.status == "succeeded" for result in actions),
-            evidence_refs=tuple(
-                dict.fromkeys(ref for result in actions for ref in result.evidence_refs)
-            ),
+
+        passed = all(result.status == "succeeded" for result in actions)
+        evidence_refs = tuple(
+            dict.fromkeys(ref for result in actions for ref in result.evidence_refs)
         )
+        verification = VerificationResult(
+            project_id=work.project_id,
+            contract_id=contract.id,
+            attempt_id=attempts.pop(),
+            stage="execution",
+            passed=passed,
+            criterion_results=tuple(
+                CriterionVerification(
+                    project_id=work.project_id,
+                    contract_id=contract.id,
+                    criterion_id=criterion_id,
+                    passed=passed,
+                    evidence_refs=evidence_refs,
+                )
+                for criterion_id in criterion_ids
+            ),
+            evidence_refs=evidence_refs,
+        )
+        validate_verification_result(contract, criterion_ids, verification)
+        return verification

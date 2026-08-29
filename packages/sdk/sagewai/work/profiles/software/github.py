@@ -22,7 +22,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict
 
 from sagewai.fleet.execution import run_worker_subprocess
-from sagewai.work.contract import WorkContract
+from sagewai.work.contract import AcceptanceCriterion, WorkContract
 from sagewai.work.events import WorkEvent, WorkEventType
 from sagewai.work.models import (
     ActionRequest,
@@ -34,7 +34,10 @@ from sagewai.work.models import (
     WorkRecord,
 )
 from sagewai.work.profiles.software.lifecycle import expected_result_sha
-from sagewai.work.profiles.software.models import SoftwareContractContext
+from sagewai.work.profiles.software.models import (
+    SoftwareContractContext,
+    SoftwareRepositoryOutcome,
+)
 from sagewai.work.profiles.software.scm import SoftwareWorktreeManager
 from sagewai.work.store import WorkStore
 
@@ -593,14 +596,23 @@ class GitHubIssueLifecycle:
             target_systems=("repository", "github"),
             created_at=now,
         )
+        contract_id = str(uuid.uuid4())
+        repository_criterion_id = f"{contract_id}:repository"
         contract = WorkContract(
-            id=str(uuid.uuid4()),
+            id=contract_id,
             project_id=project_id,
             work_id=work_id,
             version=1,
             goal=issue.title,
             allowed_scope=(".",),
-            acceptance_criteria=(description,),
+            acceptance_criteria=(
+                AcceptanceCriterion(
+                    id=repository_criterion_id,
+                    project_id=project_id,
+                    statement="produce the accepted repository outcome",
+                    verification_kind="profile",
+                ),
+            ),
             constraints=(),
             non_goals=(),
             evidence_refs=(issue.url,),
@@ -608,7 +620,11 @@ class GitHubIssueLifecycle:
             risk="low",
             design_required=False,
             profile_context=SoftwareContractContext(
+                project_id=project_id,
                 base_sha=base_sha,
+                repository_outcome=SoftwareRepositoryOutcome.MERGED,
+                repository_criterion_id=repository_criterion_id,
+                delivery=None,
             ).model_dump(mode="json"),
         )
         record = await self._software_lifecycle.start(
