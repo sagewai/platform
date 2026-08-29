@@ -49,7 +49,7 @@ async def test_save_load_run_roundtrips_replay_columns(pg_store):
         code_hash="hash-of-steps",
     )
     await pg_store.save_run(run)
-    loaded = await pg_store.load_run("wf", "r2")
+    loaded = await pg_store.load_run("wf", "r2", project_id=None)
 
     assert loaded.replay_of_run_id == "r1"
     assert loaded.replay_from_step == 1
@@ -77,7 +77,7 @@ async def test_save_load_run_roundtrips_step_injection_snapshot(pg_store):
         injection_snapshot=snap,
     )
     await pg_store.save_run(run)
-    loaded = await pg_store.load_run("wf", "r3")
+    loaded = await pg_store.load_run("wf", "r3", project_id=None)
     assert loaded.steps["s"].injection_snapshot == snap
 
 
@@ -99,5 +99,5 @@ async def test_list_replays_of_returns_child_runs(pg_store):
     for r in [parent, child_a, child_b, other]:
         await pg_store.save_run(r)
 
-    replays = await pg_store.list_replays_of("r1")
+    replays = await pg_store.list_replays_of("r1", project_id=None)
     assert {r.run_id for r in replays} == {"r2", "r3"}

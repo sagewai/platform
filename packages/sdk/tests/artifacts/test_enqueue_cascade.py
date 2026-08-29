@@ -46,7 +46,7 @@ async def test_enqueue_with_no_destination_persists_none():
     wf = DurableWorkflow(name="art-test-none", store=store)
     run_id = await wf.enqueue(execution_mode=ExecutionMode.FULL)
 
-    saved = await store.load_run("art-test-none", run_id)
+    saved = await store.load_run("art-test-none", run_id, project_id=None)
     assert saved is not None
     assert saved.artifact_destination is None
 
@@ -61,7 +61,7 @@ async def test_enqueue_run_override_persists_to_run():
         artifact_destination=dest,
     )
 
-    saved = await store.load_run("art-test-run-override", run_id)
+    saved = await store.load_run("art-test-run-override", run_id, project_id=None)
     assert saved is not None
     assert saved.artifact_destination == dest
 
@@ -76,7 +76,7 @@ async def test_enqueue_code_default_persists_when_no_run_override():
     wf = WfWithCodeDefault(name="art-test-code-default", store=store)
     run_id = await wf.enqueue(execution_mode=ExecutionMode.FULL)
 
-    saved = await store.load_run("art-test-code-default", run_id)
+    saved = await store.load_run("art-test-code-default", run_id, project_id=None)
     assert saved is not None
     assert saved.artifact_destination is not None
     assert saved.artifact_destination.type == ArtifactDestinationType.LOCAL
@@ -96,7 +96,7 @@ async def test_enqueue_run_override_beats_code_default():
         artifact_destination=override,
     )
 
-    saved = await store.load_run("art-test-precedence", run_id)
+    saved = await store.load_run("art-test-precedence", run_id, project_id=None)
     assert saved is not None
     assert saved.artifact_destination == override
 
@@ -133,7 +133,7 @@ async def test_enqueue_mode_mismatch_warns_but_proceeds(caplog):
             artifact_destination=dest,
         )
 
-    saved = await store.load_run("art-test-mode-mismatch", run_id)
+    saved = await store.load_run("art-test-mode-mismatch", run_id, project_id=None)
     assert saved is not None
     # Destination is still persisted; the runtime hook is what skips upload
     assert saved.artifact_destination == dest

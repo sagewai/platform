@@ -79,7 +79,7 @@ class TestPostgresStoreIntegration:
         run.signals = {"sig": {"data": 1}}
         await pg_store.save_run(run)
 
-        loaded = await pg_store.load_run("test", "r1")
+        loaded = await pg_store.load_run("test", "r1", project_id=None)
         assert loaded is not None
         assert loaded.workflow_name == "test"
         assert loaded.run_id == "r1"
@@ -96,7 +96,7 @@ class TestPostgresStoreIntegration:
         run.output_data = "final"
         await pg_store.save_run(run)
 
-        loaded = await pg_store.load_run("test", "r2")
+        loaded = await pg_store.load_run("test", "r2", project_id=None)
         assert loaded.status == StepStatus.COMPLETED
         assert loaded.output_data == "final"
 
@@ -108,7 +108,7 @@ class TestPostgresStoreIntegration:
         for r in [r1, r2, r3]:
             await pg_store.save_run(r)
 
-        running = await pg_store.list_runs("w", status=StepStatus.RUNNING)
+        running = await pg_store.list_runs("w", status=StepStatus.RUNNING, project_id=None)
         assert len(running) == 1
         assert running[0].run_id == "b"
 
@@ -119,10 +119,10 @@ class TestPostgresStoreIntegration:
         # Backdate updated_at directly in DB
         await pg_store._pool.execute(
             "UPDATE workflow_runs SET updated_at = NOW() - INTERVAL '10 minutes' WHERE id = $1",
-            "w:stale",
+            "2:g:1:wstale",
         )
 
-        stale = await pg_store.recover_stale_runs(stale_timeout_seconds=300)
+        stale = await pg_store.recover_stale_runs(stale_timeout_seconds=300, project_id=None)
         assert len(stale) == 1
         assert stale[0].run_id == "stale"
 
@@ -132,16 +132,16 @@ class TestPostgresStoreIntegration:
         await pg_store.save_run(run)
         await pg_store._pool.execute(
             "UPDATE workflow_runs SET updated_at = NOW() - INTERVAL '10 minutes' WHERE id = $1",
-            "w:hb",
+            "2:g:1:whb",
         )
-        await pg_store.heartbeat("w", "hb")
+        await pg_store.heartbeat("w", "hb", project_id=None)
 
-        stale = await pg_store.recover_stale_runs(stale_timeout_seconds=300)
+        stale = await pg_store.recover_stale_runs(stale_timeout_seconds=300, project_id=None)
         assert len(stale) == 0
 
     @pytest.mark.asyncio
     async def test_load_nonexistent_returns_none(self, pg_store):
-        result = await pg_store.load_run("nope", "nope")
+        result = await pg_store.load_run("nope", "nope", project_id=None)
         assert result is None
 
     @pytest.mark.asyncio
@@ -162,7 +162,7 @@ class TestPostgresStoreIntegration:
             requires_network_policy=NetworkPolicy.FULL,
         )
         await pg_store.save_run(run)
-        loaded = await pg_store.load_run("wf", "r-sandbox-1")
+        loaded = await pg_store.load_run("wf", "r-sandbox-1", project_id=None)
         assert loaded is not None
         assert loaded.requires_sandbox_mode is SandboxMode.PER_RUN
         assert loaded.requires_image == "ghcr.io/sagewai/sandbox-ml:0.1.5"
@@ -176,7 +176,7 @@ class TestPostgresStoreIntegration:
 
         run = WorkflowRun(workflow_name="wf", run_id="r-sandbox-2")
         await pg_store.save_run(run)
-        loaded = await pg_store.load_run("wf", "r-sandbox-2")
+        loaded = await pg_store.load_run("wf", "r-sandbox-2", project_id=None)
         assert loaded.requires_sandbox_mode is SandboxMode.NONE
         assert loaded.requires_image.startswith("ghcr.io/sagewai/sandbox-base:")
         assert loaded.requires_variant is None
@@ -193,7 +193,7 @@ class TestPostgresStoreIntegration:
             effective_secret_keys=["OPENAI_API_KEY"],
         )
         await pg_store.save_run(run)
-        loaded = await pg_store.load_run("wf", "r-sealed-1")
+        loaded = await pg_store.load_run("wf", "r-sealed-1", project_id=None)
         assert loaded is not None
         assert loaded.security_profile_ref == "builtin://acme-prod"
         assert "OPENAI_API_KEY" in loaded.effective_env_keys
@@ -213,7 +213,7 @@ class TestPostgresStoreIntegration:
             revoke_reason="active breach",
         )
         await pg_store.save_run(run)
-        loaded = await pg_store.load_run("wf", "r-rev-1")
+        loaded = await pg_store.load_run("wf", "r-rev-1", project_id=None)
         assert loaded is not None
         assert loaded.revoked_at == revoked
         assert loaded.revoke_reason == "active breach"

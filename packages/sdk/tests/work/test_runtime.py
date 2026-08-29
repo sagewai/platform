@@ -350,3 +350,40 @@ def test_work_request_rejects_action_scope_from_different_project() -> None:
 
     with pytest.raises(ValidationError, match="action scope belongs to a different project"):
         WorkRequest.model_validate(values)
+
+
+@pytest.mark.parametrize(
+    ("result_project", "action_project"),
+    [("project-a", None), (None, "global")],
+)
+def test_operator_result_rejects_action_result_from_different_project(
+    result_project: str | None,
+    action_project: str | None,
+) -> None:
+    values = {
+        "project_id": result_project,
+        "work_id": "work-1",
+        "run_id": "run-1",
+        "status": "passed",
+        "summary": "operator completed",
+        "evidence_refs": (),
+        "artifact_refs": (),
+        "changes": (),
+        "verification": (),
+        "risks": (),
+        "action_results": (
+            {
+                "project_id": action_project,
+                "action_id": "action-1",
+                "status": "succeeded",
+                "external_ref": None,
+                "evidence_refs": (),
+                "started_at": NOW,
+                "completed_at": NOW,
+            },
+        ),
+        "profile_context": {},
+    }
+
+    with pytest.raises(ValidationError, match="action result belongs to a different project"):
+        OperatorResult.model_validate(values)

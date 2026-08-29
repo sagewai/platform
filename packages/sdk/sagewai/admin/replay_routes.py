@@ -19,6 +19,7 @@ Workflow lookup uses ``app.state.workflow_registry`` populated by the
 admin app (or the test harness). Stores expose
 ``list_replays_of(run_id)`` from Task 5.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -50,6 +51,14 @@ def _store(app: FastAPI) -> Any:
     return getattr(app.state, "replay_store", None)
 
 
+def _project_id(request: Request) -> str | None:
+    """Return the authenticated workflow scope, or explicit global scope."""
+    ctx = getattr(request.state, "context", None)
+    if ctx is None or getattr(ctx, "tenancy_mode", None) != "multi":
+        return None
+    return ctx.project_id
+
+
 def _require_run_scope(request: Request, run: Any, *, write: bool) -> None:
     """Tenant-isolation gate for a replay of a specific run (project-scoped).
 
@@ -76,21 +85,35 @@ def register(
     app.include_router(router)
 
 
-async def _load_run_or_404(store, run_id: str):
+async def _load_run_or_404(
+    store,
+    run_id: str,
+    *,
+    project_id: str | None,
+):
     rows = await store._pool.fetch(
-        "SELECT workflow_name FROM workflow_runs WHERE run_id = $1 LIMIT 1",
+        "SELECT workflow_name FROM workflow_runs "
+        "WHERE run_id = $1 AND project_id IS NOT DISTINCT FROM $2 LIMIT 1",
         run_id,
+        project_id,
     )
     if not rows:
         raise HTTPException(404, f"run {run_id!r} not found")
-    run = await store.load_run(rows[0]["workflow_name"], run_id)
+    run = await store.load_run(rows[0]["workflow_name"], run_id, project_id=project_id)
     if run is None:
         raise HTTPException(404, f"run {run_id!r} not found")
     return run
 
 
-async def _preview_for(store, registry, run_id: str, from_step: int) -> dict:
-    run = await _load_run_or_404(store, run_id)
+async def _preview_for(
+    store,
+    registry,
+    run_id: str,
+    from_step: int,
+    *,
+    project_id: str | None,
+) -> dict:
+    run = await _load_run_or_404(store, run_id, project_id=project_id)
     wf = registry.get(run.workflow_name)
     if wf is None:
         raise HTTPException(
@@ -130,20 +153,14 @@ async def _preview_for(store, registry, run_id: str, from_step: int) -> dict:
     if run.execution_mode.value == "full_jit":
         had = await wf._original_run_used_callbacks(run)
         if had:
-            blockers.append(
-                {"type": "mode_not_replayable", "mode": "full_jit"}
-            )
+            blockers.append({"type": "mode_not_replayable", "mode": "full_jit"})
 
     snapshot_keys: dict[str, dict] = {}
     for name, rec in run.steps.items():
         if rec.injection_snapshot is not None:
             snapshot_keys[name] = {
-                "effective_env_keys": list(
-                    rec.injection_snapshot.effective_env_keys
-                ),
-                "effective_secret_keys": list(
-                    rec.injection_snapshot.effective_secret_keys
-                ),
+                "effective_env_keys": list(rec.injection_snapshot.effective_env_keys),
+                "effective_secret_keys": list(rec.injection_snapshot.effective_secret_keys),
             }
 
     return {
@@ -159,10 +176,15 @@ async def _preview_for(store, registry, run_id: str, from_step: int) -> dict:
 @router.post("/{run_id}/replay/preview")
 async def preview(request: Request, run_id: str, body: ReplayPreviewRequest):
     store = _store(request.app)
-    run = await _load_run_or_404(store, run_id)
+    project_id = _project_id(request)
+    run = await _load_run_or_404(store, run_id, project_id=project_id)
     _require_run_scope(request, run, write=False)
     return await _preview_for(
-        store, _registry(request.app), run_id, body.from_step
+        store,
+        _registry(request.app),
+        run_id,
+        body.from_step,
+        project_id=project_id,
     )
 
 
@@ -170,13 +192,18 @@ async def preview(request: Request, run_id: str, body: ReplayPreviewRequest):
 async def commit(request: Request, run_id: str, body: ReplayCommitRequest):
     store = _store(request.app)
     registry = _registry(request.app)
-    run = await _load_run_or_404(store, run_id)
+    project_id = _project_id(request)
+    run = await _load_run_or_404(store, run_id, project_id=project_id)
     _require_run_scope(request, run, write=True)
-    preview_body = await _preview_for(store, registry, run_id, body.from_step)
+    preview_body = await _preview_for(
+        store,
+        registry,
+        run_id,
+        body.from_step,
+        project_id=project_id,
+    )
     if preview_body["blockers"]:
-        raise HTTPException(
-            422, detail={"blockers": preview_body["blockers"]}
-        )
+        raise HTTPException(422, detail={"blockers": preview_body["blockers"]})
     if preview_body["warnings"] and not body.confirm_warnings:
         raise HTTPException(
             422,
@@ -191,6 +218,7 @@ async def commit(request: Request, run_id: str, body: ReplayCommitRequest):
         run_id,
         from_step=body.from_step,
         actor_id="admin",
+        project_id=project_id,
     )
     return {"new_run_id": new_run_id, "replay_of_run_id": run_id}
 
@@ -198,9 +226,10 @@ async def commit(request: Request, run_id: str, body: ReplayCommitRequest):
 @router.get("/{run_id}/replays")
 async def list_replays(request: Request, run_id: str):
     store = _store(request.app)
-    run = await _load_run_or_404(store, run_id)
+    project_id = _project_id(request)
+    run = await _load_run_or_404(store, run_id, project_id=project_id)
     _require_run_scope(request, run, write=False)
-    runs = await store.list_replays_of(run_id)
+    runs = await store.list_replays_of(run_id, project_id=project_id)
     return {
         "replays": [
             {

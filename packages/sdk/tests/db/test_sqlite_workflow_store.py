@@ -43,7 +43,7 @@ async def test_save_and_load_roundtrip():
     await s.initialize()
     run = _run()
     await s.save_run(run)
-    loaded = await s.load_run("wf", "r1")
+    loaded = await s.load_run("wf", "r1", project_id=None)
     assert loaded is not None
     assert loaded.workflow_name == "wf" and loaded.run_id == "r1"
 
@@ -58,7 +58,7 @@ async def test_persists_across_engine_restart():
     await factory.dispose_engine()
     factory.reset_engine()
     s2 = SqliteWorkflowStore()
-    loaded = await s2.load_run("wf", "durable")
+    loaded = await s2.load_run("wf", "durable", project_id=None)
     assert loaded is not None and loaded.run_id == "durable"
 
 
@@ -69,77 +69,74 @@ async def test_list_runs_filters_by_status():
     await s.initialize()
     await s.save_run(_run(run_id="a", status=StepStatus.PENDING))
     await s.save_run(_run(run_id="b", status=StepStatus.RUNNING))
-    all_runs = await s.list_runs("wf")
-    running = await s.list_runs("wf", status=StepStatus.RUNNING)
+    all_runs = await s.list_runs("wf", project_id=None)
+    running = await s.list_runs("wf", status=StepStatus.RUNNING, project_id=None)
     assert len(all_runs) == 2
     assert len(running) == 1 and running[0].run_id == "b"
 
 
 @pytest.mark.asyncio
 async def test_recover_stale_runs_and_heartbeat():
-    import asyncio
     from sagewai.core.stores.sqlite_store import SqliteWorkflowStore
     s = SqliteWorkflowStore()
     await s.initialize()
     run = _run(run_id="stale", status=StepStatus.RUNNING)
     await s.save_run(run)
     # with a 0s timeout, the running run is immediately stale
-    stale = await s.recover_stale_runs(stale_timeout_seconds=0)
+    stale = await s.recover_stale_runs(stale_timeout_seconds=0, project_id=None)
     assert any(r.run_id == "stale" for r in stale)
     # heartbeat then a large timeout -> not stale
-    await s.heartbeat("wf", "stale")
-    fresh = await s.recover_stale_runs(stale_timeout_seconds=3600)
+    await s.heartbeat("wf", "stale", project_id=None)
+    fresh = await s.recover_stale_runs(stale_timeout_seconds=3600, project_id=None)
     assert fresh == []
 
 
 @pytest.mark.asyncio
-async def test_project_scoped_no_collision(tmp_path, monkeypatch):
-    """Two projects sharing the same workflow_name+run_id must not collide."""
-    from sagewai.core.context import ProjectContext
+async def test_project_scoped_no_collision():
+    """Project and global runs with the same public ID remain isolated."""
     from sagewai.core.stores.sqlite_store import SqliteWorkflowStore
 
     s = SqliteWorkflowStore()
     await s.initialize()
 
-    # Build two runs with identical workflow_name and run_id but different projects.
-    a = WorkflowRun(workflow_name="wf", run_id="same")
-    a.project_id = "proj-a"
-    a.status = StepStatus.RUNNING
+    scopes = (
+        ("proj-a", StepStatus.RUNNING),
+        ("proj-b", StepStatus.PENDING),
+        ("global", StepStatus.COMPLETED),
+        (None, StepStatus.FAILED),
+    )
+    for project_id, status in scopes:
+        run = WorkflowRun(workflow_name="wf", run_id="same", project_id=project_id)
+        run.status = status
+        await s.save_run(run)
 
-    b = WorkflowRun(workflow_name="wf", run_id="same")
-    b.project_id = "proj-b"
-    b.status = StepStatus.PENDING
-
-    # save_run uses run.project_id via resolve_project_id — no context needed.
-    await s.save_run(a)
-    await s.save_run(b)
-
-    # Under proj-a context, load/list see only proj-a's run.
-    with ProjectContext(project_id="proj-a"):
-        la = await s.load_run("wf", "same")
-        assert la is not None and la.status == StepStatus.RUNNING
-        assert len(await s.list_runs("wf")) == 1
-
-    # Under proj-b context, load/list see only proj-b's run.
-    with ProjectContext(project_id="proj-b"):
-        lb = await s.load_run("wf", "same")
-        assert lb is not None and lb.status == StepStatus.PENDING
-        assert len(await s.list_runs("wf")) == 1
+    a = await s.load_run("wf", "same", project_id="proj-a")
+    named_global = await s.load_run("wf", "same", project_id="global")
+    b = await s.load_run("wf", "same", project_id="proj-b")
+    global_run = await s.load_run("wf", "same", project_id=None)
+    assert a is not None and a.status == StepStatus.RUNNING
+    assert named_global is not None and named_global.status == StepStatus.COMPLETED
+    assert b is not None and b.status == StepStatus.PENDING
+    assert global_run is not None and global_run.status == StepStatus.FAILED
+    assert len(await s.list_runs("wf", project_id="global")) == 1
+    assert len(await s.list_runs("wf", project_id="proj-a")) == 1
+    assert len(await s.list_runs("wf", project_id="proj-b")) == 1
+    assert len(await s.list_runs("wf", project_id=None)) == 1
 
 
 @pytest.mark.asyncio
-async def test_default_project_roundtrip():
-    """Run saved with no project context loads correctly under the same context."""
+async def test_global_project_roundtrip():
+    """Run with no project is persisted in the explicit global scope."""
     from sagewai.core.stores.sqlite_store import SqliteWorkflowStore
 
     s = SqliteWorkflowStore()
     await s.initialize()
 
     run = _run(run_id="no-project")
-    await s.save_run(run)  # saved under "default" project
+    await s.save_run(run)  # saved under global scope
 
-    loaded = await s.load_run("wf", "no-project")
+    loaded = await s.load_run("wf", "no-project", project_id=None)
     assert loaded is not None and loaded.run_id == "no-project"
 
-    all_runs = await s.list_runs("wf")
+    all_runs = await s.list_runs("wf", project_id=None)
     assert any(r.run_id == "no-project" for r in all_runs)

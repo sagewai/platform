@@ -54,6 +54,8 @@ class RecoveryWorker:
     ----------
     store:
         WorkflowStore to scan for stale runs.
+    project_id:
+        Explicit project scope to recover. ``None`` selects only global runs.
     handler:
         Optional async callback invoked per stale run.
         If None and store supports batch reset, uses that instead.
@@ -67,11 +69,13 @@ class RecoveryWorker:
         self,
         store: WorkflowStore,
         handler: Callable[[WorkflowRun], Awaitable[None]] | None = None,
+        project_id: str | None = None,
         interval: float = 60.0,
         stale_timeout: int = 300,
     ) -> None:
         self._store = store
         self._handler = handler
+        self._project_id = project_id
         self._interval = interval
         self._stale_timeout = stale_timeout
         self._running = False
@@ -93,13 +97,19 @@ class RecoveryWorker:
         while self._running:
             try:
                 if self._use_batch_reset:
-                    count = await self._store.reset_stale_to_pending(self._stale_timeout)
+                    count = await self._store.reset_stale_to_pending(
+                        stale_timeout_seconds=self._stale_timeout,
+                        project_id=self._project_id,
+                    )
                     if count > 0:
                         logger.info(
                             "Recovery: reset %d stale runs to PENDING", count
                         )
                 else:
-                    stale = await self._store.recover_stale_runs(self._stale_timeout)
+                    stale = await self._store.recover_stale_runs(
+                        stale_timeout_seconds=self._stale_timeout,
+                        project_id=self._project_id,
+                    )
                     for run in stale:
                         logger.info(
                             "Recovering stale workflow: %s run %s",

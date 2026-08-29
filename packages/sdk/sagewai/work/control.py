@@ -128,6 +128,7 @@ class OperatorController:
         durable = await self._durability_store.load_run(
             workflow_name,
             request.run_id,
+            project_id=request.project_id,
         )
         if durable is not None and durable.status is StepStatus.COMPLETED:
             if durable.output_data is None:
@@ -219,7 +220,11 @@ class OperatorController:
         )
 
         async def _heartbeat() -> None:
-            await self._durability_store.heartbeat(workflow_name, request.run_id)
+            await self._durability_store.heartbeat(
+                workflow_name,
+                request.run_id,
+                project_id=request.project_id,
+            )
             in_flight_checks = await self._evaluate_preconditions(
                 request=request,
                 capsule=capsule,

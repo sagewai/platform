@@ -59,8 +59,6 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from sagewai.core.context import resolve_project_id
-
 logger = logging.getLogger(__name__)
 
 
@@ -93,9 +91,8 @@ class DeadLetterQueue:
         project_id: str | None = None,
     ) -> int:
         """Move a failed run to the DLQ. Returns DLQ entry ID."""
-        pid = resolve_project_id(project_id)
         # Load the failed run data
-        run_data = await self._store.get_run_by_run_id(run_id)
+        run_data = await self._store.get_run_by_run_id(run_id, project_id=project_id)
         if run_data is None:
             raise ValueError(f"Run not found: {run_id}")
 
@@ -115,7 +112,7 @@ class DeadLetterQueue:
             json.dumps(input_data, default=str),
             error,
             json.dumps(original_data, default=str),
-            pid,
+            project_id,
         )
         logger.info("Moved run %s to DLQ (entry %d)", run_id, entry_id)
         return entry_id
@@ -129,9 +126,8 @@ class DeadLetterQueue:
         offset: int = 0,
     ) -> list[DLQEntry]:
         """List DLQ entries with optional filter."""
-        pid = resolve_project_id(project_id)
-        conditions = ["project_id = $3"]
-        params: list[Any] = [limit, offset, pid]
+        conditions = ["project_id IS NOT DISTINCT FROM $3"]
+        params: list[Any] = [limit, offset, project_id]
         idx = 4
         if workflow_name:
             conditions.append(f"workflow_name = ${idx}")
@@ -156,16 +152,15 @@ class DeadLetterQueue:
         self, run_id: str, *, project_id: str | None = None
     ) -> DLQEntry | None:
         """Get a DLQ entry by run_id, scoped to project."""
-        pid = resolve_project_id(project_id)
         row = await self._store._pool.fetchrow(
             """
             SELECT id, run_id, workflow_name, input_data, error,
                    original_data, retry_count, created_at
             FROM workflow_dlq
-            WHERE run_id = $1 AND project_id = $2
+            WHERE run_id = $1 AND project_id IS NOT DISTINCT FROM $2
             """,
             run_id,
-            pid,
+            project_id,
         )
         if row is None:
             return None
@@ -178,8 +173,7 @@ class DeadLetterQueue:
 
         Returns new run_id.
         """
-        pid = resolve_project_id(project_id)
-        entry = await self.get_entry(run_id, project_id=pid)
+        entry = await self.get_entry(run_id, project_id=project_id)
         if entry is None:
             raise ValueError(f"DLQ entry not found: {run_id}")
 
@@ -189,9 +183,9 @@ class DeadLetterQueue:
         # Increment retry count
         await self._store._pool.execute(
             "UPDATE workflow_dlq SET retry_count = retry_count + 1 "
-            "WHERE run_id = $1 AND project_id = $2",
+            "WHERE run_id = $1 AND project_id IS NOT DISTINCT FROM $2",
             run_id,
-            pid,
+            project_id,
         )
 
         # Re-enqueue
@@ -201,13 +195,14 @@ class DeadLetterQueue:
             workflow_name=entry.workflow_name,
             run_id=new_run_id,
             input_data=entry.input_data,
+            project_id=project_id,
             started_at=time.time(),
         )
         await self._store.enqueue_run(
             wf_run,
             input_data=entry.input_data,
             priority=priority,
-            project_id=pid,
+            project_id=project_id,
         )
         logger.info(
             "Retried DLQ entry %s as %s (attempt %d)",
@@ -221,11 +216,10 @@ class DeadLetterQueue:
         self, run_id: str, *, project_id: str | None = None
     ) -> bool:
         """Remove a DLQ entry permanently, scoped to project."""
-        pid = resolve_project_id(project_id)
         result = await self._store._pool.execute(
-            "DELETE FROM workflow_dlq WHERE run_id = $1 AND project_id = $2",
+            "DELETE FROM workflow_dlq WHERE run_id = $1 AND project_id IS NOT DISTINCT FROM $2",
             run_id,
-            pid,
+            project_id,
         )
         return result.endswith("1")
 
@@ -233,15 +227,14 @@ class DeadLetterQueue:
         self, *, older_than_days: int = 30, project_id: str | None = None
     ) -> int:
         """Purge DLQ entries older than N days. Returns count deleted."""
-        pid = resolve_project_id(project_id)
         result = await self._store._pool.execute(
             """
             DELETE FROM workflow_dlq
-            WHERE project_id = $2
+            WHERE project_id IS NOT DISTINCT FROM $2
               AND created_at < NOW() - MAKE_INTERVAL(days => $1)
             """,
             older_than_days,
-            pid,
+            project_id,
         )
         count = int(result.split()[-1]) if result else 0
         if count > 0:
@@ -254,11 +247,10 @@ class DeadLetterQueue:
 
     async def count(self, *, project_id: str | None = None) -> int:
         """Count total DLQ entries, optionally scoped to a project."""
-        pid = resolve_project_id(project_id)
         return (
             await self._store._pool.fetchval(
-                "SELECT COUNT(*) FROM workflow_dlq WHERE project_id = $1",
-                pid,
+                "SELECT COUNT(*) FROM workflow_dlq WHERE project_id IS NOT DISTINCT FROM $1",
+                project_id,
             )
             or 0
         )

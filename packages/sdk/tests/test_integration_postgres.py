@@ -52,7 +52,7 @@ class TestPostgresWorkflowLifecycle:
             status=StepStatus.RUNNING,
         )
         await pg_store.save_run(wf_run)
-        loaded = await pg_store.load_run("test-wf", run_id)
+        loaded = await pg_store.load_run("test-wf", run_id, project_id=None)
         assert loaded is not None
         assert loaded.run_id == run_id
         assert loaded.input_data == "hello"
@@ -68,7 +68,9 @@ class TestPostgresWorkflowLifecycle:
             )
             await pg_store.save_run(wf)
 
-        completed = await pg_store.list_runs("filter-test", status=StepStatus.COMPLETED)
+        completed = await pg_store.list_runs(
+            "filter-test", project_id=None, status=StepStatus.COMPLETED
+        )
         assert len(completed) >= 2
 
     @pytest.mark.asyncio
@@ -81,8 +83,8 @@ class TestPostgresWorkflowLifecycle:
             status=StepStatus.RUNNING,
         )
         await pg_store.save_run(wf)
-        await pg_store.heartbeat("hb-test", run_id)
-        loaded = await pg_store.load_run("hb-test", run_id)
+        await pg_store.heartbeat("hb-test", run_id, project_id=None)
+        loaded = await pg_store.load_run("hb-test", run_id, project_id=None)
         assert loaded is not None
 
     @pytest.mark.asyncio
@@ -96,12 +98,14 @@ class TestPostgresWorkflowLifecycle:
         )
         await pg_store.save_run(wf)
         # With 0 timeout, everything is stale
-        stale = await pg_store.recover_stale_runs(stale_timeout_seconds=0)
+        stale = await pg_store.recover_stale_runs(
+            project_id=None, stale_timeout_seconds=0
+        )
         assert any(r.run_id == run_id for r in stale)
 
     @pytest.mark.asyncio
     async def test_load_nonexistent_returns_none(self, pg_store):
-        result = await pg_store.load_run("nonexistent", "no-such-id")
+        result = await pg_store.load_run("nonexistent", "no-such-id", project_id=None)
         assert result is None
 
     @pytest.mark.asyncio
@@ -117,5 +121,5 @@ class TestPostgresWorkflowLifecycle:
         wf.status = StepStatus.COMPLETED
         wf.output = "done"
         await pg_store.save_run(wf)
-        loaded = await pg_store.load_run("upsert-test", run_id)
+        loaded = await pg_store.load_run("upsert-test", run_id, project_id=None)
         assert loaded.status == StepStatus.COMPLETED

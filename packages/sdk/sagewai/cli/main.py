@@ -229,6 +229,7 @@ def register_commands(
             run_id, is_new = await store.enqueue_workflow(
                 workflow_name,
                 input_data,
+                project_id=None,
                 priority=priority,
                 requires_sandbox_mode=mode_enum,
                 requires_image=requires_image,

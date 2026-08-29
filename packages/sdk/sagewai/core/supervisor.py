@@ -23,7 +23,7 @@ Usage::
     store = PostgresStore(database_url="postgresql://localhost/sagewai")
     await store.initialize()
 
-    supervisor = WorkflowSupervisor(store=store)
+    supervisor = WorkflowSupervisor(store=store, project_id=None)
     await supervisor.start()  # blocks until stopped
 """
 
@@ -43,6 +43,8 @@ class WorkflowSupervisor:
     ----------
     store:
         WorkflowStore with stale detection capabilities.
+    project_id:
+        Explicit project scope supervised. ``None`` selects only global runs.
     check_interval:
         Seconds between health checks (default: 60).
     stale_timeout:
@@ -57,11 +59,13 @@ class WorkflowSupervisor:
         self,
         store: Any,
         *,
+        project_id: str | None,
         check_interval: float = 60.0,
         stale_timeout: int = 300,
         on_stale_detected: Any = None,
     ) -> None:
         self._store = store
+        self._project_id = project_id
         self._check_interval = check_interval
         self._stale_timeout = stale_timeout
         self._on_stale_detected = on_stale_detected
@@ -110,7 +114,8 @@ class WorkflowSupervisor:
         # Reset stale runs
         if hasattr(self._store, "reset_stale_to_pending"):
             count = await self._store.reset_stale_to_pending(
-                self._stale_timeout
+                stale_timeout_seconds=self._stale_timeout,
+                project_id=self._project_id,
             )
             if count > 0:
                 logger.warning(
@@ -127,7 +132,9 @@ class WorkflowSupervisor:
         # Log queue stats if available
         if hasattr(self._store, "count_by_status"):
             try:
-                stats = await self._store.count_by_status()
+                stats = await self._store.count_by_status(
+                    project_id=self._project_id
+                )
                 pending = stats.get("pending", 0)
                 running = stats.get("running", 0)
                 failed = stats.get("failed", 0)
