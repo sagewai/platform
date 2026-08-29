@@ -126,8 +126,9 @@ def test_work_fleet_execution_context_is_explicit(monkeypatch) -> None:
     monkeypatch.setattr(work_module, "_pending_work", fake_pending)
 
     result = CliRunner().invoke(
-        work_cli,
+        cli,
         [
+            "work",
             "--project",
             "project-a",
             "--execution",
