@@ -157,6 +157,11 @@ def _fake_runtime_executable(
                 "has_session": "session" in prompt,
                 "argv": sys.argv[1:],
                 "result_contract": prompt.get("result_contract"),
+                "output_schema": (
+                    json.loads(pathlib.Path(sys.argv[sys.argv.index("--output-schema") + 1]).read_text())
+                    if "--output-schema" in sys.argv
+                    else None
+                ),
             }}))
             if {failure_padding}:
                 print("x" * {failure_padding} + "tail-error", file=sys.stderr)
@@ -275,6 +280,7 @@ async def test_native_runtime_uses_fake_executable_without_session_or_api_key(
     observation = json.loads((workspace_path / "runtime-observation.json").read_text())
     argv = observation.pop("argv")
     result_contract = observation.pop("result_contract")
+    output_schema = observation.pop("output_schema")
     assert result.status == "passed"
     assert result.summary == "fake runtime completed"
     assert result.output_tokens == (123 if runtime_type is ClaudeRuntime else None)
@@ -295,6 +301,18 @@ async def test_native_runtime_uses_fake_executable_without_session_or_api_key(
     assert result_contract["required_profile_context"] == {}
     assert provider.declared_scopes == ["credential://workspace"]
     assert not hasattr(runtime, "intercept_tool_call")
+    if runtime_type is CodexRuntime:
+        properties = output_schema["properties"]
+        assert properties["profile_context"] == {
+            "additionalProperties": False,
+            "properties": {},
+            "title": "Profile Context",
+            "type": "object",
+        }
+        assert set(output_schema["required"]) == set(properties)
+        assert "default" not in properties["output_tokens"]
+    else:
+        assert output_schema is None
     if runtime_type is ClaudeRuntime:
         tools = argv[argv.index("--tools") + 1].split(",")
         allowed_tools = argv[argv.index("--allowedTools") + 1].split(",")

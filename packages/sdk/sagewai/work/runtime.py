@@ -252,6 +252,17 @@ class _NativeRuntime:
         return result
 
 
+def _codex_result_schema() -> dict[str, Any]:
+    schema = OperatorResult.model_json_schema()
+    properties = schema["properties"]
+    profile_context = properties["profile_context"]
+    profile_context["additionalProperties"] = False
+    profile_context["properties"] = {}
+    properties["output_tokens"].pop("default", None)
+    schema["required"] = list(properties)
+    return schema
+
+
 class CodexRuntime(_NativeRuntime):
     """Ephemeral Codex CLI execution in an isolated worker workspace."""
 
@@ -283,7 +294,7 @@ class CodexRuntime(_NativeRuntime):
         with tempfile.TemporaryDirectory(prefix="sagewai-codex-") as temporary:
             result_path = Path(temporary) / "result.json"
             schema_path = Path(temporary) / "schema.json"
-            schema_path.write_text(json.dumps(OperatorResult.model_json_schema()))
+            schema_path.write_text(json.dumps(_codex_result_schema()))
             process = await run_worker_subprocess(
                 argv=(
                     self._executable,
