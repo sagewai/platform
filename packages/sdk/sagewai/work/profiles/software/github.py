@@ -81,6 +81,7 @@ class GitHubPullRequest(BaseModel):
     number: int
     url: str
     head: str
+    head_sha: str
     base: str
 
 
@@ -317,6 +318,7 @@ class CatalogGitHubClient:
             repo=issue.repo,
             number=int(pull_request["number"]),
             url=str(pull_request["html_url"]),
+            head_sha=str(pull_request["head"]["sha"]),
             head=head,
             base=base,
         )
@@ -348,6 +350,7 @@ class CatalogGitHubClient:
             repo=issue.repo,
             number=int(result["number"]),
             url=str(result["html_url"]),
+            head_sha=str(result["head"]["sha"]),
             head=head,
             base=base,
         )
@@ -945,6 +948,7 @@ class GitHubIssueLifecycle:
                 work_item=work_item,
                 issue=issue,
                 expected_head=branch,
+                expected_head_sha=branch_sha,
             )
             event = await self._append(
                 work_id=work_item.id,
@@ -959,16 +963,16 @@ class GitHubIssueLifecycle:
             )
             events.append(event)
 
+        pull_request_event = self._pull_request_event(
+            events,
+            after_sequence=cycle_start,
+        )
         self._validate_pull_request(
             pull_request,
             work_item=work_item,
             issue=issue,
             expected_head=f"sagewai/{work_item.id}",
-        )
-
-        pull_request_event = self._pull_request_event(
-            events,
-            after_sequence=cycle_start,
+            expected_head_sha=str(pull_request_event.payload_json["branch_sha"]),
         )
         context = GitHubWorkContext(
             project_id=issue.project_id,
@@ -1408,15 +1412,17 @@ class GitHubIssueLifecycle:
         *,
         work_item: WorkItem,
         issue: GitHubIssue,
+        expected_head_sha: str,
         expected_head: str,
     ) -> None:
         if pull_request.project_id != work_item.project_id:
             raise ValueError("pull request belongs to a different project")
         if pull_request.owner != issue.owner or pull_request.repo != issue.repo:
             raise ValueError("pull request belongs to a different repository")
+        if pull_request.head_sha != expected_head_sha:
+            raise ValueError("pull request head SHA does not match published commit")
         if pull_request.head != expected_head or pull_request.base != issue.default_branch:
             raise ValueError("pull request targets unexpected branches")
-
 
     async def _events(
         self,

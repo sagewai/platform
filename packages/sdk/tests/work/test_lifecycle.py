@@ -1886,6 +1886,7 @@ async def test_github_flow_uses_real_software_lifecycle_events(
                 number=7,
                 url="https://github.com/octocat/hello-world/pull/7",
                 head=head,
+                head_sha="b" * 40,
                 base=base,
             )
 
