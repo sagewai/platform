@@ -69,9 +69,9 @@ class SoftwareWorkspaceControlCheck:
         profile_context = context.capsule.profile_context
         software_context = profile_context.get("software", profile_context)
         try:
-            expected_sha = SoftwareCapsuleContext.model_validate(
+            capsule_context = SoftwareCapsuleContext.model_validate(
                 software_context
-            ).current_sha
+            )
         except (TypeError, ValueError):
             return ControlCheckResult(
                 project_id=context.request.project_id,
@@ -81,6 +81,20 @@ class SoftwareWorkspaceControlCheck:
                 detail="capsule has no canonical workspace HEAD",
                 checked_at=checked_at,
             )
+
+        if (
+            capsule_context.project_id != context.request.project_id
+            or capsule_context.project_id != workspace.project_id
+        ):
+            return ControlCheckResult(
+                project_id=context.request.project_id,
+                precondition_id=context.precondition.id,
+                passed=False,
+                evidence_refs=(workspace.ref,),
+                detail="capsule belongs to a different project",
+                checked_at=checked_at,
+            )
+        expected_sha = capsule_context.current_sha
 
         result = await _git(workspace.path, "rev-parse", "HEAD")
         if result.returncode != 0:

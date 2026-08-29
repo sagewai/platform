@@ -510,14 +510,20 @@ class ReviewRuntime:
         if verdict == "repair":
             findings = (
                 ReviewFinding(
+                    project_id=request.project_id,
                     severity="high",
                     claim="The target needs repair",
                     evidence_refs=tuple(capsule.prior_result_refs),
                     required_change="Write the repaired target",
-                    profile_context={"file": "target.txt", "line": 1},
+                    profile_context={
+                        "project_id": request.project_id,
+                        "file": "target.txt",
+                        "line": 1,
+                    },
                 ),
             )
         review = ReviewResult(
+            project_id=request.project_id,
             attempt_id=request.run_id,
             verdict=verdict,
             findings=findings,
@@ -582,19 +588,65 @@ class WrongAttemptReviewRuntime(ReviewRuntime):
         return result.model_copy(update={"profile_context": {"review_result": payload}})
 
 
-class InvalidFindingContextReviewRuntime(ReviewRuntime):
+class ForeignProjectReviewRuntime(ReviewRuntime):
+    async def run(self, request, capsule, capabilities, workspace):
+        result = await super().run(request, capsule, capabilities, workspace)
+        payload = dict(result.profile_context["review_result"])
+        payload["project_id"] = "project-b"
+        return result.model_copy(update={"profile_context": {"review_result": payload}})
+
+
+class ForeignFindingContextReviewRuntime(ReviewRuntime):
     async def run(self, request, capsule, capabilities, workspace):
         self.calls += 1
         review = ReviewResult(
+            project_id=request.project_id,
             attempt_id=request.run_id,
             verdict="repair",
             findings=(
                 ReviewFinding(
+                    project_id=request.project_id,
                     severity="high",
                     claim="The target needs repair",
                     evidence_refs=(f"review://{request.run_id}",),
                     required_change="Write the repaired target",
-                    profile_context={"unexpected": True},
+                    profile_context={
+                        "project_id": "project-b",
+                        "file": "target.txt",
+                        "line": 1,
+                    },
+                ),
+            ),
+            evidence_refs=(f"review://{request.run_id}",),
+            introduced_assumptions=(),
+            unsupported_claims=(),
+            scope_expansions=(),
+            unsupported_implementation_choices=(),
+        )
+        return _operator_result(
+            request,
+            profile_context={"review_result": review.model_dump(mode="json")},
+        )
+
+
+class InvalidFindingContextReviewRuntime(ReviewRuntime):
+    async def run(self, request, capsule, capabilities, workspace):
+        self.calls += 1
+        review = ReviewResult(
+            project_id=request.project_id,
+            attempt_id=request.run_id,
+            verdict="repair",
+            findings=(
+                ReviewFinding(
+                    project_id=request.project_id,
+                    severity="high",
+                    claim="The target needs repair",
+                    evidence_refs=(f"review://{request.run_id}",),
+                    required_change="Write the repaired target",
+                    profile_context={
+                        "project_id": request.project_id,
+                        "unexpected": True,
+                    },
                 ),
             ),
             evidence_refs=(f"review://{request.run_id}",),
@@ -624,6 +676,20 @@ class RestoringIsolationVerifier:
         if self.calls == 1:
             raise VerificationIsolationError("sandbox unavailable")
         return await self.delegate.verify(**kwargs)
+
+
+class ForeignProjectCheckVerifier:
+    def __init__(self, delegate: SoftwareVerifier) -> None:
+        self.delegate = delegate
+
+    async def verify(self, **kwargs):
+        result = await self.delegate.verify(**kwargs)
+        profile_context = dict(result.profile_context)
+        checks = [dict(check) for check in profile_context["checks"]]
+        checks[0]["project_id"] = "project-b"
+        profile_context["checks"] = checks
+        return result.model_copy(update={"profile_context": profile_context})
+
 
 
 class MoveHeadAfterVerifier:
@@ -932,6 +998,7 @@ async def test_successful_implement_verify_review_reaches_ready_to_merge(
     assert attempt.status == "passed"
     assert attempt.completed_at is not None
     assert attempt.profile_context == {
+        "project_id": "project-a",
         "base_sha": base_sha,
         "result_sha": _git(
             tmp_path / "worktrees/project-a/work-1/workspace",
@@ -2160,6 +2227,11 @@ async def test_invalid_review_result_blocks_without_recording_review(
     ("reviewer", "error"),
     [
         (WrongAttemptReviewRuntime(), "review result belongs to a different attempt"),
+        (ForeignProjectReviewRuntime(), "review result belongs to a different project"),
+        (
+            ForeignFindingContextReviewRuntime(),
+            "review finding context belongs to a different project",
+        ),
         (InvalidFindingContextReviewRuntime(), "Extra inputs are not permitted"),
     ],
 )
@@ -2576,6 +2648,45 @@ async def test_restart_resume_does_not_rerun_completed_implementation(
         and event.payload_json["stage"] == "implement"
     ]
     assert len(completed) == 1
+
+@pytest.mark.asyncio
+async def test_foreign_project_verification_check_is_rejected_before_persistence(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        implementer=MutationRuntime(implement_text="initial", repair_text="unused"),
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+        verifier=ForeignProjectCheckVerifier(
+            SoftwareVerifier(
+                knowledge_store=knowledge_store,
+                runner=LocalVerificationRunner(),
+            )
+        ),
+    )
+
+    with pytest.raises(
+        ValueError, match="verification check belongs to a different project"
+    ):
+        await lifecycle.start(
+            work_item=_work_item(),
+            contract=_contract(base_sha),
+        )
+
+    events = await work_store.read_events("work-1", project_id="project-a")
+    assert not any(
+        event.event_type is WorkEventType.VERIFICATION_RECORDED for event in events
+    )
+
 
 @pytest.mark.asyncio
 async def test_verification_isolation_restores_without_rerunning_implementation(
