@@ -157,6 +157,19 @@ def test_enqueue_task_scrubs_body_project_id_label(client):
     assert "project_id" not in task.get("labels", {})
 
 
+def test_enqueue_rejects_reserved_work_operator_payload(client):
+    client.headers.update({"X-Project-ID": "project-a"})
+
+    response = client.post(
+        "/api/v1/fleet/tasks",
+        json={"payload": {"kind": "work.operator", "work_id": "work-1"}},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "work.operator tasks use the Work lifecycle"}
+    assert client.get("/api/v1/fleet/tasks").json() == {"tasks": []}
+
+
 def test_enqueue_stamps_org_id_for_isolation(app_token):
     app, sf, token = app_token
     c = TestClient(app)

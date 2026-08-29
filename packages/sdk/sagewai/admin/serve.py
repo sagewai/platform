@@ -4378,6 +4378,12 @@ def create_admin_serve_app(
         from sagewai.fleet.normalizer import ModelNormalizer
 
         body = await request.json()
+        payload = body.get("payload", {})
+        if isinstance(payload, dict) and payload.get("kind") == "work.operator":
+            return JSONResponse(
+                {"detail": "work.operator tasks use the Work lifecycle"},
+                status_code=400,
+            )
         pid = _project_scope(request)
         labels = dict(body.get("labels") or {})
         labels.pop("project_id", None)  # never trust a body-supplied project scope
@@ -4390,7 +4396,7 @@ def create_admin_serve_app(
             "project_id": _fleet_project_label(pid),
             "pool": body.get("pool", "default"),
             "labels": labels,
-            "payload": body.get("payload", {}),
+            "payload": payload,
         }
         if model:
             task["model"] = model
