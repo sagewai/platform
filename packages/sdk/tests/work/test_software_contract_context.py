@@ -72,6 +72,24 @@ def test_repository_outcomes_are_explicit_and_stable() -> None:
     }
 
 
+def test_execution_route_requires_matching_fleet_organization() -> None:
+    local = SoftwareContractContext(
+        project_id="project-a",
+        base_sha="a" * 40,
+        repository_outcome=SoftwareRepositoryOutcome.VERIFIED_COMMIT,
+        repository_criterion_id="repository",
+        execution_route="local",
+    )
+    fleet = local.model_copy(update={"execution_route": "fleet", "fleet_org_id": "org-a"})
+
+    assert local.fleet_org_id is None
+    assert fleet.fleet_org_id == "org-a"
+    with pytest.raises(ValidationError, match="fleet execution requires an organization"):
+        SoftwareContractContext.model_validate({**local.model_dump(), "execution_route": "fleet"})
+    with pytest.raises(ValidationError, match="local execution cannot name a Fleet organization"):
+        SoftwareContractContext.model_validate({**local.model_dump(), "fleet_org_id": "org-a"})
+
+
 def test_contract_context_accepts_known_disjoint_repository_and_delivery_criteria() -> None:
     context = SoftwareContractContext(
         project_id="project-a",

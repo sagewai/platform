@@ -1,8 +1,20 @@
 import tempfile
+import sqlite3
 import unittest
 from pathlib import Path
 
 from desk import AlreadyDecided, ApprovalDesk, EvidenceRequired
+
+
+class TrackingApprovalDesk(ApprovalDesk):
+    def __init__(self, database):
+        self.connections = []
+        super().__init__(database)
+
+    def _connect(self):
+        connection = super()._connect()
+        self.connections.append(connection)
+        return connection
 
 
 class ApprovalDeskTest(unittest.TestCase):
@@ -29,6 +41,36 @@ class ApprovalDeskTest(unittest.TestCase):
         self.assertEqual(
             [request.id for request in self.desk.pending(project_id="project-a")],
             [project_a.id],
+        )
+
+    def test_project_scope_is_normalized_on_every_operation(self):
+        request = self.desk.create_request(
+            project_id=" project-a ",
+            title="Approve supplier quote",
+            risk="low",
+        )
+
+        self.assertEqual(
+            [item.id for item in self.desk.pending(project_id=" project-a ")],
+            [request.id],
+        )
+        self.assertEqual(self.desk.get(" project-a ", request.id).id, request.id)
+        self.desk.decide(
+            project_id=" project-a ",
+            request_id=request.id,
+            decision="approved",
+            actor="arda",
+            reason="Reviewed",
+        )
+        self.assertEqual(
+            [
+                event["kind"]
+                for event in self.desk.history(
+                    project_id=" project-a ",
+                    request_id=request.id,
+                )
+            ],
+            ["created", "approved"],
         )
 
     def test_low_risk_request_can_be_approved_with_reason(self):
@@ -167,6 +209,28 @@ class ApprovalDeskTest(unittest.TestCase):
                 actor="mallory",
                 reason="Not my project",
             )
+
+    def test_connections_are_closed_after_each_operation(self):
+        desk = TrackingApprovalDesk(self.database)
+        request = desk.create_request(
+            project_id="project-a",
+            title="Approve supplier quote",
+            risk="low",
+        )
+        desk.get("project-a", request.id)
+        desk.pending(project_id="project-a")
+        desk.decide(
+            project_id="project-a",
+            request_id=request.id,
+            decision="approved",
+            actor="arda",
+            reason="Reviewed",
+        )
+        desk.history(project_id="project-a", request_id=request.id)
+
+        for connection in desk.connections:
+            with self.assertRaises(sqlite3.ProgrammingError):
+                connection.execute("SELECT 1")
 
 
 if __name__ == "__main__":

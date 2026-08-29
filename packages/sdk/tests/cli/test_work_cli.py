@@ -24,7 +24,7 @@ from sagewai.cli.fleet import fleet_group
 from sagewai.cli.work import work as work_cli
 from sagewai.core.state import InMemoryStore
 from sagewai.work import WorkEventType, WorkMetrics
-from sagewai.work.profiles.software import SoftwareStageOperator
+from sagewai.work.profiles.software import SoftwareContractContext, SoftwareStageOperator
 from tests.db.conftest import dialect_engine  # noqa: F401
 
 work_module = import_module("sagewai.cli.work")
@@ -327,6 +327,50 @@ async def test_start_work_routes_github_issue_to_github_lifecycle(monkeypatch) -
     ]
 
 
+@pytest.mark.asyncio
+async def test_start_work_records_selected_execution_route(monkeypatch) -> None:
+    repository = SimpleNamespace()
+    captured = []
+
+    async def fake_repository_state():
+        return repository, "a" * 40
+
+    class FakeLifecycle:
+        async def start(self, *, work_item, contract):
+            captured.append((work_item, contract))
+            return SimpleNamespace(work_id=work_item.id, status="READY_TO_MERGE")
+
+    async def fake_build_lifecycle(
+        *,
+        project_id,
+        repository,
+        execution=None,
+        fleet_org=None,
+    ):
+        assert project_id == "project-a"
+        assert execution == "local"
+        assert fleet_org is None
+        return FakeLifecycle(), SimpleNamespace(), SimpleNamespace()
+
+    monkeypatch.setattr(work_module, "_repository_state", fake_repository_state)
+    monkeypatch.setattr(work_module, "_build_lifecycle", fake_build_lifecycle)
+
+    await work_module._start_work("bounded change", project_id="project-a")
+
+    context = SoftwareContractContext.model_validate(captured[0][1].profile_context)
+    assert context.execution_route == "local"
+    assert context.fleet_org_id is None
+    projected = work_module._execution_route_from_events(
+        [
+            SimpleNamespace(
+                event_type=WorkEventType.CONTRACT_PROPOSED,
+                payload_json=captured[0][1].model_dump(mode="json"),
+            )
+        ]
+    )
+    assert projected == ("local", None)
+
+
 def test_work_status_is_project_scoped_and_reports_not_found(monkeypatch) -> None:
     seen = []
 
@@ -380,6 +424,104 @@ def test_work_resume_reports_lifecycle_error(monkeypatch) -> None:
     assert result.exit_code != 0
     assert "configuration is missing" in result.output
     assert "Traceback" not in result.output
+
+
+def test_resume_rejects_execution_route_change_before_repository_work(monkeypatch) -> None:
+    record = SimpleNamespace(
+        work_id="work-1",
+        project_id="project-a",
+        status="ANALYZING",
+        source_ref=None,
+    )
+
+    async def fake_status(_work_id, *, project_id):
+        assert project_id == "project-a"
+        return record
+
+    async def fake_stored_route(_work_id, *, project_id):
+        assert project_id == "project-a"
+        return "fleet", "org-a"
+
+    async def unexpected_repository_state():
+        raise AssertionError("route mismatch must fail before repository work")
+
+    monkeypatch.setattr(work_module, "_status_work", fake_status)
+    monkeypatch.setattr(
+        work_module,
+        "_stored_work_execution_route",
+        fake_stored_route,
+        raising=False,
+    )
+    monkeypatch.setattr(work_module, "_repository_state", unexpected_repository_state)
+
+    result = CliRunner().invoke(
+        work_cli,
+        ["--project", "project-a", "resume", "work-1"],
+    )
+
+    assert result.exit_code != 0
+    assert "bound to fleet execution" in result.output
+    assert "--execution fleet --fleet-org org-a" in result.output
+
+
+def test_resume_accepts_the_same_fleet_route(monkeypatch) -> None:
+    record = SimpleNamespace(
+        work_id="work-1",
+        project_id="project-a",
+        status="ANALYZING",
+        source_ref=None,
+    )
+    repository = SimpleNamespace()
+    route_reads = []
+
+    async def fake_status(_work_id, *, project_id):
+        assert project_id == "project-a"
+        return record
+
+    async def fake_stored_route(work_id, *, project_id):
+        route_reads.append((work_id, project_id))
+        return "fleet", "org-a"
+
+    async def fake_repository_state():
+        return repository, "a" * 40
+
+    class FakeLifecycle:
+        async def resume(self, work_id, *, project_id):
+            assert (work_id, project_id) == ("work-1", "project-a")
+            return SimpleNamespace(work_id=work_id, status="WORK_BLOCKED")
+
+    async def fake_build_lifecycle(*, project_id, repository):
+        assert project_id == "project-a"
+        assert repository is not None
+        return FakeLifecycle(), SimpleNamespace(), SimpleNamespace()
+
+    monkeypatch.setattr(work_module, "_status_work", fake_status)
+    monkeypatch.setattr(
+        work_module,
+        "_stored_work_execution_route",
+        fake_stored_route,
+        raising=False,
+    )
+    monkeypatch.setattr(work_module, "_repository_state", fake_repository_state)
+    monkeypatch.setattr(work_module, "_build_lifecycle", fake_build_lifecycle)
+
+    result = CliRunner().invoke(
+        work_cli,
+        [
+            "--project",
+            "project-a",
+            "--execution",
+            "fleet",
+            "--fleet-org",
+            "org-a",
+            "resume",
+            "work-1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert route_reads == [("work-1", "project-a")]
+    assert "WORK_BLOCKED" in result.output
 
 
 def test_work_approve_advances_the_named_canonical_gate(monkeypatch) -> None:
@@ -663,6 +805,10 @@ async def test_triaging_resume_repairs_without_inferring_delivery(monkeypatch) -
         assert project_id == "project-a"
         return current
 
+    async def fake_stored_route(_work_id, *, project_id):
+        assert project_id == "project-a"
+        return "local", None
+
     async def fake_repository_state():
         seen.append("repository")
         return repository, "a" * 40
@@ -679,6 +825,11 @@ async def test_triaging_resume_repairs_without_inferring_delivery(monkeypatch) -
         return FakeGitHubLifecycle()
 
     monkeypatch.setattr(work_module, "_status_work", fake_status)
+    monkeypatch.setattr(
+        work_module,
+        "_stored_work_execution_route",
+        fake_stored_route,
+    )
     monkeypatch.setattr(work_module, "_repository_state", fake_repository_state)
     monkeypatch.setattr(
         work_module, "_build_github_lifecycle", fake_build_github_lifecycle

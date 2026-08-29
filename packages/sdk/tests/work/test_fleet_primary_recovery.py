@@ -227,9 +227,9 @@ async def test_work_cli_resume_requires_the_original_fleet_route(
         ],
     )
     assert local_resume.exit_code == 1
-    assert "unfinished operator runtime changed" in local_resume.output
+    assert "bound to fleet execution for organization org-a" in local_resume.output
     assert wrong_org_resume.exit_code == 1
-    assert "unfinished operator runtime changed" in wrong_org_resume.output
+    assert "bound to fleet execution for organization org-a" in wrong_org_resume.output
     assert (
         await task_store.list_tasks(org_id="org-a", project_id="project-a") == tasks_at_interruption
     )

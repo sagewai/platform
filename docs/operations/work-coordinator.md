@@ -80,8 +80,9 @@ no gate or blocker, resume from the last durable stage:
 sagewai work --project coordinator-demo resume WORK_ID
 ```
 
-You can stop the process between commands and run `resume` later. The execution
-route is bound to the Work, completed stages retain their receipts, and only the
+You can stop the process between commands and run `resume` later. The local
+example uses the default local route; every resume must use the same execution
+selection as `start`. Completed stages retain their receipts, and only the
 unfinished stage is eligible to run again.
 
 Try a data-and-policy change next:
@@ -190,6 +191,16 @@ sagewai work --project coordinator-demo \
 The control plane dispatches a credential-free workspace snapshot to a compatible
 worker. If a worker disappears, the durable Work remains and Fleet lease recovery
 can reassign the unfinished stage to another compatible, same-project worker.
+
+A Fleet resume must repeat the same route and organization selection:
+
+```bash
+sagewai work --project coordinator-demo \
+  --execution fleet --fleet-org YOUR_ORG_ID \
+  resume WORK_ID
+```
+
+Sagewai rejects a different route before it runs repository or model work.
 
 ## 7. Operate it as your middleman
 

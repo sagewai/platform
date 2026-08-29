@@ -436,6 +436,8 @@ def _flow(
     repository_outcome: SoftwareRepositoryOutcome = SoftwareRepositoryOutcome.MERGED,
     delivery: bool = False,
     missing_criterion: bool = False,
+    execution_route: str | None = None,
+    fleet_org_id: str | None = None,
 ):
     software = FakeSoftwareLifecycle(
         store,
@@ -453,6 +455,8 @@ def _flow(
         branch_publisher=publisher,
         merge_policy=lambda _request: decision,
         repository_outcome=repository_outcome,
+        execution_route=execution_route,
+        fleet_org_id=fleet_org_id,
     )
     return flow, software, github, publisher
 
@@ -496,7 +500,11 @@ async def test_labeled_intake_starts_one_unseen_issue_once(
 async def test_issue_to_pr_requires_gate_then_records_merged_sha(
     store: WorkStore,
 ) -> None:
-    flow, software, github, publisher = _flow(store)
+    flow, software, github, publisher = _flow(
+        store,
+        execution_route="fleet",
+        fleet_org_id="org-a",
+    )
 
     gated = await flow.start(
         issue_url=ISSUE_URL,
@@ -513,6 +521,9 @@ async def test_issue_to_pr_requires_gate_then_records_merged_sha(
     assert work_item.source_ref == ISSUE_URL
     assert work_item.project_id == PROJECT_ID
     assert contract.goal == github.issue.title
+    execution = SoftwareContractContext.model_validate(contract.profile_context)
+    assert execution.execution_route == "fleet"
+    assert execution.fleet_org_id == "org-a"
     assert len(contract.acceptance_criteria) == 1
     repository_criterion = contract.acceptance_criteria[0]
     assert repository_criterion.id == f"{contract.id}:repository"

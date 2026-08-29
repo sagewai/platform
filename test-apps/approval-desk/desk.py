@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 import json
 import sqlite3
 import uuid
@@ -44,8 +46,17 @@ class ApprovalDesk:
         connection.row_factory = sqlite3.Row
         return connection
 
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        connection = self._connect()
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
+
     def _initialize(self) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS requests (
@@ -108,7 +119,7 @@ class ApprovalDesk:
             evidence_ref=None,
             decision_reason=None,
         )
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 """
                 INSERT INTO requests (
@@ -133,7 +144,8 @@ class ApprovalDesk:
         return request
 
     def get(self, project_id: str, request_id: str) -> ApprovalRequest:
-        with self._connect() as connection:
+        project_id = self._require_text(project_id, "project_id")
+        with self._connection() as connection:
             row = connection.execute(
                 "SELECT * FROM requests WHERE project_id = ? AND id = ?",
                 (project_id, request_id),
@@ -143,7 +155,8 @@ class ApprovalDesk:
         return self._request(row)
 
     def pending(self, *, project_id: str) -> list[ApprovalRequest]:
-        with self._connect() as connection:
+        project_id = self._require_text(project_id, "project_id")
+        with self._connection() as connection:
             rows = connection.execute(
                 """
                 SELECT * FROM requests
@@ -166,11 +179,12 @@ class ApprovalDesk:
     ) -> ApprovalRequest:
         if decision not in {"approved", "rejected"}:
             raise ValueError("decision must be approved or rejected")
+        project_id = self._require_text(project_id, "project_id")
         actor = self._require_text(actor, "actor")
         reason = self._require_text(reason, "reason")
         evidence_ref = (evidence_ref.strip() or None) if evidence_ref else None
 
-        with self._connect() as connection:
+        with self._connection() as connection:
             row = connection.execute(
                 "SELECT * FROM requests WHERE project_id = ? AND id = ?",
                 (project_id, request_id),
@@ -234,8 +248,9 @@ class ApprovalDesk:
         return decided
 
     def history(self, *, project_id: str, request_id: str) -> list[dict]:
+        project_id = self._require_text(project_id, "project_id")
         self.get(project_id, request_id)
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute(
                 """
                 SELECT sequence, kind, payload_json, created_at
