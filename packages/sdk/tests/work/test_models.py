@@ -186,6 +186,7 @@ def test_assumption_verification_and_review_models_are_typed_and_immutable() -> 
         profile_context={"checks": [{"command": "just smoke", "exit_code": 1}]},
     )
     finding = ReviewFinding(
+        project_id="project-a",
         severity="high",
         claim="The compatibility path is unsupported",
         evidence_refs=("knowledge-verification-1",),
@@ -193,6 +194,7 @@ def test_assumption_verification_and_review_models_are_typed_and_immutable() -> 
         profile_context={"file": "target.py", "line": 12},
     )
     review = ReviewResult(
+        project_id="project-a",
         attempt_id="review-1",
         verdict="repair",
         findings=(finding,),
@@ -208,6 +210,28 @@ def test_assumption_verification_and_review_models_are_typed_and_immutable() -> 
     assert review.introduced_assumptions == ("A compatibility path is required",)
     with pytest.raises(ValidationError):
         assumption.status = "validated"  # type: ignore[misc]
+
+
+def test_review_rejects_finding_from_another_project() -> None:
+    with pytest.raises(ValidationError, match="finding belongs to a different project"):
+        ReviewResult(
+            project_id="project-a",
+            attempt_id="review-1",
+            verdict="repair",
+            findings=(
+                ReviewFinding(
+                    project_id="project-b",
+                    severity="high",
+                    claim="Cross-project finding",
+                    evidence_refs=(),
+                    required_change="Reject it",
+                ),
+            ),
+            introduced_assumptions=(),
+            unsupported_claims=(),
+            scope_expansions=(),
+            unsupported_implementation_choices=(),
+        )
 
 
 def test_review_requires_every_semantic_independent_check_answer() -> None:

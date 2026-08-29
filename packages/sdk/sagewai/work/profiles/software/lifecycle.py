@@ -59,6 +59,7 @@ from sagewai.work.profiles.software.models import (
     SoftwareRepositoryOutcome,
     SoftwareReviewContext,
     SoftwareReviewFindingContext,
+    SoftwareVerificationCheck,
     SoftwareWorkspace,
     WorkspaceStaleError,
 )
@@ -1284,6 +1285,7 @@ class SoftwareLifecycle:
                 "evidence_refs": list(result.evidence_refs),
                 "artifact_refs": list(result.artifact_refs),
                 "profile_context": SoftwareAttemptContext(
+                    project_id=work_item.project_id,
                     base_sha=workspace.base_sha,
                     result_sha=result_sha,
                 ).model_dump(mode="json"),
@@ -1383,6 +1385,12 @@ class SoftwareLifecycle:
                 deterministic_criterion_ids,
                 deterministic,
             )
+            for check_payload in deterministic.profile_context.get("checks", ()):
+                check = SoftwareVerificationCheck.model_validate(check_payload)
+                if check.project_id != work_item.project_id:
+                    raise ValueError(
+                        "verification check belongs to a different project"
+                    )
             if isolation_was_degraded:
                 await self._append(
                     work_item,
@@ -1615,11 +1623,19 @@ class SoftwareLifecycle:
                 actor_ref=self._reviewer.actor_ref,
             )
             return "WORK_BLOCKED"
+        if review.project_id != work_item.project_id:
+            raise ValueError("review result belongs to a different project")
         if review.attempt_id != run_id:
             raise ValueError("review result belongs to a different attempt")
         for finding in review.findings:
             if finding.profile_context:
-                SoftwareReviewFindingContext.model_validate(finding.profile_context)
+                context = SoftwareReviewFindingContext.model_validate(
+                    finding.profile_context
+                )
+                if context.project_id != review.project_id:
+                    raise ValueError(
+                        "review finding context belongs to a different project"
+                    )
         if review.verdict == "accept":
             reviewer_evidence_refs = tuple(
                 ref for ref in review.evidence_refs if ref != diff_artifact.storage_ref
@@ -1915,6 +1931,7 @@ class SoftwareLifecycle:
     ) -> SoftwareCapsuleContext:
         software = SoftwareContractContext.model_validate(contract.profile_context)
         return SoftwareCapsuleContext(
+            project_id=contract.project_id,
             base_sha=software.base_sha,
             current_sha=current_sha,
             repo_instructions=self._repo_instructions,
