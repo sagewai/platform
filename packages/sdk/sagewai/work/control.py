@@ -27,6 +27,7 @@ from sagewai.work.events import (
     WorkEvent,
     WorkEventType,
     active_control_precondition_ids,
+    execution_attempt_from_events,
 )
 from sagewai.work.models import (
     ControlPrecondition,
@@ -141,6 +142,18 @@ class OperatorController:
             ):
                 raise ValueError("completed durable result belongs to different work")
             return persisted
+
+        if durable is not None and durable.status in {
+            StepStatus.RUNNING,
+            StepStatus.WAITING,
+        }:
+            events = await self._work_store.read_events(
+                request.work_id,
+                project_id=request.project_id,
+            )
+            attempt = execution_attempt_from_events(events, request.run_id)
+            if attempt is not None and attempt.runtime != runtime.name:
+                raise ValueError("unfinished operator runtime changed")
 
         risk_mismatches = self._risk_mismatches(request, capsule)
         scoped, permission_violations = await self._evaluate_intents(request, capabilities)
