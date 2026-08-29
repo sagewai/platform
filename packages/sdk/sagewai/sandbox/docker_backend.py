@@ -229,8 +229,11 @@ class DockerSandboxHandle:
             logger.debug("stop() failed for %s", self.sandbox_id, exc_info=True)
         try:
             await self._container.delete(force=True)
-        except Exception:
+        except Exception as exc:
             logger.debug("delete() failed for %s", self.sandbox_id, exc_info=True)
+            raise RuntimeError(
+                f"failed to delete sandbox {self.sandbox_id}"
+            ) from exc
 
 
 class DockerBackend:

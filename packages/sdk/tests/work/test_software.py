@@ -682,6 +682,39 @@ async def test_verification_distinguishes_command_failure_from_control_loss(
     assert backend.handle.stop_calls == 1
     assert backend.close_calls == 1
 
+@pytest.mark.asyncio
+async def test_docker_handle_reports_failed_force_delete() -> None:
+    from sagewai.sandbox.docker_backend import DockerSandboxHandle
+
+    class FailingContainer:
+        def __init__(self) -> None:
+            self.delete_calls = 0
+
+        async def stop(self, *, timeout: int) -> None:
+            del timeout
+            raise RuntimeError("stop failed")
+
+        async def delete(self, *, force: bool) -> None:
+            assert force is True
+            self.delete_calls += 1
+            raise RuntimeError("delete failed")
+
+    container = FailingContainer()
+    handle = DockerSandboxHandle(
+        client=object(),
+        container=container,
+        image="example.invalid/verifier",
+        image_digest="sha256:" + "a" * 64,
+        sandbox_id="verification-test",
+        docker_bin="docker",
+    )
+
+    with pytest.raises(RuntimeError, match="failed to delete sandbox"):
+        await handle.stop()
+
+    assert container.delete_calls == 1
+
+
 
 @pytest.mark.asyncio
 async def test_verification_rejects_untracked_embedded_repository(tmp_path: Path) -> None:

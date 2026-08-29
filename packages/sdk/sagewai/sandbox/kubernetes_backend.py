@@ -584,8 +584,11 @@ class KubernetesSandboxHandle:
                 name=self._pod_name, namespace=self._namespace,
                 grace_period_seconds=int(timeout),
             )
-        except Exception:
+        except Exception as exc:
             logger.debug("pod delete failed for %s", self._pod_name, exc_info=True)
+            raise RuntimeError(
+                f"failed to delete sandbox pod {self._pod_name}"
+            ) from exc
 
     async def stats(self) -> Any:
         from sagewai.sandbox.models import SandboxStats

@@ -215,6 +215,25 @@ async def test_handle_stop_deletes_pod(fake_k8s):
 
 
 @pytest.mark.asyncio
+async def test_handle_stop_reports_failed_pod_delete() -> None:
+    from sagewai.sandbox.kubernetes_backend import KubernetesSandboxHandle
+
+    core_v1 = AsyncMock()
+    core_v1.delete_namespaced_pod = AsyncMock(side_effect=RuntimeError("delete failed"))
+    handle = KubernetesSandboxHandle(
+        api_client=object(), namespace="sagewai", pod_name="sgw-x",
+        image="img", image_digest="", sandbox_id="sgw-x",
+    )
+
+    with patch(
+        "sagewai.sandbox.kubernetes_backend._CoreV1Api",
+        return_value=core_v1,
+    ):
+        with pytest.raises(RuntimeError, match="failed to delete sandbox pod"):
+            await handle.stop()
+
+
+@pytest.mark.asyncio
 async def test_handle_stats_returns_zero_on_no_metrics():
     from sagewai.sandbox.kubernetes_backend import KubernetesSandboxHandle
 
