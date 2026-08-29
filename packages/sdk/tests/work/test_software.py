@@ -617,6 +617,13 @@ async def test_verification_sandbox_unavailability_fails_closed(tmp_path: Path) 
             "execution receipt",
             None,
         ),
+        (
+            ToolResult(call_id="unused", ok=False, error="timeout after 30s"),
+            None,
+            None,
+            None,
+            124,
+        ),
         (ToolResult(call_id="unused", ok=False, exit_code=0), None, None, "receipt", None),
         (ToolResult(call_id="unused", ok=False, exit_code=1), None, None, None, 1),
         (
@@ -679,6 +686,7 @@ async def test_verification_distinguishes_command_failure_from_control_loss(
         processes = await run
         assert processes[0].returncode == expected_returncode
 
+        assert processes[0].timed_out is (expected_returncode == 124)
     assert backend.handle.stop_calls == 1
     assert backend.close_calls == 1
 

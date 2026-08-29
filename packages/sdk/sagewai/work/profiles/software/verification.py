@@ -277,6 +277,28 @@ class SandboxedVerificationRunner:
                                 raise VerificationIsolationError(
                                     f"verification sandbox execution failed: {exc}"
                                 ) from exc
+                            command_timed_out = (
+                                receipt.call_id == call.call_id
+                                and receipt.ok is False
+                                and receipt.exit_code is None
+                                and receipt.error is not None
+                                and receipt.error.startswith("timeout after ")
+                            )
+                            if command_timed_out:
+                                stderr = "\n".join(
+                                    value
+                                    for value in (receipt.stderr, receipt.error)
+                                    if value
+                                )
+                                results.append(
+                                    WorkerProcessResult(
+                                        returncode=124,
+                                        stdout=receipt.stdout,
+                                        stderr=stderr,
+                                        timed_out=True,
+                                    )
+                                )
+                                continue
                             if (
                                 receipt.call_id != call.call_id
                                 or receipt.error is not None
