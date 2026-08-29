@@ -25,6 +25,7 @@ from enum import Enum
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 WORK_CAPABILITY_LABEL_PREFIX = "sagewai.work.capability."
+WORKER_ID_ROUTING_LABEL = "sagewai.fleet.selected-worker"
 
 
 def capability_routing_labels(capability_names: list[str] | tuple[str, ...]) -> dict[str, str]:

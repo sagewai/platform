@@ -13,18 +13,25 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
+import httpx
 import pytest
+from fastapi.encoders import jsonable_encoder
 
 from sagewai.artifacts import LocalArtifactStore
 from sagewai.core.state import InMemoryStore
 from sagewai.fleet import (
+    FleetDispatcher,
     InMemoryFleetRegistry,
     InMemoryTaskStore,
     WorkerCapabilities,
 )
+from sagewai.fleet.runner import WorkerRunner
 from sagewai.work import (
+    FleetOperatorResultEnvelope,
     OperatorResult,
     ReviewResult,
     TaskCapsuleCompiler,
@@ -41,6 +48,15 @@ from sagewai.work.profiles.software import (
     SoftwareVerifier,
     SoftwareWorktreeManager,
 )
+from sagewai.work.profiles.software.fleet_worker import (
+    SoftwareFleetTaskHandler,
+    SoftwareFleetWorkspaceResolver,
+)
+from sagewai.work.profiles.software.fleet_workspace import (
+    SoftwareFleetWorkspaceTransport,
+    software_repository_ref,
+)
+from sagewai.work.runtime import ClaudeRuntime
 from tests.db.conftest import dialect_engine  # noqa: F401
 from tests.work.fakes_verification import LocalVerificationRunner
 from tests.work.test_lifecycle import (
@@ -88,6 +104,23 @@ async def _wait_for_task(store: InMemoryTaskStore, run_id: str) -> dict:
     raise AssertionError(f"{run_id} was not enqueued")
 
 
+async def _wait_for_selected_worker(
+    store: InMemoryTaskStore,
+    run_id: str,
+    worker_id: str,
+) -> None:
+    for _ in range(1000):
+        task = await store.get_task(
+            run_id,
+            org_id="org-a",
+            project_id="project-a",
+        )
+        if task is not None and task.get("selected_worker_id") == worker_id:
+            return
+        await asyncio.sleep(0.001)
+    raise AssertionError(f"{run_id} was not selected for {worker_id}")
+
+
 def _accepted_review(run_id: str) -> OperatorResult:
     review = ReviewResult(
         project_id="project-a",
@@ -116,8 +149,101 @@ def _accepted_review(run_id: str) -> OperatorResult:
     )
 
 
+class _ReviewClaudeRuntime(ClaudeRuntime):
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def run(self, request, capsule, capabilities, workspace):
+        self.calls.append(request.run_id)
+        return _accepted_review(request.run_id)
+
+
+def _clone_worker_repository(repository: Path, destination: Path) -> Path:
+    subprocess.run(
+        ("git", "clone", "-q", str(repository), str(destination)),
+        check=True,
+    )
+    subprocess.run(
+        (
+            "git",
+            "-C",
+            str(destination),
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/sagewai/platform.git",
+        ),
+        check=True,
+    )
+    return destination
+
+
+def _worker_runner(
+    *,
+    worker,
+    registry: InMemoryFleetRegistry,
+    dispatcher: FleetDispatcher,
+    task_store: InMemoryTaskStore,
+    task_handler,
+) -> WorkerRunner:
+    async def gateway(request: httpx.Request) -> httpx.Response:
+        worker_id = request.headers.get("X-Worker-Id", "")
+        record = await registry.get_worker(worker_id)
+        if record is None:
+            return httpx.Response(404, request=request)
+        if request.url.path == "/api/v1/fleet/claim":
+            body = json.loads(request.content or b"{}")
+            task = await dispatcher.claim(
+                worker_id=worker_id,
+                org_id=record.org_id,
+                models_canonical=record.capabilities.models_canonical,
+                pool=record.capabilities.pool,
+                labels=record.capabilities.routing_labels(),
+                project_id=record.project_id,
+                poll_timeout=body.get("poll_timeout", 0.01),
+            )
+            if task is None:
+                return httpx.Response(204, request=request)
+            return httpx.Response(200, json=jsonable_encoder(task), request=request)
+        if request.url.path == "/api/v1/fleet/report":
+            body = json.loads(request.content)
+            await dispatcher.report(
+                worker_id=worker_id,
+                org_id=record.org_id,
+                project_id=record.project_id,
+                run_id=body["run_id"],
+                status=body["status"],
+                output=body.get("output"),
+                error=body.get("error"),
+            )
+            return httpx.Response(200, json={}, request=request)
+        if request.url.path == "/api/v1/fleet/heartbeat":
+            await registry.heartbeat(worker_id)
+            await task_store.renew_worker_leases(worker_id)
+            return httpx.Response(200, json={}, request=request)
+        return httpx.Response(404, request=request)
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(gateway),
+        base_url="http://fleet.test",
+    )
+    return WorkerRunner(
+        base_url="http://fleet.test",
+        project=worker.project_id,
+        capability_names=list(worker.capabilities.capability_names),
+        worker_id=worker.id,
+        worker_secret=f"worker-local-secret-{worker.id}",
+        http_client=client,
+        task_handler=task_handler,
+        poll_timeout=0.01,
+        heartbeat_interval=0.005,
+    )
+
+
+@pytest.mark.parametrize("terminal_failure", [False, True], ids=["retarget", "attempt-exhausted"])
 @pytest.mark.asyncio
 async def test_fleet_worker_loss_resumes_only_unfinished_software_stage(
+    terminal_failure: bool,
     monkeypatch: pytest.MonkeyPatch,
     dialect_engine,  # noqa: F811
     tmp_path,
@@ -128,7 +254,9 @@ async def test_fleet_worker_loss_resumes_only_unfinished_software_stage(
     await work_store.init()
     await knowledge_store.init()
     durability = InMemoryStore()
-    task_store = InMemoryTaskStore(lease_ttl_seconds=0.01)
+    task_store = InMemoryTaskStore(
+        lease_ttl_seconds=0.01, max_attempts=1 if terminal_failure else 3
+    )
     registry = InMemoryFleetRegistry()
     incompatible = await _register_worker(
         registry,
@@ -143,6 +271,21 @@ async def test_fleet_worker_loss_resumes_only_unfinished_software_stage(
         capabilities=("runtime.claude", "filesystem.read"),
     )
     repository, base_sha = _repository(tmp_path)
+    subprocess.run(
+        (
+            "git",
+            "-C",
+            str(repository),
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/sagewai/platform.git",
+        ),
+        check=True,
+    )
+    workspace_transport = SoftwareFleetWorkspaceTransport(
+        repository_ref=await software_repository_ref(repository),
+    )
     analyzer = AnalysisRuntime()
     implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
     repairer = MutationRuntime(implement_text="unused", repair_text="fixed")
@@ -191,6 +334,7 @@ async def test_fleet_worker_loss_resumes_only_unfinished_software_stage(
             runtime_capability="runtime.claude",
             poll_interval_seconds=0.001,
             heartbeat_ttl=timedelta(seconds=30),
+            workspace_transport=workspace_transport,
             capabilities=_read_capabilities(),
             controller=_controller(
                 work_store,
@@ -224,6 +368,51 @@ async def test_fleet_worker_loss_resumes_only_unfinished_software_stage(
         project_id="project-a",
         capabilities=("runtime.claude", "filesystem.read"),
     )
+    first_repository = _clone_worker_repository(
+        repository,
+        tmp_path / "worker-1-repository",
+    )
+    replacement_repository = _clone_worker_repository(
+        repository,
+        tmp_path / "worker-2-repository",
+    )
+    first_runtime = _ReviewClaudeRuntime()
+    replacement_runtime = _ReviewClaudeRuntime()
+    dispatcher = FleetDispatcher(
+        task_store,
+        poll_interval=0.001,
+        poll_timeout=0.01,
+    )
+    first_runner = _worker_runner(
+        worker=first,
+        registry=registry,
+        dispatcher=dispatcher,
+        task_store=task_store,
+        task_handler=SoftwareFleetTaskHandler(
+            workspace_resolver=SoftwareFleetWorkspaceResolver(
+                repository=first_repository,
+                worktree_manager=SoftwareWorktreeManager(
+                    root=tmp_path / "worker-1-worktrees"
+                ),
+            ),
+            claude_runtime=first_runtime,
+        ),
+    )
+    replacement_runner = _worker_runner(
+        worker=replacement,
+        registry=registry,
+        dispatcher=dispatcher,
+        task_store=task_store,
+        task_handler=SoftwareFleetTaskHandler(
+            workspace_resolver=SoftwareFleetWorkspaceResolver(
+                repository=replacement_repository,
+                worktree_manager=SoftwareWorktreeManager(
+                    root=tmp_path / "worker-2-worktrees"
+                ),
+            ),
+            claude_runtime=replacement_runtime,
+        ),
+    )
     started = asyncio.create_task(
         lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
     )
@@ -252,48 +441,67 @@ async def test_fleet_worker_loss_resumes_only_unfinished_software_stage(
         )
         is None
     )
-    claimed = await task_store.claim_task(
-        first.id,
-        "org-a",
-        [],
-        "default",
-        first.capabilities.routing_labels(),
-        project_id="project-a",
-    )
+    claimed = await first_runner._claim()
     assert claimed is not None
     serialized_payload = json.dumps(claimed["payload"])
     assert "worker-local-token" not in serialized_payload
     assert "secret-hash-" not in serialized_payload
 
-    task_store._claimed[run_id]["lease_expires_at"] = datetime.now(
+    task_store._claimed[("org-a", "p:project-a", run_id)]["lease_expires_at"] = datetime.now(
         timezone.utc
     ) - timedelta(seconds=1)
-    assert await task_store.reap_expired_leases() == {"failed": 0, "requeued": 1}
-    resumed = await task_store.claim_task(
-        replacement.id,
-        "org-a",
-        [],
-        "default",
-        replacement.capabilities.routing_labels(),
-        project_id="project-a",
-    )
-    assert resumed is not None
-    assert resumed["run_id"] == run_id
-    assert resumed["payload"] == claimed["payload"]
+    await registry.revoke_worker(first.id)
+    reaped = await task_store.reap_expired_leases()
+    if terminal_failure:
+        assert reaped == {"failed": 1, "requeued": 0}
+        record = await asyncio.wait_for(started, timeout=1)
+        resumed = await lifecycle.resume("work-1", project_id="project-a")
+        await first_runner.http_client.aclose()
+        await replacement_runner.http_client.aclose()
+        assert record.status == "WORK_BLOCKED"
+        assert resumed.status == "WORK_BLOCKED"
+        assert analyzer.calls == 1
+        assert implementer.calls == 1
+        assert first_runtime.calls == []
+        assert replacement_runtime.calls == []
+        assert len(await task_store.list_tasks(
+            org_id="org-a", project_id="project-a"
+        )) == 1
+        events = await work_store.read_events("work-1", project_id="project-a")
+        assert any(
+            event.event_type is WorkEventType.EXECUTION_RECORDED
+            and event.payload_json.get("run_id") == run_id
+            and event.payload_json.get("status") == "failed"
+            for event in events
+        )
+        assert any(
+            event.event_type is WorkEventType.WORK_BLOCKED for event in events
+        )
+        return
+
+    assert reaped == {"failed": 0, "requeued": 1}
+    await _wait_for_selected_worker(task_store, run_id, replacement.id)
+    pending = task_store._pending[0]
+    assert pending["run_id"] == run_id
+    assert pending["payload"] == claimed["payload"]
     expected = _accepted_review(run_id)
-    await task_store.report_task(
-        run_id,
-        "completed",
-        expected.model_dump_json(),
-        None,
-        worker_id=replacement.id,
-    )
+    worker_result = await replacement_runner.run_once()
+    assert worker_result == {
+        "claimed": True,
+        "run_id": run_id,
+        "status": "completed",
+        "reported": True,
+    }
 
     record = await asyncio.wait_for(started, timeout=1)
+    await first_runner.http_client.aclose()
+    await replacement_runner.http_client.aclose()
     assert record.status == "READY_TO_MERGE"
     assert analyzer.calls == 1
     assert implementer.calls == 1
     assert repairer.calls == 0
+    assert first_runtime.calls == []
+    assert replacement_runtime.calls == [run_id]
     events = await work_store.read_events("work-1", project_id="project-a")
     assert sum(
         event.event_type is WorkEventType.STAGE_COMPLETED
@@ -320,4 +528,6 @@ async def test_fleet_worker_loss_resumes_only_unfinished_software_stage(
         project_id="project-a",
     )
     assert persisted is not None
-    assert OperatorResult.model_validate_json(persisted["output"]) == expected
+    envelope = FleetOperatorResultEnvelope.model_validate_json(persisted["output"])
+    assert envelope.result == expected
+    assert envelope.workspace_result is not None

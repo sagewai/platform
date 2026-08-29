@@ -22,8 +22,10 @@ import logging
 import os
 import signal
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -50,6 +52,17 @@ class RegistrationError(RuntimeError):
         super().__init__(f"register failed: {status_code} {detail}")
 
 
+@dataclass(frozen=True)
+class WorkerTaskContext:
+    """Worker-owned identity and capabilities supplied to a typed task handler."""
+
+    project_id: str | None
+    capability_names: tuple[str, ...]
+
+
+TaskHandler = Callable[[dict[str, Any], WorkerTaskContext], Awaitable[str]]
+
+
 @dataclass
 class WorkerRunner:
     base_url: str
@@ -74,6 +87,7 @@ class WorkerRunner:
     heartbeat_interval: float = 10.0
     grace: float = 10.0
     http_client: httpx.AsyncClient | None = None
+    task_handler: TaskHandler | None = None
     _owned_client: httpx.AsyncClient | None = field(default=None, repr=False)
     _stop: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
 
@@ -214,6 +228,24 @@ class WorkerRunner:
             logger.warning("could not force-remove task container %s", container_name)
 
     async def _execute(self, task: dict) -> tuple[str, str | None, str | None]:
+        payload = task.get("payload")
+        if isinstance(payload, dict) and payload.get("kind") == "work.operator":
+            if self.task_handler is None:
+                return "failed", None, "work.operator task handler is not configured"
+            try:
+                output = await self.task_handler(
+                    task,
+                    WorkerTaskContext(
+                        project_id=self.project,
+                        capability_names=tuple(self.capability_names),
+                    ),
+                )
+            except Exception:
+                logger.error("work.operator task execution failed")
+                return "failed", None, "work.operator task execution failed"
+            if not isinstance(output, str):
+                return "failed", None, "work.operator task handler returned an invalid result"
+            return "completed", output, None
         if not self.exec_cmd and not self.image:
             logger.info("echo-exec run_id=%s", task.get("run_id"))
             return "completed", f"echo: {task.get('run_id')}", None

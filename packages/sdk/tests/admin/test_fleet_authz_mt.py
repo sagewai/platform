@@ -61,14 +61,28 @@ async def mt(tmp_path, monkeypatch):
     async def mint(user_id, project_id, scopes=("read", "write", "admin")):
         ctx = await store.build_context(oid, user_id, project_id=project_id)
         _, plaintext = await api_tokens.create_for(
-            ctx, name="t", scopes=set(scopes), project_id=project_id
+            ctx,
+            name=f"t-{user_id}",
+            scopes=set(scopes),
+            project_id=project_id,
         )
         return plaintext
 
     tok_a = await mint(user_a["id"], pa)
     tok_b = await mint(user_b["id"], pb)
     tok_owner = await mint(owner["id"], None)
-    return {"app": app, "pa": pa, "pb": pb, "tok_a": tok_a, "tok_b": tok_b, "tok_owner": tok_owner}
+    tok_owner_a = await mint(owner["id"], pa)
+    tok_owner_b = await mint(owner["id"], pb)
+    return {
+        "app": app,
+        "pa": pa,
+        "pb": pb,
+        "tok_a": tok_a,
+        "tok_b": tok_b,
+        "tok_owner": tok_owner,
+        "tok_owner_a": tok_owner_a,
+        "tok_owner_b": tok_owner_b,
+    }
 
 
 def _client(app, token):
@@ -153,6 +167,53 @@ async def test_project_token_cannot_override_project_via_body_label(mt):
     assert worker.project_id == mt["pa"]             # token scope, not body's "pb"
     assert "project_id" not in w["labels"]
     assert w["labels"].get("gpu") == "a100"          # other labels preserved
+
+
+@pytest.mark.asyncio
+async def test_project_fleet_management_reads_hide_foreign_workers(mt):
+    app = mt["app"]
+    async with _client(app, mt["tok_a"]) as ca:
+        registered_a = (
+            await ca.post("/api/v1/fleet/register", json={"name": "wa"})
+        ).json()
+    async with _client(app, mt["tok_b"]) as cb:
+        registered_b = (
+            await cb.post("/api/v1/fleet/register", json={"name": "wb"})
+        ).json()
+
+    stats = {
+        "worker_id": registered_a["worker_id"],
+        "aggregate": {"active_count": 1},
+    }
+    async with _worker_client(app) as worker:
+        heartbeat = await worker.post(
+            "/api/v1/fleet/heartbeat",
+            headers=_wh(registered_a["worker_id"], registered_a["worker_secret"]),
+            json={"pool_stats": stats},
+        )
+        assert heartbeat.status_code == 200
+
+    async with _client(app, mt["tok_owner_b"]) as cb:
+        listed = await cb.get("/api/v1/fleet/workers")
+        foreign_detail = await cb.get(
+            f"/api/v1/fleet/workers/{registered_a['worker_id']}"
+        )
+        foreign_stats = await cb.get(
+            f"/api/v1/admin/fleet/workers/{registered_a['worker_id']}/pool-stats"
+        )
+    assert listed.status_code == 200, listed.text
+    assert {worker["id"] for worker in listed.json()["workers"]} == {
+        registered_b["worker_id"]
+    }
+    assert foreign_detail.status_code == 404
+    assert foreign_stats.status_code == 404
+
+    async with _client(app, mt["tok_owner_a"]) as ca:
+        own_stats = await ca.get(
+            f"/api/v1/admin/fleet/workers/{registered_a['worker_id']}/pool-stats"
+        )
+    assert own_stats.status_code == 200
+    assert own_stats.json() == stats
 
 
 @pytest.mark.asyncio

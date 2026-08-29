@@ -163,22 +163,22 @@ class TestInMemoryTaskStore:
         await store.enqueue({"run_id": "r1", "pool": "default"})
         await store.claim_task("w1", "org1", [], "default", None)
 
-        await store.report_task("r1", "completed", "output data", None, worker_id="w1")
+        await store.report_task("r1", "completed", "output data", None, worker_id="w1", org_id="org1", project_id=None)
 
-        assert "r1" in store._completed
-        assert store._completed["r1"]["status"] == "completed"
-        assert store._completed["r1"]["output"] == "output data"
-        assert "r1" not in store._claimed
+        assert ("org1", "g:", "r1") in store._completed
+        assert store._completed[("org1", "g:", "r1")]["status"] == "completed"
+        assert store._completed[("org1", "g:", "r1")]["output"] == "output data"
+        assert ("org1", "g:", "r1") not in store._claimed
 
     @pytest.mark.asyncio
     async def test_report_failed(self, store: InMemoryTaskStore) -> None:
         await store.enqueue({"run_id": "r1", "pool": "default"})
         await store.claim_task("w1", "org1", [], "default", None)
 
-        await store.report_task("r1", "failed", None, "something broke", worker_id="w1")
+        await store.report_task("r1", "failed", None, "something broke", worker_id="w1", org_id="org1", project_id=None)
 
-        assert store._completed["r1"]["status"] == "failed"
-        assert store._completed["r1"]["error"] == "something broke"
+        assert store._completed[("org1", "g:", "r1")]["status"] == "failed"
+        assert store._completed[("org1", "g:", "r1")]["error"] == "something broke"
 
     def test_implements_protocol(self) -> None:
         """InMemoryTaskStore satisfies the TaskStore protocol."""
@@ -261,7 +261,7 @@ class TestFleetDispatcher:
             status="completed",
             output="result data",
         )
-        assert store._completed["r1"]["status"] == "completed"
+        assert store._completed[("org1", "g:", "r1")]["status"] == "completed"
 
     @pytest.mark.asyncio
     async def test_report_failure(
@@ -277,8 +277,8 @@ class TestFleetDispatcher:
             status="failed",
             error="timeout exceeded",
         )
-        assert store._completed["r1"]["status"] == "failed"
-        assert store._completed["r1"]["error"] == "timeout exceeded"
+        assert store._completed[("org1", "g:", "r1")]["status"] == "failed"
+        assert store._completed[("org1", "g:", "r1")]["error"] == "timeout exceeded"
 
     @pytest.mark.asyncio
     async def test_heartbeat(self, dispatcher: FleetDispatcher) -> None:
@@ -320,7 +320,7 @@ class TestFleetDispatcher:
             worker_id="w1", org_id="org1", run_id="r1",
             status="completed", output="result",
         )
-        assert store._completed["r1"]["output"] == "ENC:result"  # encrypted
+        assert store._completed[("org1", "g:", "r1")]["output"] == "ENC:result"  # encrypted
 
     @pytest.mark.asyncio
     async def test_audit_event_recording(self, store: InMemoryTaskStore) -> None:
