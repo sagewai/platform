@@ -30,6 +30,7 @@ from sagewai.errors import SagewaiError
 
 def test_artifact_ref_is_frozen_and_rejects_extra_fields():
     ref = ArtifactRef(
+        project_id="project-a",
         digest="sha256:" + "a" * 64,
         media_type="text/plain",
         size_bytes=7,
@@ -42,6 +43,25 @@ def test_artifact_ref_is_frozen_and_rejects_extra_fields():
         ref.size_bytes = 8
     with pytest.raises(ValidationError):
         ArtifactRef.model_validate({**ref.model_dump(), "extra": True})
+
+
+@pytest.mark.parametrize("project_id", [None, "project-a"])
+def test_artifact_ref_requires_explicit_project_scope(project_id: str | None) -> None:
+    values = {
+        "project_id": project_id,
+        "digest": "sha256:" + "a" * 64,
+        "media_type": "text/plain",
+        "size_bytes": 7,
+        "storage_ref": "artifact://sha256:" + "a" * 64,
+        "created_at": datetime(2026, 8, 28, tzinfo=timezone.utc),
+        "created_by": "test",
+    }
+
+    assert ArtifactRef.model_validate(values).project_id == project_id
+    with pytest.raises(ValidationError):
+        ArtifactRef.model_validate(
+            {key: value for key, value in values.items() if key != "project_id"},
+        )
 
 
 def test_artifact_destination_type_values():

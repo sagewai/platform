@@ -58,71 +58,73 @@ class TaskCapsuleCompiler:
         considered_ids: set[str] = set()
         project_id = work_item.project_id
 
-        if project_id is not None:
-            for item_id in contract.evidence_refs:
-                item = await self._knowledge_store.get(item_id, project_id=project_id)
-                if item is not None:
-                    considered_ids.add(item.id)
-                    if item.id in selected_ids:
-                        continue
-                    selected.append(item)
-                    selected_ids.add(item.id)
-                    if len(selected) == self._max_knowledge_items:
-                        break
-
-            for item_id in prior_result_refs:
+        for item_id in contract.evidence_refs:
+            item = await self._knowledge_store.get(item_id, project_id=project_id)
+            if item is not None:
+                considered_ids.add(item.id)
+                if item.id in selected_ids:
+                    continue
+                selected.append(item)
+                selected_ids.add(item.id)
                 if len(selected) == self._max_knowledge_items:
                     break
-                if item_id in selected_ids:
+
+        for item_id in prior_result_refs:
+            if len(selected) == self._max_knowledge_items:
+                break
+            if item_id in selected_ids:
+                continue
+            item = await self._knowledge_store.get(item_id, project_id=project_id)
+            if item is None:
+                continue
+            considered_ids.add(item.id)
+            if item.work_id not in {None, work_item.id}:
+                continue
+            selected.append(item)
+            selected_ids.add(item.id)
+
+        if search_text and len(selected) < self._max_knowledge_items:
+            matches = await self._knowledge_store.search(
+                KnowledgeQuery(text=search_text, project_id=project_id)
+            )
+            considered_ids.update(item.id for item in matches)
+            for item in matches:
+                if item.id in selected_ids:
                     continue
-                item = await self._knowledge_store.get(item_id, project_id=project_id)
-                if item is None:
-                    continue
-                considered_ids.add(item.id)
                 if item.work_id not in {None, work_item.id}:
                     continue
                 selected.append(item)
                 selected_ids.add(item.id)
+                if len(selected) == self._max_knowledge_items:
+                    break
 
-            if search_text and len(selected) < self._max_knowledge_items:
-                matches = await self._knowledge_store.search(
-                    KnowledgeQuery(text=search_text, project_id=project_id)
+            if len(selected) < self._max_knowledge_items:
+                candidates = await self._knowledge_store.search_high_importance_project_findings_any_term(
+                    KnowledgeQuery(text=search_text, project_id=project_id),
+                    limit=self._max_knowledge_items - len(selected),
                 )
-                considered_ids.update(item.id for item in matches)
-                for item in matches:
+                considered_ids.update(item.id for item in candidates)
+                for item in candidates:
                     if item.id in selected_ids:
-                        continue
-                    if item.work_id not in {None, work_item.id}:
                         continue
                     selected.append(item)
                     selected_ids.add(item.id)
                     if len(selected) == self._max_knowledge_items:
                         break
 
-                if len(selected) < self._max_knowledge_items:
-                    candidates = await self._knowledge_store.search_high_importance_project_findings_any_term(
-                        KnowledgeQuery(text=search_text, project_id=project_id),
-                        limit=self._max_knowledge_items - len(selected),
-                    )
-                    considered_ids.update(item.id for item in candidates)
-                    for item in candidates:
-                        if item.id in selected_ids:
-                            continue
-                        selected.append(item)
-                        selected_ids.add(item.id)
-                        if len(selected) == self._max_knowledge_items:
-                            break
-
         artifact_refs: dict[str, ArtifactRef | None] = {
             artifact.storage_ref: artifact for artifact in referenced_artifacts
         }
+        for artifact in referenced_artifacts:
+            if artifact.project_id != project_id:
+                raise ValueError("artifact belongs to a different project")
         for item in selected:
             for storage_ref in item.artifact_refs:
                 artifact_refs.setdefault(storage_ref, None)
         artifact_bytes_referenced = 0
         for storage_ref, artifact in artifact_refs.items():
             try:
-                path = self._artifact_store.resolve(storage_ref)
+                path = self._artifact_store.resolve(storage_ref, project_id=project_id)
             except ValueError:
                 if artifact is not None:
                     artifact_bytes_referenced += artifact.size_bytes

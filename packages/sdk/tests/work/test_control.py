@@ -120,6 +120,7 @@ def _request(
         run_id=run_id,
         stage="implement",
         action_scope=ActionScope(
+            project_id="project-a",
             objective="Implement runtime",
             allowed_targets=("packages/sdk/sagewai/work",),
             allowed_capabilities=("filesystem.write",),

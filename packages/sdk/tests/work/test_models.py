@@ -126,6 +126,7 @@ def test_profile_context_round_trips_without_interpretation() -> None:
 def test_assumption_verification_and_review_models_are_typed_and_immutable() -> None:
     assumption = Assumption(
         id="assumption-1",
+        project_id="project-a",
         statement="A compatibility path is required",
         kind="compatibility",
         evidence_refs=(),
@@ -203,6 +204,7 @@ def test_review_schema_asks_the_four_semantic_independent_check_questions() -> N
 
 def test_action_and_discipline_models_match_the_generic_contract() -> None:
     scope = ActionScope(
+        project_id="project-a",
         objective="Implement PR 1",
         allowed_targets=("packages/sdk/sagewai/work",),
         max_files_changed=10,

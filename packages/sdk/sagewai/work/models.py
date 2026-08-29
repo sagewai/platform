@@ -37,6 +37,7 @@ class Assumption(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str
+    project_id: str | None
     statement: str
     kind: str
     evidence_refs: tuple[str, ...] = ()
@@ -223,6 +224,7 @@ class ActionScope(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    project_id: str | None
     objective: str
     allowed_targets: tuple[str, ...]
     forbidden_targets: tuple[str, ...] = ()

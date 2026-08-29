@@ -17,10 +17,10 @@ from typing import Literal
 from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from sagewai._project_scope import project_scope_key
 from sagewai.db import factory
 from sagewai.db.dialect import upsert
 from sagewai.db.models import Base, WorkEventModel, WorkItemModel
-from sagewai.work._scope import project_scope_key
 from sagewai.work.events import (
     WorkEvent,
     WorkEventType,

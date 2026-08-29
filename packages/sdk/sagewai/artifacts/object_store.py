@@ -18,6 +18,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from sagewai._project_scope import project_scope_key
 from sagewai.artifacts.models import ArtifactRef
 from sagewai.home import objects_dir
 
@@ -34,6 +35,7 @@ class LocalArtifactStore:
         self,
         content: bytes,
         *,
+        project_id: str | None,
         media_type: str,
         created_by: str,
     ) -> ArtifactRef:
@@ -56,7 +58,14 @@ class LocalArtifactStore:
             finally:
                 if temporary is not None:
                     temporary.unlink(missing_ok=True)
+        ownership_path = self._ownership_path(project_id, digest)
+        ownership_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.link(path, ownership_path)
+        except FileExistsError:
+            pass
         return ArtifactRef(
+            project_id=project_id,
             digest=f"sha256:{digest}",
             media_type=media_type,
             size_bytes=len(content),
@@ -65,19 +74,24 @@ class LocalArtifactStore:
             created_by=created_by,
         )
 
-    def resolve(self, storage_ref: str) -> Path:
+    def resolve(self, storage_ref: str, *, project_id: str | None) -> Path:
         """Resolve a valid reference to an existing local object path."""
         match = _STORAGE_REF_RE.fullmatch(storage_ref)
         if match is None:
             raise ValueError(f"invalid artifact reference: {storage_ref}")
-        path = self._object_path(match.group(1))
-        if not path.is_file():
+        digest = match.group(1)
+        path = self._object_path(digest)
+        if not self._ownership_path(project_id, digest).is_file() or not path.is_file():
             raise FileNotFoundError(storage_ref)
         return path
 
-    def read(self, storage_ref: str) -> bytes:
+    def read(self, storage_ref: str, *, project_id: str | None) -> bytes:
         """Read one existing object by its immutable reference."""
-        return self.resolve(storage_ref).read_bytes()
+        return self.resolve(storage_ref, project_id=project_id).read_bytes()
 
     def _object_path(self, digest: str) -> Path:
         return self._root / digest[:2] / digest
+
+    def _ownership_path(self, project_id: str | None, digest: str) -> Path:
+        scope_digest = hashlib.sha256(project_scope_key(project_id).encode()).hexdigest()
+        return self._root / ".ownership" / scope_digest / digest[:2] / digest

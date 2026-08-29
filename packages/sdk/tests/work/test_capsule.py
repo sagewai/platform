@@ -39,10 +39,14 @@ def _work_item(*, project_id: str | None = "project-a") -> WorkItem:
     )
 
 
-def _contract(*, evidence_refs: tuple[str, ...] = ()) -> WorkContract:
+def _contract(
+    *,
+    project_id: str | None = "project-a",
+    evidence_refs: tuple[str, ...] = (),
+) -> WorkContract:
     return WorkContract(
         id="contract-1",
-        project_id="project-a",
+        project_id=project_id,
         work_id="work-1",
         version=1,
         goal="Compile a bounded capsule",
@@ -62,7 +66,7 @@ def _knowledge(
     item_id: str,
     statement: str,
     *,
-    project_id: str = "project-a",
+    project_id: str | None = "project-a",
     work_id: str | None = "work-1",
     offset: int = 0,
     artifact_refs: tuple[str, ...] = (),
@@ -135,11 +139,13 @@ async def test_compiler_deduplicates_considered_items_and_artifact_bytes(
     artifact_store = LocalArtifactStore(root=tmp_path / "objects")
     evidence = artifact_store.put_bytes(
         b"verified evidence",
+        project_id="project-a",
         media_type="text/plain",
         created_by="test",
     )
     diff = artifact_store.put_bytes(
         b"workspace diff",
+        project_id="project-a",
         media_type="text/x-diff",
         created_by="test",
     )
@@ -297,3 +303,60 @@ def test_task_capsule_keeps_profile_context_opaque() -> None:
         profile_context={"software": {"base_sha": "a" * 40}},
     )
     assert TaskCapsule.model_validate_json(capsule.model_dump_json()) == capsule
+
+
+@pytest.mark.asyncio
+async def test_compiler_builds_global_capsule_from_global_evidence_only(
+    knowledge_store: KnowledgeStore,
+) -> None:
+    for item in (
+        _knowledge(
+            "global-direct",
+            "Global direct source-of-truth read-back",
+            project_id=None,
+        ),
+        _knowledge(
+            "global-fts",
+            "Quartz global finding",
+            project_id=None,
+            work_id=None,
+        ),
+        _knowledge("project-fts", "Quartz private finding"),
+    ):
+        await knowledge_store.publish(item)
+
+    capsule = await TaskCapsuleCompiler(knowledge_store=knowledge_store).compile(
+        work_item=_work_item(project_id=None),
+        contract=_contract(project_id=None, evidence_refs=("global-direct",)),
+        stage="implement",
+        search_text="quartz",
+    )
+
+    assert capsule.project_id is None
+    assert capsule.knowledge_refs == ("global-direct", "global-fts")
+    assert all(item.project_id is None for item in capsule.knowledge_items)
+
+
+@pytest.mark.asyncio
+async def test_compiler_rejects_explicit_artifact_from_different_project(
+    knowledge_store: KnowledgeStore,
+    tmp_path: Path,
+) -> None:
+    artifact_store = LocalArtifactStore(root=tmp_path / "objects")
+    other_project_artifact = artifact_store.put_bytes(
+        b"private evidence",
+        project_id="project-b",
+        media_type="text/plain",
+        created_by="test",
+    )
+
+    with pytest.raises(ValueError, match="artifact belongs to a different project"):
+        await TaskCapsuleCompiler(
+            knowledge_store=knowledge_store,
+            artifact_store=artifact_store,
+        ).compile(
+            work_item=_work_item(),
+            contract=_contract(),
+            stage="review",
+            referenced_artifacts=(other_project_artifact,),
+        )

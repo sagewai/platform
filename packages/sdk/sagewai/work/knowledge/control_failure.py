@@ -22,8 +22,6 @@ def control_failure_finding(event: WorkEvent) -> KnowledgeItem:
 
     if event.event_type is not WorkEventType.CONTROL_DEGRADED:
         raise ValueError("control failure finding requires a CONTROL_DEGRADED event")
-    if event.project_id is None:
-        raise ValueError("control failure finding requires a project-scoped event")
 
     failed_preconditions = tuple(
         str(value) for value in event.payload_json.get("failed_preconditions", ())

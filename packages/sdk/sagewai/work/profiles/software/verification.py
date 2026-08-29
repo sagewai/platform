@@ -548,6 +548,7 @@ class SoftwareVerifier:
                     output_bytes,
                     media_type="text/plain",
                     created_by="software.verifier",
+                    project_id=work_item.project_id,
                 )
                 artifact_ref = artifact.storage_ref
                 artifact_refs = (artifact_ref,)

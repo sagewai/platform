@@ -91,7 +91,7 @@ async def test_duplicate_work_sequence_is_rejected_within_scope(
 
 
 @pytest.mark.asyncio
-async def test_invalid_unscoped_degradation_receipt_remains_durable(
+async def test_global_degradation_receipt_remains_durable(
     store: WorkStore,
 ) -> None:
     event = _event(
@@ -100,8 +100,7 @@ async def test_invalid_unscoped_degradation_receipt_remains_durable(
         payload={"failed_preconditions": ["authority"]},
     ).model_copy(update={"event_type": WorkEventType.CONTROL_DEGRADED})
 
-    with pytest.raises(ValueError, match="project-scoped"):
-        await store.append_event(event)
+    await store.append_event(event)
 
     assert await store.read_events("work-1", project_id=None) == [event]
 

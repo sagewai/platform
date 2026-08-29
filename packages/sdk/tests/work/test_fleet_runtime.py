@@ -50,6 +50,7 @@ def _request() -> WorkRequest:
         run_id="run-1",
         stage="review",
         action_scope=ActionScope(
+            project_id="project-a",
             objective="Review the accepted change",
             allowed_targets=("packages/sdk/sagewai/work",),
             allowed_capabilities=("cli.git",),

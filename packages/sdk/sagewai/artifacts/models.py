@@ -23,6 +23,7 @@ class ArtifactRef(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    project_id: str | None
     digest: str
     media_type: str
     size_bytes: int

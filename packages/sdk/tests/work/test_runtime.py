@@ -61,6 +61,7 @@ def _request() -> WorkRequest:
         run_id="run-1",
         stage="implement",
         action_scope=ActionScope(
+            project_id="project-a",
             objective="Implement runtime",
             allowed_targets=("packages/sdk/sagewai/work",),
             allowed_capabilities=("filesystem.write",),
@@ -341,3 +342,11 @@ def test_operator_result_schema_is_structured_and_bounded() -> None:
 
     with pytest.raises(ValidationError):
         OperatorResult.model_validate(values)
+
+
+def test_work_request_rejects_action_scope_from_different_project() -> None:
+    values = _request().model_dump()
+    values["action_scope"]["project_id"] = "project-b"
+
+    with pytest.raises(ValidationError, match="action scope belongs to a different project"):
+        WorkRequest.model_validate(values)

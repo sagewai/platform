@@ -266,7 +266,9 @@ class DiffReadingMutationRuntime(MutationRuntime):
             self.materialized_diffs.append(materialized.read_bytes())
             assert (
                 materialized.stat().st_ino
-                != self.artifact_store.resolve(context.diff_artifact.storage_ref).stat().st_ino
+                != self.artifact_store.resolve(
+                    context.diff_artifact.storage_ref, project_id=request.project_id
+                ).stat().st_ino
             )
         return await super().run(request, capsule, capabilities, workspace)
 
@@ -503,7 +505,9 @@ class DiffReadingReviewRuntime(ReviewRuntime):
             self.materialized_diffs.append(materialized.read_bytes())
             assert (
                 materialized.stat().st_ino
-                != self.artifact_store.resolve(context.diff_artifact.storage_ref).stat().st_ino
+                != self.artifact_store.resolve(
+                    context.diff_artifact.storage_ref, project_id=request.project_id
+                ).stat().st_ino
             )
         return await super().run(request, capsule, capabilities, workspace)
 
@@ -680,11 +684,13 @@ def test_diff_context_limit_uses_exact_utf8_bytes_and_keeps_artifact(
 
     inline, at_limit = _store_diff_context(
         artifact_store=store,
+        project_id="project-a",
         raw_diff="é",
         max_inline_diff_bytes=2,
     )
     omitted, above_limit = _store_diff_context(
         artifact_store=store,
+        project_id="project-a",
         raw_diff="é",
         max_inline_diff_bytes=1,
     )
@@ -692,7 +698,7 @@ def test_diff_context_limit_uses_exact_utf8_bytes_and_keeps_artifact(
     assert inline == "é"
     assert omitted is None
     assert above_limit.storage_ref == at_limit.storage_ref
-    assert store.read(above_limit.storage_ref) == "é".encode()
+    assert store.read(above_limit.storage_ref, project_id="project-a") == "é".encode()
 
 
 def _lifecycle(
@@ -860,7 +866,7 @@ async def test_successful_implement_verify_review_reaches_ready_to_merge(
     assert context.diff_artifact.media_type == "text/x-diff"
     assert context.diff_artifact.created_by == "software.lifecycle"
     fresh_artifact_store = LocalArtifactStore(root=tmp_path / "objects")
-    assert fresh_artifact_store.read(context.diff_artifact.storage_ref) == (
+    assert fresh_artifact_store.read(context.diff_artifact.storage_ref, project_id="project-a") == (
         context.diff.encode()
     )
     assert capsule.prior_result_refs == context.verification.evidence_refs
@@ -2223,7 +2229,9 @@ async def test_review_finding_reaches_repair_as_typed_canonical_context(
     )
     assert repair_context.diff_artifact.media_type == "text/x-diff"
     independent_store = LocalArtifactStore(root=tmp_path / "objects")
-    raw_diff = independent_store.read(repair_context.diff_artifact.storage_ref)
+    raw_diff = independent_store.read(
+        repair_context.diff_artifact.storage_ref, project_id="project-a"
+    )
     assert b"initial" in raw_diff
     assert repair_context.diff_artifact.size_bytes == len(raw_diff)
     assert reviewer.materialized_diffs[0] == raw_diff
@@ -2851,6 +2859,7 @@ async def test_unsupported_compatibility_assumption_blocks_before_execution(
     )
     assumption = Assumption(
         id="assumption-compat",
+        project_id="project-a",
         statement="A fallback path is required",
         kind="compatibility",
         evidence_refs=(),
@@ -2858,6 +2867,13 @@ async def test_unsupported_compatibility_assumption_blocks_before_execution(
         impact_if_wrong="high",
         status="open",
     )
+
+    with pytest.raises(ValueError, match="assumption belongs to a different project"):
+        await lifecycle.start(
+            work_item=_work_item(),
+            contract=_contract(base_sha, assumption_ids=(assumption.id,)),
+            assumptions=(assumption.model_copy(update={"project_id": "project-b"}),),
+        )
 
     record = await lifecycle.start(
         work_item=_work_item(),

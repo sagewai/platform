@@ -17,9 +17,9 @@ from datetime import datetime, timezone
 from sqlalchemy import func, insert, literal_column, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from sagewai._project_scope import project_scope_key
 from sagewai.db import factory
 from sagewai.db.models import Base, KnowledgeItemModel, KnowledgeSourceRefModel
-from sagewai.work._scope import project_scope_key
 from sagewai.work.knowledge.models import KnowledgeItem, KnowledgeQuery
 
 

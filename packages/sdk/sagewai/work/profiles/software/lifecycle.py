@@ -82,6 +82,7 @@ from sagewai.work.store import WorkStore
 def _store_diff_context(
     *,
     artifact_store: LocalArtifactStore,
+    project_id: str | None,
     raw_diff: str,
     max_inline_diff_bytes: int,
 ) -> tuple[str | None, ArtifactRef]:
@@ -90,6 +91,7 @@ def _store_diff_context(
         diff_bytes,
         media_type="text/x-diff",
         created_by="software.lifecycle",
+        project_id=project_id,
     )
     inline_diff = raw_diff if len(diff_bytes) <= max_inline_diff_bytes else None
     return inline_diff, artifact
@@ -129,6 +131,12 @@ class _DiffMaterializingRuntime:
     ) -> OperatorResult:
         if not isinstance(workspace, SoftwareWorkspace):
             raise ValueError("diff materialization requires a software workspace")
+        if (
+            request.project_id != capsule.project_id
+            or request.project_id != workspace.project_id
+            or request.project_id != self.artifact.project_id
+        ):
+            raise ValueError("diff artifact belongs to a different project")
         target = _diff_workspace_target(workspace, self.relative_path)
         parent_existed = target.parent.exists()
         if target.exists() or target.is_symlink():
@@ -136,7 +144,9 @@ class _DiffMaterializingRuntime:
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             with (
-                self.artifact_store.resolve(self.artifact.storage_ref).open("rb") as source,
+                self.artifact_store.resolve(
+                    self.artifact.storage_ref, project_id=request.project_id
+                ).open("rb") as source,
                 target.open("xb") as destination,
             ):
                 shutil.copyfileobj(source, destination)
@@ -439,6 +449,7 @@ class SoftwareLifecycle:
             run_id=run_id,
             stage="analysis",
             action_scope=ActionScope(
+                project_id=work_item.project_id,
                 objective=(
                     "Ground material claims and propose the smallest sufficient software "
                     "contract"
@@ -511,6 +522,7 @@ class SoftwareLifecycle:
             analyzed_assumptions = tuple(
                 Assumption(
                     id=f"{run_id}:assumption:{index}",
+                    project_id=work_item.project_id,
                     statement=claim.statement,
                     kind=claim.kind,
                     evidence_refs=claim.evidence_refs,
@@ -783,6 +795,7 @@ class SoftwareLifecycle:
             run_id=run_id,
             stage="design",
             action_scope=ActionScope(
+                project_id=work_item.project_id,
                 objective="Design the smallest sufficient change within the accepted contract",
                 allowed_targets=contract.allowed_scope,
                 allowed_capabilities=tuple(
@@ -887,7 +900,9 @@ class SoftwareLifecycle:
                 actor_ref=self._analyst.actor_ref,
             )
             return "WORK_BLOCKED"
-        design_assumptions = self._assumptions_from_claims(design.claims, run_id=run_id)
+        design_assumptions = self._assumptions_from_claims(
+            design.claims, run_id=run_id, project_id=work_item.project_id
+        )
         for assumption in design_assumptions:
             await self._append_once(
                 work_item,
@@ -1059,6 +1074,7 @@ class SoftwareLifecycle:
             raw_diff, relevant_files = await workspace_diff(workspace)
             inline_diff, diff_artifact = _store_diff_context(
                 artifact_store=self._artifact_store,
+                project_id=work_item.project_id,
                 raw_diff=raw_diff,
                 max_inline_diff_bytes=self._max_inline_diff_bytes,
             )
@@ -1100,6 +1116,7 @@ class SoftwareLifecycle:
             run_id=run_id,
             stage=stage,
             action_scope=ActionScope(
+                project_id=work_item.project_id,
                 objective=contract.goal,
                 allowed_targets=contract.allowed_scope,
                 allowed_capabilities=(planned_action.capability,),
@@ -1334,6 +1351,7 @@ class SoftwareLifecycle:
         diff_before, relevant_files = await workspace_diff(workspace)
         inline_diff, diff_artifact = _store_diff_context(
             artifact_store=self._artifact_store,
+            project_id=work_item.project_id,
             raw_diff=diff_before,
             max_inline_diff_bytes=self._max_inline_diff_bytes,
         )
@@ -1366,6 +1384,7 @@ class SoftwareLifecycle:
             run_id=run_id,
             stage="review",
             action_scope=ActionScope(
+                project_id=work_item.project_id,
                 objective="Independently review the verified software change",
                 allowed_targets=contract.allowed_scope,
                 allowed_capabilities=tuple(
@@ -1507,6 +1526,8 @@ class SoftwareLifecycle:
             raise ValueError("contract belongs to different work")
         if not contract.allowed_scope:
             raise ValueError("software contract requires an allowed scope")
+        if any(item.project_id != work_item.project_id for item in assumptions):
+            raise ValueError("assumption belongs to a different project")
         provided_ids = tuple(item.id for item in assumptions)
         if provided_ids != contract.assumption_ids:
             raise ValueError("contract assumptions do not match supplied assumptions")
@@ -1521,10 +1542,12 @@ class SoftwareLifecycle:
         claims: tuple[ClassifiedClaim, ...],
         *,
         run_id: str,
+        project_id: str | None,
     ) -> tuple[Assumption, ...]:
         return tuple(
             Assumption(
                 id=f"{run_id}:assumption:{index}",
+                project_id=project_id,
                 statement=claim.statement,
                 kind=claim.kind,
                 evidence_refs=claim.evidence_refs,
