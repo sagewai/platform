@@ -52,6 +52,10 @@ async def test_build_lifecycle_shares_one_artifact_store(
     repository = tmp_path / "repository"
     repository.mkdir()
     monkeypatch.setenv("SAGEWAI_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv(
+        "SAGEWAI_WORK_VERIFICATION_IMAGE",
+        "example.invalid/verifier@sha256:" + "a" * 64,
+    )
     monkeypatch.setattr(work_module.factory, "ensure_schema", fake_ensure_schema)
     monkeypatch.setattr(work_module.factory, "get_engine", lambda: dialect_engine)
     monkeypatch.setattr(
@@ -68,6 +72,14 @@ async def test_build_lifecycle_shares_one_artifact_store(
     artifact_store = lifecycle._artifact_store
     assert lifecycle._capsule_compiler._artifact_store is artifact_store
     assert lifecycle._verifier._artifact_store is artifact_store
+    assert lifecycle._verifier._runner._image.endswith("a" * 64)
+
+
+def test_verification_image_is_required(monkeypatch) -> None:
+    monkeypatch.delenv("SAGEWAI_WORK_VERIFICATION_IMAGE", raising=False)
+
+    with pytest.raises(ValueError, match="never executes on the host"):
+        work_module._verification_image()
 
 
 def test_work_group_is_registered() -> None:

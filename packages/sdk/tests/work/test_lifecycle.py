@@ -72,6 +72,7 @@ from sagewai.work.profiles.software import (
 )
 from sagewai.work.profiles.software.lifecycle import _store_diff_context
 from tests.db.conftest import dialect_engine  # noqa: F401
+from tests.work.fakes_verification import LocalVerificationRunner
 
 NOW = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
 
@@ -718,6 +719,7 @@ def _lifecycle(
         verifier=verifier
         or SoftwareVerifier(
             knowledge_store=knowledge_store,
+            runner=LocalVerificationRunner(),
             artifact_store=artifact_store,
         ),
         artifact_store=artifact_store,
@@ -2511,7 +2513,9 @@ async def test_restored_workspace_resumes_review_without_rerunning_completed_sta
     durability = InMemoryStore()
     implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
     reviewer = ReviewRuntime("accept")
-    verifier = MoveHeadAfterVerifier(SoftwareVerifier(knowledge_store=knowledge_store))
+    verifier = MoveHeadAfterVerifier(
+        SoftwareVerifier(knowledge_store=knowledge_store, runner=LocalVerificationRunner())
+    )
     lifecycle = _lifecycle(
         repository=repository,
         worktree_root=tmp_path / "worktrees",
@@ -2578,7 +2582,10 @@ async def test_missing_workspace_before_review_degrades_before_capsule_read(
         repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
         commands=(_command("initial"),),
         verifier=RemoveWorkspaceAfterVerifier(
-            SoftwareVerifier(knowledge_store=knowledge_store)
+            SoftwareVerifier(
+                knowledge_store=knowledge_store,
+                runner=LocalVerificationRunner(),
+            )
         ),
     )
 
@@ -2624,7 +2631,10 @@ async def test_missing_workspace_before_repair_degrades_before_capsule_read(
         repairer=repairer,
         commands=(_always_fail_command(),),
         verifier=RemoveWorkspaceAfterVerifier(
-            SoftwareVerifier(knowledge_store=knowledge_store)
+            SoftwareVerifier(
+                knowledge_store=knowledge_store,
+                runner=LocalVerificationRunner(),
+            )
         ),
     )
 

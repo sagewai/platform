@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -21,9 +22,11 @@ import pytest
 
 import sagewai.work as work
 from sagewai.artifacts import LocalArtifactStore
+from sagewai.sandbox import NetworkPolicy, SandboxLifetime, ToolResult
 from sagewai.work import ActionResult, ActionScope, OperatorResult, WorkItem, WorkRequest
 from sagewai.work.knowledge import KnowledgeStore
 from sagewai.work.profiles.software import (
+    SandboxedVerificationRunner,
     SoftwareAttemptContext,
     SoftwareCapsuleContext,
     SoftwareContractContext,
@@ -34,13 +37,73 @@ from sagewai.work.profiles.software import (
     SoftwareWorkspace,
     SoftwareWorkspaceControlCheck,
     SoftwareWorktreeManager,
+    VerificationIsolationError,
     WorkspaceStaleError,
     WorktreeBranchPublisher,
     software_workspace_precondition,
 )
 from tests.db.conftest import dialect_engine  # noqa: F401
+from tests.work.fakes_verification import LocalVerificationRunner
 
 NOW = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
+
+
+class _RecordingSandboxHandle:
+    def __init__(self, backend) -> None:
+        self._backend = backend
+        self.calls = []
+        self.stopped = False
+
+    async def exec(self, tool_call):
+        self.calls.append(tool_call)
+        snapshot = self._backend.start_kwargs["workdir_mount"]
+        assert not (snapshot / "host-secret.txt").exists()
+        assert (snapshot / "README.md").read_text() == "changed\n"
+        assert (snapshot / "new.txt").read_text() == "new\n"
+        (snapshot / "verification-generated.txt").write_text("discard me\n")
+        return ToolResult(
+            call_id=tool_call.call_id,
+            ok=True,
+            exit_code=0,
+            stdout="sandboxed\n",
+        )
+
+    async def stop(self, *, timeout: float = 10.0) -> None:
+        del timeout
+        assert self._backend.start_kwargs["workdir_mount"].exists()
+        self.stopped = True
+
+
+class _RecordingSandboxBackend:
+    name = "recording"
+
+    def __init__(self) -> None:
+        self.start_kwargs = None
+        self.handle = _RecordingSandboxHandle(self)
+        self.closed = False
+
+    async def start(self, **kwargs):
+        self.start_kwargs = kwargs
+        return self.handle
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class _FailingSandboxBackend:
+    name = "failing"
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.start_calls = 0
+
+    async def start(self, **kwargs):
+        del kwargs
+        self.start_calls += 1
+        raise RuntimeError("sandbox unavailable")
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 def _git(repository: Path, *args: str) -> str:
@@ -349,6 +412,96 @@ async def test_result_validator_records_runtime_output_tokens(
 
 
 @pytest.mark.asyncio
+async def test_verification_runs_in_disposable_networkless_sandbox(tmp_path: Path) -> None:
+    repository, base_sha = _repository(tmp_path)
+    (repository / "README.md").write_text("changed\n")
+    (repository / "new.txt").write_text("new\n")
+    (repository / ".git" / "info" / "exclude").write_text("host-secret.txt\n")
+    (repository / "host-secret.txt").write_text("outside verification scope\n")
+    workspace = SoftwareWorkspace(
+        ref="workspace://verify",
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="verify",
+        repository=repository,
+        path=repository,
+        base_sha=base_sha,
+        initial_sha=base_sha,
+    )
+    backend = _RecordingSandboxBackend()
+    command = ("python", "-c", "print('quoted value')")
+    runner = SandboxedVerificationRunner(
+        image="example.invalid/verifier@sha256:" + "a" * 64,
+        backend_factory=lambda: backend,
+    )
+
+    results = await runner.run(
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="attempt-1",
+        workspace=workspace,
+        commands=(command,),
+        timeout=30,
+    )
+
+    assert len(results) == 1
+    assert results[0].returncode == 0
+    assert results[0].stdout == "sandboxed\n"
+    assert backend.start_kwargs["project_id"] == "project-a"
+    assert backend.start_kwargs["run_id"] == "verify-work-1-attempt-1"
+    assert backend.start_kwargs["env"] == {}
+    assert backend.start_kwargs["network_policy"] is NetworkPolicy.NONE
+    assert backend.start_kwargs["lifetime"] is SandboxLifetime.PER_RUN
+    snapshot = backend.start_kwargs["workdir_mount"]
+    assert not snapshot.exists()
+    assert backend.handle.calls[0].args == {"command": shlex.join(command)}
+    assert backend.handle.stopped is True
+    assert backend.closed is True
+    assert not (repository / "verification-generated.txt").exists()
+    assert (repository / "host-secret.txt").read_text() == "outside verification scope\n"
+
+
+@pytest.mark.asyncio
+async def test_verification_sandbox_unavailability_fails_closed(tmp_path: Path) -> None:
+    repository, base_sha = _repository(tmp_path)
+    workspace = SoftwareWorkspace(
+        ref="workspace://verify",
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="verify",
+        repository=repository,
+        path=repository,
+        base_sha=base_sha,
+        initial_sha=base_sha,
+    )
+    backend = _FailingSandboxBackend()
+    runner = SandboxedVerificationRunner(
+        image="example.invalid/verifier@sha256:" + "a" * 64,
+        backend_factory=lambda: backend,
+    )
+    escaped = repository / "host-command-ran"
+    command = (
+        sys.executable,
+        "-c",
+        f"from pathlib import Path; Path({str(escaped)!r}).write_text('escaped')",
+    )
+
+    with pytest.raises(VerificationIsolationError, match="failed to start"):
+        await runner.run(
+            project_id="project-a",
+            work_id="work-1",
+            attempt_id="attempt-1",
+            workspace=workspace,
+            commands=(command,),
+            timeout=30,
+        )
+
+    assert backend.start_calls == 1
+    assert backend.closed is True
+    assert not escaped.exists()
+
+
+@pytest.mark.asyncio
 async def test_large_verification_output_is_deduplicated_artifact_evidence(
     dialect_engine,  # noqa: F811
     tmp_path: Path,
@@ -379,6 +532,7 @@ async def test_large_verification_output_is_deduplicated_artifact_evidence(
     object_root = tmp_path / "objects"
     verifier = SoftwareVerifier(
         knowledge_store=knowledge_store,
+        runner=LocalVerificationRunner(),
         artifact_store=LocalArtifactStore(root=object_root),
     )
     command = f"{sys.executable} -c \"import sys; sys.stdout.write('x' * 5001)\""
@@ -448,6 +602,7 @@ async def test_small_verification_output_remains_inline(
     await knowledge_store.init()
     verifier = SoftwareVerifier(
         knowledge_store=knowledge_store,
+        runner=LocalVerificationRunner(),
         artifact_store=LocalArtifactStore(root=tmp_path / "objects"),
     )
     command = f"{sys.executable} -c \"print('small-output')\""
