@@ -51,6 +51,7 @@ from sagewai.work import (
 from sagewai.work.control import ControlCheckResult, OperatorController
 from sagewai.work.knowledge import KnowledgeKind, KnowledgeQuery, KnowledgeStore
 from sagewai.work.profiles.software import (
+    SOFTWARE_VERIFICATION_ISOLATION_PRECONDITION_ID,
     SOFTWARE_WORKSPACE_CHECK_REF,
     GitHubIssue,
     GitHubIssueLifecycle,
@@ -68,10 +69,12 @@ from sagewai.work.profiles.software import (
     SoftwareVerifier,
     SoftwareWorkspaceControlCheck,
     SoftwareWorktreeManager,
+    VerificationIsolationError,
     WorkspaceStaleError,
 )
 from sagewai.work.profiles.software.lifecycle import _store_diff_context
 from tests.db.conftest import dialect_engine  # noqa: F401
+from tests.work.fakes_verification import LocalVerificationRunner
 
 NOW = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
 
@@ -563,6 +566,18 @@ class CrashVerifier:
         raise RuntimeError("simulated restart")
 
 
+class RestoringIsolationVerifier:
+    def __init__(self, delegate: SoftwareVerifier) -> None:
+        self.delegate = delegate
+        self.calls = 0
+
+    async def verify(self, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            raise VerificationIsolationError("sandbox unavailable")
+        return await self.delegate.verify(**kwargs)
+
+
 class MoveHeadAfterVerifier:
     def __init__(self, delegate: SoftwareVerifier) -> None:
         self.delegate = delegate
@@ -718,6 +733,7 @@ def _lifecycle(
         verifier=verifier
         or SoftwareVerifier(
             knowledge_store=knowledge_store,
+            runner=LocalVerificationRunner(),
             artifact_store=artifact_store,
         ),
         artifact_store=artifact_store,
@@ -2500,6 +2516,72 @@ async def test_restart_resume_does_not_rerun_completed_implementation(
     ]
     assert len(completed) == 1
 
+@pytest.mark.asyncio
+async def test_verification_isolation_restores_without_rerunning_implementation(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
+    reviewer = ReviewRuntime("accept")
+    repairer = MutationRuntime(implement_text="unused", repair_text="fixed")
+    verifier = RestoringIsolationVerifier(
+        SoftwareVerifier(
+            knowledge_store=knowledge_store,
+            runner=LocalVerificationRunner(),
+        )
+    )
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        implementer=implementer,
+        reviewer=reviewer,
+        repairer=repairer,
+        commands=(_command("initial"),),
+        verifier=verifier,
+    )
+
+    degraded = await lifecycle.start(
+        work_item=_work_item(),
+        contract=_contract(base_sha),
+    )
+
+    assert degraded.status == "CONTROL_DEGRADED"
+    assert implementer.calls == 1
+    assert verifier.calls == 1
+    assert repairer.calls == 0
+    assert reviewer.calls == 0
+
+    resumed = await lifecycle.resume("work-1", project_id="project-a")
+
+    assert resumed.status == "READY_TO_MERGE"
+    assert implementer.calls == 1
+    assert verifier.calls == 2
+    assert reviewer.calls == 1
+    assert repairer.calls == 0
+    events = await work_store.read_events("work-1", project_id="project-a")
+    control_events = [
+        event
+        for event in events
+        if event.event_type
+        in {WorkEventType.CONTROL_DEGRADED, WorkEventType.CONTROL_RESTORED}
+    ]
+    assert [event.event_type for event in control_events] == [
+        WorkEventType.CONTROL_DEGRADED,
+        WorkEventType.CONTROL_RESTORED,
+    ]
+    assert control_events[0].payload_json["failed_preconditions"] == [
+        SOFTWARE_VERIFICATION_ISOLATION_PRECONDITION_ID
+    ]
+    assert control_events[1].payload_json["precondition_ids"] == [
+        SOFTWARE_VERIFICATION_ISOLATION_PRECONDITION_ID
+    ]
+
+
 
 @pytest.mark.asyncio
 async def test_restored_workspace_resumes_review_without_rerunning_completed_stages(
@@ -2511,7 +2593,9 @@ async def test_restored_workspace_resumes_review_without_rerunning_completed_sta
     durability = InMemoryStore()
     implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
     reviewer = ReviewRuntime("accept")
-    verifier = MoveHeadAfterVerifier(SoftwareVerifier(knowledge_store=knowledge_store))
+    verifier = MoveHeadAfterVerifier(
+        SoftwareVerifier(knowledge_store=knowledge_store, runner=LocalVerificationRunner())
+    )
     lifecycle = _lifecycle(
         repository=repository,
         worktree_root=tmp_path / "worktrees",
@@ -2578,7 +2662,10 @@ async def test_missing_workspace_before_review_degrades_before_capsule_read(
         repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
         commands=(_command("initial"),),
         verifier=RemoveWorkspaceAfterVerifier(
-            SoftwareVerifier(knowledge_store=knowledge_store)
+            SoftwareVerifier(
+                knowledge_store=knowledge_store,
+                runner=LocalVerificationRunner(),
+            )
         ),
     )
 
@@ -2624,7 +2711,10 @@ async def test_missing_workspace_before_repair_degrades_before_capsule_read(
         repairer=repairer,
         commands=(_always_fail_command(),),
         verifier=RemoveWorkspaceAfterVerifier(
-            SoftwareVerifier(knowledge_store=knowledge_store)
+            SoftwareVerifier(
+                knowledge_store=knowledge_store,
+                runner=LocalVerificationRunner(),
+            )
         ),
     )
 

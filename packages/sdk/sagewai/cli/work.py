@@ -66,6 +66,7 @@ from sagewai.work.profiles.software import (
     HealthGate,
     HealthVerdict,
     ReleaseCandidate,
+    SandboxedVerificationRunner,
     SoftwareContractContext,
     SoftwareLifecycle,
     SoftwareProfile,
@@ -461,6 +462,7 @@ async def _build_lifecycle(
         worktree_manager=worktree_manager,
         verifier=SoftwareVerifier(
             knowledge_store=knowledge_store,
+            runner=SandboxedVerificationRunner(image=_verification_image()),
             artifact_store=artifact_store,
         ),
         artifact_store=artifact_store,
@@ -493,6 +495,16 @@ async def _build_lifecycle(
         verification_commands=("just smoke",),
     )
     return lifecycle, work_store, worktree_manager
+
+
+def _verification_image() -> str:
+    image = os.environ.get("SAGEWAI_WORK_VERIFICATION_IMAGE", "").strip()
+    if not image:
+        raise ValueError(
+            "SAGEWAI_WORK_VERIFICATION_IMAGE is required; "
+            "software verification never executes on the host"
+        )
+    return image
 
 
 async def _build_github_lifecycle(

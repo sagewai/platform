@@ -127,6 +127,7 @@ class KubernetesBackend:
         resource_limits: Any,
         workdir_mount: Any,
         lifetime: Any,
+        user: str | None = None,
         image_pull_policy: str | None = None,
     ) -> "KubernetesSandboxHandle":
         import asyncio
@@ -142,6 +143,15 @@ class KubernetesBackend:
             network_policy=network_policy, resource_limits=resource_limits,
             lifetime=lifetime, image_pull_policy=image_pull_policy,
         )
+
+        if user is not None:
+            try:
+                uid, gid = (int(value) for value in user.split(":", 1))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("sandbox user must be numeric uid:gid") from exc
+            security_context = pod_spec["spec"]["containers"][0]["securityContext"]
+            security_context["runAsUser"] = uid
+            security_context["runAsGroup"] = gid
 
         api = await self._ensure_client()
         core_v1 = _CoreV1Api(api)
@@ -574,8 +584,11 @@ class KubernetesSandboxHandle:
                 name=self._pod_name, namespace=self._namespace,
                 grace_period_seconds=int(timeout),
             )
-        except Exception:
+        except Exception as exc:
             logger.debug("pod delete failed for %s", self._pod_name, exc_info=True)
+            raise RuntimeError(
+                f"failed to delete sandbox pod {self._pod_name}"
+            ) from exc
 
     async def stats(self) -> Any:
         from sagewai.sandbox.models import SandboxStats

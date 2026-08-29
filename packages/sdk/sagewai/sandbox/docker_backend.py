@@ -229,8 +229,11 @@ class DockerSandboxHandle:
             logger.debug("stop() failed for %s", self.sandbox_id, exc_info=True)
         try:
             await self._container.delete(force=True)
-        except Exception:
+        except Exception as exc:
             logger.debug("delete() failed for %s", self.sandbox_id, exc_info=True)
+            raise RuntimeError(
+                f"failed to delete sandbox {self.sandbox_id}"
+            ) from exc
 
 
 class DockerBackend:
@@ -366,6 +369,7 @@ class DockerBackend:
         resource_limits: ResourceLimits,
         workdir_mount: Path | None,
         lifetime: SandboxLifetime,
+        user: str | None = None,
     ) -> DockerSandboxHandle:
         sandbox_id = f"sgw-{uuid.uuid4().hex[:12]}"
         binds: list[str] = []
@@ -405,6 +409,8 @@ class DockerBackend:
             "HostConfig": host_config,
         }
 
+        if user is not None:
+            container_config["User"] = user
         container = await self._client.containers.create(
             config=container_config, name=sandbox_id
         )

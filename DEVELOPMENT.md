@@ -76,6 +76,20 @@ just admin-dev      # admin UI only (port 3008)
 just docs-dev       # docs site only (port 3010)
 ```
 
+### Software Work verification image
+
+Software Work verification never runs project commands on the worker host. Set
+`SAGEWAI_WORK_VERIFICATION_IMAGE` to an immutable digest-pinned Docker image,
+for example `registry.example/verifier@sha256:<64 hexadecimal characters>`.
+
+The image must contain the Sagewai tool runner plus every tool and dependency
+needed by the configured verification commands. The default command is `just
+smoke`, so that image needs `just`, `uv`, and the repository's locked test
+environment. Verification runs with no network, no inherited environment, a
+read-only container root, bounded CPU/memory/processes, and a disposable copy of
+the Work workspace. Ignored host files and the worker's Codex, Claude, and
+Sagewai credentials are not mounted. There is no host-execution fallback.
+
 ### Docker
 
 ```bash

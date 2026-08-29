@@ -11,25 +11,37 @@
 
 from __future__ import annotations
 
+import os
+import re
 import shlex
+import shutil
+import tempfile
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timezone
-from pathlib import PurePosixPath
-from typing import Literal
+from pathlib import Path, PurePosixPath
+from typing import Literal, Protocol
 
 from sagewai.artifacts import LocalArtifactStore
-from sagewai.fleet.execution import run_worker_subprocess
+from sagewai.fleet.execution import WorkerProcessResult, run_worker_subprocess
+from sagewai.sandbox.backend import SandboxBackend
+from sagewai.sandbox.models import (
+    NetworkPolicy,
+    ResourceLimits,
+    SandboxLifetime,
+    ToolCall,
+)
 from sagewai.work.knowledge import KnowledgeItem, KnowledgeKind, KnowledgeStore
 from sagewai.work.models import OperatorDisciplineReport, VerificationResult, WorkItem
 from sagewai.work.profiles.software.models import (
     SoftwareVerificationCheck,
     SoftwareWorkspace,
-    WorkspaceStaleError,
 )
-from sagewai.work.profiles.software.scm import _git
 from sagewai.work.runtime import OperatorResult, WorkRequest, Workspace
 
 _VERIFICATION_INLINE_LIMIT_BYTES = 4000
+SOFTWARE_VERIFICATION_ISOLATION_PRECONDITION_ID = "software.verification.isolation"
+_DIGEST_PINNED_IMAGE = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
 
 
 class SoftwareResultValidator:
@@ -102,28 +114,38 @@ class SoftwareResultValidator:
 
 
 async def _git_changes(workspace: SoftwareWorkspace) -> tuple[tuple[str, ...], int]:
-    tracked = await _git(workspace.path, "diff", "--numstat", workspace.base_sha, "--")
-    if tracked.returncode != 0:
-        raise WorkspaceStaleError(tracked.stderr)
-    untracked = await _git(
-        workspace.path,
-        "ls-files",
-        "--others",
-        "--exclude-standard",
-    )
-    if untracked.returncode != 0:
-        raise WorkspaceStaleError(untracked.stderr)
+    with tempfile.TemporaryDirectory(prefix="sagewai-git-inspection-") as root:
+        trusted = Path(root) / "repository"
+        await _prepare_trusted_repository(workspace, trusted)
+        tracked = await _checked_git(
+            trusted,
+            f"--work-tree={workspace.path}",
+            "diff",
+            "--numstat",
+            "--no-ext-diff",
+            "--no-textconv",
+            workspace.base_sha,
+            "--",
+        )
+        untracked = await _checked_git(
+            trusted,
+            f"--work-tree={workspace.path}",
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            *_trusted_exclude_args(workspace.repository),
+        )
 
     files: set[str] = set()
     diff_lines = 0
-    for line in tracked.stdout.splitlines():
+    for line in tracked.splitlines():
         added, deleted, changed_file = line.split("\t", 2)
         files.add(changed_file)
         if added != "-":
             diff_lines += int(added)
         if deleted != "-":
             diff_lines += int(deleted)
-    for changed_file in untracked.stdout.splitlines():
+    for changed_file in untracked.splitlines():
         files.add(changed_file)
         try:
             diff_lines += len((workspace.path / changed_file).read_text().splitlines())
@@ -153,6 +175,315 @@ def _intent_declares_file(target: str, scope: dict, changed_file: str) -> bool:
     )
 
 
+class VerificationIsolationError(RuntimeError):
+    """Raised when verification cannot run inside its required boundary."""
+
+
+class VerificationCommandRunner(Protocol):
+    """Execute configured verification commands without host access."""
+
+    async def run(
+        self,
+        *,
+        project_id: str,
+        work_id: str,
+        attempt_id: str,
+        workspace: SoftwareWorkspace,
+        commands: tuple[tuple[str, ...], ...],
+        timeout: float,
+    ) -> tuple[WorkerProcessResult, ...]: ...
+
+
+def _docker_backend() -> SandboxBackend:
+    try:
+        from sagewai.sandbox.docker_backend import DockerBackend
+
+        return DockerBackend()
+    except (ImportError, RuntimeError) as exc:
+        raise VerificationIsolationError(
+            "Docker verification backend is unavailable; install sagewai[sandbox]"
+        ) from exc
+
+
+class SandboxedVerificationRunner:
+    """Run commands in a networkless sandbox over a disposable Git snapshot."""
+
+    def __init__(
+        self,
+        *,
+        image: str,
+        backend_factory: Callable[[], SandboxBackend] = _docker_backend,
+        resource_limits: ResourceLimits | None = None,
+    ) -> None:
+        if not _DIGEST_PINNED_IMAGE.fullmatch(image):
+            raise ValueError("verification sandbox image must be digest-pinned")
+        self._image = image
+        self._backend_factory = backend_factory
+        self._resource_limits = resource_limits or ResourceLimits()
+
+    async def run(
+        self,
+        *,
+        project_id: str,
+        work_id: str,
+        attempt_id: str,
+        workspace: SoftwareWorkspace,
+        commands: tuple[tuple[str, ...], ...],
+        timeout: float,
+    ) -> tuple[WorkerProcessResult, ...]:
+        backend: SandboxBackend | None = None
+        try:
+            backend = self._backend_factory()
+        except Exception as exc:
+            raise VerificationIsolationError(
+                f"verification sandbox backend is unavailable: {exc}"
+            ) from exc
+        handle = None
+        try:
+            try:
+                with tempfile.TemporaryDirectory(prefix="sagewai-verification-") as root:
+                    try:
+                        snapshot = Path(root) / "workspace"
+                        await _create_verification_snapshot(workspace, snapshot)
+                        try:
+                            handle = await backend.start(
+                                project_id=project_id,
+                                run_id=f"verify-{work_id}-{attempt_id}",
+                                image=self._image,
+                                image_digest=_image_digest(self._image),
+                                env={},
+                                network_policy=NetworkPolicy.NONE,
+                                resource_limits=self._resource_limits,
+                                workdir_mount=snapshot,
+                                lifetime=SandboxLifetime.PER_RUN,
+                                user=f"{os.getuid()}:{os.getgid()}",
+                            )
+                        except Exception as exc:
+                            raise VerificationIsolationError(
+                                f"verification sandbox failed to start: {exc}"
+                            ) from exc
+
+                        results: list[WorkerProcessResult] = []
+                        for index, argv in enumerate(commands, start=1):
+                            call = ToolCall(
+                                tool="bash",
+                                args={"command": shlex.join(argv)},
+                                call_id=f"verify-{attempt_id}-{index}",
+                                timeout_s=timeout,
+                            )
+                            try:
+                                receipt = await handle.exec(call)
+                            except Exception as exc:
+                                raise VerificationIsolationError(
+                                    f"verification sandbox execution failed: {exc}"
+                                ) from exc
+                            command_timed_out = (
+                                receipt.call_id == call.call_id
+                                and receipt.ok is False
+                                and receipt.exit_code is None
+                                and receipt.error is not None
+                                and receipt.error.startswith("timeout after ")
+                            )
+                            if command_timed_out:
+                                stderr = "\n".join(
+                                    value
+                                    for value in (receipt.stderr, receipt.error)
+                                    if value
+                                )
+                                results.append(
+                                    WorkerProcessResult(
+                                        returncode=124,
+                                        stdout=receipt.stdout,
+                                        stderr=stderr,
+                                        timed_out=True,
+                                    )
+                                )
+                                continue
+                            if (
+                                receipt.call_id != call.call_id
+                                or receipt.error is not None
+                                or receipt.exit_code is None
+                                or receipt.ok != (receipt.exit_code == 0)
+                            ):
+                                detail = receipt.error or "inconsistent status and exit code"
+                                raise VerificationIsolationError(
+                                    "invalid verification sandbox execution receipt: "
+                                    f"{detail}"
+                                )
+                            results.append(
+                                WorkerProcessResult(
+                                    returncode=receipt.exit_code,
+                                    stdout=receipt.stdout,
+                                    stderr=receipt.stderr,
+                                )
+                            )
+                        return tuple(results)
+                    finally:
+                        if handle is not None:
+                            try:
+                                await handle.stop()
+                            except Exception as exc:
+                                raise VerificationIsolationError(
+                                    f"verification sandbox cleanup failed: stop: {exc}"
+                                ) from exc
+                            finally:
+                                handle = None
+            except VerificationIsolationError:
+                raise
+            except Exception as exc:
+                raise VerificationIsolationError(
+                    f"verification isolation failed: {exc}"
+                ) from exc
+        finally:
+            try:
+                await backend.close()
+            except Exception as exc:
+                raise VerificationIsolationError(
+                    f"verification sandbox cleanup failed: close: {exc}"
+                ) from exc
+
+
+def _image_digest(image: str) -> str:
+    return "sha256:" + image.rsplit("@sha256:", 1)[1]
+
+
+def _trusted_git_env() -> dict[str, str]:
+    return {
+        "HOME": os.devnull,
+        "XDG_CONFIG_HOME": os.devnull,
+        "GIT_ATTR_NOSYSTEM": "1",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_OPTIONAL_LOCKS": "0",
+    }
+
+
+def _trusted_git_argv(*args: str) -> tuple[str, ...]:
+    return (
+        "git",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        f"core.hooksPath={os.devnull}",
+        *args,
+    )
+
+
+async def _prepare_trusted_repository(
+    workspace: SoftwareWorkspace,
+    destination: Path,
+) -> None:
+    repository = workspace.repository.resolve()
+    if not repository.is_dir():
+        raise VerificationIsolationError("trusted repository is unavailable")
+    clone = await run_worker_subprocess(
+        argv=_trusted_git_argv(
+            "clone",
+            "--quiet",
+            "--no-hardlinks",
+            "--no-checkout",
+            str(repository),
+            str(destination),
+        ),
+        cwd=repository.parent,
+        explicit_env=_trusted_git_env(),
+        output_limit=None,
+    )
+    if clone.returncode != 0:
+        raise VerificationIsolationError(f"cannot prepare trusted repository: {clone.stderr}")
+    await _checked_git(
+        destination,
+        "checkout",
+        "--quiet",
+        "--detach",
+        workspace.base_sha,
+    )
+
+
+def _trusted_exclude_args(repository: Path) -> tuple[str, ...]:
+    git_dir = repository / ".git"
+    if not git_dir.is_dir() and (repository / "objects").is_dir():
+        git_dir = repository
+    exclude = git_dir / "info" / "exclude"
+    return (f"--exclude-from={exclude}",) if exclude.is_file() else ()
+
+
+async def _create_verification_snapshot(
+    workspace: SoftwareWorkspace,
+    destination: Path,
+) -> None:
+    await _prepare_trusted_repository(workspace, destination)
+    diff = await _checked_git(
+        destination,
+        f"--work-tree={workspace.path}",
+        "diff",
+        "--binary",
+        "--no-ext-diff",
+        "--no-textconv",
+        workspace.base_sha,
+        "--",
+    )
+    if diff:
+        await _checked_git(
+            destination,
+            "apply",
+            "--binary",
+            "--whitespace=nowarn",
+            "--",
+            stdin=diff,
+        )
+
+    untracked = await _checked_git(
+        destination,
+        f"--work-tree={workspace.path}",
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        *_trusted_exclude_args(workspace.repository),
+        "-z",
+    )
+    for relative in filter(None, untracked.split("\0")):
+        _copy_untracked(workspace.path, destination, relative)
+    await _checked_git(destination, "remote", "remove", "origin")
+
+
+async def _checked_git(cwd: Path, *args: str, stdin: str = "") -> str:
+    result = await run_worker_subprocess(
+        argv=_trusted_git_argv(*args),
+        stdin=stdin,
+        explicit_env=_trusted_git_env(),
+        cwd=cwd,
+        output_limit=None,
+    )
+    if result.returncode != 0:
+        raise VerificationIsolationError(
+            f"git {' '.join(args)} failed while preparing verification: {result.stderr}"
+        )
+    return result.stdout
+
+
+def _copy_untracked(source: Path, destination: Path, relative: str) -> None:
+    path = PurePosixPath(relative)
+    if path.is_absolute() or ".." in path.parts or ".git" in path.parts:
+        raise VerificationIsolationError(f"unsafe untracked path: {relative}")
+    src = source.joinpath(*path.parts)
+    if src.is_dir():
+        raise VerificationIsolationError(f"untracked directory is not allowed: {relative}")
+    dst = destination.joinpath(*path.parts)
+    current = destination
+    for part in path.parts[:-1]:
+        current /= part
+        if current.is_symlink():
+            raise VerificationIsolationError(f"untracked path crosses symlink: {relative}")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if src.is_symlink():
+        dst.symlink_to(os.readlink(src))
+    else:
+        shutil.copy2(src, dst, follow_symlinks=False)
+
+
 class SoftwareVerifier:
     """Run configured verification commands and publish immutable receipts."""
 
@@ -160,10 +491,12 @@ class SoftwareVerifier:
         self,
         *,
         knowledge_store: KnowledgeStore,
+        runner: VerificationCommandRunner,
         artifact_store: LocalArtifactStore | None = None,
         timeout: float = 600,
     ) -> None:
         self._knowledge_store = knowledge_store
+        self._runner = runner
         self._artifact_store = artifact_store
         self._timeout = timeout
 
@@ -183,19 +516,27 @@ class SoftwareVerifier:
         if not commands:
             raise ValueError("at least one verification command is required")
 
-        checks: list[SoftwareVerificationCheck] = []
-        evidence_refs: list[str] = []
-        passed = True
-        for index, command in enumerate(commands, start=1):
+        parsed_commands: list[tuple[str, ...]] = []
+        for command in commands:
             argv = tuple(shlex.split(command))
             if not argv:
                 raise ValueError("verification command cannot be empty")
-            process = await run_worker_subprocess(
-                argv=argv,
-                cwd=workspace.path,
-                timeout=self._timeout,
-                output_limit=None,
-            )
+            parsed_commands.append(argv)
+        processes = await self._runner.run(
+            project_id=work_item.project_id,
+            work_id=work_item.id,
+            attempt_id=attempt_id,
+            workspace=workspace,
+            commands=tuple(parsed_commands),
+            timeout=self._timeout,
+        )
+        if len(processes) != len(commands):
+            raise ValueError("verification runner returned an unexpected result count")
+
+        checks: list[SoftwareVerificationCheck] = []
+        evidence_refs: list[str] = []
+        passed = True
+        for index, (command, process) in enumerate(zip(commands, processes), start=1):
             output = f"stdout:\n{process.stdout}\nstderr:\n{process.stderr}"
             output_bytes = output.encode()
             artifact_ref = None

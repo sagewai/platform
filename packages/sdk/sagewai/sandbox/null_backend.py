@@ -128,7 +128,9 @@ class NullBackend:
         resource_limits: ResourceLimits,
         workdir_mount: Path | None,
         lifetime: SandboxLifetime,
+        user: str | None = None,
     ) -> NullSandboxHandle:
+        del user
         sandbox_id = f"null-{uuid.uuid4().hex[:12]}"
         if workdir_mount:
             workdir_mount.mkdir(parents=True, exist_ok=True)
@@ -136,3 +138,6 @@ class NullBackend:
 
     async def reap(self, *, older_than: timedelta) -> int:
         return 0
+
+    async def close(self) -> None:
+        return None
