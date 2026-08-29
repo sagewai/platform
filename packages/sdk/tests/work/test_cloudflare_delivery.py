@@ -655,8 +655,8 @@ async def test_lifecycle_refuses_rollback_when_cloudflare_credential_expires(
     assert "cloudflare-authority" in degraded.payload_json["failed_preconditions"]
     pending = await store.pending_attention(project_id=PROJECT_ID)
     assert len(pending) == 1
-    assert pending[0].attention_id == degraded.id
-    assert pending[0].kind.value == "PRODUCTION_INCIDENT"
+    assert pending[0].attention_id == "software-delivery:deployment-1"
+    assert pending[0].kind.value == "EXTERNAL_OUTCOME_INCIDENT"
     assert pending[0].evidence_refs == tuple(degraded.payload_json["evidence_refs"])
 
 

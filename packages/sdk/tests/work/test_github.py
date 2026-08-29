@@ -393,6 +393,40 @@ async def store(dialect_engine) -> WorkStore:  # noqa: F811
     await result.init()
     return result
 
+def _external_incident_event(
+    *,
+    work_id: str,
+    sequence: int,
+    deployment_id: str,
+    severity: str,
+    evidence_refs: tuple[str, ...],
+    active_control_event_ids: tuple[str, ...] = (),
+    cause: str | None = None,
+    created_at: datetime = NOW,
+) -> WorkEvent:
+    summary = f"production incident for deployment {deployment_id}"
+    if cause is not None:
+        summary = f"{summary}; {cause}"
+    return WorkEvent(
+        id=f"incident-{sequence}",
+        project_id=PROJECT_ID,
+        work_id=work_id,
+        sequence=sequence,
+        event_type=WorkEventType.EXTERNAL_OUTCOME_RECORDED,
+        actor_type="software",
+        actor_ref="software_delivery",
+        payload_json={
+            "incident": {
+                "incident_id": f"software-delivery:{deployment_id}",
+                "summary": summary,
+                "severity": severity,
+                "evidence_refs": list(evidence_refs),
+                "active_control_event_ids": list(active_control_event_ids),
+            }
+        },
+        created_at=created_at,
+    )
+
 def _flow(
     store: WorkStore,
     *,
@@ -1299,6 +1333,21 @@ async def test_critical_production_incident_freezes_approved_merge(
             created_at=NOW,
         )
     )
+    await store.append_event(
+        _external_incident_event(
+            work_id=gated.work_id,
+            sequence=events[-1].sequence + 3,
+            deployment_id="production-1",
+            severity="critical",
+            evidence_refs=("check://rollback-authority",),
+            active_control_event_ids=("rollback-refused",),
+            cause=(
+                "failed preconditions: rollback-authority; "
+                "details: rollback credential expired"
+            ),
+        )
+    )
+
 
     frozen = await flow.approve(
         gated.work_id,
@@ -1810,7 +1859,7 @@ async def test_pending_attention_is_presented_as_concise_issue_comments(
 
 
 @pytest.mark.asyncio
-async def test_production_fail_and_rollback_present_one_incident_comment(
+async def test_external_outcome_updates_present_once_per_severity(
     store: WorkStore,
 ) -> None:
     flow, _, github, _ = _flow(store)
@@ -1830,59 +1879,23 @@ async def test_production_fail_and_rollback_present_one_incident_comment(
         )
     )
     await store.append_event(
-        WorkEvent(
-            id="deployment-event",
-            project_id=PROJECT_ID,
+        _external_incident_event(
             work_id="work-1",
             sequence=1,
-            event_type=WorkEventType.DEPLOYMENT_RECORDED,
-            actor_type="test",
-            actor_ref=None,
-            payload_json={
-                "deployment": {
-                    "id": "production-1",
-                    "environment": "production",
-                }
-            },
-            created_at=NOW,
+            deployment_id="production-1",
+            severity="high",
+            evidence_refs=("metrics://production-fail",),
         )
     )
-    await store.append_event(
-        WorkEvent(
-            id="fail-event",
-            project_id=PROJECT_ID,
-            work_id="work-1",
-            sequence=2,
-            event_type=WorkEventType.OBSERVATION_RECORDED,
-            actor_type="test",
-            actor_ref=None,
-            payload_json={
-                "observation": {
-                    "deployment_id": "production-1",
-                    "verdict": "fail",
-                    "evidence_refs": ["metrics://production-fail"],
-                }
-            },
-            created_at=NOW,
-        )
-    )
-
     await flow.present_pending("work-1", project_id=PROJECT_ID)
 
     await store.append_event(
-        WorkEvent(
-            id="rollback-event",
-            project_id=PROJECT_ID,
+        _external_incident_event(
             work_id="work-1",
-            sequence=4,
-            event_type=WorkEventType.ROLLBACK_RECORDED,
-            actor_type="test",
-            actor_ref=None,
-            payload_json={
-                "source_deployment_id": "production-1",
-                "evidence_refs": ["provider://rollback-1"],
-            },
-            created_at=NOW,
+            sequence=3,
+            deployment_id="production-1",
+            severity="high",
+            evidence_refs=("provider://rollback-1",),
         )
     )
     await flow.present_pending("work-1", project_id=PROJECT_ID)
@@ -1894,34 +1907,37 @@ async def test_production_fail_and_rollback_present_one_incident_comment(
             "deployment production-1. Evidence: metrics://production-fail.",
         )
     ]
-    events = await store.read_events("work-1", project_id=PROJECT_ID)
-    receipts = [
-        event
-        for event in events
-        if event.event_type is WorkEventType.EXECUTION_RECORDED
-        and event.payload_json.get("action") == "github_pending_attention_presented"
-    ]
-    assert len(receipts) == 1
-    assert receipts[0].payload_json["kind"] == "PRODUCTION_INCIDENT"
 
     await store.append_event(
         WorkEvent(
             id="rollback-refused",
             project_id=PROJECT_ID,
             work_id="work-1",
-            sequence=5,
+            sequence=4,
             event_type=WorkEventType.CONTROL_DEGRADED,
             actor_type="delivery_control",
             actor_ref="delivery_control",
             payload_json={
-                "severity": "critical",
-                "action": "rollback",
-                "deployment_id": "production-1",
                 "failed_preconditions": ["rollback-authority"],
                 "details": "rollback credential expired",
                 "evidence_refs": ["check://rollback-authority"],
                 "frozen_action_ids": ["rollback"],
             },
+            created_at=NOW + timedelta(seconds=1),
+        )
+    )
+    await store.append_event(
+        _external_incident_event(
+            work_id="work-1",
+            sequence=5,
+            deployment_id="production-1",
+            severity="critical",
+            evidence_refs=("check://rollback-authority",),
+            active_control_event_ids=("rollback-refused",),
+            cause=(
+                "failed preconditions: rollback-authority; "
+                "details: rollback credential expired"
+            ),
             created_at=NOW + timedelta(seconds=1),
         )
     )
@@ -1931,10 +1947,10 @@ async def test_production_fail_and_rollback_present_one_incident_comment(
     pending = [
         item
         for item in await store.pending_attention(project_id=PROJECT_ID)
-        if item.kind is PendingAttentionKind.PRODUCTION_INCIDENT
+        if item.kind is PendingAttentionKind.EXTERNAL_OUTCOME_INCIDENT
     ]
     assert len(pending) == 1
-    assert pending[0].attention_id == "fail-event"
+    assert pending[0].attention_id == "software-delivery:production-1"
     assert pending[0].created_at == NOW
     assert pending[0].severity == "critical"
     assert pending[0].evidence_refs == (
@@ -1970,7 +1986,6 @@ async def test_production_fail_and_rollback_present_one_incident_comment(
         "critical",
     ]
 
-
 @pytest.mark.asyncio
 async def test_refused_production_rollback_presents_one_critical_incident_comment(
     store: WorkStore,
@@ -1993,35 +2008,14 @@ async def test_refused_production_rollback_presents_one_critical_incident_commen
     )
     await store.append_event(
         WorkEvent(
-            id="deployment-event",
-            project_id=PROJECT_ID,
-            work_id="work-1",
-            sequence=1,
-            event_type=WorkEventType.DEPLOYMENT_RECORDED,
-            actor_type="test",
-            actor_ref=None,
-            payload_json={
-                "deployment": {
-                    "id": "production-1",
-                    "environment": "production",
-                }
-            },
-            created_at=NOW,
-        )
-    )
-    await store.append_event(
-        WorkEvent(
             id="rollback-refused",
             project_id=PROJECT_ID,
             work_id="work-1",
-            sequence=2,
+            sequence=1,
             event_type=WorkEventType.CONTROL_DEGRADED,
             actor_type="delivery_control",
             actor_ref="delivery_control",
             payload_json={
-                "severity": "critical",
-                "action": "rollback",
-                "deployment_id": "production-1",
                 "failed_preconditions": [
                     "rollback-authority",
                     "rollback-observability",
@@ -2031,6 +2025,20 @@ async def test_refused_production_rollback_presents_one_critical_incident_commen
                 "frozen_action_ids": ["rollback"],
             },
             created_at=NOW,
+        )
+    )
+    await store.append_event(
+        _external_incident_event(
+            work_id="work-1",
+            sequence=2,
+            deployment_id="production-1",
+            severity="critical",
+            evidence_refs=("check://rollback-control",),
+            active_control_event_ids=("rollback-refused",),
+            cause=(
+                "failed preconditions: rollback-authority, rollback-observability; "
+                "details: rollback control failed"
+            ),
         )
     )
 
@@ -2054,11 +2062,12 @@ async def test_refused_production_rollback_presents_one_critical_incident_commen
         and event.payload_json.get("action") == "github_pending_attention_presented"
     ]
     assert len(receipts) == 1
-    assert receipts[0].payload_json["attention_id"] == "rollback-refused"
-    assert receipts[0].payload_json["kind"] == "PRODUCTION_INCIDENT"
+    assert (
+        receipts[0].payload_json["attention_id"]
+        == "software-delivery:production-1"
+    )
+    assert receipts[0].payload_json["kind"] == "EXTERNAL_OUTCOME_INCIDENT"
 
-
-@pytest.mark.asyncio
 async def test_catalog_client_types_github_merge_conflict() -> None:
     async def github_callable(_payload):
         request = httpx.Request(

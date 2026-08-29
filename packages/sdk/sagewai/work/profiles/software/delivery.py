@@ -38,6 +38,7 @@ from sagewai.work.events import (
 from sagewai.work.models import (
     ActionRequest,
     ControlPrecondition,
+    ExternalOutcomeIncident,
     GateDecision,
     Reversibility,
     WorkRecord,
@@ -583,13 +584,26 @@ class DeliveryLifecycle:
             control_request,
         )
         self._validate_observation(result, deployment, gates)
-        await self._append(
-            project_id=deployment.project_id,
-            work_id=deployment.work_id,
-            event_type=WorkEventType.OBSERVATION_RECORDED,
-            payload={"observation": result.model_dump(mode="json")},
-            actor_ref="observation_provider",
-        )
+        if deployment.environment == "production" and result.verdict is HealthVerdict.FAIL:
+            incident_deployment = await self._external_incident_source(deployment)
+            await self._append_with_external_outcome(
+                project_id=deployment.project_id,
+                work_id=deployment.work_id,
+                source_event_type=WorkEventType.OBSERVATION_RECORDED,
+                source_payload={"observation": result.model_dump(mode="json")},
+                source_actor_ref="observation_provider",
+                incident_deployment=incident_deployment,
+                severity="high",
+                evidence_refs=result.evidence_refs,
+            )
+        else:
+            await self._append(
+                project_id=deployment.project_id,
+                work_id=deployment.work_id,
+                event_type=WorkEventType.OBSERVATION_RECORDED,
+                payload={"observation": result.model_dump(mode="json")},
+                actor_ref="observation_provider",
+            )
         return result
 
     async def promote(
@@ -736,19 +750,32 @@ class DeliveryLifecycle:
             or rolled_back.status != "rolled_back"
         ):
             raise ValueError("rollback result belongs to a different deployment")
-        await self._append(
-            project_id=deployment.project_id,
-            work_id=deployment.work_id,
-            event_type=WorkEventType.ROLLBACK_RECORDED,
-            payload={
-                "source_deployment_id": deployment.id,
-                "source_release_candidate_id": candidate.id,
-                "deployment": rolled_back.model_dump(mode="json"),
-                "known_good_release_candidate": known_good_candidate.model_dump(mode="json"),
-                "evidence_refs": list(evidence_refs),
-            },
-            actor_ref="deployment_provider",
-        )
+        rollback_payload = {
+            "source_deployment_id": deployment.id,
+            "source_release_candidate_id": candidate.id,
+            "deployment": rolled_back.model_dump(mode="json"),
+            "known_good_release_candidate": known_good_candidate.model_dump(mode="json"),
+            "evidence_refs": list(evidence_refs),
+        }
+        if deployment.environment == "production":
+            await self._append_with_external_outcome(
+                project_id=deployment.project_id,
+                work_id=deployment.work_id,
+                source_event_type=WorkEventType.ROLLBACK_RECORDED,
+                source_payload=rollback_payload,
+                source_actor_ref="deployment_provider",
+                incident_deployment=deployment,
+                severity="high",
+                evidence_refs=evidence_refs,
+            )
+        else:
+            await self._append(
+                project_id=deployment.project_id,
+                work_id=deployment.work_id,
+                event_type=WorkEventType.ROLLBACK_RECORDED,
+                payload=rollback_payload,
+                actor_ref="deployment_provider",
+            )
         return rolled_back
 
     async def _run_rollback_provider(
@@ -1021,13 +1048,114 @@ class DeliveryLifecycle:
         }
         if request.deployment is not None:
             payload["deployment_id"] = request.deployment.id
-        await self._append(
-            project_id=request.project_id,
-            work_id=request.work_id,
-            event_type=WorkEventType.CONTROL_DEGRADED,
-            payload=payload,
-            actor_ref="delivery_control",
+        if production_rollback and request.deployment is not None:
+            failed_ids = tuple(
+                result.precondition_id for result in failures_to_record
+            )
+            details = str(payload["details"])
+            failed_summary = ", ".join(failed_ids)
+            await self._append_with_external_outcome(
+                project_id=request.project_id,
+                work_id=request.work_id,
+                source_event_type=WorkEventType.CONTROL_DEGRADED,
+                source_payload=payload,
+                source_actor_ref="delivery_control",
+                incident_deployment=request.deployment,
+                severity="critical",
+                evidence_refs=tuple(
+                    ref for result in failures_to_record for ref in result.evidence_refs
+                ),
+                link_source_control_event=True,
+                cause=(
+                    f"failed preconditions: {failed_summary}; "
+                    f"details: {details}"
+                ),
+            )
+        else:
+            await self._append(
+                project_id=request.project_id,
+                work_id=request.work_id,
+                event_type=WorkEventType.CONTROL_DEGRADED,
+                payload=payload,
+                actor_ref="delivery_control",
+            )
+
+    async def _external_incident_source(
+        self,
+        deployment: Deployment,
+    ) -> Deployment:
+        """Keep a rollback observation on its source deployment incident."""
+
+        events = await self._work_store.read_events(
+            deployment.work_id, project_id=deployment.project_id
         )
+        for event in reversed(events):
+            if event.event_type is not WorkEventType.ROLLBACK_RECORDED:
+                continue
+            recorded = Deployment.model_validate(event.payload_json["deployment"])
+            if recorded.id == deployment.id:
+                return await self._deployment_by_id(
+                    deployment.work_id,
+                    deployment.project_id,
+                    str(event.payload_json["source_deployment_id"]),
+                )
+        return deployment
+
+    async def _append_with_external_outcome(
+        self,
+        *,
+        project_id: str,
+        work_id: str,
+        source_event_type: WorkEventType,
+        source_payload: dict,
+        source_actor_ref: str,
+        incident_deployment: Deployment,
+        severity: Literal["high", "critical"],
+        evidence_refs: tuple[str, ...],
+        link_source_control_event: bool = False,
+        cause: str | None = None,
+    ) -> WorkEvent:
+        """Atomically persist a delivery outcome and its generic interrupt receipt."""
+
+        events = await self._work_store.read_events(work_id, project_id=project_id)
+        sequence = events[-1].sequence + 1 if events else 1
+        created_at = datetime.now(timezone.utc)
+        source_event = WorkEvent(
+            id=str(uuid.uuid4()),
+            project_id=project_id,
+            work_id=work_id,
+            sequence=sequence,
+            event_type=source_event_type,
+            actor_type="delivery",
+            actor_ref=source_actor_ref,
+            payload_json=source_payload,
+            created_at=created_at,
+        )
+        summary = f"production incident for deployment {incident_deployment.id}"
+        if cause is not None:
+            summary = f"{summary}; {cause}"
+        incident = ExternalOutcomeIncident(
+            incident_id=f"software-delivery:{incident_deployment.id}",
+            summary=summary[:500],
+            severity=severity,
+            evidence_refs=tuple(dict.fromkeys(evidence_refs))[:32],
+            active_control_event_ids=((source_event.id,) if link_source_control_event else ()),
+        )
+        receipt_event = WorkEvent(
+            id=str(uuid.uuid4()),
+            project_id=project_id,
+            work_id=work_id,
+            sequence=sequence + 1,
+            event_type=WorkEventType.EXTERNAL_OUTCOME_RECORDED,
+            actor_type="delivery",
+            actor_ref="software_delivery",
+            payload_json={"incident": incident.model_dump(mode="json")},
+            created_at=created_at,
+        )
+        await self._work_store.append_events((source_event, receipt_event))
+        if source_event_type in _DELIVERY_STATUS_EVENTS:
+            await self._project_work_status(work_id, project_id)
+        return source_event
 
     async def _authorize(self, request: ActionRequest) -> None:
         gate_id = f"{request.action}:{request.work_id}:{request.scope}"
@@ -1457,23 +1585,23 @@ class DeliveryLifecycle:
         event_type: WorkEventType,
         payload: dict,
         actor_ref: str,
-    ) -> None:
+    ) -> WorkEvent:
         events = await self._work_store.read_events(work_id, project_id=project_id)
-        await self._work_store.append_event(
-            WorkEvent(
-                id=str(uuid.uuid4()),
-                project_id=project_id,
-                work_id=work_id,
-                sequence=events[-1].sequence + 1 if events else 1,
-                event_type=event_type,
-                actor_type="delivery",
-                actor_ref=actor_ref,
-                payload_json=payload,
-                created_at=datetime.now(timezone.utc),
-            )
+        event = WorkEvent(
+            id=str(uuid.uuid4()),
+            project_id=project_id,
+            work_id=work_id,
+            sequence=events[-1].sequence + 1 if events else 1,
+            event_type=event_type,
+            actor_type="delivery",
+            actor_ref=actor_ref,
+            payload_json=payload,
+            created_at=datetime.now(timezone.utc),
         )
+        await self._work_store.append_event(event)
         if event_type in _DELIVERY_STATUS_EVENTS:
             await self._project_work_status(work_id, project_id)
+        return event
 
     async def _known_good_problem(
         self,
