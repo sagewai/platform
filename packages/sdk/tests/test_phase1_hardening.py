@@ -122,9 +122,9 @@ class TestDurableRunnerHeartbeat:
 
         original_heartbeat = store.heartbeat
 
-        async def tracking_heartbeat(workflow_name: str, run_id: str) -> None:
+        async def tracking_heartbeat(workflow_name: str, run_id: str, *, project_id: str | None) -> None:
             heartbeat_calls.append((workflow_name, run_id))
-            await original_heartbeat(workflow_name, run_id)
+            await original_heartbeat(workflow_name, run_id, project_id=project_id)
 
         store.heartbeat = tracking_heartbeat  # type: ignore[assignment]
 
@@ -188,10 +188,10 @@ class TestDurableRunnerHeartbeatCancellation:
 
         original_heartbeat = store.heartbeat
 
-        async def tracking_heartbeat(wf: str, rid: str) -> None:
+        async def tracking_heartbeat(wf: str, rid: str, *, project_id: str | None) -> None:
             if completion_event.is_set():
                 heartbeat_after_done.append(rid)
-            await original_heartbeat(wf, rid)
+            await original_heartbeat(wf, rid, project_id=project_id)
 
         store.heartbeat = tracking_heartbeat  # type: ignore[assignment]
 
@@ -221,10 +221,10 @@ class TestDurableRunnerHeartbeatCancellation:
 
         original_heartbeat = store.heartbeat
 
-        async def tracking_heartbeat(wf: str, rid: str) -> None:
+        async def tracking_heartbeat(wf: str, rid: str, *, project_id: str | None) -> None:
             if timeout_event.is_set():
                 heartbeat_after_timeout.append(rid)
-            await original_heartbeat(wf, rid)
+            await original_heartbeat(wf, rid, project_id=project_id)
 
         store.heartbeat = tracking_heartbeat  # type: ignore[assignment]
 
@@ -684,9 +684,9 @@ class TestDurableRunnerParallelHeartbeat:
 
         original_heartbeat = store.heartbeat
 
-        async def tracking_heartbeat(wf: str, rid: str) -> None:
+        async def tracking_heartbeat(wf: str, rid: str, *, project_id: str | None) -> None:
             heartbeat_calls.append(rid)
-            await original_heartbeat(wf, rid)
+            await original_heartbeat(wf, rid, project_id=project_id)
 
         store.heartbeat = tracking_heartbeat  # type: ignore[assignment]
 
@@ -716,9 +716,9 @@ class TestDurableRunnerLoopHeartbeat:
 
         original_heartbeat = store.heartbeat
 
-        async def tracking_heartbeat(wf: str, rid: str) -> None:
+        async def tracking_heartbeat(wf: str, rid: str, *, project_id: str | None) -> None:
             heartbeat_calls.append(rid)
-            await original_heartbeat(wf, rid)
+            await original_heartbeat(wf, rid, project_id=project_id)
 
         store.heartbeat = tracking_heartbeat  # type: ignore[assignment]
 
@@ -752,6 +752,8 @@ class TestDurableRunnerStepTimeoutLoop:
             )
 
         # Verify the run was marked as failed
-        run = await store.load_run("loop:slow-loop", "loop-timeout-1")
+        run = await store.load_run(
+            "loop:slow-loop", "loop-timeout-1", project_id=None
+        )
         assert run is not None
         assert run.status == StepStatus.FAILED

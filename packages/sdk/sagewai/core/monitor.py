@@ -44,7 +44,6 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from sagewai.core.context import resolve_project_id
 from sagewai.core.state import StepStatus, WorkflowRun, WorkflowStore
 
 logger = logging.getLogger(__name__)
@@ -202,7 +201,9 @@ class WorkflowMonitor:
             for row in rows
         ]
 
-    async def get_execution(self, run_id: str) -> ExecutionDetail | None:
+    async def get_execution(
+        self, run_id: str, *, project_id: str | None = None
+    ) -> ExecutionDetail | None:
         """Get full execution detail including all steps.
 
         Args:
@@ -218,7 +219,7 @@ class WorkflowMonitor:
             )
             return None
 
-        row = await self._store.get_run_by_run_id(run_id)
+        row = await self._store.get_run_by_run_id(run_id, project_id=project_id)
         if row is None:
             return None
 
@@ -261,7 +262,9 @@ class WorkflowMonitor:
             error=row.get("error"),
         )
 
-    async def get_execution_timeline(self, run_id: str) -> list[TimelineEvent]:
+    async def get_execution_timeline(
+        self, run_id: str, *, project_id: str | None = None
+    ) -> list[TimelineEvent]:
         """Get ordered event history for a run (like Temporal's event history).
 
         Args:
@@ -277,7 +280,7 @@ class WorkflowMonitor:
             )
             return []
 
-        events = await self._store.list_events(run_id)
+        events = await self._store.list_events(run_id, project_id=project_id)
         return [
             TimelineEvent(
                 id=ev["id"],
@@ -305,7 +308,6 @@ class WorkflowMonitor:
             logger.warning("get_worker_status requires PostgresStore with _pool")
             return []
 
-        pid = resolve_project_id(project_id)
 
         # Try enriched query with workers table JOIN
         try:
@@ -322,13 +324,13 @@ class WorkflowMonitor:
                 FROM workflow_runs r
                 LEFT JOIN workers w ON w.worker_id = r.owner_id
                 WHERE r.owner_id IS NOT NULL
-                  AND r.project_id = $1
+                  AND r.project_id IS NOT DISTINCT FROM $1
                   AND r.updated_at > NOW() - INTERVAL '5 minutes'
                 GROUP BY r.owner_id, w.pool, w.labels, w.status,
                          w.max_concurrent, w.registered_at
                 ORDER BY last_heartbeat DESC
                 """,
-                pid,
+                project_id,
             )
         except Exception:
             # Workers table may not exist — fall back to runs-only query
@@ -339,12 +341,12 @@ class WorkflowMonitor:
                        MAX(updated_at) AS last_heartbeat
                 FROM workflow_runs
                 WHERE owner_id IS NOT NULL
-                  AND project_id = $1
+                  AND project_id IS NOT DISTINCT FROM $1
                   AND updated_at > NOW() - INTERVAL '5 minutes'
                 GROUP BY owner_id
                 ORDER BY last_heartbeat DESC
                 """,
-                pid,
+                project_id,
             )
 
         results = []
@@ -418,15 +420,14 @@ class WorkflowMonitor:
             logger.warning("get_queue_stats requires PostgresStore with _pool")
             return QueueStats()
 
-        pid = resolve_project_id(project_id)
         rows = await self._store._pool.fetch(
             """
             SELECT status, COUNT(*) AS cnt
             FROM workflow_runs
-            WHERE project_id = $1
+            WHERE project_id IS NOT DISTINCT FROM $1
             GROUP BY status
             """,
-            pid,
+            project_id,
         )
         counts: dict[str, int] = {row["status"]: row["cnt"] for row in rows}
         total = sum(counts.values())
@@ -444,7 +445,9 @@ class WorkflowMonitor:
     # Control operations
     # ------------------------------------------------------------------
 
-    async def terminate_execution(self, run_id: str) -> bool:
+    async def terminate_execution(
+        self, run_id: str, *, project_id: str | None = None
+    ) -> bool:
         """Force-cancel a stuck run.
 
         Args:
@@ -456,10 +459,12 @@ class WorkflowMonitor:
         if hasattr(self._store, "cancel_run"):
             # cancel_run expects (workflow_name, run_id); look up name first
             if hasattr(self._store, "get_run_by_run_id"):
-                row = await self._store.get_run_by_run_id(run_id)
+                row = await self._store.get_run_by_run_id(run_id, project_id=project_id)
                 if row is None:
                     return False
-                return await self._store.cancel_run(row["workflow_name"], run_id)
+                return await self._store.cancel_run(
+                    row["workflow_name"], run_id, project_id=project_id
+                )
 
         # Fallback: raw UPDATE if we have a pool
         if hasattr(self._store, "_pool"):
@@ -467,9 +472,11 @@ class WorkflowMonitor:
                 """
                 UPDATE workflow_runs
                 SET status = 'cancelled', updated_at = NOW()
-                WHERE run_id = $1 AND status IN ('pending', 'running')
+                WHERE run_id = $1 AND project_id IS NOT DISTINCT FROM $2
+                  AND status IN ('pending', 'running')
                 """,
                 run_id,
+                project_id,
             )
             return result.endswith("1")
 
@@ -495,7 +502,7 @@ class WorkflowMonitor:
         if not hasattr(self._store, "get_run_by_run_id"):
             raise ValueError("retry_execution requires a store with get_run_by_run_id")
 
-        row = await self._store.get_run_by_run_id(run_id)
+        row = await self._store.get_run_by_run_id(run_id, project_id=project_id)
         if row is None:
             raise ValueError(f"Run not found: {run_id}")
         if row["status"] != "failed":
@@ -519,16 +526,16 @@ class WorkflowMonitor:
             run_id=new_run_id,
             status=StepStatus.PENDING,
             input_data=input_data,
+            project_id=project_id,
             started_at=None,
         )
 
-        pid = resolve_project_id(project_id)
         if hasattr(self._store, "enqueue_run"):
             await self._store.enqueue_run(
                 new_run,
                 input_data=input_data if isinstance(input_data, dict) else {},
                 steps_total=row.get("steps_total"),
-                project_id=pid,
+                project_id=project_id,
             )
         else:
             await self._store.save_run(new_run)
@@ -541,7 +548,14 @@ class WorkflowMonitor:
         )
         return new_run_id
 
-    async def signal_execution(self, run_id: str, signal_name: str, data: Any) -> bool:
+    async def signal_execution(
+        self,
+        run_id: str,
+        signal_name: str,
+        data: Any,
+        *,
+        project_id: str | None = None,
+    ) -> bool:
         """Inject data into a WAITING workflow.
 
         Stores the signal in the run's signals dict and marks any WAITING
@@ -559,14 +573,16 @@ class WorkflowMonitor:
             logger.warning("signal_execution requires a store with get_run_by_run_id")
             return False
 
-        row = await self._store.get_run_by_run_id(run_id)
+        row = await self._store.get_run_by_run_id(run_id, project_id=project_id)
         if row is None:
             return False
 
         workflow_name = row["workflow_name"]
 
         # Load the full WorkflowRun to manipulate signals and steps
-        wf_run = await self._store.load_run(workflow_name, run_id)
+        wf_run = await self._store.load_run(
+            workflow_name, run_id, project_id=project_id
+        )
         if wf_run is None:
             return False
 

@@ -28,10 +28,23 @@ import os
 import platform
 from typing import Any
 
+from sagewai._project_scope import project_scope_key
 from sagewai.core.context import resolve_project_id
 from sagewai.core.state import QueueFullError, StepStatus, WorkflowRun, WorkflowStore
 
 logger = logging.getLogger(__name__)
+
+
+def _run_key(project_id: str | None, workflow_name: str, run_id: str) -> str:
+    """Return a collision-free key for public identity within project scope."""
+    scope = project_scope_key(project_id)
+    return f"{len(scope)}:{scope}{len(workflow_name)}:{workflow_name}{run_id}"
+
+
+def _scoped_idempotency_key(project_id: str | None, caller_key: str) -> str:
+    """Qualify a caller idempotency key without delimiter ambiguity."""
+    scope = project_scope_key(project_id)
+    return f"{len(scope)}:{scope}{caller_key}"
 
 
 def _owner_id() -> str:
@@ -83,7 +96,7 @@ class PostgresStore(WorkflowStore):
 
     async def save_run(self, run: WorkflowRun) -> None:
         """Upsert a workflow run as JSONB plus typed sandbox requirement columns."""
-        key = f"{run.workflow_name}:{run.run_id}"
+        key = _run_key(run.project_id, run.workflow_name, run.run_id)
         data = json.dumps(run.to_dict(), default=str)
 
         await self._pool.execute(
@@ -99,11 +112,11 @@ class PostgresStore(WorkflowStore):
                 replay_of_run_id, replay_from_step, code_hash,
                 directive_chain, estimated_cost_usd,
                 replay_re_evaluate_directives, execution_mode_override,
-                identity_from
+                identity_from, project_id
             )
             VALUES ($1, $2, $3, $4, $5::jsonb, $6, NOW(), $7, $8, $9, $10, $11, $12, $13,
                     $14, $15, $16, $17::jsonb, $18, $19, $20,
-                    $21::jsonb, $22, $23, $24, $25)
+                    $21::jsonb, $22, $23, $24, $25, $26)
             ON CONFLICT (id) DO UPDATE SET
                 status = EXCLUDED.status,
                 data = EXCLUDED.data,
@@ -127,7 +140,8 @@ class PostgresStore(WorkflowStore):
                 estimated_cost_usd = EXCLUDED.estimated_cost_usd,
                 replay_re_evaluate_directives = EXCLUDED.replay_re_evaluate_directives,
                 execution_mode_override = EXCLUDED.execution_mode_override,
-                identity_from = EXCLUDED.identity_from
+                identity_from = EXCLUDED.identity_from,
+                project_id = EXCLUDED.project_id
             """,
             key,
             run.workflow_name,
@@ -161,14 +175,23 @@ class PostgresStore(WorkflowStore):
             run.replay_re_evaluate_directives,
             run.execution_mode_override.value if run.execution_mode_override else None,
             run.identity_from,
+            run.project_id,
         )
 
-    async def load_run(self, workflow_name: str, run_id: str) -> WorkflowRun | None:
+    async def load_run(
+        self,
+        workflow_name: str,
+        run_id: str,
+        *,
+        project_id: str | None,
+    ) -> WorkflowRun | None:
         """Load a workflow run by name and ID."""
-        key = f"{workflow_name}:{run_id}"
+        key = _run_key(project_id, workflow_name, run_id)
         row = await self._pool.fetchrow(
-            "SELECT data FROM workflow_runs WHERE id = $1",
+            "SELECT data FROM workflow_runs "
+            "WHERE id = $1 AND project_id IS NOT DISTINCT FROM $2",
             key,
+            project_id,
         )
         if row is None:
             return None
@@ -181,12 +204,12 @@ class PostgresStore(WorkflowStore):
         self,
         workflow_name: str,
         status: StepStatus | None = None,
-        project_id: str | None = None,
+        *,
+        project_id: str | None,
     ) -> list[WorkflowRun]:
         """List runs for a workflow, optionally filtered by status and project."""
-        pid = resolve_project_id(project_id)
-        conditions = ["workflow_name = $1", "project_id = $2"]
-        params: list[Any] = [workflow_name, pid]
+        conditions = ["workflow_name = $1", "project_id IS NOT DISTINCT FROM $2"]
+        params: list[Any] = [workflow_name, project_id]
         idx = 3
         if status is not None:
             conditions.append(f"status = ${idx}")
@@ -206,7 +229,12 @@ class PostgresStore(WorkflowStore):
             results.append(WorkflowRun.from_dict(data))
         return results
 
-    async def list_replays_of(self, run_id: str) -> list[WorkflowRun]:
+    async def list_replays_of(
+        self,
+        run_id: str,
+        *,
+        project_id: str | None,
+    ) -> list[WorkflowRun]:
         """Return all runs whose replay_of_run_id equals the given id.
 
         Uses the idx_workflow_runs_replay_of partial index from migration 006.
@@ -215,9 +243,11 @@ class PostgresStore(WorkflowStore):
             """
             SELECT data FROM workflow_runs
             WHERE replay_of_run_id = $1
+              AND project_id IS NOT DISTINCT FROM $2
             ORDER BY created_at ASC NULLS LAST
             """,
             run_id,
+            project_id,
         )
         results = []
         for row in rows:
@@ -230,21 +260,21 @@ class PostgresStore(WorkflowStore):
     async def recover_stale_runs(
         self,
         stale_timeout_seconds: int = 300,
-        project_id: str | None = None,
+        *,
+        project_id: str | None,
     ) -> list[WorkflowRun]:
         """Find RUNNING workflows that haven't been updated within the timeout."""
-        pid = resolve_project_id(project_id)
         rows = await self._pool.fetch(
             """
             SELECT data FROM workflow_runs
             WHERE status = $1
-              AND project_id = $3
+              AND project_id IS NOT DISTINCT FROM $3
               AND updated_at < NOW() - MAKE_INTERVAL(secs => $2)
             ORDER BY updated_at ASC
             """,
             StepStatus.RUNNING.value,
             float(stale_timeout_seconds),
-            pid,
+            project_id,
         )
         results = []
         for row in rows:
@@ -254,25 +284,32 @@ class PostgresStore(WorkflowStore):
             results.append(WorkflowRun.from_dict(data))
         return results
 
-    async def heartbeat(self, workflow_name: str, run_id: str) -> None:
+    async def heartbeat(
+        self,
+        workflow_name: str,
+        run_id: str,
+        *,
+        project_id: str | None,
+    ) -> None:
         """Refresh updated_at to prevent stale detection."""
-        key = f"{workflow_name}:{run_id}"
+        key = _run_key(project_id, workflow_name, run_id)
         await self._pool.execute(
-            "UPDATE workflow_runs SET updated_at = NOW() WHERE id = $1",
+            "UPDATE workflow_runs SET updated_at = NOW() "
+            "WHERE id = $1 AND project_id IS NOT DISTINCT FROM $2",
             key,
+            project_id,
         )
 
     # ------------------------------------------------------------------
     # Queue operations — atomic enqueue, claim, complete, fail
     # ------------------------------------------------------------------
 
-    async def queue_depth(self, project_id: str | None = None) -> int:
-        """Count pending workflow runs, optionally scoped to a project."""
-        pid = resolve_project_id(project_id)
+    async def queue_depth(self, *, project_id: str | None) -> int:
+        """Count pending workflow runs in one explicit project scope."""
         return await self._pool.fetchval(
             "SELECT COUNT(*) FROM workflow_runs "
-            "WHERE status = 'pending' AND project_id = $1",
-            pid,
+            "WHERE status = 'pending' AND project_id IS NOT DISTINCT FROM $1",
+            project_id,
         ) or 0
 
     async def enqueue_run(
@@ -282,7 +319,8 @@ class PostgresStore(WorkflowStore):
         idempotency_key: str | None = None,
         steps_total: int | None = None,
         priority: int = 0,
-        project_id: str | None = None,
+        *,
+        project_id: str | None,
         max_queue_depth: int | None = None,
         target_pool: str | None = None,
         target_labels: dict[str, Any] | None = None,
@@ -298,7 +336,7 @@ class PostgresStore(WorkflowStore):
         priority:
             Higher values are dequeued first (default 0).
         project_id:
-            Optional project identifier for multi-tenant isolation.
+            Explicit project scope; ``None`` is the global scope.
         max_queue_depth:
             If set, raises ``QueueFullError`` when the number of pending
             runs meets or exceeds this limit.
@@ -309,15 +347,22 @@ class PostgresStore(WorkflowStore):
         target_worker_id:
             Target a specific worker by ID.
         """
+        if run.project_id != project_id:
+            raise ValueError("run.project_id must match the explicit project_id")
         if max_queue_depth is not None:
-            depth = await self.queue_depth()
+            depth = await self.queue_depth(project_id=project_id)
             if depth >= max_queue_depth:
                 raise QueueFullError(depth, max_queue_depth)
-        key = f"{run.workflow_name}:{run.run_id}"
+        key = _run_key(project_id, run.workflow_name, run.run_id)
         data = json.dumps(run.to_dict(), default=str)
         input_json = json.dumps(input_data or {}, default=str)
         labels_json = json.dumps(target_labels) if target_labels else None
 
+        scoped_idempotency_key = (
+            _scoped_idempotency_key(project_id, idempotency_key)
+            if idempotency_key is not None
+            else None
+        )
         if idempotency_key:
             result = await self._pool.fetchval(
                 """
@@ -338,7 +383,7 @@ class PostgresStore(WorkflowStore):
                 run.run_id,
                 data,
                 input_json,
-                idempotency_key,
+                scoped_idempotency_key,
                 steps_total,
                 priority,
                 project_id,
@@ -349,8 +394,10 @@ class PostgresStore(WorkflowStore):
             if result is None:
                 existing = await self._pool.fetchval(
                     "SELECT run_id FROM workflow_runs "
-                    "WHERE idempotency_key = $1",
-                    idempotency_key,
+                    "WHERE idempotency_key = $1 "
+                    "AND project_id IS NOT DISTINCT FROM $2",
+                    scoped_idempotency_key,
+                    project_id,
                 )
                 return existing or run.run_id, False
             return run.run_id, True
@@ -383,8 +430,8 @@ class PostgresStore(WorkflowStore):
     async def claim_pending_run(
         self,
         owner_id: str,
-        project_id: str | None = None,
         *,
+        project_id: str | None,
         worker_pool: str | None = None,
         worker_labels: dict[str, Any] | None = None,
         models_canonical: list[str] | None = None,
@@ -410,14 +457,12 @@ class PostgresStore(WorkflowStore):
         A run with ``target_model IS NULL`` is claimable by any worker.
         This preserves backward compatibility.
         """
-        conditions = ["status = 'pending'"]
-        params: list[Any] = [owner_id]
-        idx = 2
-
-        if project_id is not None:
-            conditions.append(f"project_id = ${idx}")
-            params.append(project_id)
-            idx += 1
+        conditions = [
+            "status = 'pending'",
+            "project_id IS NOT DISTINCT FROM $2",
+        ]
+        params: list[Any] = [owner_id, project_id]
+        idx = 3
 
         # Pool matching: unrouted runs (NULL) match any worker
         if worker_pool is not None:
@@ -488,6 +533,7 @@ class PostgresStore(WorkflowStore):
         pool: str,
         labels: dict[str, str] | None,
         *,
+        project_id: str | None,
         worker_sandbox_mode: Any = None,
         worker_sandbox_variants: list[Any] | None = None,
         worker_network_policy: Any = None,
@@ -525,16 +571,15 @@ class PostgresStore(WorkflowStore):
             for v in (worker_sandbox_variants or [])
         ]
 
-        conditions = ["status = 'pending'"]
-        params: list[Any] = [worker_id]
-        idx = 2
+        conditions = [
+            "status = 'pending'",
+            "(org_id IS NULL OR org_id = $2)",
+            "project_id IS NOT DISTINCT FROM $3",
+        ]
+        params: list[Any] = [worker_id, org_id, project_id]
+        idx = 4
 
-        # org_id scoping
-        conditions.append(f"(org_id IS NULL OR org_id = ${idx})")
-        params.append(org_id)
-        idx += 1
-
-        # Pool matching: unrouted runs match any worker
+        # Pool matching: unrouted runs (NULL) match any worker
         conditions.append(f"(target_pool IS NULL OR target_pool = ${idx})")
         params.append(pool)
         idx += 1
@@ -603,9 +648,11 @@ class PostgresStore(WorkflowStore):
         output: dict[str, Any],
         data: dict[str, Any] | None = None,
         steps_completed: int | None = None,
+        *,
+        project_id: str | None,
     ) -> None:
         """Mark a run as completed with output."""
-        key = f"{workflow_name}:{run_id}"
+        key = _run_key(project_id, workflow_name, run_id)
         output_json = json.dumps(output, default=str)
         data_json = json.dumps(data, default=str) if data else None
 
@@ -615,12 +662,13 @@ class PostgresStore(WorkflowStore):
                 UPDATE workflow_runs
                 SET status = 'completed', output = $2::jsonb, data = $3::jsonb,
                     steps_completed = COALESCE($4, steps_completed), updated_at = NOW()
-                WHERE id = $1
+                WHERE id = $1 AND project_id IS NOT DISTINCT FROM $5
                 """,
                 key,
                 output_json,
                 data_json,
                 steps_completed,
+                project_id,
             )
         else:
             await self._pool.execute(
@@ -628,11 +676,12 @@ class PostgresStore(WorkflowStore):
                 UPDATE workflow_runs
                 SET status = 'completed', output = $2::jsonb,
                     steps_completed = COALESCE($3, steps_completed), updated_at = NOW()
-                WHERE id = $1
+                WHERE id = $1 AND project_id IS NOT DISTINCT FROM $4
                 """,
                 key,
                 output_json,
                 steps_completed,
+                project_id,
             )
 
     async def fail_run(
@@ -641,9 +690,11 @@ class PostgresStore(WorkflowStore):
         run_id: str,
         error: str,
         data: dict[str, Any] | None = None,
+        *,
+        project_id: str | None,
     ) -> None:
         """Mark a run as failed with error message."""
-        key = f"{workflow_name}:{run_id}"
+        key = _run_key(project_id, workflow_name, run_id)
         data_json = json.dumps(data, default=str) if data else None
 
         if data_json:
@@ -651,49 +702,64 @@ class PostgresStore(WorkflowStore):
                 """
                 UPDATE workflow_runs
                 SET status = 'failed', error = $2, data = $3::jsonb, updated_at = NOW()
-                WHERE id = $1
+                WHERE id = $1 AND project_id IS NOT DISTINCT FROM $4
                 """,
                 key,
                 error,
                 data_json,
+                project_id,
             )
         else:
             await self._pool.execute(
                 """
                 UPDATE workflow_runs
                 SET status = 'failed', error = $2, updated_at = NOW()
-                WHERE id = $1
+                WHERE id = $1 AND project_id IS NOT DISTINCT FROM $3
                 """,
                 key,
                 error,
+                project_id,
             )
 
-    async def cancel_run(self, workflow_name: str, run_id: str) -> bool:
+    async def cancel_run(
+        self,
+        workflow_name: str,
+        run_id: str,
+        *,
+        project_id: str | None,
+    ) -> bool:
         """Cancel a pending or running workflow. Returns True if cancelled."""
-        key = f"{workflow_name}:{run_id}"
+        key = _run_key(project_id, workflow_name, run_id)
         result = await self._pool.execute(
             """
             UPDATE workflow_runs
             SET status = 'cancelled', updated_at = NOW()
-            WHERE id = $1 AND status IN ('pending', 'running')
+            WHERE id = $1
+              AND project_id IS NOT DISTINCT FROM $2
+              AND status IN ('pending', 'running')
             """,
             key,
+            project_id,
         )
         return result.endswith("1")  # "UPDATE 1"
 
-    async def reset_stale_to_pending(self, stale_timeout_seconds: int = 300) -> int:
-        """Reset stale RUNNING workflows to PENDING for re-claim.
-
-        Returns the number of runs reset.
-        """
+    async def reset_stale_to_pending(
+        self,
+        stale_timeout_seconds: int = 300,
+        *,
+        project_id: str | None,
+    ) -> int:
+        """Reset stale RUNNING workflows to PENDING for one project scope."""
         result = await self._pool.execute(
             """
             UPDATE workflow_runs
             SET status = 'pending', owner_id = NULL, updated_at = NOW()
             WHERE status = 'running'
+              AND project_id IS NOT DISTINCT FROM $2
               AND updated_at < NOW() - MAKE_INTERVAL(secs => $1)
             """,
             float(stale_timeout_seconds),
+            project_id,
         )
         count = int(result.split()[-1]) if result else 0
         if count > 0:
@@ -701,18 +767,24 @@ class PostgresStore(WorkflowStore):
         return count
 
     async def update_steps_completed(
-        self, workflow_name: str, run_id: str, steps_completed: int
+        self,
+        workflow_name: str,
+        run_id: str,
+        steps_completed: int,
+        *,
+        project_id: str | None,
     ) -> None:
         """Update the step progress counter."""
-        key = f"{workflow_name}:{run_id}"
+        key = _run_key(project_id, workflow_name, run_id)
         await self._pool.execute(
             """
             UPDATE workflow_runs
             SET steps_completed = $2, updated_at = NOW()
-            WHERE id = $1
+            WHERE id = $1 AND project_id IS NOT DISTINCT FROM $3
             """,
             key,
             steps_completed,
+            project_id,
         )
 
     # ------------------------------------------------------------------
@@ -720,30 +792,43 @@ class PostgresStore(WorkflowStore):
     # ------------------------------------------------------------------
 
     async def persist_event(
-        self, run_id: str, event_type: str, data: dict[str, Any]
+        self,
+        run_id: str,
+        event_type: str,
+        data: dict[str, Any],
+        *,
+        project_id: str | None,
     ) -> None:
-        """Persist a workflow event to the workflow_events table."""
+        """Persist a workflow event in one explicit project scope."""
         data_json = json.dumps(data, default=str)
         await self._pool.execute(
             """
-            INSERT INTO workflow_events (run_id, event_type, data)
-            VALUES ($1, $2, $3::jsonb)
+            INSERT INTO workflow_events (project_id, run_id, event_type, data)
+            VALUES ($1, $2, $3, $4::jsonb)
             """,
+            project_id,
             run_id,
             event_type,
             data_json,
         )
 
-    async def list_events(self, run_id: str) -> list[dict[str, Any]]:
-        """List all events for a workflow run, ordered by creation."""
+    async def list_events(
+        self,
+        run_id: str,
+        *,
+        project_id: str | None,
+    ) -> list[dict[str, Any]]:
+        """List events for one workflow run and explicit project scope."""
         rows = await self._pool.fetch(
             """
             SELECT id, run_id, event_type, data, created_at
             FROM workflow_events
             WHERE run_id = $1
+              AND project_id IS NOT DISTINCT FROM $2
             ORDER BY id ASC
             """,
             run_id,
+            project_id,
         )
         results = []
         for row in rows:
@@ -769,18 +854,19 @@ class PostgresStore(WorkflowStore):
         offset: int = 0,
         status: str | None = None,
         search: str | None = None,
-        project_id: str | None = None,
+        *,
+        project_id: str | None,
     ) -> list[dict[str, Any]]:
         """List runs across all workflows with queue metadata.
 
         Parameters
         ----------
         project_id:
-            If provided, only return runs belonging to this project.
+            Explicit project scope; ``None`` selects global runs.
         """
-        conditions: list[str] = []
-        params: list[Any] = [limit, offset]
-        idx = 3
+        conditions: list[str] = ["project_id IS NOT DISTINCT FROM $3"]
+        params: list[Any] = [limit, offset, project_id]
+        idx = 4
 
         if status:
             conditions.append(f"status = ${idx}")
@@ -789,10 +875,6 @@ class PostgresStore(WorkflowStore):
         if search:
             conditions.append(f"workflow_name ILIKE ${idx}")
             params.append(f"%{search}%")
-            idx += 1
-        if project_id is not None:
-            conditions.append(f"project_id = ${idx}")
-            params.append(project_id)
             idx += 1
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
@@ -807,7 +889,12 @@ class PostgresStore(WorkflowStore):
         rows = await self._pool.fetch(query, *params)
         return [self._row_to_dict(row) for row in rows]
 
-    async def get_run_by_run_id(self, run_id: str) -> dict[str, Any] | None:
+    async def get_run_by_run_id(
+        self,
+        run_id: str,
+        *,
+        project_id: str | None,
+    ) -> dict[str, Any] | None:
         """Load a run by run_id (without requiring workflow_name)."""
         row = await self._pool.fetchrow(
             """
@@ -815,10 +902,12 @@ class PostgresStore(WorkflowStore):
                    steps_completed, steps_total, owner_id, created_at, updated_at
             FROM workflow_runs
             WHERE run_id = $1
+              AND project_id IS NOT DISTINCT FROM $2
             ORDER BY created_at DESC
             LIMIT 1
             """,
             run_id,
+            project_id,
         )
         if row is None:
             return None
@@ -842,7 +931,7 @@ class PostgresStore(WorkflowStore):
         run_id: str | None = None,
         priority: int = 0,
         idempotency_key: str | None = None,
-        project_id: str | None = None,
+        project_id: str | None,
         max_queue_depth: int | None = None,
         worker_pool: str | None = None,
         worker_labels: dict[str, Any] | None = None,
@@ -862,7 +951,7 @@ class PostgresStore(WorkflowStore):
         Parameters
         ----------
         project_id:
-            Optional project identifier for multi-tenant isolation.
+            Explicit project scope; ``None`` selects global runs.
             Like Temporal's namespace — workers register for a project
             and only claim runs from that project.
         max_queue_depth:
@@ -972,14 +1061,15 @@ class PostgresStore(WorkflowStore):
         )
 
     async def count_by_status(
-        self, project_id: str | None = None
+        self,
+        *,
+        project_id: str | None,
     ) -> dict[str, int]:
-        """Count workflow runs by status, optionally scoped to a project."""
-        pid = resolve_project_id(project_id)
+        """Count workflow runs by status in one explicit project scope."""
         rows = await self._pool.fetch(
-            "SELECT status, COUNT(*) as cnt "
-            "FROM workflow_runs WHERE project_id = $1 GROUP BY status",
-            pid,
+            "SELECT status, COUNT(*) as cnt FROM workflow_runs "
+            "WHERE project_id IS NOT DISTINCT FROM $1 GROUP BY status",
+            project_id,
         )
         return {row["status"]: row["cnt"] for row in rows}
 

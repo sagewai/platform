@@ -98,7 +98,7 @@ async def test_replay_mode_2_run_succeeds_with_identical_output(
     original = await wf.get_run(rid)
     assert original.steps["transform"].result == "HELLO"
 
-    new_id = await wf.replay_from(rid, from_step=0)
+    new_id = await wf.replay_from(rid, project_id=None, from_step=0)
     await wf.run(run_id=new_id, x="hello")
     replay = await wf.get_run(new_id)
     assert replay.steps["transform"].result == "HELLO"
@@ -150,7 +150,7 @@ async def test_replay_proceeds_with_warning_when_key_revoked_after(
     orig = audit_mod.AuditWriter
     audit_mod.AuditWriter = _CaptureWriter
     try:
-        new_id = await wf.replay_from(rid, from_step=0)
+        new_id = await wf.replay_from(rid, project_id=None, from_step=0)
         await wf.run(run_id=new_id, x="v")
     finally:
         audit_mod.AuditWriter = orig
@@ -191,7 +191,7 @@ async def test_replay_fails_loud_on_builtin_rotation(
         )
     )
 
-    new_id = await wf.replay_from(rid, from_step=0)
+    new_id = await wf.replay_from(rid, project_id=None, from_step=0)
     # The rotation only surfaces when replay_env_for runs (during sandbox
     # acquire). Mode IDENTITY still goes through the host-side
     # SealedSecretProvider when the worker dispatches; in this Postgres-gated

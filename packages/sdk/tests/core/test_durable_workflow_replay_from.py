@@ -59,7 +59,7 @@ async def test_replay_from_step_zero_creates_new_run_with_snapshots():
         s.injection_snapshot = snap
     await wf._store.save_run(original)
 
-    new_id = await wf.replay_from(rid, from_step=0)
+    new_id = await wf.replay_from(rid, project_id=None, from_step=0)
     new_run = await wf.get_run(new_id)
 
     assert new_run.replay_of_run_id == rid
@@ -86,7 +86,7 @@ async def test_replay_from_mid_workflow_preserves_completed_steps():
         return "C-OUT"
 
     await wf.run(x="0"); rid = _generate_run_id(wf.name, {"x": "0"})
-    new_id = await wf.replay_from(rid, from_step=2)
+    new_id = await wf.replay_from(rid, project_id=None, from_step=2)
     new_run = await wf.get_run(new_id)
 
     assert new_run.steps["a"].status == StepStatus.COMPLETED
@@ -104,13 +104,13 @@ async def test_replay_from_step_out_of_range_raises():
 
     await wf.run(x="0"); rid = _generate_run_id(wf.name, {"x": "0"})
     with pytest.raises(ValueError, match="from_step"):
-        await wf.replay_from(rid, from_step=5)
+        await wf.replay_from(rid, project_id=None, from_step=5)
 
 
 async def test_replay_from_unknown_run_raises():
     wf = DurableWorkflow(name="wf4", store=InMemoryStore())
     with pytest.raises(ValueError, match="not found"):
-        await wf.replay_from("does-not-exist", from_step=0)
+        await wf.replay_from("does-not-exist", project_id=None, from_step=0)
 
 
 # --- Task 14: validation guards --------------------------------------------
@@ -137,7 +137,7 @@ async def test_legacy_run_no_snapshot_raises():
     await wf._store.save_run(run)
 
     with pytest.raises(LegacyRunNoSnapshotError):
-        await wf.replay_from(rid, from_step=1)
+        await wf.replay_from(rid, project_id=None, from_step=1)
 
 
 async def test_workflow_version_mismatch_raises():
@@ -162,7 +162,7 @@ async def test_workflow_version_mismatch_raises():
         return x
 
     with pytest.raises(WorkflowVersionMismatchError):
-        await wf2.replay_from(rid, from_step=0)
+        await wf2.replay_from(rid, project_id=None, from_step=0)
 
 
 async def test_mode_3b_with_callback_raises():
@@ -181,7 +181,7 @@ async def test_mode_3b_with_callback_raises():
     await wf._store.save_run(run)
 
     with pytest.raises(ModeNotReplayableError):
-        await wf.replay_from(rid, from_step=0)
+        await wf.replay_from(rid, project_id=None, from_step=0)
 
 
 # --- Task 15 piece: replay.completed fires when replay run finishes -------
@@ -199,7 +199,7 @@ async def test_replay_completed_fires_on_replay_run_finish():
         return x
 
     await wf.run(x="0"); rid = _generate_run_id(wf.name, {"x": "0"})
-    new_id = await wf.replay_from(rid, from_step=0)
+    new_id = await wf.replay_from(rid, project_id=None, from_step=0)
 
     captured: list[tuple[str, dict]] = []
 

@@ -132,6 +132,9 @@ class DurableRunner:
     ----------
     store:
         Workflow state store. Defaults to InMemoryStore.
+    project_id:
+        Explicit project scope for all checkpoint operations. ``None`` is the
+        global scope and remains distinct from a project named ``"global"``.
     compactor:
         Optional PromptCompactor for compressing context before checkpoint.
     heartbeat_interval:
@@ -149,12 +152,14 @@ class DurableRunner:
     def __init__(
         self,
         store: WorkflowStore | None = None,
+        project_id: str | None = None,
         compactor: PromptCompactor | None = None,
         heartbeat_interval: float = 30.0,
         step_timeout: float | None = None,
         on_progress: Callable[[int, int, str], None] | None = None,
     ) -> None:
         self._store = store or InMemoryStore()
+        self._project_id = project_id
         self._compactor = compactor
         self._heartbeat_interval = heartbeat_interval
         self._step_timeout = step_timeout
@@ -376,7 +381,9 @@ class DurableRunner:
 
     async def get_checkpoint(self, workflow_name: str, run_id: str) -> WorkflowRun | None:
         """Retrieve checkpoint state for a run."""
-        return await self._store.load_run(workflow_name, run_id)
+        return await self._store.load_run(
+            workflow_name, run_id, project_id=self._project_id,
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -410,7 +417,7 @@ class DurableRunner:
         async def _heartbeat() -> None:
             try:
                 await self._store.heartbeat(
-                    wf_run.workflow_name, wf_run.run_id,
+                    wf_run.workflow_name, wf_run.run_id, project_id=wf_run.project_id,
                 )
             except Exception:
                 logger.warning(
@@ -433,11 +440,14 @@ class DurableRunner:
         self, workflow_name: str, run_id: str, input_data: Any
     ) -> WorkflowRun:
         """Load existing run or create new one."""
-        wf_run = await self._store.load_run(workflow_name, run_id)
+        wf_run = await self._store.load_run(
+            workflow_name, run_id, project_id=self._project_id,
+        )
         if wf_run is None:
             wf_run = WorkflowRun(
                 workflow_name=workflow_name,
                 run_id=run_id,
+                project_id=self._project_id,
                 input_data=input_data,
                 started_at=time.time(),
             )

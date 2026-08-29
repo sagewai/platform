@@ -83,9 +83,9 @@ def test_control_event_fold_restores_only_the_named_preconditions() -> None:
     assert active_control_precondition_ids(events) == {"authority"}
 
 
-def _intent() -> ActionIntent:
+def _intent(project_id: str | None = "project-a") -> ActionIntent:
     return ActionIntent(
-        project_id="project-a",
+        project_id=project_id,
         action_id="action-1",
         capability="filesystem.write",
         target="packages/sdk/sagewai/work",
@@ -112,28 +112,29 @@ def _precondition(kind: ControlPreconditionKind, check_ref: str) -> ControlPreco
 def _request(
     *,
     run_id: str = "run-1",
+    project_id: str | None = "project-a",
     preconditions: tuple[ControlPrecondition, ...] = (),
 ) -> WorkRequest:
     return WorkRequest(
-        project_id="project-a",
+        project_id=project_id,
         work_id="work-1",
         run_id=run_id,
         stage="implement",
         action_scope=ActionScope(
-            project_id="project-a",
+            project_id=project_id,
             objective="Implement runtime",
             allowed_targets=("packages/sdk/sagewai/work",),
             allowed_capabilities=("filesystem.write",),
         ),
-        action_intents=(_intent(),),
+        action_intents=(_intent(project_id),),
         control_preconditions=preconditions,
     )
 
 
-def _capsule() -> TaskCapsule:
+def _capsule(project_id: str | None = "project-a") -> TaskCapsule:
     item = WorkItem(
         id="work-1",
-        project_id="project-a",
+        project_id=project_id,
         profile="software",
         source="local",
         source_ref=None,
@@ -143,7 +144,7 @@ def _capsule() -> TaskCapsule:
     )
     contract = WorkContract(
         id="contract-1",
-        project_id="project-a",
+        project_id=project_id,
         work_id="work-1",
         version=1,
         goal="Implement runtime",
@@ -157,7 +158,7 @@ def _capsule() -> TaskCapsule:
         design_required=False,
     )
     return TaskCapsule(
-        project_id="project-a",
+        project_id=project_id,
         work_id="work-1",
         stage="implement",
         work_item=item,
@@ -171,19 +172,19 @@ def _capsule() -> TaskCapsule:
     )
 
 
-def _capabilities() -> CapabilitySet:
+def _capabilities(project_id: str | None = "project-a") -> CapabilitySet:
     return CapabilitySet(
-        project_id="project-a",
+        project_id=project_id,
         grants=(
             CapabilityGrant(
-                project_id="project-a",
+                project_id=project_id,
                 name="filesystem.write",
                 kind="filesystem",
                 scope={"roots": ["packages/sdk/sagewai/work"]},
                 permissions=("workspace.write",),
             ),
             CapabilityGrant(
-                project_id="project-a",
+                project_id=project_id,
                 name="production.deploy",
                 kind="api",
                 scope={"environment": "production"},
@@ -194,9 +195,9 @@ def _capabilities() -> CapabilitySet:
     )
 
 
-def _result(run_id: str) -> OperatorResult:
+def _result(run_id: str, project_id: str | None = "project-a") -> OperatorResult:
     return OperatorResult(
-        project_id="project-a",
+        project_id=project_id,
         work_id="work-1",
         run_id=run_id,
         status="passed",
@@ -231,7 +232,7 @@ class RecordingRuntime:
             except asyncio.CancelledError:
                 self.cancelled = True
                 raise
-        return _result(request.run_id)
+        return _result(request.run_id, request.project_id)
 
 
 class SequenceControlCheck:
@@ -683,7 +684,11 @@ async def test_cancelled_execution_leaves_durable_running_state_for_retry(
     with pytest.raises(asyncio.CancelledError):
         await execution
 
-    durable = await durability.load_run("work:work-1:implement", "run-killed")
+    durable = await durability.load_run(
+        "work:work-1:implement",
+        "run-killed",
+        project_id="project-a",
+    )
     events = await work_store.read_events("work-1", project_id="project-a")
     assert durable is not None
     assert durable.status is StepStatus.RUNNING
@@ -697,3 +702,32 @@ async def test_cancelled_execution_leaves_durable_running_state_for_retry(
         workspace=None,
     )
     assert retry.status == "passed"
+
+
+@pytest.mark.asyncio
+async def test_completed_operator_runs_with_identical_ids_are_project_isolated(
+    work_store: WorkStore,
+) -> None:
+    durability = InMemoryStore()
+
+    for project_id in ("project-a", "project-b", None, "global"):
+        runtime = RecordingRuntime()
+        request = _request(project_id=project_id, run_id="run-shared")
+        first = await _controller(work_store, durability).run(
+            runtime=runtime,
+            request=request,
+            capsule=_capsule(project_id),
+            capabilities=_capabilities(project_id),
+            workspace=None,
+        )
+        second = await _controller(work_store, durability).run(
+            runtime=runtime,
+            request=request,
+            capsule=_capsule(project_id),
+            capabilities=_capabilities(project_id),
+            workspace=None,
+        )
+
+        assert first == second
+        assert first.project_id == project_id
+        assert runtime.started == 1

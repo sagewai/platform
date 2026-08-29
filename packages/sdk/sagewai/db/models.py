@@ -123,7 +123,7 @@ class WorkflowRunModel(Base):
 
     # ── 001_initial ──────────────────────────────────────────────────────
     id: Mapped[str] = mapped_column(Text, primary_key=True)
-    project_id: Mapped[str] = mapped_column(Text, nullable=False, server_default="default")
+    project_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     workflow_name: Mapped[str] = mapped_column(Text, nullable=False)
     run_id: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")

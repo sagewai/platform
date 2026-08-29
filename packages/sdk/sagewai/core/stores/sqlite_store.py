@@ -28,25 +28,27 @@ from typing import Any
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from sagewai.core.context import resolve_project_id
+from sagewai._project_scope import project_scope_key
 from sagewai.core.state import StepStatus, WorkflowRun, WorkflowStore
 from sagewai.db import factory
 from sagewai.db.dialect import upsert
 from sagewai.db.models import Base, WorkflowRunModel
+from sagewai.db.sqlite_workflow_scope import upgrade_sqlite_workflow_scope
 
 logger = logging.getLogger(__name__)
 
 _TABLE = WorkflowRunModel.__table__
 
 
-def _id(pid: str, workflow_name: str, run_id: str) -> str:
+def _id(project_id: str | None, workflow_name: str, run_id: str) -> str:
     """Return the project-qualified primary key for a workflow run row.
 
-    Format: ``<project_id>:<workflow_name>:<run_id>``.
+    Format: length-prefixed scope and workflow segments followed by the run ID.
     Internal to this store — callers outside this module must not construct
     or parse this key.
     """
-    return f"{pid}:{workflow_name}:{run_id}"
+    scope = project_scope_key(project_id)
+    return f"{len(scope)}:{scope}{len(workflow_name)}:{workflow_name}{run_id}"
 
 
 class SqliteWorkflowStore(WorkflowStore):
@@ -84,6 +86,8 @@ class SqliteWorkflowStore(WorkflowStore):
         if self._engine.dialect.name == "sqlite":
             async with self._engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
+                await conn.run_sync(factory.add_missing_sqlite_columns)
+                await conn.run_sync(upgrade_sqlite_workflow_scope)
 
     async def close(self) -> None:
         """No-op — the factory owns the engine lifecycle."""
@@ -94,8 +98,7 @@ class SqliteWorkflowStore(WorkflowStore):
 
     async def save_run(self, run: WorkflowRun) -> None:
         """Upsert the workflow run into ``workflow_runs``."""
-        pid = resolve_project_id(run.project_id)
-        key = _id(pid, run.workflow_name, run.run_id)
+        key = _id(run.project_id, run.workflow_name, run.run_id)
 
         values: dict[str, Any] = {
             # Primary key / identity
@@ -106,7 +109,7 @@ class SqliteWorkflowStore(WorkflowStore):
             # Full serialised run document — JSONType handles serialisation
             "data": run.to_dict(),
             # Project scoping
-            "project_id": pid,
+            "project_id": run.project_id,
             # Timestamps — always refresh updated_at on every save
             "updated_at": datetime.now(timezone.utc),
             # Typed sandbox / execution columns
@@ -163,10 +166,15 @@ class SqliteWorkflowStore(WorkflowStore):
         async with self._engine.begin() as conn:
             await conn.execute(stmt)
 
-    async def load_run(self, workflow_name: str, run_id: str) -> WorkflowRun | None:
+    async def load_run(
+        self,
+        workflow_name: str,
+        run_id: str,
+        *,
+        project_id: str | None,
+    ) -> WorkflowRun | None:
         """Load a single workflow run by name and ID."""
-        pid = resolve_project_id()
-        key = _id(pid, workflow_name, run_id)
+        key = _id(project_id, workflow_name, run_id)
         stmt = select(_TABLE.c.data).where(_TABLE.c.id == key)
         async with self._engine.connect() as conn:
             row = (await conn.execute(stmt)).fetchone()
@@ -181,13 +189,19 @@ class SqliteWorkflowStore(WorkflowStore):
         self,
         workflow_name: str,
         status: StepStatus | None = None,
+        *,
+        project_id: str | None,
     ) -> list[WorkflowRun]:
         """List runs for a workflow, optionally filtered by status."""
-        pid = resolve_project_id()
+        project_filter = (
+            _TABLE.c.project_id.is_(None)
+            if project_id is None
+            else _TABLE.c.project_id == project_id
+        )
         stmt = (
             select(_TABLE.c.data)
             .where(_TABLE.c.workflow_name == workflow_name)
-            .where(_TABLE.c.project_id == pid)
+            .where(project_filter)
             .order_by(_TABLE.c.created_at.desc())
         )
         if status is not None:
@@ -205,15 +219,22 @@ class SqliteWorkflowStore(WorkflowStore):
         return results
 
     async def recover_stale_runs(
-        self, stale_timeout_seconds: int = 300
+        self,
+        stale_timeout_seconds: int = 300,
+        *,
+        project_id: str | None,
     ) -> list[WorkflowRun]:
         """Return RUNNING runs that haven't had a heartbeat within the timeout."""
-        pid = resolve_project_id()
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_timeout_seconds)
+        project_filter = (
+            _TABLE.c.project_id.is_(None)
+            if project_id is None
+            else _TABLE.c.project_id == project_id
+        )
         stmt = (
             select(_TABLE.c.data)
             .where(_TABLE.c.status == StepStatus.RUNNING.value)
-            .where(_TABLE.c.project_id == pid)
+            .where(project_filter)
             .where(_TABLE.c.updated_at < cutoff)
             .order_by(_TABLE.c.updated_at.asc())
         )
@@ -228,10 +249,15 @@ class SqliteWorkflowStore(WorkflowStore):
             results.append(WorkflowRun.from_dict(data))
         return results
 
-    async def heartbeat(self, workflow_name: str, run_id: str) -> None:
+    async def heartbeat(
+        self,
+        workflow_name: str,
+        run_id: str,
+        *,
+        project_id: str | None,
+    ) -> None:
         """Refresh updated_at to prevent stale detection."""
-        pid = resolve_project_id()
-        key = _id(pid, workflow_name, run_id)
+        key = _id(project_id, workflow_name, run_id)
         stmt = (
             update(_TABLE)
             .where(_TABLE.c.id == key)

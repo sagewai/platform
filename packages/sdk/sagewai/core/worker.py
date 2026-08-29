@@ -630,6 +630,7 @@ class WorkflowWorker:
                 wf_run.workflow_name,
                 wf_run.run_id,
                 msg,
+                project_id=wf_run.project_id,
             )
             return
 
@@ -645,6 +646,7 @@ class WorkflowWorker:
                 wf_run.workflow_name,
                 wf_run.run_id,
                 error_msg,
+                project_id=wf_run.project_id,
             )
             return
 
@@ -660,7 +662,9 @@ class WorkflowWorker:
 
         try:
             input_data: dict[str, Any] = getattr(wf_run, "_input", {}) or {}
-            result = await workflow.run(run_id=wf_run.run_id, **input_data)
+            result = await workflow.run(
+                run_id=wf_run.run_id, project_id=wf_run.project_id, **input_data
+            )
 
             # Sealed-v directive integration — fires once after the run finishes all
             # steps (the DurableWorkflow step loop lives in state.py, not here, so
@@ -770,6 +774,7 @@ class WorkflowWorker:
                 wf_run.workflow_name,
                 wf_run.run_id,
                 output=output,
+                project_id=wf_run.project_id,
             )
             logger.info(
                 "Workflow %s run %s completed",
@@ -788,6 +793,7 @@ class WorkflowWorker:
                 wf_run.workflow_name,
                 wf_run.run_id,
                 error_detail,
+                project_id=wf_run.project_id,
             )
         finally:
             _worker_credentials.reset(cred_token)
@@ -810,7 +816,11 @@ class WorkflowWorker:
         while True:
             await asyncio.sleep(self._heartbeat_interval)
             try:
-                await self._store.heartbeat(wf_run.workflow_name, wf_run.run_id)
+                await self._store.heartbeat(
+                    wf_run.workflow_name,
+                    wf_run.run_id,
+                    project_id=wf_run.project_id,
+                )
                 # Also update the worker's own heartbeat in the
                 # workers table for load balancer visibility
                 if hasattr(self._store, "worker_heartbeat"):

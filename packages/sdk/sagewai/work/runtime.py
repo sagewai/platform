@@ -126,6 +126,13 @@ class OperatorResult(BaseModel):
     output_tokens: int | None = None
     profile_context: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def validate_action_results(self) -> OperatorResult:
+        for result in self.action_results:
+            if result.project_id != self.project_id:
+                raise ValueError("action result belongs to a different project")
+        return self
+
 
 @runtime_checkable
 class Workspace(Protocol):

@@ -379,6 +379,23 @@ class TaskCapsule(BaseModel):
     prior_result_refs: tuple[str, ...]
     profile_context: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def validate_nested_ownership(self) -> TaskCapsule:
+        if self.work_item.project_id != self.project_id:
+            raise ValueError("work item belongs to a different project")
+        if self.work_item.id != self.work_id:
+            raise ValueError("work item belongs to different work")
+        if self.contract.project_id != self.project_id:
+            raise ValueError("contract belongs to a different project")
+        if self.contract.work_id != self.work_id:
+            raise ValueError("contract belongs to different work")
+        for item in self.knowledge_items:
+            if item.project_id != self.project_id:
+                raise ValueError("knowledge item belongs to a different project")
+            if item.work_id not in {None, self.work_id}:
+                raise ValueError("knowledge item belongs to different work")
+        return self
+
 
 class WorkRecord(BaseModel):
     """Mutable current-state projection derived from Work events."""

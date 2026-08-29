@@ -47,6 +47,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
+from sagewai._project_scope import project_scope_key
 from sagewai.artifacts.models import ArtifactDestination
 from sagewai.errors import SagewaiWorkflowError
 from sagewai.sandbox import image_manifest
@@ -324,22 +325,43 @@ class WorkflowStore:
         """Persist the workflow run state."""
         raise NotImplementedError
 
-    async def load_run(self, workflow_name: str, run_id: str) -> WorkflowRun | None:
-        """Load a workflow run by ID. Returns None if not found."""
+    async def load_run(
+        self,
+        workflow_name: str,
+        run_id: str,
+        *,
+        project_id: str | None,
+    ) -> WorkflowRun | None:
+        """Load a workflow run from one explicit project scope."""
         raise NotImplementedError
 
     async def list_runs(
-        self, workflow_name: str, status: StepStatus | None = None
+        self,
+        workflow_name: str,
+        *,
+        project_id: str | None,
+        status: StepStatus | None = None,
     ) -> list[WorkflowRun]:
-        """List runs for a workflow, optionally filtered by status."""
+        """List project-scoped runs, optionally filtered by status."""
         raise NotImplementedError
 
-    async def recover_stale_runs(self, stale_timeout_seconds: int = 300) -> list[WorkflowRun]:
-        """Find RUNNING workflows that haven't been updated within the timeout."""
+    async def recover_stale_runs(
+        self,
+        *,
+        project_id: str | None,
+        stale_timeout_seconds: int = 300,
+    ) -> list[WorkflowRun]:
+        """Find stale RUNNING workflows within one explicit project scope."""
         return []
 
-    async def heartbeat(self, workflow_name: str, run_id: str) -> None:
-        """Refresh updated_at to prevent stale detection."""
+    async def heartbeat(
+        self,
+        workflow_name: str,
+        run_id: str,
+        *,
+        project_id: str | None,
+    ) -> None:
+        """Refresh updated_at for a run in one explicit project scope."""
         pass
 
 
@@ -375,37 +397,74 @@ class InMemoryStore(WorkflowStore):
     """In-memory workflow store for testing and development."""
 
     def __init__(self) -> None:
-        self._runs: dict[str, WorkflowRun] = {}
-        self._updated_at: dict[str, float] = {}
+        self._runs: dict[tuple[str, str, str], WorkflowRun] = {}
+        self._updated_at: dict[tuple[str, str, str], float] = {}
+
+    @staticmethod
+    def _key(
+        workflow_name: str,
+        run_id: str,
+        project_id: str | None,
+    ) -> tuple[str, str, str]:
+        return project_scope_key(project_id), workflow_name, run_id
 
     async def save_run(self, run: WorkflowRun) -> None:
-        key = f"{run.workflow_name}:{run.run_id}"
+        key = self._key(run.workflow_name, run.run_id, run.project_id)
         self._runs[key] = run
         self._updated_at[key] = time.time()
 
-    async def load_run(self, workflow_name: str, run_id: str) -> WorkflowRun | None:
-        return self._runs.get(f"{workflow_name}:{run_id}")
+    async def load_run(
+        self,
+        workflow_name: str,
+        run_id: str,
+        *,
+        project_id: str | None,
+    ) -> WorkflowRun | None:
+        return self._runs.get(self._key(workflow_name, run_id, project_id))
 
     async def list_runs(
-        self, workflow_name: str, status: StepStatus | None = None
+        self,
+        workflow_name: str,
+        *,
+        project_id: str | None,
+        status: StepStatus | None = None,
     ) -> list[WorkflowRun]:
-        runs = [r for r in self._runs.values() if r.workflow_name == workflow_name]
+        scope_key = project_scope_key(project_id)
+        runs = [
+            run
+            for (stored_scope, stored_workflow, _), run in self._runs.items()
+            if stored_scope == scope_key and stored_workflow == workflow_name
+        ]
         if status is not None:
-            runs = [r for r in runs if r.status == status]
+            runs = [run for run in runs if run.status == status]
         return runs
 
-    async def recover_stale_runs(self, stale_timeout_seconds: int = 300) -> list[WorkflowRun]:
-        """Find RUNNING workflows that haven't been updated within the timeout."""
+    async def recover_stale_runs(
+        self,
+        *,
+        project_id: str | None,
+        stale_timeout_seconds: int = 300,
+    ) -> list[WorkflowRun]:
+        """Find stale RUNNING workflows within one explicit project scope."""
+        scope_key = project_scope_key(project_id)
         cutoff = time.time() - stale_timeout_seconds
         return [
-            r
-            for key, r in self._runs.items()
-            if r.status == StepStatus.RUNNING and self._updated_at.get(key, 0) < cutoff
+            run
+            for key, run in self._runs.items()
+            if key[0] == scope_key
+            and run.status == StepStatus.RUNNING
+            and self._updated_at.get(key, 0) < cutoff
         ]
 
-    async def heartbeat(self, workflow_name: str, run_id: str) -> None:
-        """Refresh updated_at to prevent stale detection."""
-        key = f"{workflow_name}:{run_id}"
+    async def heartbeat(
+        self,
+        workflow_name: str,
+        run_id: str,
+        *,
+        project_id: str | None,
+    ) -> None:
+        """Refresh updated_at for a run in one explicit project scope."""
+        key = self._key(workflow_name, run_id, project_id)
         if key in self._runs:
             self._updated_at[key] = time.time()
 
@@ -483,6 +542,8 @@ async def _snapshot_secret_provenance(
     return hashes, versions, revs
 
 
+_WORKFLOW_PROJECT_UNSET = object()
+
 class DurableWorkflow:
     """Durable workflow with step-level checkpointing and recovery.
 
@@ -495,6 +556,8 @@ class DurableWorkflow:
         Workflow name (used as storage key).
     store:
         Workflow state store. Defaults to InMemoryStore.
+    project_id:
+        Explicit project scope. ``None`` is the global scope.
     """
 
     def __init__(
@@ -502,8 +565,11 @@ class DurableWorkflow:
         name: str,
         *,
         store: WorkflowStore | None = None,
+        project_id: str | None = None,
     ) -> None:
+        project_scope_key(project_id)
         self.name = name
+        self.project_id = project_id
         self._store = store or _default_store or InMemoryStore()
         self._steps: list[_StepDef] = []
         self._current_run: WorkflowRun | None = None
@@ -539,21 +605,35 @@ class DurableWorkflow:
 
         return decorator
 
-    async def run(self, run_id: str | None = None, **kwargs: Any) -> Any:
+    async def run(
+        self,
+        run_id: str | None = None,
+        *,
+        project_id: str | None | object = _WORKFLOW_PROJECT_UNSET,
+        **kwargs: Any,
+    ) -> Any:
         """Execute the workflow, resuming from checkpoint if available.
 
         Args:
             run_id: Optional run ID for resuming. Auto-generated if not provided.
+            project_id: Per-call project scope; defaults to this workflow's bound scope.
             **kwargs: Input arguments passed to the first step.
 
         Returns:
             Output from the last step.
         """
+        scope = self.project_id if project_id is _WORKFLOW_PROJECT_UNSET else project_id
+        if scope is not None and not isinstance(scope, str):
+            raise TypeError("project_id must be a string or None")
+        project_scope_key(scope)
+
         if run_id is None:
             run_id = _generate_run_id(self.name, kwargs)
 
         # Try to resume from checkpoint
-        wf_run = await self._store.load_run(self.name, run_id)
+        wf_run = await self._store.load_run(
+            self.name, run_id, project_id=scope
+        )
         if wf_run is None:
             from sagewai.sealed.replay import compute_code_hash
             wf_run = WorkflowRun(
@@ -561,6 +641,7 @@ class DurableWorkflow:
                 run_id=run_id,
                 input_data=kwargs,
                 started_at=time.time(),
+                project_id=scope,
                 code_hash=compute_code_hash(self),
             )
 
@@ -736,11 +817,11 @@ class DurableWorkflow:
 
     async def get_run(self, run_id: str) -> WorkflowRun | None:
         """Get a workflow run by ID."""
-        return await self._store.load_run(self.name, run_id)
+        return await self._store.load_run(self.name, run_id, project_id=self.project_id)
 
     async def list_runs(self, status: StepStatus | None = None) -> list[WorkflowRun]:
         """List workflow runs, optionally filtered by status."""
-        return await self._store.list_runs(self.name, status)
+        return await self._store.list_runs(self.name, project_id=self.project_id, status=status)
 
     def get_signal(self, signal_name: str) -> Any | None:
         """Check if signal data exists (called inside a step)."""
@@ -750,7 +831,9 @@ class DurableWorkflow:
 
     async def signal(self, run_id: str, signal_name: str, data: Any) -> None:
         """Inject external data into a waiting workflow."""
-        wf_run = await self._store.load_run(self.name, run_id)
+        wf_run = await self._store.load_run(
+            self.name, run_id, project_id=self.project_id
+        )
         if wf_run is None:
             raise ValueError(f"No run found: {self.name}:{run_id}")
         wf_run.signals[signal_name] = data
@@ -780,8 +863,10 @@ class DurableWorkflow:
                 row = await self._store._pool.fetchrow(
                     "SELECT 1 FROM sealed_audit_events "
                     "WHERE run_id = $1 AND event_type = 'credential.requested' "
+                    "AND project_id IS NOT DISTINCT FROM $2 "
                     "LIMIT 1",
                     original.run_id,
+                    original.project_id,
                 )
                 return row is not None
         except Exception:
@@ -792,6 +877,7 @@ class DurableWorkflow:
         self,
         original_run_id: str,
         *,
+        project_id: str | None,
         from_step: int = 0,
         actor_id: str | None = None,
     ) -> str:
@@ -813,7 +899,9 @@ class DurableWorkflow:
             compute_code_hash,
         )
 
-        original = await self._store.load_run(self.name, original_run_id)
+        original = await self._store.load_run(
+            self.name, original_run_id, project_id=project_id
+        )
         if original is None:
             raise ValueError(
                 f"Run {original_run_id!r} not found for workflow {self.name!r}"
@@ -982,7 +1070,7 @@ class DurableWorkflow:
         if hasattr(self._store, "get_project_defaults"):
             try:
                 project_defaults = await self._store.get_project_defaults(
-                    getattr(self, "project_id", None)
+                    self.project_id
                 )
             except Exception:
                 project_defaults = None
@@ -1028,7 +1116,7 @@ class DurableWorkflow:
                 audit_writer = AuditWriter(self._store)
                 audit_context = {
                     "workflow_name": self.name,
-                    "project_id": getattr(self, "project_id", None),
+                    "project_id": self.project_id,
                 }
             else:
                 sealed_levels = None  # skip resolve_security_profile altogether
@@ -1057,7 +1145,7 @@ class DurableWorkflow:
 
             admin_artifact_dest = AdminStateFile().get_workflow_artifact_destination(
                 self.name,
-                project_id=getattr(self, "project_id", None),
+                project_id=self.project_id,
             )
         except Exception as exc:
             logger.debug("Artifact destination admin override skipped: %s", exc)
@@ -1123,6 +1211,7 @@ class DurableWorkflow:
             run_id=run_id,
             input_data=input_data,
             started_at=time.time(),
+            project_id=self.project_id,
             execution_mode=execution_mode,
             requires_sandbox_mode=requirements.sandbox_mode,
             requires_image=requirements.image,

@@ -112,6 +112,7 @@ class TestWorkflowWorker:
         pending_run = WorkflowRun(
             workflow_name="test-wf",
             run_id="run-1",
+            project_id="alpha",
         )
         pending_run._input = {"msg": "World"}
 
@@ -139,6 +140,7 @@ class TestWorkflowWorker:
             workflow_registry={"test-wf": wf},
             max_concurrent=2,
             poll_interval=0.05,
+            project_id="alpha",
         )
 
         # Run worker briefly then stop
@@ -150,6 +152,8 @@ class TestWorkflowWorker:
 
         # The worker should have tried to complete the run
         assert store.complete_run.called or store.save_run.called
+        if store.complete_run.called:
+            assert store.complete_run.await_args.kwargs["project_id"] == "alpha"
 
     @pytest.mark.asyncio
     async def test_worker_unknown_workflow(self):
@@ -159,6 +163,7 @@ class TestWorkflowWorker:
         pending_run = WorkflowRun(
             workflow_name="nonexistent-wf",
             run_id="run-unk",
+            project_id="alpha",
         )
 
         call_count = 0
@@ -177,6 +182,7 @@ class TestWorkflowWorker:
             workflow_registry={},
             max_concurrent=2,
             poll_interval=0.05,
+            project_id="alpha",
         )
 
         async def stop_soon():
@@ -186,7 +192,8 @@ class TestWorkflowWorker:
         await asyncio.gather(worker.start(), stop_soon())
 
         store.fail_run.assert_called_once_with(
-            "nonexistent-wf", "run-unk", "Unknown workflow: nonexistent-wf"
+            "nonexistent-wf", "run-unk", "Unknown workflow: nonexistent-wf",
+            project_id="alpha",
         )
 
     @pytest.mark.asyncio
@@ -345,13 +352,14 @@ class TestWorkflowMonitor:
         )
 
         monitor = WorkflowMonitor(store=store)
-        detail = await monitor.get_execution("r1")
+        detail = await monitor.get_execution("r1", project_id="alpha")
 
         assert detail is not None
         assert detail.run_id == "r1"
         assert len(detail.steps) == 1
         assert detail.steps[0].step_name == "step1"
         assert detail.steps[0].duration_seconds == 1.5
+        store.get_run_by_run_id.assert_awaited_once_with("r1", project_id="alpha")
 
     @pytest.mark.asyncio
     async def test_monitor_get_execution_not_found(self):
@@ -359,7 +367,7 @@ class TestWorkflowMonitor:
         store = AsyncMock()
         store.get_run_by_run_id = AsyncMock(return_value=None)
         monitor = WorkflowMonitor(store=store)
-        assert await monitor.get_execution("missing") is None
+        assert await monitor.get_execution("missing", project_id="alpha") is None
 
     @pytest.mark.asyncio
     async def test_monitor_queue_stats(self):
@@ -411,10 +419,12 @@ class TestWorkflowMonitor:
         store.enqueue_run = AsyncMock()
 
         monitor = WorkflowMonitor(store=store)
-        new_id = await monitor.retry_execution("r-fail")
+        new_id = await monitor.retry_execution("r-fail", project_id="alpha")
 
         assert new_id == "r-fail-retry-1"
         store.enqueue_run.assert_called_once()
+        assert store.enqueue_run.await_args.kwargs["project_id"] == "alpha"
+        assert store.enqueue_run.await_args.args[0].project_id == "alpha"
 
     @pytest.mark.asyncio
     async def test_monitor_retry_non_failed_raises(self):
@@ -430,7 +440,7 @@ class TestWorkflowMonitor:
         monitor = WorkflowMonitor(store=store)
 
         with pytest.raises(ValueError, match="Can only retry failed"):
-            await monitor.retry_execution("r-ok")
+            await monitor.retry_execution("r-ok", project_id="alpha")
 
     @pytest.mark.asyncio
     async def test_monitor_terminate_execution(self):
@@ -446,8 +456,11 @@ class TestWorkflowMonitor:
         store.cancel_run = AsyncMock(return_value=True)
 
         monitor = WorkflowMonitor(store=store)
-        result = await monitor.terminate_execution("r-stuck")
+        result = await monitor.terminate_execution("r-stuck", project_id="alpha")
         assert result is True
+        store.cancel_run.assert_awaited_once_with(
+            "wf1", "r-stuck", project_id="alpha",
+        )
 
     @pytest.mark.asyncio
     async def test_monitor_terminate_not_found(self):
@@ -457,7 +470,7 @@ class TestWorkflowMonitor:
         store.cancel_run = AsyncMock()
 
         monitor = WorkflowMonitor(store=store)
-        result = await monitor.terminate_execution("missing")
+        result = await monitor.terminate_execution("missing", project_id="alpha")
         assert result is False
 
 
@@ -500,12 +513,15 @@ class TestDeadLetterQueue:
         dlq = DeadLetterQueue(store=store)
 
         # Move to DLQ
-        entry_id = await dlq.move_to_dlq("wf1", "r-fail", "Step failed")
+        entry_id = await dlq.move_to_dlq("wf1", "r-fail", "Step failed", project_id="global")
         assert entry_id == 42
         mock_pool.fetchval.assert_called_once()
+        store.get_run_by_run_id.assert_awaited_once_with(
+            "r-fail", project_id="global"
+        )
 
         # List entries
-        entries = await dlq.list_entries()
+        entries = await dlq.list_entries(project_id="global")
         assert len(entries) == 1
         assert entries[0].run_id == "r-fail"
         assert entries[0].error == "Step failed"
@@ -519,7 +535,7 @@ class TestDeadLetterQueue:
 
         dlq = DeadLetterQueue(store=store)
         with pytest.raises(ValueError, match="Run not found"):
-            await dlq.move_to_dlq("wf1", "missing", "error")
+            await dlq.move_to_dlq("wf1", "missing", "error", project_id="global")
 
     @pytest.mark.asyncio
     async def test_dlq_retry(self):
@@ -544,10 +560,12 @@ class TestDeadLetterQueue:
         store.enqueue_run = AsyncMock()
 
         dlq = DeadLetterQueue(store=store)
-        new_id = await dlq.retry("r-fail")
+        new_id = await dlq.retry("r-fail", project_id="global")
 
         assert new_id == "r-fail-retry-1"
         store.enqueue_run.assert_called_once()
+        assert store.enqueue_run.await_args.kwargs["project_id"] == "global"
+        assert store.enqueue_run.await_args.args[0].project_id == "global"
         # Verify retry_count was incremented
         mock_pool.execute.assert_called_once()
 
@@ -562,7 +580,7 @@ class TestDeadLetterQueue:
 
         dlq = DeadLetterQueue(store=store)
         with pytest.raises(ValueError, match="DLQ entry not found"):
-            await dlq.retry("missing")
+            await dlq.retry("missing", project_id="global")
 
     @pytest.mark.asyncio
     async def test_dlq_discard(self):
@@ -574,7 +592,7 @@ class TestDeadLetterQueue:
         store._pool = mock_pool
 
         dlq = DeadLetterQueue(store=store)
-        result = await dlq.discard("r-fail")
+        result = await dlq.discard("r-fail", project_id="global")
         assert result is True
 
     @pytest.mark.asyncio
@@ -587,7 +605,7 @@ class TestDeadLetterQueue:
         store._pool = mock_pool
 
         dlq = DeadLetterQueue(store=store)
-        assert await dlq.count() == 7
+        assert await dlq.count(project_id="global") == 7
 
     @pytest.mark.asyncio
     async def test_dlq_list_filtered_by_workflow(self):
@@ -599,7 +617,7 @@ class TestDeadLetterQueue:
         store._pool = mock_pool
 
         dlq = DeadLetterQueue(store=store)
-        entries = await dlq.list_entries(workflow_name="wf1")
+        entries = await dlq.list_entries(workflow_name="wf1", project_id="global")
         assert entries == []
 
         # Should have passed workflow_name as $3
@@ -896,7 +914,7 @@ class TestApprovalGate:
             await wf.run(run_id="gate-1", content="draft article")
 
         # Verify run is in WAITING state
-        run = await store.load_run("approval-test", "gate-1")
+        run = await store.load_run("approval-test", "gate-1", project_id=None)
         assert run is not None
         assert run.status == StepStatus.WAITING
 
@@ -982,6 +1000,7 @@ class TestWorkflowSupervisor:
             store=store,
             check_interval=0.05,
             stale_timeout=300,
+            project_id="alpha",
         )
 
         async def stop_soon():
@@ -1011,11 +1030,14 @@ class TestWorkflowSupervisor:
         supervisor = WorkflowSupervisor(
             store=store,
             on_stale_detected=on_stale,
+            project_id="alpha",
         )
 
         await supervisor.run_once()
 
-        store.reset_stale_to_pending.assert_called_once_with(300)
+        store.reset_stale_to_pending.assert_called_once_with(
+            stale_timeout_seconds=300, project_id="alpha"
+        )
         assert stale_counts == [3]
 
     @pytest.mark.asyncio
@@ -1023,7 +1045,7 @@ class TestWorkflowSupervisor:
         """Supervisor handles stores without reset_stale_to_pending."""
         store = MagicMock(spec=[])  # no methods
 
-        supervisor = WorkflowSupervisor(store=store)
+        supervisor = WorkflowSupervisor(store=store, project_id="alpha")
         # Should not raise
         await supervisor.run_once()
 
@@ -1039,6 +1061,7 @@ class TestWorkflowSupervisor:
         supervisor = WorkflowSupervisor(
             store=store,
             on_stale_detected=bad_callback,
+            project_id="alpha",
         )
 
         # Should not raise despite callback failure
@@ -1051,7 +1074,8 @@ class TestWorkflowSupervisor:
         store.reset_stale_to_pending = AsyncMock(return_value=0)
 
         supervisor = WorkflowSupervisor(
-            store=store, check_interval=0.05
+            store=store, check_interval=0.05,
+            project_id="alpha",
         )
 
         assert not supervisor.is_running
@@ -1073,3 +1097,80 @@ class TestWorkflowSupervisor:
 
         await asyncio.gather(supervisor.start(), verify_and_stop())
         assert not supervisor.is_running
+
+
+@pytest.mark.asyncio
+async def test_monitor_timeline_uses_explicit_project_scope():
+    store = AsyncMock()
+    store.list_events = AsyncMock(
+        return_value=[
+            {
+                "id": 1,
+                "event_type": "started",
+                "data": {},
+                "created_at": "2026-01-01",
+            }
+        ]
+    )
+
+    events = await WorkflowMonitor(store=store).get_execution_timeline(
+        "same-run", project_id="global"
+    )
+
+    assert [event.event_type for event in events] == ["started"]
+    store.list_events.assert_awaited_once_with(
+        "same-run", project_id="global"
+    )
+
+
+@pytest.mark.asyncio
+async def test_monitor_signal_uses_one_explicit_project_scope():
+    run = WorkflowRun(
+        workflow_name="wf", run_id="same-run", project_id="alpha",
+    )
+    store = AsyncMock()
+    store.get_run_by_run_id = AsyncMock(
+        return_value={"workflow_name": "wf", "run_id": "same-run"}
+    )
+    store.load_run = AsyncMock(return_value=run)
+    store.save_run = AsyncMock()
+
+    delivered = await WorkflowMonitor(store=store).signal_execution(
+        "same-run", "approved", {"ok": True}, project_id="alpha",
+    )
+
+    assert delivered is True
+    assert run.project_id == "alpha"
+    assert run.signals == {"approved": {"ok": True}}
+    store.get_run_by_run_id.assert_awaited_once_with(
+        "same-run", project_id="alpha",
+    )
+    store.load_run.assert_awaited_once_with(
+        "wf", "same-run", project_id="alpha",
+    )
+
+
+@pytest.mark.asyncio
+async def test_worker_heartbeat_uses_claimed_run_project_scope():
+    store = AsyncMock()
+    worker = WorkflowWorker(
+        store=store,
+        workflow_registry={},
+        heartbeat_interval=0.01,
+        project_id="alpha",
+    )
+    run = WorkflowRun(
+        workflow_name="wf", run_id="same-run", project_id="alpha"
+    )
+
+    heartbeat = asyncio.create_task(worker._heartbeat_loop(run))
+    await asyncio.sleep(0.025)
+    heartbeat.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await heartbeat
+
+    assert store.heartbeat.await_count >= 1
+    assert all(
+        call.kwargs == {"project_id": "alpha"}
+        for call in store.heartbeat.await_args_list
+    )

@@ -360,3 +360,84 @@ async def test_compiler_rejects_explicit_artifact_from_different_project(
             stage="review",
             referenced_artifacts=(other_project_artifact,),
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "nested_field", "nested_value", "message"),
+    [
+        ("work_item", "project_id", None, "work item belongs to a different project"),
+        ("work_item", "id", "work-2", "work item belongs to different work"),
+        ("contract", "project_id", None, "contract belongs to a different project"),
+        ("contract", "work_id", "work-2", "contract belongs to different work"),
+    ],
+)
+def test_task_capsule_rejects_nested_work_ownership_mismatch(
+    field: str,
+    nested_field: str,
+    nested_value: str | None,
+    message: str,
+) -> None:
+    values = TaskCapsule(
+        project_id="project-a",
+        work_id="work-1",
+        stage="implement",
+        work_item=_work_item(),
+        contract=_contract(),
+        knowledge_refs=(),
+        knowledge_items=(),
+        knowledge_items_considered=0,
+        artifact_bytes_referenced=0,
+        open_assumption_ids=(),
+        prior_result_refs=(),
+    ).model_dump()
+    values[field][nested_field] = nested_value
+
+    with pytest.raises(ValueError, match=message):
+        TaskCapsule.model_validate(values)
+
+
+@pytest.mark.parametrize(
+    ("capsule_project", "item_project"),
+    [("project-a", None), (None, "global")],
+)
+def test_task_capsule_rejects_nested_knowledge_from_different_project(
+    capsule_project: str | None,
+    item_project: str | None,
+) -> None:
+    values = TaskCapsule(
+        project_id=capsule_project,
+        work_id="work-1",
+        stage="implement",
+        work_item=_work_item(project_id=capsule_project),
+        contract=_contract(project_id=capsule_project),
+        knowledge_refs=("finding-1",),
+        knowledge_items=(_knowledge("finding-1", "Scoped finding", project_id=capsule_project),),
+        knowledge_items_considered=1,
+        artifact_bytes_referenced=0,
+        open_assumption_ids=(),
+        prior_result_refs=(),
+    ).model_dump()
+    values["knowledge_items"][0]["project_id"] = item_project
+
+    with pytest.raises(ValueError, match="knowledge item belongs to a different project"):
+        TaskCapsule.model_validate(values)
+
+
+def test_task_capsule_rejects_nested_knowledge_from_different_work() -> None:
+    values = TaskCapsule(
+        project_id="project-a",
+        work_id="work-1",
+        stage="implement",
+        work_item=_work_item(),
+        contract=_contract(),
+        knowledge_refs=("finding-1",),
+        knowledge_items=(_knowledge("finding-1", "Scoped finding"),),
+        knowledge_items_considered=1,
+        artifact_bytes_referenced=0,
+        open_assumption_ids=(),
+        prior_result_refs=(),
+    ).model_dump()
+    values["knowledge_items"][0]["work_id"] = "work-2"
+
+    with pytest.raises(ValueError, match="knowledge item belongs to different work"):
+        TaskCapsule.model_validate(values)

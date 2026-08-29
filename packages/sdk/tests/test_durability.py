@@ -136,7 +136,7 @@ async def test_runner_sequential_checkpoints_saved():
     await runner.run_sequential([a, b], "hello", run_id="run-1")
 
     workflow_name = "sequential:a-b"
-    wf_run = await store.load_run(workflow_name, "run-1")
+    wf_run = await store.load_run(workflow_name, "run-1", project_id=None)
     assert wf_run is not None
     assert wf_run.status == StepStatus.COMPLETED
     assert len(wf_run.steps) == 2
@@ -220,7 +220,7 @@ async def test_runner_parallel_resume():
     await runner1.run_parallel([a], "hello", run_id="par-3")
 
     # Verify checkpoint
-    wf_run = await store.load_run("parallel:a", "par-3")
+    wf_run = await store.load_run("parallel:a", "par-3", project_id=None)
     assert wf_run is not None
     assert wf_run.status == StepStatus.COMPLETED
 
@@ -499,3 +499,31 @@ def test_run_record_checkpoint_field():
 
     rec2 = RunRecord(run_id="r2", agent_name="scout", checkpoint_run_id="wf-run-1")
     assert rec2.checkpoint_run_id == "wf-run-1"
+
+
+@pytest.mark.asyncio
+async def test_runner_isolates_same_workflow_and_run_id_by_project():
+    """Checkpoint identity includes the explicit project scope."""
+    store = InMemoryStore()
+    alpha = DurableRunner(store=store, project_id="alpha")
+    named_global = DurableRunner(store=store, project_id="global")
+
+    alpha_agent = EchoAgent(prefix="alpha:", name="same", model="mock")
+    global_agent = EchoAgent(prefix="global:", name="same", model="mock")
+
+    assert await alpha.run_sequential(
+        [alpha_agent], "input", run_id="same-run"
+    ) == "alpha:input"
+    assert await named_global.run_sequential(
+        [global_agent], "input", run_id="same-run"
+    ) == "global:input"
+
+    alpha_run = await alpha.get_checkpoint("sequential:same", "same-run")
+    global_run = await named_global.get_checkpoint("sequential:same", "same-run")
+    global_scope_run = await store.load_run(
+        "sequential:same", "same-run", project_id=None
+    )
+
+    assert alpha_run is not None and alpha_run.project_id == "alpha"
+    assert global_run is not None and global_run.project_id == "global"
+    assert global_scope_run is None

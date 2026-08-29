@@ -96,7 +96,7 @@ async def test_get_workflow_store_sqlite_is_initialized():
     from sagewai.core.state import WorkflowRun
     run = WorkflowRun(workflow_name="test-wf", run_id="run-sqlite-init")
     await store.save_run(run)
-    loaded = await store.load_run("test-wf", "run-sqlite-init")
+    loaded = await store.load_run("test-wf", "run-sqlite-init", project_id=None)
     assert loaded is not None
     assert loaded.run_id == "run-sqlite-init"
 
@@ -135,7 +135,9 @@ async def test_get_workflow_store_postgres_is_initialized(monkeypatch):
 
         # Confirm load_run returns None gracefully for a non-existent run
         # (proves the pool can reach the workflow_runs table without crashing).
-        loaded = await store.load_run("nonexistent-wf", "nonexistent-run")
+        loaded = await store.load_run(
+            "nonexistent-wf", "nonexistent-run", project_id=None
+        )
         assert loaded is None
     finally:
         if store is not None:

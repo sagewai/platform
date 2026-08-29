@@ -136,7 +136,9 @@ async def test_all_state_survives_restart():
     )
 
     # 3. Workflow checkpoint persisted
-    loaded = await SqliteWorkflowStore(engine=eng2).load_run("pipeline", "r-durable")
+    loaded = await SqliteWorkflowStore(engine=eng2).load_run(
+        "pipeline", "r-durable", project_id=None
+    )
     assert loaded is not None, "Workflow checkpoint lost across restart"
     assert loaded.run_id == "r-durable", (
         f"Loaded wrong run; expected 'r-durable', got {loaded.run_id!r}"

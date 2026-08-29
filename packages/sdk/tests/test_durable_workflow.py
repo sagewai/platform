@@ -99,14 +99,14 @@ class TestInMemoryStore:
         store = InMemoryStore()
         run = WorkflowRun(workflow_name="wf", run_id="r1")
         await store.save_run(run)
-        loaded = await store.load_run("wf", "r1")
+        loaded = await store.load_run("wf", "r1", project_id=None)
         assert loaded is not None
         assert loaded.run_id == "r1"
 
     @pytest.mark.asyncio
     async def test_load_not_found(self):
         store = InMemoryStore()
-        assert await store.load_run("wf", "nonexistent") is None
+        assert await store.load_run("wf", "nonexistent", project_id=None) is None
 
     @pytest.mark.asyncio
     async def test_list_runs(self):
@@ -118,10 +118,12 @@ class TestInMemoryStore:
         await store.save_run(r2)
         await store.save_run(r3)
 
-        all_wf = await store.list_runs("wf")
+        all_wf = await store.list_runs("wf", project_id=None)
         assert len(all_wf) == 2
 
-        completed = await store.list_runs("wf", status=StepStatus.COMPLETED)
+        completed = await store.list_runs(
+            "wf", project_id=None, status=StepStatus.COMPLETED
+        )
         assert len(completed) == 1
         assert completed[0].run_id == "r1"
 
@@ -209,7 +211,7 @@ class TestDurableWorkflowBasic:
         result = await wf.run(x="test")
         assert result == "done: test"
 
-        runs = await store.list_runs("tracked")
+        runs = await store.list_runs("tracked", project_id=None)
         assert len(runs) == 1
         assert runs[0].status == StepStatus.COMPLETED
         assert runs[0].output_data == "done: test"
@@ -293,7 +295,7 @@ class TestCheckpointRecovery:
         assert "step2_fail" in call_log
 
         # Verify checkpoint was saved
-        saved = await store.load_run("resume-wf", "run-1")
+        saved = await store.load_run("resume-wf", "run-1", project_id=None)
         assert saved is not None
         assert saved.steps["step1"].status == StepStatus.COMPLETED
 
@@ -390,7 +392,7 @@ class TestDurableWorkflowSignals:
             await wf.run(run_id="sig-1", topic="test")
 
         # Verify step saved as WAITING
-        run = await store.load_run("signal-test", "sig-1")
+        run = await store.load_run("signal-test", "sig-1", project_id=None)
         assert run is not None
         assert run.status == StepStatus.WAITING
         assert run.steps["check"].status == StepStatus.WAITING
@@ -518,9 +520,11 @@ class TestRecoverStaleRuns:
         await store.save_run(run)
 
         # Mark run as stale by backdating updated_at
-        store._updated_at["w:stale-1"] = time.time() - 600
+        store._updated_at[("g:", "w", "stale-1")] = time.time() - 600
 
-        stale = await store.recover_stale_runs(stale_timeout_seconds=300)
+        stale = await store.recover_stale_runs(
+            project_id=None, stale_timeout_seconds=300
+        )
         assert len(stale) == 1
         assert stale[0].run_id == "stale-1"
 
@@ -531,9 +535,11 @@ class TestRecoverStaleRuns:
         store = InMemoryStore()
         run = WorkflowRun(workflow_name="w", run_id="wait-1", status=StepStatus.WAITING)
         await store.save_run(run)
-        store._updated_at["w:wait-1"] = time.time() - 600
+        store._updated_at[("g:", "w", "wait-1")] = time.time() - 600
 
-        stale = await store.recover_stale_runs(stale_timeout_seconds=300)
+        stale = await store.recover_stale_runs(
+            project_id=None, stale_timeout_seconds=300
+        )
         assert len(stale) == 0
 
     @pytest.mark.asyncio
@@ -543,11 +549,13 @@ class TestRecoverStaleRuns:
         store = InMemoryStore()
         run = WorkflowRun(workflow_name="w", run_id="fresh-1", status=StepStatus.RUNNING)
         await store.save_run(run)
-        store._updated_at["w:fresh-1"] = time.time() - 600  # looks stale
+        store._updated_at[("g:", "w", "fresh-1")] = time.time() - 600  # looks stale
 
-        await store.heartbeat("w", "fresh-1")  # refresh
+        await store.heartbeat("w", "fresh-1", project_id=None)  # refresh
 
-        stale = await store.recover_stale_runs(stale_timeout_seconds=300)
+        stale = await store.recover_stale_runs(
+            project_id=None, stale_timeout_seconds=300
+        )
         assert len(stale) == 0
 
 

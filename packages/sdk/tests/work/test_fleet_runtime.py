@@ -312,3 +312,49 @@ async def test_fleet_runtime_rejects_result_for_another_run() -> None:
 
     with pytest.raises(ValueError, match="different request"):
         await asyncio.wait_for(waiter, timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_fleet_runtime_rejects_serialized_nested_result_from_another_project() -> None:
+    store = InMemoryTaskStore()
+    runtime = FleetOperatorRuntime(
+        store=store,
+        org_id="org-a",
+        runtime_capability="runtime.claude",
+        poll_interval_seconds=0.001,
+    )
+    waiter = asyncio.create_task(
+        runtime.run(_request(), _capsule(), _capabilities(), workspace=None)
+    )
+    await _wait_for_status(store, "pending")
+    worker = WorkerCapabilities(capability_names=["runtime.claude", "cli.git"])
+    await store.claim_task(
+        "worker-claude",
+        "org-a",
+        [],
+        "default",
+        worker.routing_labels(),
+        project_id="project-a",
+    )
+    hostile_result = _result().model_dump(mode="json")
+    hostile_result["action_results"] = [
+        {
+            "project_id": None,
+            "action_id": "action-1",
+            "status": "succeeded",
+            "external_ref": None,
+            "evidence_refs": [],
+            "started_at": NOW.isoformat(),
+            "completed_at": NOW.isoformat(),
+        }
+    ]
+    await store.report_task(
+        "run-1",
+        "completed",
+        json.dumps(hostile_result),
+        None,
+        worker_id="worker-claude",
+    )
+
+    with pytest.raises(ValidationError, match="action result belongs to a different project"):
+        await asyncio.wait_for(waiter, timeout=1)
