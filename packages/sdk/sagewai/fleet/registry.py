@@ -67,6 +67,12 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Restore the UTC marker SQLite drops from timezone-aware timestamps."""
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
 # Sentinel for list_workers(project_id=...): distinguishes "don't filter by project"
 # (the default) from "filter by None" (org-global only). `== None` would otherwise be
 # indistinguishable from the unset default.
@@ -531,7 +537,7 @@ class PostgresFleetRegistry(FleetRegistry):
             id=m["worker_id"], name=m["name"] or "worker", org_id=m["org_id"] or "",
             project_id=m["project_id"], capabilities=caps,
             approval_status=WorkerApprovalStatus(m["approval_status"]),
-            last_heartbeat=m["last_heartbeat"], last_probe_at=m["last_probe_at"],
+            last_heartbeat=_as_utc(m["last_heartbeat"]), last_probe_at=m["last_probe_at"],
             probe_status=m["probe_status"], registered_at=m["registered_at"],
             approved_at=m["approved_at"], approved_by=m["approved_by"],
             secret_hash=m["secret_hash"],

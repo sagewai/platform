@@ -19,7 +19,7 @@ from sagewai.fleet.dispatcher import InMemoryTaskStore, TaskStore
 
 def _past(store, run_id):
     """Force a claimed task's lease into the past (deterministic, no clock dep)."""
-    store._claimed[run_id]["lease_expires_at"] = datetime.now(timezone.utc) - timedelta(seconds=1)
+    store._claimed[("o", "g:", run_id)]["lease_expires_at"] = datetime.now(timezone.utc) - timedelta(seconds=1)
 
 
 @pytest.mark.asyncio
@@ -28,8 +28,8 @@ async def test_claim_sets_lease_and_attempts():
     assert isinstance(s, TaskStore)  # Protocol still satisfied after it grows
     await s.enqueue({"run_id": "r1", "org_id": "o", "project_id": None, "pool": "default"})
     t = await s.claim_task("w", "o", [], "default", {}, project_id=None)
-    assert t and s._claimed["r1"]["attempts"] == 1
-    assert s._claimed["r1"]["lease_expires_at"] > datetime.now(timezone.utc)
+    assert t and s._claimed[("o", "g:", "r1")]["attempts"] == 1
+    assert s._claimed[("o", "g:", "r1")]["lease_expires_at"] > datetime.now(timezone.utc)
 
 
 @pytest.mark.asyncio
@@ -39,7 +39,7 @@ async def test_renew_extends_only_that_worker():
     await s.claim_task("w", "o", [], "default", {}, project_id=None)
     _past(s, "r1")
     n = await s.renew_worker_leases("w")
-    assert n == 1 and s._claimed["r1"]["lease_expires_at"] > datetime.now(timezone.utc)
+    assert n == 1 and s._claimed[("o", "g:", "r1")]["lease_expires_at"] > datetime.now(timezone.utc)
     assert await s.renew_worker_leases("other") == 0
 
 
@@ -65,5 +65,5 @@ async def test_report_clears_lease():
     s = InMemoryTaskStore()
     await s.enqueue({"run_id": "r1", "org_id": "o", "project_id": None, "pool": "default"})
     await s.claim_task("w", "o", [], "default", {}, project_id=None)
-    await s.report_task("r1", "completed", "out", None, worker_id="w")
-    assert s._completed["r1"]["lease_expires_at"] is None
+    await s.report_task("r1", "completed", "out", None, worker_id="w", org_id="o", project_id=None)
+    assert s._completed[("o", "g:", "r1")]["lease_expires_at"] is None

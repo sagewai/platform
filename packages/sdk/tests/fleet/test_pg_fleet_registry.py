@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import timezone
 
 import pytest
 
@@ -45,6 +46,8 @@ async def test_register_persists_across_instances(reg):
     assert got.secret_hash == "deadbeef"           # secret survives "restart"
     assert got.project_id == "pa"                   # first-class project
     assert "gpt-4o" in got.capabilities.models_canonical
+    assert got.last_heartbeat is not None
+    assert got.last_heartbeat.tzinfo is timezone.utc
     assert got.capabilities.capability_names == ["runtime.claude", "cli.git"]
 
 

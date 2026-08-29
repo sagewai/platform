@@ -34,12 +34,14 @@ async def test_fleet_tasks_table_builds(tmp_path):
 
         meta = await conn.run_sync(_reflect)
     cols = meta["cols"]
-    assert {"run_id", "org_id", "project_id", "pool", "model", "labels", "payload",
+    assert {"run_id", "org_id", "project_id", "project_scope_key", "pool", "model",
+            "labels", "payload",
             "status", "worker_id", "claimed_at", "output", "error", "reported_at",
             "created_at"} <= set(cols)
     assert cols["org_id"]["nullable"] is False      # tenant isolation
     assert cols["project_id"]["nullable"] is True
-    assert meta["pk"] == ["run_id"]                 # unique run identity
+    assert cols["project_scope_key"]["nullable"] is False
+    assert meta["pk"] == ["org_id", "project_scope_key", "run_id"]
     assert "ck_fleet_tasks_status" in meta["checks"]    # status constrained
     assert {"ix_fleet_tasks_claim", "ix_fleet_tasks_scope"} <= meta["indexes"]
     # status defaults to 'pending' (server_default text varies by dialect; assert it exists)

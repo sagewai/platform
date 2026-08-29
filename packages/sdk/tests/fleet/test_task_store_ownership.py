@@ -27,8 +27,8 @@ async def test_owner_can_report():
     store = InMemoryTaskStore()
     await store.enqueue({"run_id": "r1", "model": "gpt-4o", "pool": "default"})
     await _claim_one(store, "w1")
-    await store.report_task("r1", "completed", "ok", None, worker_id="w1")
-    assert store._completed["r1"]["status"] == "completed"
+    await store.report_task("r1", "completed", "ok", None, worker_id="w1", org_id="o", project_id=None)
+    assert store._completed[("o", "g:", "r1")]["status"] == "completed"
 
 
 @pytest.mark.asyncio
@@ -37,7 +37,7 @@ async def test_non_owner_rejected():
     await store.enqueue({"run_id": "r1", "model": "gpt-4o", "pool": "default"})
     await _claim_one(store, "w1")
     with pytest.raises(NotTaskOwnerError):
-        await store.report_task("r1", "completed", "ok", None, worker_id="w2")
+        await store.report_task("r1", "completed", "ok", None, worker_id="w2", org_id="o", project_id=None)
 
 
 @pytest.mark.asyncio
@@ -45,14 +45,14 @@ async def test_duplicate_same_worker_status_is_idempotent():
     store = InMemoryTaskStore()
     await store.enqueue({"run_id": "r1", "model": "gpt-4o", "pool": "default"})
     await _claim_one(store, "w1")
-    await store.report_task("r1", "completed", "ok", None, worker_id="w1")
+    await store.report_task("r1", "completed", "ok", None, worker_id="w1", org_id="o", project_id=None)
     # lost-ack retry: same worker + status → no error
-    await store.report_task("r1", "completed", "ok", None, worker_id="w1")
-    assert store._completed["r1"]["status"] == "completed"
+    await store.report_task("r1", "completed", "ok", None, worker_id="w1", org_id="o", project_id=None)
+    assert store._completed[("o", "g:", "r1")]["status"] == "completed"
 
 
 @pytest.mark.asyncio
 async def test_unknown_run_rejected():
     store = InMemoryTaskStore()
     with pytest.raises(NotTaskOwnerError):
-        await store.report_task("nope", "completed", None, None, worker_id="w1")
+        await store.report_task("nope", "completed", None, None, worker_id="w1", org_id="o", project_id=None)

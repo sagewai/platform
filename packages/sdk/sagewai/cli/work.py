@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import click
@@ -23,6 +23,8 @@ import sagewai.cli as _cli
 from sagewai.artifacts import LocalArtifactStore
 from sagewai.db import factory
 from sagewai.fleet.execution import run_worker_subprocess
+from sagewai.fleet.registry import PostgresFleetRegistry
+from sagewai.fleet.task_store import PostgresTaskStore
 from sagewai.safety.permissions import PermissionPolicy
 from sagewai.tools import factory as tool_factory
 from sagewai.work import (
@@ -62,6 +64,12 @@ from sagewai.work.profiles.software import (
     github_remote_repository,
     is_github_issue_url,
 )
+from sagewai.work.profiles.software.fleet_workspace import (
+    SoftwareFleetWorkspaceTransport,
+)
+from sagewai.work.profiles.software.fleet_workspace import (
+    software_repository_ref as _software_repository_ref,
+)
 
 
 @click.group()
@@ -72,12 +80,53 @@ from sagewai.work.profiles.software import (
     metavar="<slug|global>",
     help="Project slug, or 'global' for organization-global Work.",
 )
+@click.option(
+    "--execution",
+    type=click.Choice(("local", "fleet")),
+    default="local",
+    show_default=True,
+    help="Execute operator stages locally or through registered Fleet workers.",
+)
+@click.option(
+    "--fleet-org",
+    default=None,
+    metavar="ORG_ID",
+    help="Fleet organization ID (required with --execution fleet).",
+)
 @click.pass_context
-def work(ctx: click.Context, project_scope: str) -> None:
-    """Run deterministic local software work."""
+def work(
+    ctx: click.Context,
+    project_scope: str,
+    execution: str,
+    fleet_org: str | None,
+) -> None:
+    """Run deterministic software work through the selected execution path."""
     if not project_scope:
         raise click.BadParameter("project scope must not be empty", param_hint="--project")
+    if execution == "fleet" and not fleet_org:
+        raise click.BadParameter(
+            "--fleet-org is required with --execution fleet",
+            param_hint="--fleet-org",
+        )
+    if execution == "local" and fleet_org is not None:
+        raise click.BadParameter(
+            "--fleet-org requires --execution fleet",
+            param_hint="--fleet-org",
+        )
     ctx.obj = None if project_scope == "global" else project_scope
+
+
+def _work_execution_config() -> tuple[str, str | None]:
+    """Return the explicit Work-group execution selection for this command."""
+    context = click.get_current_context(silent=True)
+    while context is not None:
+        if "execution" in context.params:
+            return (
+                str(context.params["execution"]),
+                context.params.get("fleet_org"),
+            )
+        context = context.parent
+    return "local", None
 
 
 @work.command("start")
@@ -415,9 +464,21 @@ async def _build_lifecycle(
     *,
     project_id: str | None,
     repository: Path,
+    execution: str | None = None,
+    fleet_org: str | None = None,
 ) -> tuple[SoftwareLifecycle, WorkStore, SoftwareWorktreeManager]:
     await factory.ensure_schema()
     engine = factory.get_engine()
+    if execution is None:
+        execution, selected_fleet_org = _work_execution_config()
+        if fleet_org is None:
+            fleet_org = selected_fleet_org
+    if execution not in {"local", "fleet"}:
+        raise ValueError(f"unsupported Work execution path: {execution}")
+    if execution == "fleet" and not fleet_org:
+        raise ValueError("fleet execution requires an explicit Fleet organization ID")
+    if execution == "local" and fleet_org is not None:
+        raise ValueError("Fleet organization ID requires fleet execution")
     work_store = WorkStore(engine=engine)
     knowledge_store = KnowledgeStore(engine=engine)
     await work_store.init()
@@ -467,10 +528,89 @@ async def _build_lifecycle(
             ),
         ),
     )
-    codex = CodexRuntime()
-    claude = ClaudeRuntime()
     worktree_manager = SoftwareWorktreeManager()
     artifact_store = LocalArtifactStore()
+    if execution == "fleet":
+        assert fleet_org is not None
+        fleet_registry = PostgresFleetRegistry(engine=engine)
+        fleet_store = PostgresTaskStore(engine=engine)
+        await fleet_registry.init()
+        await fleet_store.init()
+        workspace_transport = SoftwareFleetWorkspaceTransport(
+            repository_ref=await _software_repository_ref(repository),
+        )
+
+        def fleet_stage(
+            *,
+            actor_ref: str,
+            runtime_capability: str,
+            capabilities: CapabilitySet,
+            controller: OperatorController,
+        ) -> SoftwareStageOperator:
+            return SoftwareStageOperator.fleet(
+                actor_ref=actor_ref,
+                store=fleet_store,
+                registry=fleet_registry,
+                org_id=fleet_org,
+                runtime_capability=runtime_capability,
+                poll_interval_seconds=0.25,
+                heartbeat_ttl=timedelta(seconds=30),
+                workspace_transport=workspace_transport,
+                capabilities=capabilities,
+                controller=controller,
+            )
+
+        analyst = fleet_stage(
+            actor_ref="fleet:claude:analyst",
+            runtime_capability="runtime.claude",
+            capabilities=read_capabilities,
+            controller=review_controller,
+        )
+        implementer = fleet_stage(
+            actor_ref="fleet:codex:implementer",
+            runtime_capability="runtime.codex",
+            capabilities=write_capabilities,
+            controller=implementation_controller,
+        )
+        reviewer = fleet_stage(
+            actor_ref="fleet:claude:reviewer",
+            runtime_capability="runtime.claude",
+            capabilities=read_capabilities,
+            controller=review_controller,
+        )
+        repairer = fleet_stage(
+            actor_ref="fleet:codex:repairer",
+            runtime_capability="runtime.codex",
+            capabilities=write_capabilities,
+            controller=implementation_controller,
+        )
+    else:
+        codex = CodexRuntime()
+        claude = ClaudeRuntime()
+        analyst = SoftwareStageOperator(
+            actor_ref="runtime:claude:analyst",
+            runtime=claude,
+            capabilities=read_capabilities,
+            controller=review_controller,
+        )
+        implementer = SoftwareStageOperator(
+            actor_ref="runtime:codex:implementer",
+            runtime=codex,
+            capabilities=write_capabilities,
+            controller=implementation_controller,
+        )
+        reviewer = SoftwareStageOperator(
+            actor_ref="runtime:claude:reviewer",
+            runtime=claude,
+            capabilities=read_capabilities,
+            controller=review_controller,
+        )
+        repairer = SoftwareStageOperator(
+            actor_ref="runtime:codex:implementer",
+            runtime=codex,
+            capabilities=write_capabilities,
+            controller=implementation_controller,
+        )
     lifecycle = SoftwareLifecycle(
         profile=SoftwareProfile(),
         work_store=work_store,
@@ -487,30 +627,10 @@ async def _build_lifecycle(
         ),
         artifact_store=artifact_store,
         repository=repository,
-        analyst=SoftwareStageOperator(
-            actor_ref="runtime:claude:analyst",
-            runtime=claude,
-            capabilities=read_capabilities,
-            controller=review_controller,
-        ),
-        implementer=SoftwareStageOperator(
-            actor_ref="runtime:codex:implementer",
-            runtime=codex,
-            capabilities=write_capabilities,
-            controller=implementation_controller,
-        ),
-        reviewer=SoftwareStageOperator(
-            actor_ref="runtime:claude:reviewer",
-            runtime=claude,
-            capabilities=read_capabilities,
-            controller=review_controller,
-        ),
-        repairer=SoftwareStageOperator(
-            actor_ref="runtime:codex:implementer",
-            runtime=codex,
-            capabilities=write_capabilities,
-            controller=implementation_controller,
-        ),
+        analyst=analyst,
+        implementer=implementer,
+        reviewer=reviewer,
+        repairer=repairer,
         repo_instructions=(("AGENTS.md",) if (repository / "AGENTS.md").is_file() else ()),
         verification_commands=("just smoke",),
     )

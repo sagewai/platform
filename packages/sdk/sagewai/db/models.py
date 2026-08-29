@@ -1876,14 +1876,18 @@ class FleetTaskModel(Base):
             "status IN ('pending','claimed','completed','failed')",
             name="ck_fleet_tasks_status",
         ),
+        PrimaryKeyConstraint(
+            "org_id", "project_scope_key", "run_id", name="pk_fleet_tasks"
+        ),
         Index("ix_fleet_tasks_claim", "status", "org_id", "project_id", "pool", "created_at"),
         Index("ix_fleet_tasks_scope", "org_id", "project_id", "created_at"),
         Index("ix_fleet_tasks_lease", "status", "lease_expires_at"),
     )
 
-    run_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    run_id: Mapped[str] = mapped_column(Text, nullable=False)
     org_id: Mapped[str] = mapped_column(Text, nullable=False)
     project_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    project_scope_key: Mapped[str] = mapped_column(Text, nullable=False)
     pool: Mapped[str] = mapped_column(Text, nullable=False, server_default="default")
     model: Mapped[str | None] = mapped_column(Text, nullable=True)
     labels: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)

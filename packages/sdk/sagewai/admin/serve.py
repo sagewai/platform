@@ -4234,9 +4234,24 @@ def create_admin_serve_app(
             return ctx.org_id
         return _single_org_fleet_org_id
 
+    def _fleet_worker_visible(worker, request: Request) -> bool:
+        context = getattr(request.state, "context", None)
+        if (
+            context is None
+            or getattr(context, "tenancy_mode", None) != "multi"
+            or context.project_id is None
+        ):
+            return True
+        project_id = _fleet_project_label(_project_scope(request))
+        return worker.project_id in (None, project_id)
+
     async def _fleet_worker_in_scope(worker_id: str, request: Request):
         worker = await fleet_registry.get_worker(worker_id)
-        if worker is None or getattr(worker, "org_id", None) != _fleet_org_id(request):
+        if (
+            worker is None
+            or getattr(worker, "org_id", None) != _fleet_org_id(request)
+            or not _fleet_worker_visible(worker, request)
+        ):
             return None
         return worker
 
@@ -4330,6 +4345,7 @@ def create_admin_serve_app(
             await fleet_dispatcher.report(
                 worker_id=worker.id,
                 org_id=worker.org_id,
+                project_id=worker.project_id,
                 run_id=body.get("run_id", ""),
                 status=body.get("status", "completed"),
                 output=body.get("output"),
@@ -4362,6 +4378,12 @@ def create_admin_serve_app(
         from sagewai.fleet.normalizer import ModelNormalizer
 
         body = await request.json()
+        payload = body.get("payload", {})
+        if isinstance(payload, dict) and payload.get("kind") == "work.operator":
+            return JSONResponse(
+                {"detail": "work.operator tasks use the Work lifecycle"},
+                status_code=400,
+            )
         pid = _project_scope(request)
         labels = dict(body.get("labels") or {})
         labels.pop("project_id", None)  # never trust a body-supplied project scope
@@ -4374,7 +4396,7 @@ def create_admin_serve_app(
             "project_id": _fleet_project_label(pid),
             "pool": body.get("pool", "default"),
             "labels": labels,
-            "payload": body.get("payload", {}),
+            "payload": payload,
         }
         if model:
             task["model"] = model
@@ -4424,6 +4446,7 @@ def create_admin_serve_app(
     @app.get("/api/v1/fleet/workers")
     async def list_fleet_workers(request: Request) -> JSONResponse:
         workers = await fleet_registry.list_workers(org_id=_fleet_org_id(request))
+        workers = [worker for worker in workers if _fleet_worker_visible(worker, request)]
         # The admin UI expects { workers: FleetWorker[], total } with the full
         # nested FleetWorker shape (capabilities, approval_status, …). Pydantic's
         # model_dump produces exactly that; this previously returned a flattened

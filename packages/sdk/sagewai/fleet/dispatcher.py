@@ -46,6 +46,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol, runtime_checkable
 
+from sagewai._project_scope import project_scope_key
+from sagewai.fleet.models import WORKER_ID_ROUTING_LABEL
 from sagewai.sandbox.models import NetworkPolicy, SandboxImageVariant, SandboxMode
 
 logger = logging.getLogger(__name__)
@@ -106,6 +108,8 @@ class TaskStore(Protocol):
         error: str | None,
         *,
         worker_id: str,
+        org_id: str,
+        project_id: str | None,
     ) -> None:
         """Report completion/failure. Raises NotTaskOwnerError if run_id was not
         claimed by worker_id; idempotent no-op for a same-worker+status duplicate."""
@@ -115,6 +119,18 @@ class TaskStore(Protocol):
         self, run_id: str, *, org_id: str, project_id: str | None
     ) -> dict[str, Any] | None:
         """Return a status view of an in-scope task, or None."""
+        ...
+
+    async def retarget_task(
+        self,
+        run_id: str,
+        *,
+        org_id: str,
+        project_id: str | None,
+        expected_worker_id: str | None,
+        selected_worker_id: str,
+    ) -> bool:
+        """CAS-update one pending task to a replacement selected worker."""
         ...
 
     async def list_tasks(
@@ -155,8 +171,8 @@ class InMemoryTaskStore:
 
     def __init__(self, *, lease_ttl_seconds: float = 60.0, max_attempts: int = 3) -> None:
         self._pending: list[dict[str, Any]] = []
-        self._claimed: dict[str, dict[str, Any]] = {}  # run_id -> task
-        self._completed: dict[str, dict[str, Any]] = {}  # run_id -> result
+        self._claimed: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self._completed: dict[tuple[str, str, str], dict[str, Any]] = {}
         self._lease_ttl_seconds = lease_ttl_seconds
         self._max_attempts = max_attempts
 
@@ -219,6 +235,7 @@ class InMemoryTaskStore:
 
             # Match found — remove from pending
             claimed = self._pending.pop(i)
+            claimed.setdefault("org_id", org_id)
             claimed["worker_id"] = worker_id
             claimed["claimed_at"] = datetime.now(timezone.utc).isoformat()
             claimed["status"] = "claimed"
@@ -226,7 +243,10 @@ class InMemoryTaskStore:
                 seconds=self._lease_ttl_seconds
             )
             claimed["attempts"] = claimed.get("attempts", 0) + 1
-            self._claimed[claimed["run_id"]] = claimed
+            identity = self._identity(
+                claimed["run_id"], org_id=claimed["org_id"], project_id=project_id
+            )
+            self._claimed[identity] = claimed
             return claimed
 
         return None
@@ -238,6 +258,8 @@ class InMemoryTaskStore:
         output: str | None,
         error: str | None,
         *,
+        org_id: str,
+        project_id: str | None,
         worker_id: str,
     ) -> None:
         """Complete a claimed task. Ownership-checked + idempotent."""
@@ -245,11 +267,12 @@ class InMemoryTaskStore:
             raise ValueError(
                 f"Invalid report status {status!r} (only 'completed'/'failed' may be reported)"
             )
-        claimed = self._claimed.get(run_id)
+        identity = self._identity(run_id, org_id=org_id, project_id=project_id)
+        claimed = self._claimed.get(identity)
         if claimed is not None:
             if claimed.get("worker_id") != worker_id:
                 raise NotTaskOwnerError(run_id)
-            self._completed[run_id] = {
+            self._completed[identity] = {
                 **claimed,
                 "status": status,
                 "output": output,
@@ -258,9 +281,9 @@ class InMemoryTaskStore:
                 "lease_expires_at": None,
                 "reported_at": datetime.now(timezone.utc).isoformat(),
             }
-            self._claimed.pop(run_id, None)
+            self._claimed.pop(identity, None)
             return
-        prior = self._completed.get(run_id)
+        prior = self._completed.get(identity)
         if prior is not None:
             # lost-ack retry: a duplicate from the same worker + status is OK.
             if prior.get("worker_id") == worker_id and prior.get("status") == status:
@@ -281,7 +304,7 @@ class InMemoryTaskStore:
         cap = self._max_attempts if max_attempts is None else max_attempts
         now = datetime.now(timezone.utc)
         failed = requeued = 0
-        for run_id, task in list(self._claimed.items()):
+        for identity, task in list(self._claimed.items()):
             lease = task.get("lease_expires_at")
             if lease is None or lease >= now:
                 continue
@@ -290,7 +313,7 @@ class InMemoryTaskStore:
                 task["error"] = "lease expired after max attempts"
                 task["lease_expires_at"] = None
                 task["reported_at"] = now.isoformat()
-                self._completed[run_id] = task
+                self._completed[identity] = task
                 failed += 1
             else:
                 task["status"] = "pending"
@@ -299,8 +322,14 @@ class InMemoryTaskStore:
                 task["lease_expires_at"] = None
                 self._pending.append(task)
                 requeued += 1
-            del self._claimed[run_id]
+            del self._claimed[identity]
         return {"failed": failed, "requeued": requeued}
+
+    @staticmethod
+    def _identity(
+        run_id: str, *, org_id: str, project_id: str | None
+    ) -> tuple[str, str, str]:
+        return (org_id, project_scope_key(project_id), run_id)
 
     @staticmethod
     def _status_view(task: dict[str, Any]) -> dict[str, Any]:
@@ -316,23 +345,56 @@ class InMemoryTaskStore:
             "output": task.get("output"),
             "reported_at": task.get("reported_at"),
             "created_at": task.get("created_at"),
+            "selected_worker_id": (task.get("labels") or {}).get(
+                WORKER_ID_ROUTING_LABEL
+            ),
+            "workspace_input_digest": (
+                (task.get("payload") or {}).get("workspace") or {}
+            ).get("input_digest"),
         }
 
     def _scoped_all(self, org_id: str, project_id: str | None):
         seen = set()
         for t in (*self._completed.values(), *self._claimed.values(), *self._pending):
-            rid = t.get("run_id")
-            if rid in seen:
+            if t.get("org_id") != org_id or t.get("project_id") != project_id:
                 continue
-            seen.add(rid)
-            if t.get("org_id") == org_id and t.get("project_id") == project_id:
-                yield t
+            identity = self._identity(
+                t["run_id"], org_id=org_id, project_id=project_id
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            yield t
 
     async def get_task(self, run_id, *, org_id, project_id):
         for t in self._scoped_all(org_id, project_id):
             if t.get("run_id") == run_id:
                 return self._status_view(t)
         return None
+
+    async def retarget_task(
+        self,
+        run_id,
+        *,
+        org_id,
+        project_id,
+        expected_worker_id,
+        selected_worker_id,
+    ):
+        for task in self._pending:
+            if (
+                task.get("run_id") == run_id
+                and task.get("org_id") == org_id
+                and task.get("project_id") == project_id
+                and (task.get("labels") or {}).get(WORKER_ID_ROUTING_LABEL)
+                == expected_worker_id
+            ):
+                task["labels"] = {
+                    **(task.get("labels") or {}),
+                    WORKER_ID_ROUTING_LABEL: selected_worker_id,
+                }
+                return True
+        return False
 
     async def list_tasks(self, *, org_id, project_id, status=None, limit=50):
         tasks = [t for t in self._scoped_all(org_id, project_id)
@@ -408,12 +470,16 @@ class FleetDispatcher:
         deadline = loop.time() + effective_timeout
 
         while loop.time() < deadline:
+            worker_labels = {
+                **(labels or {}),
+                WORKER_ID_ROUTING_LABEL: worker_id,
+            }
             task = await self._store.claim_task(
                 worker_id=worker_id,
                 org_id=org_id,
                 models_canonical=models_canonical,
                 pool=pool,
-                labels=labels,
+                labels=worker_labels,
                 project_id=project_id,
                 worker_sandbox_mode=worker_sandbox_mode,
                 worker_sandbox_variants=worker_sandbox_variants,
@@ -466,6 +532,8 @@ class FleetDispatcher:
         status: str,
         output: str | None = None,
         error: str | None = None,
+        *,
+        project_id: str | None = None,
     ) -> None:
         """Report task completion or failure.
 
@@ -493,6 +561,8 @@ class FleetDispatcher:
             output=encrypted_output,
             error=error,
             worker_id=worker_id,
+            org_id=org_id,
+            project_id=project_id,
         )
 
         if self._audit:

@@ -48,6 +48,14 @@ from sagewai.work.profiles.software.delivery import (
     ReleaseProvider,
     default_delivery_action_policy,
 )
+from sagewai.work.profiles.software.fleet_workspace import (
+    SOFTWARE_FLEET_WORKSPACE_KIND,
+    SoftwareFleetWorkspaceInput,
+    SoftwareFleetWorkspaceOutput,
+    SoftwareFleetWorkspaceTransport,
+    repository_ref_from_origin,
+    software_repository_ref,
+)
 from sagewai.work.profiles.software.github import (
     CatalogGitHubClient,
     GitHubIssue,
@@ -143,6 +151,8 @@ __all__ = [
     "github_remote_repository",
     "is_github_issue_url",
     "require_merge_approval",
+    "repository_ref_from_origin",
+    "software_repository_ref",
     "SOFTWARE_VERIFICATION_ISOLATION_PRECONDITION_ID",
     "SandboxedVerificationRunner",
     "SoftwareAttemptContext",
@@ -152,6 +162,10 @@ __all__ = [
     "SoftwareDeliveryContractContext",
     "SoftwareDeliveryTriageContext",
     "SoftwareDesignContext",
+    "SoftwareFleetWorkspaceTransport",
+    "SoftwareFleetWorkspaceInput",
+    "SoftwareFleetWorkspaceOutput",
+    "SOFTWARE_FLEET_WORKSPACE_KIND",
     "SoftwareLifecycle",
     "SoftwareProfile",
     "SoftwareReadOnlyResultValidator",

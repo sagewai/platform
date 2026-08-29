@@ -122,8 +122,8 @@ async def test_fleet_register_claim_report():
     )
 
     # 10. Verify task store state
-    assert "run-1" in store._completed
-    assert store._completed["run-1"]["status"] == "completed"
+    assert ("org-1", "g:", "run-1") in store._completed
+    assert store._completed[("org-1", "g:", "run-1")]["status"] == "completed"
 
 
 @pytest.mark.asyncio
