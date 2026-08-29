@@ -293,6 +293,7 @@ class FakeGitHub:
             number=7,
             url="https://github.com/octocat/hello-world/pull/7",
             head=head,
+            head_sha="b" * 40,
             base=base,
         )
         self.remote_pull_request = pull_request
@@ -570,6 +571,7 @@ async def test_foreign_project_pull_request_cannot_prove_repository_outcome(
         repo=github.issue.repo,
         number=7,
         url="https://github.com/octocat/hello-world/pull/7",
+        head_sha="c" * 40,
         head="sagewai/foreign",
         base=github.issue.default_branch,
     )
@@ -596,6 +598,48 @@ async def test_foreign_project_pull_request_cannot_prove_repository_outcome(
         for event in events
     )
 
+
+@pytest.mark.asyncio
+async def test_pull_request_head_sha_must_match_published_commit(
+    store: WorkStore,
+    monkeypatch,
+) -> None:
+    flow, _, github, _ = _flow(
+        store,
+        decision=GateDecision.ALLOW,
+        repository_outcome=SoftwareRepositoryOutcome.PULL_REQUEST,
+    )
+
+    async def mismatched_pull_request(*, issue, head, base):
+        return GitHubPullRequest(
+            project_id=PROJECT_ID,
+            owner=issue.owner,
+            repo=issue.repo,
+            number=7,
+            url="https://github.com/octocat/hello-world/pull/7",
+            head=head,
+            head_sha="c" * 40,
+            base=base,
+        )
+
+    monkeypatch.setattr(github, "find_open_pull_request", mismatched_pull_request)
+
+    with pytest.raises(ValueError, match="head SHA"):
+        await flow.start(
+            issue_url=ISSUE_URL,
+            project_id=PROJECT_ID,
+            base_sha="a" * 40,
+        )
+
+    records = await store.list_work(project_id=PROJECT_ID)
+    events = await store.read_events(records[0].work_id, project_id=PROJECT_ID)
+    assert not any(
+        event.event_type in {
+            WorkEventType.VERIFICATION_RECORDED,
+            WorkEventType.WORK_COMPLETED,
+        }
+        for event in events
+    )
 
 
 @pytest.mark.asyncio
@@ -708,6 +752,7 @@ async def test_delivery_triage_creates_new_reviewed_pr_and_merged_sha(
             number=8,
             url="https://github.com/octocat/hello-world/pull/8",
             head=head,
+            head_sha="b" * 40,
             base=base,
         )
         github.remote_pull_request = pull_request
@@ -2040,6 +2085,7 @@ async def test_catalog_client_types_github_merge_conflict() -> None:
         owner="octocat",
         repo="hello-world",
         number=7,
+        head_sha="e" * 40,
         url="https://github.com/octocat/hello-world/pull/7",
         head="sagewai/work-1",
         base="main",
@@ -2105,7 +2151,7 @@ async def test_catalog_client_adapts_existing_github_callable() -> None:
                 {
                     "number": 7,
                     "html_url": "https://github.com/octocat/hello-world/pull/7",
-                    "head": {"ref": "sagewai/work-1"},
+                    "head": {"ref": "sagewai/work-1", "sha": "e" * 40},
                     "base": {"ref": "main"},
                 }
             ]
@@ -2113,6 +2159,7 @@ async def test_catalog_client_adapts_existing_github_callable() -> None:
             return {
                 "number": 7,
                 "html_url": "https://github.com/octocat/hello-world/pull/7",
+                "head": {"sha": "e" * 40},
             }
         if operation == "get_pull_request":
             return {
@@ -2152,8 +2199,10 @@ async def test_catalog_client_adapts_existing_github_callable() -> None:
     assert issue.default_branch == "main"
     assert found is not None
     assert found.number == 7
+    assert found.head_sha == "e" * 40
     assert calls[2]["head"] == "octocat:sagewai/work-1"
     assert pull_request.number == 7
+    assert pull_request.head_sha == "e" * 40
     assert merge.merged_sha == "d" * 40
     assert calls[-1]["sha"] == "e" * 40
     assert state.merged is True
