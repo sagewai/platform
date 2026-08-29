@@ -598,7 +598,8 @@ async def test_resume_observes_rollback_persisted_before_process_death(
         for index, event in enumerate(events)
         if event.event_type is WorkEventType.ROLLBACK_RECORDED
     )
-    assert events[rollback_index + 1].event_type is WorkEventType.OBSERVATION_RECORDED
+    assert events[rollback_index + 1].event_type is WorkEventType.EXTERNAL_OUTCOME_RECORDED
+    assert events[rollback_index + 2].event_type is WorkEventType.OBSERVATION_RECORDED
     assert events[-1].event_type is WorkEventType.TRIAGE_CREATED
 
 
@@ -638,7 +639,7 @@ async def test_failed_rollback_verification_escalates_once_with_evidence(
     ]
     pending = await store.pending_attention(project_id=PROJECT_ID)
     assert len(pending) == 1
-    assert pending[0].kind.value == "PRODUCTION_INCIDENT"
+    assert pending[0].kind.value == "EXTERNAL_OUTCOME_INCIDENT"
     assert pending[0].severity == "critical"
     assert pending[0].evidence_refs == (
         "fake-observation://deployment-1/availability",
@@ -663,7 +664,7 @@ async def test_failure_restores_triages_and_new_candidate_redeploys(
     assert first_provider.rollbacks
     triaged_pending = await store.pending_attention(project_id=PROJECT_ID)
     assert len(triaged_pending) == 1
-    assert triaged_pending[0].kind.value == "PRODUCTION_INCIDENT"
+    assert triaged_pending[0].kind.value == "EXTERNAL_OUTCOME_INCIDENT"
     assert triaged_pending[0].severity == "high"
     await store.save_work(triaged.model_copy(update={"status": "READY_TO_DELIVER"}))
 

@@ -132,13 +132,26 @@ class ActionRequest(BaseModel):
     evidence_refs: tuple[str, ...]
 
 
+class ExternalOutcomeIncident(BaseModel):
+    """Profile-owned external outcome receipt folded by the generic kernel."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    incident_id: str = Field(min_length=1, max_length=255)
+    summary: str = Field(min_length=1, max_length=500)
+    severity: Literal["high", "critical"]
+    evidence_refs: tuple[str, ...] = Field(default=(), max_length=32)
+    active_control_event_ids: tuple[str, ...] = Field(
+        default=(), max_length=32
+    )
+
 class PendingAttentionKind(str, Enum):
     """Canonical operator-attention categories."""
 
     GATE_REQUESTED = "GATE_REQUESTED"
     WORK_BLOCKED = "WORK_BLOCKED"
     CONTROL_DEGRADED = "CONTROL_DEGRADED"
-    PRODUCTION_INCIDENT = "PRODUCTION_INCIDENT"
+    EXTERNAL_OUTCOME_INCIDENT = "EXTERNAL_OUTCOME_INCIDENT"
 
 
 class PendingAttention(BaseModel):
