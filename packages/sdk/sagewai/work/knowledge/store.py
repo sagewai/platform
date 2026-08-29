@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from sagewai.db import factory
 from sagewai.db.models import Base, KnowledgeItemModel, KnowledgeSourceRefModel
+from sagewai.work._scope import project_scope_key
 from sagewai.work.knowledge.models import KnowledgeItem, KnowledgeQuery
 
 
@@ -96,6 +97,7 @@ async def insert_knowledge_item(
 ) -> None:
     """Insert one item and its SQLite search row on an existing transaction."""
     values = item.model_dump(mode="python")
+    values["project_scope_key"] = project_scope_key(item.project_id)
     values["kind"] = item.kind.value
     values["source_refs"] = list(item.source_refs)
     values["artifact_refs"] = list(item.artifact_refs)
@@ -108,6 +110,7 @@ async def insert_knowledge_item(
             [
                 {
                     "knowledge_item_id": item.id,
+                    "project_scope_key": project_scope_key(item.project_id),
                     "project_id": item.project_id,
                     "source_ref": source_ref,
                 }
@@ -117,10 +120,14 @@ async def insert_knowledge_item(
     if dialect_name == "sqlite":
         await conn.execute(
             text(
-                "INSERT INTO knowledge_items_fts (item_id, statement) "
-                "VALUES (:item_id, :statement)"
+                "INSERT INTO knowledge_items_fts (project_scope_key, item_id, statement) "
+                "VALUES (:project_scope_key, :item_id, :statement)"
             ),
-            {"item_id": item.id, "statement": item.statement},
+            {
+                "project_scope_key": project_scope_key(item.project_id),
+                "item_id": item.id,
+                "statement": item.statement,
+            },
         )
 
 
@@ -141,8 +148,8 @@ class KnowledgeStore:
             await conn.execute(
                 text(
                     "INSERT OR IGNORE INTO knowledge_source_refs "
-                    "(knowledge_item_id, project_id, source_ref) "
-                    "SELECT DISTINCT knowledge.id, knowledge.project_id, source.value "
+                    "(project_scope_key, knowledge_item_id, project_id, source_ref) "
+                    "SELECT DISTINCT knowledge.project_scope_key, knowledge.id, knowledge.project_id, source.value "
                     "FROM knowledge_items AS knowledge "
                     "CROSS JOIN json_each(knowledge.source_refs) AS source "
                     "WHERE source.type = :source_type"
@@ -159,11 +166,11 @@ class KnowledgeStore:
                 dialect_name=self._engine.dialect.name,
             )
 
-    async def get(self, item_id: str, *, project_id: str) -> KnowledgeItem | None:
+    async def get(self, item_id: str, *, project_id: str | None) -> KnowledgeItem | None:
         """Read one item without crossing its project boundary."""
         query = select(self._items).where(
             self._items.c.id == item_id,
-            self._items.c.project_id == project_id,
+            self._items.c.project_scope_key == project_scope_key(project_id),
         )
         async with self._engine.connect() as conn:
             row = (await conn.execute(query)).first()
@@ -175,14 +182,14 @@ class KnowledgeStore:
         self,
         source_ref: str,
         *,
-        project_id: str,
+        project_id: str | None,
         work_id: str | None = None,
     ) -> list[KnowledgeItem]:
         """Resolve an exact source ref through the project-scoped navigation index."""
         filters = [
-            self._source_refs.c.project_id == project_id,
+            self._source_refs.c.project_scope_key == project_scope_key(project_id),
             self._source_refs.c.source_ref == source_ref,
-            self._items.c.project_id == project_id,
+            self._items.c.project_scope_key == project_scope_key(project_id),
         ]
         if work_id is not None:
             filters.append(self._items.c.work_id == work_id)
@@ -190,7 +197,8 @@ class KnowledgeStore:
             select(self._items)
             .join(
                 self._source_refs,
-                self._source_refs.c.knowledge_item_id == self._items.c.id,
+                (self._source_refs.c.project_scope_key == self._items.c.project_scope_key)
+                & (self._source_refs.c.knowledge_item_id == self._items.c.id),
             )
             .where(*filters)
             .order_by(self._items.c.created_at, self._items.c.id)
@@ -201,14 +209,14 @@ class KnowledgeStore:
 
     async def search(self, query: KnowledgeQuery) -> list[KnowledgeItem]:
         """Run scoped literal-term search using the active database's tokenization."""
-        filters = [self._items.c.project_id == query.project_id]
+        filters = [self._items.c.project_scope_key == project_scope_key(query.project_id)]
         if query.work_id is not None:
             filters.append(self._items.c.work_id == query.work_id)
 
         if self._engine.dialect.name == "sqlite":
             matched_ids = text(
                 "SELECT item_id FROM knowledge_items_fts "
-                "WHERE knowledge_items_fts MATCH :search_text"
+                "WHERE project_scope_key = :project_scope_key AND knowledge_items_fts MATCH :search_text"
             )
             filters.append(self._items.c.id.in_(matched_ids))
         else:
@@ -223,7 +231,10 @@ class KnowledgeStore:
             select(self._items).where(*filters).order_by(self._items.c.created_at, self._items.c.id)
         )
         if self._engine.dialect.name == "sqlite":
-            statement = statement.params(search_text=_sqlite_plaintext_query(query.text))
+            statement = statement.params(
+                project_scope_key=project_scope_key(query.project_id),
+                search_text=_sqlite_plaintext_query(query.text),
+            )
 
         async with self._engine.connect() as conn:
             rows = (await conn.execute(statement)).all()
@@ -241,7 +252,7 @@ class KnowledgeStore:
             return []
 
         filters = [
-            self._items.c.project_id == query.project_id,
+            self._items.c.project_scope_key == project_scope_key(query.project_id),
             self._items.c.work_id.is_(None),
             self._items.c.kind == "finding",
             self._items.c.importance_score > 50,
@@ -249,7 +260,7 @@ class KnowledgeStore:
         if self._engine.dialect.name == "sqlite":
             matched_ids = text(
                 "SELECT item_id FROM knowledge_items_fts "
-                "WHERE knowledge_items_fts MATCH :search_text"
+                "WHERE project_scope_key = :project_scope_key AND knowledge_items_fts MATCH :search_text"
             )
             filters.append(self._items.c.id.in_(matched_ids))
         else:
@@ -269,19 +280,21 @@ class KnowledgeStore:
             )
         )
         if self._engine.dialect.name == "sqlite":
-            statement = statement.params(search_text=_sqlite_any_term_query(terms))
+            statement = statement.params(
+                project_scope_key=project_scope_key(query.project_id),
+                search_text=_sqlite_any_term_query(terms),
+            )
 
         async with self._engine.connect() as conn:
             rows = (await conn.execute(statement)).all()
         matches = (self._from_row(row._mapping) for row in rows)
         return [
-            item
-            for item in matches
-            if _has_meaningful_term_overlap(query.text, item.statement)
+            item for item in matches if _has_meaningful_term_overlap(query.text, item.statement)
         ][:limit]
 
     @staticmethod
     def _from_row(values) -> KnowledgeItem:
         data = dict(values)
+        data.pop("project_scope_key")
         data["created_at"] = _as_utc(data["created_at"])
         return KnowledgeItem.model_validate(data)

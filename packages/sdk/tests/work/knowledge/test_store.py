@@ -34,7 +34,7 @@ def _item(
     item_id: str,
     statement: str,
     *,
-    project_id: str = "project-a",
+    project_id: str | None = "project-a",
     work_id: str | None = "work-1",
     kind: KnowledgeKind = KnowledgeKind.FINDING,
     source_refs: tuple[str, ...] = (),
@@ -117,6 +117,58 @@ async def test_get_is_project_scoped(store: KnowledgeStore) -> None:
 
 
 @pytest.mark.asyncio
+async def test_duplicate_ids_do_not_cross_project_indexes(store: KnowledgeStore) -> None:
+    common_ref = "repo://shared/evidence"
+    items = (
+        _item(
+            "shared-knowledge",
+            "Amber evidence belongs only to project A.",
+            project_id="project-a",
+            source_refs=(common_ref, "repo://scope/project-a"),
+        ),
+        _item(
+            "shared-knowledge",
+            "Beryl evidence belongs only to project B.",
+            project_id="project-b",
+            source_refs=(common_ref, "repo://scope/project-b"),
+        ),
+        _item(
+            "shared-knowledge",
+            "Cobalt evidence belongs only to the global scope.",
+            project_id=None,
+            source_refs=(common_ref, "repo://scope/global"),
+        ),
+    )
+    for item in items:
+        await store.publish(item)
+
+    scoped_items = (
+        ("project-a", "Amber", items[0]),
+        ("project-b", "Beryl", items[1]),
+        (None, "Cobalt", items[2]),
+    )
+    for project_id, query_text, expected in scoped_items:
+        assert await store.get("shared-knowledge", project_id=project_id) == expected
+        assert await store.find_by_source_ref(
+            common_ref,
+            project_id=project_id,
+        ) == [expected]
+        assert await store.search(KnowledgeQuery(text=query_text, project_id=project_id)) == [
+            expected
+        ]
+
+    assert await store.get("shared-knowledge", project_id="project-c") is None
+    assert await store.search(KnowledgeQuery(text="Amber", project_id="project-b")) == []
+    assert (
+        await store.find_by_source_ref(
+            "repo://scope/project-a",
+            project_id="project-b",
+        )
+        == []
+    )
+
+
+@pytest.mark.asyncio
 async def test_source_ref_lookup_is_exact_and_project_and_work_scoped(
     store: KnowledgeStore,
 ) -> None:
@@ -175,6 +227,7 @@ async def test_sqlite_init_backfills_existing_source_refs(tmp_path) -> None:
         source_refs=("command://legacy/readback",),
     )
     values = item.model_dump(mode="python")
+    values["project_scope_key"] = "p:project-a"
     values["kind"] = item.kind.value
     values["source_refs"] = list(item.source_refs)
     values["artifact_refs"] = list(item.artifact_refs)

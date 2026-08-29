@@ -37,7 +37,7 @@ class KnowledgeItem(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str
-    project_id: str
+    project_id: str | None
     work_id: str | None
     kind: KnowledgeKind
     statement: str
@@ -64,5 +64,5 @@ class KnowledgeQuery(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     text: str = Field(min_length=1, pattern=r"\S")
-    project_id: str
+    project_id: str | None
     work_id: str | None = None
