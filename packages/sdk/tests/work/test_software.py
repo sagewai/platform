@@ -448,6 +448,7 @@ async def test_result_validator_does_not_run_worktree_git_filters(tmp_path: Path
         run_id="run-1",
         stage="implement",
         action_scope=ActionScope(
+            project_id="project-a",
             objective="Change tracked.txt",
             allowed_targets=("tracked.txt",),
         ),
