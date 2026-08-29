@@ -221,9 +221,8 @@ def _result(run_id: str, project_id: str | None = "project-a") -> OperatorResult
 
 
 class RecordingRuntime:
-    name = "fake"
-
-    def __init__(self, *, block: bool = False) -> None:
+    def __init__(self, *, block: bool = False, name: str = "fake") -> None:
+        self.name = name
         self.started = 0
         self.capabilities: CapabilitySet | None = None
         self.started_event = asyncio.Event()
@@ -676,7 +675,7 @@ async def test_cancelled_execution_leaves_durable_running_state_for_retry(
 ) -> None:
     durability = InMemoryStore()
     controller = _controller(work_store, durability, heartbeat_interval=60)
-    runtime = RecordingRuntime(block=True)
+    runtime = RecordingRuntime(block=True, name="fleet:org-a:runtime.codex")
     request = _request(run_id="run-killed")
     execution = asyncio.create_task(
         controller.run(
@@ -701,9 +700,21 @@ async def test_cancelled_execution_leaves_durable_running_state_for_retry(
     assert durable is not None
     assert durable.status is StepStatus.RUNNING
     assert [event.event_type for event in events] == [WorkEventType.STAGE_STARTED]
+    wrong_runtime = RecordingRuntime(name="fleet:org-b:runtime.codex")
+    with pytest.raises(ValueError, match="unfinished operator runtime changed"):
+        await _controller(work_store, durability).run(
+            runtime=wrong_runtime,
+            request=request,
+            capsule=_capsule(),
+            capabilities=_capabilities(),
+            workspace=None,
+        )
+    assert wrong_runtime.started == 0
+    events = await work_store.read_events("work-1", project_id="project-a")
+    assert [event.event_type for event in events] == [WorkEventType.STAGE_STARTED]
 
     retry = await _controller(work_store, durability).run(
-        runtime=RecordingRuntime(),
+        runtime=RecordingRuntime(name="fleet:org-a:runtime.codex"),
         request=request,
         capsule=_capsule(),
         capabilities=_capabilities(),

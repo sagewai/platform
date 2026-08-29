@@ -146,7 +146,7 @@ class FleetOperatorRuntime:
         self._poll_interval_seconds = poll_interval_seconds
         self._heartbeat_ttl = heartbeat_ttl
         self._workspace_transport = workspace_transport
-        self.name = f"fleet:{runtime_capability}"
+        self.name = f"fleet:{org_id}:{runtime_capability}"
 
     async def _select_worker(
         self,
