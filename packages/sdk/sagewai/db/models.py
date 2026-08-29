@@ -1905,9 +1905,17 @@ class WorkItemModel(Base):
     """Current projection for a generic WorkItem."""
 
     __tablename__ = "work_items"
-    __table_args__ = (Index("ix_work_items_project_id", "project_id"),)
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "project_scope_key",
+            "work_id",
+            name="pk_work_items",
+        ),
+        Index("ix_work_items_project_scope", "project_scope_key"),
+    )
 
-    work_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    project_scope_key: Mapped[str] = mapped_column(Text, nullable=False)
+    work_id: Mapped[str] = mapped_column(Text, nullable=False)
     project_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
     profile: Mapped[str] = mapped_column(Text, nullable=False)
@@ -1929,11 +1937,27 @@ class WorkEventModel(Base):
 
     __tablename__ = "work_events"
     __table_args__ = (
-        UniqueConstraint("work_id", "sequence", name="uq_work_events_work_sequence"),
-        Index("ix_work_events_project_work_sequence", "project_id", "work_id", "sequence"),
+        PrimaryKeyConstraint(
+            "project_scope_key",
+            "id",
+            name="pk_work_events",
+        ),
+        UniqueConstraint(
+            "project_scope_key",
+            "work_id",
+            "sequence",
+            name="uq_work_events_work_sequence",
+        ),
+        Index(
+            "ix_work_events_scope_work_sequence",
+            "project_scope_key",
+            "work_id",
+            "sequence",
+        ),
     )
 
-    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    project_scope_key: Mapped[str] = mapped_column(Text, nullable=False)
+    id: Mapped[str] = mapped_column(Text, nullable=False)
     project_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     work_id: Mapped[str] = mapped_column(Text, nullable=False)
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -1951,20 +1975,26 @@ class KnowledgeItemModel(Base):
 
     __tablename__ = "knowledge_items"
     __table_args__ = (
+        PrimaryKeyConstraint(
+            "project_scope_key",
+            "id",
+            name="pk_knowledge_items",
+        ),
         CheckConstraint(
             "factness_score IN (0, 100)",
             name="ck_knowledge_items_factness_score",
         ),
         Index(
-            "ix_knowledge_items_project_work_created_at",
-            "project_id",
+            "ix_knowledge_items_scope_work_created_at",
+            "project_scope_key",
             "work_id",
             "created_at",
         ),
     )
 
-    id: Mapped[str] = mapped_column(Text, primary_key=True)
-    project_id: Mapped[str] = mapped_column(Text, nullable=False)
+    project_scope_key: Mapped[str] = mapped_column(Text, nullable=False)
+    id: Mapped[str] = mapped_column(Text, nullable=False)
+    project_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     work_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     kind: Mapped[str] = mapped_column(Text, nullable=False)
     statement: Mapped[str] = mapped_column(Text, nullable=False)
@@ -1985,24 +2015,28 @@ class KnowledgeSourceRefModel(Base):
     __tablename__ = "knowledge_source_refs"
     __table_args__ = (
         PrimaryKeyConstraint(
+            "project_scope_key",
             "knowledge_item_id",
             "source_ref",
             name="pk_knowledge_source_refs",
         ),
+        ForeignKeyConstraint(
+            ["project_scope_key", "knowledge_item_id"],
+            ["knowledge_items.project_scope_key", "knowledge_items.id"],
+            name="fk_knowledge_source_refs_scoped_item",
+            ondelete="CASCADE",
+        ),
         Index(
-            "ix_knowledge_source_refs_project_ref_item",
-            "project_id",
+            "ix_knowledge_source_refs_scope_ref_item",
+            "project_scope_key",
             "source_ref",
             "knowledge_item_id",
         ),
     )
 
-    knowledge_item_id: Mapped[str] = mapped_column(
-        Text,
-        ForeignKey("knowledge_items.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    project_id: Mapped[str] = mapped_column(Text, nullable=False)
+    project_scope_key: Mapped[str] = mapped_column(Text, nullable=False)
+    knowledge_item_id: Mapped[str] = mapped_column(Text, nullable=False)
+    project_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_ref: Mapped[str] = mapped_column(Text, nullable=False)
 
 
@@ -2011,6 +2045,6 @@ event.listen(
     "after_create",
     DDL(
         "CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_items_fts "
-        "USING fts5(item_id UNINDEXED, statement)"
+        "USING fts5(project_scope_key UNINDEXED, item_id UNINDEXED, statement)"
     ).execute_if(dialect="sqlite"),
 )

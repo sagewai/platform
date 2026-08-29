@@ -41,18 +41,19 @@ def test_source_ref_navigation_table_and_index_compile_for_both_dialects() -> No
     postgres_ddl = str(CreateTable(table).compile(dialect=postgresql.dialect()))
     sqlite_ddl = str(CreateTable(table).compile(dialect=sqlite.dialect()))
     index = next(
-        item for item in table.indexes if item.name == "ix_knowledge_source_refs_project_ref_item"
+        item for item in table.indexes if item.name == "ix_knowledge_source_refs_scope_ref_item"
     )
 
     for ddl in (postgres_ddl, sqlite_ddl):
         assert "knowledge_item_id" in ddl
         assert "project_id" in ddl
         assert "source_ref" in ddl
-        assert "PRIMARY KEY (knowledge_item_id, source_ref)" in ddl
-        assert "FOREIGN KEY(knowledge_item_id) REFERENCES knowledge_items (id)" in ddl
+        assert "PRIMARY KEY (project_scope_key, knowledge_item_id, source_ref)" in ddl
+        assert "FOREIGN KEY(project_scope_key, knowledge_item_id)" in ddl
+        assert "REFERENCES knowledge_items (project_scope_key, id)" in ddl
     for dialect in (postgresql.dialect(), sqlite.dialect()):
         index_ddl = str(CreateIndex(index).compile(dialect=dialect))
-        assert "(project_id, source_ref, knowledge_item_id)" in index_ddl
+        assert "(project_scope_key, source_ref, knowledge_item_id)" in index_ddl
 
 
 def test_migration_backfills_canonical_json_source_refs(monkeypatch) -> None:

@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from sagewai.db import factory
 from sagewai.db.dialect import upsert
 from sagewai.db.models import Base, WorkEventModel, WorkItemModel
+from sagewai.work._scope import project_scope_key
 from sagewai.work.events import (
     WorkEvent,
     WorkEventType,
@@ -60,6 +61,7 @@ class WorkStore:
     async def append_event(self, event: WorkEvent) -> None:
         """Append one immutable event; database constraints reject duplicates."""
         event_values = event.model_dump(mode="python")
+        event_values["project_scope_key"] = project_scope_key(event.project_id)
         event_values["event_type"] = event.event_type.value
         finding = None
         finding_error: ValueError | None = None
@@ -69,26 +71,6 @@ class WorkStore:
             except ValueError as exc:
                 finding_error = exc
         async with self._engine.begin() as conn:
-            projection = (
-                await conn.execute(
-                    select(self._work_items.c.project_id).where(
-                        self._work_items.c.work_id == event.work_id
-                    )
-                )
-            ).first()
-            if projection is not None and projection.project_id != event.project_id:
-                raise ValueError("work_id belongs to a different project")
-
-            existing_event = (
-                await conn.execute(
-                    select(self._work_events.c.project_id)
-                    .where(self._work_events.c.work_id == event.work_id)
-                    .limit(1)
-                )
-            ).first()
-            if existing_event is not None and existing_event.project_id != event.project_id:
-                raise ValueError("work_id belongs to a different project")
-
             await conn.execute(insert(self._work_events).values(**event_values))
             if finding is not None:
                 await insert_knowledge_item(
@@ -109,7 +91,10 @@ class WorkStore:
         table = self._work_events
         query = (
             select(table)
-            .where(table.c.work_id == work_id, table.c.project_id == project_id)
+            .where(
+                table.c.project_scope_key == project_scope_key(project_id),
+                table.c.work_id == work_id,
+            )
             .order_by(table.c.sequence)
         )
         async with self._engine.connect() as conn:
@@ -119,7 +104,7 @@ class WorkStore:
     async def metrics(
         self,
         *,
-        project_id: str,
+        project_id: str | None,
         work_id: str | None = None,
         profile: str | None = None,
         runtime: str | None = None,
@@ -127,7 +112,7 @@ class WorkStore:
         """Derive project-, Work-, profile-, or runtime-scoped event metrics."""
 
         table = self._work_events
-        filters = [table.c.project_id == project_id]
+        filters = [table.c.project_scope_key == project_scope_key(project_id)]
         if work_id is not None:
             filters.append(table.c.work_id == work_id)
         query = select(table).where(*filters).order_by(table.c.work_id, table.c.sequence)
@@ -145,33 +130,16 @@ class WorkStore:
         """Insert or replace the current projection for one WorkItem."""
         table = self._work_items
         values = record.model_dump(mode="python")
+        values["project_scope_key"] = project_scope_key(record.project_id)
         async with self._engine.begin() as conn:
-            existing = (
-                await conn.execute(
-                    select(table.c.project_id).where(table.c.work_id == record.work_id)
-                )
-            ).first()
-            if existing is not None and existing.project_id != record.project_id:
-                raise ValueError("work_id belongs to a different project")
-
-            existing_event = (
-                await conn.execute(
-                    select(self._work_events.c.project_id)
-                    .where(self._work_events.c.work_id == record.work_id)
-                    .limit(1)
-                )
-            ).first()
-            if existing_event is not None and existing_event.project_id != record.project_id:
-                raise ValueError("work_id belongs to a different project")
-
             statement = upsert(
                 table,
                 values,
-                index_elements=["work_id"],
+                index_elements=["project_scope_key", "work_id"],
                 set_={
                     column: values[column]
                     for column in values
-                    if column not in {"work_id", "project_id", "created_at"}
+                    if column not in {"project_scope_key", "work_id", "project_id", "created_at"}
                 },
                 dialect=self._engine.dialect.name,
             )
@@ -187,13 +155,14 @@ class WorkStore:
         table = self._work_items
         query = select(table).where(
             table.c.work_id == work_id,
-            table.c.project_id == project_id,
+            table.c.project_scope_key == project_scope_key(project_id),
         )
         async with self._engine.connect() as conn:
             row = (await conn.execute(query)).first()
         if row is None:
             return None
         values = dict(row._mapping)
+        values.pop("project_scope_key")
         values["created_at"] = _as_utc(values["created_at"])
         values["updated_at"] = _as_utc(values["updated_at"])
         return WorkRecord.model_validate(values)
@@ -206,7 +175,7 @@ class WorkStore:
     ) -> list[WorkRecord]:
         """List exact-project Work projections in deterministic creation order."""
         table = self._work_items
-        query = select(table).where(table.c.project_id == project_id)
+        query = select(table).where(table.c.project_scope_key == project_scope_key(project_id))
         if active_only:
             query = query.where(table.c.status != "COMPLETE")
         query = query.order_by(table.c.created_at, table.c.work_id)
@@ -216,6 +185,7 @@ class WorkStore:
         records: list[WorkRecord] = []
         for row in rows:
             values = dict(row._mapping)
+            values.pop("project_scope_key")
             values["created_at"] = _as_utc(values["created_at"])
             values["updated_at"] = _as_utc(values["updated_at"])
             records.append(WorkRecord.model_validate(values))
@@ -233,7 +203,7 @@ class WorkStore:
             select(table)
             .where(
                 table.c.source_ref == source_ref,
-                table.c.project_id == project_id,
+                table.c.project_scope_key == project_scope_key(project_id),
             )
             .order_by(table.c.created_at, table.c.work_id)
             .limit(1)
@@ -243,6 +213,7 @@ class WorkStore:
         if row is None:
             return None
         values = dict(row._mapping)
+        values.pop("project_scope_key")
         values["created_at"] = _as_utc(values["created_at"])
         values["updated_at"] = _as_utc(values["updated_at"])
         return WorkRecord.model_validate(values)
@@ -255,12 +226,12 @@ class WorkStore:
         """List the four canonical unresolved attention categories for a project."""
         work_query = (
             select(self._work_items)
-            .where(self._work_items.c.project_id == project_id)
+            .where(self._work_items.c.project_scope_key == project_scope_key(project_id))
             .order_by(self._work_items.c.created_at, self._work_items.c.work_id)
         )
         event_query = (
             select(self._work_events)
-            .where(self._work_events.c.project_id == project_id)
+            .where(self._work_events.c.project_scope_key == project_scope_key(project_id))
             .order_by(self._work_events.c.work_id, self._work_events.c.sequence)
         )
         async with self._engine.connect() as conn:
@@ -347,8 +318,7 @@ class WorkStore:
                     deployment_id = str(payload.get("deployment_id", ""))
                     if deployment_id in production_deployment_ids:
                         failed_ids = tuple(
-                            str(item)
-                            for item in payload.get("failed_preconditions", ())
+                            str(item) for item in payload.get("failed_preconditions", ())
                         )
                         incident_critical_event_ids.setdefault(
                             deployment_id,
@@ -433,7 +403,8 @@ class WorkStore:
                 for deployment_id, trigger in incident_triggers.items():
                     severity = incident_severity[deployment_id]
                     if severity == "critical" and not any(
-                        event.id in incident_critical_event_ids.get(
+                        event.id
+                        in incident_critical_event_ids.get(
                             deployment_id,
                             (),
                         )
@@ -441,13 +412,10 @@ class WorkStore:
                     ):
                         severity = "high"
                     incident_summary_cause = (
-                        incident_cause.get(deployment_id)
-                        if severity == "critical"
-                        else None
+                        incident_cause.get(deployment_id) if severity == "critical" else None
                     )
                     summary = (
-                        f"{severity.upper()}: production incident for deployment "
-                        f"{deployment_id}"
+                        f"{severity.upper()}: production incident for deployment {deployment_id}"
                     )
                     if incident_summary_cause is not None:
                         summary = f"{summary}; {incident_summary_cause}"
@@ -496,5 +464,6 @@ class WorkStore:
     @staticmethod
     def _event_from_row(values) -> WorkEvent:
         data = dict(values)
+        data.pop("project_scope_key")
         data["created_at"] = _as_utc(data["created_at"])
         return WorkEvent.model_validate(data)

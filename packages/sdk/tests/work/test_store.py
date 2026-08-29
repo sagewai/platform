@@ -79,11 +79,15 @@ async def test_events_are_read_in_sequence_order(store: WorkStore) -> None:
 
 
 @pytest.mark.asyncio
-async def test_duplicate_work_sequence_is_rejected(store: WorkStore) -> None:
-    await store.append_event(_event(1, event_id="event-a"))
+@pytest.mark.parametrize("project_id", ["project-a", None])
+async def test_duplicate_work_sequence_is_rejected_within_scope(
+    store: WorkStore,
+    project_id: str | None,
+) -> None:
+    await store.append_event(_event(1, event_id="event-a", project_id=project_id))
 
     with pytest.raises(IntegrityError):
-        await store.append_event(_event(1, event_id="event-b"))
+        await store.append_event(_event(1, event_id="event-b", project_id=project_id))
 
 
 @pytest.mark.asyncio
@@ -125,42 +129,34 @@ async def test_event_reads_are_project_scoped(store: WorkStore) -> None:
 
 
 @pytest.mark.asyncio
-async def test_event_append_rejects_projection_project_mismatch(
-    store: WorkStore,
-) -> None:
-    await store.save_work(_record(project_id=None))
+async def test_event_identity_and_stream_are_project_scoped(store: WorkStore) -> None:
+    events = (
+        _event(
+            1,
+            event_id="shared-event",
+            project_id="project-a",
+            payload={"stage": "project-a"},
+        ),
+        _event(
+            1,
+            event_id="shared-event",
+            project_id="project-b",
+            payload={"stage": "project-b"},
+        ),
+        _event(
+            1,
+            event_id="shared-event",
+            project_id=None,
+            payload={"stage": "global"},
+        ),
+    )
+    for event in events:
+        await store.append_event(event)
 
-    with pytest.raises(ValueError, match="different project"):
-        await store.append_event(_event(1, project_id="project-b"))
-
-    assert await store.read_events("work-1", project_id="project-b") == []
-
-
-@pytest.mark.asyncio
-async def test_event_stream_cannot_fork_projects_before_projection(
-    store: WorkStore,
-) -> None:
-    await store.append_event(_event(1, project_id=None))
-
-    with pytest.raises(ValueError, match="different project"):
-        await store.append_event(_event(2, project_id="project-b"))
-
-    events = await store.read_events("work-1", project_id=None)
-    assert [event.sequence for event in events] == [1]
-
-
-@pytest.mark.asyncio
-async def test_projection_cannot_fork_from_existing_event_stream(
-    store: WorkStore,
-) -> None:
-    await store.append_event(_event(1, project_id=None))
-
-    with pytest.raises(ValueError, match="different project"):
-        await store.save_work(_record(project_id="project-a"))
-
-    assert await store.load_work("work-1", project_id="project-a") is None
-    events = await store.read_events("work-1", project_id=None)
-    assert [event.sequence for event in events] == [1]
+    assert await store.read_events("work-1", project_id="project-a") == [events[0]]
+    assert await store.read_events("work-1", project_id="project-b") == [events[1]]
+    assert await store.read_events("work-1", project_id=None) == [events[2]]
+    assert await store.read_events("work-1", project_id="project-c") == []
 
 
 @pytest.mark.asyncio
@@ -181,12 +177,26 @@ async def test_projection_save_load_and_profile_context_round_trip(store: WorkSt
 
 
 @pytest.mark.asyncio
-async def test_projection_reads_and_identity_are_project_scoped(store: WorkStore) -> None:
-    await store.save_work(_record())
+async def test_projection_identity_and_reads_are_project_scoped(store: WorkStore) -> None:
+    records = (
+        _record(project_id="project-a", profile_context={"scope": "project-a"}),
+        _record(project_id="project-b", profile_context={"scope": "project-b"}),
+        _record(project_id=None, profile_context={"scope": "global"}),
+    )
+    for record in records:
+        await store.save_work(record)
 
-    assert await store.load_work("work-1", project_id="project-b") is None
-    with pytest.raises(ValueError, match="different project"):
-        await store.save_work(_record(project_id="project-b"))
+    assert await store.load_work("work-1", project_id="project-a") == records[0]
+    assert await store.load_work("work-1", project_id="project-b") == records[1]
+    assert await store.load_work("work-1", project_id=None) == records[2]
+    assert await store.load_work("work-1", project_id="project-c") is None
+
+    updated = records[0].model_copy(update={"status": "contract_ready", "updated_at": NOW})
+    await store.save_work(updated)
+
+    assert await store.load_work("work-1", project_id="project-a") == updated
+    assert await store.load_work("work-1", project_id="project-b") == records[1]
+    assert await store.load_work("work-1", project_id=None) == records[2]
 
 
 @pytest.mark.asyncio
@@ -205,11 +215,3 @@ async def test_source_ref_lookup_is_project_scoped(store: WorkStore) -> None:
         )
         is None
     )
-
-
-@pytest.mark.asyncio
-async def test_org_global_projection_cannot_change_project(store: WorkStore) -> None:
-    await store.save_work(_record(project_id=None))
-
-    with pytest.raises(ValueError, match="different project"):
-        await store.save_work(_record(project_id="project-a"))

@@ -44,7 +44,7 @@ def test_work_tables_compile_with_postgres_jsonb_mapping() -> None:
 
     assert "profile_context JSONB NOT NULL" in work_items
     assert "payload_json JSONB NOT NULL" in work_events
-    assert "UNIQUE (work_id, sequence)" in work_events
+    assert "UNIQUE (project_scope_key, work_id, sequence)" in work_events
 
 
 @pytest.mark.integration
