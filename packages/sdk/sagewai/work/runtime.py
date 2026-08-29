@@ -200,13 +200,32 @@ class _NativeRuntime:
         capsule: TaskCapsule,
         capabilities: CapabilitySet,
     ) -> str:
-        required_profile_context = {
-            key.removesuffix("_schema"): {
+        expected_profile_identity = {
+            "project_id": request.project_id,
+            "work_id": request.work_id,
+            "run_id": request.run_id,
+            "attempt_id": request.run_id,
+        }
+        required_profile_context: dict[str, dict[str, Any]] = {}
+        for key, schema in capsule.profile_context.items():
+            if not key.endswith("_result_schema") or not isinstance(schema, dict):
+                continue
+            properties = schema.get("properties")
+            identity = (
+                {
+                    field: value
+                    for field, value in expected_profile_identity.items()
+                    if field in properties
+                }
+                if isinstance(properties, dict)
+                else {}
+            )
+            result_requirement: dict[str, Any] = {
                 "schema_ref": f"capsule.profile_context.{key}"
             }
-            for key, value in capsule.profile_context.items()
-            if key.endswith("_result_schema") and isinstance(value, dict)
-        }
+            if identity:
+                result_requirement["identity"] = identity
+            required_profile_context[key.removesuffix("_schema")] = result_requirement
         result_contract = {
             "identity": {
                 "project_id": request.project_id,
@@ -226,6 +245,7 @@ class _NativeRuntime:
                 "Copy result_contract.identity exactly into the result identity fields.",
                 "Return one action_results receipt for every required_action_results entry and no undeclared action receipts.",
                 "For every required_profile_context entry, place the result under that exact profile_context key and make it match the referenced schema.",
+                "When a required_profile_context entry contains identity, copy it exactly into the profile result identity fields.",
                 "Do not place required profile result fields directly at the profile_context root.",
                 "Ground every evidence reference in material actually observed or produced.",
             ],

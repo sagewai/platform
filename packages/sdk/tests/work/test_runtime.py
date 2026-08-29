@@ -419,7 +419,11 @@ def test_native_runtime_prompt_maps_profile_result_schemas() -> None:
                 "software": {"base_sha": "a" * 40},
                 "analysis_result_schema": {
                     "type": "object",
-                    "required": ["attempt_id"],
+                    "properties": {
+                        "project_id": {"type": ["string", "null"]},
+                        "attempt_id": {"type": "string"},
+                    },
+                    "required": ["project_id", "attempt_id"],
                 },
             }
         }
@@ -431,11 +435,19 @@ def test_native_runtime_prompt_maps_profile_result_schemas() -> None:
 
     assert payload["result_contract"]["required_profile_context"] == {
         "analysis_result": {
-            "schema_ref": "capsule.profile_context.analysis_result_schema"
+            "schema_ref": "capsule.profile_context.analysis_result_schema",
+            "identity": {
+                "project_id": "project-a",
+                "attempt_id": "run-1",
+            },
         }
     }
     assert any(
         "exact profile_context key" in rule
+        for rule in payload["result_contract"]["rules"]
+    )
+    assert any(
+        "profile result identity" in rule
         for rule in payload["result_contract"]["rules"]
     )
 
