@@ -6,6 +6,6 @@
   "scripts": {
     "smoke": "node --check engine.js && node --check app.js && node --test engine.test.js",
     "test": "node --test engine.test.js",
-    "serve": "python3 -m http.server 4173"
+    "serve": "python3 -m http.server 4173 --bind 127.0.0.1"
   }
 }

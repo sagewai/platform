@@ -254,6 +254,10 @@ canvas {
   .game-footer { justify-content: center; }
 }
 
+@media (hover: none), (pointer: coarse) {
+  .controls { display: grid; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     scroll-behavior: auto !important;

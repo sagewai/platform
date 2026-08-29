@@ -27,13 +27,15 @@
 
       <section class="game-card" aria-label="Signal Runner game">
         <div class="hud">
-          <div><span class="hud-label">Score</span><strong id="score">0000</strong></div>
-          <div><span class="hud-label">Signals</span><strong id="signals">0 / 5</strong></div>
-          <div><span class="hud-label">Lives</span><strong id="lives">● ● ●</strong></div>
+          <div><span class="hud-label">Score</span><strong id="score" aria-live="polite">0000</strong></div>
+          <div><span class="hud-label">Signals</span><strong id="signals" aria-live="polite">0 / 5</strong></div>
+          <div><span class="hud-label">Lives</span><strong id="lives" aria-live="polite">● ● ●</strong></div>
         </div>
 
         <div class="board-wrap">
-          <canvas id="board" width="960" height="640" aria-label="Signal Runner board"></canvas>
+          <canvas id="board" width="960" height="640" aria-label="Signal Runner board">
+            Signal Runner is a grid game. Use the movement controls below the board.
+          </canvas>
           <div id="result" class="result" hidden>
             <p id="result-kicker" class="eyebrow"></p>
             <h2 id="result-title"></h2>

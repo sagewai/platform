@@ -7,8 +7,8 @@ verification, independent Claude review, repair, and durable resume.
 
 | Application | What it exercises | Run locally |
 |---|---|---|
-| [Signal Runner](./browser-game/) | Browser UI, deterministic JavaScript engine, keyboard and touch controls | `cd browser-game && npm run smoke && npm run serve` |
-| [Approval Desk](./approval-desk/) | Project isolation, evidence gates, immutable decisions, SQLite recovery | `cd approval-desk && python3 -m unittest -v` |
+| [Signal Runner](./browser-game/) | Deterministic engine; syntax-checked browser UI with keyboard and touch controls | `cd browser-game && npm run smoke && npm run serve` |
+| [Approval Desk](./approval-desk/) | Project isolation, evidence gates, immutable decisions, restart-safe SQLite persistence | `cd approval-desk && python3 -m unittest -v` |
 
 Run both suites from the repository root with `just test-apps-smoke`. The normal
 `just smoke` contract includes them, so a Sagewai change to either application

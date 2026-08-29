@@ -411,7 +411,9 @@ sdk-smoke:
 
 # Dependency-free applications used as safe Work coordinator targets
 test-apps-smoke:
-    npm --prefix test-apps/browser-game run smoke
+    node --check test-apps/browser-game/engine.js
+    node --check test-apps/browser-game/app.js
+    node --test test-apps/browser-game/engine.test.js
     cd test-apps/approval-desk && python3 -m unittest -q
 
 # ── Perf ───────────────────────────────────────────────────────────────────

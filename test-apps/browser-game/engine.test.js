@@ -95,6 +95,21 @@ test("a final glitch collision ends the game", () => {
   assert.equal(state.status, "lost");
 });
 
+test("a collision cannot make remaining lives negative", () => {
+  const state = move(
+    createGame(
+      level({
+        lives: 0,
+        hazards: [{ path: [[1, 0]] }],
+      }),
+    ),
+    "right",
+  );
+
+  assert.equal(state.lives, 0);
+  assert.equal(state.status, "lost");
+});
+
 test("glitches patrol after a successful move", () => {
   const state = move(
     createGame(
@@ -120,7 +135,7 @@ test("restart restores the original level", () => {
   assert.deepEqual(restart(changed), initial);
 });
 
-test("the shipped game can be won with moving glitches", () => {
+test("the shipped game can be won without losing a life", () => {
   const directions = ["up", "down", "left", "right"];
   const initial = createGame();
   const stateKey = (state) =>
@@ -137,7 +152,7 @@ test("the shipped game can be won with moving glitches", () => {
 
   while (queue.length > 0) {
     const state = queue.shift();
-    if (state.status === "won") {
+    if (state.status === "won" && state.lives === initial.lives) {
       won = true;
       break;
     }

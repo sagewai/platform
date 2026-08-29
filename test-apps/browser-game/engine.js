@@ -78,8 +78,8 @@ function collide(state) {
 }
 
 function loseLife(state) {
-  const lives = state.lives - 1;
-  if (lives === 0) {
+  const lives = Math.max(0, state.lives - 1);
+  if (lives <= 0) {
     return {
       ...state,
       lives,

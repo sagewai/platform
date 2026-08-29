@@ -1,4 +1,4 @@
-import { DEFAULT_LEVEL, createGame, move, restart } from "./engine.js";
+import { createGame, move, restart } from "./engine.js";
 
 const canvas = document.querySelector("#board");
 const context = canvas.getContext("2d");
@@ -9,6 +9,8 @@ const message = document.querySelector("#message");
 const result = document.querySelector("#result");
 const resultKicker = document.querySelector("#result-kicker");
 const resultTitle = document.querySelector("#result-title");
+const playAgain = document.querySelector("#play-again");
+const restartButton = document.querySelector("#restart");
 
 let state = createGame();
 
@@ -161,17 +163,22 @@ function render() {
   drawRunner();
 
   score.textContent = String(state.score).padStart(4, "0");
-  signals.textContent = `${DEFAULT_LEVEL.evidence.length - state.evidence.length} / ${DEFAULT_LEVEL.evidence.length}`;
+  const totalSignals = state.level.evidence.length;
+  signals.textContent = `${totalSignals - state.evidence.length} / ${totalSignals}`;
   lives.textContent = Array.from({ length: state.level.lives }, (_, index) =>
     index < state.lives ? "●" : "○",
   ).join(" ");
   message.textContent = state.message;
 
   const ended = state.status !== "playing";
+  const justEnded = ended && result.hidden;
   result.hidden = !ended;
   if (ended) {
     resultKicker.textContent = state.status === "won" ? "Route complete" : "Control lost";
     resultTitle.textContent = state.status === "won" ? "Uplink restored" : "Try another route";
+    if (justEnded) {
+      playAgain.focus();
+    }
   }
 }
 
@@ -196,6 +203,9 @@ const keyDirections = {
 };
 
 window.addEventListener("keydown", (event) => {
+  if (event.ctrlKey || event.metaKey || event.altKey) {
+    return;
+  }
   const direction = keyDirections[event.key];
   if (direction) {
     event.preventDefault();
@@ -210,10 +220,11 @@ document.querySelectorAll("[data-direction]").forEach((button) => {
 function resetGame() {
   state = restart(state);
   render();
+  restartButton.focus();
 }
 
-document.querySelector("#restart").addEventListener("click", resetGame);
-document.querySelector("#play-again").addEventListener("click", resetGame);
+restartButton.addEventListener("click", resetGame);
+playAgain.addEventListener("click", resetGame);
 window.addEventListener("resize", render);
 
 render();

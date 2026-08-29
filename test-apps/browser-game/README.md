@@ -36,7 +36,7 @@ Use one narrowly scoped change at a time, for example:
 ```text
 In test-apps/browser-game, add a pause control. Pause must stop keyboard and
 touch movement without changing score, lives, hazards, or collected signals.
-Add deterministic engine/UI tests and change nothing outside this app.
+Add deterministic engine tests and change nothing outside this app.
 ```
 
 ```text

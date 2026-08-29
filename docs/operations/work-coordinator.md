@@ -21,10 +21,10 @@ automation is not implied by the current software profile. The Approval Desk
 example below is a safe application for Sagewai to modify; it is not a second
 control plane or a claim that Sagewai already sends payments or approves orders.
 
-Delivery is optional and provider-neutral. A WorkContract must explicitly select
-a configured adapter before Sagewai considers deployment. AWS EKS or ECS, Azure
-AKS, Google GKE, Cloudflare, or another provider may be that adapter; none is a
-default, and a successful software run does not imply a deployment.
+Delivery is optional and not part of core coordination. The delivery contracts
+are provider-neutral, but Cloudflare is the only adapter shipped today and is
+never selected by default. EKS, ECS, AKS, GKE, or another platform requires a
+configured adapter. A successful software run does not imply a deployment.
 
 ## 1. Prepare a trusted checkout
 
@@ -40,16 +40,18 @@ at an immutable verifier image that contains the locked repository toolchain:
 export SAGEWAI_WORK_VERIFICATION_IMAGE='registry.example/verifier@sha256:<digest>'
 ```
 
-The image must be digest-pinned and able to run `just smoke`. Do not place model
-credentials or unrelated host secrets in it.
+The image must be digest-pinned and contain `just`, `uv`, Python 3, Node.js 20 or
+newer, and the repository's locked test environment. It must be able to run
+`just smoke`; do not place model credentials or unrelated host secrets in it.
 
 From this repository, prove the deterministic contract before involving either
 model:
 
 ```bash
 just smoke
-just test-apps-smoke
 ```
+
+Use `just test-apps-smoke` when you want only the two example suites.
 
 ## 2. Coordinate a bounded local change
 
@@ -209,7 +211,8 @@ control stops new side effects.
 ## Troubleshooting
 
 - **Verification image rejected:** use an immutable digest, not a mutable tag, and
-  confirm the image contains `just` plus the repository's locked test toolchain.
+  confirm the image contains `just`, `uv`, Python 3, Node.js 20 or newer, and the
+  repository's locked test environment.
 - **Work needs attention:** run `pending`, act on the exact reported ID, then
   `resume`; do not restart the Work under a new ID.
 - **No compatible Fleet worker:** verify project scope and advertised
