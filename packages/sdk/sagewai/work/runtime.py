@@ -200,8 +200,59 @@ class _NativeRuntime:
         capsule: TaskCapsule,
         capabilities: CapabilitySet,
     ) -> str:
+        expected_profile_identity = {
+            "project_id": request.project_id,
+            "work_id": request.work_id,
+            "run_id": request.run_id,
+            "attempt_id": request.run_id,
+        }
+        required_profile_context: dict[str, dict[str, Any]] = {}
+        for key, schema in capsule.profile_context.items():
+            if not key.endswith("_result_schema") or not isinstance(schema, dict):
+                continue
+            properties = schema.get("properties")
+            identity = (
+                {
+                    field: value
+                    for field, value in expected_profile_identity.items()
+                    if field in properties
+                }
+                if isinstance(properties, dict)
+                else {}
+            )
+            result_requirement: dict[str, Any] = {
+                "schema_ref": f"capsule.profile_context.{key}"
+            }
+            if identity:
+                result_requirement["identity"] = identity
+            required_profile_context[key.removesuffix("_schema")] = result_requirement
+        result_contract = {
+            "identity": {
+                "project_id": request.project_id,
+                "work_id": request.work_id,
+                "run_id": request.run_id,
+            },
+            "required_action_results": [
+                {
+                    "project_id": intent.project_id,
+                    "action_id": intent.action_id,
+                }
+                for intent in request.action_intents
+            ],
+            "required_profile_context": required_profile_context,
+            "rules": [
+                "Return exactly one OperatorResult JSON object matching the output schema.",
+                "Copy result_contract.identity exactly into the result identity fields.",
+                "Return one action_results receipt for every required_action_results entry and no undeclared action receipts.",
+                "For every required_profile_context entry, place the result under that exact profile_context key and make it match the referenced schema.",
+                "When a required_profile_context entry contains identity, copy it exactly into the profile result identity fields.",
+                "Do not place required profile result fields directly at the profile_context root.",
+                "Ground every evidence reference in material actually observed or produced.",
+            ],
+        }
         return json.dumps(
             {
+                "result_contract": result_contract,
                 "request": request.model_dump(mode="json"),
                 "capsule": capsule.model_dump(mode="json"),
                 "capabilities": capabilities.model_dump(mode="json"),
@@ -219,6 +270,17 @@ class _NativeRuntime:
         ):
             raise ValueError("operator result belongs to a different request")
         return result
+
+
+def _codex_result_schema() -> dict[str, Any]:
+    schema = OperatorResult.model_json_schema()
+    properties = schema["properties"]
+    profile_context = properties["profile_context"]
+    profile_context["additionalProperties"] = False
+    profile_context["properties"] = {}
+    properties["output_tokens"].pop("default", None)
+    schema["required"] = list(properties)
+    return schema
 
 
 class CodexRuntime(_NativeRuntime):
@@ -252,7 +314,7 @@ class CodexRuntime(_NativeRuntime):
         with tempfile.TemporaryDirectory(prefix="sagewai-codex-") as temporary:
             result_path = Path(temporary) / "result.json"
             schema_path = Path(temporary) / "schema.json"
-            schema_path.write_text(json.dumps(OperatorResult.model_json_schema()))
+            schema_path.write_text(json.dumps(_codex_result_schema()))
             process = await run_worker_subprocess(
                 argv=(
                     self._executable,
@@ -272,6 +334,7 @@ class CodexRuntime(_NativeRuntime):
                 explicit_env=environment,
                 cwd=workspace.path,
                 timeout=self._timeout,
+                output_limit=None,
             )
             if process.returncode != 0:
                 return _failed_result(request, process.stderr)
@@ -337,6 +400,7 @@ class ClaudeRuntime(_NativeRuntime):
             explicit_env=await self._environment(request, capabilities),
             cwd=workspace.path,
             timeout=self._timeout,
+            output_limit=None,
         )
         if process.returncode != 0:
             return _failed_result(request, process.stderr)
@@ -403,7 +467,7 @@ def _failed_result(request: WorkRequest, error: str) -> OperatorResult:
         work_id=request.work_id,
         run_id=request.run_id,
         status="failed",
-        summary=error[:4000],
+        summary=error[-4000:],
         evidence_refs=(),
         artifact_refs=(),
         changes=(),

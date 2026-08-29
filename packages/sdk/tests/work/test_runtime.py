@@ -133,7 +133,12 @@ def _workspace(path: Path) -> SoftwareWorkspace:
     )
 
 
-def _fake_runtime_executable(tmp_path: Path) -> Path:
+def _fake_runtime_executable(
+    tmp_path: Path,
+    *,
+    envelope_padding: int = 0,
+    failure_padding: int = 0,
+) -> Path:
     executable = tmp_path / "fake-operator"
     executable.write_text(
         textwrap.dedent(
@@ -151,7 +156,16 @@ def _fake_runtime_executable(tmp_path: Path) -> Path:
                 "capabilities": [g["name"] for g in prompt["capabilities"]["grants"]],
                 "has_session": "session" in prompt,
                 "argv": sys.argv[1:],
+                "result_contract": prompt.get("result_contract"),
+                "output_schema": (
+                    json.loads(pathlib.Path(sys.argv[sys.argv.index("--output-schema") + 1]).read_text())
+                    if "--output-schema" in sys.argv
+                    else None
+                ),
             }}))
+            if {failure_padding}:
+                print("x" * {failure_padding} + "tail-error", file=sys.stderr)
+                raise SystemExit(1)
             result = {{
                 "project_id": prompt["request"]["project_id"],
                 "work_id": prompt["request"]["work_id"],
@@ -181,6 +195,7 @@ def _fake_runtime_executable(tmp_path: Path) -> Path:
             else:
                 print(json.dumps({{
                     "structured_output": result,
+                    "result": "x" * {envelope_padding},
                     "usage": {{"output_tokens": 123}},
                 }}))
             """
@@ -264,6 +279,8 @@ async def test_native_runtime_uses_fake_executable_without_session_or_api_key(
 
     observation = json.loads((workspace_path / "runtime-observation.json").read_text())
     argv = observation.pop("argv")
+    result_contract = observation.pop("result_contract")
+    output_schema = observation.pop("output_schema")
     assert result.status == "passed"
     assert result.summary == "fake runtime completed"
     assert result.output_tokens == (123 if runtime_type is ClaudeRuntime else None)
@@ -273,8 +290,29 @@ async def test_native_runtime_uses_fake_executable_without_session_or_api_key(
         "capabilities": ["filesystem.write"],
         "has_session": False,
     }
+    assert result_contract["identity"] == {
+        "project_id": "project-a",
+        "work_id": "work-1",
+        "run_id": "run-1",
+    }
+    assert result_contract["required_action_results"] == [
+        {"project_id": "project-a", "action_id": "action-1"}
+    ]
+    assert result_contract["required_profile_context"] == {}
     assert provider.declared_scopes == ["credential://workspace"]
     assert not hasattr(runtime, "intercept_tool_call")
+    if runtime_type is CodexRuntime:
+        properties = output_schema["properties"]
+        assert properties["profile_context"] == {
+            "additionalProperties": False,
+            "properties": {},
+            "title": "Profile Context",
+            "type": "object",
+        }
+        assert set(output_schema["required"]) == set(properties)
+        assert "default" not in properties["output_tokens"]
+    else:
+        assert output_schema is None
     if runtime_type is ClaudeRuntime:
         tools = argv[argv.index("--tools") + 1].split(",")
         allowed_tools = argv[argv.index("--allowedTools") + 1].split(",")
@@ -330,6 +368,88 @@ async def test_claude_scopes_cli_and_mcp_tools_from_grants(tmp_path: Path) -> No
     assert allowed_tools == ["Bash(git *)", "mcp__github__*"]
     assert all("curl" not in selector for selector in allowed_tools)
     assert all("kubectl" not in selector for selector in allowed_tools)
+
+
+@pytest.mark.asyncio
+async def test_claude_accepts_schema_bounded_output_larger_than_preview_limit(
+    tmp_path: Path,
+) -> None:
+    runtime = ClaudeRuntime(
+        executable=str(_fake_runtime_executable(tmp_path, envelope_padding=5000)),
+        timeout=5,
+    )
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+
+    result = await runtime.run(
+        _request(),
+        _capsule(),
+        _capabilities(),
+        _workspace(workspace_path),
+    )
+
+    assert result.summary == "fake runtime completed"
+
+
+@pytest.mark.asyncio
+async def test_codex_failure_preserves_bounded_stderr_tail(tmp_path: Path) -> None:
+    runtime = CodexRuntime(
+        executable=str(_fake_runtime_executable(tmp_path, failure_padding=5000)),
+        timeout=5,
+    )
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+
+    result = await runtime.run(
+        _request(),
+        _capsule(),
+        _capabilities(),
+        _workspace(workspace_path),
+    )
+
+    assert result.status == "failed"
+    assert len(result.summary) == 4000
+    assert result.summary.endswith("tail-error\n")
+
+
+def test_native_runtime_prompt_maps_profile_result_schemas() -> None:
+    capsule = _capsule().model_copy(
+        update={
+            "profile_context": {
+                "software": {"base_sha": "a" * 40},
+                "analysis_result_schema": {
+                    "type": "object",
+                    "properties": {
+                        "project_id": {"type": ["string", "null"]},
+                        "attempt_id": {"type": "string"},
+                    },
+                    "required": ["project_id", "attempt_id"],
+                },
+            }
+        }
+    )
+
+    payload = json.loads(
+        ClaudeRuntime._prompt(_request(), capsule, _capabilities())
+    )
+
+    assert payload["result_contract"]["required_profile_context"] == {
+        "analysis_result": {
+            "schema_ref": "capsule.profile_context.analysis_result_schema",
+            "identity": {
+                "project_id": "project-a",
+                "attempt_id": "run-1",
+            },
+        }
+    }
+    assert any(
+        "exact profile_context key" in rule
+        for rule in payload["result_contract"]["rules"]
+    )
+    assert any(
+        "profile result identity" in rule
+        for rule in payload["result_contract"]["rules"]
+    )
 
 
 def test_operator_result_schema_is_structured_and_bounded() -> None:
