@@ -107,6 +107,48 @@ class _FailingSandboxBackend:
         self.closed = True
 
 
+class _StaticSandboxHandle:
+    def __init__(self, result: ToolResult, *, stop_error: Exception | None = None) -> None:
+        self.result = result
+        self.stop_error = stop_error
+        self.calls = []
+        self.stop_calls = 0
+
+    async def exec(self, tool_call):
+        self.calls.append(tool_call)
+        return self.result.model_copy(update={"call_id": tool_call.call_id})
+
+    async def stop(self, *, timeout: float = 10.0) -> None:
+        del timeout
+        self.stop_calls += 1
+        if self.stop_error is not None:
+            raise self.stop_error
+
+
+class _StaticSandboxBackend:
+    name = "static"
+
+    def __init__(
+        self,
+        result: ToolResult,
+        *,
+        stop_error: Exception | None = None,
+        close_error: Exception | None = None,
+    ) -> None:
+        self.handle = _StaticSandboxHandle(result, stop_error=stop_error)
+        self.close_error = close_error
+        self.close_calls = 0
+
+    async def start(self, **kwargs):
+        del kwargs
+        return self.handle
+
+    async def close(self) -> None:
+        self.close_calls += 1
+        if self.close_error is not None:
+            raise self.close_error
+
+
 def _git(repository: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", *args],
@@ -562,6 +604,83 @@ async def test_verification_sandbox_unavailability_fails_closed(tmp_path: Path) 
     assert backend.start_calls == 1
     assert backend.closed is True
     assert not escaped.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("result", "stop_error", "close_error", "expected_error", "expected_returncode"),
+    [
+        (
+            ToolResult(call_id="unused", ok=False, error="sandbox response timeout"),
+            None,
+            None,
+            "execution receipt",
+            None,
+        ),
+        (ToolResult(call_id="unused", ok=False, exit_code=0), None, None, "receipt", None),
+        (ToolResult(call_id="unused", ok=False, exit_code=1), None, None, None, 1),
+        (
+            ToolResult(call_id="unused", ok=True, exit_code=0),
+            RuntimeError("stop failed"),
+            None,
+            "cleanup failed",
+            None,
+        ),
+        (
+            ToolResult(call_id="unused", ok=True, exit_code=0),
+            None,
+            RuntimeError("close failed"),
+            "cleanup failed",
+            None,
+        ),
+    ],
+)
+async def test_verification_distinguishes_command_failure_from_control_loss(
+    tmp_path: Path,
+    result: ToolResult,
+    stop_error: Exception | None,
+    close_error: Exception | None,
+    expected_error: str | None,
+    expected_returncode: int | None,
+) -> None:
+    repository, base_sha = _repository(tmp_path)
+    workspace = SoftwareWorkspace(
+        ref="workspace://verify",
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="verify",
+        repository=repository,
+        path=repository,
+        base_sha=base_sha,
+        initial_sha=base_sha,
+    )
+    backend = _StaticSandboxBackend(
+        result,
+        stop_error=stop_error,
+        close_error=close_error,
+    )
+    runner = SandboxedVerificationRunner(
+        image="example.invalid/verifier@sha256:" + "a" * 64,
+        backend_factory=lambda: backend,
+    )
+    run = runner.run(
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="attempt-1",
+        workspace=workspace,
+        commands=(("true",),),
+        timeout=30,
+    )
+
+    if expected_error is not None:
+        with pytest.raises(VerificationIsolationError, match=expected_error):
+            await run
+    else:
+        processes = await run
+        assert processes[0].returncode == expected_returncode
+
+    assert backend.handle.stop_calls == 1
+    assert backend.close_calls == 1
 
 
 @pytest.mark.asyncio

@@ -240,61 +240,85 @@ class SandboxedVerificationRunner:
             ) from exc
         handle = None
         try:
-            with tempfile.TemporaryDirectory(prefix="sagewai-verification-") as root:
-                try:
-                    snapshot = Path(root) / "workspace"
-                    await _create_verification_snapshot(workspace, snapshot)
+            try:
+                with tempfile.TemporaryDirectory(prefix="sagewai-verification-") as root:
                     try:
-                        handle = await backend.start(
-                            project_id=project_id,
-                            run_id=f"verify-{work_id}-{attempt_id}",
-                            image=self._image,
-                            image_digest=_image_digest(self._image),
-                            env={},
-                            network_policy=NetworkPolicy.NONE,
-                            resource_limits=self._resource_limits,
-                            workdir_mount=snapshot,
-                            lifetime=SandboxLifetime.PER_RUN,
-                            user=f"{os.getuid()}:{os.getgid()}",
-                        )
-                    except Exception as exc:
-                        raise VerificationIsolationError(
-                            f"verification sandbox failed to start: {exc}"
-                        ) from exc
+                        snapshot = Path(root) / "workspace"
+                        await _create_verification_snapshot(workspace, snapshot)
+                        try:
+                            handle = await backend.start(
+                                project_id=project_id,
+                                run_id=f"verify-{work_id}-{attempt_id}",
+                                image=self._image,
+                                image_digest=_image_digest(self._image),
+                                env={},
+                                network_policy=NetworkPolicy.NONE,
+                                resource_limits=self._resource_limits,
+                                workdir_mount=snapshot,
+                                lifetime=SandboxLifetime.PER_RUN,
+                                user=f"{os.getuid()}:{os.getgid()}",
+                            )
+                        except Exception as exc:
+                            raise VerificationIsolationError(
+                                f"verification sandbox failed to start: {exc}"
+                            ) from exc
 
-                    results: list[WorkerProcessResult] = []
-                    for index, argv in enumerate(commands, start=1):
-                        result = await handle.exec(
-                            ToolCall(
+                        results: list[WorkerProcessResult] = []
+                        for index, argv in enumerate(commands, start=1):
+                            call = ToolCall(
                                 tool="bash",
                                 args={"command": shlex.join(argv)},
                                 call_id=f"verify-{attempt_id}-{index}",
                                 timeout_s=timeout,
                             )
-                        )
-                        timed_out = bool(result.error and "timeout" in result.error.lower())
-                        returncode = result.exit_code
-                        if returncode is None or (not result.ok and returncode == 0):
-                            returncode = -1
-                        stderr = result.stderr
-                        if result.error:
-                            stderr = f"{stderr}\n{result.error}".strip()
-                        results.append(
-                            WorkerProcessResult(
-                                returncode=returncode,
-                                stdout=result.stdout,
-                                stderr=stderr,
-                                timed_out=timed_out,
+                            try:
+                                receipt = await handle.exec(call)
+                            except Exception as exc:
+                                raise VerificationIsolationError(
+                                    f"verification sandbox execution failed: {exc}"
+                                ) from exc
+                            if (
+                                receipt.call_id != call.call_id
+                                or receipt.error is not None
+                                or receipt.exit_code is None
+                                or receipt.ok != (receipt.exit_code == 0)
+                            ):
+                                detail = receipt.error or "inconsistent status and exit code"
+                                raise VerificationIsolationError(
+                                    "invalid verification sandbox execution receipt: "
+                                    f"{detail}"
+                                )
+                            results.append(
+                                WorkerProcessResult(
+                                    returncode=receipt.exit_code,
+                                    stdout=receipt.stdout,
+                                    stderr=receipt.stderr,
+                                )
                             )
-                        )
-                    return tuple(results)
-                finally:
-                    if handle is not None:
-                        await handle.stop()
-                        handle = None
+                        return tuple(results)
+                    finally:
+                        if handle is not None:
+                            try:
+                                await handle.stop()
+                            except Exception as exc:
+                                raise VerificationIsolationError(
+                                    f"verification sandbox cleanup failed: stop: {exc}"
+                                ) from exc
+                            finally:
+                                handle = None
+            except VerificationIsolationError:
+                raise
+            except Exception as exc:
+                raise VerificationIsolationError(
+                    f"verification isolation failed: {exc}"
+                ) from exc
         finally:
-            if backend is not None:
+            try:
                 await backend.close()
+            except Exception as exc:
+                raise VerificationIsolationError(
+                    f"verification sandbox cleanup failed: close: {exc}"
+                ) from exc
 
 
 def _image_digest(image: str) -> str:

@@ -2525,6 +2525,7 @@ async def test_verification_isolation_restores_without_rerunning_implementation(
     repository, base_sha = _repository(tmp_path)
     implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
     reviewer = ReviewRuntime("accept")
+    repairer = MutationRuntime(implement_text="unused", repair_text="fixed")
     verifier = RestoringIsolationVerifier(
         SoftwareVerifier(
             knowledge_store=knowledge_store,
@@ -2539,7 +2540,7 @@ async def test_verification_isolation_restores_without_rerunning_implementation(
         durability=InMemoryStore(),
         implementer=implementer,
         reviewer=reviewer,
-        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        repairer=repairer,
         commands=(_command("initial"),),
         verifier=verifier,
     )
@@ -2552,6 +2553,7 @@ async def test_verification_isolation_restores_without_rerunning_implementation(
     assert degraded.status == "CONTROL_DEGRADED"
     assert implementer.calls == 1
     assert verifier.calls == 1
+    assert repairer.calls == 0
     assert reviewer.calls == 0
 
     resumed = await lifecycle.resume("work-1", project_id="project-a")
@@ -2560,6 +2562,7 @@ async def test_verification_isolation_restores_without_rerunning_implementation(
     assert implementer.calls == 1
     assert verifier.calls == 2
     assert reviewer.calls == 1
+    assert repairer.calls == 0
     events = await work_store.read_events("work-1", project_id="project-a")
     control_events = [
         event
