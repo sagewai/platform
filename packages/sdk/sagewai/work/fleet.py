@@ -12,9 +12,14 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 from sagewai.fleet.dispatcher import TaskStore
-from sagewai.fleet.models import capability_routing_labels
+from sagewai.fleet.models import (
+    WorkerApprovalStatus,
+    capability_routing_labels,
+)
+from sagewai.fleet.registry import FleetRegistry
 from sagewai.work.models import TaskCapsule
 from sagewai.work.runtime import (
     CapabilitySet,
@@ -24,6 +29,10 @@ from sagewai.work.runtime import (
 )
 
 
+class NoCompatibleWorkerError(RuntimeError):
+    """No approved online worker can satisfy a Work stage."""
+
+
 class FleetOperatorRuntime:
     """Dispatch one Work stage to a capability-matched Fleet worker."""
 
@@ -31,17 +40,46 @@ class FleetOperatorRuntime:
         self,
         *,
         store: TaskStore,
+        registry: FleetRegistry,
         org_id: str,
         runtime_capability: str,
         poll_interval_seconds: float,
+        heartbeat_ttl: timedelta,
     ) -> None:
         if poll_interval_seconds <= 0:
             raise ValueError("poll_interval_seconds must be positive")
+        if heartbeat_ttl <= timedelta(0):
+            raise ValueError("heartbeat_ttl must be positive")
         self._store = store
+        self._registry = registry
         self._org_id = org_id
         self._runtime_capability = runtime_capability
         self._poll_interval_seconds = poll_interval_seconds
+        self._heartbeat_ttl = heartbeat_ttl
         self.name = f"fleet:{runtime_capability}"
+
+    async def _require_compatible_worker(
+        self,
+        *,
+        project_id: str | None,
+        required_capabilities: tuple[str, ...],
+    ) -> None:
+        workers = await self._registry.list_workers(
+            self._org_id,
+            status=WorkerApprovalStatus.APPROVED,
+            pool="default",
+            project_id=project_id,
+        )
+        now = datetime.now(timezone.utc)
+        required = set(required_capabilities)
+        if not any(
+            worker.is_online(now=now, heartbeat_ttl=self._heartbeat_ttl)
+            and required.issubset(worker.capabilities.capability_names)
+            for worker in workers
+        ):
+            raise NoCompatibleWorkerError(
+                "no approved online worker satisfies the required stage capabilities"
+            )
 
     async def run(
         self,
@@ -61,6 +99,10 @@ class FleetOperatorRuntime:
             project_id=request.project_id,
         )
         if existing is None:
+            await self._require_compatible_worker(
+                project_id=request.project_id,
+                required_capabilities=required_capabilities,
+            )
             await self._store.enqueue(
                 {
                     "run_id": request.run_id,

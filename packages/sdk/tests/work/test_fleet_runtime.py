@@ -19,7 +19,12 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from sagewai.fleet import InMemoryTaskStore, WorkerCapabilities, WorkerRecord
+from sagewai.fleet import (
+    InMemoryFleetRegistry,
+    InMemoryTaskStore,
+    WorkerCapabilities,
+    WorkerRecord,
+)
 from sagewai.fleet.models import WORK_CAPABILITY_LABEL_PREFIX
 from sagewai.work import (
     AcceptanceCriterion,
@@ -27,6 +32,7 @@ from sagewai.work import (
     CapabilityGrant,
     CapabilitySet,
     FleetOperatorRuntime,
+    NoCompatibleWorkerError,
     OperatorResult,
     TaskCapsule,
     WorkContract,
@@ -125,6 +131,20 @@ def _capabilities() -> CapabilitySet:
     )
 
 
+async def _compatible_registry() -> InMemoryFleetRegistry:
+    registry = InMemoryFleetRegistry()
+    worker = await registry.register_worker(
+        "claude-worker",
+        "org-a",
+        WorkerCapabilities(capability_names=["runtime.claude", "cli.git"]),
+        project_id="project-a",
+        secret_hash="worker-local-secret-hash",
+    )
+    await registry.approve_worker(worker.id, approved_by="test")
+    await registry.heartbeat(worker.id)
+    return registry
+
+
 def _result(*, run_id: str = "run-1") -> OperatorResult:
     return OperatorResult(
         project_id="project-a",
@@ -185,16 +205,58 @@ def test_worker_online_state_requires_caller_supplied_ttl() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fleet_runtime_rejects_no_compatible_worker() -> None:
+    store = InMemoryTaskStore()
+    registry = InMemoryFleetRegistry()
+    incompatible = await registry.register_worker(
+        "codex-worker",
+        "org-a",
+        WorkerCapabilities(capability_names=["runtime.codex", "cli.git"]),
+        project_id="project-a",
+        secret_hash="codex-secret-hash",
+    )
+    foreign = await registry.register_worker(
+        "foreign-claude-worker",
+        "org-a",
+        WorkerCapabilities(capability_names=["runtime.claude", "cli.git"]),
+        project_id="project-b",
+        secret_hash="foreign-secret-hash",
+    )
+    for worker in (incompatible, foreign):
+        await registry.approve_worker(worker.id, approved_by="test")
+        await registry.heartbeat(worker.id)
+    runtime = FleetOperatorRuntime(
+        store=store,
+        registry=registry,
+        org_id="org-a",
+        runtime_capability="runtime.claude",
+        poll_interval_seconds=0.001,
+        heartbeat_ttl=timedelta(seconds=30),
+    )
+
+    with pytest.raises(
+        NoCompatibleWorkerError,
+        match="no approved online worker satisfies",
+    ):
+        await runtime.run(_request(), _capsule(), _capabilities(), workspace=None)
+
+    assert await store.list_tasks(org_id="org-a", project_id="project-a") == []
+
+
+@pytest.mark.asyncio
 async def test_fleet_runtime_matches_capabilities_and_resumes_after_worker_loss(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "worker-secret-value")
     store = InMemoryTaskStore(lease_ttl_seconds=0.01)
+    registry = await _compatible_registry()
     runtime = FleetOperatorRuntime(
         store=store,
+        registry=registry,
         org_id="org-a",
         runtime_capability="runtime.claude",
         poll_interval_seconds=0.001,
+        heartbeat_ttl=timedelta(seconds=30),
     )
     request = _request()
     capsule = _capsule()
@@ -291,11 +353,14 @@ async def test_fleet_runtime_matches_capabilities_and_resumes_after_worker_loss(
 @pytest.mark.asyncio
 async def test_fleet_runtime_rejects_result_for_another_run() -> None:
     store = InMemoryTaskStore()
+    registry = await _compatible_registry()
     runtime = FleetOperatorRuntime(
         store=store,
+        registry=registry,
         org_id="org-a",
         runtime_capability="runtime.claude",
         poll_interval_seconds=0.001,
+        heartbeat_ttl=timedelta(seconds=30),
     )
     waiter = asyncio.create_task(
         runtime.run(_request(), _capsule(), _capabilities(), workspace=None)
@@ -325,11 +390,14 @@ async def test_fleet_runtime_rejects_result_for_another_run() -> None:
 @pytest.mark.asyncio
 async def test_fleet_runtime_rejects_serialized_nested_result_from_another_project() -> None:
     store = InMemoryTaskStore()
+    registry = await _compatible_registry()
     runtime = FleetOperatorRuntime(
         store=store,
+        registry=registry,
         org_id="org-a",
         runtime_capability="runtime.claude",
         poll_interval_seconds=0.001,
+        heartbeat_ttl=timedelta(seconds=30),
     )
     waiter = asyncio.create_task(
         runtime.run(_request(), _capsule(), _capabilities(), workspace=None)

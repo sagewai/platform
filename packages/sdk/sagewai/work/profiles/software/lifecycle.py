@@ -15,12 +15,13 @@ import hashlib
 import shutil
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Protocol
 
 from sagewai.artifacts.models import ArtifactRef
 from sagewai.artifacts.object_store import LocalArtifactStore
+from sagewai.fleet import FleetRegistry, TaskStore
 from sagewai.work.capsule import TaskCapsuleCompiler
 from sagewai.work.completion import evaluate_completion, validate_verification_result
 from sagewai.work.contract import AcceptanceCriterion, WorkContract
@@ -30,6 +31,7 @@ from sagewai.work.events import (
     WorkEventType,
     active_control_precondition_ids,
 )
+from sagewai.work.fleet import FleetOperatorRuntime
 from sagewai.work.knowledge import KnowledgeItem, KnowledgeKind, KnowledgeStore
 from sagewai.work.models import (
     ActionIntent,
@@ -206,6 +208,35 @@ class SoftwareStageOperator:
     runtime: OperatorRuntime
     capabilities: CapabilitySet
     controller: OperatorController
+
+    @classmethod
+    def fleet(
+        cls,
+        *,
+        actor_ref: str,
+        store: TaskStore,
+        registry: FleetRegistry,
+        org_id: str,
+        runtime_capability: str,
+        poll_interval_seconds: float,
+        heartbeat_ttl: timedelta,
+        capabilities: CapabilitySet,
+        controller: OperatorController,
+    ) -> SoftwareStageOperator:
+        """Select durable Fleet execution for one software lifecycle role."""
+        return cls(
+            actor_ref=actor_ref,
+            runtime=FleetOperatorRuntime(
+                store=store,
+                registry=registry,
+                org_id=org_id,
+                runtime_capability=runtime_capability,
+                poll_interval_seconds=poll_interval_seconds,
+                heartbeat_ttl=heartbeat_ttl,
+            ),
+            capabilities=capabilities,
+            controller=controller,
+        )
 
 
 class SoftwareLifecycle:
