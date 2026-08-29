@@ -60,30 +60,41 @@ class WorkStore:
 
     async def append_event(self, event: WorkEvent) -> None:
         """Append one immutable event; database constraints reject duplicates."""
-        if event.event_type is WorkEventType.EXTERNAL_OUTCOME_RECORDED:
-            if set(event.payload_json) != {"incident"}:
-                raise ValueError("external outcome event must contain exactly one incident")
-            ExternalOutcomeIncident.model_validate(event.payload_json["incident"])
-        event_values = event.model_dump(mode="python")
-        event_values["project_scope_key"] = project_scope_key(event.project_id)
-        event_values["event_type"] = event.event_type.value
-        finding = None
-        finding_error: ValueError | None = None
-        if event.event_type is WorkEventType.CONTROL_DEGRADED:
-            try:
-                finding = control_failure_finding(event)
-            except ValueError as exc:
-                finding_error = exc
+
+        await self.append_events((event,))
+
+    async def append_events(self, events: tuple[WorkEvent, ...]) -> None:
+        """Append related immutable events in one database transaction."""
+
+        prepared = []
+        finding_errors: list[ValueError] = []
+        for event in events:
+            if event.event_type is WorkEventType.EXTERNAL_OUTCOME_RECORDED:
+                if set(event.payload_json) != {"incident"}:
+                    raise ValueError("external outcome event must contain exactly one incident")
+                ExternalOutcomeIncident.model_validate(event.payload_json["incident"])
+            event_values = event.model_dump(mode="python")
+            event_values["project_scope_key"] = project_scope_key(event.project_id)
+            event_values["event_type"] = event.event_type.value
+            finding = None
+            if event.event_type is WorkEventType.CONTROL_DEGRADED:
+                try:
+                    finding = control_failure_finding(event)
+                except ValueError as exc:
+                    finding_errors.append(exc)
+            prepared.append((event_values, finding))
+
         async with self._engine.begin() as conn:
-            await conn.execute(insert(self._work_events).values(**event_values))
-            if finding is not None:
-                await insert_knowledge_item(
-                    conn,
-                    finding,
-                    dialect_name=self._engine.dialect.name,
-                )
-        if finding_error is not None:
-            raise finding_error
+            for event_values, finding in prepared:
+                await conn.execute(insert(self._work_events).values(**event_values))
+                if finding is not None:
+                    await insert_knowledge_item(
+                        conn,
+                        finding,
+                        dialect_name=self._engine.dialect.name,
+                    )
+        if finding_errors:
+            raise finding_errors[0]
 
     async def read_events(
         self,
