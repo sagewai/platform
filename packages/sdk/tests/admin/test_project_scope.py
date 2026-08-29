@@ -12,7 +12,9 @@
 import types
 
 import pytest
+from fastapi import HTTPException
 
+from sagewai.admin.auth_middleware import _project_hint
 from sagewai.admin.authz import PermissionDeniedError
 from sagewai.admin.serve import (
     _emit_audit,
@@ -24,9 +26,10 @@ from sagewai.admin.serve import (
     _project_scope,
     _ProjectRunThrottle,
     _QuotaExceededError,
-    _require_resource_write,
     _request_org_id,
+    _require_resource_write,
     _RunProjectRequiredError,
+    _work_project_scope,
 )
 from sagewai.admin.state_file import SHARED_ONLY
 from sagewai.admin.tenancy import RequestContext, UserRef
@@ -52,7 +55,7 @@ class _Map:
         return self._d.get(key, default)
 
 
-def _req(ctx=None, header=None):
+def _req(ctx=None, header=None, *, path="/api/v1/work"):
     state = types.SimpleNamespace()
     if ctx is not None:
         state.context = ctx
@@ -60,6 +63,7 @@ def _req(ctx=None, header=None):
         state=state,
         headers=_Map({"x-project-id": header} if header else {}),
         query_params=_Map({}),
+        url=types.SimpleNamespace(path=path),
     )
 
 
@@ -96,6 +100,39 @@ def test_org_scope_uses_shared_sentinel_not_none():
     assert _project_scope(_req(ctx=_ctx("pA", {"project:member"}))) == "pA"
     # Single mode keeps None (header filter).
     assert _project_scope(_req(ctx=None)) is None
+
+
+def test_work_scope_requires_explicit_authorized_selection():
+    with pytest.raises(HTTPException) as omitted:
+        _work_project_scope(_req(ctx=_ctx(None, {"org:admin"})))
+    assert omitted.value.status_code == 400
+
+    assert (
+        _work_project_scope(
+            _req(ctx=_ctx("pA", {"project:member"}), header="pA")
+        )
+        == "pA"
+    )
+    assert (
+        _work_project_scope(
+            _req(ctx=_ctx(None, {"org:admin"}), header="global")
+        )
+        is None
+    )
+
+    for context, selected in (
+        (_ctx("pA", {"project:member"}), "pB"),
+        (_ctx("pA", {"project:member"}), "global"),
+        (_ctx(None, {"org:admin"}), "pA"),
+    ):
+        with pytest.raises(HTTPException) as hidden:
+            _work_project_scope(_req(ctx=context, header=selected))
+        assert hidden.value.status_code == 404
+
+
+def test_global_hint_normalization_is_limited_to_work_reads():
+    assert _project_hint(_req(header="global", path="/api/v1/work/pending")) is None
+    assert _project_hint(_req(header="global", path="/api/v1/providers")) == "global"
 
 
 def test_owner_maps_sentinel_back_to_none_for_stamping():
