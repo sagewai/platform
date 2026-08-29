@@ -40,7 +40,7 @@ def _isolated_factory(tmp_path, monkeypatch):
 def _record(
     work_id: str,
     *,
-    project_id: str,
+    project_id: str | None,
     status: str,
     created_at: datetime = NOW,
 ) -> WorkRecord:
@@ -61,7 +61,7 @@ def _event(
     event_id: str,
     *,
     work_id: str,
-    project_id: str,
+    project_id: str | None,
     sequence: int,
     event_type: WorkEventType,
     payload_json: dict,
@@ -90,6 +90,78 @@ def _app_and_token(tmp_path):
     app = create_admin_serve_app(state)
     token = state.validate_login("admin@example.com", "pw123456")["access_token"]
     return app, token
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "/api/v1/work",
+        "/api/v1/work/pending",
+        "/api/v1/work/work-1",
+    ),
+)
+def test_work_routes_reject_omitted_scope(tmp_path, path: str) -> None:
+    app, token = _app_and_token(tmp_path)
+
+    with TestClient(app) as client:
+        response = client.get(
+            path,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Work project scope is required"}
+
+
+def test_work_routes_select_explicit_global_scope_and_hide_projects(tmp_path) -> None:
+    app, token = _app_and_token(tmp_path)
+    global_record = _record("work-global", project_id=None, status="WORK_BLOCKED")
+    project_record = _record(
+        "work-project",
+        project_id="project-a",
+        status="WORK_BLOCKED",
+    )
+    global_event = _event(
+        "blocked-global",
+        work_id=global_record.work_id,
+        project_id=None,
+        sequence=1,
+        event_type=WorkEventType.WORK_BLOCKED,
+        payload_json={"reason": "Global blocker"},
+    )
+    project_event = _event(
+        "blocked-project",
+        work_id=project_record.work_id,
+        project_id="project-a",
+        sequence=1,
+        event_type=WorkEventType.WORK_BLOCKED,
+        payload_json={"reason": "Project blocker"},
+    )
+
+    with TestClient(app) as client:
+        client.headers.update(
+            {
+                "Authorization": f"Bearer {token}",
+                "X-Project-ID": "global",
+            }
+        )
+        client.portal.call(app.state.work_store.save_work, global_record)
+        client.portal.call(app.state.work_store.save_work, project_record)
+        client.portal.call(app.state.work_store.append_event, global_event)
+        client.portal.call(app.state.work_store.append_event, project_event)
+
+        listed = client.get("/api/v1/work")
+        pending = client.get("/api/v1/work/pending")
+        global_detail = client.get(f"/api/v1/work/{global_record.work_id}")
+        project_detail = client.get(f"/api/v1/work/{project_record.work_id}")
+
+    assert listed.status_code == 200
+    assert [item["work_id"] for item in listed.json()] == [global_record.work_id]
+    assert pending.status_code == 200
+    assert [item["work_id"] for item in pending.json()] == [global_record.work_id]
+    assert global_detail.status_code == 200
+    assert global_detail.json()["work"] == jsonable_encoder(global_record)
+    assert project_detail.status_code == 404
 
 
 def test_active_work_list_is_exact_and_project_scoped(tmp_path) -> None:

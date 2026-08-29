@@ -161,6 +161,21 @@ async function mockWorkApi(
 }
 
 test.describe('Work Control Console', () => {
+  test('sends the explicit global Work scope', async ({ page }) => {
+    const scopes: Array<string | undefined> = [];
+    await mockWorkApi(page);
+    await page.route('**/api/v1/work**', async (route) => {
+      scopes.push(route.request().headers()['x-project-id']);
+      await route.fulfill({ json: [] });
+    });
+
+    await page.goto('/work');
+    await page.getByRole('button', { name: /Console Project/ }).click();
+    await page.getByRole('button', { name: /All Projects/ }).click();
+
+    await expect.poll(() => scopes.includes('global')).toBe(true);
+  });
+
   test('shows project-scoped active Work and canonical pending attention', async ({ page }) => {
     let scopedRequests = 0;
     await mockWorkApi(
