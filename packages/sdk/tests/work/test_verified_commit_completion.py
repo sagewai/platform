@@ -34,6 +34,7 @@ from sagewai.work.profiles.software import (
     SoftwareVerifier,
 )
 from tests.db.conftest import dialect_engine  # noqa: F401
+from tests.work.fakes_verification import LocalVerificationRunner
 from tests.work.test_lifecycle import (
     AnalysisRuntime,
     MutationRuntime,
@@ -177,7 +178,7 @@ async def test_verified_commit_completes_with_exact_sha_and_resumes_without_reru
     implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
     reviewer = ReviewRuntime("accept")
     verifier = CountingVerifier(
-        SoftwareVerifier(knowledge_store=knowledge_store)
+        SoftwareVerifier(knowledge_store=knowledge_store, runner=LocalVerificationRunner())
     )
     lifecycle = _lifecycle(
         repository=repository,
@@ -282,7 +283,7 @@ async def test_mixed_criterion_kinds_use_exact_issuers_and_missing_policy_blocks
     )
     implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
     reviewer = ReviewRuntime("accept")
-    verifier = CountingVerifier(SoftwareVerifier(knowledge_store=knowledge_store))
+    verifier = CountingVerifier(SoftwareVerifier(knowledge_store=knowledge_store, runner=LocalVerificationRunner()))
     lifecycle = _lifecycle(
         repository=repository,
         worktree_root=tmp_path / "worktrees",
@@ -362,7 +363,7 @@ async def test_resume_after_commit_before_repository_event_does_not_rerun_stages
     first_implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
     first_reviewer = ReviewRuntime("accept")
     first_verifier = CountingVerifier(
-        SoftwareVerifier(knowledge_store=knowledge_store)
+        SoftwareVerifier(knowledge_store=knowledge_store, runner=LocalVerificationRunner())
     )
     first = _lifecycle(
         repository=repository,
@@ -401,7 +402,7 @@ async def test_resume_after_commit_before_repository_event_does_not_rerun_stages
     resumed_implementer = MutationRuntime(implement_text="wrong", repair_text="wrong")
     resumed_reviewer = ReviewRuntime("accept")
     resumed_verifier = CountingVerifier(
-        SoftwareVerifier(knowledge_store=knowledge_store)
+        SoftwareVerifier(knowledge_store=knowledge_store, runner=LocalVerificationRunner())
     )
     resumed_lifecycle = _lifecycle(
         repository=repository,
@@ -499,7 +500,7 @@ async def test_unexpected_head_during_verified_commit_freezes_control(
     implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
     reviewer = ReviewRuntime("accept")
     verifier = CountingVerifier(
-        SoftwareVerifier(knowledge_store=knowledge_store)
+        SoftwareVerifier(knowledge_store=knowledge_store, runner=LocalVerificationRunner())
     )
     lifecycle = _lifecycle(
         repository=repository,
