@@ -22,14 +22,18 @@ import httpx
 from pydantic import BaseModel, ConfigDict
 
 from sagewai.fleet.execution import run_worker_subprocess
+from sagewai.work.completion import evaluate_completion, validate_verification_result
 from sagewai.work.contract import AcceptanceCriterion, WorkContract
 from sagewai.work.events import WorkEvent, WorkEventType
 from sagewai.work.models import (
     ActionRequest,
+    CompletionEvaluation,
+    CriterionVerification,
     GateDecision,
     PendingAttention,
     PendingAttentionKind,
     Reversibility,
+    VerificationResult,
     WorkItem,
     WorkRecord,
 )
@@ -514,12 +518,16 @@ class GitHubIssueLifecycle:
         software_lifecycle: SoftwareLifecyclePort,
         github: GitHubClient,
         branch_publisher: GitBranchPublisher,
+        repository_outcome: SoftwareRepositoryOutcome,
         merge_policy: Callable[[ActionRequest], GateDecision] = require_merge_approval,
     ) -> None:
         self._work_store = work_store
         self._software_lifecycle = software_lifecycle
         self._github = github
         self._branch_publisher = branch_publisher
+        if repository_outcome is SoftwareRepositoryOutcome.VERIFIED_COMMIT:
+            raise ValueError("GitHub lifecycle requires a pull-request or merged outcome")
+        self._repository_outcome = repository_outcome
         self._merge_policy = merge_policy
 
     async def start(
@@ -622,7 +630,7 @@ class GitHubIssueLifecycle:
             profile_context=SoftwareContractContext(
                 project_id=project_id,
                 base_sha=base_sha,
-                repository_outcome=SoftwareRepositoryOutcome.MERGED,
+                repository_outcome=self._repository_outcome,
                 repository_criterion_id=repository_criterion_id,
                 delivery=None,
             ).model_dump(mode="json"),
@@ -801,6 +809,8 @@ class GitHubIssueLifecycle:
         issue: GitHubIssue,
         record: WorkRecord,
     ) -> WorkRecord:
+        software = SoftwareContractContext.model_validate(contract.profile_context)
+        software.validate_contract(contract)
         pending = await self._work_store.pending_attention(
             project_id=work_item.project_id,
         )
@@ -839,7 +849,6 @@ class GitHubIssueLifecycle:
         cycle_start = self._delivery_cycle_start(events)
         pull_request = self._pull_request(events, after_sequence=cycle_start)
         if pull_request is None:
-            software = SoftwareContractContext.model_validate(contract.profile_context)
             publication = self._branch_publication(
                 events,
                 after_sequence=cycle_start,
@@ -931,6 +940,12 @@ class GitHubIssueLifecycle:
                     base=issue.default_branch,
                     body=f"Closes #{issue.number}",
                 )
+            self._validate_pull_request(
+                pull_request,
+                work_item=work_item,
+                issue=issue,
+                expected_head=branch,
+            )
             event = await self._append(
                 work_id=work_item.id,
                 project_id=work_item.project_id,
@@ -943,6 +958,13 @@ class GitHubIssueLifecycle:
                 actor_ref="github",
             )
             events.append(event)
+
+        self._validate_pull_request(
+            pull_request,
+            work_item=work_item,
+            issue=issue,
+            expected_head=f"sagewai/{work_item.id}",
+        )
 
         pull_request_event = self._pull_request_event(
             events,
@@ -974,6 +996,16 @@ class GitHubIssueLifecycle:
         github_context = GitHubWorkContext.model_validate(
             record.profile_context["github"]
         )
+
+        if software.repository_outcome is SoftwareRepositoryOutcome.PULL_REQUEST:
+            return await self._finish_repository_outcome(
+                work_item=work_item,
+                contract=contract,
+                software=software,
+                record=record,
+                pull_request=pull_request,
+                result_sha=github_context.branch_sha,
+            )
 
         gate_id = f"merge:{work_item.id}:{pull_request.number}"
         decided = self._gate_event(
@@ -1162,12 +1194,229 @@ class GitHubIssueLifecycle:
         )
         profile_context = dict(record.profile_context)
         profile_context["github"] = github_context.model_dump(mode="json")
-        return await self._set_record(
+        record = await self._set_record(
             record,
-            status="READY_TO_DELIVER",
+            status="MERGING",
             pending_gate=None,
             profile_context=profile_context,
         )
+        return await self._finish_repository_outcome(
+            work_item=work_item,
+            contract=contract,
+            software=software,
+            record=record,
+            pull_request=pull_request,
+            result_sha=state.merge_commit_sha,
+        )
+
+    async def _finish_repository_outcome(
+        self,
+        *,
+        work_item: WorkItem,
+        contract: WorkContract,
+        software: SoftwareContractContext,
+        record: WorkRecord,
+        pull_request: GitHubPullRequest,
+        result_sha: str,
+    ) -> WorkRecord:
+        evidence_refs = (pull_request.url, f"git://{result_sha}")
+        expected_result = VerificationResult(
+            project_id=work_item.project_id,
+            contract_id=contract.id,
+            attempt_id=(
+                f"{work_item.id}:repository:{software.repository_outcome.value}:"
+                f"{pull_request.number}"
+            ),
+            stage="repository",
+            passed=True,
+            criterion_results=(
+                CriterionVerification(
+                    project_id=work_item.project_id,
+                    contract_id=contract.id,
+                    criterion_id=software.repository_criterion_id,
+                    passed=True,
+                    evidence_refs=evidence_refs,
+                ),
+            ),
+            evidence_refs=evidence_refs,
+            profile_context={
+                "repository_outcome": software.repository_outcome.value,
+                "pull_request_number": pull_request.number,
+                "pull_request_url": pull_request.url,
+                "result_sha": result_sha,
+            },
+        )
+        validate_verification_result(
+            contract,
+            (software.repository_criterion_id,),
+            expected_result,
+        )
+
+        events = await self._events(work_item.id, work_item.project_id)
+        result_event = next(
+            (
+                event
+                for event in reversed(events)
+                if event.event_type is WorkEventType.VERIFICATION_RECORDED
+                and event.payload_json.get("contract_id") == contract.id
+                and event.payload_json.get("attempt_id") == expected_result.attempt_id
+            ),
+            None,
+        )
+        if result_event is None:
+            await self._append(
+                work_id=work_item.id,
+                project_id=work_item.project_id,
+                event_type=WorkEventType.VERIFICATION_RECORDED,
+                payload=expected_result.model_dump(mode="json"),
+                actor_ref="github",
+            )
+        else:
+            recorded_result = VerificationResult.model_validate(
+                result_event.payload_json
+            )
+            validate_verification_result(
+                contract,
+                (software.repository_criterion_id,),
+                recorded_result,
+            )
+            if recorded_result != expected_result:
+                raise RuntimeError("repository outcome conflicts with canonical evidence")
+
+        if software.delivery is not None:
+            return await self._set_record(
+                record,
+                status="READY_TO_DELIVER",
+                pending_gate=None,
+            )
+
+        events = await self._events(work_item.id, work_item.project_id)
+        verification_results = tuple(
+            VerificationResult.model_validate(event.payload_json)
+            for event in events
+            if event.event_type is WorkEventType.VERIFICATION_RECORDED
+            and event.payload_json.get("contract_id") == contract.id
+        )
+        try:
+            evaluation = evaluate_completion(
+                work=work_item,
+                contract=contract,
+                verification_results=verification_results,
+                evaluated_at=datetime.now(timezone.utc),
+            )
+        except ValueError as exc:
+            return await self._block_completion(
+                work_item=work_item,
+                contract=contract,
+                record=record,
+                reason="completion_evidence_invalid",
+                payload={
+                    "violations": [str(exc)],
+                    "decision_request": (
+                        "Repair the current-contract verification evidence."
+                    ),
+                },
+            )
+        if not evaluation.passed:
+            return await self._block_completion(
+                work_item=work_item,
+                contract=contract,
+                record=record,
+                reason="completion_criteria_failed",
+                payload={
+                    "failed_criterion_ids": [
+                        result.criterion_id
+                        for result in evaluation.criterion_results
+                        if not result.passed
+                    ],
+                    "decision_request": "Repair the failed acceptance criteria.",
+                },
+            )
+
+        completed_event = next(
+            (
+                event
+                for event in reversed(events)
+                if event.event_type is WorkEventType.WORK_COMPLETED
+                and event.payload_json.get("contract_id") == contract.id
+            ),
+            None,
+        )
+        if completed_event is None:
+            await self._append(
+                work_id=work_item.id,
+                project_id=work_item.project_id,
+                event_type=WorkEventType.WORK_COMPLETED,
+                payload=evaluation.model_dump(mode="json"),
+                actor_ref="github",
+            )
+        else:
+            recorded_evaluation = CompletionEvaluation.model_validate(
+                completed_event.payload_json
+            )
+            if recorded_evaluation.model_dump(exclude={"evaluated_at"}) != (
+                evaluation.model_dump(exclude={"evaluated_at"})
+            ):
+                raise RuntimeError("completion conflicts with canonical evidence")
+        return await self._set_record(
+            record,
+            status="COMPLETE",
+            pending_gate=None,
+        )
+
+    async def _block_completion(
+        self,
+        *,
+        work_item: WorkItem,
+        contract: WorkContract,
+        record: WorkRecord,
+        reason: str,
+        payload: dict[str, Any],
+    ) -> WorkRecord:
+        events = await self._events(work_item.id, work_item.project_id)
+        if not any(
+            event.event_type is WorkEventType.WORK_BLOCKED
+            and event.payload_json.get("contract_id") == contract.id
+            and event.payload_json.get("reason") == reason
+            for event in events
+        ):
+            await self._append(
+                work_id=work_item.id,
+                project_id=work_item.project_id,
+                event_type=WorkEventType.WORK_BLOCKED,
+                payload={
+                    "contract_id": contract.id,
+                    "reason": reason,
+                    **payload,
+                },
+                actor_ref="github",
+            )
+        updated = await self._set_record(
+            record,
+            status="WORK_BLOCKED",
+            pending_gate=None,
+        )
+        await self.present_pending(
+            work_item.id,
+            project_id=work_item.project_id,
+        )
+        return updated
+
+    @staticmethod
+    def _validate_pull_request(
+        pull_request: GitHubPullRequest,
+        *,
+        work_item: WorkItem,
+        issue: GitHubIssue,
+        expected_head: str,
+    ) -> None:
+        if pull_request.project_id != work_item.project_id:
+            raise ValueError("pull request belongs to a different project")
+        if pull_request.owner != issue.owner or pull_request.repo != issue.repo:
+            raise ValueError("pull request belongs to a different repository")
+        if pull_request.head != expected_head or pull_request.base != issue.default_branch:
+            raise ValueError("pull request targets unexpected branches")
+
 
     async def _events(
         self,
