@@ -38,6 +38,7 @@ from sagewai.work.events import (
 from sagewai.work.models import (
     ActionRequest,
     ControlPrecondition,
+    ExternalOutcomeIncident,
     GateDecision,
     Reversibility,
     WorkRecord,
@@ -590,6 +591,16 @@ class DeliveryLifecycle:
             payload={"observation": result.model_dump(mode="json")},
             actor_ref="observation_provider",
         )
+        if (
+            deployment.environment == "production"
+            and result.verdict is HealthVerdict.FAIL
+        ):
+            incident_deployment = await self._external_incident_source(deployment)
+            await self._record_external_outcome_incident(
+                incident_deployment,
+                severity="high",
+                evidence_refs=result.evidence_refs,
+            )
         return result
 
     async def promote(
@@ -749,6 +760,12 @@ class DeliveryLifecycle:
             },
             actor_ref="deployment_provider",
         )
+        if deployment.environment == "production":
+            await self._record_external_outcome_incident(
+                deployment,
+                severity="high",
+                evidence_refs=evidence_refs,
+            )
         return rolled_back
 
     async def _run_rollback_provider(
@@ -1021,13 +1038,86 @@ class DeliveryLifecycle:
         }
         if request.deployment is not None:
             payload["deployment_id"] = request.deployment.id
-        await self._append(
+        degradation_event = await self._append(
             project_id=request.project_id,
             work_id=request.work_id,
             event_type=WorkEventType.CONTROL_DEGRADED,
             payload=payload,
             actor_ref="delivery_control",
         )
+        if production_rollback and request.deployment is not None:
+            failed_ids = tuple(
+                result.precondition_id for result in failures_to_record
+            )
+            details = str(payload["details"])
+            failed_summary = ", ".join(failed_ids)
+            await self._record_external_outcome_incident(
+                request.deployment,
+                severity="critical",
+                evidence_refs=tuple(
+                    ref for result in failures_to_record for ref in result.evidence_refs
+                ),
+                active_control_event_ids=(degradation_event.id,),
+                cause=(
+                    f"failed preconditions: {failed_summary}; "
+                    f"details: {details}"
+                ),
+            )
+    async def _external_incident_source(
+        self,
+        deployment: Deployment,
+    ) -> Deployment:
+        """Keep a rollback observation on its source deployment incident."""
+
+        events = await self._work_store.read_events(
+            deployment.work_id, project_id=deployment.project_id
+        )
+        for event in reversed(events):
+            if event.event_type is not WorkEventType.ROLLBACK_RECORDED:
+                continue
+            recorded = Deployment.model_validate(event.payload_json["deployment"])
+            if recorded.id == deployment.id:
+                return await self._deployment_by_id(
+                    deployment.work_id,
+                    deployment.project_id,
+                    str(event.payload_json["source_deployment_id"]),
+                )
+        return deployment
+
+
+
+    async def _record_external_outcome_incident(
+        self,
+        deployment: Deployment,
+        *,
+        severity: Literal["high", "critical"],
+        evidence_refs: tuple[str, ...],
+        active_control_event_ids: tuple[str, ...] = (),
+        cause: str | None = None,
+    ) -> None:
+        """Publish software delivery semantics through the generic interrupt receipt."""
+
+        summary = f"production incident for deployment {deployment.id}"
+        if cause is not None:
+            summary = f"{summary}; {cause}"
+        summary = summary[:500]
+        bounded_evidence = tuple(dict.fromkeys(evidence_refs))[:32]
+        bounded_control_events = tuple(dict.fromkeys(active_control_event_ids))[:32]
+        incident = ExternalOutcomeIncident(
+            incident_id=f"software-delivery:{deployment.id}",
+            summary=summary,
+            severity=severity,
+            evidence_refs=bounded_evidence,
+            active_control_event_ids=bounded_control_events,
+        )
+        await self._append(
+            project_id=deployment.project_id,
+            work_id=deployment.work_id,
+            event_type=WorkEventType.EXTERNAL_OUTCOME_RECORDED,
+            payload={"incident": incident.model_dump(mode="json")},
+            actor_ref="software_delivery",
+        )
+
 
     async def _authorize(self, request: ActionRequest) -> None:
         gate_id = f"{request.action}:{request.work_id}:{request.scope}"
@@ -1457,23 +1547,23 @@ class DeliveryLifecycle:
         event_type: WorkEventType,
         payload: dict,
         actor_ref: str,
-    ) -> None:
+    ) -> WorkEvent:
         events = await self._work_store.read_events(work_id, project_id=project_id)
-        await self._work_store.append_event(
-            WorkEvent(
-                id=str(uuid.uuid4()),
-                project_id=project_id,
-                work_id=work_id,
-                sequence=events[-1].sequence + 1 if events else 1,
-                event_type=event_type,
-                actor_type="delivery",
-                actor_ref=actor_ref,
-                payload_json=payload,
-                created_at=datetime.now(timezone.utc),
-            )
+        event = WorkEvent(
+            id=str(uuid.uuid4()),
+            project_id=project_id,
+            work_id=work_id,
+            sequence=events[-1].sequence + 1 if events else 1,
+            event_type=event_type,
+            actor_type="delivery",
+            actor_ref=actor_ref,
+            payload_json=payload,
+            created_at=datetime.now(timezone.utc),
         )
+        await self._work_store.append_event(event)
         if event_type in _DELIVERY_STATUS_EVENTS:
             await self._project_work_status(work_id, project_id)
+        return event
 
     async def _known_good_problem(
         self,

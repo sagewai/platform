@@ -590,8 +590,10 @@ async def test_fake_lifecycle_drives_staging_canary_rollout_observation_and_roll
         WorkEventType.GATE_DECIDED,
         WorkEventType.DEPLOYMENT_RECORDED,
         WorkEventType.OBSERVATION_RECORDED,
+        WorkEventType.EXTERNAL_OUTCOME_RECORDED,
         WorkEventType.GATE_DECIDED,
         WorkEventType.ROLLBACK_RECORDED,
+        WorkEventType.EXTERNAL_OUTCOME_RECORDED,
         WorkEventType.OBSERVATION_RECORDED,
     ]
     rollback_event = next(
@@ -1007,6 +1009,7 @@ async def test_provider_reusing_deployment_id_requires_new_observation(
     (
         ("rollback-artifact", "known-good artifact is missing"),
         ("rollback-authority", "rollback credential is expired"),
+        pytest.param("rollback-authority", "x" * 2000, id="overlong-detail"),
     ),
 )
 @pytest.mark.asyncio
@@ -1018,7 +1021,11 @@ async def test_failed_rollback_precondition_refuses_action_and_freezes_work(
     probe = DeterministicFakeControlProbe(
         {
             "rollback": (
-                _result("rollback-authority", passed=failed_id != "rollback-authority"),
+                _result(
+                    "rollback-authority",
+                    passed=failed_id != "rollback-authority",
+                    detail=detail if failed_id == "rollback-authority" else None,
+                ),
                 _result("delivery-observability"),
                 _result(
                     "rollback-artifact",
@@ -1060,14 +1067,23 @@ async def test_failed_rollback_precondition_refuses_action_and_freezes_work(
     degraded = next(
         event for event in events if event.event_type is WorkEventType.CONTROL_DEGRADED
     )
+    incident_event = next(
+        event
+        for event in events
+        if event.event_type is WorkEventType.EXTERNAL_OUTCOME_RECORDED
+    )
+    assert len(incident_event.payload_json["incident"]["summary"]) <= 500
+    assert incident_event.payload_json["incident"]["active_control_event_ids"] == [
+        degraded.id
+    ]
     assert degraded.payload_json["severity"] == "critical"
     assert degraded.payload_json["action"] == "rollback"
     assert degraded.payload_json["deployment_id"] == deployment.id
     assert "environment" not in degraded.payload_json
     pending = await store.pending_attention(project_id=PROJECT_ID)
     assert len(pending) == 1
-    assert pending[0].attention_id == degraded.id
-    assert pending[0].kind.value == "PRODUCTION_INCIDENT"
+    assert pending[0].attention_id == "software-delivery:deployment-1"
+    assert pending[0].kind.value == "EXTERNAL_OUTCOME_INCIDENT"
     assert pending[0].evidence_refs == (f"check://{failed_id}",)
 
 
@@ -1128,7 +1144,7 @@ async def test_rollback_provider_failure_escalates_once_and_is_not_retried(
     assert "RuntimeError: provider rejected rollback" in critical[0].payload_json["details"]
     pending = await store.pending_attention(project_id=PROJECT_ID)
     assert len(pending) == 1
-    assert pending[0].kind.value == "PRODUCTION_INCIDENT"
+    assert pending[0].kind.value == "EXTERNAL_OUTCOME_INCIDENT"
     assert pending[0].severity == "critical"
 
 
@@ -1419,7 +1435,7 @@ async def test_unrecorded_known_good_candidate_degrades_reversibility(
     assert provider.rollbacks == []
     pending = await store.pending_attention(project_id=PROJECT_ID)
     assert len(pending) == 1
-    assert pending[0].kind.value == "PRODUCTION_INCIDENT"
+    assert pending[0].kind.value == "EXTERNAL_OUTCOME_INCIDENT"
     assert pending[0].evidence_refs == ("check://rollback-artifact",)
     assert pending[0].summary.startswith("CRITICAL:")
 
