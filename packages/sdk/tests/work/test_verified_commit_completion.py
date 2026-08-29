@@ -136,6 +136,27 @@ class MoveHeadBeforeCommitManager:
         return await self.delegate.commit_reviewed(workspace, **kwargs)
 
 
+class MutateReviewedOutputBeforeCommitManager:
+    """Rewrite reviewed content without moving HEAD before the commit boundary."""
+
+    def __init__(self, delegate, *, mutation: str) -> None:
+        self.delegate = delegate
+        self.mutation = mutation
+        self.calls = 0
+
+    def __getattr__(self, name):
+        return getattr(self.delegate, name)
+
+    async def commit_reviewed(self, workspace, **kwargs) -> str:
+        self.calls += 1
+        target = workspace.path / "target.txt"
+        if self.mutation == "rewrite":
+            target.write_text("not reviewed\n")
+        else:
+            target.unlink()
+        return await self.delegate.commit_reviewed(workspace, **kwargs)
+
+
 @pytest.fixture
 async def completion_stores(dialect_engine):  # noqa: F811
     work_store = WorkStore(engine=dialect_engine)
@@ -412,6 +433,63 @@ async def test_resume_after_commit_before_repository_event_does_not_rerun_stages
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", ["rewrite", "remove"])
+async def test_reviewed_output_change_with_unchanged_head_freezes_control(
+    completion_stores,
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    work_store, knowledge_store = completion_stores
+    repository, base_sha = _repository(tmp_path)
+    implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
+    reviewer = ReviewRuntime("accept")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        implementer=implementer,
+        reviewer=reviewer,
+        repairer=implementer,
+        commands=(_command("initial"),),
+    )
+    mutating_manager = MutateReviewedOutputBeforeCommitManager(
+        lifecycle._worktree_manager,  # noqa: SLF001
+        mutation=mutation,
+    )
+    lifecycle._worktree_manager = mutating_manager  # noqa: SLF001
+
+    degraded = await lifecycle.start(
+        work_item=_work_item(),
+        contract=_contract(base_sha, SoftwareRepositoryOutcome.VERIFIED_COMMIT),
+    )
+
+    workspace = tmp_path / "worktrees/project-a/work-1/workspace"
+    assert degraded.status == "CONTROL_DEGRADED"
+    assert _git(workspace, "rev-parse", "HEAD") == base_sha
+    assert mutating_manager.calls == 1
+    events = await work_store.read_events("work-1", project_id="project-a")
+    review = next(
+        event for event in events if event.event_type is WorkEventType.REVIEW_RECORDED
+    )
+    assert review.payload_json["evidence_refs"][-1].startswith("artifact://sha256:")
+    degradation = next(
+        event for event in events if event.event_type is WorkEventType.CONTROL_DEGRADED
+    )
+    assert degradation.payload_json["stage"] == "repository"
+    assert "reviewed diff digest changed" in degradation.payload_json["details"]
+    assert not any(
+        event.event_type is WorkEventType.WORK_COMPLETED
+        or (
+            event.event_type is WorkEventType.VERIFICATION_RECORDED
+            and event.payload_json.get("stage") == "repository"
+        )
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
 async def test_unexpected_head_during_verified_commit_freezes_control(
     completion_stores,
     tmp_path: Path,
@@ -469,9 +547,32 @@ async def test_unexpected_head_during_verified_commit_freezes_control(
         for event in events
     )
 
+    workspace = tmp_path / "worktrees/project-a/work-1/workspace"
+    subprocess.run(
+        ("git", "-C", str(workspace), "checkout", "--detach", "-q", base_sha),
+        check=True,
+    )
+    projection = await work_store.load_work("work-1", project_id="project-a")
+    assert projection is not None
+    await work_store.save_work(projection.model_copy(update={"status": "COMPLETING"}))
+
     still_degraded = await lifecycle.resume("work-1", project_id="project-a")
+
     assert still_degraded.status == "CONTROL_DEGRADED"
+    assert _git(workspace, "rev-parse", "HEAD") == base_sha
     assert moving_manager.calls == 1
+    resumed_events = await work_store.read_events("work-1", project_id="project-a")
+    assert not any(
+        event.event_type in {
+            WorkEventType.CONTROL_RESTORED,
+            WorkEventType.WORK_COMPLETED,
+        }
+        or (
+            event.event_type is WorkEventType.VERIFICATION_RECORDED
+            and event.payload_json.get("stage") == "repository"
+        )
+        for event in resumed_events
+    )
 
 
 @pytest.mark.asyncio

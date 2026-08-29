@@ -11,8 +11,8 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
-from difflib import unified_diff
 from pathlib import Path
 
 from sagewai.fleet.execution import WorkerProcessResult, run_worker_subprocess
@@ -253,8 +253,16 @@ class SoftwareWorktreeManager:
         *,
         expected_sha: str,
         commit_message: str,
+        expected_diff_digest: str | None = None,
     ) -> str:
         """Commit reviewed local state, accepting only one matching restart commit."""
+        if expected_diff_digest is not None:
+            reviewed_diff, _ = await workspace_diff(workspace)
+            actual_diff_digest = (
+                f"sha256:{hashlib.sha256(reviewed_diff.encode()).hexdigest()}"
+            )
+            if actual_diff_digest != expected_diff_digest:
+                raise WorkspaceStaleError("reviewed diff digest changed")
         actual_sha = await self.current_sha(workspace)
         if actual_sha != expected_sha:
             if await self._matches_published_state(
@@ -317,16 +325,7 @@ class SoftwareWorktreeManager:
 async def workspace_diff(
     workspace: SoftwareWorkspace,
 ) -> tuple[str, tuple[str, ...]]:
-    """Return the complete tracked/untracked review diff and changed paths."""
-    tracked = await _git(
-        workspace.path,
-        "diff",
-        "--no-ext-diff",
-        workspace.base_sha,
-        "--",
-    )
-    if tracked.returncode != 0:
-        raise WorkspaceStaleError(tracked.stderr)
+    """Return a stable Git-native diff for all tracked and untracked paths."""
     tracked_names = await _git(
         workspace.path,
         "diff",
@@ -345,26 +344,42 @@ async def workspace_diff(
     if untracked.returncode != 0:
         raise WorkspaceStaleError(untracked.stderr)
 
-    paths = set(tracked_names.stdout.splitlines())
-    untracked_paths = tuple(path for path in untracked.stdout.splitlines() if path)
-    paths.update(untracked_paths)
-    parts = [tracked.stdout]
-    for relative in untracked_paths:
-        path = workspace.path / relative
-        try:
-            lines = path.read_text().splitlines(keepends=True)
-        except UnicodeDecodeError:
-            parts.append(f"Binary file b/{relative} added\n")
-            continue
-        parts.extend(
-            unified_diff(
-                (),
-                lines,
-                fromfile="/dev/null",
-                tofile=f"b/{relative}",
-            )
+    untracked_paths = {path for path in untracked.stdout.splitlines() if path}
+    paths = tuple(
+        sorted(
+            {path for path in tracked_names.stdout.splitlines() if path}
+            | untracked_paths
         )
-    return "".join(parts), tuple(sorted(paths))
+    )
+    parts: list[str] = []
+    for relative in paths:
+        if relative in untracked_paths:
+            diff = await _git(
+                workspace.path,
+                "diff",
+                "--no-ext-diff",
+                "--binary",
+                "--no-index",
+                "--",
+                "/dev/null",
+                relative,
+            )
+            if diff.returncode not in {0, 1}:
+                raise WorkspaceStaleError(diff.stderr)
+        else:
+            diff = await _git(
+                workspace.path,
+                "diff",
+                "--no-ext-diff",
+                "--binary",
+                workspace.base_sha,
+                "--",
+                relative,
+            )
+            if diff.returncode != 0:
+                raise WorkspaceStaleError(diff.stderr)
+        parts.append(diff.stdout)
+    return "".join(parts), paths
 
 
 def _validate_component(label: str, value: str) -> None:

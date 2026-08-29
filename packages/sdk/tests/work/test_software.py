@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shlex
 import subprocess
@@ -42,6 +43,7 @@ from sagewai.work.profiles.software import (
     WorkspaceStaleError,
     WorktreeBranchPublisher,
     software_workspace_precondition,
+    workspace_diff,
 )
 from tests.db.conftest import dialect_engine  # noqa: F401
 from tests.work.fakes_verification import LocalVerificationRunner
@@ -331,6 +333,36 @@ async def test_worktree_is_pinned_retryable_and_detects_unexpected_head_movement
     _git(resumed.path, "commit", "-m", "unexpected head")
     with pytest.raises(WorkspaceStaleError, match="HEAD moved"):
         await manager.assert_current(resumed, expected_sha=base_sha)
+
+
+@pytest.mark.asyncio
+async def test_reviewed_diff_is_canonical_before_and_after_committing_untracked_file(
+    tmp_path: Path,
+) -> None:
+    repository, base_sha = _repository(tmp_path)
+    manager = SoftwareWorktreeManager(root=tmp_path / "worktrees")
+    workspace = await manager.prepare(
+        repository=repository,
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="attempt-1",
+        base_sha=base_sha,
+    )
+    (workspace.path / "target.txt").write_text("reviewed\n")
+    reviewed_diff, reviewed_files = await workspace_diff(workspace)
+    reviewed_digest = f"sha256:{hashlib.sha256(reviewed_diff.encode()).hexdigest()}"
+
+    result_sha = await manager.commit_reviewed(
+        workspace,
+        expected_sha=base_sha,
+        expected_diff_digest=reviewed_digest,
+        commit_message="sagewai work work-1",
+    )
+    committed_diff, committed_files = await workspace_diff(workspace)
+
+    assert result_sha != base_sha
+    assert committed_diff == reviewed_diff
+    assert committed_files == reviewed_files == ("target.txt",)
 
 
 @pytest.mark.asyncio

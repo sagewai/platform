@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import uuid
 from dataclasses import dataclass, field
@@ -1619,6 +1620,15 @@ class SoftwareLifecycle:
         for finding in review.findings:
             if finding.profile_context:
                 SoftwareReviewFindingContext.model_validate(finding.profile_context)
+        if review.verdict == "accept":
+            reviewer_evidence_refs = tuple(
+                ref for ref in review.evidence_refs if ref != diff_artifact.storage_ref
+            )
+            review = review.model_copy(
+                update={
+                    "evidence_refs": (*reviewer_evidence_refs, diff_artifact.storage_ref)
+                }
+            )
         await self._append(
             work_item,
             WorkEventType.REVIEW_RECORDED,
@@ -1673,6 +1683,13 @@ class SoftwareLifecycle:
             raise ValueError("local completion requires a verified-commit outcome")
 
         events = await self._events(work_item)
+        if SOFTWARE_WORKSPACE_PRECONDITION_ID in active_control_precondition_ids(events):
+            await self._set_status(
+                work_item,
+                "CONTROL_DEGRADED",
+                active_run_id=f"{work_item.id}:repository:1",
+            )
+            return "CONTROL_DEGRADED"
         repository_result = next(
             (
                 VerificationResult.model_validate(event.payload_json)
@@ -1684,6 +1701,23 @@ class SoftwareLifecycle:
             None,
         )
         if repository_result is None:
+            review = self._latest_review(events)
+            if review is None or review.verdict != "accept" or not review.evidence_refs:
+                raise WorkspaceStaleError("accepted review diff evidence is missing")
+            reviewed_diff_ref = review.evidence_refs[-1]
+            try:
+                reviewed_diff = self._artifact_store.read(
+                    reviewed_diff_ref, project_id=work_item.project_id
+                )
+            except (OSError, ValueError) as exc:
+                raise WorkspaceStaleError(
+                    "reviewed diff evidence is unavailable"
+                ) from exc
+            expected_diff_digest = (
+                f"sha256:{hashlib.sha256(reviewed_diff).hexdigest()}"
+            )
+            if reviewed_diff_ref != f"artifact://{expected_diff_digest}":
+                raise WorkspaceStaleError("reviewed diff evidence digest changed")
             expected_sha = expected_result_sha(events, software.base_sha)
             actual_sha = await self._worktree_manager.current_sha(workspace)
             if actual_sha == expected_sha and not await self._preflight_workspace(
@@ -1698,6 +1732,7 @@ class SoftwareLifecycle:
                 workspace,
                 expected_sha=expected_sha,
                 commit_message=f"sagewai work {work_item.id}",
+                expected_diff_digest=expected_diff_digest,
             )
             read_back_sha = await self._worktree_manager.current_sha(workspace)
             if read_back_sha != result_sha:
