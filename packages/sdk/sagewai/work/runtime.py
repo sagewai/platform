@@ -200,8 +200,39 @@ class _NativeRuntime:
         capsule: TaskCapsule,
         capabilities: CapabilitySet,
     ) -> str:
+        required_profile_context = {
+            key.removesuffix("_schema"): {
+                "schema_ref": f"capsule.profile_context.{key}"
+            }
+            for key, value in capsule.profile_context.items()
+            if key.endswith("_result_schema") and isinstance(value, dict)
+        }
+        result_contract = {
+            "identity": {
+                "project_id": request.project_id,
+                "work_id": request.work_id,
+                "run_id": request.run_id,
+            },
+            "required_action_results": [
+                {
+                    "project_id": intent.project_id,
+                    "action_id": intent.action_id,
+                }
+                for intent in request.action_intents
+            ],
+            "required_profile_context": required_profile_context,
+            "rules": [
+                "Return exactly one OperatorResult JSON object matching the output schema.",
+                "Copy result_contract.identity exactly into the result identity fields.",
+                "Return one action_results receipt for every required_action_results entry and no undeclared action receipts.",
+                "For every required_profile_context entry, place the result under that exact profile_context key and make it match the referenced schema.",
+                "Do not place required profile result fields directly at the profile_context root.",
+                "Ground every evidence reference in material actually observed or produced.",
+            ],
+        }
         return json.dumps(
             {
+                "result_contract": result_contract,
                 "request": request.model_dump(mode="json"),
                 "capsule": capsule.model_dump(mode="json"),
                 "capabilities": capabilities.model_dump(mode="json"),
