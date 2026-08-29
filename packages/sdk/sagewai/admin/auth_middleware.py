@@ -248,7 +248,21 @@ def _extract(request) -> tuple[str | None, str]:
 def _project_hint(request) -> str | None:
     """The client-supplied project hint — a *hint within authorized scope*, never
     an authorization input (multi-tenant resolves it against membership)."""
-    return request.headers.get("x-project-id") or request.query_params.get("project_id") or None
+    hint = (
+        request.headers.get("x-project-id")
+        or request.query_params.get("project_id")
+        or None
+    )
+    if hint == "global" and _is_work_read_path(request.url.path):
+        return None
+    return hint
+
+
+def _is_work_read_path(path: str) -> bool:
+    if path in {"/api/v1/work", "/api/v1/work/pending"}:
+        return True
+    parts = path.split("/")
+    return len(parts) == 5 and parts[1:4] == ["api", "v1", "work"]
 
 
 class AuthMiddleware(BaseHTTPMiddleware):

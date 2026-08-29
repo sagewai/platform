@@ -145,7 +145,9 @@ import { getCurrentProjectId } from './project-state';
 const clientOpts = { getToken: getAccessToken, getProjectId: getCurrentProjectId };
 const client = createFetchClient(BASE_URL, clientOpts);
 const analyticsClient = createFetchClient(ANALYTICS_URL, clientOpts);
-
+const workScopeHeaders = () => ({
+  'X-Project-ID': getCurrentProjectId() ?? 'global',
+});
 
 export const adminApi = {
   /* ─── Unified connections (PR5) — talks to /api/v1/admin/connections/... ─── */
@@ -153,14 +155,19 @@ export const adminApi = {
 
   /* ─── Work control plane ─── */
   listActiveWork: () =>
-    analyticsClient.get<WorkRecord[]>('/api/v1/work'),
+    analyticsClient.raw<WorkRecord[]>('/api/v1/work', {
+      headers: workScopeHeaders(),
+    }),
 
   listPendingWorkAttention: () =>
-    analyticsClient.get<PendingAttention[]>('/api/v1/work/pending'),
+    analyticsClient.raw<PendingAttention[]>('/api/v1/work/pending', {
+      headers: workScopeHeaders(),
+    }),
 
   getWork: (workId: string) =>
-    analyticsClient.get<WorkDetail>(`/api/v1/work/${encodeURIComponent(workId)}`),
-
+    analyticsClient.raw<WorkDetail>(`/api/v1/work/${encodeURIComponent(workId)}`, {
+      headers: workScopeHeaders(),
+    }),
   /* ─── Core admin endpoints ─── */
   listAgents: () => client.get<AgentSummary[]>('/agents'),
 

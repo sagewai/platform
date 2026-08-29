@@ -84,32 +84,83 @@ def test_work_group_is_registered() -> None:
     assert "approve" in result.output
     assert "pending" in result.output
     assert "metrics" in result.output
+    assert "--project" in result.output
+
+
+@pytest.mark.parametrize(
+    "command",
+    (
+        ("start", "description"),
+        ("intake", "--label", "sagewai"),
+        ("status", "work-1"),
+        ("resume", "work-1"),
+        ("approve", "work-1", "gate-1"),
+        ("pending",),
+        ("metrics",),
+    ),
+)
+def test_every_work_command_rejects_omitted_project_scope(
+    monkeypatch,
+    command: tuple[str, ...],
+) -> None:
+    monkeypatch.setenv("SAGEWAI_PROJECT", "ambient-project-must-not-apply")
+
+    result = CliRunner().invoke(cli, ["work", *command])
+
+    assert result.exit_code == 2
+    assert "Missing option '--project'" in result.output
+
+
+def test_work_global_scope_is_explicit_none(monkeypatch) -> None:
+    seen = []
+
+    async def fake_pending(*, project_id):
+        seen.append(project_id)
+        return ()
+
+    monkeypatch.setattr(work_module, "_pending_work", fake_pending)
+
+    result = CliRunner().invoke(
+        cli,
+        ["work", "--project", "global", "pending"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen == [None]
+    assert result.output == "No pending Work attention.\n"
 
 
 def test_work_intake_runs_one_labeled_issue_scan(monkeypatch) -> None:
     seen = []
 
-    async def fake_intake(label: str):
-        seen.append(label)
+    async def fake_intake(label: str, *, project_id: str | None):
+        seen.append((label, project_id))
         return SimpleNamespace(work_id="work-1", status="READY_TO_MERGE")
 
     monkeypatch.setattr(work_module, "_intake_work", fake_intake)
 
-    result = CliRunner().invoke(work_cli, ["intake", "--label", "sagewai"])
+    result = CliRunner().invoke(
+        work_cli,
+        ["--project", "project-a", "intake", "--label", "sagewai"],
+    )
 
     assert result.exit_code == 0, result.output
-    assert seen == ["sagewai"]
+    assert seen == [("sagewai", "project-a")]
     assert "work-1" in result.output
     assert "READY_TO_MERGE" in result.output
 
 
 def test_work_intake_reports_no_unseen_labeled_issue(monkeypatch) -> None:
-    async def fake_intake(_label: str):
+    async def fake_intake(_label: str, *, project_id: str | None):
+        assert project_id == "project-a"
         return None
 
     monkeypatch.setattr(work_module, "_intake_work", fake_intake)
 
-    result = CliRunner().invoke(work_cli, ["intake", "--label", "sagewai"])
+    result = CliRunner().invoke(
+        work_cli,
+        ["--project", "project-a", "intake", "--label", "sagewai"],
+    )
 
     assert result.exit_code == 0, result.output
     assert (
@@ -139,7 +190,6 @@ async def test_intake_work_targets_the_local_github_repository(monkeypatch) -> N
         seen.append({"build": (project_id, repository)})
         return FakeGitHubLifecycle()
 
-    monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
     monkeypatch.setattr(work_module, "_repository_state", fake_repository_state)
     monkeypatch.setattr(
         work_module,
@@ -148,7 +198,7 @@ async def test_intake_work_targets_the_local_github_repository(monkeypatch) -> N
     )
     monkeypatch.setattr(work_module, "_build_github_lifecycle", fake_build_github_lifecycle)
 
-    record = await work_module._intake_work("sagewai")
+    record = await work_module._intake_work("sagewai", project_id="project-a")
 
     assert record is not None
     assert seen == [
@@ -166,31 +216,35 @@ async def test_intake_work_targets_the_local_github_repository(monkeypatch) -> N
 def test_work_start_runs_direct_lifecycle(monkeypatch) -> None:
     seen = []
 
-    async def fake_start(description: str):
-        seen.append(description)
+    async def fake_start(description: str, *, project_id: str | None):
+        seen.append((description, project_id))
         return SimpleNamespace(work_id="work-1", status="READY_TO_MERGE")
 
     monkeypatch.setattr(work_module, "_start_work", fake_start)
 
     result = CliRunner().invoke(
         work_cli,
-        ["start", "local change description"],
+        ["--project", "project-a", "start", "local change description"],
     )
 
     assert result.exit_code == 0, result.output
-    assert seen == ["local change description"]
+    assert seen == [("local change description", "project-a")]
     assert "work-1" in result.output
     assert "READY_TO_MERGE" in result.output
     assert "COMPLETE" not in result.output
 
 
 def test_work_start_reports_target_validation_error(monkeypatch) -> None:
-    async def fake_start(_description: str):
+    async def fake_start(_description: str, *, project_id: str | None):
+        assert project_id == "project-a"
         raise ValueError("requested base does not match GitHub default branch")
 
     monkeypatch.setattr(work_module, "_start_work", fake_start)
 
-    result = CliRunner().invoke(work_cli, ["start", "https://github.com/o/r/issues/1"])
+    result = CliRunner().invoke(
+        work_cli,
+        ["--project", "project-a", "start", "https://github.com/o/r/issues/1"],
+    )
 
     assert result.exit_code != 0
     assert "requested base does not match GitHub default branch" in result.output
@@ -220,11 +274,13 @@ async def test_start_work_routes_github_issue_to_github_lifecycle(monkeypatch) -
         seen.append(("build", project_id, repository))
         return FakeGitHubLifecycle()
 
-    monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
     monkeypatch.setattr(work_module, "_repository_state", fake_repository_state)
     monkeypatch.setattr(work_module, "_build_github_lifecycle", fake_build_github_lifecycle)
 
-    record = await work_module._start_work("https://github.com/octocat/repo/issues/7")
+    record = await work_module._start_work(
+        "https://github.com/octocat/repo/issues/7",
+        project_id="project-a",
+    )
 
     assert record.status == "READY_TO_MERGE"
     assert seen == [
@@ -241,42 +297,52 @@ async def test_start_work_routes_github_issue_to_github_lifecycle(monkeypatch) -
 def test_work_status_is_project_scoped_and_reports_not_found(monkeypatch) -> None:
     seen = []
 
-    async def fake_status(work_id: str):
-        seen.append(work_id)
+    async def fake_status(work_id: str, *, project_id: str | None):
+        seen.append((work_id, project_id))
         return None
 
     monkeypatch.setattr(work_module, "_status_work", fake_status)
 
-    result = CliRunner().invoke(work_cli, ["status", "missing"])
+    result = CliRunner().invoke(
+        work_cli,
+        ["--project", "project-a", "status", "missing"],
+    )
 
     assert result.exit_code != 0
-    assert seen == ["missing"]
+    assert seen == [("missing", "project-a")]
     assert "not found" in result.output.lower()
 
 
 def test_work_resume_uses_persisted_lifecycle(monkeypatch) -> None:
     seen = []
 
-    async def fake_resume(work_id: str):
-        seen.append(work_id)
+    async def fake_resume(work_id: str, *, project_id: str | None):
+        seen.append((work_id, project_id))
         return SimpleNamespace(work_id=work_id, status="WORK_BLOCKED")
 
     monkeypatch.setattr(work_module, "_resume_work", fake_resume)
 
-    result = CliRunner().invoke(work_cli, ["resume", "work-1"])
+    result = CliRunner().invoke(
+        work_cli,
+        ["--project", "project-a", "resume", "work-1"],
+    )
 
     assert result.exit_code == 0, result.output
-    assert seen == ["work-1"]
+    assert seen == [("work-1", "project-a")]
     assert "WORK_BLOCKED" in result.output
 
 
 def test_work_resume_reports_lifecycle_error(monkeypatch) -> None:
-    async def fake_resume(_work_id: str):
+    async def fake_resume(_work_id: str, *, project_id: str | None):
+        assert project_id == "project-a"
         raise ValueError("lifecycle configuration is missing: TOKEN")
 
     monkeypatch.setattr(work_module, "_resume_work", fake_resume)
 
-    result = CliRunner().invoke(work_cli, ["resume", "work-1"])
+    result = CliRunner().invoke(
+        work_cli,
+        ["--project", "project-a", "resume", "work-1"],
+    )
 
     assert result.exit_code != 0
     assert "configuration is missing" in result.output
@@ -286,24 +352,36 @@ def test_work_resume_reports_lifecycle_error(monkeypatch) -> None:
 def test_work_approve_advances_the_named_canonical_gate(monkeypatch) -> None:
     seen = []
 
-    async def fake_approve(work_id: str, gate_id: str):
-        seen.append((work_id, gate_id))
+    async def fake_approve(
+        work_id: str,
+        gate_id: str,
+        *,
+        project_id: str | None,
+    ):
+        seen.append((work_id, gate_id, project_id))
         return SimpleNamespace(work_id=work_id, status="READY_TO_MERGE")
 
     monkeypatch.setattr(work_module, "_approve_work", fake_approve)
 
     result = CliRunner().invoke(
         work_cli,
-        ["approve", "work-1", "merge:work-1:42"],
+        [
+            "--project",
+            "project-a",
+            "approve",
+            "work-1",
+            "merge:work-1:42",
+        ],
     )
 
     assert result.exit_code == 0, result.output
-    assert seen == [("work-1", "merge:work-1:42")]
+    assert seen == [("work-1", "merge:work-1:42", "project-a")]
     assert "READY_TO_MERGE" in result.output
 
 
 def test_work_pending_lists_canonical_attention(monkeypatch) -> None:
-    async def fake_pending():
+    async def fake_pending(*, project_id: str | None):
+        assert project_id == "project-a"
         return (
             SimpleNamespace(
                 kind=SimpleNamespace(value="GATE_REQUESTED"),
@@ -321,7 +399,10 @@ def test_work_pending_lists_canonical_attention(monkeypatch) -> None:
 
     monkeypatch.setattr(work_module, "_pending_work", fake_pending)
 
-    result = CliRunner().invoke(work_cli, ["pending"])
+    result = CliRunner().invoke(
+        work_cli,
+        ["--project", "project-a", "pending"],
+    )
 
     assert result.exit_code == 0, result.output
     assert "GATE_REQUESTED" in result.output
@@ -334,8 +415,19 @@ def test_work_pending_lists_canonical_attention(monkeypatch) -> None:
 
 
 def test_work_metrics_prints_the_read_only_event_projection(monkeypatch) -> None:
-    async def fake_metrics(*, work_id=None, profile=None, runtime=None):
-        assert (work_id, profile, runtime) == ("work-1", "software", "codex")
+    async def fake_metrics(
+        *,
+        project_id,
+        work_id=None,
+        profile=None,
+        runtime=None,
+    ):
+        assert (project_id, work_id, profile, runtime) == (
+            "project-a",
+            "work-1",
+            "software",
+            "codex",
+        )
         return WorkMetrics(
             project_id="project-a",
             work_id=work_id,
@@ -353,6 +445,8 @@ def test_work_metrics_prints_the_read_only_event_projection(monkeypatch) -> None
     result = CliRunner().invoke(
         work_cli,
         [
+            "--project",
+            "project-a",
             "metrics",
             "--work-id",
             "work-1",
@@ -418,12 +512,12 @@ async def test_work_metrics_queries_the_resolved_project_store(monkeypatch) -> N
             calls.append(("metrics", project_id, work_id, profile, runtime))
             return expected
 
-    monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
     monkeypatch.setattr(work_module.factory, "ensure_schema", fake_ensure_schema)
     monkeypatch.setattr(work_module.factory, "get_engine", lambda: "engine")
     monkeypatch.setattr(work_module, "WorkStore", FakeStore)
 
     result = await work_module._work_metrics(
+        project_id="project-a",
         work_id="work-1",
         profile="software",
         runtime="codex",
@@ -471,19 +565,19 @@ async def test_delivery_phase_resume_does_not_infer_provider(
         source_ref="https://github.com/octocat/repo/issues/7",
     )
 
-    async def fake_status(_work_id):
+    async def fake_status(_work_id, *, project_id):
+        assert project_id == "project-a"
         return record
 
     async def unexpected_repository_state():
         raise AssertionError("generic resume must not select a delivery provider")
 
-    monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
     monkeypatch.setattr(work_module, "_status_work", fake_status)
     monkeypatch.setattr(
         work_module, "_repository_state", unexpected_repository_state
     )
 
-    result = await work_module._resume_work("work-1")
+    result = await work_module._resume_work("work-1", project_id="project-a")
 
     assert result is record
 
@@ -498,17 +592,17 @@ async def test_complete_resume_returns_without_repository_or_remote_work(monkeyp
         source_ref="https://github.com/octocat/repo/issues/7",
     )
 
-    async def fake_status(_work_id):
+    async def fake_status(_work_id, *, project_id):
+        assert project_id == "project-a"
         return record
 
     async def unexpected_repository_state():
         raise AssertionError("terminal Work must not inspect the repository")
 
-    monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
     monkeypatch.setattr(work_module, "_status_work", fake_status)
     monkeypatch.setattr(work_module, "_repository_state", unexpected_repository_state)
 
-    result = await work_module._resume_work("work-1")
+    result = await work_module._resume_work("work-1", project_id="project-a")
 
     assert result is record
 
@@ -532,7 +626,8 @@ async def test_triaging_resume_repairs_without_inferring_delivery(monkeypatch) -
     repository = SimpleNamespace()
     seen = []
 
-    async def fake_status(_work_id):
+    async def fake_status(_work_id, *, project_id):
+        assert project_id == "project-a"
         return current
 
     async def fake_repository_state():
@@ -550,15 +645,20 @@ async def test_triaging_resume_repairs_without_inferring_delivery(monkeypatch) -
         seen.append(("build", project_id, repository))
         return FakeGitHubLifecycle()
 
-    monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
     monkeypatch.setattr(work_module, "_status_work", fake_status)
     monkeypatch.setattr(work_module, "_repository_state", fake_repository_state)
     monkeypatch.setattr(
         work_module, "_build_github_lifecycle", fake_build_github_lifecycle
     )
 
-    repair_result = await work_module._resume_work("work-1")
-    frozen_result = await work_module._resume_work("work-1")
+    repair_result = await work_module._resume_work(
+        "work-1",
+        project_id="project-a",
+    )
+    frozen_result = await work_module._resume_work(
+        "work-1",
+        project_id="project-a",
+    )
 
     assert repair_result is frozen_result is repaired
     assert seen == [
@@ -578,7 +678,8 @@ async def test_delivery_gate_approval_requires_explicit_adapter(monkeypatch) -> 
     )
     gate_id = "deploy_production:work-1:candidate:production:traffic:5%"
 
-    async def fake_status(_work_id):
+    async def fake_status(_work_id, *, project_id):
+        assert project_id == "project-a"
         return record
 
     async def unexpected_repository_state():
@@ -602,7 +703,6 @@ async def test_delivery_gate_approval_requires_explicit_adapter(monkeypatch) -> 
                 )
             ]
 
-    monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
     monkeypatch.setattr(work_module, "_status_work", fake_status)
     monkeypatch.setattr(
         work_module, "_repository_state", unexpected_repository_state
@@ -615,7 +715,11 @@ async def test_delivery_gate_approval_requires_explicit_adapter(monkeypatch) -> 
         ValueError,
         match="delivery approval requires an explicitly selected adapter",
     ):
-        await work_module._approve_work("work-1", gate_id)
+        await work_module._approve_work(
+            "work-1",
+            gate_id,
+            project_id="project-a",
+        )
 
 
 @pytest.mark.asyncio
@@ -629,17 +733,21 @@ async def test_complete_delivery_approval_is_a_noop_before_repository_work(
         source_ref="https://github.com/octocat/repo/issues/7",
     )
 
-    async def fake_status(_work_id):
+    async def fake_status(_work_id, *, project_id):
+        assert project_id == "project-a"
         return record
 
     async def unexpected_repository_state():
         raise AssertionError("terminal Work must not inspect the repository")
 
-    monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
     monkeypatch.setattr(work_module, "_status_work", fake_status)
     monkeypatch.setattr(work_module, "_repository_state", unexpected_repository_state)
 
-    result = await work_module._approve_work("work-1", "promote_rollout:stale")
+    result = await work_module._approve_work(
+        "work-1",
+        "promote_rollout:stale",
+        project_id="project-a",
+    )
 
     assert result is record
 
@@ -655,15 +763,19 @@ async def test_triaging_rejects_stale_delivery_approval_before_repository_work(
         source_ref="https://github.com/octocat/repo/issues/7",
     )
 
-    async def fake_status(_work_id):
+    async def fake_status(_work_id, *, project_id):
+        assert project_id == "project-a"
         return record
 
     async def unexpected_repository_state():
         raise AssertionError("triaging approval rejection must not inspect the repository")
 
-    monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
     monkeypatch.setattr(work_module, "_status_work", fake_status)
     monkeypatch.setattr(work_module, "_repository_state", unexpected_repository_state)
 
     with pytest.raises(ValueError, match="cannot approve a stale gate from TRIAGING"):
-        await work_module._approve_work("work-1", "rollback:stale")
+        await work_module._approve_work(
+            "work-1",
+            "rollback:stale",
+            project_id="project-a",
+        )

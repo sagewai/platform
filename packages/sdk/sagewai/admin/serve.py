@@ -28,7 +28,7 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -4170,21 +4170,21 @@ def create_admin_serve_app(
     @app.get("/api/v1/work/pending")
     async def list_pending_work(request: Request) -> JSONResponse:
         pending = await request.app.state.work_store.pending_attention(
-            project_id=_owner(_project_scope(request))
+            project_id=_work_project_scope(request)
         )
         return JSONResponse(jsonable_encoder(pending))
 
     @app.get("/api/v1/work")
     async def list_active_work(request: Request) -> JSONResponse:
         records = await request.app.state.work_store.list_work(
-            project_id=_owner(_project_scope(request)),
+            project_id=_work_project_scope(request),
             active_only=True,
         )
         return JSONResponse(jsonable_encoder(records))
 
     @app.get("/api/v1/work/{work_id}")
     async def get_work(work_id: str, request: Request) -> JSONResponse:
-        project_id = _owner(_project_scope(request))
+        project_id = _work_project_scope(request)
         record = await request.app.state.work_store.load_work(
             work_id,
             project_id=project_id,
@@ -6398,6 +6398,33 @@ def _project_scope(request: Request) -> str | None:
     if ctx is not None and ctx.tenancy_mode == "multi":
         return ctx.project_id if ctx.project_id is not None else SHARED_ONLY
     return _project_id(request)
+
+
+def _work_project_scope(request: Request) -> str | None:
+    """Return the explicitly selected, authorized Work read scope."""
+    selected = (
+        request.headers.get("x-project-id")
+        or request.query_params.get("project_id")
+        or None
+    )
+    if selected is None:
+        raise HTTPException(status_code=400, detail="Work project scope is required")
+
+    context = getattr(request.state, "context", None)
+    if selected == "global":
+        if (
+            context is not None
+            and context.tenancy_mode == "multi"
+            and context.project_id is not None
+        ):
+            raise HTTPException(status_code=404, detail="Not found")
+        return None
+
+    if context is not None and context.tenancy_mode == "multi":
+        if context.project_id != selected:
+            raise HTTPException(status_code=404, detail="Not found")
+        return context.project_id
+    return selected
 
 
 def _fleet_project_label(scope: str | None) -> str | None:
