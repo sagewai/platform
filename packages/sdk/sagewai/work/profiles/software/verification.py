@@ -607,6 +607,7 @@ class SoftwareVerifier:
             evidence_refs.append(item.id)
             checks.append(
                 SoftwareVerificationCheck(
+                    project_id=work_item.project_id,
                     name=f"command-{index}",
                     command=command,
                     exit_code=process.returncode,

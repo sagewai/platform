@@ -402,11 +402,11 @@ sdk-typecheck:
 # Daily software Work path (no LLM, no services) — alias for sdk-smoke
 smoke: sdk-smoke
 
-# Labeled intake -> merge gate -> delivery completion, entirely with safe fakes
+# Labeled intake plus issue -> implementation -> review -> merge completion, with safe fakes
 sdk-smoke:
     uv run --package sagewai --group test pytest \
         packages/sdk/tests/work/test_github.py::test_labeled_intake_starts_one_unseen_issue_once \
-        packages/sdk/tests/work/test_cloudflare_flow.py::test_flow_reaches_complete_with_same_candidate_promoted \
+        packages/sdk/tests/work/test_lifecycle.py::test_github_flow_uses_real_software_lifecycle_events \
         -q -o "addopts="
 
 # ── Perf ───────────────────────────────────────────────────────────────────
