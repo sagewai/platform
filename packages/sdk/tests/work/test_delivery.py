@@ -16,7 +16,10 @@ from datetime import datetime, timezone
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import insert
 
+from sagewai._project_scope import project_scope_key
+from sagewai.db.models import WorkEventModel
 from sagewai.work import (
     ActionRequest,
     ControlCheckResult,
@@ -183,6 +186,43 @@ class RecordingPolicy:
         return self.decision
 
 
+class _SimulatedProcessDeathError(RuntimeError):
+    pass
+
+
+class _CrashBetweenOutcomeEventsStore(WorkStore):
+    """Fault once after inserting the source event but before its receipt."""
+
+    def __init__(self, *, engine) -> None:
+        super().__init__(engine=engine)
+        self._fault_engine = engine
+        self._armed = True
+
+    async def append_event(self, event: WorkEvent) -> None:
+        if self._armed and event.event_type is WorkEventType.EXTERNAL_OUTCOME_RECORDED:
+            self._armed = False
+            raise _SimulatedProcessDeathError
+        await super().append_event(event)
+
+    async def append_events(self, events: tuple[WorkEvent, ...]) -> None:
+        if (
+            self._armed
+            and len(events) == 2
+            and events[1].event_type is WorkEventType.EXTERNAL_OUTCOME_RECORDED
+        ):
+            self._armed = False
+            source = events[0]
+            values = source.model_dump(mode="python")
+            values["project_scope_key"] = project_scope_key(source.project_id)
+            values["event_type"] = source.event_type.value
+            with pytest.raises(_SimulatedProcessDeathError):
+                async with self._fault_engine.begin() as conn:
+                    await conn.execute(insert(WorkEventModel.__table__).values(**values))
+                    raise _SimulatedProcessDeathError
+            raise _SimulatedProcessDeathError
+        await super().append_events(events)
+
+
 @pytest.mark.parametrize(
     ("risk", "reversibility", "expected"),
     (
@@ -212,9 +252,7 @@ def test_default_delivery_action_policy(
     assert default_delivery_action_policy(request) is expected
 
 
-@pytest.fixture
-async def store(dialect_engine) -> WorkStore:  # noqa: F811
-    result = WorkStore(engine=dialect_engine)
+async def _seed_delivery_store(result: WorkStore) -> None:
     await result.init()
     await result.save_work(_record())
     known_good = _known_good()
@@ -231,6 +269,12 @@ async def store(dialect_engine) -> WorkStore:  # noqa: F811
             created_at=NOW,
         )
     )
+
+
+@pytest.fixture
+async def store(dialect_engine) -> WorkStore:  # noqa: F811
+    result = WorkStore(engine=dialect_engine)
+    await _seed_delivery_store(result)
     return result
 
 
@@ -2406,3 +2450,180 @@ def test_control_request_is_immutable() -> None:
 
     with pytest.raises(ValidationError):
         request.action = "deploy"  # type: ignore[misc]
+
+
+def _production_deployment() -> Deployment:
+    return Deployment(
+        id="deployment-crash-boundary",
+        project_id=PROJECT_ID,
+        work_id=WORK_ID,
+        release_candidate_id="candidate-1",
+        environment="production",
+        exposure=BlastRadius(dimension="traffic", value="5%"),
+        provider_ref="fake://deployment/crash-boundary",
+        status="active",
+    )
+
+
+def _failed_rollback_probe() -> DeterministicFakeControlProbe:
+    return DeterministicFakeControlProbe(
+        {
+            "rollback": (
+                _result(
+                    "rollback-authority",
+                    passed=False,
+                    detail="credential expired",
+                ),
+                _result("delivery-observability"),
+                _result("rollback-artifact"),
+            )
+        }
+    )
+
+
+async def _restarted_store(engine) -> WorkStore:
+    result = WorkStore(engine=engine)
+    await result.init()
+    return result
+
+
+async def _assert_one_external_incident(store: WorkStore) -> None:
+    events = await store.read_events(WORK_ID, project_id=PROJECT_ID)
+    receipts = [
+        event for event in events if event.event_type is WorkEventType.EXTERNAL_OUTCOME_RECORDED
+    ]
+    assert len(receipts) == 1
+    assert receipts[0].payload_json["incident"]["incident_id"] == (
+        "software-delivery:deployment-crash-boundary"
+    )
+    pending = await store.pending_attention(project_id=PROJECT_ID)
+    assert len(pending) == 1
+    assert pending[0].kind.value == "EXTERNAL_OUTCOME_INCIDENT"
+    assert pending[0].attention_id == "software-delivery:deployment-crash-boundary"
+
+
+@pytest.mark.asyncio
+async def test_production_fail_receipt_is_atomic_across_process_restart(
+    dialect_engine,  # noqa: F811
+) -> None:
+    crashing_store = _CrashBetweenOutcomeEventsStore(engine=dialect_engine)
+    await _seed_delivery_store(crashing_store)
+    lifecycle, _, _, _, _ = _lifecycle(
+        crashing_store,
+        observations=({"availability": False},),
+    )
+    await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    deployment = _production_deployment()
+    await _record_deployment(crashing_store, deployment)
+    gate = HealthGate(
+        id="availability",
+        project_id=PROJECT_ID,
+        description="availability",
+        check_ref="fake://availability",
+        failure_verdict=HealthVerdict.FAIL,
+    )
+
+    with pytest.raises(_SimulatedProcessDeathError):
+        await lifecycle.observe(deployment, gates=(gate,), window_seconds=60)
+
+    restarted = await _restarted_store(dialect_engine)
+    resumed, _, _, _, _ = _lifecycle(
+        restarted,
+        observations=({"availability": False},),
+    )
+    result = await resumed.observe(deployment, gates=(gate,), window_seconds=60)
+
+    assert result.verdict is HealthVerdict.FAIL
+    events = await restarted.read_events(WORK_ID, project_id=PROJECT_ID)
+    assert sum(event.event_type is WorkEventType.OBSERVATION_RECORDED for event in events) == 1
+    await _assert_one_external_incident(restarted)
+
+
+@pytest.mark.asyncio
+async def test_production_rollback_receipt_is_atomic_across_process_restart(
+    dialect_engine,  # noqa: F811
+) -> None:
+    crashing_store = _CrashBetweenOutcomeEventsStore(engine=dialect_engine)
+    await _seed_delivery_store(crashing_store)
+    lifecycle, _, _, _, _ = _lifecycle(crashing_store)
+    await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    deployment = _production_deployment()
+    await _record_deployment(crashing_store, deployment)
+
+    with pytest.raises(_SimulatedProcessDeathError):
+        await lifecycle.rollback(
+            deployment,
+            known_good_candidate=_known_good(),
+            evidence_refs=("observation://failed",),
+            expected_duration_seconds=60,
+        )
+
+    restarted = await _restarted_store(dialect_engine)
+    resumed, _, _, _, _ = _lifecycle(restarted)
+    await resumed.rollback(
+        deployment,
+        known_good_candidate=_known_good(),
+        evidence_refs=("observation://failed",),
+        expected_duration_seconds=60,
+    )
+
+    events = await restarted.read_events(WORK_ID, project_id=PROJECT_ID)
+    assert sum(event.event_type is WorkEventType.ROLLBACK_RECORDED for event in events) == 1
+    await _assert_one_external_incident(restarted)
+
+
+@pytest.mark.asyncio
+async def test_critical_rollback_control_receipt_is_atomic_across_process_restart(
+    dialect_engine,  # noqa: F811
+) -> None:
+    failed_probe = _failed_rollback_probe()
+    crashing_store = _CrashBetweenOutcomeEventsStore(engine=dialect_engine)
+    await _seed_delivery_store(crashing_store)
+    lifecycle, _, _, _, _ = _lifecycle(crashing_store, control_probe=failed_probe)
+    await lifecycle.build(
+        work_id=WORK_ID,
+        project_id=PROJECT_ID,
+        commit_sha=COMMIT_SHA,
+        evidence_refs=(),
+    )
+    deployment = _production_deployment()
+    await _record_deployment(crashing_store, deployment)
+
+    with pytest.raises(_SimulatedProcessDeathError):
+        await lifecycle.rollback(
+            deployment,
+            known_good_candidate=_known_good(),
+            evidence_refs=(),
+            expected_duration_seconds=60,
+        )
+
+    restarted = await _restarted_store(dialect_engine)
+    resumed_probe = _failed_rollback_probe()
+    resumed, _, _, _, _ = _lifecycle(restarted, control_probe=resumed_probe)
+    with pytest.raises(ControlDegradedError, match="rollback-authority"):
+        await resumed.rollback(
+            deployment,
+            known_good_candidate=_known_good(),
+            evidence_refs=(),
+            expected_duration_seconds=60,
+        )
+
+    events = await restarted.read_events(WORK_ID, project_id=PROJECT_ID)
+    degraded = [
+        event
+        for event in events
+        if event.event_type is WorkEventType.CONTROL_DEGRADED
+        and event.payload_json.get("action") == "rollback"
+    ]
+    assert len(degraded) == 1
+    await _assert_one_external_incident(restarted)
