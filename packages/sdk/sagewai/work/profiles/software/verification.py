@@ -536,6 +536,7 @@ class SoftwareVerifier:
             for criterion in contract.acceptance_criteria
             if criterion.id != context.repository_criterion_id
             and criterion.id not in delivery_criterion_ids
+            and criterion.verification_kind == "deterministic"
         )
         validate_criterion_subset(contract, criterion_ids)
         if criterion_ids != execution_criterion_ids:

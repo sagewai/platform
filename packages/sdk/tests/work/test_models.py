@@ -28,11 +28,13 @@ from sagewai.work import (
     ControlPreconditionKind,
     CriterionVerification,
     OperatorDisciplineReport,
+    ProposedAcceptanceCriterion,
     Reversibility,
     ReviewFinding,
     ReviewResult,
     VerificationResult,
     WorkContract,
+    WorkContractProposal,
     WorkEventType,
     WorkItem,
     WorkRecord,
@@ -68,6 +70,29 @@ def _contract(**updates) -> WorkContract:
     }
     values.update(updates)
     return WorkContract.model_validate(values)
+
+
+def test_contract_proposal_requires_typed_explicit_verification_kind() -> None:
+    proposal = WorkContractProposal(
+        goal="Prove the change",
+        allowed_scope=("target.txt",),
+        acceptance_criteria=(
+            ProposedAcceptanceCriterion(
+                statement="commands pass",
+                verification_kind="deterministic",
+            ),
+        ),
+        constraints=(),
+        non_goals=(),
+        risk="low",
+        design_required=False,
+    )
+
+    assert proposal.acceptance_criteria[0].verification_kind == "deterministic"
+    values = proposal.model_dump()
+    values["acceptance_criteria"] = ("legacy criterion",)
+    with pytest.raises(ValidationError):
+        WorkContractProposal.model_validate(values)
 
 
 def test_work_item_is_frozen_and_project_scoped() -> None:

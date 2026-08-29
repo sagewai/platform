@@ -718,10 +718,10 @@ class SoftwareLifecycle:
             AcceptanceCriterion(
                 id=f"{draft.id}:analysis:criterion:{index}",
                 project_id=draft.project_id,
-                statement=statement,
-                verification_kind="deterministic",
+                statement=proposed_criterion.statement,
+                verification_kind=proposed_criterion.verification_kind,
             )
-            for index, statement in enumerate(proposal.acceptance_criteria, start=1)
+            for index, proposed_criterion in enumerate(proposal.acceptance_criteria, start=1)
         )
         accepted = WorkContract(
             id=f"{draft.id}:analysis",
@@ -995,11 +995,22 @@ class SoftwareLifecycle:
             if state in {"READY_TO_MERGE", "WORK_BLOCKED", "COMPLETE"}:
                 return await self._set_status(work_item, state)
             if state == "COMPLETING":
-                state = await self._complete_verified_commit(
-                    work_item=work_item,
-                    contract=contract,
-                    workspace=workspace,
-                )
+                try:
+                    state = await self._complete_verified_commit(
+                        work_item=work_item,
+                        contract=contract,
+                        workspace=workspace,
+                    )
+                except WorkspaceStaleError as exc:
+                    run_id = f"{work_item.id}:repository:1"
+                    await self._record_workspace_degradation(
+                        work_item,
+                        stage="repository",
+                        run_id=run_id,
+                        detail=str(exc),
+                        evidence_refs=(workspace.ref,),
+                    )
+                    state = "CONTROL_DEGRADED"
                 continue
             if state == "DESIGNING":
                 state = await self._run_design(
@@ -1199,12 +1210,18 @@ class SoftwareLifecycle:
             capabilities=assignment.capabilities,
             workspace=workspace,
         )
+        criteria_by_id = {criterion.id: criterion for criterion in contract.acceptance_criteria}
+        profile_criterion_ids = tuple(
+            criterion_id
+            for criterion_id in planned_action.verification
+            if criteria_by_id[criterion_id].verification_kind == "profile"
+        )
         profile_verification: VerificationResult | None = None
-        if result.action_results:
+        if profile_criterion_ids and result.action_results:
             profile_verification = await self._profile.verify(
                 work_item,
                 contract,
-                planned_action.verification,
+                profile_criterion_ids,
                 result.action_results,
             )
             if profile_verification.attempt_id != run_id:
@@ -1252,8 +1269,8 @@ class SoftwareLifecycle:
             )
             return "WORK_BLOCKED"
 
-        if profile_verification is None:
-            raise ValueError("passed software execution requires action verification")
+        if profile_criterion_ids and profile_verification is None:
+            raise ValueError("passed software execution requires profile verification")
 
         result_sha = await self._worktree_manager.current_sha(workspace)
         await self._append(
@@ -1269,7 +1286,11 @@ class SoftwareLifecycle:
                     base_sha=workspace.base_sha,
                     result_sha=result_sha,
                 ).model_dump(mode="json"),
-                "profile_verification": profile_verification.model_dump(mode="json"),
+                "profile_verification": (
+                    profile_verification.model_dump(mode="json")
+                    if profile_verification is not None
+                    else None
+                ),
                 "criterion_ids": list(planned_action.verification),
             },
             actor_ref=assignment.actor_ref,
@@ -1296,88 +1317,114 @@ class SoftwareLifecycle:
             str(criterion_id)
             for criterion_id in completed.payload_json["criterion_ids"]
         )
-        profile_result = VerificationResult.model_validate(
-            completed.payload_json["profile_verification"]
+        criteria_by_id = {
+            criterion.id: criterion for criterion in contract.acceptance_criteria
+        }
+        profile_criterion_ids = tuple(
+            criterion_id
+            for criterion_id in criterion_ids
+            if criteria_by_id[criterion_id].verification_kind == "profile"
         )
-        if profile_result.attempt_id != attempt_id:
-            raise ValueError("profile verification belongs to a different attempt")
-        validate_verification_result(contract, criterion_ids, profile_result)
-        isolation_was_degraded = (
-            SOFTWARE_VERIFICATION_ISOLATION_PRECONDITION_ID
-            in active_control_precondition_ids(events)
+        deterministic_criterion_ids = tuple(
+            criterion_id
+            for criterion_id in criterion_ids
+            if criteria_by_id[criterion_id].verification_kind == "deterministic"
         )
-        try:
-            deterministic = await self._verifier.verify(
-                work_item=work_item,
-                contract=contract,
-                criterion_ids=criterion_ids,
-                attempt_id=attempt_id,
-                workspace=workspace,
-                commands=self._verification_commands,
+
+        profile_result: VerificationResult | None = None
+        profile_payload = completed.payload_json.get("profile_verification")
+        if profile_payload is not None:
+            profile_result = VerificationResult.model_validate(profile_payload)
+            if profile_result.attempt_id != attempt_id:
+                raise ValueError("profile verification belongs to a different attempt")
+            validate_verification_result(contract, profile_criterion_ids, profile_result)
+
+        deterministic: VerificationResult | None = None
+        if deterministic_criterion_ids:
+            isolation_was_degraded = (
+                SOFTWARE_VERIFICATION_ISOLATION_PRECONDITION_ID
+                in active_control_precondition_ids(events)
             )
-        except VerificationIsolationError as exc:
-            if not isolation_was_degraded:
+            try:
+                deterministic = await self._verifier.verify(
+                    work_item=work_item,
+                    contract=contract,
+                    criterion_ids=deterministic_criterion_ids,
+                    attempt_id=attempt_id,
+                    workspace=workspace,
+                    commands=self._verification_commands,
+                )
+            except VerificationIsolationError as exc:
+                if not isolation_was_degraded:
+                    await self._append(
+                        work_item,
+                        WorkEventType.CONTROL_DEGRADED,
+                        {
+                            "run_id": attempt_id,
+                            "stage": "verification",
+                            "failed_preconditions": [
+                                SOFTWARE_VERIFICATION_ISOLATION_PRECONDITION_ID
+                            ],
+                            "evidence_refs": [workspace.ref],
+                            "details": str(exc),
+                            "frozen_action_ids": [],
+                        },
+                        actor_ref="software.verifier",
+                    )
+                await self._set_status(
+                    work_item,
+                    "CONTROL_DEGRADED",
+                    active_run_id=attempt_id,
+                )
+                return "CONTROL_DEGRADED"
+            validate_verification_result(
+                contract,
+                deterministic_criterion_ids,
+                deterministic,
+            )
+            if isolation_was_degraded:
                 await self._append(
                     work_item,
-                    WorkEventType.CONTROL_DEGRADED,
+                    WorkEventType.CONTROL_RESTORED,
                     {
                         "run_id": attempt_id,
                         "stage": "verification",
-                        "failed_preconditions": [
+                        "precondition_ids": [
                             SOFTWARE_VERIFICATION_ISOLATION_PRECONDITION_ID
                         ],
-                        "evidence_refs": [workspace.ref],
-                        "details": str(exc),
-                        "frozen_action_ids": [],
+                        "evidence_refs": list(deterministic.evidence_refs),
                     },
                     actor_ref="software.verifier",
                 )
-            await self._set_status(
+
+        issuer_results = tuple(
+            issuer for issuer in (profile_result, deterministic) if issuer is not None
+        )
+        if not issuer_results:
+            await self._block_once(
                 work_item,
-                "CONTROL_DEGRADED",
-                active_run_id=attempt_id,
-            )
-            return "CONTROL_DEGRADED"
-        validate_verification_result(contract, criterion_ids, deterministic)
-        if isolation_was_degraded:
-            await self._append(
-                work_item,
-                WorkEventType.CONTROL_RESTORED,
                 {
-                    "run_id": attempt_id,
-                    "stage": "verification",
-                    "precondition_ids": [
-                        SOFTWARE_VERIFICATION_ISOLATION_PRECONDITION_ID
-                    ],
-                    "evidence_refs": list(deterministic.evidence_refs),
+                    "reason": "verification_issuer_missing",
+                    "criterion_ids": list(criterion_ids),
+                    "decision_request": (
+                        "Provide a supported verifier for an accepted criterion or revise "
+                        "the contract."
+                    ),
                 },
                 actor_ref="software.verifier",
             )
-        profile_by_id = {
-            result.criterion_id: result for result in profile_result.criterion_results
+            return "WORK_BLOCKED"
+
+        results_by_id = {
+            criterion_result.criterion_id: criterion_result
+            for issuer in issuer_results
+            for criterion_result in issuer.criterion_results
         }
-        deterministic_by_id = {
-            result.criterion_id: result for result in deterministic.criterion_results
-        }
+        proven_criterion_ids = tuple(
+            criterion_id for criterion_id in criterion_ids if criterion_id in results_by_id
+        )
         criterion_results = tuple(
-            CriterionVerification(
-                project_id=work_item.project_id,
-                contract_id=contract.id,
-                criterion_id=criterion_id,
-                passed=(
-                    profile_by_id[criterion_id].passed
-                    and deterministic_by_id[criterion_id].passed
-                ),
-                evidence_refs=tuple(
-                    dict.fromkeys(
-                        (
-                            *profile_by_id[criterion_id].evidence_refs,
-                            *deterministic_by_id[criterion_id].evidence_refs,
-                        )
-                    )
-                ),
-            )
-            for criterion_id in criterion_ids
+            results_by_id[criterion_id] for criterion_id in proven_criterion_ids
         )
         result = VerificationResult(
             project_id=work_item.project_id,
@@ -1388,15 +1435,18 @@ class SoftwareLifecycle:
             criterion_results=criterion_results,
             evidence_refs=tuple(
                 dict.fromkeys(
-                    (*profile_result.evidence_refs, *deterministic.evidence_refs)
+                    evidence_ref
+                    for issuer in issuer_results
+                    for evidence_ref in issuer.evidence_refs
                 )
             ),
             profile_context={
-                **profile_result.profile_context,
-                **deterministic.profile_context,
+                key: value
+                for issuer in issuer_results
+                for key, value in issuer.profile_context.items()
             },
         )
-        validate_verification_result(contract, criterion_ids, result)
+        validate_verification_result(contract, proven_criterion_ids, result)
         await self._append(
             work_item,
             WorkEventType.VERIFICATION_RECORDED,
@@ -1635,6 +1685,15 @@ class SoftwareLifecycle:
         )
         if repository_result is None:
             expected_sha = expected_result_sha(events, software.base_sha)
+            actual_sha = await self._worktree_manager.current_sha(workspace)
+            if actual_sha == expected_sha and not await self._preflight_workspace(
+                work_item,
+                workspace=workspace,
+                stage="repository",
+                run_id=f"{work_item.id}:repository:1",
+                expected_sha=expected_sha,
+            ):
+                return "CONTROL_DEGRADED"
             result_sha = await self._worktree_manager.commit_reviewed(
                 workspace,
                 expected_sha=expected_sha,
@@ -1908,6 +1967,8 @@ class SoftwareLifecycle:
             return "repair"
         if state == "REVIEWING":
             return "review"
+        if state == "COMPLETING":
+            return "repository"
         return None
 
     def _operator_run_id(
@@ -1923,6 +1984,8 @@ class SoftwareLifecycle:
             return f"{work_item.id}:implement:1"
         if stage == "repair":
             return f"{work_item.id}:repair:{self._repair_count(events) + 1}"
+        if stage == "repository":
+            return f"{work_item.id}:repository:1"
         return f"{work_item.id}:review:{self._review_count(events) + 1}"
 
     async def _append(

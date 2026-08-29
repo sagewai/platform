@@ -193,6 +193,18 @@ def _verification_contract() -> work.WorkContract:
                 statement="verification commands pass",
                 verification_kind="deterministic",
             ),
+            work.AcceptanceCriterion(
+                id="criterion-profile",
+                project_id="project-a",
+                statement="profile action succeeds",
+                verification_kind="profile",
+            ),
+            work.AcceptanceCriterion(
+                id="criterion-policy",
+                project_id="project-a",
+                statement="policy authorizes completion",
+                verification_kind="policy",
+            ),
         ),
         constraints=(),
         non_goals=(),
@@ -945,12 +957,13 @@ async def test_small_verification_output_remains_inline(
     assert item.artifact_refs == ()
     assert "stdout:\nsmall-output" in item.statement
     assert not (tmp_path / "objects").exists()
-    with pytest.raises(ValueError, match="criterion subset"):
-        await verifier.verify(
-            work_item=work_item,
-            contract=_verification_contract(),
-            criterion_ids=("criterion-repository",),
-            attempt_id="attempt-1",
-            workspace=workspace,
-            commands=(command,),
-        )
+    for mismatched_id in ("criterion-repository", "criterion-profile", "criterion-policy"):
+        with pytest.raises(ValueError, match="criterion subset"):
+            await verifier.verify(
+                work_item=work_item,
+                contract=_verification_contract(),
+                criterion_ids=(mismatched_id,),
+                attempt_id="attempt-1",
+                workspace=workspace,
+                commands=(command,),
+            )

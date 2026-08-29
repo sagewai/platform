@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -19,8 +20,10 @@ from sagewai.core.state import InMemoryStore
 from sagewai.work import (
     AcceptanceCriterion,
     CompletionEvaluation,
+    ProposedAcceptanceCriterion,
     VerificationResult,
     WorkContract,
+    WorkContractProposal,
     WorkEventType,
     WorkStore,
 )
@@ -77,8 +80,10 @@ class CountingVerifier:
     def __init__(self, delegate: SoftwareVerifier) -> None:
         self.delegate = delegate
         self.calls = 0
+        self.criterion_ids: list[tuple[str, ...]] = []
 
     async def verify(self, **kwargs) -> VerificationResult:
+        self.criterion_ids.append(tuple(kwargs["criterion_ids"]))
         self.calls += 1
         return await self.delegate.verify(**kwargs)
 
@@ -99,6 +104,36 @@ class CrashAfterCommitManager:
             self.crashed = True
             raise RuntimeError("simulated death after local commit")
         return result_sha
+
+
+class MoveHeadBeforeCommitManager:
+    """Move HEAD immediately before the reviewed commit is applied."""
+
+    def __init__(self, delegate) -> None:
+        self.delegate = delegate
+        self.calls = 0
+
+    def __getattr__(self, name):
+        return getattr(self.delegate, name)
+
+    async def commit_reviewed(self, workspace, **kwargs) -> str:
+        self.calls += 1
+        subprocess.run(
+            ("git", "-C", str(workspace.path), "add", "--all"),
+            check=True,
+        )
+        subprocess.run(
+            (
+                "git",
+                "-C",
+                str(workspace.path),
+                "commit",
+                "-qm",
+                "unexpected completion movement",
+            ),
+            check=True,
+        )
+        return await self.delegate.commit_reviewed(workspace, **kwargs)
 
 
 @pytest.fixture
@@ -194,6 +229,108 @@ async def test_verified_commit_completes_with_exact_sha_and_resumes_without_reru
 
 
 @pytest.mark.asyncio
+async def test_mixed_criterion_kinds_use_exact_issuers_and_missing_policy_blocks_completion(
+    completion_stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = completion_stores
+    repository, base_sha = _repository(tmp_path)
+    analyzer = AnalysisRuntime(
+        proposal=WorkContractProposal(
+            goal="Change target under explicit policy",
+            allowed_scope=("target.txt",),
+            acceptance_criteria=(
+                ProposedAcceptanceCriterion(
+                    statement="verification commands pass",
+                    verification_kind="deterministic",
+                ),
+                ProposedAcceptanceCriterion(
+                    statement="profile action succeeds",
+                    verification_kind="profile",
+                ),
+                ProposedAcceptanceCriterion(
+                    statement="policy authorizes completion",
+                    verification_kind="policy",
+                ),
+            ),
+            constraints=(),
+            non_goals=(),
+            risk="low",
+            design_required=False,
+        )
+    )
+    implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
+    reviewer = ReviewRuntime("accept")
+    verifier = CountingVerifier(SoftwareVerifier(knowledge_store=knowledge_store))
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        analyzer=analyzer,
+        implementer=implementer,
+        reviewer=reviewer,
+        repairer=implementer,
+        verifier=verifier,
+        commands=(_command("initial"),),
+    )
+
+    record = await lifecycle.start(
+        work_item=_work_item(),
+        contract=_contract(base_sha, SoftwareRepositoryOutcome.VERIFIED_COMMIT),
+    )
+
+    assert record.status == "WORK_BLOCKED"
+    events = await work_store.read_events("work-1", project_id="project-a")
+    accepted = WorkContract.model_validate(
+        next(
+            event.payload_json
+            for event in events
+            if event.event_type is WorkEventType.CONTRACT_ACCEPTED
+        )
+    )
+    deterministic_id, profile_id, policy_id = (
+        criterion.id for criterion in accepted.acceptance_criteria[1:]
+    )
+    assert verifier.criterion_ids == [(deterministic_id,)]
+
+    completed_mutation = next(
+        event
+        for event in events
+        if event.event_type is WorkEventType.STAGE_COMPLETED
+        and event.payload_json.get("stage") == "implement"
+    )
+    profile_result = VerificationResult.model_validate(
+        completed_mutation.payload_json["profile_verification"]
+    )
+    assert tuple(item.criterion_id for item in profile_result.criterion_results) == (
+        profile_id,
+    )
+
+    stage_result = next(
+        VerificationResult.model_validate(event.payload_json)
+        for event in events
+        if event.event_type is WorkEventType.VERIFICATION_RECORDED
+        and event.payload_json.get("stage") == "verification"
+    )
+    assert tuple(item.criterion_id for item in stage_result.criterion_results) == (
+        deterministic_id,
+        profile_id,
+    )
+    assert policy_id not in {item.criterion_id for item in stage_result.criterion_results}
+    assert reviewer.calls == 1
+    blocker = next(
+        event for event in events if event.event_type is WorkEventType.WORK_BLOCKED
+    )
+    assert blocker.payload_json["reason"] == "completion_evidence_invalid"
+    assert blocker.payload_json["violations"] == [f"missing criterion ids: {policy_id}"]
+    assert not any(
+        event.event_type is WorkEventType.WORK_COMPLETED for event in events
+    )
+
+
+@pytest.mark.asyncio
 async def test_resume_after_commit_before_repository_event_does_not_rerun_stages(
     completion_stores,
     tmp_path: Path,
@@ -272,6 +409,69 @@ async def test_resume_after_commit_before_repository_event_does_not_rerun_stages
     assert sum(
         event.event_type is WorkEventType.WORK_COMPLETED for event in completed_events
     ) == 1
+
+
+@pytest.mark.asyncio
+async def test_unexpected_head_during_verified_commit_freezes_control(
+    completion_stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = completion_stores
+    repository, base_sha = _repository(tmp_path)
+    implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
+    reviewer = ReviewRuntime("accept")
+    verifier = CountingVerifier(
+        SoftwareVerifier(knowledge_store=knowledge_store)
+    )
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        implementer=implementer,
+        reviewer=reviewer,
+        repairer=implementer,
+        verifier=verifier,
+        commands=(_command("initial"),),
+    )
+    moving_manager = MoveHeadBeforeCommitManager(
+        lifecycle._worktree_manager  # noqa: SLF001
+    )
+    lifecycle._worktree_manager = moving_manager  # noqa: SLF001
+
+    degraded = await lifecycle.start(
+        work_item=_work_item(),
+        contract=_contract(base_sha, SoftwareRepositoryOutcome.VERIFIED_COMMIT),
+    )
+
+    assert degraded.status == "CONTROL_DEGRADED"
+    assert implementer.calls == 1
+    assert verifier.calls == 1
+    assert reviewer.calls == 1
+    assert moving_manager.calls == 1
+    events = await work_store.read_events("work-1", project_id="project-a")
+    degradation = next(
+        event for event in events if event.event_type is WorkEventType.CONTROL_DEGRADED
+    )
+    assert degradation.payload_json["stage"] == "repository"
+    assert degradation.payload_json["run_id"] == "work-1:repository:1"
+    assert degradation.payload_json["frozen_action_ids"] == [
+        "work-1:repository:1:change"
+    ]
+    assert "workspace HEAD moved" in degradation.payload_json["details"]
+    assert not any(
+        event.event_type is WorkEventType.WORK_COMPLETED
+        or (
+            event.event_type is WorkEventType.VERIFICATION_RECORDED
+            and event.payload_json.get("stage") == "repository"
+        )
+        for event in events
+    )
+
+    still_degraded = await lifecycle.resume("work-1", project_id="project-a")
+    assert still_degraded.status == "CONTROL_DEGRADED"
+    assert moving_manager.calls == 1
 
 
 @pytest.mark.asyncio

@@ -35,6 +35,7 @@ from sagewai.work import (
     ControlPreconditionKind,
     OperatorDisciplineReport,
     OperatorResult,
+    ProposedAcceptanceCriterion,
     ReviewFinding,
     ReviewResult,
     TaskCapsuleCompiler,
@@ -307,7 +308,12 @@ class AnalysisRuntime:
         proposal = self.proposal or WorkContractProposal(
             goal="Change target deterministically",
             allowed_scope=("target.txt",),
-            acceptance_criteria=("deterministic verification passes",),
+            acceptance_criteria=(
+                ProposedAcceptanceCriterion(
+                    statement="deterministic verification passes",
+                    verification_kind="deterministic",
+                ),
+            ),
             constraints=(),
             non_goals=(),
             risk="low",
@@ -324,6 +330,25 @@ class AnalysisRuntime:
         )
 
 
+def _profile_analysis_runtime() -> AnalysisRuntime:
+    return AnalysisRuntime(
+        proposal=WorkContractProposal(
+            goal="Change target with profile verification",
+            allowed_scope=("target.txt",),
+            acceptance_criteria=(
+                ProposedAcceptanceCriterion(
+                    statement="profile action succeeds",
+                    verification_kind="profile",
+                ),
+            ),
+            constraints=(),
+            non_goals=(),
+            risk="low",
+            design_required=False,
+        )
+    )
+
+
 class AnalysisAndDesignRuntime(AnalysisRuntime):
     def __init__(
         self,
@@ -335,7 +360,12 @@ class AnalysisAndDesignRuntime(AnalysisRuntime):
             proposal=WorkContractProposal(
                 goal="Change target deterministically",
                 allowed_scope=("target.txt",),
-                acceptance_criteria=("deterministic verification passes",),
+                acceptance_criteria=(
+                    ProposedAcceptanceCriterion(
+                        statement="deterministic verification passes",
+                        verification_kind="deterministic",
+                    ),
+                ),
                 constraints=(),
                 non_goals=(),
                 risk="low",
@@ -861,7 +891,7 @@ async def test_successful_implement_verify_review_reaches_ready_to_merge(
     assert record.status != "COMPLETE"
     assert implementer.calls == 1
     assert profile.prepare_calls == 1
-    assert profile.verify_calls == 1
+    assert profile.verify_calls == 0
     assert reviewer.calls == 1
     assert repairer.calls == 0
     for request in (*implementer.requests, *reviewer.requests):
@@ -884,7 +914,7 @@ async def test_successful_implement_verify_review_reaches_ready_to_merge(
         context.diff.encode()
     )
     assert capsule.prior_result_refs == context.verification.evidence_refs
-    assert context.verification.evidence_refs[0] == "runtime://work-1:implement:1"
+    assert len(context.verification.evidence_refs) == 1
     assert tuple(item.id for item in capsule.knowledge_items) == (
         analysis_ref,
         context.verification.evidence_refs[-1],
@@ -1550,7 +1580,12 @@ async def test_invalid_analysis_proposal_blocks_instead_of_wedging_work(
         proposal=WorkContractProposal(
             goal="Change target deterministically",
             allowed_scope=(proposed_scope,),
-            acceptance_criteria=("deterministic verification passes",),
+            acceptance_criteria=(
+                ProposedAcceptanceCriterion(
+                    statement="deterministic verification passes",
+                    verification_kind="deterministic",
+                ),
+            ),
             constraints=(),
             non_goals=(),
             risk="low",
@@ -1938,6 +1973,7 @@ async def test_failed_action_receipt_uses_canonical_verification_transition(
         work_store=work_store,
         knowledge_store=knowledge_store,
         durability=durability,
+        analyzer=_profile_analysis_runtime(),
         profile=profile,
         implementer=PassedWithFailedActionReceiptRuntime(
             implement_text="initial", repair_text="unused"
@@ -2413,6 +2449,7 @@ async def test_profile_verification_crash_resumes_persisted_execution(
         work_store=work_store,
         knowledge_store=knowledge_store,
         durability=durability,
+        analyzer=_profile_analysis_runtime(),
         profile=first_profile,
         implementer=first_implementer,
         reviewer=ReviewRuntime("accept"),
@@ -2526,7 +2563,7 @@ async def test_restart_resume_does_not_rerun_completed_implementation(
     assert record.status == "READY_TO_MERGE"
     assert first_implementer.calls == 1
     assert resumed_implementer.calls == 0
-    assert first_profile.verify_calls == 1
+    assert first_profile.verify_calls == 0
     assert resumed_profile.verify_calls == 0
     assert resumed_reviewer.calls == 1
     events = await work_store.read_events("work-1", project_id="project-a")

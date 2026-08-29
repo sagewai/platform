@@ -59,6 +59,15 @@ class ClassifiedClaim(BaseModel):
     impact_if_wrong: Literal["low", "medium", "high"]
 
 
+class ProposedAcceptanceCriterion(BaseModel):
+    """One proposed obligation with an explicit verification boundary."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    statement: str = Field(min_length=1)
+    verification_kind: Literal["deterministic", "profile", "policy"]
+
+
 class WorkContractProposal(BaseModel):
     """Operator-proposed contract fields awaiting deterministic acceptance."""
 
@@ -66,7 +75,7 @@ class WorkContractProposal(BaseModel):
 
     goal: str
     allowed_scope: tuple[str, ...]
-    acceptance_criteria: tuple[str, ...]
+    acceptance_criteria: tuple[ProposedAcceptanceCriterion, ...]
     constraints: tuple[str, ...]
     non_goals: tuple[str, ...]
     risk: Literal["low", "medium", "high"]

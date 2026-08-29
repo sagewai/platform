@@ -63,7 +63,19 @@ def _contract(*, project_id: str = "project-a") -> WorkContract:
                 id="criterion-execution",
                 project_id=project_id,
                 statement="implementation matches the accepted scope",
+                verification_kind="profile",
+            ),
+            AcceptanceCriterion(
+                id="criterion-command",
+                project_id=project_id,
+                statement="verification commands pass",
                 verification_kind="deterministic",
+            ),
+            AcceptanceCriterion(
+                id="criterion-policy",
+                project_id=project_id,
+                statement="policy authorizes completion",
+                verification_kind="policy",
             ),
         ),
         constraints=(),
@@ -97,7 +109,11 @@ async def test_software_profile_prepares_and_verifies_one_scoped_action() -> Non
     assert action.work_id == work_item.id
     assert action.capability == "filesystem.write"
     assert action.scope == {"allowed_targets": ["target.txt"]}
-    assert action.verification == ("criterion-execution",)
+    assert action.verification == (
+        "criterion-execution",
+        "criterion-command",
+        "criterion-policy",
+    )
 
     result = await profile.verify(
         work_item,
@@ -132,6 +148,8 @@ async def test_software_profile_prepares_and_verifies_one_scoped_action() -> Non
     [
         (),
         ("criterion-unknown",),
+        ("criterion-command",),
+        ("criterion-policy",),
         ("criterion-repository",),
         ("criterion-repository", "criterion-repository"),
     ],
