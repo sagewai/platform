@@ -117,16 +117,16 @@ def work(
 
 
 def _work_execution_config() -> tuple[str, str | None]:
-    """Return the explicit root Work execution selection for this command."""
+    """Return the explicit Work-group execution selection for this command."""
     context = click.get_current_context(silent=True)
-    while context is not None and context.parent is not None:
+    while context is not None:
+        if "execution" in context.params:
+            return (
+                str(context.params["execution"]),
+                context.params.get("fleet_org"),
+            )
         context = context.parent
-    if context is None:
-        return "local", None
-    return (
-        str(context.params.get("execution", "local")),
-        context.params.get("fleet_org"),
-    )
+    return "local", None
 
 
 @work.command("start")
