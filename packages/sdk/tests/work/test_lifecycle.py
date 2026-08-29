@@ -1886,6 +1886,7 @@ async def test_github_flow_uses_real_software_lifecycle_events(
                 number=7,
                 url="https://github.com/octocat/hello-world/pull/7",
                 head=head,
+                head_sha="b" * 40,
                 base=base,
             )
 
@@ -1927,6 +1928,7 @@ async def test_github_flow_uses_real_software_lifecycle_events(
         software_lifecycle=software,
         github=github,
         branch_publisher=publisher,
+        repository_outcome=SoftwareRepositoryOutcome.MERGED,
     )
 
     gated = await flow.start(
@@ -1944,7 +1946,7 @@ async def test_github_flow_uses_real_software_lifecycle_events(
     assert gated.status == "READY_TO_MERGE"
     assert publisher.expected_sha == base_sha
     assert github.expected_head_sha == "b" * 40
-    assert delivered.status == "READY_TO_DELIVER"
+    assert delivered.status == "COMPLETE"
     events = await work_store.read_events(gated.work_id, project_id="project-a")
     assert any(
         event.event_type is WorkEventType.STAGE_COMPLETED
