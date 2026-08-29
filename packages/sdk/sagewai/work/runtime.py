@@ -272,6 +272,7 @@ class CodexRuntime(_NativeRuntime):
                 explicit_env=environment,
                 cwd=workspace.path,
                 timeout=self._timeout,
+                output_limit=None,
             )
             if process.returncode != 0:
                 return _failed_result(request, process.stderr)
@@ -337,6 +338,7 @@ class ClaudeRuntime(_NativeRuntime):
             explicit_env=await self._environment(request, capabilities),
             cwd=workspace.path,
             timeout=self._timeout,
+            output_limit=None,
         )
         if process.returncode != 0:
             return _failed_result(request, process.stderr)
@@ -403,7 +405,7 @@ def _failed_result(request: WorkRequest, error: str) -> OperatorResult:
         work_id=request.work_id,
         run_id=request.run_id,
         status="failed",
-        summary=error[:4000],
+        summary=error[-4000:],
         evidence_refs=(),
         artifact_refs=(),
         changes=(),

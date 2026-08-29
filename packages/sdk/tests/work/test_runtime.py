@@ -133,7 +133,12 @@ def _workspace(path: Path) -> SoftwareWorkspace:
     )
 
 
-def _fake_runtime_executable(tmp_path: Path) -> Path:
+def _fake_runtime_executable(
+    tmp_path: Path,
+    *,
+    envelope_padding: int = 0,
+    failure_padding: int = 0,
+) -> Path:
     executable = tmp_path / "fake-operator"
     executable.write_text(
         textwrap.dedent(
@@ -152,6 +157,9 @@ def _fake_runtime_executable(tmp_path: Path) -> Path:
                 "has_session": "session" in prompt,
                 "argv": sys.argv[1:],
             }}))
+            if {failure_padding}:
+                print("x" * {failure_padding} + "tail-error", file=sys.stderr)
+                raise SystemExit(1)
             result = {{
                 "project_id": prompt["request"]["project_id"],
                 "work_id": prompt["request"]["work_id"],
@@ -181,6 +189,7 @@ def _fake_runtime_executable(tmp_path: Path) -> Path:
             else:
                 print(json.dumps({{
                     "structured_output": result,
+                    "result": "x" * {envelope_padding},
                     "usage": {{"output_tokens": 123}},
                 }}))
             """
@@ -330,6 +339,48 @@ async def test_claude_scopes_cli_and_mcp_tools_from_grants(tmp_path: Path) -> No
     assert allowed_tools == ["Bash(git *)", "mcp__github__*"]
     assert all("curl" not in selector for selector in allowed_tools)
     assert all("kubectl" not in selector for selector in allowed_tools)
+
+
+@pytest.mark.asyncio
+async def test_claude_accepts_schema_bounded_output_larger_than_preview_limit(
+    tmp_path: Path,
+) -> None:
+    runtime = ClaudeRuntime(
+        executable=str(_fake_runtime_executable(tmp_path, envelope_padding=5000)),
+        timeout=5,
+    )
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+
+    result = await runtime.run(
+        _request(),
+        _capsule(),
+        _capabilities(),
+        _workspace(workspace_path),
+    )
+
+    assert result.summary == "fake runtime completed"
+
+
+@pytest.mark.asyncio
+async def test_codex_failure_preserves_bounded_stderr_tail(tmp_path: Path) -> None:
+    runtime = CodexRuntime(
+        executable=str(_fake_runtime_executable(tmp_path, failure_padding=5000)),
+        timeout=5,
+    )
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+
+    result = await runtime.run(
+        _request(),
+        _capsule(),
+        _capabilities(),
+        _workspace(workspace_path),
+    )
+
+    assert result.status == "failed"
+    assert len(result.summary) == 4000
+    assert result.summary.endswith("tail-error\n")
 
 
 def test_operator_result_schema_is_structured_and_bounded() -> None:
