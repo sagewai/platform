@@ -12,11 +12,9 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
 from importlib import import_module
 from types import SimpleNamespace
 
-import httpx
 import pytest
 from click import ClickException
 from click.testing import CliRunner
@@ -24,15 +22,8 @@ from click.testing import CliRunner
 from sagewai.cli import cli
 from sagewai.cli.work import work as work_cli
 from sagewai.core.state import InMemoryStore
-from sagewai.fleet.execution import WorkerProcessResult
-from sagewai.work import WorkEvent, WorkEventType, WorkMetrics, WorkRecord, WorkStore
+from sagewai.work import WorkEventType, WorkMetrics
 from tests.db.conftest import dialect_engine  # noqa: F401
-from tests.work.test_cloudflare_adapter import (
-    NEW_VERSION_ID,
-    OLD_VERSION_ID,
-    CloudflareState,
-    FakeCommandRunner,
-)
 
 work_module = import_module("sagewai.cli.work")
 
@@ -279,9 +270,9 @@ def test_work_resume_uses_persisted_lifecycle(monkeypatch) -> None:
     assert "WORK_BLOCKED" in result.output
 
 
-def test_work_resume_reports_delivery_configuration_error(monkeypatch) -> None:
+def test_work_resume_reports_lifecycle_error(monkeypatch) -> None:
     async def fake_resume(_work_id: str):
-        raise ValueError("Cloudflare docs delivery configuration is missing: TOKEN")
+        raise ValueError("lifecycle configuration is missing: TOKEN")
 
     monkeypatch.setattr(work_module, "_resume_work", fake_resume)
 
@@ -297,7 +288,7 @@ def test_work_approve_advances_the_named_canonical_gate(monkeypatch) -> None:
 
     async def fake_approve(work_id: str, gate_id: str):
         seen.append((work_id, gate_id))
-        return SimpleNamespace(work_id=work_id, status="READY_TO_DELIVER")
+        return SimpleNamespace(work_id=work_id, status="READY_TO_MERGE")
 
     monkeypatch.setattr(work_module, "_approve_work", fake_approve)
 
@@ -308,7 +299,7 @@ def test_work_approve_advances_the_named_canonical_gate(monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     assert seen == [("work-1", "merge:work-1:42")]
-    assert "READY_TO_DELIVER" in result.output
+    assert "READY_TO_MERGE" in result.output
 
 
 def test_work_pending_lists_canonical_attention(monkeypatch) -> None:
@@ -469,7 +460,7 @@ def test_github_credentials_fail_before_remote_call_when_token_is_missing(
     ),
 )
 @pytest.mark.asyncio
-async def test_delivery_phase_resume_routes_to_docs_delivery(
+async def test_delivery_phase_resume_does_not_infer_provider(
     monkeypatch,
     delivery_status: str,
 ) -> None:
@@ -479,124 +470,23 @@ async def test_delivery_phase_resume_routes_to_docs_delivery(
         status=delivery_status,
         source_ref="https://github.com/octocat/repo/issues/7",
     )
-    repository = SimpleNamespace()
-    seen = []
 
     async def fake_status(_work_id):
         return record
 
-    async def fake_repository_state():
-        return repository, "a" * 40
-
-    async def fake_run_docs_delivery(
-        value, *, project_id, repository, approve_gate_id=None
-    ):
-        seen.append((value, project_id, repository))
-        return SimpleNamespace(work_id="work-1", status="COMPLETE")
+    async def unexpected_repository_state():
+        raise AssertionError("generic resume must not select a delivery provider")
 
     monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
     monkeypatch.setattr(work_module, "_status_work", fake_status)
-    monkeypatch.setattr(work_module, "_repository_state", fake_repository_state)
     monkeypatch.setattr(
-        work_module,
-        "_run_docs_delivery_with_pending",
-        fake_run_docs_delivery,
+        work_module, "_repository_state", unexpected_repository_state
     )
 
     result = await work_module._resume_work("work-1")
 
-    assert result.status == "COMPLETE"
-    assert seen == [(record, "project-a", repository)]
+    assert result is record
 
-
-@pytest.mark.asyncio
-async def test_delivery_progress_presents_pending_attention(monkeypatch) -> None:
-    record = SimpleNamespace(work_id="work-1")
-    completed = SimpleNamespace(work_id="work-1", status="COMPLETE")
-    repository = SimpleNamespace()
-    seen = []
-
-    async def fake_run_docs_delivery(
-        value, *, project_id, repository, approve_gate_id=None
-    ):
-        seen.append(("delivery", value.work_id, project_id, repository))
-        return completed
-
-    class FakeGitHubLifecycle:
-        async def present_pending(self, work_id, *, project_id):
-            seen.append(("pending", work_id, project_id))
-
-    async def fake_build_github_lifecycle(*, project_id, repository):
-        seen.append(("build", project_id, repository))
-        return FakeGitHubLifecycle()
-
-    monkeypatch.setattr(work_module, "_run_docs_delivery", fake_run_docs_delivery)
-    monkeypatch.setattr(
-        work_module,
-        "_build_github_lifecycle",
-        fake_build_github_lifecycle,
-    )
-
-    result = await work_module._run_docs_delivery_with_pending(
-        record,
-        project_id="project-a",
-        repository=repository,
-    )
-
-    assert result is completed
-    assert seen == [
-        ("delivery", "work-1", "project-a", repository),
-        ("build", "project-a", repository),
-        ("pending", "work-1", "project-a"),
-    ]
-
-
-@pytest.mark.asyncio
-async def test_delivery_error_presents_pending_and_preserves_error(monkeypatch) -> None:
-    record = SimpleNamespace(work_id="work-1")
-    repository = SimpleNamespace()
-    seen = []
-    delivery_cause = ValueError("provider rejected rollout")
-    error = RuntimeError("production health gate failed")
-    presentation_error = RuntimeError("GitHub comment unavailable")
-
-    async def fake_run_docs_delivery(
-        _value, *, project_id, repository, approve_gate_id=None
-    ):
-        seen.append(("delivery", project_id, repository))
-        raise error from delivery_cause
-
-    class FakeGitHubLifecycle:
-        async def present_pending(self, work_id, *, project_id):
-            seen.append(("pending", work_id, project_id))
-            raise presentation_error
-
-    async def fake_build_github_lifecycle(*, project_id, repository):
-        seen.append(("build", project_id, repository))
-        return FakeGitHubLifecycle()
-
-    monkeypatch.setattr(work_module, "_run_docs_delivery", fake_run_docs_delivery)
-    monkeypatch.setattr(
-        work_module,
-        "_build_github_lifecycle",
-        fake_build_github_lifecycle,
-    )
-
-    with pytest.raises(RuntimeError) as caught:
-        await work_module._run_docs_delivery_with_pending(
-            record,
-            project_id="project-a",
-            repository=repository,
-        )
-
-    assert caught.value is error
-    assert caught.value.__cause__ is delivery_cause
-    assert caught.value.__context__ is presentation_error
-    assert seen == [
-        ("delivery", "project-a", repository),
-        ("build", "project-a", repository),
-        ("pending", "work-1", "project-a"),
-    ]
 
 
 @pytest.mark.asyncio
@@ -624,7 +514,7 @@ async def test_complete_resume_returns_without_repository_or_remote_work(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_triaging_resume_repairs_new_merged_sha_then_redeploys(monkeypatch) -> None:
+async def test_triaging_resume_repairs_without_inferring_delivery(monkeypatch) -> None:
     current = SimpleNamespace(
         work_id="work-1",
         project_id="project-a",
@@ -639,7 +529,6 @@ async def test_triaging_resume_repairs_new_merged_sha_then_redeploys(monkeypatch
         source_ref="https://github.com/octocat/repo/issues/7",
         profile_context={"github": {"merged_sha": "b" * 40}},
     )
-    completed = SimpleNamespace(work_id="work-1", status="COMPLETE")
     repository = SimpleNamespace()
     seen = []
 
@@ -647,20 +536,8 @@ async def test_triaging_resume_repairs_new_merged_sha_then_redeploys(monkeypatch
         return current
 
     async def fake_repository_state():
+        seen.append("repository")
         return repository, "a" * 40
-
-    async def fake_docs_delivery(value, *, project_id, repository):
-        nonlocal current
-        seen.append(
-            (
-                "delivery",
-                value.profile_context["github"]["merged_sha"],
-                project_id,
-                repository,
-            )
-        )
-        current = completed
-        return completed
 
     class FakeGitHubLifecycle:
         async def resume(self, work_id, *, project_id):
@@ -677,26 +554,22 @@ async def test_triaging_resume_repairs_new_merged_sha_then_redeploys(monkeypatch
     monkeypatch.setattr(work_module, "_status_work", fake_status)
     monkeypatch.setattr(work_module, "_repository_state", fake_repository_state)
     monkeypatch.setattr(
-        work_module,
-        "_run_docs_delivery_with_pending",
-        fake_docs_delivery,
+        work_module, "_build_github_lifecycle", fake_build_github_lifecycle
     )
-    monkeypatch.setattr(work_module, "_build_github_lifecycle", fake_build_github_lifecycle)
 
     repair_result = await work_module._resume_work("work-1")
-    delivery_result = await work_module._resume_work("work-1")
+    frozen_result = await work_module._resume_work("work-1")
 
-    assert repair_result is repaired
-    assert delivery_result is completed
+    assert repair_result is frozen_result is repaired
     assert seen == [
+        "repository",
         ("build", "project-a", repository),
         ("resume", "work-1", "project-a"),
-        ("delivery", "b" * 40, "project-a", repository),
     ]
 
 
 @pytest.mark.asyncio
-async def test_delivery_gate_approval_routes_to_delivery_flow(monkeypatch) -> None:
+async def test_delivery_gate_approval_requires_explicit_adapter(monkeypatch) -> None:
     record = SimpleNamespace(
         work_id="work-1",
         project_id="project-a",
@@ -704,14 +577,12 @@ async def test_delivery_gate_approval_routes_to_delivery_flow(monkeypatch) -> No
         source_ref="https://github.com/octocat/repo/issues/7",
     )
     gate_id = "deploy_production:work-1:candidate:production:traffic:5%"
-    repository = SimpleNamespace()
-    seen = []
 
     async def fake_status(_work_id):
         return record
 
-    async def fake_repository_state():
-        return repository, "a" * 40
+    async def unexpected_repository_state():
+        raise AssertionError("delivery approval must not infer a provider")
 
     async def fake_ensure_schema():
         return None
@@ -731,32 +602,20 @@ async def test_delivery_gate_approval_routes_to_delivery_flow(monkeypatch) -> No
                 )
             ]
 
-    async def fake_run_docs_delivery(
-        value,
-        *,
-        project_id,
-        repository,
-        approve_gate_id,
-    ):
-        seen.append((value, project_id, repository, approve_gate_id))
-        return SimpleNamespace(work_id="work-1", status="READY_TO_DELIVER")
-
     monkeypatch.setattr(work_module, "resolve_project_id", lambda: "project-a")
     monkeypatch.setattr(work_module, "_status_work", fake_status)
-    monkeypatch.setattr(work_module, "_repository_state", fake_repository_state)
+    monkeypatch.setattr(
+        work_module, "_repository_state", unexpected_repository_state
+    )
     monkeypatch.setattr(work_module.factory, "ensure_schema", fake_ensure_schema)
     monkeypatch.setattr(work_module.factory, "get_engine", lambda: object())
     monkeypatch.setattr(work_module, "WorkStore", lambda engine: FakeStore())
-    monkeypatch.setattr(
-        work_module,
-        "_run_docs_delivery_with_pending",
-        fake_run_docs_delivery,
-    )
 
-    approved = await work_module._approve_work("work-1", gate_id)
-
-    assert approved.status == "READY_TO_DELIVER"
-    assert seen == [(record, "project-a", repository, gate_id)]
+    with pytest.raises(
+        ValueError,
+        match="delivery approval requires an explicitly selected adapter",
+    ):
+        await work_module._approve_work("work-1", gate_id)
 
 
 @pytest.mark.asyncio
@@ -808,257 +667,3 @@ async def test_triaging_rejects_stale_delivery_approval_before_repository_work(
 
     with pytest.raises(ValueError, match="cannot approve a stale gate from TRIAGING"):
         await work_module._approve_work("work-1", "rollback:stale")
-
-
-def test_docs_delivery_settings_require_explicit_freshness_and_rollout(
-    monkeypatch,
-) -> None:
-    names = (
-        "CLOUDFLARE_API_TOKEN",
-        "CLOUDFLARE_ACCOUNT_ID",
-        "SAGEWAI_DOCS_KNOWN_GOOD_VERSION_ID",
-        "SAGEWAI_DOCS_KNOWN_GOOD_COMMIT_SHA",
-        "SAGEWAI_DOCS_KNOWN_GOOD_VERIFICATION_REF",
-        "SAGEWAI_DOCS_KNOWN_GOOD_REVIEW_REF",
-        "SAGEWAI_DOCS_ROLLOUT_JSON",
-        "SAGEWAI_DOCS_POLICY_EVIDENCE_REF",
-        "SAGEWAI_DOCS_ROLLBACK_OBSERVATION_SECONDS",
-        "SAGEWAI_DOCS_OBSERVATION_SAMPLE_SECONDS",
-        "SAGEWAI_DOCS_COMMAND_TIMEOUT_SECONDS",
-        "SAGEWAI_DOCS_HTTP_TIMEOUT_SECONDS",
-        "SAGEWAI_DOCS_HEARTBEAT_SECONDS",
-        "SAGEWAI_DOCS_MINIMUM_CREDENTIAL_TTL_SECONDS",
-        "SAGEWAI_DOCS_MAXIMUM_MONITORING_STALENESS_SECONDS",
-    )
-    for name in names:
-        monkeypatch.setenv(name, "value")
-    monkeypatch.setenv(
-        "SAGEWAI_DOCS_ROLLOUT_JSON",
-        '[{"exposure":"5%","observe_seconds":30},{"exposure":"100%","observe_seconds":60}]',
-    )
-    for name in (
-        "SAGEWAI_DOCS_ROLLBACK_OBSERVATION_SECONDS",
-        "SAGEWAI_DOCS_OBSERVATION_SAMPLE_SECONDS",
-        "SAGEWAI_DOCS_COMMAND_TIMEOUT_SECONDS",
-        "SAGEWAI_DOCS_HTTP_TIMEOUT_SECONDS",
-        "SAGEWAI_DOCS_HEARTBEAT_SECONDS",
-        "SAGEWAI_DOCS_MINIMUM_CREDENTIAL_TTL_SECONDS",
-        "SAGEWAI_DOCS_MAXIMUM_MONITORING_STALENESS_SECONDS",
-    ):
-        monkeypatch.setenv(name, "30")
-
-    settings = work_module._docs_delivery_settings()
-
-    assert settings["maximum_monitoring_staleness_seconds"] == 30
-    assert settings["http_timeout_seconds"] == 30
-    assert [step.exposure.value for step in settings["policy"].rollout] == [
-        "5%",
-        "100%",
-    ]
-
-    monkeypatch.delenv("SAGEWAI_DOCS_MAXIMUM_MONITORING_STALENESS_SECONDS")
-    with pytest.raises(ValueError, match="MAXIMUM_MONITORING_STALENESS"):
-        work_module._docs_delivery_settings()
-
-
-@pytest.mark.asyncio
-async def test_docs_delivery_composition_reaches_complete_with_real_adapters(
-    monkeypatch,
-    dialect_engine,  # noqa: F811
-    tmp_path,
-) -> None:
-    project_id = "project-a"
-    work_id = "work-1"
-    merged_sha = "a" * 40
-    now = datetime.now(timezone.utc)
-    repository = tmp_path / "repo"
-    docs = repository / "apps" / "docs"
-    output = docs / "out"
-    output.mkdir(parents=True)
-    (docs / "wrangler.toml").write_text(
-        'name = "docs"\ncompatibility_date = "2026-04-04"\n',
-        encoding="utf-8",
-    )
-    (output / "index.html").write_text("<h1>Sagewai docs</h1>", encoding="utf-8")
-
-    record = WorkRecord(
-        work_id=work_id,
-        project_id=project_id,
-        source_ref="https://github.com/sagewai/platform/issues/1",
-        profile="software",
-        status="READY_TO_DELIVER",
-        contract_version=1,
-        active_run_id="review-1",
-        pending_gate=None,
-        profile_context={"github": {"merged_sha": merged_sha}},
-        created_at=now,
-        updated_at=now,
-    )
-    store = WorkStore(engine=dialect_engine)
-    await store.init()
-    await store.save_work(record)
-    for sequence, event_type in enumerate(
-        (WorkEventType.VERIFICATION_RECORDED, WorkEventType.REVIEW_RECORDED),
-        start=1,
-    ):
-        await store.append_event(
-            WorkEvent(
-                id=f"evidence-{sequence}",
-                project_id=project_id,
-                work_id=work_id,
-                sequence=sequence,
-                event_type=event_type,
-                actor_type="test",
-                actor_ref="test",
-                payload_json={"passed": True},
-                created_at=now,
-            )
-        )
-
-    async def fake_ensure_schema() -> None:
-        return None
-
-    monkeypatch.setattr(work_module.factory, "ensure_schema", fake_ensure_schema)
-    monkeypatch.setattr(work_module.factory, "get_engine", lambda: dialect_engine)
-    monkeypatch.setattr(work_module.home, "data_dir", lambda: tmp_path / "data")
-    values = {
-        "CLOUDFLARE_API_TOKEN": "token",
-        "CLOUDFLARE_ACCOUNT_ID": "account-1",
-        "SAGEWAI_DOCS_KNOWN_GOOD_VERSION_ID": OLD_VERSION_ID,
-        "SAGEWAI_DOCS_KNOWN_GOOD_COMMIT_SHA": "b" * 40,
-        "SAGEWAI_DOCS_KNOWN_GOOD_VERIFICATION_REF": "verification://known-good",
-        "SAGEWAI_DOCS_KNOWN_GOOD_REVIEW_REF": "review://known-good",
-        "SAGEWAI_DOCS_ROLLOUT_JSON": json.dumps(
-            [
-                {"exposure": "5%", "observe_seconds": 1},
-                {"exposure": "100%", "observe_seconds": 1},
-            ]
-        ),
-        "SAGEWAI_DOCS_POLICY_EVIDENCE_REF": "policy://docs-production",
-        "SAGEWAI_DOCS_ROLLBACK_OBSERVATION_SECONDS": "1",
-        "SAGEWAI_DOCS_OBSERVATION_SAMPLE_SECONDS": "1",
-        "SAGEWAI_DOCS_COMMAND_TIMEOUT_SECONDS": "30",
-        "SAGEWAI_DOCS_HTTP_TIMEOUT_SECONDS": "2",
-        "SAGEWAI_DOCS_HEARTBEAT_SECONDS": "1",
-        "SAGEWAI_DOCS_MINIMUM_CREDENTIAL_TTL_SECONDS": "1",
-        "SAGEWAI_DOCS_MAXIMUM_MONITORING_STALENESS_SECONDS": "60",
-    }
-    for name, value in values.items():
-        monkeypatch.setenv(name, value)
-
-    state = CloudflareState()
-    state.deployments.append(
-        {
-            "id": "00000000-0000-0000-0000-000000000001",
-            "created_on": "2026-08-27T09:59:00Z",
-            "strategy": "percentage",
-            "versions": [{"version_id": OLD_VERSION_ID, "percentage": 100}],
-            "annotations": {},
-        }
-    )
-
-    def on_run(args) -> None:
-        if "upload" in args:
-            state.add_candidate_version(args[args.index("--tag") + 1])
-
-    runner = FakeCommandRunner(
-        (
-            WorkerProcessResult(returncode=0, stdout=f"{merged_sha}\n", stderr=""),
-            WorkerProcessResult(returncode=0, stdout="", stderr=""),
-            WorkerProcessResult(returncode=0, stdout="build passed", stderr=""),
-            WorkerProcessResult(
-                returncode=0,
-                stdout=f"Worker Version ID: {NEW_VERSION_ID}\n",
-                stderr="",
-            ),
-        ),
-        on_run=on_run,
-    )
-
-    def response(request: httpx.Request) -> httpx.Response:
-        path = request.url.path
-        if path == "/client/v4/user/tokens/verify":
-            return httpx.Response(
-                200,
-                request=request,
-                json={"success": True, "result": {"status": "active"}},
-            )
-        if path == "/client/v4/zones":
-            return httpx.Response(
-                200,
-                request=request,
-                json={
-                    "success": True,
-                    "result": [{"id": "zone-1", "status": "active"}],
-                },
-            )
-        if path == "/client/v4/graphql":
-            return httpx.Response(
-                200,
-                request=request,
-                json={
-                    "data": {
-                        "viewer": {
-                            "zones": [
-                                {
-                                    "metrics": [
-                                        {
-                                            "count": 1,
-                                            "dimensions": {
-                                                "datetimeMinute": (
-                                                    datetime.now(timezone.utc)
-                                                    - timedelta(seconds=1)
-                                                ).isoformat()
-                                            },
-                                        }
-                                    ]
-                                }
-                            ]
-                        }
-                    },
-                    "errors": None,
-                },
-            )
-        if path.endswith(f"/versions/{OLD_VERSION_ID}"):
-            return httpx.Response(
-                200,
-                request=request,
-                json={"success": True, "result": {"id": OLD_VERSION_ID}},
-            )
-        return state(request)
-
-    current = record
-    for _ in range(3):
-        try:
-            current = await work_module._run_docs_delivery(
-                current,
-                project_id=project_id,
-                repository=repository,
-                process_runner=runner,
-                http_transport=httpx.MockTransport(response),
-            )
-        except work_module.DeliveryApprovalRequiredError:
-            loaded = await store.load_work(work_id, project_id=project_id)
-            assert loaded is not None
-            current = loaded
-        if current.status == "COMPLETE":
-            break
-        assert current.pending_gate is not None
-        current = await work_module._run_docs_delivery(
-            current,
-            project_id=project_id,
-            repository=repository,
-            approve_gate_id=current.pending_gate,
-            process_runner=runner,
-            http_transport=httpx.MockTransport(response),
-        )
-
-    assert current.status == "COMPLETE"
-    assert len(runner.calls) == 4
-    assert [post["versions"] for post in state.posts] == [
-        [
-            {"version_id": OLD_VERSION_ID, "percentage": 95},
-            {"version_id": NEW_VERSION_ID, "percentage": 5},
-        ],
-        [{"version_id": NEW_VERSION_ID, "percentage": 100}],
-    ]

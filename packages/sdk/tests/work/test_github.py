@@ -18,12 +18,20 @@ import httpx
 import pytest
 
 from sagewai.work import (
+    AcceptanceCriterion,
+    CompletionEvaluation,
     GateDecision,
     PendingAttentionKind,
+    VerificationResult,
     WorkEvent,
     WorkEventType,
     WorkRecord,
     WorkStore,
+)
+from sagewai.work.profiles.software import (
+    SoftwareContractContext,
+    SoftwareDeliveryContractContext,
+    SoftwareRepositoryOutcome,
 )
 from sagewai.work.profiles.software.github import (
     CatalogGitHubClient,
@@ -49,15 +57,65 @@ class FakeSoftwareLifecycle:
         *,
         degraded: bool = False,
         pause_analysis: bool = False,
+        delivery: bool = False,
+        missing_criterion: bool = False,
     ) -> None:
         self.store = store
         self.degraded = degraded
         self.pause_analysis = pause_analysis
+        self.delivery = delivery
+        self.missing_criterion = missing_criterion
         self.starts = []
         self.resumes = 0
         self.analysis_contracts = {}
 
     async def start(self, *, work_item, contract, assumptions=()):
+        if self.delivery:
+            delivery_criterion_id = f"{contract.id}:delivery"
+            software = SoftwareContractContext.model_validate(
+                contract.profile_context
+            ).model_copy(
+                update={
+                    "delivery": SoftwareDeliveryContractContext(
+                        project_id=work_item.project_id,
+                        target_environment="test",
+                        criterion_ids=(delivery_criterion_id,),
+                        release_provider_ref="provider://release/test",
+                        deployment_provider_ref="provider://deployment/test",
+                        observation_provider_ref="provider://observation/test",
+                        rollout_policy_ref="policy://rollout/test",
+                        rollback_policy_ref="policy://rollback/test",
+                    )
+                }
+            )
+            contract = contract.model_copy(
+                update={
+                    "acceptance_criteria": contract.acceptance_criteria
+                    + (
+                        AcceptanceCriterion(
+                            id=delivery_criterion_id,
+                            project_id=work_item.project_id,
+                            statement="deliver to the explicit test target",
+                            verification_kind="profile",
+                        ),
+                    ),
+                    "profile_context": software.model_dump(mode="json"),
+                }
+            )
+        if self.missing_criterion:
+            contract = contract.model_copy(
+                update={
+                    "acceptance_criteria": contract.acceptance_criteria
+                    + (
+                        AcceptanceCriterion(
+                            id=f"{contract.id}:missing",
+                            project_id=work_item.project_id,
+                            statement="prove the intentionally missing criterion",
+                            verification_kind="profile",
+                        ),
+                    )
+                }
+            )
         self.starts.append((work_item, contract, assumptions))
         contract_event = (
             WorkEventType.CONTRACT_PROPOSED
@@ -334,18 +392,22 @@ async def store(dialect_engine) -> WorkStore:  # noqa: F811
     await result.init()
     return result
 
-
 def _flow(
     store: WorkStore,
     *,
     decision: GateDecision = GateDecision.REQUIRE_APPROVAL,
     degraded: bool = False,
     pause_analysis: bool = False,
+    repository_outcome: SoftwareRepositoryOutcome = SoftwareRepositoryOutcome.MERGED,
+    delivery: bool = False,
+    missing_criterion: bool = False,
 ):
     software = FakeSoftwareLifecycle(
         store,
         degraded=degraded,
         pause_analysis=pause_analysis,
+        delivery=delivery,
+        missing_criterion=missing_criterion,
     )
     github = FakeGitHub()
     publisher = FakeBranchPublisher()
@@ -355,6 +417,7 @@ def _flow(
         github=github,
         branch_publisher=publisher,
         merge_policy=lambda _request: decision,
+        repository_outcome=repository_outcome,
     )
     return flow, software, github, publisher
 
@@ -444,8 +507,7 @@ async def test_issue_to_pr_requires_gate_then_records_merged_sha(
     )
 
     assert delivered.profile_context["github"]["project_id"] == PROJECT_ID
-    assert delivered.status == "READY_TO_DELIVER"
-    assert delivered.status != "COMPLETE"
+    assert delivered.status == "COMPLETE"
     assert delivered.pending_gate is None
     assert delivered.profile_context["github"]["merged_sha"] == "c" * 40
     assert len(github.merges) == 1
@@ -468,7 +530,103 @@ async def test_issue_to_pr_requires_gate_then_records_merged_sha(
         and event.payload_json.get("stage") == "merge"
     )
     assert merged.payload_json["merged_sha"] == "c" * 40
-    assert all(event.event_type is not WorkEventType.WORK_COMPLETED for event in events)
+    repository_event = next(
+        event
+        for event in events
+        if event.event_type is WorkEventType.VERIFICATION_RECORDED
+        and event.payload_json.get("stage") == "repository"
+    )
+    repository_result = VerificationResult.model_validate(repository_event.payload_json)
+    assert repository_result.project_id == PROJECT_ID
+    assert repository_result.contract_id == contract.id
+    assert repository_result.evidence_refs == (
+        "https://github.com/octocat/hello-world/pull/7",
+        "git://" + "c" * 40,
+    )
+    assert repository_result.profile_context["repository_outcome"] == "merged"
+    assert repository_result.profile_context["result_sha"] == "c" * 40
+    completion_event = next(
+        event for event in events if event.event_type is WorkEventType.WORK_COMPLETED
+    )
+    evaluation = CompletionEvaluation.model_validate(completion_event.payload_json)
+    assert evaluation.project_id == PROJECT_ID
+    assert evaluation.work_id == gated.work_id
+    assert evaluation.contract_id == contract.id
+    assert evaluation.passed is True
+
+
+@pytest.mark.asyncio
+async def test_foreign_project_pull_request_cannot_prove_repository_outcome(
+    store: WorkStore,
+) -> None:
+    flow, _, github, _ = _flow(
+        store,
+        decision=GateDecision.ALLOW,
+        repository_outcome=SoftwareRepositoryOutcome.PULL_REQUEST,
+    )
+    github.remote_pull_request = GitHubPullRequest(
+        project_id="project-b",
+        owner=github.issue.owner,
+        repo=github.issue.repo,
+        number=7,
+        url="https://github.com/octocat/hello-world/pull/7",
+        head="sagewai/foreign",
+        base=github.issue.default_branch,
+    )
+
+    with pytest.raises(ValueError, match="different project"):
+        await flow.start(
+            issue_url=ISSUE_URL,
+            project_id=PROJECT_ID,
+            base_sha="a" * 40,
+        )
+
+    records = await store.list_work(project_id=PROJECT_ID)
+    events = await store.read_events(records[0].work_id, project_id=PROJECT_ID)
+    assert not any(
+        event.event_type in {
+            WorkEventType.VERIFICATION_RECORDED,
+            WorkEventType.WORK_COMPLETED,
+        }
+        for event in events
+    )
+    assert not any(
+        event.event_type is WorkEventType.STAGE_COMPLETED
+        and event.payload_json.get("stage") == "pull_request"
+        for event in events
+    )
+
+
+
+@pytest.mark.asyncio
+async def test_missing_completion_evidence_is_blocked_and_presented_once(
+    store: WorkStore,
+) -> None:
+    flow, _, github, _ = _flow(
+        store,
+        decision=GateDecision.ALLOW,
+        repository_outcome=SoftwareRepositoryOutcome.PULL_REQUEST,
+        missing_criterion=True,
+    )
+
+    blocked = await flow.start(
+        issue_url=ISSUE_URL,
+        project_id=PROJECT_ID,
+        base_sha="a" * 40,
+    )
+    repeated = await flow.resume(blocked.work_id, project_id=PROJECT_ID)
+
+    assert blocked.status == repeated.status == "WORK_BLOCKED"
+    assert len(github.comments) == 1
+    assert "blocked" in github.comments[0][1].lower()
+    events = await store.read_events(blocked.work_id, project_id=PROJECT_ID)
+    assert len(
+        [event for event in events if event.event_type is WorkEventType.WORK_BLOCKED]
+    ) == 1
+    assert not any(
+        event.event_type is WorkEventType.WORK_COMPLETED for event in events
+    )
+
 
 
 @pytest.mark.asyncio
@@ -476,7 +634,7 @@ async def test_delivery_triage_creates_new_reviewed_pr_and_merged_sha(
     store: WorkStore,
     monkeypatch,
 ) -> None:
-    flow, software, github, publisher = _flow(store)
+    flow, software, github, publisher = _flow(store, delivery=True)
     gated = await flow.start(
         issue_url=ISSUE_URL,
         project_id=PROJECT_ID,
@@ -489,6 +647,10 @@ async def test_delivery_triage_creates_new_reviewed_pr_and_merged_sha(
         actor_ref="operator:arda",
     )
     events = await store.read_events(delivered.work_id, project_id=PROJECT_ID)
+    assert delivered.status == "READY_TO_DELIVER"
+    assert all(
+        event.event_type is not WorkEventType.WORK_COMPLETED for event in events
+    )
     await store.append_event(
         WorkEvent(
             id="triage-1",
@@ -590,6 +752,20 @@ async def test_delivery_triage_creates_new_reviewed_pr_and_merged_sha(
         "main",
     )
     assert [item["pull_request"].number for item in github.merges] == [7, 8]
+    events = await store.read_events(delivered.work_id, project_id=PROJECT_ID)
+    repository_results = [
+        VerificationResult.model_validate(event.payload_json)
+        for event in events
+        if event.event_type is WorkEventType.VERIFICATION_RECORDED
+        and event.payload_json.get("stage") == "repository"
+    ]
+    assert [result.profile_context["result_sha"] for result in repository_results] == [
+        "c" * 40,
+        "e" * 40,
+    ]
+    assert not any(
+        event.event_type is WorkEventType.WORK_COMPLETED for event in events
+    )
 
 
 @pytest.mark.asyncio
@@ -655,7 +831,9 @@ async def test_resume_delegates_analyzing_work_before_loading_accepted_contract(
 async def test_resume_recovers_pull_request_created_before_event_persistence(
     store: WorkStore,
 ) -> None:
-    flow, software, github, _ = _flow(store)
+    flow, software, github, publisher = _flow(
+        store, repository_outcome=SoftwareRepositoryOutcome.PULL_REQUEST
+    )
     github.fail_after_create_once = True
 
     with pytest.raises(RuntimeError, match="connection lost after pull request creation"):
@@ -673,9 +851,17 @@ async def test_resume_recovers_pull_request_created_before_event_persistence(
         for event in events
     )
 
-    gated = await flow.resume(work_id, project_id=PROJECT_ID)
+    flow = GitHubIssueLifecycle(
+        work_store=store,
+        software_lifecycle=software,
+        github=github,
+        branch_publisher=publisher,
+        repository_outcome=SoftwareRepositoryOutcome.MERGED,
+    )
 
-    assert gated.status == "READY_TO_MERGE"
+    completed = await flow.resume(work_id, project_id=PROJECT_ID)
+
+    assert completed.status == "COMPLETE"
     assert len(github.pull_requests) == 1
     assert len(github.pull_request_searches) == 2
     assert len(software.starts) == 1
@@ -688,6 +874,30 @@ async def test_resume_recovers_pull_request_created_before_event_persistence(
         and event.payload_json.get("stage") == "pull_request"
     ]
     assert len(pull_requests) == 1
+    assert github.pull_request_reads == []
+    assert github.merges == []
+    assert not any(event.event_type is WorkEventType.GATE_REQUESTED for event in events)
+    repository_events = [
+        event
+        for event in events
+        if event.event_type is WorkEventType.VERIFICATION_RECORDED
+        and event.payload_json.get("stage") == "repository"
+    ]
+    completion_events = [
+        event for event in events if event.event_type is WorkEventType.WORK_COMPLETED
+    ]
+    assert len(repository_events) == len(completion_events) == 1
+    repository_result = VerificationResult.model_validate(
+        repository_events[0].payload_json
+    )
+    assert repository_result.project_id == PROJECT_ID
+    assert repository_result.profile_context["repository_outcome"] == "pull_request"
+    assert repository_result.profile_context["result_sha"] == "b" * 40
+
+    repeated = await flow.resume(work_id, project_id=PROJECT_ID)
+    repeated_events = await store.read_events(work_id, project_id=PROJECT_ID)
+    assert repeated == completed
+    assert len(repeated_events) == len(events)
 
 
 @pytest.mark.asyncio
@@ -724,10 +934,10 @@ async def test_resume_rebuilds_pr_projection_and_does_not_duplicate_merge_event(
         gate_id=gated.pending_gate,
         actor_ref="operator:arda",
     )
-    assert delivered.status == "READY_TO_DELIVER"
+    assert delivered.status == "COMPLETE"
 
     resumed = await flow.resume(delivered.work_id, project_id=PROJECT_ID)
-    assert resumed.status == "READY_TO_DELIVER"
+    assert resumed.status == "COMPLETE"
     events = await store.read_events(delivered.work_id, project_id=PROJECT_ID)
     merges = [
         event
@@ -736,6 +946,122 @@ async def test_resume_rebuilds_pr_projection_and_does_not_duplicate_merge_event(
         and event.payload_json.get("stage") == "merge"
     ]
     assert len(merges) == 1
+
+
+@pytest.mark.asyncio
+async def test_resume_after_completion_event_does_not_repeat_external_actions(
+    store: WorkStore,
+    monkeypatch,
+) -> None:
+    flow, software, github, publisher = _flow(
+        store, decision=GateDecision.ALLOW
+    )
+    original_save = store.save_work
+    failed = False
+
+    async def fail_complete_projection(record):
+        nonlocal failed
+        if not failed and record.status == "COMPLETE":
+            failed = True
+            raise RuntimeError("completion projection interrupted")
+        await original_save(record)
+
+    monkeypatch.setattr(store, "save_work", fail_complete_projection)
+    with pytest.raises(RuntimeError, match="completion projection interrupted"):
+        await flow.start(
+            issue_url=ISSUE_URL,
+            project_id=PROJECT_ID,
+            base_sha="a" * 40,
+        )
+    monkeypatch.setattr(store, "save_work", original_save)
+
+    work_id = software.starts[0][0].id
+    before = await store.read_events(work_id, project_id=PROJECT_ID)
+    flow = GitHubIssueLifecycle(
+        work_store=store,
+        software_lifecycle=software,
+        github=github,
+        branch_publisher=publisher,
+        merge_policy=lambda _request: GateDecision.ALLOW,
+        repository_outcome=SoftwareRepositoryOutcome.MERGED,
+    )
+    completed = await flow.resume(work_id, project_id=PROJECT_ID)
+    after = await store.read_events(work_id, project_id=PROJECT_ID)
+
+    assert completed.status == "COMPLETE"
+    assert len(github.pull_requests) == len(github.merges) == 1
+    assert len(after) == len(before)
+    assert len(
+        [
+            event
+            for event in after
+            if event.event_type is WorkEventType.VERIFICATION_RECORDED
+            and event.payload_json.get("stage") == "repository"
+        ]
+    ) == 1
+    assert len(
+        [event for event in after if event.event_type is WorkEventType.WORK_COMPLETED]
+    ) == 1
+
+
+
+@pytest.mark.asyncio
+async def test_resume_after_delivery_ready_evidence_does_not_repeat_actions(
+    store: WorkStore,
+    monkeypatch,
+) -> None:
+    flow, software, github, publisher = _flow(
+        store,
+        decision=GateDecision.ALLOW,
+        delivery=True,
+    )
+    original_save = store.save_work
+    failed = False
+
+    async def fail_ready_projection(record):
+        nonlocal failed
+        if not failed and record.status == "READY_TO_DELIVER":
+            failed = True
+            raise RuntimeError("delivery-ready projection interrupted")
+        await original_save(record)
+
+    monkeypatch.setattr(store, "save_work", fail_ready_projection)
+    with pytest.raises(RuntimeError, match="delivery-ready projection interrupted"):
+        await flow.start(
+            issue_url=ISSUE_URL,
+            project_id=PROJECT_ID,
+            base_sha="a" * 40,
+        )
+    monkeypatch.setattr(store, "save_work", original_save)
+
+    work_id = software.starts[0][0].id
+    before = await store.read_events(work_id, project_id=PROJECT_ID)
+    flow = GitHubIssueLifecycle(
+        work_store=store,
+        software_lifecycle=software,
+        github=github,
+        branch_publisher=publisher,
+        merge_policy=lambda _request: GateDecision.ALLOW,
+        repository_outcome=SoftwareRepositoryOutcome.MERGED,
+    )
+    ready = await flow.resume(work_id, project_id=PROJECT_ID)
+    after = await store.read_events(work_id, project_id=PROJECT_ID)
+
+    assert ready.status == "READY_TO_DELIVER"
+    assert len(github.pull_requests) == len(github.merges) == 1
+    assert len(after) == len(before)
+    assert len(
+        [
+            event
+            for event in after
+            if event.event_type is WorkEventType.VERIFICATION_RECORDED
+            and event.payload_json.get("stage") == "repository"
+        ]
+    ) == 1
+    assert not any(
+        event.event_type is WorkEventType.WORK_COMPLETED for event in after
+    )
+
 
 
 @pytest.mark.parametrize(
@@ -755,7 +1081,7 @@ async def test_delivery_phase_resume_does_not_reenter_software_lifecycle(
     store: WorkStore,
     delivery_status: str,
 ) -> None:
-    flow, software, _github, _publisher = _flow(store)
+    flow, software, _github, _publisher = _flow(store, delivery=True)
     gated = await flow.start(
         issue_url=ISSUE_URL,
         project_id=PROJECT_ID,
@@ -813,7 +1139,7 @@ async def test_retry_approval_recovers_decision_recorded_before_projection(
         actor_ref="operator:arda",
     )
 
-    assert delivered.status == "READY_TO_DELIVER"
+    assert delivered.status == "COMPLETE"
     assert len(github.merges) == 1
 
 
@@ -881,7 +1207,7 @@ async def test_control_degraded_freezes_start_resume_and_approved_merge(
 async def test_critical_production_incident_freezes_approved_merge(
     store: WorkStore,
 ) -> None:
-    flow, _, github, _ = _flow(store)
+    flow, _, github, _ = _flow(store, delivery=True)
     gated = await flow.start(
         issue_url=ISSUE_URL,
         project_id=PROJECT_ID,
@@ -1098,7 +1424,7 @@ async def test_allow_policy_merges_without_requesting_operator_approval(
         base_sha="a" * 40,
     )
 
-    assert delivered.status == "READY_TO_DELIVER"
+    assert delivered.status == "COMPLETE"
     assert len(github.merges) == 1
     events = await store.read_events(delivered.work_id, project_id=PROJECT_ID)
     assert all(event.event_type is not WorkEventType.GATE_REQUESTED for event in events)
@@ -1326,7 +1652,7 @@ async def test_resume_recovers_merge_completed_before_event_persistence(
 
     delivered = await flow.resume(gated.work_id, project_id=PROJECT_ID)
 
-    assert delivered.status == "READY_TO_DELIVER"
+    assert delivered.status == "COMPLETE"
     assert delivered.profile_context["github"]["merged_sha"] == "c" * 40
     assert len(github.merges) == 1
     events = await store.read_events(gated.work_id, project_id=PROJECT_ID)
@@ -1337,6 +1663,16 @@ async def test_resume_recovers_merge_completed_before_event_persistence(
         and event.payload_json.get("stage") == "merge"
     ]
     assert len(merge_events) == 1
+    repository_events = [
+        event
+        for event in events
+        if event.event_type is WorkEventType.VERIFICATION_RECORDED
+        and event.payload_json.get("stage") == "repository"
+    ]
+    completion_events = [
+        event for event in events if event.event_type is WorkEventType.WORK_COMPLETED
+    ]
+    assert len(repository_events) == len(completion_events) == 1
     assert merge_events[0].payload_json["merged_sha"] == "c" * 40
 
 @pytest.mark.parametrize(
