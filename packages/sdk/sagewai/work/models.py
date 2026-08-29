@@ -309,15 +309,80 @@ class ExecutionAttempt(BaseModel):
     profile_context: dict[str, Any] = Field(default_factory=dict)
 
 
-class VerificationResult(BaseModel):
-    """Profile-neutral deterministic verification verdict."""
+class CriterionVerification(BaseModel):
+    """Verdict and evidence for one accepted contract criterion."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    attempt_id: str
+    project_id: str | None
+    contract_id: str
+    criterion_id: str
     passed: bool
     evidence_refs: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def validate_passing_evidence(self) -> CriterionVerification:
+        if self.passed and not self.evidence_refs:
+            raise ValueError("passing criterion requires evidence")
+        return self
+
+
+class VerificationResult(BaseModel):
+    """Profile-neutral criterion-linked verification verdict."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    project_id: str | None
+    contract_id: str
+    attempt_id: str
+    stage: str
+    passed: bool
+    criterion_results: tuple[CriterionVerification, ...] = Field(min_length=1)
+    evidence_refs: tuple[str, ...]
     profile_context: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_criterion_results(self) -> VerificationResult:
+        criterion_ids: set[str] = set()
+        for result in self.criterion_results:
+            if result.project_id != self.project_id:
+                raise ValueError("criterion belongs to a different project")
+            if result.contract_id != self.contract_id:
+                raise ValueError("criterion belongs to a different contract")
+            if result.criterion_id in criterion_ids:
+                raise ValueError("criterion result ids must be unique")
+            criterion_ids.add(result.criterion_id)
+        if self.passed != all(result.passed for result in self.criterion_results):
+            raise ValueError("verification passed is inconsistent with criterion results")
+        return self
+
+
+class CompletionEvaluation(BaseModel):
+    """Exact current-contract criterion evaluation produced before completion."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    project_id: str | None
+    work_id: str
+    contract_id: str
+    passed: bool
+    criterion_results: tuple[CriterionVerification, ...] = Field(min_length=1)
+    evaluated_at: datetime
+
+    @model_validator(mode="after")
+    def validate_criterion_results(self) -> CompletionEvaluation:
+        criterion_ids: set[str] = set()
+        for result in self.criterion_results:
+            if result.project_id != self.project_id:
+                raise ValueError("criterion belongs to a different project")
+            if result.contract_id != self.contract_id:
+                raise ValueError("criterion belongs to a different contract")
+            if result.criterion_id in criterion_ids:
+                raise ValueError("criterion result ids must be unique")
+            criterion_ids.add(result.criterion_id)
+        if self.passed != all(result.passed for result in self.criterion_results):
+            raise ValueError("completion passed is inconsistent with criterion results")
+        return self
 
 
 class ReviewFinding(BaseModel):

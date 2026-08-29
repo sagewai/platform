@@ -21,7 +21,8 @@ from typing import Protocol
 from sagewai.artifacts.models import ArtifactRef
 from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.work.capsule import TaskCapsuleCompiler
-from sagewai.work.contract import WorkContract
+from sagewai.work.completion import evaluate_completion, validate_verification_result
+from sagewai.work.contract import AcceptanceCriterion, WorkContract
 from sagewai.work.control import OperatorController
 from sagewai.work.events import (
     WorkEvent,
@@ -35,6 +36,7 @@ from sagewai.work.models import (
     Assumption,
     ClaimClassification,
     ClassifiedClaim,
+    CriterionVerification,
     OperatorDisciplineReport,
     ReviewResult,
     TaskCapsule,
@@ -53,6 +55,7 @@ from sagewai.work.profiles.software.models import (
     SoftwareDeliveryTriageContext,
     SoftwareDesignContext,
     SoftwareRepairContext,
+    SoftwareRepositoryOutcome,
     SoftwareReviewContext,
     SoftwareReviewFindingContext,
     SoftwareWorkspace,
@@ -161,16 +164,22 @@ class _DiffMaterializingRuntime:
 
 
 def expected_result_sha(events: list[WorkEvent], base_sha: str) -> str:
-    """Return the latest recorded workspace HEAD, including publication commits."""
+    """Return the latest durable workspace HEAD."""
     result_sha = base_sha
     for event in events:
-        if event.event_type is not WorkEventType.STAGE_COMPLETED:
-            continue
-        stage = event.payload_json.get("stage")
-        if stage in {"implement", "repair"}:
-            result_sha = str(event.payload_json["current_sha"])
-        elif stage == "branch_published":
-            result_sha = str(event.payload_json["branch_sha"])
+        if event.event_type is WorkEventType.STAGE_COMPLETED:
+            stage = event.payload_json.get("stage")
+            if stage in {"implement", "repair"}:
+                result_sha = str(event.payload_json["current_sha"])
+            elif stage == "branch_published":
+                result_sha = str(event.payload_json["branch_sha"])
+        elif (
+            event.event_type is WorkEventType.VERIFICATION_RECORDED
+            and event.payload_json.get("stage") == "repository"
+        ):
+            profile_context = event.payload_json.get("profile_context", {})
+            if "result_sha" in profile_context:
+                result_sha = str(profile_context["result_sha"])
     return result_sha
 
 
@@ -179,6 +188,8 @@ class _Verifier(Protocol):
         self,
         *,
         work_item: WorkItem,
+        contract: WorkContract,
+        criterion_ids: tuple[str, ...],
         attempt_id: str,
         workspace: SoftwareWorkspace,
         commands: tuple[str, ...],
@@ -369,6 +380,8 @@ class SoftwareLifecycle:
         work_item, contract, assumptions = self._canonical_inputs(events)
         software = self._validate_inputs(work_item, contract, assumptions)
         state = self._state_from_events(events)
+        if state == "COMPLETE":
+            return await self._set_status(work_item, "COMPLETE")
         try:
             if state == "READY_TO_IMPLEMENT":
                 workspace = await self._worktree_manager.prepare(
@@ -386,6 +399,11 @@ class SoftwareLifecycle:
                     attempt_id=self._workspace_attempt_id,
                     base_sha=software.base_sha,
                     expected_sha=expected_result_sha(events, software.base_sha),
+                    publish_commit_message=(
+                        f"sagewai work {work_item.id}"
+                        if state == "COMPLETING"
+                        else None
+                    ),
                 )
         except WorkspaceStaleError as exc:
             stage = self._operator_stage(state)
@@ -689,14 +707,30 @@ class SoftwareLifecycle:
                 or ".." in path.parts
             ):
                 raise ValueError(f"analysis contract scope is not surgical: {target}")
-        return WorkContract(
+        software = SoftwareContractContext.model_validate(draft.profile_context)
+        reserved_ids = (
+            software.repository_criterion_id,
+            *(software.delivery.criterion_ids if software.delivery is not None else ()),
+        )
+        criteria_by_id = {criterion.id: criterion for criterion in draft.acceptance_criteria}
+        preserved = tuple(criteria_by_id[criterion_id] for criterion_id in reserved_ids)
+        proposed = tuple(
+            AcceptanceCriterion(
+                id=f"{draft.id}:analysis:criterion:{index}",
+                project_id=draft.project_id,
+                statement=statement,
+                verification_kind="deterministic",
+            )
+            for index, statement in enumerate(proposal.acceptance_criteria, start=1)
+        )
+        accepted = WorkContract(
             id=f"{draft.id}:analysis",
             project_id=draft.project_id,
             work_id=draft.work_id,
             version=draft.version + 1,
             goal=proposal.goal,
             allowed_scope=proposal.allowed_scope,
-            acceptance_criteria=proposal.acceptance_criteria,
+            acceptance_criteria=(*preserved, *proposed),
             constraints=proposal.constraints,
             non_goals=proposal.non_goals,
             evidence_refs=tuple(
@@ -708,6 +742,8 @@ class SoftwareLifecycle:
             profile_context=draft.profile_context,
             supersedes=draft.id,
         )
+        software.validate_contract(accepted)
+        return accepted
 
     async def _publish_analysis_claims(
         self,
@@ -956,8 +992,15 @@ class SoftwareLifecycle:
                 )
                 assert degraded is not None
                 return degraded
-            if state in {"READY_TO_MERGE", "WORK_BLOCKED"}:
+            if state in {"READY_TO_MERGE", "WORK_BLOCKED", "COMPLETE"}:
                 return await self._set_status(work_item, state)
+            if state == "COMPLETING":
+                state = await self._complete_verified_commit(
+                    work_item=work_item,
+                    contract=contract,
+                    workspace=workspace,
+                )
+                continue
             if state == "DESIGNING":
                 state = await self._run_design(
                     work_item=work_item,
@@ -979,6 +1022,7 @@ class SoftwareLifecycle:
             if state == "VERIFYING":
                 state = await self._run_verification(
                     work_item=work_item,
+                    contract=contract,
                     workspace=workspace,
                 )
                 continue
@@ -1159,6 +1203,8 @@ class SoftwareLifecycle:
         if result.action_results:
             profile_verification = await self._profile.verify(
                 work_item,
+                contract,
+                planned_action.verification,
                 result.action_results,
             )
             if profile_verification.attempt_id != run_id:
@@ -1224,6 +1270,7 @@ class SoftwareLifecycle:
                     result_sha=result_sha,
                 ).model_dump(mode="json"),
                 "profile_verification": profile_verification.model_dump(mode="json"),
+                "criterion_ids": list(planned_action.verification),
             },
             actor_ref=assignment.actor_ref,
         )
@@ -1234,6 +1281,7 @@ class SoftwareLifecycle:
         self,
         *,
         work_item: WorkItem,
+        contract: WorkContract,
         workspace: SoftwareWorkspace,
     ) -> str:
         events = await self._events(work_item)
@@ -1244,11 +1292,16 @@ class SoftwareLifecycle:
             and event.payload_json.get("stage") in {"implement", "repair"}
         )
         attempt_id = str(completed.payload_json["run_id"])
+        criterion_ids = tuple(
+            str(criterion_id)
+            for criterion_id in completed.payload_json["criterion_ids"]
+        )
         profile_result = VerificationResult.model_validate(
             completed.payload_json["profile_verification"]
         )
         if profile_result.attempt_id != attempt_id:
             raise ValueError("profile verification belongs to a different attempt")
+        validate_verification_result(contract, criterion_ids, profile_result)
         isolation_was_degraded = (
             SOFTWARE_VERIFICATION_ISOLATION_PRECONDITION_ID
             in active_control_precondition_ids(events)
@@ -1256,6 +1309,8 @@ class SoftwareLifecycle:
         try:
             deterministic = await self._verifier.verify(
                 work_item=work_item,
+                contract=contract,
+                criterion_ids=criterion_ids,
                 attempt_id=attempt_id,
                 workspace=workspace,
                 commands=self._verification_commands,
@@ -1283,6 +1338,7 @@ class SoftwareLifecycle:
                 active_run_id=attempt_id,
             )
             return "CONTROL_DEGRADED"
+        validate_verification_result(contract, criterion_ids, deterministic)
         if isolation_was_degraded:
             await self._append(
                 work_item,
@@ -1297,9 +1353,39 @@ class SoftwareLifecycle:
                 },
                 actor_ref="software.verifier",
             )
+        profile_by_id = {
+            result.criterion_id: result for result in profile_result.criterion_results
+        }
+        deterministic_by_id = {
+            result.criterion_id: result for result in deterministic.criterion_results
+        }
+        criterion_results = tuple(
+            CriterionVerification(
+                project_id=work_item.project_id,
+                contract_id=contract.id,
+                criterion_id=criterion_id,
+                passed=(
+                    profile_by_id[criterion_id].passed
+                    and deterministic_by_id[criterion_id].passed
+                ),
+                evidence_refs=tuple(
+                    dict.fromkeys(
+                        (
+                            *profile_by_id[criterion_id].evidence_refs,
+                            *deterministic_by_id[criterion_id].evidence_refs,
+                        )
+                    )
+                ),
+            )
+            for criterion_id in criterion_ids
+        )
         result = VerificationResult(
+            project_id=work_item.project_id,
+            contract_id=contract.id,
             attempt_id=attempt_id,
-            passed=profile_result.passed and deterministic.passed,
+            stage="verification",
+            passed=all(item.passed for item in criterion_results),
+            criterion_results=criterion_results,
             evidence_refs=tuple(
                 dict.fromkeys(
                     (*profile_result.evidence_refs, *deterministic.evidence_refs)
@@ -1310,6 +1396,7 @@ class SoftwareLifecycle:
                 **deterministic.profile_context,
             },
         )
+        validate_verification_result(contract, criterion_ids, result)
         await self._append(
             work_item,
             WorkEventType.VERIFICATION_RECORDED,
@@ -1490,6 +1577,17 @@ class SoftwareLifecycle:
         )
 
         if review.verdict == "accept":
+            software = SoftwareContractContext.model_validate(contract.profile_context)
+            if (
+                software.repository_outcome
+                is SoftwareRepositoryOutcome.VERIFIED_COMMIT
+            ):
+                await self._set_status(
+                    work_item,
+                    "COMPLETING",
+                    active_run_id=run_id,
+                )
+                return "COMPLETING"
             await self._set_status(work_item, "READY_TO_MERGE", active_run_id=run_id)
             return "READY_TO_MERGE"
         if review.verdict == "blocked":
@@ -1512,6 +1610,131 @@ class SoftwareLifecycle:
         await self._set_status(work_item, "REPAIRING", active_run_id=run_id)
         return "REPAIRING"
 
+    async def _complete_verified_commit(
+        self,
+        *,
+        work_item: WorkItem,
+        contract: WorkContract,
+        workspace: SoftwareWorkspace,
+    ) -> str:
+        software = SoftwareContractContext.model_validate(contract.profile_context)
+        software.validate_contract(contract)
+        if software.repository_outcome is not SoftwareRepositoryOutcome.VERIFIED_COMMIT:
+            raise ValueError("local completion requires a verified-commit outcome")
+
+        events = await self._events(work_item)
+        repository_result = next(
+            (
+                VerificationResult.model_validate(event.payload_json)
+                for event in reversed(events)
+                if event.event_type is WorkEventType.VERIFICATION_RECORDED
+                and event.payload_json.get("stage") == "repository"
+                and event.payload_json.get("contract_id") == contract.id
+            ),
+            None,
+        )
+        if repository_result is None:
+            expected_sha = expected_result_sha(events, software.base_sha)
+            result_sha = await self._worktree_manager.commit_reviewed(
+                workspace,
+                expected_sha=expected_sha,
+                commit_message=f"sagewai work {work_item.id}",
+            )
+            read_back_sha = await self._worktree_manager.current_sha(workspace)
+            if read_back_sha != result_sha:
+                raise WorkspaceStaleError("repository commit read-back changed")
+            evidence_refs = (f"git://{result_sha}",)
+            repository_result = VerificationResult(
+                project_id=work_item.project_id,
+                contract_id=contract.id,
+                attempt_id=f"{work_item.id}:repository:1",
+                stage="repository",
+                passed=True,
+                criterion_results=(
+                    CriterionVerification(
+                        project_id=work_item.project_id,
+                        contract_id=contract.id,
+                        criterion_id=software.repository_criterion_id,
+                        passed=True,
+                        evidence_refs=evidence_refs,
+                    ),
+                ),
+                evidence_refs=evidence_refs,
+                profile_context={
+                    "base_sha": expected_sha,
+                    "result_sha": result_sha,
+                },
+            )
+            validate_verification_result(
+                contract,
+                (software.repository_criterion_id,),
+                repository_result,
+            )
+            await self._append_once(
+                work_item,
+                WorkEventType.VERIFICATION_RECORDED,
+                repository_result.model_dump(mode="json"),
+                actor_ref="software.lifecycle",
+            )
+        else:
+            validate_verification_result(
+                contract,
+                (software.repository_criterion_id,),
+                repository_result,
+            )
+            result_sha = str(repository_result.profile_context["result_sha"])
+            if await self._worktree_manager.current_sha(workspace) != result_sha:
+                raise WorkspaceStaleError("repository verification SHA does not match HEAD")
+
+        current_results = tuple(
+            VerificationResult.model_validate(event.payload_json)
+            for event in await self._events(work_item)
+            if event.event_type is WorkEventType.VERIFICATION_RECORDED
+            and event.payload_json.get("contract_id") == contract.id
+        )
+        try:
+            evaluation = evaluate_completion(
+                work=work_item,
+                contract=contract,
+                verification_results=current_results,
+                evaluated_at=datetime.now(timezone.utc),
+            )
+        except ValueError as exc:
+            await self._block_once(
+                work_item,
+                {
+                    "reason": "completion_evidence_invalid",
+                    "violations": [str(exc)],
+                    "decision_request": "Repair the current-contract verification evidence.",
+                },
+                actor_ref="software.lifecycle",
+            )
+            return "WORK_BLOCKED"
+        if not evaluation.passed:
+            await self._block_once(
+                work_item,
+                {
+                    "reason": "completion_criteria_failed",
+                    "failed_criterion_ids": [
+                        result.criterion_id
+                        for result in evaluation.criterion_results
+                        if not result.passed
+                    ],
+                    "decision_request": "Repair the failed acceptance criteria.",
+                },
+                actor_ref="software.lifecycle",
+            )
+            return "WORK_BLOCKED"
+
+        await self._append_once(
+            work_item,
+            WorkEventType.WORK_COMPLETED,
+            evaluation.model_dump(mode="json"),
+            actor_ref="software.lifecycle",
+        )
+        await self._set_status(work_item, "COMPLETE")
+        return "COMPLETE"
+
     def _validate_inputs(
         self,
         work_item: WorkItem,
@@ -1531,7 +1754,9 @@ class SoftwareLifecycle:
         provided_ids = tuple(item.id for item in assumptions)
         if provided_ids != contract.assumption_ids:
             raise ValueError("contract assumptions do not match supplied assumptions")
-        return SoftwareContractContext.model_validate(contract.profile_context)
+        software = SoftwareContractContext.model_validate(contract.profile_context)
+        software.validate_contract(contract)
+        return software
 
     @staticmethod
     def _post_contract_state(contract: WorkContract) -> str:
@@ -1858,6 +2083,13 @@ class SoftwareLifecycle:
             if accepted is not None
             else "READY_TO_IMPLEMENT"
         )
+        verified_commit = (
+            accepted is not None
+            and SoftwareContractContext.model_validate(
+                accepted.profile_context
+            ).repository_outcome
+            is SoftwareRepositoryOutcome.VERIFIED_COMMIT
+        )
         for event in events:
             if event.event_type is WorkEventType.WORK_BLOCKED:
                 state = "WORK_BLOCKED"
@@ -1891,17 +2123,22 @@ class SoftwareLifecycle:
                     state = "VERIFYING"
             elif event.event_type is WorkEventType.VERIFICATION_RECORDED:
                 result = VerificationResult.model_validate(event.payload_json)
-                state = "REVIEWING" if result.passed else "REPAIRING"
+                if result.stage == "repository":
+                    state = "COMPLETING"
+                else:
+                    state = "REVIEWING" if result.passed else "REPAIRING"
             elif event.event_type is WorkEventType.REVIEW_RECORDED:
                 review = ReviewResult.model_validate(event.payload_json)
                 if review.verdict == "accept":
-                    state = "READY_TO_MERGE"
+                    state = "COMPLETING" if verified_commit else "READY_TO_MERGE"
                 elif review.verdict == "repair":
                     state = "REPAIRING"
                 else:
                     state = "WORK_BLOCKED"
             elif event.event_type is WorkEventType.TRIAGE_CREATED:
                 state = "REPAIRING"
+            elif event.event_type is WorkEventType.WORK_COMPLETED:
+                state = "COMPLETE"
         return state
 
     @staticmethod

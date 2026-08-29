@@ -247,17 +247,25 @@ class SoftwareWorktreeManager:
                 f"workspace HEAD moved: expected {expected_sha}, found {actual_sha}"
             )
 
-    async def publish_branch(
+    async def commit_reviewed(
         self,
         workspace: SoftwareWorkspace,
         *,
-        branch: str,
+        expected_sha: str,
         commit_message: str,
     ) -> str:
-        """Commit the reviewed workspace state and push one named branch."""
-        valid = await _git(workspace.path, "check-ref-format", "--branch", branch)
-        if valid.returncode != 0:
-            raise ValueError(f"invalid Git branch: {branch}")
+        """Commit reviewed local state, accepting only one matching restart commit."""
+        actual_sha = await self.current_sha(workspace)
+        if actual_sha != expected_sha:
+            if await self._matches_published_state(
+                workspace,
+                expected_sha=expected_sha,
+                commit_message=commit_message,
+            ):
+                return actual_sha
+            raise WorkspaceStaleError(
+                f"workspace HEAD moved: expected {expected_sha}, found {actual_sha}"
+            )
 
         status = await _git(workspace.path, "status", "--porcelain")
         if status.returncode != 0:
@@ -274,8 +282,27 @@ class SoftwareWorktreeManager:
             )
             if committed.returncode != 0:
                 raise WorkspaceStaleError(committed.stderr)
+        return await self.current_sha(workspace)
 
-        result_sha = await self.current_sha(workspace)
+
+    async def publish_branch(
+        self,
+        workspace: SoftwareWorkspace,
+        *,
+        branch: str,
+        commit_message: str,
+    ) -> str:
+        """Commit the reviewed workspace state and push one named branch."""
+        valid = await _git(workspace.path, "check-ref-format", "--branch", branch)
+        if valid.returncode != 0:
+            raise ValueError(f"invalid Git branch: {branch}")
+
+        expected_sha = await self.current_sha(workspace)
+        result_sha = await self.commit_reviewed(
+            workspace,
+            expected_sha=expected_sha,
+            commit_message=commit_message,
+        )
         pushed = await _git(
             workspace.path,
             "push",

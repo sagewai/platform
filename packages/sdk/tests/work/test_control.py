@@ -20,6 +20,7 @@ import pytest
 from sagewai.core.state import InMemoryStore, StepStatus
 from sagewai.safety.permissions import PermissionPolicy
 from sagewai.work import (
+    AcceptanceCriterion,
     ActionIntent,
     ActionScope,
     CapabilityGrant,
@@ -149,7 +150,14 @@ def _capsule(project_id: str | None = "project-a") -> TaskCapsule:
         version=1,
         goal="Implement runtime",
         allowed_scope=("packages/sdk/sagewai/work",),
-        acceptance_criteria=("control checks pass",),
+        acceptance_criteria=(
+            AcceptanceCriterion(
+                id="criterion-control-checks",
+                project_id=project_id,
+                statement="control checks pass",
+                verification_kind="deterministic",
+            ),
+        ),
         constraints=(),
         non_goals=(),
         evidence_refs=(),

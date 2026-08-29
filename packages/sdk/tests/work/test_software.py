@@ -172,6 +172,43 @@ def _repository(tmp_path: Path) -> tuple[Path, str]:
     return repository, _git(repository, "rev-parse", "HEAD")
 
 
+def _verification_contract() -> work.WorkContract:
+    return work.WorkContract(
+        id="contract-1",
+        project_id="project-a",
+        work_id="work-1",
+        version=1,
+        goal="Verify the software change",
+        allowed_scope=("README.md",),
+        acceptance_criteria=(
+            work.AcceptanceCriterion(
+                id="criterion-repository",
+                project_id="project-a",
+                statement="repository outcome is verified",
+                verification_kind="deterministic",
+            ),
+            work.AcceptanceCriterion(
+                id="criterion-execution",
+                project_id="project-a",
+                statement="verification commands pass",
+                verification_kind="deterministic",
+            ),
+        ),
+        constraints=(),
+        non_goals=(),
+        evidence_refs=("issue://1",),
+        assumption_ids=(),
+        risk="low",
+        design_required=False,
+        profile_context=SoftwareContractContext(
+            project_id="project-a",
+            base_sha="a" * 40,
+            repository_outcome="verified_commit",
+            repository_criterion_id="criterion-repository",
+        ).model_dump(mode="json"),
+    )
+
+
 def _result(
     *,
     action_results: tuple[ActionResult, ...] = (),
@@ -195,7 +232,12 @@ def _result(
 
 
 def test_software_profile_contexts_round_trip_at_profile_boundary() -> None:
-    contract = SoftwareContractContext(base_sha="a" * 40)
+    contract = SoftwareContractContext(
+        project_id="project-a",
+        base_sha="a" * 40,
+        repository_outcome="verified_commit",
+        repository_criterion_id="criterion-repository",
+    )
     capsule = SoftwareCapsuleContext(
         base_sha="a" * 40,
         current_sha="b" * 40,
@@ -809,6 +851,8 @@ async def test_large_verification_output_is_deduplicated_artifact_evidence(
 
     result = await verifier.verify(
         work_item=work_item,
+        contract=_verification_contract(),
+        criterion_ids=("criterion-execution",),
         attempt_id="attempt-1",
         workspace=workspace,
         commands=(command, command),
@@ -819,6 +863,11 @@ async def test_large_verification_output_is_deduplicated_artifact_evidence(
         for check in result.profile_context["checks"]
     )
     assert result.passed is True
+    assert result.project_id == "project-a"
+    assert result.contract_id == "contract-1"
+    assert result.stage == "verification"
+    assert tuple(item.criterion_id for item in result.criterion_results) == ("criterion-execution",)
+    assert result.criterion_results[0].evidence_refs == result.evidence_refs
     assert checks[0].artifact_ref is not None
     assert checks[1].artifact_ref == checks[0].artifact_ref
     items = [
@@ -882,6 +931,8 @@ async def test_small_verification_output_remains_inline(
 
     result = await verifier.verify(
         work_item=work_item,
+        contract=_verification_contract(),
+        criterion_ids=("criterion-execution",),
         attempt_id="attempt-1",
         workspace=workspace,
         commands=(command,),
@@ -894,3 +945,12 @@ async def test_small_verification_output_remains_inline(
     assert item.artifact_refs == ()
     assert "stdout:\nsmall-output" in item.statement
     assert not (tmp_path / "objects").exists()
+    with pytest.raises(ValueError, match="criterion subset"):
+        await verifier.verify(
+            work_item=work_item,
+            contract=_verification_contract(),
+            criterion_ids=("criterion-repository",),
+            attempt_id="attempt-1",
+            workspace=workspace,
+            commands=(command,),
+        )

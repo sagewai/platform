@@ -1,0 +1,312 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+#
+# This file is part of Sagewai, licensed under the GNU Affero General
+# Public License v3.0 or later (AGPL-3.0-or-later). You may use,
+# modify, and distribute this file under the terms of the AGPL.
+# See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
+#
+# This file is also available under a commercial license.
+# See COMMERCIAL-LICENSE.md for details.
+"""Verified local commit completion for the software Work lifecycle."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from sagewai.core.state import InMemoryStore
+from sagewai.work import (
+    AcceptanceCriterion,
+    CompletionEvaluation,
+    VerificationResult,
+    WorkContract,
+    WorkEventType,
+    WorkStore,
+)
+from sagewai.work.knowledge import KnowledgeStore
+from sagewai.work.profiles.software import (
+    SoftwareContractContext,
+    SoftwareRepositoryOutcome,
+    SoftwareVerifier,
+)
+from tests.db.conftest import dialect_engine  # noqa: F401
+from tests.work.test_lifecycle import (
+    AnalysisRuntime,
+    MutationRuntime,
+    ReviewRuntime,
+    _command,
+    _git,
+    _lifecycle,
+    _repository,
+    _work_item,
+)
+
+
+def _contract(base_sha: str, outcome: SoftwareRepositoryOutcome) -> WorkContract:
+    repository_criterion = AcceptanceCriterion(
+        id="criterion-repository",
+        project_id="project-a",
+        statement="produce the accepted repository outcome",
+        verification_kind="profile",
+    )
+    return WorkContract(
+        id="contract-1",
+        project_id="project-a",
+        work_id="work-1",
+        version=1,
+        goal="Change target deterministically",
+        allowed_scope=("target.txt",),
+        acceptance_criteria=(repository_criterion,),
+        constraints=(),
+        non_goals=(),
+        evidence_refs=(),
+        assumption_ids=(),
+        risk="low",
+        design_required=False,
+        profile_context=SoftwareContractContext(
+            project_id="project-a",
+            base_sha=base_sha,
+            repository_outcome=outcome,
+            repository_criterion_id=repository_criterion.id,
+        ).model_dump(mode="json"),
+    )
+
+
+class CountingVerifier:
+    def __init__(self, delegate: SoftwareVerifier) -> None:
+        self.delegate = delegate
+        self.calls = 0
+
+    async def verify(self, **kwargs) -> VerificationResult:
+        self.calls += 1
+        return await self.delegate.verify(**kwargs)
+
+
+class CrashAfterCommitManager:
+    """Persist the commit, then simulate death before its Work event."""
+
+    def __init__(self, delegate) -> None:
+        self.delegate = delegate
+        self.crashed = False
+
+    def __getattr__(self, name):
+        return getattr(self.delegate, name)
+
+    async def commit_reviewed(self, *args, **kwargs) -> str:
+        result_sha = await self.delegate.commit_reviewed(*args, **kwargs)
+        if not self.crashed:
+            self.crashed = True
+            raise RuntimeError("simulated death after local commit")
+        return result_sha
+
+
+@pytest.fixture
+async def completion_stores(dialect_engine):  # noqa: F811
+    work_store = WorkStore(engine=dialect_engine)
+    knowledge_store = KnowledgeStore(engine=dialect_engine)
+    await work_store.init()
+    await knowledge_store.init()
+    return work_store, knowledge_store
+
+
+@pytest.mark.asyncio
+async def test_verified_commit_completes_with_exact_sha_and_resumes_without_reruns(
+    completion_stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = completion_stores
+    repository, base_sha = _repository(tmp_path)
+    analyzer = AnalysisRuntime()
+    implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
+    reviewer = ReviewRuntime("accept")
+    verifier = CountingVerifier(
+        SoftwareVerifier(knowledge_store=knowledge_store)
+    )
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        analyzer=analyzer,
+        implementer=implementer,
+        reviewer=reviewer,
+        repairer=implementer,
+        verifier=verifier,
+        commands=(_command("initial"),),
+    )
+    draft = _contract(base_sha, SoftwareRepositoryOutcome.VERIFIED_COMMIT)
+
+    completed = await lifecycle.start(work_item=_work_item(), contract=draft)
+
+    workspace = tmp_path / "worktrees/project-a/work-1/workspace"
+    result_sha = _git(workspace, "rev-parse", "HEAD")
+    assert completed.status == "COMPLETE"
+    assert result_sha != base_sha
+    assert _git(repository, "rev-parse", "HEAD") == base_sha
+    assert _git(workspace, "status", "--porcelain") == ""
+
+    events = await work_store.read_events("work-1", project_id="project-a")
+    accepted_event = next(
+        event for event in events if event.event_type is WorkEventType.CONTRACT_ACCEPTED
+    )
+    accepted = WorkContract.model_validate(accepted_event.payload_json)
+    assert accepted.acceptance_criteria[0] == draft.acceptance_criteria[0]
+    assert accepted.acceptance_criteria[1].id == "contract-1:analysis:criterion:1"
+    assert accepted.acceptance_criteria[1].statement == "deterministic verification passes"
+
+    repository_result = next(
+        VerificationResult.model_validate(event.payload_json)
+        for event in events
+        if event.event_type is WorkEventType.VERIFICATION_RECORDED
+        and event.payload_json.get("stage") == "repository"
+    )
+    assert repository_result.contract_id == accepted.id
+    assert repository_result.attempt_id == "work-1:repository:1"
+    assert repository_result.passed is True
+    assert repository_result.criterion_results[0].criterion_id == "criterion-repository"
+    assert repository_result.evidence_refs == (f"git://{result_sha}",)
+    assert repository_result.profile_context == {
+        "base_sha": base_sha,
+        "result_sha": result_sha,
+    }
+
+    completed_events = [
+        event for event in events if event.event_type is WorkEventType.WORK_COMPLETED
+    ]
+    assert len(completed_events) == 1
+    evaluation = CompletionEvaluation.model_validate(completed_events[0].payload_json)
+    assert evaluation.passed is True
+    assert evaluation.contract_id == accepted.id
+    assert tuple(item.criterion_id for item in evaluation.criterion_results) == tuple(
+        item.id for item in accepted.acceptance_criteria
+    )
+
+    calls = (analyzer.calls, implementer.calls, verifier.calls, reviewer.calls)
+    resumed = await lifecycle.resume("work-1", project_id="project-a")
+    assert resumed.status == "COMPLETE"
+    assert (analyzer.calls, implementer.calls, verifier.calls, reviewer.calls) == calls
+    resumed_events = await work_store.read_events("work-1", project_id="project-a")
+    assert sum(
+        event.event_type is WorkEventType.WORK_COMPLETED for event in resumed_events
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_resume_after_commit_before_repository_event_does_not_rerun_stages(
+    completion_stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = completion_stores
+    repository, base_sha = _repository(tmp_path)
+    first_analyzer = AnalysisRuntime()
+    first_implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
+    first_reviewer = ReviewRuntime("accept")
+    first_verifier = CountingVerifier(
+        SoftwareVerifier(knowledge_store=knowledge_store)
+    )
+    first = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        analyzer=first_analyzer,
+        implementer=first_implementer,
+        reviewer=first_reviewer,
+        repairer=first_implementer,
+        verifier=first_verifier,
+        commands=(_command("initial"),),
+    )
+    first._worktree_manager = CrashAfterCommitManager(  # noqa: SLF001
+        first._worktree_manager  # noqa: SLF001
+    )
+
+    with pytest.raises(RuntimeError, match="death after local commit"):
+        await first.start(
+            work_item=_work_item(),
+            contract=_contract(base_sha, SoftwareRepositoryOutcome.VERIFIED_COMMIT),
+        )
+
+    workspace = tmp_path / "worktrees/project-a/work-1/workspace"
+    committed_sha = _git(workspace, "rev-parse", "HEAD")
+    assert committed_sha != base_sha
+    interrupted_events = await work_store.read_events("work-1", project_id="project-a")
+    assert not any(
+        event.event_type is WorkEventType.VERIFICATION_RECORDED
+        and event.payload_json.get("stage") == "repository"
+        for event in interrupted_events
+    )
+
+    resumed_analyzer = AnalysisRuntime()
+    resumed_implementer = MutationRuntime(implement_text="wrong", repair_text="wrong")
+    resumed_reviewer = ReviewRuntime("accept")
+    resumed_verifier = CountingVerifier(
+        SoftwareVerifier(knowledge_store=knowledge_store)
+    )
+    resumed_lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        analyzer=resumed_analyzer,
+        implementer=resumed_implementer,
+        reviewer=resumed_reviewer,
+        repairer=resumed_implementer,
+        verifier=resumed_verifier,
+        commands=(_command("initial"),),
+    )
+
+    completed = await resumed_lifecycle.resume("work-1", project_id="project-a")
+
+    assert completed.status == "COMPLETE"
+    assert _git(workspace, "rev-parse", "HEAD") == committed_sha
+    assert _git(workspace, "log", "-1", "--format=%B") == "sagewai work work-1"
+    assert resumed_analyzer.calls == 0
+    assert resumed_implementer.calls == 0
+    assert resumed_verifier.calls == 0
+    assert resumed_reviewer.calls == 0
+    completed_events = await work_store.read_events("work-1", project_id="project-a")
+    assert sum(
+        event.event_type is WorkEventType.WORK_COMPLETED for event in completed_events
+    ) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome",
+    [SoftwareRepositoryOutcome.PULL_REQUEST, SoftwareRepositoryOutcome.MERGED],
+)
+async def test_remote_repository_outcomes_still_stop_ready_to_merge(
+    completion_stores,
+    tmp_path: Path,
+    outcome: SoftwareRepositoryOutcome,
+) -> None:
+    work_store, knowledge_store = completion_stores
+    repository, base_sha = _repository(tmp_path)
+    implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        implementer=implementer,
+        reviewer=ReviewRuntime("accept"),
+        repairer=implementer,
+        commands=(_command("initial"),),
+    )
+
+    record = await lifecycle.start(
+        work_item=_work_item(),
+        contract=_contract(base_sha, outcome),
+    )
+
+    assert record.status == "READY_TO_MERGE"
+    assert _git(
+        tmp_path / "worktrees/project-a/work-1/workspace",
+        "rev-parse",
+        "HEAD",
+    ) == base_sha

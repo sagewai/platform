@@ -37,5 +37,7 @@ class WorkProfile(Protocol):
     async def verify(
         self,
         work: WorkItem,
+        contract: WorkContract,
+        criterion_ids: tuple[str, ...],
         actions: tuple[ActionResult, ...],
     ) -> VerificationResult: ...

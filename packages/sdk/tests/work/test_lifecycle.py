@@ -25,6 +25,7 @@ from sagewai.artifacts import LocalArtifactStore
 from sagewai.core.state import InMemoryStore
 from sagewai.safety.permissions import PermissionPolicy
 from sagewai.work import (
+    AcceptanceCriterion,
     ActionResult,
     Assumption,
     CapabilityGrant,
@@ -63,6 +64,7 @@ from sagewai.work.profiles.software import (
     SoftwareProfile,
     SoftwareReadOnlyResultValidator,
     SoftwareRepairContext,
+    SoftwareRepositoryOutcome,
     SoftwareResultValidator,
     SoftwareReviewContext,
     SoftwareStageOperator,
@@ -134,14 +136,26 @@ def _contract(
         version=1,
         goal="Change target deterministically",
         allowed_scope=allowed_scope,
-        acceptance_criteria=("deterministic verification passes",),
+        acceptance_criteria=(
+            AcceptanceCriterion(
+                id="criterion-repository",
+                project_id="project-a",
+                statement="produce the accepted merged repository outcome",
+                verification_kind="profile",
+            ),
+        ),
         constraints=(),
         non_goals=(),
         evidence_refs=(),
         assumption_ids=assumption_ids,
         risk="low",
         design_required=False,
-        profile_context=SoftwareContractContext(base_sha=base_sha).model_dump(mode="json"),
+        profile_context=SoftwareContractContext(
+            project_id="project-a",
+            base_sha=base_sha,
+            repository_outcome=SoftwareRepositoryOutcome.MERGED,
+            repository_criterion_id="criterion-repository",
+        ).model_dump(mode="json"),
     )
 
 
@@ -232,14 +246,14 @@ class RecordingSoftwareProfile(SoftwareProfile):
         self.prepare_calls += 1
         return await super().prepare(work, contract)
 
-    async def verify(self, work, actions):
+    async def verify(self, work, contract, criterion_ids, actions):
         self.verify_calls += 1
-        return await super().verify(work, actions)
+        return await super().verify(work, contract, criterion_ids, actions)
 
 
 class CrashingSoftwareProfile(RecordingSoftwareProfile):
-    async def verify(self, work, actions):
-        await super().verify(work, actions)
+    async def verify(self, work, contract, criterion_ids, actions):
+        await super().verify(work, contract, criterion_ids, actions)
         raise RuntimeError("simulated profile verification restart")
 
 

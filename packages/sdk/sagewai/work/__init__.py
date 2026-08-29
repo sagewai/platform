@@ -10,7 +10,13 @@
 """Public API for the generic Work domain."""
 
 from sagewai.work.capsule import TaskCapsuleCompiler
-from sagewai.work.contract import WorkContract
+from sagewai.work.completion import (
+    evaluate_completion,
+    fold_verification_results,
+    validate_criterion_subset,
+    validate_verification_result,
+)
+from sagewai.work.contract import AcceptanceCriterion, WorkContract
 from sagewai.work.control import (
     ControlCheck,
     ControlCheckContext,
@@ -36,8 +42,10 @@ from sagewai.work.models import (
     Assumption,
     ClaimClassification,
     ClassifiedClaim,
+    CompletionEvaluation,
     ControlPrecondition,
     ControlPreconditionKind,
+    CriterionVerification,
     ExecutionAttempt,
     GateDecision,
     OperatorDisciplineReport,
@@ -69,6 +77,7 @@ from sagewai.work.store import WorkStore
 
 __all__ = [
     "Action",
+    "AcceptanceCriterion",
     "ActionPlan",
     "ActionRequest",
     "ActionIntent",
@@ -87,6 +96,8 @@ __all__ = [
     "ControlCheckContext",
     "ControlCheckResult",
     "ControlDegradedError",
+    "CompletionEvaluation",
+    "CriterionVerification",
     "FleetOperatorRuntime",
     "ExecutionAttempt",
     "GateDecision",
@@ -117,4 +128,8 @@ __all__ = [
     "Workspace",
     "active_control_precondition_ids",
     "execution_attempt_from_events",
+    "evaluate_completion",
+    "fold_verification_results",
+    "validate_criterion_subset",
+    "validate_verification_result",
 ]

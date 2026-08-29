@@ -16,7 +16,13 @@ from datetime import datetime, timezone
 import pytest
 
 import sagewai.work.store as work_store_module
-from sagewai.work import TaskCapsuleCompiler, WorkContract, WorkItem, WorkStore
+from sagewai.work import (
+    AcceptanceCriterion,
+    TaskCapsuleCompiler,
+    WorkContract,
+    WorkItem,
+    WorkStore,
+)
 from sagewai.work.events import WorkEvent, WorkEventType
 from sagewai.work.knowledge.control_failure import control_failure_finding
 from sagewai.work.knowledge.models import KnowledgeItem, KnowledgeKind, KnowledgeQuery
@@ -124,7 +130,14 @@ async def test_control_event_atomically_publishes_one_reusable_project_finding(
         version=1,
         goal=related_work.description,
         allowed_scope=("packages/sdk",),
-        acceptance_criteria=("Quartz metrics remain fresh",),
+        acceptance_criteria=(
+            AcceptanceCriterion(
+                id="criterion-metrics-fresh",
+                project_id="project-a",
+                statement="Quartz metrics remain fresh",
+                verification_kind="deterministic",
+            ),
+        ),
         constraints=(),
         non_goals=(),
         evidence_refs=(),

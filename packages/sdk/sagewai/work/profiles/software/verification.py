@@ -31,9 +31,20 @@ from sagewai.sandbox.models import (
     SandboxLifetime,
     ToolCall,
 )
+from sagewai.work.completion import (
+    validate_criterion_subset,
+    validate_verification_result,
+)
+from sagewai.work.contract import WorkContract
 from sagewai.work.knowledge import KnowledgeItem, KnowledgeKind, KnowledgeStore
-from sagewai.work.models import OperatorDisciplineReport, VerificationResult, WorkItem
+from sagewai.work.models import (
+    CriterionVerification,
+    OperatorDisciplineReport,
+    VerificationResult,
+    WorkItem,
+)
 from sagewai.work.profiles.software.models import (
+    SoftwareContractContext,
     SoftwareVerificationCheck,
     SoftwareWorkspace,
 )
@@ -504,6 +515,8 @@ class SoftwareVerifier:
         self,
         *,
         work_item: WorkItem,
+        contract: WorkContract,
+        criterion_ids: tuple[str, ...],
         attempt_id: str,
         workspace: SoftwareWorkspace,
         commands: tuple[str, ...],
@@ -511,6 +524,22 @@ class SoftwareVerifier:
         """Execute every command; the process receipts alone determine the verdict."""
         if work_item.project_id is None:
             raise ValueError("software verification requires a project")
+        if contract.project_id != work_item.project_id or contract.work_id != work_item.id:
+            raise ValueError("verification contract belongs to different work")
+        context = SoftwareContractContext.model_validate(contract.profile_context)
+        context.validate_contract(contract)
+        delivery_criterion_ids = (
+            set(context.delivery.criterion_ids) if context.delivery is not None else set()
+        )
+        execution_criterion_ids = tuple(
+            criterion.id
+            for criterion in contract.acceptance_criteria
+            if criterion.id != context.repository_criterion_id
+            and criterion.id not in delivery_criterion_ids
+        )
+        validate_criterion_subset(contract, criterion_ids)
+        if criterion_ids != execution_criterion_ids:
+            raise ValueError("criterion subset does not match software command verification")
         if workspace.project_id != work_item.project_id or workspace.work_id != work_item.id:
             raise ValueError("verification workspace belongs to different work")
         if not commands:
@@ -585,12 +614,27 @@ class SoftwareVerifier:
             )
             passed = passed and process.returncode == 0 and not process.timed_out
 
-        return VerificationResult(
+        verification = VerificationResult(
+            project_id=work_item.project_id,
+            contract_id=contract.id,
             attempt_id=attempt_id,
+            stage="verification",
             passed=passed,
+            criterion_results=tuple(
+                CriterionVerification(
+                    project_id=work_item.project_id,
+                    contract_id=contract.id,
+                    criterion_id=criterion_id,
+                    passed=passed,
+                    evidence_refs=tuple(evidence_refs),
+                )
+                for criterion_id in criterion_ids
+            ),
             evidence_refs=tuple(evidence_refs),
             profile_context={"checks": [check.model_dump(mode="json") for check in checks]},
         )
+        validate_verification_result(contract, criterion_ids, verification)
+        return verification
 
 
 class SoftwareReadOnlyResultValidator:

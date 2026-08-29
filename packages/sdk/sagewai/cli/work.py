@@ -30,6 +30,7 @@ from sagewai.fleet.execution import run_worker_subprocess
 from sagewai.safety.permissions import PermissionPolicy
 from sagewai.tools import factory as tool_factory
 from sagewai.work import (
+    AcceptanceCriterion,
     CapabilityGrant,
     CapabilitySet,
     ClaudeRuntime,
@@ -71,6 +72,7 @@ from sagewai.work.profiles.software import (
     SoftwareLifecycle,
     SoftwareProfile,
     SoftwareReadOnlyResultValidator,
+    SoftwareRepositoryOutcome,
     SoftwareResultValidator,
     SoftwareStageOperator,
     SoftwareVerifier,
@@ -214,14 +216,23 @@ async def _start_work(description: str) -> WorkRecord:
             target_systems=("repository",),
             created_at=now,
         )
+        contract_id = str(uuid.uuid4())
+        repository_criterion_id = f"{contract_id}:repository"
         contract = WorkContract(
-            id=str(uuid.uuid4()),
+            id=contract_id,
             project_id=project_id,
             work_id=work_id,
             version=1,
             goal=description,
             allowed_scope=(".",),
-            acceptance_criteria=(description,),
+            acceptance_criteria=(
+                AcceptanceCriterion(
+                    id=repository_criterion_id,
+                    project_id=project_id,
+                    statement="produce the accepted repository outcome",
+                    verification_kind="profile",
+                ),
+            ),
             constraints=(),
             non_goals=(),
             evidence_refs=(),
@@ -229,7 +240,11 @@ async def _start_work(description: str) -> WorkRecord:
             risk="low",
             design_required=False,
             profile_context=SoftwareContractContext(
+                project_id=project_id,
                 base_sha=base_sha,
+                repository_outcome=SoftwareRepositoryOutcome.VERIFIED_COMMIT,
+                repository_criterion_id=repository_criterion_id,
+                delivery=None,
             ).model_dump(mode="json"),
         )
         return await lifecycle.start(work_item=work_item, contract=contract)

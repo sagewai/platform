@@ -26,6 +26,7 @@ from sagewai.work import (
     ClaimClassification,
     ControlPrecondition,
     ControlPreconditionKind,
+    CriterionVerification,
     OperatorDisciplineReport,
     Reversibility,
     ReviewFinding,
@@ -48,7 +49,14 @@ def _contract(**updates) -> WorkContract:
         "version": 1,
         "goal": "Add the generic Work domain",
         "allowed_scope": ("packages/sdk/sagewai/work",),
-        "acceptance_criteria": ("the store is append-only",),
+        "acceptance_criteria": (
+            {
+                "id": "criterion-1",
+                "project_id": "project-a",
+                "statement": "the store is append-only",
+                "verification_kind": "deterministic",
+            },
+        ),
         "constraints": ("reuse the database layer",),
         "non_goals": ("GitHub integration",),
         "evidence_refs": ("repo://base/AGENTS.md",),
@@ -135,8 +143,20 @@ def test_assumption_verification_and_review_models_are_typed_and_immutable() -> 
         status="open",
     )
     verification = VerificationResult(
+        project_id="project-a",
+        contract_id="contract-1",
         attempt_id="verify-1",
+        stage="verification",
         passed=False,
+        criterion_results=(
+            CriterionVerification(
+                project_id="project-a",
+                contract_id="contract-1",
+                criterion_id="criterion-1",
+                passed=False,
+                evidence_refs=("knowledge-verification-1",),
+            ),
+        ),
         evidence_refs=("knowledge-verification-1",),
         profile_context={"checks": [{"command": "just smoke", "exit_code": 1}]},
     )
