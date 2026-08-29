@@ -253,12 +253,15 @@ def test_software_profile_contexts_round_trip_at_profile_boundary() -> None:
         repository_criterion_id="criterion-repository",
     )
     capsule = SoftwareCapsuleContext(
+        project_id="project-a",
         base_sha="a" * 40,
         current_sha="b" * 40,
         repo_instructions=("AGENTS.md",),
         verification_commands=("just smoke",),
     )
-    attempt = SoftwareAttemptContext(base_sha="a" * 40, result_sha=None)
+    attempt = SoftwareAttemptContext(
+        project_id="project-a", base_sha="a" * 40, result_sha=None
+    )
 
     assert SoftwareContractContext.model_validate(contract.model_dump()) == contract
     assert SoftwareCapsuleContext.model_validate(capsule.model_dump()) == capsule
@@ -286,6 +289,7 @@ async def test_workspace_control_check_fails_when_worktree_is_missing(tmp_path: 
             precondition=precondition,
             capsule=SimpleNamespace(
                 profile_context=SoftwareCapsuleContext(
+                    project_id="project-a",
                     base_sha=expected_sha,
                     current_sha=expected_sha,
                     repo_instructions=(),
@@ -299,6 +303,42 @@ async def test_workspace_control_check_fails_when_worktree_is_missing(tmp_path: 
     assert result.passed is False
     assert result.evidence_refs == ("workspace://workspace",)
     assert result.detail == "recorded workspace does not exist"
+
+
+@pytest.mark.asyncio
+async def test_workspace_control_check_rejects_foreign_project_capsule(
+    tmp_path: Path,
+) -> None:
+    expected_sha = "a" * 40
+    workspace = SoftwareWorkspace(
+        ref="workspace://workspace",
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="workspace",
+        repository=tmp_path,
+        path=tmp_path,
+        base_sha=expected_sha,
+        initial_sha=expected_sha,
+    )
+    result = await SoftwareWorkspaceControlCheck().evaluate(
+        SimpleNamespace(
+            request=SimpleNamespace(project_id="project-a", work_id="work-1"),
+            precondition=software_workspace_precondition(project_id="project-a"),
+            capsule=SimpleNamespace(
+                profile_context=SoftwareCapsuleContext(
+                    project_id="project-b",
+                    base_sha=expected_sha,
+                    current_sha=expected_sha,
+                    repo_instructions=(),
+                    verification_commands=("just smoke",),
+                ).model_dump(mode="json")
+            ),
+            workspace=workspace,
+        )
+    )
+
+    assert result.passed is False
+    assert result.detail == "capsule belongs to a different project"
 
 
 @pytest.mark.asyncio
@@ -930,6 +970,7 @@ async def test_large_verification_output_is_deduplicated_artifact_evidence(
     )
     assert result.passed is True
     assert result.project_id == "project-a"
+    assert all(check.project_id == "project-a" for check in checks)
     assert result.contract_id == "contract-1"
     assert result.stage == "verification"
     assert tuple(item.criterion_id for item in result.criterion_results) == ("criterion-execution",)

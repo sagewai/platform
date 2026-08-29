@@ -399,6 +399,8 @@ class ReviewFinding(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    project_id: str | None
+
     severity: Literal["low", "medium", "high", "critical"]
     claim: str
     evidence_refs: tuple[str, ...]
@@ -410,6 +412,8 @@ class ReviewResult(BaseModel):
     """Profile-neutral independent review verdict."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    project_id: str | None
 
     attempt_id: str
     verdict: Literal["accept", "repair", "blocked"]
@@ -433,6 +437,12 @@ class ReviewResult(BaseModel):
             "behavior added without evidence?"
         )
     )
+
+    @model_validator(mode="after")
+    def validate_finding_ownership(self) -> ReviewResult:
+        if any(finding.project_id != self.project_id for finding in self.findings):
+            raise ValueError("finding belongs to a different project")
+        return self
 
 
 class TaskCapsule(BaseModel):

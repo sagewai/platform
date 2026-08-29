@@ -92,6 +92,8 @@ class SoftwareCapsuleContext(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    project_id: str | None
+
     base_sha: str
     current_sha: str
     repo_instructions: tuple[str, ...]
@@ -121,6 +123,8 @@ class SoftwareAttemptContext(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    project_id: str | None
+
     base_sha: str
     result_sha: str | None
 
@@ -129,6 +133,8 @@ class SoftwareVerificationCheck(BaseModel):
     """One deterministic software verification command receipt."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    project_id: str | None
 
     name: str
     command: str
@@ -140,6 +146,8 @@ class SoftwareReviewFindingContext(BaseModel):
     """Optional source location attached to a generic review finding."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    project_id: str | None
 
     file: str | None
     line: int | None
