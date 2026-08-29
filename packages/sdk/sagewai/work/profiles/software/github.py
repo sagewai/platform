@@ -821,7 +821,7 @@ class GitHubIssueLifecycle:
             item
             for item in pending
             if item.work_id == work_item.id
-            and item.kind is PendingAttentionKind.PRODUCTION_INCIDENT
+            and item.kind is PendingAttentionKind.EXTERNAL_OUTCOME_INCIDENT
             and item.severity == "critical"
         )
         if critical_incidents:
@@ -1673,7 +1673,7 @@ def _parse_issue_url(value: str) -> tuple[str, str, int]:
 
 def _attention_key(item: PendingAttention) -> str:
     key = f"{item.kind.value}:{item.attention_id}:{item.created_at.isoformat()}"
-    if item.kind is PendingAttentionKind.PRODUCTION_INCIDENT:
+    if item.kind is PendingAttentionKind.EXTERNAL_OUTCOME_INCIDENT:
         return f"{key}:{item.severity}"
     return key
 
@@ -1685,7 +1685,7 @@ def _attention_comment(item: PendingAttention) -> str:
         return f"Sagewai: approval required — {summary} (gate {item.attention_id})."
     if item.kind is PendingAttentionKind.WORK_BLOCKED:
         return f"Sagewai: work blocked — {summary}."
-    if item.kind is PendingAttentionKind.PRODUCTION_INCIDENT:
+    if item.kind is PendingAttentionKind.EXTERNAL_OUTCOME_INCIDENT:
         evidence = ", ".join(item.evidence_refs)
         suffix = f" Evidence: {evidence}." if evidence else ""
         return f"Sagewai: production incident — {summary}.{suffix}"

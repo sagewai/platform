@@ -96,6 +96,27 @@ def _deployment(
         "status": status,
     }
 
+def _external_incident(
+    deployment_id: str,
+    *,
+    severity: str = "high",
+    evidence_refs: tuple[str, ...] = (),
+    active_control_event_ids: tuple[str, ...] = (),
+    cause: str | None = None,
+) -> dict:
+    summary = f"production incident for deployment {deployment_id}"
+    if cause is not None:
+        summary = f"{summary}; {cause}"
+    return {
+        "incident": {
+            "incident_id": f"software-delivery:{deployment_id}",
+            "summary": summary,
+            "severity": severity,
+            "evidence_refs": list(evidence_refs),
+            "active_control_event_ids": list(active_control_event_ids),
+        }
+    }
+
 
 @pytest.mark.asyncio
 async def test_pending_attention_is_canonical_resolved_and_project_scoped(
@@ -200,51 +221,33 @@ def test_pending_attention_taxonomy_has_exactly_four_kinds() -> None:
         "GATE_REQUESTED",
         "WORK_BLOCKED",
         "CONTROL_DEGRADED",
-        "PRODUCTION_INCIDENT",
+        "EXTERNAL_OUTCOME_INCIDENT",
     ]
 
 
 @pytest.mark.asyncio
-async def test_production_fail_and_rollback_are_one_stable_incident(
+async def test_profile_receipts_for_fail_and_rollback_are_one_stable_incident(
     store: WorkStore,
 ) -> None:
     await store.save_work(_record(status="PRODUCTION_ROLLOUT", pending_gate=None))
     await store.append_event(
         _event(
             1,
-            WorkEventType.DEPLOYMENT_RECORDED,
-            {"deployment": _deployment("production-1", environment="production")},
+            WorkEventType.EXTERNAL_OUTCOME_RECORDED,
+            _external_incident(
+                "production-1",
+                evidence_refs=("metrics://production-fail",),
+            ),
         )
     )
     await store.append_event(
         _event(
             2,
-            WorkEventType.OBSERVATION_RECORDED,
-            {
-                "observation": {
-                    "project_id": "project-a",
-                    "work_id": "work-1",
-                    "deployment_id": "production-1",
-                    "verdict": "fail",
-                    "gate_results": [],
-                    "evidence_refs": ["metrics://production-fail"],
-                }
-            },
-        )
-    )
-    await store.append_event(
-        _event(
-            3,
-            WorkEventType.ROLLBACK_RECORDED,
-            {
-                "source_deployment_id": "production-1",
-                "deployment": _deployment(
-                    "rollback-1",
-                    environment="production",
-                    status="rolled_back",
-                ),
-                "evidence_refs": ["provider://rollback-1"],
-            },
+            WorkEventType.EXTERNAL_OUTCOME_RECORDED,
+            _external_incident(
+                "production-1",
+                evidence_refs=("provider://rollback-1",),
+            ),
             created_at=NOW + timedelta(seconds=1),
         )
     )
@@ -252,11 +255,11 @@ async def test_production_fail_and_rollback_are_one_stable_incident(
     incidents = [
         item
         for item in await store.pending_attention(project_id="project-a")
-        if item.kind is PendingAttentionKind.PRODUCTION_INCIDENT
+        if item.kind is PendingAttentionKind.EXTERNAL_OUTCOME_INCIDENT
     ]
 
     assert len(incidents) == 1
-    assert incidents[0].attention_id == "work-1-event-2"
+    assert incidents[0].attention_id == "software-delivery:production-1"
     assert incidents[0].created_at == NOW
     assert incidents[0].severity == "high"
     assert incidents[0].summary == "HIGH: production incident for deployment production-1"
@@ -267,12 +270,12 @@ async def test_production_fail_and_rollback_are_one_stable_incident(
 
     await store.save_work(_record(status="TRIAGING", pending_gate=None))
     assert any(
-        item.kind is PendingAttentionKind.PRODUCTION_INCIDENT
+        item.kind is PendingAttentionKind.EXTERNAL_OUTCOME_INCIDENT
         for item in await store.pending_attention(project_id="project-a")
     )
     await store.save_work(_record(status="COMPLETE", pending_gate=None))
     assert all(
-        item.kind is not PendingAttentionKind.PRODUCTION_INCIDENT
+        item.kind is not PendingAttentionKind.EXTERNAL_OUTCOME_INCIDENT
         for item in await store.pending_attention(project_id="project-a")
     )
 
@@ -324,30 +327,36 @@ async def test_staging_fail_and_rollback_do_not_interrupt(
 
 
 @pytest.mark.asyncio
-async def test_critical_rollback_control_loss_upserts_incident_and_suppresses_only_it(
+async def test_generic_control_link_upserts_incident_and_suppresses_only_it(
     store: WorkStore,
 ) -> None:
     await store.save_work(_record(status="CONTROL_DEGRADED", pending_gate=None))
     await store.append_event(
         _event(
             1,
-            WorkEventType.DEPLOYMENT_RECORDED,
-            {"deployment": _deployment("production-1", environment="production")},
-        )
-    )
-    await store.append_event(
-        _event(
-            2,
             WorkEventType.CONTROL_DEGRADED,
             {
-                "severity": "critical",
-                "action": "rollback",
-                "deployment_id": "production-1",
                 "failed_preconditions": ["rollback-authority"],
                 "details": "rollback credential expired",
                 "evidence_refs": ["check://rollback-authority"],
                 "frozen_action_ids": ["rollback"],
             },
+        )
+    )
+    await store.append_event(
+        _event(
+            2,
+            WorkEventType.EXTERNAL_OUTCOME_RECORDED,
+            _external_incident(
+                "production-1",
+                severity="critical",
+                evidence_refs=("check://rollback-authority",),
+                active_control_event_ids=("work-1-event-1",),
+                cause=(
+                    "failed preconditions: rollback-authority; "
+                    "details: rollback credential expired"
+                ),
+            ),
         )
     )
     await store.append_event(
@@ -366,15 +375,8 @@ async def test_critical_rollback_control_loss_upserts_incident_and_suppresses_on
     await store.append_event(
         _event(
             4,
-            WorkEventType.ROLLBACK_RECORDED,
-            {
-                "source_deployment_id": "production-1",
-                "deployment": _deployment(
-                    "rollback-1",
-                    environment="production",
-                    status="rolled_back",
-                ),
-            },
+            WorkEventType.EXTERNAL_OUTCOME_RECORDED,
+            _external_incident("production-1"),
             created_at=NOW + timedelta(seconds=2),
         )
     )
@@ -382,7 +384,10 @@ async def test_critical_rollback_control_loss_upserts_incident_and_suppresses_on
     pending = await store.pending_attention(project_id="project-a")
 
     assert [(item.kind, item.attention_id) for item in pending] == [
-        (PendingAttentionKind.PRODUCTION_INCIDENT, "work-1-event-2"),
+        (
+            PendingAttentionKind.EXTERNAL_OUTCOME_INCIDENT,
+            "software-delivery:production-1",
+        ),
         (PendingAttentionKind.CONTROL_DEGRADED, "observability"),
     ]
     incident = pending[0]
@@ -409,7 +414,7 @@ async def test_critical_rollback_control_loss_upserts_incident_and_suppresses_on
     restored_incident = next(
         item
         for item in after_restore
-        if item.kind is PendingAttentionKind.PRODUCTION_INCIDENT
+        if item.kind is PendingAttentionKind.EXTERNAL_OUTCOME_INCIDENT
     )
     assert restored_incident.attention_id == incident.attention_id
     assert restored_incident.created_at == incident.created_at
@@ -422,8 +427,6 @@ async def test_critical_rollback_control_loss_upserts_incident_and_suppresses_on
             6,
             WorkEventType.CONTROL_DEGRADED,
             {
-                "severity": "high",
-                "action": "deploy",
                 "failed_preconditions": ["rollback-authority"],
                 "details": "unrelated staging authority failure",
                 "evidence_refs": ["check://staging-authority"],
@@ -436,7 +439,7 @@ async def test_critical_rollback_control_loss_upserts_incident_and_suppresses_on
     unrelated_incident = next(
         item
         for item in with_unrelated_degradation
-        if item.kind is PendingAttentionKind.PRODUCTION_INCIDENT
+        if item.kind is PendingAttentionKind.EXTERNAL_OUTCOME_INCIDENT
     )
     assert unrelated_incident.severity == "high"
     assert any(
