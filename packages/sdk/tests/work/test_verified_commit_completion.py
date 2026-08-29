@@ -39,6 +39,7 @@ from tests.work.test_lifecycle import (
     AnalysisRuntime,
     MutationRuntime,
     ReviewRuntime,
+    _always_pass_command,
     _command,
     _git,
     _lifecycle,
@@ -153,6 +154,9 @@ class MutateReviewedOutputBeforeCommitManager:
         target = workspace.path / "target.txt"
         if self.mutation == "rewrite":
             target.write_text("not reviewed\n")
+        elif self.mutation == "append_tail":
+            content = target.read_text()
+            target.write_text(f"{content[:-2]}y\n")
         else:
             target.unlink()
         return await self.delegate.commit_reviewed(workspace, **kwargs)
@@ -434,15 +438,24 @@ async def test_resume_after_commit_before_repository_event_does_not_rerun_stages
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mutation", ["rewrite", "remove"])
+@pytest.mark.parametrize(
+    ("mutation", "implement_text"),
+    (
+        ("rewrite", "initial"),
+        ("remove", "initial"),
+        ("append_tail", "x" * 100_100),
+    ),
+    ids=("rewrite", "remove", "large-tail"),
+)
 async def test_reviewed_output_change_with_unchanged_head_freezes_control(
     completion_stores,
     tmp_path: Path,
     mutation: str,
+    implement_text: str,
 ) -> None:
     work_store, knowledge_store = completion_stores
     repository, base_sha = _repository(tmp_path)
-    implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
+    implementer = MutationRuntime(implement_text=implement_text, repair_text="fixed")
     reviewer = ReviewRuntime("accept")
     lifecycle = _lifecycle(
         repository=repository,
@@ -453,7 +466,7 @@ async def test_reviewed_output_change_with_unchanged_head_freezes_control(
         implementer=implementer,
         reviewer=reviewer,
         repairer=implementer,
-        commands=(_command("initial"),),
+        commands=(_always_pass_command(),),
     )
     mutating_manager = MutateReviewedOutputBeforeCommitManager(
         lifecycle._worktree_manager,  # noqa: SLF001

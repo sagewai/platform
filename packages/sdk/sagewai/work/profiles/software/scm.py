@@ -332,6 +332,7 @@ async def workspace_diff(
         "--name-only",
         workspace.base_sha,
         "--",
+        output_limit=None,
     )
     if tracked_names.returncode != 0:
         raise WorkspaceStaleError(tracked_names.stderr)
@@ -340,6 +341,7 @@ async def workspace_diff(
         "ls-files",
         "--others",
         "--exclude-standard",
+        output_limit=None,
     )
     if untracked.returncode != 0:
         raise WorkspaceStaleError(untracked.stderr)
@@ -363,6 +365,7 @@ async def workspace_diff(
                 "--",
                 "/dev/null",
                 relative,
+                output_limit=None,
             )
             if diff.returncode not in {0, 1}:
                 raise WorkspaceStaleError(diff.stderr)
@@ -375,6 +378,7 @@ async def workspace_diff(
                 workspace.base_sha,
                 "--",
                 relative,
+                output_limit=None,
             )
             if diff.returncode != 0:
                 raise WorkspaceStaleError(diff.stderr)
@@ -387,9 +391,13 @@ def _validate_component(label: str, value: str) -> None:
         raise ValueError(f"{label} is not a safe path component")
 
 
-async def _git(cwd: Path, *args: str) -> WorkerProcessResult:
+async def _git(
+    cwd: Path,
+    *args: str,
+    output_limit: int | None = 100_000,
+) -> WorkerProcessResult:
     return await run_worker_subprocess(
         argv=("git", *args),
         cwd=cwd,
-        output_limit=100_000,
+        output_limit=output_limit,
     )

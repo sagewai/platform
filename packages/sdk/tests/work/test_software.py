@@ -364,6 +364,28 @@ async def test_reviewed_diff_is_canonical_before_and_after_committing_untracked_
     assert committed_diff == reviewed_diff
     assert committed_files == reviewed_files == ("target.txt",)
 
+@pytest.mark.asyncio
+async def test_workspace_diff_captures_content_beyond_preview_limit(
+    tmp_path: Path,
+) -> None:
+    repository, base_sha = _repository(tmp_path)
+    workspace = await SoftwareWorktreeManager(root=tmp_path / "worktrees").prepare(
+        repository=repository,
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="attempt-1",
+        base_sha=base_sha,
+    )
+    tail_marker = "reviewed-tail-marker"
+    (workspace.path / "target.txt").write_text(f"{'x' * 100_100}{tail_marker}\n")
+
+    reviewed_diff, reviewed_files = await workspace_diff(workspace)
+
+    assert len(reviewed_diff) > 100_000
+    assert tail_marker in reviewed_diff
+    assert reviewed_files == ("target.txt",)
+
+
 
 @pytest.mark.asyncio
 async def test_worktree_publishes_reviewed_state_to_isolated_git_remote(
