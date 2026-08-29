@@ -399,8 +399,8 @@ sdk-typecheck:
 # ── Smoke ──────────────────────────────────────────────────────────────────
 # Sub-second sanity checks — no LLM calls, no services, safe to run anywhere.
 
-# Daily software Work path (no LLM, no services) — alias for sdk-smoke
-smoke: sdk-smoke
+# Daily software Work path and tangible test applications (no LLM or services)
+smoke: sdk-smoke test-apps-smoke
 
 # Labeled intake plus issue -> implementation -> review -> merge completion, with safe fakes
 sdk-smoke:
@@ -408,6 +408,11 @@ sdk-smoke:
         packages/sdk/tests/work/test_github.py::test_labeled_intake_starts_one_unseen_issue_once \
         packages/sdk/tests/work/test_lifecycle.py::test_github_flow_uses_real_software_lifecycle_events \
         -q -o "addopts="
+
+# Dependency-free applications used as safe Work coordinator targets
+test-apps-smoke:
+    npm --prefix test-apps/browser-game run smoke
+    cd test-apps/approval-desk && python3 -m unittest -q
 
 # ── Perf ───────────────────────────────────────────────────────────────────
 # Performance micro-benchmarks with fixed time budgets that fail CI on regression.

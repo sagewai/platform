@@ -80,6 +80,10 @@ sagewai work --project my-project resume WORK_ID
 
 `start` persists the WorkItem, contract, evidence, stage receipts, and repository result. A successful uncontracted software run ends at a verified commit; it does not imply a deployment.
 
+To see the coordinator work against small, deterministic targets, try the
+[browser game and approval desk](./test-apps/) and follow the
+[coordinator walkthrough](./docs/operations/work-coordinator.md).
+
 For a GitHub issue, provide a token authorized for the target repository and pass the issue URL. The lifecycle opens a pull request and stops at the named merge gate. Use the exact IDs reported by `pending`:
 
 ```bash

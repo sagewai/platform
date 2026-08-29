@@ -1,0 +1,11 @@
+{
+  "name": "sagewai-signal-runner",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "smoke": "node --check engine.js && node --check app.js && node --test engine.test.js",
+    "test": "node --test engine.test.js",
+    "serve": "python3 -m http.server 4173"
+  }
+}

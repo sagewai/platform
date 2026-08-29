@@ -1,0 +1,8 @@
+smoke:
+    npm run smoke
+
+test:
+    npm test
+
+serve:
+    npm run serve

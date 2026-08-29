@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#07131f" />
+    <title>Signal Runner</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="intro" aria-labelledby="game-title">
+        <p class="eyebrow">Sagewai dogfood · browser game</p>
+        <h1 id="game-title">Signal Runner</h1>
+        <p class="lede">
+          Recover every signal, avoid the roaming glitches, and reach the uplink.
+          The board advances only when you move.
+        </p>
+        <div class="legend" aria-label="Game legend">
+          <span><i class="legend-dot runner"></i> Runner</span>
+          <span><i class="legend-dot signal"></i> Signal</span>
+          <span><i class="legend-dot glitch"></i> Glitch</span>
+          <span><i class="legend-dot uplink"></i> Uplink</span>
+        </div>
+      </section>
+
+      <section class="game-card" aria-label="Signal Runner game">
+        <div class="hud">
+          <div><span class="hud-label">Score</span><strong id="score">0000</strong></div>
+          <div><span class="hud-label">Signals</span><strong id="signals">0 / 5</strong></div>
+          <div><span class="hud-label">Lives</span><strong id="lives">● ● ●</strong></div>
+        </div>
+
+        <div class="board-wrap">
+          <canvas id="board" width="960" height="640" aria-label="Signal Runner board"></canvas>
+          <div id="result" class="result" hidden>
+            <p id="result-kicker" class="eyebrow"></p>
+            <h2 id="result-title"></h2>
+            <button id="play-again" class="primary-button" type="button">Run it again</button>
+          </div>
+        </div>
+
+        <p id="message" class="message" aria-live="polite">
+          Collect every signal, then reach the uplink.
+        </p>
+
+        <div class="controls" aria-label="Movement controls">
+          <button type="button" data-direction="up" aria-label="Move up">↑</button>
+          <button type="button" data-direction="left" aria-label="Move left">←</button>
+          <button type="button" data-direction="down" aria-label="Move down">↓</button>
+          <button type="button" data-direction="right" aria-label="Move right">→</button>
+        </div>
+
+        <div class="game-footer">
+          <span>Arrow keys or WASD</span>
+          <button id="restart" class="text-button" type="button">Restart route</button>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
