@@ -131,8 +131,11 @@ def test_enrollment_key_register_is_token_less(app_token):
     app, sf, token = app_token
     admin = TestClient(app)
     admin.headers.update({"Authorization": f"Bearer {token}"})
-    key = admin.post("/api/v1/fleet/enrollment-keys", json={"name": "k", "models": ["gpt-4o"]}).json()
-    raw = key["key"]
+    key = admin.post(
+        "/api/v1/fleet/enrollment-keys",
+        json={"name": "k", "allowed_models": ["gpt-4o"]},
+    ).json()
+    raw = key["raw_key"]
     # Register with NO org token, only the enrollment key header.
     anon = TestClient(app)
     r = anon.post(
