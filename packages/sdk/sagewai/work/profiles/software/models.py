@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -61,9 +61,17 @@ class SoftwareContractContext(BaseModel):
     repository_outcome: SoftwareRepositoryOutcome
     repository_criterion_id: str
     delivery: SoftwareDeliveryContractContext | None = None
+    execution_route: Literal["local", "fleet"] | None = None
+    fleet_org_id: str | None = Field(default=None, min_length=1, pattern=r"\S")
 
     @model_validator(mode="after")
     def _validate_delivery_boundary(self) -> SoftwareContractContext:
+        if self.execution_route == "fleet" and self.fleet_org_id is None:
+            raise ValueError("fleet execution requires an organization")
+        if self.execution_route == "local" and self.fleet_org_id is not None:
+            raise ValueError("local execution cannot name a Fleet organization")
+        if self.execution_route is None and self.fleet_org_id is not None:
+            raise ValueError("Fleet organization requires a recorded execution route")
         if self.delivery is None:
             return self
         if self.repository_outcome is not SoftwareRepositoryOutcome.MERGED:

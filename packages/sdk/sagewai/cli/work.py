@@ -38,6 +38,7 @@ from sagewai.work import (
     PendingAttention,
     TaskCapsuleCompiler,
     WorkContract,
+    WorkEvent,
     WorkEventType,
     WorkItem,
     WorkMetrics,
@@ -242,6 +243,7 @@ async def _start_work(
     project_id: str | None,
 ) -> WorkRecord:
     repository, base_sha = await _repository_state()
+    execution, fleet_org = _work_execution_config()
     if is_github_issue_url(description):
         github = await _build_github_lifecycle(
             project_id=project_id,
@@ -256,6 +258,8 @@ async def _start_work(
     lifecycle, _, _ = await _build_lifecycle(
         project_id=project_id,
         repository=repository,
+        execution=execution,
+        fleet_org=fleet_org,
     )
     now = datetime.now(timezone.utc)
     work_id = str(uuid.uuid4())
@@ -299,6 +303,8 @@ async def _start_work(
             repository_outcome=SoftwareRepositoryOutcome.VERIFIED_COMMIT,
             repository_criterion_id=repository_criterion_id,
             delivery=None,
+            execution_route=execution,
+            fleet_org_id=fleet_org,
         ).model_dump(mode="json"),
     )
     return await lifecycle.start(work_item=work_item, contract=contract)
@@ -313,6 +319,39 @@ async def _status_work(
     store = WorkStore(engine=factory.get_engine())
     await store.init()
     return await store.load_work(work_id, project_id=project_id)
+
+
+def _execution_route_from_events(
+    events: list[WorkEvent],
+) -> tuple[str, str | None]:
+    contract_event = next(
+        (
+            event
+            for event in reversed(events)
+            if event.event_type
+            in {WorkEventType.CONTRACT_ACCEPTED, WorkEventType.CONTRACT_PROPOSED}
+        ),
+        None,
+    )
+    if contract_event is None:
+        raise ValueError("Work has no durable software contract")
+    contract = WorkContract.model_validate(contract_event.payload_json)
+    context = SoftwareContractContext.model_validate(contract.profile_context)
+    if context.execution_route is None:
+        raise ValueError("Work has no durable execution route and cannot be resumed safely")
+    return context.execution_route, context.fleet_org_id
+
+
+async def _stored_work_execution_route(
+    work_id: str,
+    *,
+    project_id: str | None,
+) -> tuple[str, str | None]:
+    await factory.ensure_schema()
+    store = WorkStore(engine=factory.get_engine())
+    await store.init()
+    events = await store.read_events(work_id, project_id=project_id)
+    return _execution_route_from_events(events)
 
 
 async def _intake_work(
@@ -367,6 +406,25 @@ async def _resume_work(
         "ROLLING_BACK",
     }:
         return record
+    expected_execution, expected_fleet_org = await _stored_work_execution_route(
+        work_id,
+        project_id=project_id,
+    )
+    selected_execution, selected_fleet_org = _work_execution_config()
+    if (selected_execution, selected_fleet_org) != (
+        expected_execution,
+        expected_fleet_org,
+    ):
+        if expected_execution == "fleet":
+            raise ValueError(
+                f"Work {work_id} is bound to fleet execution for organization "
+                f"{expected_fleet_org}; resume with --execution fleet "
+                f"--fleet-org {expected_fleet_org}"
+            )
+        raise ValueError(
+            f"Work {work_id} is bound to local execution; resume without "
+            "--execution fleet or --fleet-org"
+        )
     repository, _ = await _repository_state()
     if record.source_ref and is_github_issue_url(record.source_ref):
         github = await _build_github_lifecycle(
@@ -654,9 +712,12 @@ async def _build_github_lifecycle(
 ) -> GitHubIssueLifecycle:
     if project_id is None:
         raise ValueError("GitHub software lifecycle requires a project")
+    execution, fleet_org = _work_execution_config()
     lifecycle, work_store, worktree_manager = await _build_lifecycle(
         project_id=project_id,
         repository=repository,
+        execution=execution,
+        fleet_org=fleet_org,
     )
     callables = tool_factory.build_callables(
         project_id=project_id,
@@ -674,6 +735,8 @@ async def _build_github_lifecycle(
             repository=repository,
         ),
         repository_outcome=SoftwareRepositoryOutcome.MERGED,
+        execution_route=execution,
+        fleet_org_id=fleet_org,
     )
 
 

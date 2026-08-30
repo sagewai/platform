@@ -522,6 +522,8 @@ class GitHubIssueLifecycle:
         github: GitHubClient,
         branch_publisher: GitBranchPublisher,
         repository_outcome: SoftwareRepositoryOutcome,
+        execution_route: str | None = None,
+        fleet_org_id: str | None = None,
         merge_policy: Callable[[ActionRequest], GateDecision] = require_merge_approval,
     ) -> None:
         self._work_store = work_store
@@ -531,6 +533,8 @@ class GitHubIssueLifecycle:
         if repository_outcome is SoftwareRepositoryOutcome.VERIFIED_COMMIT:
             raise ValueError("GitHub lifecycle requires a pull-request or merged outcome")
         self._repository_outcome = repository_outcome
+        self._execution_route = execution_route
+        self._fleet_org_id = fleet_org_id
         self._merge_policy = merge_policy
 
     async def start(
@@ -636,6 +640,8 @@ class GitHubIssueLifecycle:
                 repository_outcome=self._repository_outcome,
                 repository_criterion_id=repository_criterion_id,
                 delivery=None,
+                execution_route=self._execution_route,
+                fleet_org_id=self._fleet_org_id,
             ).model_dump(mode="json"),
         )
         record = await self._software_lifecycle.start(
