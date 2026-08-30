@@ -32,6 +32,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import click
+import httpx
 
 from sagewai.fleet.models import (
     EnrollmentKey,
@@ -358,6 +359,11 @@ def run(
                         raise SystemExit(2)
                 return
             await runner.run()
+        except httpx.ConnectError as exc:
+            raise click.ClickException(
+                f"Could not connect to Sagewai gateway at {base_url}. "
+                "Check SAGEWAI_ADMIN_URL and that the backend is running."
+            ) from exc
         except RegistrationError as exc:
             hint = ""
             if exc.status_code == 401:
