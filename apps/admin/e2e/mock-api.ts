@@ -12,10 +12,11 @@
  */
 import type { Page } from '@playwright/test';
 
-export const BACKEND_URL = process.env.SAGEWAI_E2E_BACKEND_URL;
-if (!BACKEND_URL) {
+const backendUrl = process.env.SAGEWAI_E2E_BACKEND_URL;
+if (!backendUrl) {
   throw new Error('SAGEWAI_E2E_BACKEND_URL is required for E2E isolation');
 }
+export const BACKEND_URL = backendUrl;
 
 /**
  * Set the auth cookie from the real backend.
