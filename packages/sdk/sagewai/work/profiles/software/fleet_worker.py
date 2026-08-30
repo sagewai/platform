@@ -142,6 +142,7 @@ class SoftwareFleetWorkspaceResolver:
             "diff-tree",
             "--no-commit-id",
             "--binary",
+            "--full-index",
             "--no-ext-diff",
             "--no-textconv",
             "-p",

@@ -32,9 +32,11 @@ from sagewai.work.profiles.software.fleet_workspace import (
     SOFTWARE_FLEET_WORKSPACE_KIND,
     SoftwareFleetWorkspaceInput,
     SoftwareFleetWorkspaceOutput,
+    SoftwareFleetWorkspaceTransport,
     software_repository_ref,
 )
-from sagewai.work.profiles.software.scm import SoftwareWorktreeManager
+from sagewai.work.profiles.software.models import SoftwareWorkspace
+from sagewai.work.profiles.software.scm import SoftwareWorktreeManager, workspace_diff
 from sagewai.work.runtime import ClaudeRuntime, CodexRuntime
 
 from .test_fleet_runtime import _capabilities, _capsule, _request, _result
@@ -61,7 +63,8 @@ def _repositories(tmp_path: Path) -> tuple[Path, Path, str]:
     _git(seed, "config", "user.email", "fleet@example.test")
     _git(seed, "config", "user.name", "Fleet Test")
     (seed / "target.bin").write_bytes(b"base\x00state\n")
-    _git(seed, "add", "target.bin")
+    (seed / "target.txt").write_text("base state\n")
+    _git(seed, "add", "target.bin", "target.txt")
     _git(seed, "commit", "-m", "base")
     base_sha = _git(seed, "rev-parse", "HEAD").decode().strip()
 
@@ -492,6 +495,50 @@ async def test_concrete_resolver_round_trips_binary_workspace_delta(tmp_path: Pa
     assert result.input_digest == snapshot.input_digest
     assert result.result_digest == _digest(resulting_diff)
     assert output_payload.delta_diff_sha256 == _digest(delta)
+
+
+@pytest.mark.asyncio
+async def test_concrete_resolver_round_trips_text_delta_across_core_abbrev(
+    tmp_path: Path,
+) -> None:
+    central, worker, base_sha = _repositories(tmp_path)
+    coordinator_abbrev = "7"
+    worker_abbrev = "12"
+    assert len(base_sha) not in {int(coordinator_abbrev), int(worker_abbrev)}
+    _git(central, "config", "core.abbrev", coordinator_abbrev)
+    _git(worker, "config", "core.abbrev", worker_abbrev)
+    repository_ref = await software_repository_ref(worker)
+    transport = SoftwareFleetWorkspaceTransport(repository_ref=repository_ref)
+    central_workspace = SoftwareWorkspace(
+        ref="workspace://run-1",
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="run-1",
+        repository=central,
+        path=central,
+        base_sha=base_sha,
+        initial_sha=base_sha,
+    )
+    (central / "target.txt").write_text("coordinator input\n")
+
+    snapshot = await transport.snapshot(central_workspace)
+    resolver = SoftwareFleetWorkspaceResolver(
+        repository=worker,
+        worktree_manager=SoftwareWorktreeManager(root=tmp_path / "worker-worktrees"),
+    )
+    workspace = await resolver.materialize(snapshot)
+    assert (workspace.path / "target.txt").read_text() == "coordinator input\n"
+
+    (workspace.path / "target.txt").write_text("worker output\n")
+    result = await resolver.capture(snapshot, workspace)
+    await transport.apply(central_workspace, snapshot, result)
+
+    assert (central / "target.txt").read_text() == "worker output\n"
+    input_payload = SoftwareFleetWorkspaceInput.model_validate(snapshot.payload)
+    applied_diff, _ = await workspace_diff(
+        central_workspace.model_copy(update={"base_sha": input_payload.current_sha})
+    )
+    assert _digest(applied_diff.encode()) == result.result_digest
 
 
 @pytest.mark.asyncio
