@@ -162,11 +162,11 @@ async def test_project_token_cannot_override_project_via_body_label(mt):
         )
         wid = reg.json()["worker_id"]
     async with _client(app, mt["tok_owner"]) as co:
-        w = (await co.get(f"/api/v1/fleet/workers/{wid}")).json()
+        w = (await co.get(f"/api/v1/fleet/workers/{wid}")).json()["worker"]
     worker = await app.state.fleet_registry.get_worker(wid)
     assert worker.project_id == mt["pa"]             # token scope, not body's "pb"
-    assert "project_id" not in w["labels"]
-    assert w["labels"].get("gpu") == "a100"          # other labels preserved
+    assert "project_id" not in w["capabilities"]["labels"]
+    assert w["capabilities"]["labels"].get("gpu") == "a100"  # other labels preserved
 
 
 @pytest.mark.asyncio

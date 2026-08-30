@@ -46,6 +46,14 @@ const pending = {
   created_at: '2026-08-28T09:00:00Z',
 };
 
+const incidentPending = {
+  ...pending,
+  attention_id: 'external-outcome-incident',
+  kind: 'EXTERNAL_OUTCOME_INCIDENT',
+  summary: 'Configured outcome regressed after completion.',
+  severity: 'high',
+};
+
 const events = [
   {
     id: 'event-1',
@@ -149,7 +157,7 @@ async function mockWorkApi(
     }
     const pathname = new URL(route.request().url()).pathname;
     if (pathname === '/api/v1/work/pending') {
-      await route.fulfill({ json: [pending] });
+      await route.fulfill({ json: [pending, incidentPending] });
       return;
     }
     if (pathname === `/api/v1/work/${work.work_id}`) {
@@ -189,6 +197,10 @@ test.describe('Work Control Console', () => {
     await expect(page.getByRole('heading', { name: 'Work Control' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Needs Attention' })).toBeVisible();
     await expect(page.getByText('Approve production delivery?').filter({ visible: true })).toBeVisible();
+    const incidentBadge = page.getByText('EXTERNAL OUTCOME INCIDENT', { exact: true }).filter({ visible: true });
+    await expect(incidentBadge).toBeVisible();
+    await expect(incidentBadge).toHaveClass(/text-destructive/);
+    await expect(page.getByText('Configured outcome regressed after completion.').filter({ visible: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Active Work' })).toBeVisible();
     await expect(page.getByText('READY TO DELIVER').filter({ visible: true })).toBeVisible();
     await expect(page.getByRole('main').getByRole('link', { name: 'Fleet workers' })).toHaveAttribute('href', '/fleet');
@@ -208,6 +220,7 @@ test.describe('Work Control Console', () => {
     ).toHaveText('Failed to load Work control state.');
     await expect(page.getByText('work-console-1')).toHaveCount(0);
     await expect(page.getByText('Approve production delivery?')).toHaveCount(0);
+    await expect(page.getByText('Configured outcome regressed after completion.')).toHaveCount(0);
   });
 
   test('keeps the persisted project scope visible outside Work routes', async ({ page }) => {

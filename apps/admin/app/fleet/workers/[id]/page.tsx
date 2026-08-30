@@ -339,6 +339,26 @@ export default function WorkerDetailPage() {
         <div className="space-y-4">
           <Card className="!p-5">
             <h3 className="text-sm font-semibold uppercase tracking-wide text-text-muted m-0 mb-3">
+              Work Capabilities
+            </h3>
+            {localWorker.capabilities.capability_names.length === 0 ? (
+              <p className="text-sm text-text-muted m-0">No Work capabilities advertised.</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {localWorker.capabilities.capability_names.map((capability) => (
+                  <span
+                    key={capability}
+                    className="inline-block px-2.5 py-1 text-[13px] bg-bg-subtle border border-border rounded-md font-mono"
+                  >
+                    {capability}
+                  </span>
+                ))}
+              </div>
+            )}
+          </Card>
+
+          <Card className="!p-5">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-text-muted m-0 mb-3">
               Supported Models
             </h3>
             <div className="flex flex-wrap gap-2">

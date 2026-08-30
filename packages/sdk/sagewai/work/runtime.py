@@ -432,7 +432,7 @@ def _claude_tool_scope(
             if not can_read:
                 raise ValueError("filesystem grant requires workspace.read or workspace.write")
             roots = grant.scope.get("roots")
-            if not isinstance(roots, (list, tuple)) or not roots:
+            if not isinstance(roots, list | tuple) or not roots:
                 raise ValueError("filesystem grant requires scoped roots")
             patterns = tuple(_claude_workspace_pattern(root) for root in roots)
             builtin_tools.update(("Glob", "Grep", "Read"))

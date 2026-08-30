@@ -52,7 +52,9 @@ from sagewai.work.runtime import OperatorResult, WorkRequest, Workspace
 
 _VERIFICATION_INLINE_LIMIT_BYTES = 4000
 SOFTWARE_VERIFICATION_ISOLATION_PRECONDITION_ID = "software.verification.isolation"
-_DIGEST_PINNED_IMAGE = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
+_DIGEST_PINNED_IMAGE = re.compile(
+    r"^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$"
+)
 
 
 class SoftwareResultValidator:
@@ -355,6 +357,8 @@ class SandboxedVerificationRunner:
 
 
 def _image_digest(image: str) -> str:
+    if image.startswith("sha256:"):
+        return image
     return "sha256:" + image.rsplit("@sha256:", 1)[1]
 
 

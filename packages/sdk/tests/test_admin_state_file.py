@@ -89,6 +89,7 @@ class TestSetup:
         )
         projects = sf.list_projects()
         assert len(projects) == 1
+        assert projects[0]["id"] == "app"
         assert projects[0]["slug"] == "app"
         assert projects[0]["name"] == "App"
         assert projects[0]["status"] == "active"
@@ -148,6 +149,7 @@ class TestProjects:
         sf.create_project(name="Second Project")
         projects = sf.list_projects()
         assert len(projects) == 2
+        assert projects[1]["id"] == "second-project"
         assert projects[1]["name"] == "Second Project"
 
     def test_update_project(self, sf):
@@ -331,6 +333,7 @@ class TestMigration:
         # Projects should auto-create from app_slug
         projects = sf.list_projects()
         assert len(projects) == 1
+        assert projects[0]["id"] == "oldapp"
         assert projects[0]["slug"] == "oldapp"
         assert projects[0]["name"] == "OldApp"
 

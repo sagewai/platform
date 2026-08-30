@@ -563,6 +563,11 @@ class AdminStateFile:
                 }
             ]
 
+        # Single-org projects use their immutable slug as the project scope ID.
+        # Older state files predate the explicit ID consumed by the Admin client.
+        for project in data.get("projects", []):
+            project.setdefault("id", project["slug"])
+
         # v0: no providers array
         if "providers" not in data:
             data["providers"] = []
@@ -656,6 +661,7 @@ class AdminStateFile:
                 "users": [],
                 "projects": [
                     {
+                        "id": app_slug,
                         "slug": app_slug,
                         "name": app_name or "Default",
                         "environment": "production",
@@ -733,6 +739,7 @@ class AdminStateFile:
             raise ValueError(f"Project '{slug}' already exists.")
         now = _now_iso()
         project = {
+            "id": slug,
             "slug": slug,
             "name": name,
             "environment": environment,

@@ -93,7 +93,10 @@ def test_worker_capabilities_round_trip_and_drive_reserved_routing(client):
     worker_id = body["worker_id"]
     detail = client.get(f"/api/v1/fleet/workers/{worker_id}")
     assert detail.status_code == 200
-    assert detail.json()["capability_names"] == ["runtime.claude", "cli.git"]
+    assert detail.json()["worker"]["capabilities"]["capability_names"] == [
+        "runtime.claude",
+        "cli.git",
+    ]
     client.post(f"/api/v1/fleet/workers/{worker_id}/approve")
 
     enq = client.post(
@@ -188,9 +191,9 @@ def test_register_and_enqueue_use_first_class_project(client):
     assert reg.status_code == 201
     wid = reg.json()["worker_id"]
     # Worker row got the first-class field (None = org-global in single-org), NOT a label.
-    detail = client.get(f"/api/v1/fleet/workers/{wid}").json()
+    detail = client.get(f"/api/v1/fleet/workers/{wid}").json()["worker"]
     assert detail["project_id"] is None
-    assert "project_id" not in detail.get("labels", {})
+    assert "project_id" not in detail["capabilities"]["labels"]
     w = asyncio.run(client.app.state.fleet_registry.get_worker(wid))
     assert w.project_id is None
     # Producer: the persisted task carries project_id as a first-class field (read it
