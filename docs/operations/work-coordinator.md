@@ -188,7 +188,9 @@ sagewai fleet run --name mac-mini-codex --project coordinator-demo \
   --capabilities runtime.codex,filesystem.write \
   --pool default \
   --enrollment-key 'PASTE_ENROLLMENT_KEY' \
-  --work-repository /absolute/path/to/platform
+  --work-repository /absolute/path/to/platform \
+  --codex-model gpt-5-codex \
+  --codex-reasoning-effort medium
 ```
 
 On the laptop, keep `just dev-all` running and start the Claude worker in another
@@ -201,8 +203,20 @@ sagewai fleet run --name laptop-claude --project coordinator-demo \
   --capabilities runtime.claude,filesystem.read \
   --pool default \
   --enrollment-key 'PASTE_ENROLLMENT_KEY' \
-  --work-repository /absolute/path/to/platform
+  --work-repository /absolute/path/to/platform \
+  --claude-analysis-model claude-sonnet-analysis \
+  --claude-analysis-effort medium \
+  --claude-analysis-max-budget-usd 1.25 \
+  --claude-review-model claude-sonnet-review \
+  --claude-review-effort high \
+  --claude-review-max-budget-usd 2.50
 ```
+
+The Codex model and reasoning effort apply to implementation and repair stages.
+The Claude analysis model, effort, and max budget apply to analysis and design
+stages; the Claude review settings apply only to review stages. These native
+runtime settings are worker-local: Sagewai never sends them to the control plane,
+worker registration capabilities, Fleet task payloads, or Fleet result payloads.
 
 The enrollment key authenticates registration without copying an Admin bearer
 token to either worker. Open <http://localhost:3008/fleet>, verify both workers

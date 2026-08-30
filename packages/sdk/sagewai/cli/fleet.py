@@ -29,6 +29,7 @@ import os
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 import click
@@ -45,6 +46,12 @@ from sagewai.fleet.runner import RegistrationError, TerminalAuthError, WorkerRun
 from sagewai.work.profiles.software.fleet_worker import (
     SoftwareFleetTaskHandler,
     SoftwareFleetWorkspaceResolver,
+)
+from sagewai.work.runtime import (
+    CLAUDE_EFFORT_VALUES,
+    CODEX_REASONING_EFFORT_VALUES,
+    ClaudeRuntime,
+    CodexRuntime,
 )
 
 # ---------------------------------------------------------------------------
@@ -101,6 +108,22 @@ def _parse_duration(value: str) -> timedelta:
         elif unit == "s":
             total += timedelta(seconds=n)
     return total
+
+
+def _parse_positive_budget(
+    _ctx: click.Context,
+    _param: click.Parameter,
+    value: str | None,
+) -> str | None:
+    if value is None:
+        return None
+    try:
+        parsed = Decimal(value)
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise click.BadParameter("must be a positive number") from exc
+    if not parsed.is_finite() or parsed <= 0:
+        raise click.BadParameter("must be a positive number")
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -231,25 +254,118 @@ def register(
     default=None,
     help="Trusted local repository for native Work operator tasks.",
 )
+@click.option(
+    "--claude-analysis-model",
+    default=None,
+    help="Claude model for analysis and design stages.",
+)
+@click.option(
+    "--claude-analysis-effort",
+    default=None,
+    type=click.Choice(CLAUDE_EFFORT_VALUES),
+    help="Claude effort for analysis and design stages.",
+)
+@click.option(
+    "--claude-analysis-max-budget-usd",
+    default=None,
+    callback=_parse_positive_budget,
+    metavar="USD",
+    help="Positive Claude CLI max budget for analysis and design stages.",
+)
+@click.option(
+    "--claude-review-model",
+    default=None,
+    help="Claude model for review stages.",
+)
+@click.option(
+    "--claude-review-effort",
+    default=None,
+    type=click.Choice(CLAUDE_EFFORT_VALUES),
+    help="Claude effort for review stages.",
+)
+@click.option(
+    "--claude-review-max-budget-usd",
+    default=None,
+    callback=_parse_positive_budget,
+    metavar="USD",
+    help="Positive Claude CLI max budget for review stages.",
+)
+@click.option(
+    "--codex-model",
+    default=None,
+    help="Codex model for implementation and repair stages.",
+)
+@click.option(
+    "--codex-reasoning-effort",
+    default=None,
+    type=click.Choice(CODEX_REASONING_EFFORT_VALUES),
+    help="Codex reasoning effort for implementation and repair stages.",
+)
 @click.option("--enrollment-key", default=None, help="Enrollment key for auto-approval.")
 @click.option("--worker-id", default=None, help="Reuse an approved worker; skip registration.")
-@click.option("--worker-secret", default=None, help="Worker secret (else $SAGEWAI_WORKER_SECRET / creds file).")
+@click.option(
+    "--worker-secret",
+    default=None,
+    help="Worker secret (else $SAGEWAI_WORKER_SECRET / creds file).",
+)
 @click.option("--creds-file", default=None, help="Path to the worker credentials file.")
 @click.option("--exec", "exec_cmd", default=None, help="Shell command to run per task.")
 @click.option("--exec-timeout", default=300.0, type=float, help="Per-task kill (seconds).")
 @click.option("--env", "envs", multiple=True, help="Task env var KEY=VALUE (repeatable).")
 @click.option("--env-file", default=None, help="File of KEY=VALUE task env vars.")
 @click.option("--image", default=None, help="Run each task in a fresh container of this image.")
-@click.option("--docker-arg", "docker_args", multiple=True, help="Extra `docker run` args (repeatable).")
+@click.option(
+    "--docker-arg",
+    "docker_args",
+    multiple=True,
+    help="Extra `docker run` args (repeatable).",
+)
 @click.option("--register-only", is_flag=True, help="Register (appear in the screen), then exit.")
 @click.option("--once", is_flag=True, help="Claim/execute/report one task, then exit.")
-@click.option("--gateway-url", default=None, help="Gateway base URL (default $SAGEWAI_ADMIN_URL).")
+@click.option(
+    "--gateway-url",
+    default=None,
+    help="Gateway base URL (default $SAGEWAI_ADMIN_URL).",
+)
 @click.option("--poll-timeout", default=30.0, type=float, help="Claim long-poll seconds.")
-@click.option("--heartbeat-interval", default=10.0, type=float, help="Heartbeat cadence seconds.")
+@click.option(
+    "--heartbeat-interval",
+    default=10.0,
+    type=float,
+    help="Heartbeat cadence seconds.",
+)
 def run(
-    name, models, pool, labels, capabilities, max_concurrent, project, work_repository, enrollment_key,
-    worker_id, worker_secret, creds_file, exec_cmd, exec_timeout, envs, env_file,
-    image, docker_args, register_only, once, gateway_url, poll_timeout, heartbeat_interval,
+    name,
+    models,
+    pool,
+    labels,
+    capabilities,
+    max_concurrent,
+    project,
+    work_repository,
+    claude_analysis_model,
+    claude_analysis_effort,
+    claude_analysis_max_budget_usd,
+    claude_review_model,
+    claude_review_effort,
+    claude_review_max_budget_usd,
+    codex_model,
+    codex_reasoning_effort,
+    enrollment_key,
+    worker_id,
+    worker_secret,
+    creds_file,
+    exec_cmd,
+    exec_timeout,
+    envs,
+    env_file,
+    image,
+    docker_args,
+    register_only,
+    once,
+    gateway_url,
+    poll_timeout,
+    heartbeat_interval,
 ):
     """Run this machine as a fleet worker (register + claim/execute/report loop)."""
     if worker_id is None and (not name or (not models and not capabilities)):
@@ -263,6 +379,19 @@ def run(
         name for name in capability_names
         if name in {"runtime.codex", "runtime.claude"}
     }
+    has_native_runtime_options = any(
+        value is not None
+        for value in (
+            claude_analysis_model,
+            claude_analysis_effort,
+            claude_analysis_max_budget_usd,
+            claude_review_model,
+            claude_review_effort,
+            claude_review_max_budget_usd,
+            codex_model,
+            codex_reasoning_effort,
+        )
+    )
     task_handler = None
     if native_runtime_capabilities:
         if not project:
@@ -277,14 +406,46 @@ def run(
             raise click.UsageError(
                 "native Work operator capabilities cannot be combined with --exec or --image."
             )
+        handler_kwargs = {}
+        if codex_model is not None or codex_reasoning_effort is not None:
+            handler_kwargs["codex_runtime"] = CodexRuntime(
+                model=codex_model,
+                reasoning_effort=codex_reasoning_effort,
+            )
+        if any(
+            value is not None
+            for value in (
+                claude_analysis_model,
+                claude_analysis_effort,
+                claude_analysis_max_budget_usd,
+                claude_review_model,
+                claude_review_effort,
+                claude_review_max_budget_usd,
+            )
+        ):
+            handler_kwargs["claude_analysis_runtime"] = ClaudeRuntime(
+                model=claude_analysis_model,
+                effort=claude_analysis_effort,
+                max_budget_usd=claude_analysis_max_budget_usd,
+            )
+            handler_kwargs["claude_review_runtime"] = ClaudeRuntime(
+                model=claude_review_model,
+                effort=claude_review_effort,
+                max_budget_usd=claude_review_max_budget_usd,
+            )
         task_handler = SoftwareFleetTaskHandler(
             workspace_resolver=SoftwareFleetWorkspaceResolver(
                 repository=work_repository,
             ),
+            **handler_kwargs,
         )
     elif work_repository is not None:
         raise click.UsageError(
             "--work-repository requires runtime.codex or runtime.claude capability."
+        )
+    elif has_native_runtime_options:
+        raise click.UsageError(
+            "native runtime options require runtime.codex or runtime.claude capability."
         )
     parsed_labels: dict[str, str] = {}
     if labels:

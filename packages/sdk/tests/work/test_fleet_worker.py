@@ -21,6 +21,7 @@ import pytest
 from sagewai.fleet.runner import WorkerRunner, WorkerTaskContext
 from sagewai.work.fleet import (
     FleetOperatorResultEnvelope,
+    FleetOperatorTaskPayload,
     FleetWorkspaceTransfer,
     FleetWorkspaceTransferResult,
 )
@@ -121,8 +122,12 @@ def _software_transfer(
     )
 
 
-def _task(*, runtime: str = "runtime.claude") -> dict:
+def _task(*, runtime: str = "runtime.claude", stage: str | None = None) -> dict:
     request = _request()
+    capsule = _capsule()
+    if stage is not None:
+        request = request.model_copy(update={"stage": stage})
+        capsule = capsule.model_copy(update={"stage": stage})
     capabilities = _capabilities().model_dump(mode="json")
     capabilities["grants"][0]["credential_ref"] = None
     return {
@@ -131,7 +136,7 @@ def _task(*, runtime: str = "runtime.claude") -> dict:
         "payload": {
             "kind": "work.operator",
             "request": request.model_dump(mode="json"),
-            "capsule": _capsule().model_dump(mode="json"),
+            "capsule": capsule.model_dump(mode="json"),
             "capabilities": capabilities,
             "required_capabilities": [runtime, "cli.git"],
             "workspace": _snapshot().model_dump(mode="json"),
@@ -318,6 +323,82 @@ async def test_software_handler_maps_codex_capability_only_to_codex_runtime() ->
 
     assert len(codex.calls) == 1
     assert claude.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stage", "analysis_calls", "review_calls"),
+    [
+        ("analysis", 1, 0),
+        ("design", 1, 0),
+        ("review", 0, 1),
+    ],
+)
+async def test_software_handler_selects_claude_runtime_by_stage(
+    stage: str,
+    analysis_calls: int,
+    review_calls: int,
+) -> None:
+    claude_analysis = _Claude()
+    claude_review = _Claude()
+    codex = _Codex()
+    handler = SoftwareFleetTaskHandler(
+        workspace_resolver=_Resolver(),
+        claude_analysis_runtime=claude_analysis,
+        claude_review_runtime=claude_review,
+        codex_runtime=codex,
+    )
+
+    await handler(
+        _task(stage=stage),
+        WorkerTaskContext(
+            project_id="project-a",
+            capability_names=("runtime.claude", "cli.git"),
+        ),
+    )
+
+    assert claude_analysis is not claude_review
+    assert len(claude_analysis.calls) == analysis_calls
+    assert len(claude_review.calls) == review_calls
+    assert codex.calls == []
+
+
+@pytest.mark.asyncio
+async def test_software_handler_rejects_unsupported_claude_stage_before_runtime() -> None:
+    resolver = _Resolver()
+    claude_analysis = _Claude()
+    claude_review = _Claude()
+    handler = SoftwareFleetTaskHandler(
+        workspace_resolver=resolver,
+        claude_analysis_runtime=claude_analysis,
+        claude_review_runtime=claude_review,
+        codex_runtime=_Codex(),
+    )
+
+    with pytest.raises(ValueError, match="does not support stage"):
+        await handler(
+            _task(stage="repair"),
+            WorkerTaskContext(
+                project_id="project-a",
+                capability_names=("runtime.claude", "cli.git"),
+            ),
+        )
+
+    assert claude_analysis.calls == []
+    assert claude_review.calls == []
+    assert resolver.materialized == []
+    assert resolver.captured == []
+
+
+def test_fleet_operator_task_payload_has_no_runtime_configuration_fields() -> None:
+    assert tuple(FleetOperatorTaskPayload.model_fields) == (
+        "kind",
+        "request",
+        "capsule",
+        "capabilities",
+        "required_capabilities",
+        "workspace",
+    )
 
 
 @pytest.mark.asyncio

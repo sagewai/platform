@@ -302,6 +302,19 @@ async def test_native_runtime_uses_fake_executable_without_session_or_api_key(
     assert provider.declared_scopes == ["credential://workspace"]
     assert not hasattr(runtime, "intercept_tool_call")
     if runtime_type is CodexRuntime:
+        assert argv[:7] == [
+            "exec",
+            "--ephemeral",
+            "--sandbox",
+            "workspace-write",
+            "--cd",
+            str(workspace_path),
+            "--output-schema",
+        ]
+        assert Path(argv[7]).name == "schema.json"
+        assert argv[8] == "--output-last-message"
+        assert Path(argv[9]).name == "result.json"
+        assert argv[10:] == ["-"]
         properties = output_schema["properties"]
         assert properties["profile_context"] == {
             "additionalProperties": False,
@@ -314,6 +327,22 @@ async def test_native_runtime_uses_fake_executable_without_session_or_api_key(
     else:
         assert output_schema is None
     if runtime_type is ClaudeRuntime:
+        assert argv == [
+            "--print",
+            "--no-session-persistence",
+            "--safe-mode",
+            "--strict-mcp-config",
+            "--permission-mode",
+            "dontAsk",
+            "--tools",
+            "Edit,Glob,Grep,Read,Write",
+            "--allowedTools",
+            "Edit(/packages/sdk/sagewai/work/**),Read(/packages/sdk/sagewai/work/**)",
+            "--output-format",
+            "json",
+            "--json-schema",
+            json.dumps(OperatorResult.model_json_schema(), sort_keys=True),
+        ]
         tools = argv[argv.index("--tools") + 1].split(",")
         allowed_tools = argv[argv.index("--allowedTools") + 1].split(",")
         assert tools == ["Edit", "Glob", "Grep", "Read", "Write"]
@@ -322,6 +351,156 @@ async def test_native_runtime_uses_fake_executable_without_session_or_api_key(
             "Read(/packages/sdk/sagewai/work/**)",
         ]
         assert "Bash" not in tools
+
+
+@pytest.mark.asyncio
+async def test_claude_runtime_emits_configured_native_options(
+    tmp_path: Path,
+) -> None:
+    runtime = ClaudeRuntime(
+        executable=str(_fake_runtime_executable(tmp_path)),
+        model="claude-sonnet-analysis",
+        effort="medium",
+        max_budget_usd="1.25",
+        timeout=5,
+    )
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+
+    await runtime.run(
+        _request(),
+        _capsule(),
+        _capabilities(),
+        _workspace(workspace_path),
+    )
+
+    observation = json.loads((workspace_path / "runtime-observation.json").read_text())
+    assert observation["argv"] == [
+        "--model",
+        "claude-sonnet-analysis",
+        "--effort",
+        "medium",
+        "--max-budget-usd",
+        "1.25",
+        "--print",
+        "--no-session-persistence",
+        "--safe-mode",
+        "--strict-mcp-config",
+        "--permission-mode",
+        "dontAsk",
+        "--tools",
+        "Edit,Glob,Grep,Read,Write",
+        "--allowedTools",
+        "Edit(/packages/sdk/sagewai/work/**),Read(/packages/sdk/sagewai/work/**)",
+        "--output-format",
+        "json",
+        "--json-schema",
+        json.dumps(OperatorResult.model_json_schema(), sort_keys=True),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_claude_runtime_omits_unset_native_options(tmp_path: Path) -> None:
+    runtime = ClaudeRuntime(
+        executable=str(_fake_runtime_executable(tmp_path)),
+        model="claude-sonnet-analysis",
+        timeout=5,
+    )
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+
+    await runtime.run(
+        _request(),
+        _capsule(),
+        _capabilities(),
+        _workspace(workspace_path),
+    )
+
+    observation = json.loads((workspace_path / "runtime-observation.json").read_text())
+    argv = observation["argv"]
+    assert argv[:2] == ["--model", "claude-sonnet-analysis"]
+    assert "--effort" not in argv
+    assert "--max-budget-usd" not in argv
+
+
+@pytest.mark.asyncio
+async def test_codex_runtime_emits_configured_native_options(tmp_path: Path) -> None:
+    runtime = CodexRuntime(
+        executable=str(_fake_runtime_executable(tmp_path)),
+        model="gpt-5-codex",
+        reasoning_effort="high",
+        timeout=5,
+    )
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+
+    await runtime.run(
+        _request(),
+        _capsule(),
+        _capabilities(),
+        _workspace(workspace_path),
+    )
+
+    observation = json.loads((workspace_path / "runtime-observation.json").read_text())
+    argv = observation["argv"]
+    assert argv == [
+        "exec",
+        "--model",
+        "gpt-5-codex",
+        "-c",
+        "model_reasoning_effort=high",
+        "--ephemeral",
+        "--sandbox",
+        "workspace-write",
+        "--cd",
+        str(workspace_path),
+        "--output-schema",
+        argv[11],
+        "--output-last-message",
+        argv[13],
+        "-",
+    ]
+    assert Path(argv[11]).name == "schema.json"
+    assert Path(argv[13]).name == "result.json"
+
+
+@pytest.mark.asyncio
+async def test_codex_runtime_omits_unset_native_options(tmp_path: Path) -> None:
+    runtime = CodexRuntime(
+        executable=str(_fake_runtime_executable(tmp_path)),
+        model="gpt-5-codex",
+        timeout=5,
+    )
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+
+    await runtime.run(
+        _request(),
+        _capsule(),
+        _capabilities(),
+        _workspace(workspace_path),
+    )
+
+    observation = json.loads((workspace_path / "runtime-observation.json").read_text())
+    argv = observation["argv"]
+    assert argv[:3] == ["exec", "--model", "gpt-5-codex"]
+    assert "-c" not in argv
+
+
+@pytest.mark.parametrize(
+    ("runtime_factory", "match"),
+    [
+        (lambda: ClaudeRuntime(effort="extreme"), "Claude effort"),
+        (lambda: ClaudeRuntime(max_budget_usd="0"), "positive number"),
+        (lambda: CodexRuntime(reasoning_effort="extreme"), "Codex reasoning effort"),
+    ],
+)
+def test_native_runtime_rejects_invalid_configuration(
+    runtime_factory,
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        runtime_factory()
 
 
 @pytest.mark.asyncio
