@@ -1,11 +1,21 @@
 import { defineConfig } from '@playwright/test';
+import { resolve } from 'node:path';
+
+const adminStateFile = resolve(
+  __dirname,
+  'test-results',
+  'admin-state.json',
+);
+process.env.SAGEWAI_ADMIN_STATE_FILE = adminStateFile;
+const backendUrl = 'http://localhost:18000';
+process.env.SAGEWAI_E2E_BACKEND_URL = backendUrl;
 
 /**
  * Playwright configuration for the Sagewai admin panel.
  *
- * Starts both the Python backend (port 8000) and the Next.js frontend
+ * Starts both the Python backend (port 18000) and the Next.js frontend
  * (port 3808) automatically. No external services needed — the backend
- * uses in-memory state and file-based auth (~/.sagewai/admin-state.json).
+ * uses in-memory state and isolated file-based auth under test-results/.
  *
  * Run with:
  *   pnpm --filter @sagewai/admin test:e2e
@@ -63,17 +73,17 @@ export default defineConfig({
       command:
         'SAGEWAI_ADMIN_ALLOWED_ORIGINS=http://localhost:3808,http://127.0.0.1:3808 ' +
         'SAGEWAI_ADMIN_MAX_SESSION_TOKENS=100000 ' +
-        'uv run --package sagewai sagewai admin serve --host 0.0.0.0 --port 8000',
-      port: 8000,
-      reuseExistingServer: !process.env.CI,
+        'uv run --package sagewai sagewai admin serve --host 127.0.0.1 --port 18000',
+      port: 18000,
+      reuseExistingServer: false,
       timeout: 15_000,
       cwd: '../../',  // monorepo root where uv.lock lives
     },
     {
       // Frontend — Next.js dev server pointed at the backend.
-      command: 'NEXT_PUBLIC_ADMIN_API_URL=http://localhost:8000/admin pnpm exec next dev --port 3808',
+      command: `NEXT_PUBLIC_SAGEWAI_MODE=cloud NEXT_PUBLIC_ADMIN_API_URL=${backendUrl}/admin pnpm exec next dev --port 3808`,
       port: 3808,
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: false,
       timeout: 30_000,
     },
   ],

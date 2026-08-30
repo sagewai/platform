@@ -1,7 +1,7 @@
 /**
  * E2E test helpers — real backend, browser-based auth via storageState.
  *
- * The Playwright config starts both the backend (port 8000) and the
+ * The Playwright config starts both the isolated backend and the
  * frontend (port 3808) automatically. The backend uses in-memory
  * state so tests are fast and deterministic.
  *
@@ -11,6 +11,11 @@
  * — no per-test cookie injection needed.
  */
 import type { Page } from '@playwright/test';
+
+export const BACKEND_URL = process.env.SAGEWAI_E2E_BACKEND_URL;
+if (!BACKEND_URL) {
+  throw new Error('SAGEWAI_E2E_BACKEND_URL is required for E2E isolation');
+}
 
 /**
  * Set the auth cookie from the real backend.
@@ -43,12 +48,12 @@ export async function setupAndLogin(opts?: {
   const orgName = opts?.orgName ?? 'E2E Test Org';
 
   // Check if setup is needed
-  const statusRes = await fetch('http://localhost:8000/api/v1/setup/status');
+  const statusRes = await fetch(`${BACKEND_URL}/api/v1/setup/status`);
   const status = await statusRes.json();
 
   if (status.setup_required) {
     // Run setup
-    await fetch('http://localhost:8000/api/v1/setup', {
+    await fetch(`${BACKEND_URL}/api/v1/setup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -66,7 +71,7 @@ export async function setupAndLogin(opts?: {
   }
 
   // Login
-  const loginRes = await fetch('http://localhost:8000/api/v1/auth/login', {
+  const loginRes = await fetch(`${BACKEND_URL}/api/v1/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
@@ -81,9 +86,10 @@ export async function setupAndLogin(opts?: {
  */
 export async function resetBackendState() {
   const fs = await import('fs');
-  const path = await import('path');
-  const home = process.env.HOME ?? '/tmp';
-  const stateFile = path.join(home, '.sagewai', 'admin-state.json');
+  const stateFile = process.env.SAGEWAI_ADMIN_STATE_FILE;
+  if (!stateFile) {
+    throw new Error('SAGEWAI_ADMIN_STATE_FILE is required for E2E state isolation');
+  }
   try {
     fs.unlinkSync(stateFile);
   } catch {

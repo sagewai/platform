@@ -17,8 +17,7 @@
  * against the real UI.
  */
 import { test, expect, type Page } from '@playwright/test';
-
-const BACKEND = 'http://localhost:8000';
+import { BACKEND_URL as BACKEND } from './mock-api';
 
 // The backend enforces double-submit CSRF on cookie-authenticated mutations:
 // echo the readable `sagewai_csrf` cookie as the X-CSRF-Token header.
