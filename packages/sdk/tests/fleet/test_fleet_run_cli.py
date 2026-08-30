@@ -180,7 +180,7 @@ def test_run_register_only_configures_worker_local_native_runtimes(
             "--claude-review-model",
             "claude-review",
             "--claude-review-effort",
-            "high",
+            "xhigh",
             "--claude-review-max-budget-usd",
             "2.50",
             "--codex-model",
@@ -204,7 +204,7 @@ def test_run_register_only_configures_worker_local_native_runtimes(
     assert handler._claude_analysis_runtime._effort == "medium"
     assert handler._claude_analysis_runtime._max_budget_usd == "1.25"
     assert handler._claude_review_runtime._model == "claude-review"
-    assert handler._claude_review_runtime._effort == "high"
+    assert handler._claude_review_runtime._effort == "xhigh"
     assert handler._claude_review_runtime._max_budget_usd == "2.50"
     assert handler._codex_runtime._model == "gpt-5-codex"
     assert handler._codex_runtime._reasoning_effort == "low"

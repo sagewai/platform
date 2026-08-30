@@ -395,7 +395,7 @@ async def test_fleet_worker_loss_resumes_only_unfinished_software_stage(
                     root=tmp_path / "worker-1-worktrees"
                 ),
             ),
-            claude_runtime=first_runtime,
+            claude_review_runtime=first_runtime,
         ),
     )
     replacement_runner = _worker_runner(
@@ -410,7 +410,7 @@ async def test_fleet_worker_loss_resumes_only_unfinished_software_stage(
                     root=tmp_path / "worker-2-worktrees"
                 ),
             ),
-            claude_runtime=replacement_runtime,
+            claude_review_runtime=replacement_runtime,
         ),
     )
     started = asyncio.create_task(

@@ -32,7 +32,7 @@ from sagewai.work.models import (
 
 BoundedText = Annotated[str, Field(max_length=2000)]
 
-CLAUDE_EFFORT_VALUES = ("low", "medium", "high")
+CLAUDE_EFFORT_VALUES = ("low", "medium", "high", "xhigh", "max")
 CODEX_REASONING_EFFORT_VALUES = ("minimal", "low", "medium", "high")
 
 

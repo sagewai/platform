@@ -219,23 +219,15 @@ class SoftwareFleetTaskHandler:
         *,
         workspace_resolver: FleetWorkerWorkspaceResolver,
         codex_runtime: CodexRuntime | None = None,
-        claude_runtime: ClaudeRuntime | None = None,
         claude_analysis_runtime: ClaudeRuntime | None = None,
         claude_review_runtime: ClaudeRuntime | None = None,
     ) -> None:
         self._workspace_resolver = workspace_resolver
         self._codex_runtime = codex_runtime or CodexRuntime()
-        if claude_analysis_runtime is None and claude_review_runtime is None:
-            shared_claude_runtime = claude_runtime or ClaudeRuntime()
-            self._claude_analysis_runtime = shared_claude_runtime
-            self._claude_review_runtime = shared_claude_runtime
-        else:
-            self._claude_analysis_runtime = (
-                claude_analysis_runtime or claude_runtime or ClaudeRuntime()
-            )
-            self._claude_review_runtime = (
-                claude_review_runtime or claude_runtime or ClaudeRuntime()
-            )
+        self._claude_analysis_runtime = claude_analysis_runtime or ClaudeRuntime()
+        self._claude_review_runtime = claude_review_runtime or ClaudeRuntime()
+        if self._claude_analysis_runtime is self._claude_review_runtime:
+            raise ValueError("analysis and review require distinct Claude runtimes")
         if not isinstance(self._codex_runtime, CodexRuntime):
             raise TypeError("runtime.codex requires CodexRuntime")
         if not isinstance(self._claude_analysis_runtime, ClaudeRuntime):
@@ -285,6 +277,8 @@ class SoftwareFleetTaskHandler:
 
     def _runtime(self, runtime_capability: str, stage: str) -> OperatorRuntime:
         if runtime_capability == "runtime.codex":
+            if stage not in {"implement", "repair"}:
+                raise ValueError(f"runtime.codex does not support stage {stage!r}")
             return self._codex_runtime
         if runtime_capability != "runtime.claude":
             raise ValueError("unsupported native runtime capability")

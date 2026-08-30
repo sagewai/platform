@@ -276,7 +276,7 @@ async def test_software_handler_runs_only_advertised_native_runtime() -> None:
     codex = _Codex()
     handler = SoftwareFleetTaskHandler(
         workspace_resolver=resolver,
-        claude_runtime=claude,
+        claude_review_runtime=claude,
         codex_runtime=codex,
     )
 
@@ -304,17 +304,20 @@ async def test_software_handler_runs_only_advertised_native_runtime() -> None:
 
 
 @pytest.mark.asyncio
-async def test_software_handler_maps_codex_capability_only_to_codex_runtime() -> None:
+@pytest.mark.parametrize("stage", ["implement", "repair"])
+async def test_software_handler_maps_codex_capability_only_to_codex_runtime(
+    stage: str,
+) -> None:
     claude = _Claude()
     codex = _Codex()
     handler = SoftwareFleetTaskHandler(
         workspace_resolver=_Resolver(),
-        claude_runtime=claude,
+        claude_review_runtime=claude,
         codex_runtime=codex,
     )
 
     await handler(
-        _task(runtime="runtime.codex"),
+        _task(runtime="runtime.codex", stage=stage),
         WorkerTaskContext(
             project_id="project-a",
             capability_names=("runtime.codex", "cli.git"),
@@ -323,6 +326,55 @@ async def test_software_handler_maps_codex_capability_only_to_codex_runtime() ->
 
     assert len(codex.calls) == 1
     assert claude.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["analysis", "design", "review", "deploy"])
+async def test_software_handler_rejects_unsupported_codex_stage_before_runtime(
+    stage: str,
+) -> None:
+    resolver = _Resolver()
+    codex = _Codex()
+    handler = SoftwareFleetTaskHandler(
+        workspace_resolver=resolver,
+        claude_analysis_runtime=_Claude(),
+        claude_review_runtime=_Claude(),
+        codex_runtime=codex,
+    )
+
+    with pytest.raises(ValueError, match="does not support stage"):
+        await handler(
+            _task(runtime="runtime.codex", stage=stage),
+            WorkerTaskContext(
+                project_id="project-a",
+                capability_names=("runtime.codex", "cli.git"),
+            ),
+        )
+
+    assert codex.calls == []
+    assert resolver.materialized == []
+    assert resolver.captured == []
+
+
+def test_software_handler_keeps_default_claude_roles_independent() -> None:
+    handler = SoftwareFleetTaskHandler(
+        workspace_resolver=_Resolver(),
+        codex_runtime=_Codex(),
+    )
+
+    assert handler._claude_analysis_runtime is not handler._claude_review_runtime
+
+
+def test_software_handler_rejects_aliased_claude_roles() -> None:
+    claude = _Claude()
+
+    with pytest.raises(ValueError, match="distinct Claude runtimes"):
+        SoftwareFleetTaskHandler(
+            workspace_resolver=_Resolver(),
+            claude_analysis_runtime=claude,
+            claude_review_runtime=claude,
+            codex_runtime=_Codex(),
+        )
 
 
 @pytest.mark.asyncio
@@ -430,7 +482,7 @@ async def test_software_handler_rejects_mismatched_task_identity(mutate, match) 
     mutate(task)
     handler = SoftwareFleetTaskHandler(
         workspace_resolver=_Resolver(),
-        claude_runtime=_Claude(),
+        claude_review_runtime=_Claude(),
         codex_runtime=_Codex(),
     )
 
@@ -448,7 +500,7 @@ async def test_software_handler_rejects_mismatched_task_identity(mutate, match) 
 async def test_software_handler_rejects_unadvertised_or_ambiguous_runtime() -> None:
     handler = SoftwareFleetTaskHandler(
         workspace_resolver=_Resolver(),
-        claude_runtime=_Claude(),
+        claude_review_runtime=_Claude(),
         codex_runtime=_Codex(),
     )
     context = WorkerTaskContext(
@@ -475,7 +527,7 @@ async def test_software_handler_rejects_unadvertised_or_ambiguous_runtime() -> N
 async def test_software_handler_rejects_workspace_delta_without_write_capability() -> None:
     handler = SoftwareFleetTaskHandler(
         workspace_resolver=_Resolver(delta=b"unexpected mutation"),
-        claude_runtime=_Claude(),
+        claude_review_runtime=_Claude(),
         codex_runtime=_Codex(),
     )
 
@@ -497,7 +549,7 @@ async def test_software_handler_rejects_central_credential_reference() -> None:
     )
     handler = SoftwareFleetTaskHandler(
         workspace_resolver=_Resolver(),
-        claude_runtime=_Claude(),
+        claude_review_runtime=_Claude(),
         codex_runtime=_Codex(),
     )
 

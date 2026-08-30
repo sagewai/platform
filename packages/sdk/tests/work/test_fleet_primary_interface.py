@@ -189,7 +189,12 @@ async def test_work_cli_completes_through_heterogeneous_fleet_workers(
         project_id="project-a",
         capabilities=("runtime.codex", "filesystem.write"),
     )
-    claude_runtime = _WorkerClaudeRuntime(local_auth="claude-worker-local-auth")
+    claude_analysis_runtime = _WorkerClaudeRuntime(
+        local_auth="claude-worker-local-auth"
+    )
+    claude_review_runtime = _WorkerClaudeRuntime(
+        local_auth="claude-worker-local-auth"
+    )
     codex_runtime = _WorkerCodexRuntime(local_auth="codex-worker-local-auth")
     dispatcher = FleetDispatcher(task_store, poll_interval=0.001, poll_timeout=0.01)
     claude_runner = _worker_runner(
@@ -205,7 +210,8 @@ async def test_work_cli_completes_through_heterogeneous_fleet_workers(
                 ),
                 worktree_manager=SoftwareWorktreeManager(root=tmp_path / "claude-worker-worktrees"),
             ),
-            claude_runtime=claude_runtime,
+            claude_analysis_runtime=claude_analysis_runtime,
+            claude_review_runtime=claude_review_runtime,
         ),
     )
     codex_runner = _worker_runner(
@@ -298,7 +304,8 @@ async def test_work_cli_completes_through_heterogeneous_fleet_workers(
         "implement": codex_worker.id,
         "review": claude_worker.id,
     }
-    assert claude_runtime.calls == ["analysis", "review"]
+    assert claude_analysis_runtime.calls == ["analysis"]
+    assert claude_review_runtime.calls == ["review"]
     assert codex_runtime.calls == ["implement"]
     assert {item["run_id"] for item in worker_results if item.get("claimed")} == {
         task["run_id"] for task in tasks
@@ -306,7 +313,8 @@ async def test_work_cli_completes_through_heterogeneous_fleet_workers(
 
     payloads = await _persisted_task_payloads(engine)
     serialized_payloads = json.dumps(payloads)
-    assert claude_runtime.local_auth not in serialized_payloads
+    assert claude_analysis_runtime.local_auth not in serialized_payloads
+    assert claude_review_runtime.local_auth not in serialized_payloads
     assert codex_runtime.local_auth not in serialized_payloads
     assert all(
         grant["credential_ref"] is None

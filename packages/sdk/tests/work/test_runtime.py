@@ -360,7 +360,7 @@ async def test_claude_runtime_emits_configured_native_options(
     runtime = ClaudeRuntime(
         executable=str(_fake_runtime_executable(tmp_path)),
         model="claude-sonnet-analysis",
-        effort="medium",
+        effort="xhigh",
         max_budget_usd="1.25",
         timeout=5,
     )
@@ -379,7 +379,7 @@ async def test_claude_runtime_emits_configured_native_options(
         "--model",
         "claude-sonnet-analysis",
         "--effort",
-        "medium",
+        "xhigh",
         "--max-budget-usd",
         "1.25",
         "--print",

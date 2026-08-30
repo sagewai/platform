@@ -95,7 +95,12 @@ async def test_work_cli_resume_requires_the_original_fleet_route(
         project_id="project-a",
         capabilities=("runtime.codex", "filesystem.write"),
     )
-    claude_runtime = _WorkerClaudeRuntime(local_auth="claude-worker-local-auth")
+    claude_analysis_runtime = _WorkerClaudeRuntime(
+        local_auth="claude-worker-local-auth"
+    )
+    claude_review_runtime = _WorkerClaudeRuntime(
+        local_auth="claude-worker-local-auth"
+    )
     codex_runtime = _WorkerCodexRuntime(local_auth="codex-worker-local-auth")
     dispatcher = FleetDispatcher(task_store, poll_interval=0.001, poll_timeout=0.01)
     claude_runner = _worker_runner(
@@ -111,7 +116,8 @@ async def test_work_cli_resume_requires_the_original_fleet_route(
                 ),
                 worktree_manager=SoftwareWorktreeManager(root=tmp_path / "claude-worker-worktrees"),
             ),
-            claude_runtime=claude_runtime,
+            claude_analysis_runtime=claude_analysis_runtime,
+            claude_review_runtime=claude_review_runtime,
         ),
     )
     codex_runner = _worker_runner(
@@ -294,9 +300,11 @@ async def test_work_cli_resume_requires_the_original_fleet_route(
     ]
     assert started_by_stage == ["analysis", "implement", "implement", "review"]
     serialized = json.dumps(await _persisted_task_payloads(engine))
-    assert claude_runtime.local_auth not in serialized
+    assert claude_analysis_runtime.local_auth not in serialized
+    assert claude_review_runtime.local_auth not in serialized
     assert codex_runtime.local_auth not in serialized
-    assert claude_runtime.calls == ["analysis", "review"]
+    assert claude_analysis_runtime.calls == ["analysis"]
+    assert claude_review_runtime.calls == ["review"]
     assert codex_runtime.calls == ["implement"]
     assert sum(item.get("claimed", False) for item in resumed_worker_results) == 2
 
