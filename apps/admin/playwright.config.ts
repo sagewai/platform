@@ -80,7 +80,9 @@ export default defineConfig({
       cwd: '../../',  // monorepo root where uv.lock lives
     },
     {
-      // Frontend — Next.js dev server pointed at the backend.
+      // Frontend — Next.js dev server pointed at the backend. Cloud mode is
+      // suite-wide so Work Console tests exercise the project selector; this
+      // suite therefore does not cover self-hosted navigation rendering.
       command: `NEXT_PUBLIC_SAGEWAI_MODE=cloud NEXT_PUBLIC_ADMIN_API_URL=${backendUrl}/admin pnpm exec next dev --port 3808`,
       port: 3808,
       reuseExistingServer: false,
