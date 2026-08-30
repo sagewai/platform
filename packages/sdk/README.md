@@ -127,7 +127,7 @@ Sagewai persists all state across restarts with no setup required. On first star
 
 | Path | What lives there |
 |------|-----------------|
-| `~/.sagewai/config/` | `admin-state.json`, `connections.json` — human-readable, durable |
+| `~/.sagewai/config/` | `admin-state.json`, `admin-ui-state.json` (UI-only), `connections.json` — human-readable, durable |
 | `~/.sagewai/db/sagewai.db` | SQLite: sessions, runs, workflow checkpoints, analytics, vector learnings |
 | `~/.sagewai/secrets/` | `master.key`, `profiles.json` — mode 0700 |
 

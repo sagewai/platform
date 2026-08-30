@@ -14,10 +14,7 @@ function resolveConfiguredPath(value: string): string {
 const sagewaiHome = resolveConfiguredPath(
   process.env.SAGEWAI_HOME ?? path.join(os.homedir(), '.sagewai'),
 );
-const STATE_PATH = resolveConfiguredPath(
-  process.env.SAGEWAI_ADMIN_UI_STATE_FILE
-    ?? path.join(sagewaiHome, 'config', 'admin-ui-state.json'),
-);
+const STATE_PATH = path.join(sagewaiHome, 'config', 'admin-ui-state.json');
 
 interface AdminState {
   firstMissionCelebrated?: boolean;

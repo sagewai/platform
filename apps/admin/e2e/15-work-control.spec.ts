@@ -210,6 +210,17 @@ test.describe('Work Control Console', () => {
     await expect(page.getByText('Approve production delivery?')).toHaveCount(0);
   });
 
+  test('keeps the persisted project scope visible outside Work routes', async ({ page }) => {
+    await mockWorkApi(page);
+
+    await page.goto('/work');
+    await page.getByRole('button', { name: /Console Project/ }).click();
+    await page.getByRole('button', { name: /Isolated Project/ }).click();
+
+    await page.goto('/connections');
+    await expect(page.getByRole('button', { name: /Isolated Project/ })).toBeVisible();
+  });
+
   test('shows canonical event actors, delivery history, and Evidence Board references', async ({ page }) => {
     await mockWorkApi(page);
 
