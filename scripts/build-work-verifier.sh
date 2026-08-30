@@ -25,7 +25,7 @@ docker buildx build \
   .
 
 docker buildx build \
-  --file packages/tool-runner/images/verifier/Dockerfile \
+  --file scripts/docker/work-verifier.Dockerfile \
   --tag "${verifier_tag}" \
   --load \
   .
