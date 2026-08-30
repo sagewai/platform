@@ -3,10 +3,14 @@ import { resolve } from 'node:path';
 
 const e2eHome = resolve(__dirname, 'test-results', 'home');
 const adminStateFile = resolve(e2eHome, 'config', 'admin-state.json');
+const adminUiStateFile = resolve(e2eHome, 'config', 'admin-ui-state.json');
 process.env.SAGEWAI_HOME = e2eHome;
 process.env.SAGEWAI_ADMIN_STATE_FILE = adminStateFile;
+process.env.SAGEWAI_ADMIN_UI_STATE_FILE = adminUiStateFile;
 delete process.env.SAGEWAI_DATABASE_URL;
 delete process.env.DATABASE_URL;
+delete process.env.SAGEWAI_CONNECTIONS_FILE;
+delete process.env.SAGEWAI_CACHE_DIR;
 const backendUrl = 'http://127.0.0.1:18000';
 const frontendUrl = 'http://127.0.0.1:3808';
 process.env.SAGEWAI_E2E_BACKEND_URL = backendUrl;
@@ -77,7 +81,7 @@ export default defineConfig({
         'uv run --package sagewai sagewai admin serve --host 127.0.0.1 --port 18000',
       port: 18000,
       reuseExistingServer: false,
-      timeout: 15_000,
+      timeout: 30_000,
       cwd: '../../',  // monorepo root where uv.lock lives
     },
     {

@@ -2,14 +2,22 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 
-const sagewaiHome = process.env.SAGEWAI_HOME
-  ?? path.join(/* turbopackIgnore: true */ os.homedir(), '.sagewai');
-const STATE_PATH = process.env.SAGEWAI_ADMIN_STATE_FILE
-  ?? path.join(
-    /* turbopackIgnore: true */ sagewaiHome,
-    'config',
-    'admin-state.json',
-  );
+function resolveConfiguredPath(value: string): string {
+  const expanded = value === '~'
+    ? os.homedir()
+    : value.startsWith('~/')
+      ? path.join(os.homedir(), value.slice(2))
+      : value;
+  return path.resolve(expanded);
+}
+
+const sagewaiHome = resolveConfiguredPath(
+  process.env.SAGEWAI_HOME ?? path.join(os.homedir(), '.sagewai'),
+);
+const STATE_PATH = resolveConfiguredPath(
+  process.env.SAGEWAI_ADMIN_UI_STATE_FILE
+    ?? path.join(sagewaiHome, 'config', 'admin-ui-state.json'),
+);
 
 interface AdminState {
   firstMissionCelebrated?: boolean;

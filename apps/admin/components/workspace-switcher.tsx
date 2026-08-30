@@ -6,7 +6,7 @@ import { adminApi } from '@/utils/api';
 import { useProject } from '@/utils/project-context';
 import type { Workspace } from '@/utils/types';
 
-export function WorkspaceSwitcher() {
+export function WorkspaceSwitcher({ projectOnly = false }: { projectOnly?: boolean }) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [currentWs, setCurrentWs] = useState<Workspace | null>(null);
   const [projectOpen, setProjectOpen] = useState(false);
@@ -21,7 +21,9 @@ export function WorkspaceSwitcher() {
     } catch { /* ignore */ }
   }, [currentWs]);
 
-  useEffect(() => { fetchWorkspaces(); }, [fetchWorkspaces]);
+  useEffect(() => {
+    if (!projectOnly) void fetchWorkspaces();
+  }, [fetchWorkspaces, projectOnly]);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -34,11 +36,13 @@ export function WorkspaceSwitcher() {
   }, []);
 
   return (
-    <div ref={ref} className="mb-4 space-y-1.5">
+    <div ref={ref} className={projectOnly ? 'space-y-1.5' : 'mb-4 space-y-1.5'}>
       {/* Org name */}
-      <div className="px-3 py-1.5 text-[11px] font-semibold text-text-muted uppercase tracking-wider">
-        {currentWs?.name ?? 'Sagewai'}
-      </div>
+      {!projectOnly && (
+        <div className="px-3 py-1.5 text-[11px] font-semibold text-text-muted uppercase tracking-wider">
+          {currentWs?.name ?? 'Sagewai'}
+        </div>
+      )}
 
       {/* Project selector */}
       <div className="relative">

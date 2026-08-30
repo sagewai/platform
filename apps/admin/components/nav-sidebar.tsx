@@ -639,7 +639,7 @@ export function NavSidebar() {
       {/* Project scope selector — cloud-wide and always on Work Control routes. */}
       {showWorkspaceSwitcher && expanded && (
         <div className="px-5 mb-3 shrink-0">
-          <WorkspaceSwitcher />
+          <WorkspaceSwitcher projectOnly={!isCloud} />
         </div>
       )}
 
