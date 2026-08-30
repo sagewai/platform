@@ -68,6 +68,10 @@ prereqs:
     fi
     echo -e "\033[32mAll prerequisites met.\033[0m"
 
+# Build and smoke-test the immutable local image used by software Work verification.
+work-verifier-build:
+    ./scripts/build-work-verifier.sh
+
 # Remove SDK + admin + docs + vscode + backend build artifacts and pyc/cache dirs
 clean:
     rm -rf packages/sdk/dist packages/sdk/build .pytest_cache .mypy_cache .ruff_cache

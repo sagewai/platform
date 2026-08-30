@@ -33,16 +33,18 @@ toolchain. Install and authenticate the native `codex` and `claude` CLIs on the
 machine that will execute them. Sagewai uses their existing local authentication
 and does not collect those credentials.
 
-Verification is networkless and runs in a disposable container. Point Sagewai
-at an immutable verifier image that contains the locked repository toolchain:
+Verification is networkless and runs in a disposable container. Build the
+repository's pinned verifier image once on the coordinator machine:
 
 ```bash
-export SAGEWAI_WORK_VERIFICATION_IMAGE='registry.example/verifier@sha256:<digest>'
+just work-verifier-build
 ```
 
-The image must be digest-pinned and contain `just`, `uv`, Python 3, Node.js 20 or
-newer, and the repository's locked test environment. It must be able to run
-`just smoke`; do not place model credentials or unrelated host secrets in it.
+The command runs `just smoke` inside the image with the checkout mounted
+read-only and prints an exact `SAGEWAI_WORK_VERIFICATION_IMAGE=sha256:...`
+export. Copy that export into the terminal where you run `sagewai work`. The
+direct image ID is immutable and local to that machine. Do not place model
+credentials or unrelated host secrets in the image.
 
 From this repository, prove the deterministic contract before involving either
 model:
@@ -142,10 +144,13 @@ with that label. Re-running intake does not start the same issue twice.
 
 ## 5. Observe work in the console
 
-Run the stack and complete the first-time setup wizard:
+For a first local or two-device Work test, run the backend, Admin UI, and Work
+CLI on the same coordinator machine with the same `SAGEWAI_HOME`. This keeps
+their SQLite Work and Fleet state shared:
 
 ```bash
-just stack-up
+export SAGEWAI_HOME="$PWD/.sagewai-dev"
+just dev-all
 ```
 
 Open <http://localhost:3008/setup> on a fresh installation, then
@@ -154,33 +159,58 @@ state as `status` and `pending`; it does not maintain a browser-owned lifecycle.
 Use it to inspect active Work, events, approvals, blocked questions, degraded
 control, Evidence Board references, workers, and delivery observations.
 
-## 6. Put Codex and Claude on separate workers
+Do not use `just compose-up` for this first test: its backend database is inside
+the Compose network while the host Work CLI uses its own configured database.
 
-Connect each trusted checkout to the authenticated backend. Each worker advertises
-only the capability it can provide and keeps its native CLI authentication local:
+## 6. Put Codex and Claude on a Mac mini and laptop
+
+Use the laptop as the coordinator: it runs the backend, Admin UI, Work CLI, and
+the verifier image. Use the Mac mini for Codex and the laptop for Claude. Both
+machines need a trusted checkout at the same Git base. Authenticate `codex` only
+on the Mac mini and `claude` only on the laptop; Sagewai never sends those native
+credentials to the backend.
+
+In Admin, create project `coordinator-demo`, then open
+<http://localhost:3008/fleet/enrollment-keys>. Create one key with max uses `2`
+and allowed pool `default`. Copy the secret when it appears; it is shown once.
+
+If the backend listens only on laptop loopback, open a tunnel from the Mac mini:
 
 ```bash
-export SAGEWAI_ADMIN_URL=http://localhost:8000
-export SAGEWAI_ADMIN_TOKEN='<tenant API token>'
+ssh -N -L 18000:127.0.0.1:8000 YOUR_LAPTOP_USER@YOUR_LAPTOP
 ```
 
-Then start the project-scoped workers:
+In a second Mac mini terminal, start its Codex worker through that tunnel:
 
 ```bash
-sagewai fleet run --name codex-worker --project coordinator-demo \
+export SAGEWAI_ADMIN_URL=http://127.0.0.1:18000
+sagewai fleet run --name mac-mini-codex --project coordinator-demo \
   --capabilities runtime.codex,filesystem.write \
-  --work-repository /path/to/platform
-
-sagewai fleet run --name claude-worker --project coordinator-demo \
-  --capabilities runtime.claude,filesystem.read \
-  --work-repository /path/to/platform
+  --pool default \
+  --enrollment-key 'PASTE_ENROLLMENT_KEY' \
+  --work-repository /absolute/path/to/platform
 ```
 
-Workers without an enrollment key appear as pending in the Fleet console. Approve
-each worker there before starting Work, or use a scoped enrollment key to
-auto-approve it.
+On the laptop, keep `just dev-all` running and start the Claude worker in another
+terminal with the same `SAGEWAI_HOME`:
 
-Select Fleet explicitly when starting the Work:
+```bash
+export SAGEWAI_HOME=/absolute/path/to/platform/.sagewai-dev
+export SAGEWAI_ADMIN_URL=http://127.0.0.1:8000
+sagewai fleet run --name laptop-claude --project coordinator-demo \
+  --capabilities runtime.claude,filesystem.read \
+  --pool default \
+  --enrollment-key 'PASTE_ENROLLMENT_KEY' \
+  --work-repository /absolute/path/to/platform
+```
+
+The enrollment key authenticates registration without copying an Admin bearer
+token to either worker. Open <http://localhost:3008/fleet>, verify both workers
+are approved and online, and open each worker detail to check its advertised
+capability. The detail page shows the organization ID needed below.
+
+On the laptop, build the verifier as described in section 1, copy the printed
+export, then select Fleet explicitly when starting the Work:
 
 ```bash
 sagewai work --project coordinator-demo \
@@ -191,6 +221,11 @@ sagewai work --project coordinator-demo \
 The control plane dispatches a credential-free workspace snapshot to a compatible
 worker. If a worker disappears, the durable Work remains and Fleet lease recovery
 can reassign the unfinished stage to another compatible, same-project worker.
+
+The Admin UI currently manages worker enrollment, approval, status, and Work
+observation. Start, resume, and named gate approval remain explicit laptop CLI
+commands so the backend does not launch an unbounded coordinator process merely
+because a browser request was made.
 
 A Fleet resume must repeat the same route and organization selection:
 

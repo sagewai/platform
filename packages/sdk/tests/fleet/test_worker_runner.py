@@ -412,10 +412,11 @@ async def test_token_less_register_via_enrollment_key(app_token):
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test",
         headers={"Authorization": f"Bearer {token}"},
-    ) as admin:
-        key = (await admin.post(
-            "/api/v1/fleet/enrollment-keys", json={"name": "k", "models": ["gpt-4o"]}
-        )).json()["key"]
+        ) as admin:
+            key = (await admin.post(
+                "/api/v1/fleet/enrollment-keys",
+                json={"name": "k", "allowed_models": ["gpt-4o"]},
+            )).json()["raw_key"]
     client = httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test",
         headers={"Content-Type": "application/json"},

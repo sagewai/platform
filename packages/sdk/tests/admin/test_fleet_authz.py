@@ -43,7 +43,7 @@ def _register(client, name="w", **body):
 
 
 def _worker(client, worker_id):
-    return client.get(f"/api/v1/fleet/workers/{worker_id}").json()
+    return client.get(f"/api/v1/fleet/workers/{worker_id}").json()["worker"]
 
 
 async def _worker_org_id(app, worker_id):
@@ -58,7 +58,7 @@ def test_register_scrubs_body_project_id(client):
     reg = _register(client, name="w-forge", labels={"project_id": "victim", "gpu": "a100"})
     assert reg.status_code in (200, 201), reg.text
     wid = reg.json()["worker_id"]
-    labels = _worker(client, wid)["labels"]
+    labels = _worker(client, wid)["capabilities"]["labels"]
     assert "project_id" not in labels         # scrubbed
     assert labels.get("gpu") == "a100"          # other labels preserved
 

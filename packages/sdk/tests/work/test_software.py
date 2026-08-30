@@ -656,7 +656,17 @@ async def test_result_validator_records_runtime_output_tokens(
 
 
 @pytest.mark.asyncio
-async def test_verification_runs_in_disposable_networkless_sandbox(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "image",
+    [
+        "example.invalid/verifier@sha256:" + "a" * 64,
+        "sha256:" + "a" * 64,
+    ],
+)
+async def test_verification_runs_in_disposable_networkless_sandbox(
+    tmp_path: Path,
+    image: str,
+) -> None:
     repository, base_sha = _repository(tmp_path)
     (repository / ".gitattributes").write_text("*.md filter=escape\n")
     _git(repository, "add", ".gitattributes")
@@ -686,7 +696,7 @@ async def test_verification_runs_in_disposable_networkless_sandbox(tmp_path: Pat
     backend = _RecordingSandboxBackend()
     command = ("python", "-c", "print('quoted value')")
     runner = SandboxedVerificationRunner(
-        image="example.invalid/verifier@sha256:" + "a" * 64,
+        image=image,
         backend_factory=lambda: backend,
     )
 
@@ -707,6 +717,7 @@ async def test_verification_runs_in_disposable_networkless_sandbox(tmp_path: Pat
     assert backend.start_kwargs["env"] == {}
     assert backend.start_kwargs["network_policy"] is NetworkPolicy.NONE
     assert backend.start_kwargs["lifetime"] is SandboxLifetime.PER_RUN
+    assert backend.start_kwargs["image_digest"] == "sha256:" + "a" * 64
     assert backend.start_kwargs["user"] == f"{os.getuid()}:{os.getgid()}"
     snapshot = backend.start_kwargs["workdir_mount"]
     assert not snapshot.exists()

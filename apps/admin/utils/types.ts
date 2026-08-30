@@ -788,7 +788,7 @@ export type PendingAttentionKind =
   | 'GATE_REQUESTED'
   | 'WORK_BLOCKED'
   | 'CONTROL_DEGRADED'
-  | 'PRODUCTION_INCIDENT';
+  | 'EXTERNAL_OUTCOME_INCIDENT';
 
 export interface PendingAttention {
   attention_id: string;
@@ -1132,6 +1132,7 @@ export interface FleetWorker {
   id: string;
   name: string;
   org_id: string;
+  project_id: string | null;
   capabilities: FleetWorkerCapabilities;
   approval_status: FleetWorkerStatus;
   last_heartbeat: string | null;

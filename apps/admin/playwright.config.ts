@@ -79,7 +79,7 @@ export default defineConfig({
         'uv run --package sagewai sagewai admin serve --host 127.0.0.1 --port 18000',
       port: 18000,
       reuseExistingServer: false,
-      timeout: 30_000,
+      timeout: 90_000,
       cwd: '../../',  // monorepo root where uv.lock lives
     },
     {

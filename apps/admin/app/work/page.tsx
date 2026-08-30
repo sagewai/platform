@@ -29,7 +29,7 @@ function formatTimestamp(value: string): string {
 }
 
 function attentionClass(kind: PendingAttentionKind): string {
-  if (kind === 'CONTROL_DEGRADED' || kind === 'PRODUCTION_INCIDENT') {
+  if (kind === 'CONTROL_DEGRADED' || kind === 'EXTERNAL_OUTCOME_INCIDENT') {
     return 'border-destructive/30 bg-destructive/10 text-destructive';
   }
   if (kind === 'WORK_BLOCKED') {

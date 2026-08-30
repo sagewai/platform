@@ -4245,6 +4245,16 @@ def create_admin_serve_app(
         project_id = _fleet_project_label(_project_scope(request))
         return worker.project_id in (None, project_id)
 
+    def _fleet_worker_json(worker) -> dict:
+        return {
+            # Enterprise fields the UI reads that the core model doesn't
+            # carry — default them so worker rows never crash on access.
+            "ip_allowlist": [],
+            "requires_dual_approval": False,
+            "connection_type": None,
+            **worker.model_dump(mode="json"),
+        }
+
     async def _fleet_worker_in_scope(worker_id: str, request: Request):
         worker = await fleet_registry.get_worker(worker_id)
         if (
@@ -4452,17 +4462,7 @@ def create_admin_serve_app(
         # model_dump produces exactly that; this previously returned a flattened
         # bare array, so the page read `data.workers` as undefined and crashed.
         return JSONResponse({
-            "workers": [
-                {
-                    # Enterprise fields the UI reads that the core model doesn't
-                    # carry — default them so worker rows never crash on access.
-                    "ip_allowlist": [],
-                    "requires_dual_approval": False,
-                    "connection_type": None,
-                    **w.model_dump(mode="json"),
-                }
-                for w in workers
-            ],
+            "workers": [_fleet_worker_json(w) for w in workers],
             "total": len(workers),
         })
 
@@ -4471,18 +4471,7 @@ def create_admin_serve_app(
         w = await _fleet_worker_in_scope(worker_id, request)
         if not w:
             return JSONResponse({"detail": "Not found"}, status_code=404)
-        return JSONResponse({
-            "id": w.id, "name": w.name,
-            "project_id": w.project_id,
-            "status": w.approval_status.value,
-            "pool": w.capabilities.pool,
-            "models": w.capabilities.models_supported,
-            "capability_names": w.capabilities.capability_names,
-            "labels": w.capabilities.labels,
-            "max_concurrent": w.capabilities.max_concurrent,
-            "last_heartbeat": w.last_heartbeat.isoformat() if w.last_heartbeat else None,
-            "registered_at": w.registered_at.isoformat(),
-        })
+        return JSONResponse({"worker": _fleet_worker_json(w)})
 
     @app.post("/api/v1/fleet/workers/{worker_id}/approve")
     async def approve_fleet_worker(worker_id: str, request: Request) -> JSONResponse:
@@ -4499,7 +4488,7 @@ def create_admin_serve_app(
         await _emit_audit(
             request, "fleet.worker.approved", target_type="fleet_worker", target_id=worker_id
         )
-        return JSONResponse({"status": w.approval_status.value, "worker_id": w.id})
+        return JSONResponse({"worker": _fleet_worker_json(w)})
 
     @app.post("/api/v1/fleet/workers/{worker_id}/reject")
     async def reject_fleet_worker(worker_id: str, request: Request) -> JSONResponse:
@@ -4516,7 +4505,7 @@ def create_admin_serve_app(
         await _emit_audit(
             request, "fleet.worker.rejected", target_type="fleet_worker", target_id=worker_id
         )
-        return JSONResponse({"status": w.approval_status.value, "worker_id": w.id})
+        return JSONResponse({"worker": _fleet_worker_json(w)})
 
     @app.post("/api/v1/fleet/workers/{worker_id}/revoke")
     async def revoke_fleet_worker(worker_id: str, request: Request) -> JSONResponse:
@@ -4533,7 +4522,7 @@ def create_admin_serve_app(
         await _emit_audit(
             request, "fleet.worker.revoked", target_type="fleet_worker", target_id=worker_id
         )
-        return JSONResponse({"status": w.approval_status.value, "worker_id": w.id})
+        return JSONResponse({"worker": _fleet_worker_json(w)})
 
     @app.get("/api/v1/admin/fleet/workers/{worker_id}/pool-stats")
     async def get_worker_pool_stats(worker_id: str, request: Request) -> JSONResponse:
@@ -4565,13 +4554,30 @@ def create_admin_serve_app(
     async def create_fleet_enrollment_key(request: Request) -> JSONResponse:
         require_org_admin(request.state.context)  # fleet management is org-level
         body = await request.json()
+        expires_at = None
+        if body.get("expires_at"):
+            try:
+                expires_at = datetime.datetime.fromisoformat(
+                    str(body["expires_at"]).replace("Z", "+00:00")
+                )
+            except ValueError:
+                return JSONResponse(
+                    {"detail": "expires_at must be an ISO 8601 timestamp"},
+                    status_code=400,
+                )
+            if expires_at.tzinfo is None:
+                return JSONResponse(
+                    {"detail": "expires_at must include a timezone"},
+                    status_code=400,
+                )
         key_record, raw_key = await fleet_registry.create_enrollment_key(
             org_id=_fleet_org_id(request),
             name=body.get("name", ""),
             created_by="admin",
             max_uses=body.get("max_uses"),
-            allowed_pools=body.get("pools", [body.get("pool", "default")]),
-            allowed_models=body.get("models", []),
+            expires_at=expires_at,
+            allowed_pools=body.get("allowed_pools", []),
+            allowed_models=body.get("allowed_models", []),
         )
         emit_audit(sf, event_type="fleet.enrollment_key.created",
                    actor_label=request.state.principal.actor_label, target=key_record.id)
@@ -4581,10 +4587,13 @@ def create_admin_serve_app(
             target_type="fleet_enrollment_key",
             target_id=key_record.id,
         )
-        return JSONResponse({
-            "id": key_record.id, "key": raw_key, "name": key_record.name,
-            "max_uses": key_record.max_uses,
-        }, status_code=201)
+        return JSONResponse(
+            {
+                **key_record.model_dump(mode="json", exclude={"key_hash"}),
+                "raw_key": raw_key,
+            },
+            status_code=201,
+        )
 
     @app.delete("/api/v1/fleet/enrollment-keys/{key_id}")
     async def revoke_fleet_enrollment_key(key_id: str, request: Request) -> JSONResponse:
