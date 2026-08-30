@@ -2,7 +2,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 
-const STATE_PATH = path.join(os.homedir(), '.sagewai', 'admin-state.json');
+const sagewaiHome = process.env.SAGEWAI_HOME
+  ?? path.join(/* turbopackIgnore: true */ os.homedir(), '.sagewai');
+const STATE_PATH = process.env.SAGEWAI_ADMIN_STATE_FILE
+  ?? path.join(
+    /* turbopackIgnore: true */ sagewaiHome,
+    'config',
+    'admin-state.json',
+  );
 
 interface AdminState {
   firstMissionCelebrated?: boolean;

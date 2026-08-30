@@ -3,10 +3,10 @@ import { resolve } from 'node:path';
 
 const e2eHome = resolve(__dirname, 'test-results', 'home');
 const adminStateFile = resolve(e2eHome, 'config', 'admin-state.json');
-const databaseFile = resolve(__dirname, 'test-results', 'sagewai.db');
 process.env.SAGEWAI_HOME = e2eHome;
 process.env.SAGEWAI_ADMIN_STATE_FILE = adminStateFile;
-process.env.SAGEWAI_DATABASE_URL = `sqlite+aiosqlite:///${databaseFile}`;
+delete process.env.SAGEWAI_DATABASE_URL;
+delete process.env.DATABASE_URL;
 const backendUrl = 'http://127.0.0.1:18000';
 const frontendUrl = 'http://127.0.0.1:3808';
 process.env.SAGEWAI_E2E_BACKEND_URL = backendUrl;
@@ -72,7 +72,7 @@ export default defineConfig({
       // across a full run; at the default cap the bootstrap token is evicted
       // mid-suite and every later test redirects to /login. See state_file.py.
       command:
-        'SAGEWAI_ADMIN_ALLOWED_ORIGINS=http://localhost:3808,http://127.0.0.1:3808 ' +
+        'SAGEWAI_ADMIN_ALLOWED_ORIGINS=http://127.0.0.1:3808 ' +
         'SAGEWAI_ADMIN_MAX_SESSION_TOKENS=100000 ' +
         'uv run --package sagewai sagewai admin serve --host 127.0.0.1 --port 18000',
       port: 18000,
