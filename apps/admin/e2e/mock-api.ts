@@ -2,8 +2,8 @@
  * E2E test helpers — real backend, browser-based auth via storageState.
  *
  * The Playwright config starts both the isolated backend and the
- * frontend (port 3808) automatically. The backend uses in-memory
- * state so tests are fast and deterministic.
+ * frontend (port 3808) automatically. The backend uses isolated
+ * file-backed state under test-results/ so tests are deterministic.
  *
  * Auth is handled by the `setup` project (auth.setup.ts) which logs
  * in through the real browser UI and saves storageState to
@@ -26,7 +26,7 @@ export async function setAuthCookie(page: Page, token: string) {
     {
       name: 'sagewai_auth',
       value: token,
-      domain: 'localhost',
+      domain: new URL(BACKEND_URL).hostname,
       path: '/',
       httpOnly: true,
       sameSite: 'Lax' as const,

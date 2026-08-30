@@ -134,9 +134,10 @@ async function mockWorkApi(
   page: Page,
   onScopedRequest?: () => void,
   failedProjectId?: string,
+  availableProjects = [project, isolatedProject],
 ) {
   await page.route('**/api/v1/projects', async (route) => {
-    await route.fulfill({ json: [project, isolatedProject] });
+    await route.fulfill({ json: availableProjects });
   });
   await page.route('**/api/v1/work**', async (route) => {
     const projectId = route.request().headers()['x-project-id'];
@@ -163,17 +164,15 @@ async function mockWorkApi(
 test.describe('Work Control Console', () => {
   test('sends the explicit global Work scope', async ({ page }) => {
     const scopes: Array<string | undefined> = [];
-    await mockWorkApi(page);
+    await mockWorkApi(page, undefined, undefined, []);
     await page.route('**/api/v1/work**', async (route) => {
       scopes.push(route.request().headers()['x-project-id']);
       await route.fulfill({ json: [] });
     });
 
     await page.goto('/work');
-    await page.getByRole('button', { name: /Console Project/ }).click();
-    await page.getByRole('button', { name: /All Projects/ }).click();
-
-    await expect.poll(() => scopes.includes('global')).toBe(true);
+    await expect.poll(() => scopes.length).toBeGreaterThan(0);
+    expect(scopes.every((scope) => scope === 'global')).toBe(true);
   });
 
   test('shows project-scoped active Work and canonical pending attention', async ({ page }) => {
@@ -201,8 +200,8 @@ test.describe('Work Control Console', () => {
     );
     await expect.poll(() => scopedRequests).toBeGreaterThan(0);
 
-    await page.getByRole('button', { name: /Console Project/ }).click();
-    await page.getByRole('button', { name: /Isolated Project/ }).click();
+    await page.evaluate(() => localStorage.setItem('sagewai-project', 'isolated'));
+    await page.reload();
     await expect(
       page.getByRole('alert').filter({ hasText: 'Failed to load Work control state.' }),
     ).toHaveText('Failed to load Work control state.');

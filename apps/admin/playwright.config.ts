@@ -1,13 +1,14 @@
 import { defineConfig } from '@playwright/test';
 import { resolve } from 'node:path';
 
-const adminStateFile = resolve(
-  __dirname,
-  'test-results',
-  'admin-state.json',
-);
+const e2eHome = resolve(__dirname, 'test-results', 'home');
+const adminStateFile = resolve(e2eHome, 'config', 'admin-state.json');
+const databaseFile = resolve(__dirname, 'test-results', 'sagewai.db');
+process.env.SAGEWAI_HOME = e2eHome;
 process.env.SAGEWAI_ADMIN_STATE_FILE = adminStateFile;
-const backendUrl = 'http://localhost:18000';
+process.env.SAGEWAI_DATABASE_URL = `sqlite+aiosqlite:///${databaseFile}`;
+const backendUrl = 'http://127.0.0.1:18000';
+const frontendUrl = 'http://127.0.0.1:3808';
 process.env.SAGEWAI_E2E_BACKEND_URL = backendUrl;
 
 /**
@@ -15,7 +16,7 @@ process.env.SAGEWAI_E2E_BACKEND_URL = backendUrl;
  *
  * Starts both the Python backend (port 18000) and the Next.js frontend
  * (port 3808) automatically. No external services needed — the backend
- * uses in-memory state and isolated file-based auth under test-results/.
+ * uses isolated file-backed persistence and auth under test-results/.
  *
  * Run with:
  *   pnpm --filter @sagewai/admin test:e2e
@@ -38,7 +39,7 @@ export default defineConfig({
   timeout: 30_000,
 
   use: {
-    baseURL: 'http://localhost:3808',
+    baseURL: frontendUrl,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
@@ -61,7 +62,7 @@ export default defineConfig({
 
   webServer: [
     {
-      // Backend — lightweight FastAPI with in-memory state.
+      // Backend — lightweight FastAPI with isolated file-backed state.
       // Starts in ~2s. No Postgres/Redis required.
       // The admin UI (port 3808) calls the backend cross-origin with credentials,
       // so its origin must be in the CORS allowlist.
@@ -80,10 +81,8 @@ export default defineConfig({
       cwd: '../../',  // monorepo root where uv.lock lives
     },
     {
-      // Frontend — Next.js dev server pointed at the backend. Cloud mode is
-      // suite-wide so Work Console tests exercise the project selector; this
-      // suite therefore does not cover self-hosted navigation rendering.
-      command: `NEXT_PUBLIC_SAGEWAI_MODE=cloud NEXT_PUBLIC_ADMIN_API_URL=${backendUrl}/admin pnpm exec next dev --port 3808`,
+      // Frontend — Next.js dev server pointed at the backend.
+      command: `NEXT_PUBLIC_ADMIN_API_URL=${backendUrl}/admin pnpm exec next dev --hostname 127.0.0.1 --port 3808`,
       port: 3808,
       reuseExistingServer: false,
       timeout: 30_000,
