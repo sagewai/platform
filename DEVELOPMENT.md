@@ -142,7 +142,10 @@ See [SUPPLY-CHAIN.md](SUPPLY-CHAIN.md) for the full policy. Key rules:
 
 macOS may resolve `localhost` to `::1` (IPv6) while `127.0.0.1` is
 IPv4-only. Normal local development uses the CLI defaults and opens the
-admin UI at `http://localhost:3008`.
+admin UI at `http://localhost:3008`. If the UI remains on “Connecting to
+server…” while the backend is bound to `127.0.0.1`, run `just dev-all`
+(which binds the backend to `0.0.0.0`) or point `NEXT_PUBLIC_ADMIN_API_URL`
+at `http://127.0.0.1:8000/admin`.
 
 The Playwright E2E stack instead pins the backend, frontend, browser
 base URL, and `NEXT_PUBLIC_ADMIN_API_URL` to `127.0.0.1` on ports 18000

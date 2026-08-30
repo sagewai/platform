@@ -3,10 +3,8 @@ import { resolve } from 'node:path';
 
 const e2eHome = resolve(__dirname, 'test-results', 'home');
 const adminStateFile = resolve(e2eHome, 'config', 'admin-state.json');
-const adminUiStateFile = resolve(e2eHome, 'config', 'admin-ui-state.json');
 process.env.SAGEWAI_HOME = e2eHome;
 process.env.SAGEWAI_ADMIN_STATE_FILE = adminStateFile;
-process.env.SAGEWAI_ADMIN_UI_STATE_FILE = adminUiStateFile;
 delete process.env.SAGEWAI_DATABASE_URL;
 delete process.env.DATABASE_URL;
 delete process.env.SAGEWAI_CONNECTIONS_FILE;

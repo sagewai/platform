@@ -7,7 +7,7 @@ import { test, expect } from '@playwright/test';
  * renders correctly by checking the setup completion page.
  *
  * For a full wizard walkthrough (from fresh state), run:
- *   just admin-e2e -- e2e/01-setup-wizard.spec.ts
+ *   pnpm --filter @sagewai/admin exec playwright test e2e/01-setup-wizard.spec.ts
  *
  * The proxy (apps/admin/proxy.ts) redirects authenticated users away
  * from /login, so these tests have to run unauthenticated to exercise

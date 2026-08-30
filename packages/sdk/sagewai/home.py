@@ -12,7 +12,7 @@
 Single resolver for the on-disk layout used by a local install:
 
     $SAGEWAI_HOME/            (default ~/.sagewai)
-      config/    admin-state.json, connections.json
+      config/    admin-state.json, admin-ui-state.json, connections.json
       db/        sagewai.db   (SQLite: stores + sqlite-vec vectors)
       data/      artifacts, run outputs, scratch
       objects/   content-addressed artifact objects

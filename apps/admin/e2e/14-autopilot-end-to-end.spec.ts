@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Ali Arda Diri
 import { test, expect, type Page } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { markFirstMissionCelebrated } from '../lib/admin-state';
 import type { MissionRunEvent } from '@/utils/types';
 
 /**
@@ -412,6 +415,22 @@ async function mockSystemReadiness(page: Page) {
 // ── Test suite ─────────────────────────────────────────────────────────────
 
 test.describe('autopilot end-to-end demo cycle', () => {
+  test('keeps first-mission UI state separate from backend control state', async () => {
+    const e2eHome = process.env.SAGEWAI_HOME;
+    const backendStateFile = process.env.SAGEWAI_ADMIN_STATE_FILE;
+    expect(e2eHome).toBeTruthy();
+    expect(backendStateFile).toBeTruthy();
+    expect(resolve(e2eHome!)).toBe(resolve(__dirname, '..', 'test-results', 'home'));
+    expect(resolve(backendStateFile!)).toBe(resolve(e2eHome!, 'config', 'admin-state.json'));
+
+    await markFirstMissionCelebrated();
+    const uiStateFile = resolve(e2eHome!, 'config', 'admin-ui-state.json');
+    const uiState = JSON.parse(await readFile(uiStateFile, 'utf8')) as Record<string, unknown>;
+    expect(uiState.firstMissionCelebrated).toBe(true);
+    const backendState = JSON.parse(await readFile(backendStateFile!, 'utf8')) as Record<string, unknown>;
+    expect(backendState).not.toHaveProperty('firstMissionCelebrated');
+  });
+
   /**
    * Primary happy path:
    *   Enable → goal → routing preview → approve → detail → run → RUNNING → COMPLETED
