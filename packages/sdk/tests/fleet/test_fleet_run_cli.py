@@ -165,6 +165,26 @@ def test_run_surfaces_registration_401_with_token_hint(monkeypatch):
     assert "SAGEWAI_ADMIN_TOKEN" in res.output
 
 
+def test_run_surfaces_gateway_connection_failure_without_traceback(monkeypatch):
+    import httpx
+
+    class _FailRunner:
+        def __init__(self, **kw):
+            pass
+
+        async def run(self):
+            raise httpx.ConnectError("connection refused")
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr("sagewai.cli.fleet.WorkerRunner", _FailRunner)
+    res = CliRunner().invoke(fleet_group, ["run", "--worker-id", "w1"])
+    assert res.exit_code != 0
+    assert "Could not connect to Sagewai gateway" in res.output
+    assert "Traceback" not in res.output
+
+
 def test_run_daemon_terminal_auth_exits_2(monkeypatch):
     from sagewai.fleet.runner import TerminalAuthError
 
