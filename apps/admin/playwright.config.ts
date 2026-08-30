@@ -1,11 +1,26 @@
 import { defineConfig } from '@playwright/test';
+import { resolve } from 'node:path';
+
+const e2eHome = resolve(__dirname, 'test-results', 'home');
+const adminStateFile = resolve(e2eHome, 'config', 'admin-state.json');
+const adminUiStateFile = resolve(e2eHome, 'config', 'admin-ui-state.json');
+process.env.SAGEWAI_HOME = e2eHome;
+process.env.SAGEWAI_ADMIN_STATE_FILE = adminStateFile;
+process.env.SAGEWAI_ADMIN_UI_STATE_FILE = adminUiStateFile;
+delete process.env.SAGEWAI_DATABASE_URL;
+delete process.env.DATABASE_URL;
+delete process.env.SAGEWAI_CONNECTIONS_FILE;
+delete process.env.SAGEWAI_CACHE_DIR;
+const backendUrl = 'http://127.0.0.1:18000';
+const frontendUrl = 'http://127.0.0.1:3808';
+process.env.SAGEWAI_E2E_BACKEND_URL = backendUrl;
 
 /**
  * Playwright configuration for the Sagewai admin panel.
  *
- * Starts both the Python backend (port 8000) and the Next.js frontend
+ * Starts both the Python backend (port 18000) and the Next.js frontend
  * (port 3808) automatically. No external services needed — the backend
- * uses in-memory state and file-based auth (~/.sagewai/admin-state.json).
+ * uses isolated file-backed persistence and auth under test-results/.
  *
  * Run with:
  *   pnpm --filter @sagewai/admin test:e2e
@@ -28,7 +43,7 @@ export default defineConfig({
   timeout: 30_000,
 
   use: {
-    baseURL: 'http://localhost:3808',
+    baseURL: frontendUrl,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
@@ -51,7 +66,7 @@ export default defineConfig({
 
   webServer: [
     {
-      // Backend — lightweight FastAPI with in-memory state.
+      // Backend — lightweight FastAPI with isolated file-backed state.
       // Starts in ~2s. No Postgres/Redis required.
       // The admin UI (port 3808) calls the backend cross-origin with credentials,
       // so its origin must be in the CORS allowlist.
@@ -61,19 +76,19 @@ export default defineConfig({
       // across a full run; at the default cap the bootstrap token is evicted
       // mid-suite and every later test redirects to /login. See state_file.py.
       command:
-        'SAGEWAI_ADMIN_ALLOWED_ORIGINS=http://localhost:3808,http://127.0.0.1:3808 ' +
+        'SAGEWAI_ADMIN_ALLOWED_ORIGINS=http://127.0.0.1:3808 ' +
         'SAGEWAI_ADMIN_MAX_SESSION_TOKENS=100000 ' +
-        'uv run --package sagewai sagewai admin serve --host 0.0.0.0 --port 8000',
-      port: 8000,
-      reuseExistingServer: !process.env.CI,
-      timeout: 15_000,
+        'uv run --package sagewai sagewai admin serve --host 127.0.0.1 --port 18000',
+      port: 18000,
+      reuseExistingServer: false,
+      timeout: 30_000,
       cwd: '../../',  // monorepo root where uv.lock lives
     },
     {
       // Frontend — Next.js dev server pointed at the backend.
-      command: 'NEXT_PUBLIC_ADMIN_API_URL=http://localhost:8000/admin pnpm exec next dev --port 3808',
+      command: `NEXT_PUBLIC_ADMIN_API_URL=${backendUrl}/admin pnpm exec next dev --hostname 127.0.0.1 --port 3808`,
       port: 3808,
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: false,
       timeout: 30_000,
     },
   ],

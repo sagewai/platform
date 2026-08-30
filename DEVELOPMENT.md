@@ -140,15 +140,14 @@ See [SUPPLY-CHAIN.md](SUPPLY-CHAIN.md) for the full policy. Key rules:
 
 ## macOS: `localhost` vs `127.0.0.1`
 
-macOS resolves `localhost` to `::1` (IPv6) while `127.0.0.1` is IPv4
-only. The admin panel's browser-side health check fetches
-`http://localhost:8000/...`. If you bind the backend to `--host
-127.0.0.1`, those requests hit `::1` and silently fail — the UI shows
-"Connecting to server…" forever.
+macOS may resolve `localhost` to `::1` (IPv6) while `127.0.0.1` is
+IPv4-only. Normal local development uses the CLI defaults and opens the
+admin UI at `http://localhost:3008`.
 
-**Always use the CLI default** (`--host 0.0.0.0`, which listens on all
-interfaces) and open `http://localhost:3808` (not `127.0.0.1`) in your
-browser.
+The Playwright E2E stack instead pins the backend, frontend, browser
+base URL, and `NEXT_PUBLIC_ADMIN_API_URL` to `127.0.0.1` on ports 18000
+and 3808. Keep those E2E endpoints consistent when changing the test
+configuration.
 
 ## Known Issues
 

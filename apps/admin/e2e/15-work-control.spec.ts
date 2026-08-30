@@ -188,11 +188,14 @@ test.describe('Work Control Console', () => {
 
     await expect(page.getByRole('heading', { name: 'Work Control' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Needs Attention' })).toBeVisible();
-    await expect(page.getByText('Approve production delivery?')).toBeVisible();
+    await expect(page.getByText('Approve production delivery?').filter({ visible: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Active Work' })).toBeVisible();
-    await expect(page.getByText('READY TO DELIVER')).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Fleet workers' })).toHaveAttribute('href', '/fleet');
-    await expect(page.getByRole('link', { name: 'work-console-1' }).first()).toHaveAttribute(
+    await expect(page.getByText('READY TO DELIVER').filter({ visible: true })).toBeVisible();
+    await expect(page.getByRole('main').getByRole('link', { name: 'Fleet workers' })).toHaveAttribute('href', '/fleet');
+    const activeWork = page.locator('[data-slot="card"]').filter({
+      has: page.getByRole('heading', { name: 'Active Work' }),
+    });
+    await expect(activeWork.getByRole('link', { name: 'work-console-1' }).filter({ visible: true })).toHaveAttribute(
       'href',
       '/work/work-console-1',
     );
@@ -200,9 +203,9 @@ test.describe('Work Control Console', () => {
 
     await page.getByRole('button', { name: /Console Project/ }).click();
     await page.getByRole('button', { name: /Isolated Project/ }).click();
-    await expect(page.getByRole('alert')).toContainText(
-      'Failed to load Work control state.',
-    );
+    await expect(
+      page.getByRole('alert').filter({ hasText: 'Failed to load Work control state.' }),
+    ).toHaveText('Failed to load Work control state.');
     await expect(page.getByText('work-console-1')).toHaveCount(0);
     await expect(page.getByText('Approve production delivery?')).toHaveCount(0);
   });
@@ -215,11 +218,14 @@ test.describe('Work Control Console', () => {
     await expect(page.getByRole('heading', { name: 'Work work-console-1' })).toBeVisible();
     await expect(page.getByText('operator · codex-worker-1')).toBeVisible();
     await expect(page.getByText('production · canary · active')).toBeVisible();
-    await expect(page.getByText('FAIL')).toBeVisible();
+    await expect(page.getByText('FAIL', { exact: true })).toBeVisible();
     await expect(page.getByText('rolled back')).toBeVisible();
     await expect(page.getByText('Canary error rate exceeded the health gate.')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Evidence Board' })).toBeVisible();
-    await expect(page.getByText('evidence://observation/fail')).toBeVisible();
-    await expect(page.getByText('evidence://rollback/safe')).toBeVisible();
+    const evidenceBoard = page.locator('[data-slot="card"]').filter({
+      has: page.getByRole('heading', { name: 'Evidence Board' }),
+    });
+    await expect(evidenceBoard.getByText('evidence://observation/fail', { exact: true })).toBeVisible();
+    await expect(evidenceBoard.getByText('evidence://rollback/safe', { exact: true })).toBeVisible();
   });
 });

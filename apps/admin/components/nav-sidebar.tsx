@@ -489,6 +489,7 @@ export function NavSidebar() {
 
   const allGroups = [...mainGroups, ...bottomGroups];
   const activeGroupId = getActiveGroupId(pathname, allGroups);
+  const showWorkspaceSwitcher = isCloud || pathname === '/work' || pathname.startsWith('/work/');
 
   /** On mobile, close sidebar when navigating */
   const closeMobile = useCallback(() => {
@@ -635,10 +636,10 @@ export function NavSidebar() {
         </div>
       )}
 
-      {/* Workspace switcher — cloud + expanded only */}
-      {isCloud && expanded && (
+      {/* Project scope selector — cloud-wide and always on Work Control routes. */}
+      {showWorkspaceSwitcher && expanded && (
         <div className="px-5 mb-3 shrink-0">
-          <WorkspaceSwitcher />
+          <WorkspaceSwitcher projectOnly={!isCloud} />
         </div>
       )}
 
