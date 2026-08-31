@@ -184,9 +184,9 @@ def test_run_register_only_configures_worker_local_native_runtimes(
             "--claude-review-max-budget-usd",
             "2.50",
             "--codex-model",
-            "gpt-5-codex",
+            "gpt-5.6-sol",
             "--codex-reasoning-effort",
-            "low",
+            "ultra",
             "--register-only",
         ],
     )
@@ -206,8 +206,8 @@ def test_run_register_only_configures_worker_local_native_runtimes(
     assert handler._claude_review_runtime._model == "claude-review"
     assert handler._claude_review_runtime._effort == "xhigh"
     assert handler._claude_review_runtime._max_budget_usd == "2.50"
-    assert handler._codex_runtime._model == "gpt-5-codex"
-    assert handler._codex_runtime._reasoning_effort == "low"
+    assert handler._codex_runtime._model == "gpt-5.6-sol"
+    assert handler._codex_runtime._reasoning_effort == "ultra"
 
 
 def test_run_rejects_runtime_options_without_native_capability(monkeypatch):

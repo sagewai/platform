@@ -293,13 +293,19 @@ def register(
 @click.option(
     "--codex-model",
     default=None,
-    help="Codex model for implementation and repair stages.",
+    help=(
+        "Worker-local Codex model for implementation and repair stages; "
+        "availability is determined by that worker's Codex CLI."
+    ),
 )
 @click.option(
     "--codex-reasoning-effort",
     default=None,
     type=click.Choice(CODEX_REASONING_EFFORT_VALUES),
-    help="Codex reasoning effort for implementation and repair stages.",
+    help=(
+        "Worker-local Codex reasoning effort for implementation and repair stages; "
+        "model support is determined by that worker's Codex CLI."
+    ),
 )
 @click.option("--enrollment-key", default=None, help="Enrollment key for auto-approval.")
 @click.option("--worker-id", default=None, help="Reuse an approved worker; skip registration.")

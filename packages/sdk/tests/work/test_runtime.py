@@ -423,12 +423,25 @@ async def test_claude_runtime_omits_unset_native_options(tmp_path: Path) -> None
     assert "--max-budget-usd" not in argv
 
 
+@pytest.mark.parametrize(
+    ("model", "reasoning_effort"),
+    [
+        ("gpt-5.5", "xhigh"),
+        ("gpt-5.6-sol", "ultra"),
+        ("gpt-5.6-terra", "ultra"),
+        ("gpt-5.6-luna", "max"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_codex_runtime_emits_configured_native_options(tmp_path: Path) -> None:
+async def test_codex_runtime_emits_configured_native_options(
+    tmp_path: Path,
+    model: str,
+    reasoning_effort: str,
+) -> None:
     runtime = CodexRuntime(
         executable=str(_fake_runtime_executable(tmp_path)),
-        model="gpt-5-codex",
-        reasoning_effort="high",
+        model=model,
+        reasoning_effort=reasoning_effort,
         timeout=5,
     )
     workspace_path = tmp_path / "workspace"
@@ -446,9 +459,9 @@ async def test_codex_runtime_emits_configured_native_options(tmp_path: Path) -> 
     assert argv == [
         "exec",
         "--model",
-        "gpt-5-codex",
+        model,
         "-c",
-        "model_reasoning_effort=high",
+        f"model_reasoning_effort={reasoning_effort}",
         "--ephemeral",
         "--sandbox",
         "workspace-write",
