@@ -485,6 +485,22 @@ class FailedWithoutActionReceiptRuntime(MutationRuntime):
         )
 
 
+class FailingOnceWithoutActionReceiptRuntime(MutationRuntime):
+    async def run(self, request, capsule, capabilities, workspace):
+        if self.calls == 0:
+            self.calls += 1
+            self.capsules.append(capsule)
+            self.requests.append(request)
+            return _operator_result(request).model_copy(
+                update={
+                    "status": "failed",
+                    "evidence_refs": ("runtime://native-configuration-failure",),
+                    "action_results": (),
+                }
+            )
+        return await super().run(request, capsule, capabilities, workspace)
+
+
 class PassedWithFailedActionReceiptRuntime(MutationRuntime):
     async def run(self, request, capsule, capabilities, workspace):
         result = await super().run(request, capsule, capabilities, workspace)
@@ -2150,6 +2166,57 @@ async def test_failed_implementation_without_action_receipt_is_not_contract_drif
         "decision_request": "Inspect the failed implementation evidence and decide whether to retry or stop the work.",
         "evidence_refs": ["runtime://native-failure"],
     }
+
+
+@pytest.mark.asyncio
+async def test_resume_retries_failed_implementation_without_rerunning_analysis(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    analyzer = AnalysisRuntime()
+    implementer = FailingOnceWithoutActionReceiptRuntime(
+        implement_text="initial",
+        repair_text="unused",
+    )
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        analyzer=analyzer,
+        implementer=implementer,
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_command("initial"),),
+    )
+
+    blocked = await lifecycle.start(
+        work_item=_work_item(),
+        contract=_contract(base_sha),
+    )
+    resumed = await lifecycle.resume("work-1", project_id="project-a")
+
+    assert blocked.status == "WORK_BLOCKED"
+    assert resumed.status == "READY_TO_MERGE"
+    assert analyzer.calls == 1
+    assert implementer.calls == 2
+    assert [request.run_id for request in implementer.requests] == [
+        "work-1:implement:1",
+        "work-1:implement:2",
+    ]
+    events = await work_store.read_events("work-1", project_id="project-a")
+    completed = [
+        event
+        for event in events
+        if event.event_type is WorkEventType.STAGE_COMPLETED
+        and event.payload_json.get("stage") == "implement"
+    ]
+    assert [event.payload_json["run_id"] for event in completed] == [
+        "work-1:implement:2"
+    ]
 
 
 @pytest.mark.asyncio

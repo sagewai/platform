@@ -380,10 +380,15 @@ class SoftwareLifecycle:
         record = await self._work_store.load_work(work_id, project_id=project_id)
         if record is None:
             raise KeyError(work_id)
-        if record.status in {"READY_TO_MERGE", "WORK_BLOCKED", "COMPLETE"}:
+        if record.status in {"READY_TO_MERGE", "COMPLETE"}:
             return record
 
         events = await self._work_store.read_events(work_id, project_id=project_id)
+        blocked_resume_state = None
+        if record.status == "WORK_BLOCKED":
+            blocked_resume_state = self._blocked_resume_state(events)
+            if blocked_resume_state is None:
+                return record
         if record.status == "ANALYZING":
             work_item, draft_contract, assumptions = self._analysis_inputs(events)
             software = self._validate_inputs(work_item, draft_contract, assumptions)
@@ -414,7 +419,7 @@ class SoftwareLifecycle:
             )
         work_item, contract, assumptions = self._canonical_inputs(events)
         software = self._validate_inputs(work_item, contract, assumptions)
-        state = self._state_from_events(events)
+        state = blocked_resume_state or self._state_from_events(events)
         if state == "COMPLETE":
             return await self._set_status(work_item, "COMPLETE")
         try:
@@ -1106,9 +1111,10 @@ class SoftwareLifecycle:
         workspace: SoftwareWorkspace,
     ) -> str:
         events = await self._events(work_item)
+        implementation_number = self._failed_implementation_count(events) + 1
         repair_number = self._repair_count(events) + 1
         run_id = (
-            f"{work_item.id}:implement:1"
+            f"{work_item.id}:implement:{implementation_number}"
             if stage == "implement"
             else f"{work_item.id}:repair:{repair_number}"
         )
@@ -2288,6 +2294,31 @@ class SoftwareLifecycle:
             elif event.event_type is WorkEventType.WORK_COMPLETED:
                 state = "COMPLETE"
         return state
+
+    @staticmethod
+    def _blocked_resume_state(events: list[WorkEvent]) -> str | None:
+        blocker = next(
+            (
+                event
+                for event in reversed(events)
+                if event.event_type is WorkEventType.WORK_BLOCKED
+            ),
+            None,
+        )
+        if blocker is not None and blocker.payload_json.get("reason") == "implement_failed":
+            return "READY_TO_IMPLEMENT"
+        return None
+
+    @staticmethod
+    def _failed_implementation_count(events: list[WorkEvent]) -> int:
+        return sum(
+            event.event_type is WorkEventType.EXECUTION_RECORDED
+            and str(event.payload_json.get("run_id", "")).startswith(
+                f"{event.work_id}:implement:"
+            )
+            and event.payload_json.get("status") in {"failed", "blocked"}
+            for event in events
+        )
 
     @staticmethod
     def _repair_count(events: list[WorkEvent]) -> int:
