@@ -1111,10 +1111,9 @@ class SoftwareLifecycle:
         workspace: SoftwareWorkspace,
     ) -> str:
         events = await self._events(work_item)
-        implementation_number = self._failed_implementation_count(events) + 1
         repair_number = self._repair_count(events) + 1
         run_id = (
-            f"{work_item.id}:implement:{implementation_number}"
+            self._implementation_run_id(work_item, events)
             if stage == "implement"
             else f"{work_item.id}:repair:{repair_number}"
         )
@@ -2072,7 +2071,7 @@ class SoftwareLifecycle:
         if stage == "design":
             return f"{work_item.id}:design:1"
         if stage == "implement":
-            return f"{work_item.id}:implement:1"
+            return self._implementation_run_id(work_item, events)
         if stage == "repair":
             return f"{work_item.id}:repair:{self._repair_count(events) + 1}"
         if stage == "repository":
@@ -2161,7 +2160,15 @@ class SoftwareLifecycle:
         actor_ref: str | None = None,
     ) -> WorkRecord:
         events = await self._events(work_item)
-        if not any(event.event_type is WorkEventType.WORK_BLOCKED for event in events):
+        latest = next(
+            (
+                event
+                for event in reversed(events)
+                if event.event_type is WorkEventType.WORK_BLOCKED
+            ),
+            None,
+        )
+        if latest is None or latest.payload_json != payload:
             await self._append(
                 work_item,
                 WorkEventType.WORK_BLOCKED,
@@ -2310,15 +2317,52 @@ class SoftwareLifecycle:
         return None
 
     @staticmethod
-    def _failed_implementation_count(events: list[WorkEvent]) -> int:
-        return sum(
-            event.event_type is WorkEventType.EXECUTION_RECORDED
-            and str(event.payload_json.get("run_id", "")).startswith(
-                f"{event.work_id}:implement:"
-            )
-            and event.payload_json.get("status") in {"failed", "blocked"}
-            for event in events
+    def _implementation_run_id(
+        work_item: WorkItem,
+        events: list[WorkEvent],
+    ) -> str:
+        prefix = f"{work_item.id}:implement:"
+        blocker = next(
+            (
+                event
+                for event in reversed(events)
+                if event.event_type is WorkEventType.WORK_BLOCKED
+            ),
+            None,
         )
+        if blocker is not None and blocker.payload_json.get("reason") == "implement_failed":
+            failed_run_id = str(blocker.payload_json.get("run_id", ""))
+            if not failed_run_id.startswith(prefix):
+                raise ValueError("implementation blocker has an invalid run ID")
+            try:
+                attempt = int(failed_run_id.removeprefix(prefix))
+            except ValueError as exc:
+                raise ValueError("implementation blocker has an invalid run ID") from exc
+            if attempt < 1:
+                raise ValueError("implementation blocker has an invalid run ID")
+            return f"{prefix}{attempt + 1}"
+
+        active = next(
+            (
+                event
+                for event in reversed(events)
+                if str(event.payload_json.get("run_id", "")).startswith(prefix)
+                and (
+                    (
+                        event.event_type is WorkEventType.STAGE_STARTED
+                        and event.payload_json.get("stage") == "implement"
+                    )
+                    or (
+                        event.event_type is WorkEventType.CONTROL_DEGRADED
+                        and event.payload_json.get("stage") == "implement"
+                    )
+                )
+            ),
+            None,
+        )
+        if active is not None:
+            return str(active.payload_json["run_id"])
+        return f"{prefix}1"
 
     @staticmethod
     def _repair_count(events: list[WorkEvent]) -> int:
