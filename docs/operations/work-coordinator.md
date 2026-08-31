@@ -188,7 +188,9 @@ sagewai fleet run --name mac-mini-codex --project coordinator-demo \
   --capabilities runtime.codex,filesystem.write \
   --pool default \
   --enrollment-key 'PASTE_ENROLLMENT_KEY' \
-  --work-repository /absolute/path/to/platform
+  --work-repository /absolute/path/to/platform \
+  --codex-model gpt-5.6-sol \
+  --codex-reasoning-effort ultra
 ```
 
 On the laptop, keep `just dev-all` running and start the Claude worker in another
@@ -201,8 +203,27 @@ sagewai fleet run --name laptop-claude --project coordinator-demo \
   --capabilities runtime.claude,filesystem.read \
   --pool default \
   --enrollment-key 'PASTE_ENROLLMENT_KEY' \
-  --work-repository /absolute/path/to/platform
+  --work-repository /absolute/path/to/platform \
+  --claude-analysis-model claude-fable-5 \
+  --claude-analysis-effort medium \
+  --claude-analysis-max-budget-usd 1.25 \
+  --claude-review-model claude-opus-5 \
+  --claude-review-effort max \
+  --claude-review-max-budget-usd 2.50
 ```
+
+The Codex model and reasoning effort apply to implementation and repair stages.
+The example assigns Fable only to analysis and UI planning; the separate Opus
+configuration applies only to review stages. Claude's installed CLI currently
+names its highest effort `max`. Codex model/effort support varies by worker,
+account, and CLI version: run `codex debug models` on that worker before choosing
+a pair. For example, the current catalog advertises `ultra` for GPT-5.6 Sol and
+Terra, `max` for Luna, and `xhigh` for GPT-5.5. Sagewai passes the selected native
+model and effort through without storing a central model matrix.
+
+These native runtime settings are worker-local: Sagewai never sends them to the
+control plane, worker registration capabilities, Fleet task payloads, or Fleet
+result payloads.
 
 The enrollment key authenticates registration without copying an Admin bearer
 token to either worker. Open <http://localhost:3008/fleet>, verify both workers

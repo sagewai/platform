@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal, Protocol, runtime_checkable
 
@@ -30,6 +31,17 @@ from sagewai.work.models import (
 )
 
 BoundedText = Annotated[str, Field(max_length=2000)]
+
+CLAUDE_EFFORT_VALUES = ("low", "medium", "high", "xhigh", "max")
+CODEX_REASONING_EFFORT_VALUES = (
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "ultra",
+)
 
 
 class CapabilityGrant(BaseModel):
@@ -294,11 +306,19 @@ class CodexRuntime(_NativeRuntime):
         executable: str = "codex",
         secret_provider: SecretProvider | None = None,
         timeout: float = 1800,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
         super().__init__(
             executable=executable,
             secret_provider=secret_provider,
             timeout=timeout,
+        )
+        self._model = model
+        self._reasoning_effort = _validate_runtime_choice(
+            "Codex reasoning effort",
+            reasoning_effort,
+            CODEX_REASONING_EFFORT_VALUES,
         )
 
     async def run(
@@ -315,10 +335,16 @@ class CodexRuntime(_NativeRuntime):
             result_path = Path(temporary) / "result.json"
             schema_path = Path(temporary) / "schema.json"
             schema_path.write_text(json.dumps(_codex_result_schema()))
-            process = await run_worker_subprocess(
-                argv=(
-                    self._executable,
-                    "exec",
+            argv = [
+                self._executable,
+                "exec",
+            ]
+            if self._model is not None:
+                argv.extend(("--model", self._model))
+            if self._reasoning_effort is not None:
+                argv.extend(("-c", f"model_reasoning_effort={self._reasoning_effort}"))
+            argv.extend(
+                (
                     "--ephemeral",
                     "--sandbox",
                     "workspace-write",
@@ -329,7 +355,10 @@ class CodexRuntime(_NativeRuntime):
                     "--output-last-message",
                     str(result_path),
                     "-",
-                ),
+                )
+            )
+            process = await run_worker_subprocess(
+                argv=argv,
                 stdin=self._prompt(request, capsule, capabilities),
                 explicit_env=environment,
                 cwd=workspace.path,
@@ -356,11 +385,24 @@ class ClaudeRuntime(_NativeRuntime):
         executable: str = "claude",
         secret_provider: SecretProvider | None = None,
         timeout: float = 1800,
+        model: str | None = None,
+        effort: str | None = None,
+        max_budget_usd: str | None = None,
     ) -> None:
         super().__init__(
             executable=executable,
             secret_provider=secret_provider,
             timeout=timeout,
+        )
+        self._model = model
+        self._effort = _validate_runtime_choice(
+            "Claude effort",
+            effort,
+            CLAUDE_EFFORT_VALUES,
+        )
+        self._max_budget_usd = _validate_positive_number(
+            "Claude max budget USD",
+            max_budget_usd,
         )
 
     async def run(
@@ -375,15 +417,25 @@ class ClaudeRuntime(_NativeRuntime):
         builtin_tools, allowed_tools = _claude_tool_scope(capabilities)
         argv = [
             self._executable,
-            "--print",
-            "--no-session-persistence",
-            "--safe-mode",
-            "--strict-mcp-config",
-            "--permission-mode",
-            "dontAsk",
-            "--tools",
-            ",".join(builtin_tools),
         ]
+        if self._model is not None:
+            argv.extend(("--model", self._model))
+        if self._effort is not None:
+            argv.extend(("--effort", self._effort))
+        if self._max_budget_usd is not None:
+            argv.extend(("--max-budget-usd", self._max_budget_usd))
+        argv.extend(
+            (
+                "--print",
+                "--no-session-persistence",
+                "--safe-mode",
+                "--strict-mcp-config",
+                "--permission-mode",
+                "dontAsk",
+                "--tools",
+                ",".join(builtin_tools),
+            )
+        )
         if allowed_tools:
             argv.extend(("--allowedTools", ",".join(allowed_tools)))
         argv.extend(
@@ -441,6 +493,31 @@ def _claude_tool_scope(
                 builtin_tools.update(("Edit", "Write"))
                 allowed_tools.update(f"Edit({pattern})" for pattern in patterns)
     return tuple(sorted(builtin_tools)), tuple(sorted(allowed_tools))
+
+
+def _validate_runtime_choice(
+    name: str,
+    value: str | None,
+    allowed: tuple[str, ...],
+) -> str | None:
+    if value is None:
+        return None
+    if value not in allowed:
+        choices = ", ".join(allowed)
+        raise ValueError(f"{name} must be one of: {choices}")
+    return value
+
+
+def _validate_positive_number(name: str, value: str | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        parsed = Decimal(value)
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a positive number") from exc
+    if not parsed.is_finite() or parsed <= 0:
+        raise ValueError(f"{name} must be a positive number")
+    return value
 
 
 def _capability_suffix(name: str, kind: str, pattern: str) -> str:

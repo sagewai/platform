@@ -219,15 +219,21 @@ class SoftwareFleetTaskHandler:
         *,
         workspace_resolver: FleetWorkerWorkspaceResolver,
         codex_runtime: CodexRuntime | None = None,
-        claude_runtime: ClaudeRuntime | None = None,
+        claude_analysis_runtime: ClaudeRuntime | None = None,
+        claude_review_runtime: ClaudeRuntime | None = None,
     ) -> None:
         self._workspace_resolver = workspace_resolver
         self._codex_runtime = codex_runtime or CodexRuntime()
-        self._claude_runtime = claude_runtime or ClaudeRuntime()
+        self._claude_analysis_runtime = claude_analysis_runtime or ClaudeRuntime()
+        self._claude_review_runtime = claude_review_runtime or ClaudeRuntime()
+        if self._claude_analysis_runtime is self._claude_review_runtime:
+            raise ValueError("analysis and review require distinct Claude runtimes")
         if not isinstance(self._codex_runtime, CodexRuntime):
             raise TypeError("runtime.codex requires CodexRuntime")
-        if not isinstance(self._claude_runtime, ClaudeRuntime):
-            raise TypeError("runtime.claude requires ClaudeRuntime")
+        if not isinstance(self._claude_analysis_runtime, ClaudeRuntime):
+            raise TypeError("runtime.claude analysis requires ClaudeRuntime")
+        if not isinstance(self._claude_review_runtime, ClaudeRuntime):
+            raise TypeError("runtime.claude review requires ClaudeRuntime")
 
     async def __call__(self, task: dict[str, Any], context: WorkerTaskContext) -> str:
         payload = FleetOperatorTaskPayload.model_validate(task.get("payload"))
@@ -241,12 +247,13 @@ class SoftwareFleetTaskHandler:
             raise ValueError("worker belongs to a different project")
         if not set(payload.required_capabilities).issubset(context.capability_names):
             raise ValueError("worker did not advertise every required capability")
+        runtime = self._runtime(runtime_capability, request.stage)
 
         if payload.workspace is None:
             raise ValueError("software work.operator requires a workspace snapshot")
         workspace = await self._workspace_resolver.materialize(payload.workspace)
         self._validate_materialized_workspace(payload.workspace, workspace)
-        result = await self._runtime(runtime_capability).run(
+        result = await runtime.run(
             request,
             payload.capsule,
             payload.capabilities,
@@ -268,10 +275,18 @@ class SoftwareFleetTaskHandler:
             workspace_result=workspace_result,
         ).model_dump_json()
 
-    def _runtime(self, runtime_capability: str) -> OperatorRuntime:
+    def _runtime(self, runtime_capability: str, stage: str) -> OperatorRuntime:
         if runtime_capability == "runtime.codex":
+            if stage not in {"implement", "repair"}:
+                raise ValueError(f"runtime.codex does not support stage {stage!r}")
             return self._codex_runtime
-        return self._claude_runtime
+        if runtime_capability != "runtime.claude":
+            raise ValueError("unsupported native runtime capability")
+        if stage in {"analysis", "design"}:
+            return self._claude_analysis_runtime
+        if stage == "review":
+            return self._claude_review_runtime
+        raise ValueError(f"runtime.claude does not support stage {stage!r}")
 
     @staticmethod
     def _validate_payload(payload: FleetOperatorTaskPayload) -> str:

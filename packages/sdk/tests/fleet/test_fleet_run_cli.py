@@ -10,6 +10,7 @@
 """CLI smoke for `sagewai fleet run` option parsing + --register-only."""
 from __future__ import annotations
 
+import pytest
 from click.testing import CliRunner
 
 from sagewai.cli.fleet import fleet_group
@@ -18,11 +19,32 @@ from sagewai.cli.fleet import fleet_group
 def test_run_help_lists_key_options():
     res = CliRunner().invoke(fleet_group, ["run", "--help"])
     assert res.exit_code == 0
-    for opt in ("--name", "--models", "--pool", "--labels", "--capabilities",
-                "--max-concurrent",
-                "--exec", "--exec-timeout", "--env", "--env-file", "--image",
-                "--docker-arg", "--register-only", "--once", "--worker-id",
-                "--enrollment-key"):
+    for opt in (
+        "--name",
+        "--models",
+        "--pool",
+        "--labels",
+        "--capabilities",
+        "--max-concurrent",
+        "--claude-analysis-model",
+        "--claude-analysis-effort",
+        "--claude-analysis-max-budget-usd",
+        "--claude-review-model",
+        "--claude-review-effort",
+        "--claude-review-max-budget-usd",
+        "--codex-model",
+        "--codex-reasoning-effort",
+        "--exec",
+        "--exec-timeout",
+        "--env",
+        "--env-file",
+        "--image",
+        "--docker-arg",
+        "--register-only",
+        "--once",
+        "--worker-id",
+        "--enrollment-key",
+    ):
         assert opt in res.output
 
 
@@ -89,12 +111,22 @@ def test_run_register_only_invokes_register(monkeypatch, tmp_path):
     monkeypatch.setattr("sagewai.cli.fleet.WorkerRunner", _FakeRunner)
     res = CliRunner().invoke(
         fleet_group,
-        ["run", "--name", "w1", "--models", "gpt-4o,ollama/llama3:70b",
-         "--labels", "gpu=a100,zone=us",
-         "--capabilities", "runtime.claude,cli.git",
-         "--project", "project-a",
-         "--work-repository", str(repository),
-         "--register-only"],
+        [
+            "run",
+            "--name",
+            "w1",
+            "--models",
+            "gpt-4o,ollama/llama3:70b",
+            "--labels",
+            "gpu=a100,zone=us",
+            "--capabilities",
+            "runtime.claude,cli.git",
+            "--project",
+            "project-a",
+            "--work-repository",
+            str(repository),
+            "--register-only",
+        ],
     )
     assert res.exit_code == 0, res.output
     assert "wid-123" in res.output
@@ -104,6 +136,196 @@ def test_run_register_only_invokes_register(monkeypatch, tmp_path):
     assert calls["capability_names"] == ["runtime.claude", "cli.git"]
     assert calls["project"] == "project-a"
     assert calls["task_handler"] is not None
+
+
+def test_run_register_only_configures_worker_local_native_runtimes(
+    monkeypatch,
+    tmp_path,
+):
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    calls = {}
+
+    class _FakeRunner:
+        def __init__(self, **kw):
+            calls.update(kw)
+
+        async def register(self):
+            return "wid-123", "pending"
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr("sagewai.cli.fleet.WorkerRunner", _FakeRunner)
+    res = CliRunner().invoke(
+        fleet_group,
+        [
+            "run",
+            "--name",
+            "native-worker",
+            "--models",
+            "advertised-model",
+            "--capabilities",
+            "runtime.claude,runtime.codex,filesystem.write",
+            "--project",
+            "project-a",
+            "--work-repository",
+            str(repository),
+            "--claude-analysis-model",
+            "claude-analysis",
+            "--claude-analysis-effort",
+            "medium",
+            "--claude-analysis-max-budget-usd",
+            "1.25",
+            "--claude-review-model",
+            "claude-review",
+            "--claude-review-effort",
+            "xhigh",
+            "--claude-review-max-budget-usd",
+            "2.50",
+            "--codex-model",
+            "gpt-5.6-sol",
+            "--codex-reasoning-effort",
+            "ultra",
+            "--register-only",
+        ],
+    )
+
+    assert res.exit_code == 0, res.output
+    assert calls["capability_names"] == [
+        "runtime.claude",
+        "runtime.codex",
+        "filesystem.write",
+    ]
+    assert calls["models"] == ["advertised-model"]
+    handler = calls["task_handler"]
+    assert handler._claude_analysis_runtime is not handler._claude_review_runtime
+    assert handler._claude_analysis_runtime._model == "claude-analysis"
+    assert handler._claude_analysis_runtime._effort == "medium"
+    assert handler._claude_analysis_runtime._max_budget_usd == "1.25"
+    assert handler._claude_review_runtime._model == "claude-review"
+    assert handler._claude_review_runtime._effort == "xhigh"
+    assert handler._claude_review_runtime._max_budget_usd == "2.50"
+    assert handler._codex_runtime._model == "gpt-5.6-sol"
+    assert handler._codex_runtime._reasoning_effort == "ultra"
+
+
+def test_run_rejects_runtime_options_without_native_capability(monkeypatch):
+    runner_called = False
+
+    class _FakeRunner:
+        def __init__(self, **kw):
+            nonlocal runner_called
+            runner_called = True
+
+    monkeypatch.setattr("sagewai.cli.fleet.WorkerRunner", _FakeRunner)
+    res = CliRunner().invoke(
+        fleet_group,
+        [
+            "run",
+            "--name",
+            "w",
+            "--models",
+            "gpt-4o",
+            "--codex-model",
+            "gpt-5-codex",
+            "--register-only",
+        ],
+    )
+
+    assert res.exit_code != 0
+    assert "native runtime options require" in res.output
+    assert runner_called is False
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("--claude-analysis-effort", "extreme"),
+        ("--claude-review-effort", "extreme"),
+        ("--codex-reasoning-effort", "extreme"),
+    ],
+)
+def test_run_rejects_invalid_effort_before_worker_runner(
+    monkeypatch,
+    tmp_path,
+    option,
+    value,
+):
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    runner_called = False
+
+    class _FakeRunner:
+        def __init__(self, **kw):
+            nonlocal runner_called
+            runner_called = True
+
+    monkeypatch.setattr("sagewai.cli.fleet.WorkerRunner", _FakeRunner)
+    res = CliRunner().invoke(
+        fleet_group,
+        [
+            "run",
+            "--name",
+            "w",
+            "--models",
+            "gpt-4o",
+            "--capabilities",
+            "runtime.claude,runtime.codex,filesystem.write",
+            "--project",
+            "project-a",
+            "--work-repository",
+            str(repository),
+            option,
+            value,
+            "--register-only",
+        ],
+    )
+
+    assert res.exit_code != 0
+    assert "Invalid value" in res.output
+    assert runner_called is False
+
+
+@pytest.mark.parametrize("budget", ["abc", "0", "-1"])
+def test_run_rejects_invalid_budget_before_worker_runner(
+    monkeypatch,
+    tmp_path,
+    budget,
+):
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    runner_called = False
+
+    class _FakeRunner:
+        def __init__(self, **kw):
+            nonlocal runner_called
+            runner_called = True
+
+    monkeypatch.setattr("sagewai.cli.fleet.WorkerRunner", _FakeRunner)
+    res = CliRunner().invoke(
+        fleet_group,
+        [
+            "run",
+            "--name",
+            "w",
+            "--models",
+            "gpt-4o",
+            "--capabilities",
+            "runtime.claude,filesystem.read",
+            "--project",
+            "project-a",
+            "--work-repository",
+            str(repository),
+            "--claude-analysis-max-budget-usd",
+            budget,
+            "--register-only",
+        ],
+    )
+
+    assert res.exit_code != 0
+    assert "positive number" in res.output
+    assert runner_called is False
 
 
 def test_run_register_only_passes_task_isolation_options(monkeypatch):
