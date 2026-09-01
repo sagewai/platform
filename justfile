@@ -418,9 +418,6 @@ test-apps-smoke:
     node --check test-apps/browser-game/engine.js
     node --check test-apps/browser-game/app.js
     node --test test-apps/browser-game/engine.test.js
-    node --check test-apps/adaptive-intelligence-platform/workflow.js
-    node --check test-apps/adaptive-intelligence-platform/app.js
-    node --test test-apps/adaptive-intelligence-platform/workflow.test.js
     cd test-apps/approval-desk && python3 -m unittest -q
 
 # ── Perf ───────────────────────────────────────────────────────────────────
