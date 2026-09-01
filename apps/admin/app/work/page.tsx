@@ -18,7 +18,8 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
 import { adminApi } from '@/utils/api';
 import { useProject } from '@/utils/project-context';
-import type { PendingAttention, PendingAttentionKind, WorkRecord } from '@/utils/types';
+import { useWorkAttention } from '@/utils/work-attention-context';
+import type { PendingAttentionKind, WorkRecord } from '@/utils/types';
 
 function displayLabel(value: string): string {
   return value.replaceAll('_', ' ');
@@ -50,31 +51,33 @@ function statusClass(status: WorkRecord['status']): string {
 
 export default function WorkControlPage() {
   const { currentSlug } = useProject();
+  const {
+    pending,
+    loading: pendingLoading,
+    error: pendingError,
+  } = useWorkAttention();
   const [work, setWork] = useState<WorkRecord[]>([]);
-  const [pending, setPending] = useState<PendingAttention[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [workLoading, setWorkLoading] = useState(true);
+  const [workError, setWorkError] = useState('');
+  const loading = workLoading || pendingLoading;
+  const error = workError || pendingError || '';
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError('');
+    setWorkLoading(true);
+    setWorkError('');
     setWork([]);
-    setPending([]);
 
-    Promise.all([
-      adminApi.listActiveWork(),
-      adminApi.listPendingWorkAttention(),
-    ]).then(([activeWork, attention]) => {
-      if (cancelled) return;
-      setWork(activeWork);
-      setPending(attention);
+    adminApi.listActiveWork().then((activeWork) => {
+      if (!cancelled) {
+        setWork(activeWork);
+      }
     }).catch(() => {
       if (!cancelled) {
-        setError('Failed to load Work control state.');
+        setWorkError('Failed to load Work control state.');
       }
     }).finally(() => {
-      if (!cancelled) setLoading(false);
+      if (!cancelled) setWorkLoading(false);
     });
 
     return () => {
