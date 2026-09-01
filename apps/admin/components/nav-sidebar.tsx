@@ -39,6 +39,7 @@ import { isCloud } from '@/utils/mode';
 import { useRole } from '@/hooks/use-role';
 import { WorkspaceSwitcher } from './workspace-switcher';
 import { openCommandPalette } from './command-palette';
+import { useWorkAttention } from '@/utils/work-attention-context';
 
 const LS_KEY = 'nav-groups-collapsed';
 
@@ -330,10 +331,12 @@ function NavIconWithFlyout({
   group,
   isGroupActive,
   pathname,
+  attentionCount,
 }: {
   group: NavGroup;
   isGroupActive: boolean;
   pathname: string;
+  attentionCount: number;
 }) {
   const Icon = group.icon;
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -382,7 +385,9 @@ function NavIconWithFlyout({
       <button
         ref={btnRef}
         type="button"
-        aria-label={group.label}
+        aria-label={attentionCount > 0
+          ? `${group.label}, ${attentionCount} Work items need attention`
+          : group.label}
         aria-haspopup="true"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
@@ -393,13 +398,21 @@ function NavIconWithFlyout({
           if (flyoutRef.current?.contains(related)) return;
           setOpen(false);
         }}
-        className={`flex items-center justify-center w-full h-11 rounded-md transition-colors border-l-[3px] cursor-pointer bg-transparent ${
+        className={`relative flex items-center justify-center w-full h-11 rounded-md transition-colors border-l-[3px] cursor-pointer bg-transparent ${
           isGroupActive
             ? 'bg-sidebar-accent border-sidebar-accent-foreground text-sidebar-accent-foreground'
             : 'border-transparent text-sidebar-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground'
         }`}
       >
         <Icon size={18} strokeWidth={isGroupActive ? 2 : 1.5} aria-hidden="true" />
+        {attentionCount > 0 && (
+          <span
+            aria-hidden="true"
+            className="absolute right-1 top-1 min-w-4 rounded-full bg-destructive px-1 text-center text-[10px] font-bold leading-4 text-destructive-foreground"
+          >
+            {attentionCount}
+          </span>
+        )}
       </button>
 
       {open && typeof document !== 'undefined' && createPortal(
@@ -416,8 +429,13 @@ function NavIconWithFlyout({
           style={{ position: 'fixed', top: pos.top, left: pos.left, zIndex: 9999 }}
           className="bg-popover text-popover-foreground border border-border rounded-lg shadow-xl min-w-[180px] py-1.5 backdrop-blur-md"
         >
-          <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground border-b border-border mb-1">
-            {group.label}
+          <div className="flex items-center justify-between border-b border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1">
+            <span>{group.label}</span>
+            {attentionCount > 0 && (
+              <span className="rounded-full bg-destructive px-1.5 py-0.5 text-destructive-foreground">
+                {attentionCount}
+              </span>
+            )}
           </div>
           {group.items.map(({ href, label }) => {
             const siblingHrefs = group.items.map((i) => i.href);
@@ -478,6 +496,7 @@ export function NavSidebar() {
   const pathname = usePathname();
   const { expanded, setExpanded, mobile } = useSidebar();
   const { navGroups: allowedGroupIds } = useRole();
+  const { pending: pendingWorkAttention } = useWorkAttention();
 
   // Filter groups by role
   const roleGroups = ALL_GROUPS.filter((g) => allowedGroupIds.includes(g.id));
@@ -524,6 +543,7 @@ export function NavSidebar() {
     const Icon = group.icon;
     const isGroupActive = activeGroupId === group.id;
     const isCollapsed = collapsedGroups.has(group.id);
+    const attentionCount = group.id === 'work' ? pendingWorkAttention.length : 0;
 
     /* ── Collapsed sidebar: icon with flyout (portalled to body) ── */
     if (!expanded) {
@@ -533,6 +553,7 @@ export function NavSidebar() {
           group={group}
           isGroupActive={isGroupActive}
           pathname={pathname}
+          attentionCount={attentionCount}
         />
       );
     }
@@ -543,6 +564,9 @@ export function NavSidebar() {
         <button
           onClick={() => toggleGroup(group.id)}
           aria-expanded={!isCollapsed}
+          aria-label={attentionCount > 0
+            ? `${group.label}, ${attentionCount} Work items need attention`
+            : group.label}
           className={`w-full flex items-center gap-2.5 px-5 py-2.5 text-[11px] font-semibold uppercase tracking-[0.08em] transition-colors cursor-pointer bg-transparent border-none min-h-[36px] ${
             isGroupActive
               ? 'text-sidebar-accent-foreground'
@@ -551,6 +575,14 @@ export function NavSidebar() {
         >
           <Icon size={12} strokeWidth={2.5} aria-hidden="true" />
           <span className="flex-1 text-left">{group.label}</span>
+          {attentionCount > 0 && (
+            <span
+              aria-hidden="true"
+              className="min-w-5 rounded-full bg-destructive px-1.5 text-center text-[10px] font-bold leading-5 text-destructive-foreground"
+            >
+              {attentionCount}
+            </span>
+          )}
           {isCollapsed ? (
             <ChevronRight size={10} strokeWidth={2.5} aria-hidden="true" />
           ) : (

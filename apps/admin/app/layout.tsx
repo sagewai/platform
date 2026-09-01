@@ -15,6 +15,7 @@ import { ConnectionError } from '@/components/connection-error';
 import { ConnectionProvider, useConnection } from '@/utils/connection';
 import { LicenseProvider } from '@/utils/license';
 import { ProjectProvider } from '@/utils/project-context';
+import { WorkAttentionProvider } from '@/utils/work-attention-context';
 import { silentRefresh, isAuthenticated, authFetch } from '@/utils/auth';
 import { fontVariables } from './fonts';
 import './globals.css';
@@ -103,17 +104,19 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <ProjectProvider>
-    <LicenseProvider>
-      <SidebarProvider>
-        <AppSidebarShell sidebar={<NavSidebar />}>
-          <ErrorBoundary>
-            <PageTransition>{children}</PageTransition>
-          </ErrorBoundary>
-        </AppSidebarShell>
-        <CommandPalette />
-        <WorkflowToastListener />
-      </SidebarProvider>
-    </LicenseProvider>
+      <WorkAttentionProvider>
+        <LicenseProvider>
+          <SidebarProvider>
+            <AppSidebarShell sidebar={<NavSidebar />}>
+              <ErrorBoundary>
+                <PageTransition>{children}</PageTransition>
+              </ErrorBoundary>
+            </AppSidebarShell>
+            <CommandPalette />
+            <WorkflowToastListener />
+          </SidebarProvider>
+        </LicenseProvider>
+      </WorkAttentionProvider>
     </ProjectProvider>
   );
 }
