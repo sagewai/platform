@@ -131,16 +131,24 @@ class OperatorController:
             request.run_id,
             project_id=request.project_id,
         )
-        if durable is not None and durable.status is StepStatus.COMPLETED:
+        if durable is not None and durable.status in {
+            StepStatus.COMPLETED,
+            StepStatus.FAILED,
+        }:
             if durable.output_data is None:
-                raise ValueError("completed durable run has no output")
+                raise ValueError("terminal durable run has no output")
             persisted = OperatorResult.model_validate(durable.output_data)
             if (
                 persisted.project_id != request.project_id
                 or persisted.work_id != request.work_id
                 or persisted.run_id != request.run_id
             ):
-                raise ValueError("completed durable result belongs to different work")
+                raise ValueError("terminal durable result belongs to different work")
+            await self._append_event_once(
+                request,
+                WorkEventType.EXECUTION_RECORDED,
+                persisted.model_dump(mode="json"),
+            )
             return persisted
 
         if durable is not None and durable.status in {
@@ -442,6 +450,28 @@ class OperatorController:
             project_id=request.project_id,
         )
         return active_control_precondition_ids(events)
+
+    async def _append_event_once(
+        self,
+        request: WorkRequest,
+        event_type: WorkEventType,
+        payload: dict,
+    ) -> None:
+        events = await self._work_store.read_events(
+            request.work_id,
+            project_id=request.project_id,
+        )
+        matching_run = tuple(
+            event
+            for event in events
+            if event.event_type is event_type
+            and event.payload_json.get("run_id") == request.run_id
+        )
+        if any(event.payload_json == payload for event in matching_run):
+            return
+        if matching_run:
+            raise ValueError("canonical execution evidence differs from durable result")
+        await self._append_event(request, event_type, payload)
 
     async def _append_event(
         self,
