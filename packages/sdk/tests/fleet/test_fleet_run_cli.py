@@ -14,6 +14,63 @@ import pytest
 from click.testing import CliRunner
 
 from sagewai.cli.fleet import fleet_group
+from sagewai.work.runtime_capabilities import (
+    RuntimeCapabilitySnapshot,
+    RuntimeModelCapability,
+)
+
+
+@pytest.fixture(autouse=True)
+def _live_runtime_catalog(monkeypatch):
+    async def probe(runtime):
+        if runtime == "runtime.codex":
+            return RuntimeCapabilitySnapshot(
+                runtime=runtime,
+                cli_version="codex-cli test",
+                default_model="gpt-5.6-sol",
+                models=(
+                    RuntimeModelCapability(
+                        model="gpt-5.6-sol",
+                        resolved_model="gpt-5.6-sol",
+                        supported_efforts=("low", "medium", "high", "xhigh", "max", "ultra"),
+                        default_effort="low",
+                        priority=1,
+                    ),
+                    RuntimeModelCapability(
+                        model="gpt-5.5",
+                        resolved_model="gpt-5.5",
+                        supported_efforts=("low", "medium", "high", "xhigh"),
+                        default_effort="medium",
+                        priority=2,
+                    ),
+                ),
+            )
+        return RuntimeCapabilitySnapshot(
+            runtime=runtime,
+            cli_version="Claude Code test",
+            default_model="default",
+            models=(
+                RuntimeModelCapability(
+                    model="default",
+                    resolved_model="claude-opus-5",
+                    supported_efforts=("low", "medium", "high", "xhigh", "max"),
+                ),
+                RuntimeModelCapability(
+                    model="claude-analysis",
+                    resolved_model="claude-analysis",
+                    supported_efforts=("low", "medium", "high", "xhigh", "max"),
+                    priority=1,
+                ),
+                RuntimeModelCapability(
+                    model="claude-review",
+                    resolved_model="claude-review",
+                    supported_efforts=("low", "medium", "high", "xhigh", "max"),
+                    priority=2,
+                ),
+            ),
+        )
+
+    monkeypatch.setattr("sagewai.cli.fleet.probe_runtime_capabilities", probe)
 
 
 def test_run_help_lists_key_options():
@@ -131,7 +188,8 @@ def test_run_register_only_invokes_register(monkeypatch, tmp_path):
     assert res.exit_code == 0, res.output
     assert "wid-123" in res.output
     assert calls["name"] == "w1"
-    assert calls["models"] == ["gpt-4o", "ollama/llama3:70b"]
+    assert calls["models"][:2] == ["gpt-4o", "ollama/llama3:70b"]
+    assert {"default", "claude-analysis", "claude-review"}.issubset(calls["models"])
     assert calls["labels"] == {"gpu": "a100", "zone": "us"}
     assert calls["capability_names"] == ["runtime.claude", "cli.git"]
     assert calls["project"] == "project-a"
@@ -197,7 +255,14 @@ def test_run_register_only_configures_worker_local_native_runtimes(
         "runtime.codex",
         "filesystem.write",
     ]
-    assert calls["models"] == ["advertised-model"]
+    assert calls["models"][0] == "advertised-model"
+    assert {
+        "gpt-5.6-sol",
+        "gpt-5.5",
+        "default",
+        "claude-analysis",
+        "claude-review",
+    }.issubset(calls["models"])
     handler = calls["task_handler"]
     assert handler._claude_analysis_runtime is not handler._claude_review_runtime
     assert handler._claude_analysis_runtime._model == "claude-analysis"
@@ -241,9 +306,9 @@ def test_run_rejects_runtime_options_without_native_capability(monkeypatch):
 @pytest.mark.parametrize(
     ("option", "value"),
     [
-        ("--claude-analysis-effort", "extreme"),
-        ("--claude-review-effort", "extreme"),
-        ("--codex-reasoning-effort", "extreme"),
+        ("--claude-analysis-effort", " xhigh"),
+        ("--claude-review-effort", "xhigh "),
+        ("--codex-reasoning-effort", ""),
     ],
 )
 def test_run_rejects_invalid_effort_before_worker_runner(

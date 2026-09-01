@@ -47,11 +47,13 @@ from sagewai.work.profiles.software.fleet_worker import (
     SoftwareFleetTaskHandler,
     SoftwareFleetWorkspaceResolver,
 )
-from sagewai.work.runtime import (
-    CLAUDE_EFFORT_VALUES,
-    CODEX_REASONING_EFFORT_VALUES,
-    ClaudeRuntime,
-    CodexRuntime,
+from sagewai.work.runtime_capabilities import (
+    RefreshingClaudeRuntime,
+    RefreshingCodexRuntime,
+    RuntimeCapabilityProbeError,
+    probe_runtime_capabilities,
+    select_codex_task_configuration,
+    select_runtime_configuration,
 )
 
 # ---------------------------------------------------------------------------
@@ -108,6 +110,18 @@ def _parse_duration(value: str) -> timedelta:
         elif unit == "s":
             total += timedelta(seconds=n)
     return total
+
+
+def _parse_runtime_value(
+    _ctx: click.Context,
+    _param: click.Parameter,
+    value: str | None,
+) -> str | None:
+    if value is None:
+        return None
+    if not value or value != value.strip():
+        raise click.BadParameter("must be non-empty and trimmed")
+    return value
 
 
 def _parse_positive_budget(
@@ -262,8 +276,8 @@ def register(
 @click.option(
     "--claude-analysis-effort",
     default=None,
-    type=click.Choice(CLAUDE_EFFORT_VALUES),
-    help="Claude effort for analysis and design stages.",
+    callback=_parse_runtime_value,
+    help="Claude effort for analysis and design stages; validated by the live CLI.",
 )
 @click.option(
     "--claude-analysis-max-budget-usd",
@@ -280,8 +294,8 @@ def register(
 @click.option(
     "--claude-review-effort",
     default=None,
-    type=click.Choice(CLAUDE_EFFORT_VALUES),
-    help="Claude effort for review stages.",
+    callback=_parse_runtime_value,
+    help="Claude effort for review stages; validated by the live CLI.",
 )
 @click.option(
     "--claude-review-max-budget-usd",
@@ -294,14 +308,14 @@ def register(
     "--codex-model",
     default=None,
     help=(
-        "Worker-local Codex model for implementation and repair stages; "
-        "availability is determined by that worker's Codex CLI."
+        "Preferred worker-local Codex model for bounded implementation; "
+        "complex/design-required Work and repairs use the live provider default."
     ),
 )
 @click.option(
     "--codex-reasoning-effort",
     default=None,
-    type=click.Choice(CODEX_REASONING_EFFORT_VALUES),
+    callback=_parse_runtime_value,
     help=(
         "Worker-local Codex reasoning effort for implementation and repair stages; "
         "model support is determined by that worker's Codex CLI."
@@ -412,39 +426,115 @@ def run(
             raise click.UsageError(
                 "native Work operator capabilities cannot be combined with --exec or --image."
             )
-        handler_kwargs = {}
-        if codex_model is not None or codex_reasoning_effort is not None:
-            handler_kwargs["codex_runtime"] = CodexRuntime(
-                model=codex_model,
-                reasoning_effort=codex_reasoning_effort,
-            )
-        if any(
-            value is not None
-            for value in (
-                claude_analysis_model,
-                claude_analysis_effort,
-                claude_analysis_max_budget_usd,
-                claude_review_model,
-                claude_review_effort,
-                claude_review_max_budget_usd,
-            )
-        ):
-            handler_kwargs["claude_analysis_runtime"] = ClaudeRuntime(
-                model=claude_analysis_model,
-                effort=claude_analysis_effort,
-                max_budget_usd=claude_analysis_max_budget_usd,
-            )
-            handler_kwargs["claude_review_runtime"] = ClaudeRuntime(
-                model=claude_review_model,
-                effort=claude_review_effort,
-                max_budget_usd=claude_review_max_budget_usd,
-            )
-        task_handler = SoftwareFleetTaskHandler(
-            workspace_resolver=SoftwareFleetWorkspaceResolver(
-                repository=work_repository,
-            ),
-            **handler_kwargs,
+        claude_options = (
+            claude_analysis_model,
+            claude_analysis_effort,
+            claude_analysis_max_budget_usd,
+            claude_review_model,
+            claude_review_effort,
+            claude_review_max_budget_usd,
         )
+        if "runtime.codex" not in native_runtime_capabilities and (
+            codex_model is not None or codex_reasoning_effort is not None
+        ):
+            raise click.UsageError("Codex runtime options require runtime.codex capability.")
+        if "runtime.claude" not in native_runtime_capabilities and any(
+            value is not None for value in claude_options
+        ):
+            raise click.UsageError("Claude runtime options require runtime.claude capability.")
+
+        async def resolve_native_handler():
+            handler_kwargs = {}
+            discovered_models: list[str] = []
+            probe_kinds = tuple(
+                runtime
+                for runtime in ("runtime.codex", "runtime.claude")
+                if runtime in native_runtime_capabilities
+            )
+            snapshots = {
+                runtime: snapshot
+                for runtime, snapshot in zip(
+                    probe_kinds,
+                    await asyncio.gather(
+                        *(probe_runtime_capabilities(runtime) for runtime in probe_kinds)
+                    ),
+                    strict=True,
+                )
+            }
+            if "runtime.codex" in snapshots:
+                snapshot = snapshots["runtime.codex"]
+                bounded_selection = select_codex_task_configuration(
+                    snapshot,
+                    stage="implement",
+                    risk="low",
+                    design_required=False,
+                    bounded_model=codex_model,
+                    requested_effort=codex_reasoning_effort,
+                )
+                complex_selection = select_codex_task_configuration(
+                    snapshot,
+                    stage="implement",
+                    risk="high",
+                    design_required=True,
+                    bounded_model=codex_model,
+                    requested_effort=codex_reasoning_effort,
+                )
+                discovered_models.extend(model.model for model in snapshot.models)
+                click.echo(
+                    f"Resolved bounded {bounded_selection.verification_text()}"
+                )
+                click.echo(
+                    f"Resolved complex {complex_selection.verification_text()}"
+                )
+                handler_kwargs["codex_runtime"] = RefreshingCodexRuntime(
+                    snapshot=snapshot,
+                    requested_model=codex_model,
+                    requested_effort=codex_reasoning_effort,
+                )
+            if "runtime.claude" in snapshots:
+                snapshot = snapshots["runtime.claude"]
+                analysis_selection = select_runtime_configuration(
+                    snapshot,
+                    requested_model=claude_analysis_model,
+                    requested_effort=claude_analysis_effort,
+                )
+                review_selection = select_runtime_configuration(
+                    snapshot,
+                    requested_model=claude_review_model,
+                    requested_effort=claude_review_effort,
+                )
+                discovered_models.extend(model.model for model in snapshot.models)
+                click.echo(
+                    f"Resolved analysis {analysis_selection.verification_text()}"
+                )
+                click.echo(f"Resolved review {review_selection.verification_text()}")
+                handler_kwargs["claude_analysis_runtime"] = RefreshingClaudeRuntime(
+                    snapshot=snapshot,
+                    requested_model=claude_analysis_model,
+                    requested_effort=claude_analysis_effort,
+                    max_budget_usd=claude_analysis_max_budget_usd,
+                )
+                handler_kwargs["claude_review_runtime"] = RefreshingClaudeRuntime(
+                    snapshot=snapshot,
+                    requested_model=claude_review_model,
+                    requested_effort=claude_review_effort,
+                    max_budget_usd=claude_review_max_budget_usd,
+                )
+            return (
+                SoftwareFleetTaskHandler(
+                    workspace_resolver=SoftwareFleetWorkspaceResolver(
+                        repository=work_repository,
+                    ),
+                    **handler_kwargs,
+                ),
+                discovered_models,
+            )
+
+        try:
+            task_handler, discovered_models = asyncio.run(resolve_native_handler())
+        except RuntimeCapabilityProbeError as exc:
+            raise click.ClickException(str(exc)) from exc
+        model_list = list(dict.fromkeys((*model_list, *discovered_models)))
     elif work_repository is not None:
         raise click.UsageError(
             "--work-repository requires runtime.codex or runtime.claude capability."

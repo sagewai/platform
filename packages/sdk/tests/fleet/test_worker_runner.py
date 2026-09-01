@@ -15,6 +15,7 @@ import asyncio
 import httpx
 import pytest
 
+from sagewai.fleet.execution import WorkerConfigurationError
 from sagewai.fleet.runner import WorkerRunner
 
 
@@ -310,6 +311,29 @@ async def test_run_drains_then_stops_on_signal_event(app_token):
     await asyncio.gather(r.run(), _stop_soon())
     store = app.state.fleet_task_store
     assert (await store.get_task("rA", org_id=org_id, project_id=None) or {}).get("status") == "completed"
+
+
+@pytest.mark.asyncio
+async def test_native_task_surfaces_trusted_configuration_failure() -> None:
+    async def handler(_task, _context):
+        raise WorkerConfigurationError(
+            "runtime.codex capability refresh failed before model invocation"
+        )
+
+    runner = WorkerRunner(
+        base_url="http://test",
+        project="project-a",
+        capability_names=["runtime.codex"],
+        task_handler=handler,
+    )
+
+    status, output, error = await runner._execute(
+        {"run_id": "rX", "payload": {"kind": "work.operator"}}
+    )
+
+    assert status == "failed"
+    assert output is None
+    assert error == "runtime.codex capability refresh failed before model invocation"
 
 
 @pytest.mark.asyncio

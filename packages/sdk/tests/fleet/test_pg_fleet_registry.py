@@ -25,7 +25,10 @@ async def reg(tmp_path):
     engine = create_engine(f"sqlite+aiosqlite:///{tmp_path/'fleet.db'}")
     r = PostgresFleetRegistry(engine=engine)
     await r.init()
-    return r, engine
+    try:
+        yield r, engine
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -126,11 +129,14 @@ async def test_lazy_self_init_without_explicit_init(tmp_path):
     bare TestClient doesn't enter the lifespan)."""
     engine = create_engine(f"sqlite+aiosqlite:///{tmp_path/'lazy.db'}")
     r = PostgresFleetRegistry(engine=engine)  # NOTE: no await r.init()
-    w = await r.register_worker(
-        name="w", org_id="o",
-        capabilities=WorkerCapabilities(models_supported=["gpt-4o"]), secret_hash="x",
-    )
-    assert (await r.get_worker(w.id)) is not None
+    try:
+        w = await r.register_worker(
+            name="w", org_id="o",
+            capabilities=WorkerCapabilities(models_supported=["gpt-4o"]), secret_hash="x",
+        )
+        assert (await r.get_worker(w.id)) is not None
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio

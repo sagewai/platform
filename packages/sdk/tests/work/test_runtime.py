@@ -442,12 +442,13 @@ async def test_codex_runtime_emits_configured_native_options(
         executable=str(_fake_runtime_executable(tmp_path)),
         model=model,
         reasoning_effort=reasoning_effort,
+        selection_note=f"runtime.codex: model={model}, effort={reasoning_effort}",
         timeout=5,
     )
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
 
-    await runtime.run(
+    result = await runtime.run(
         _request(),
         _capsule(),
         _capabilities(),
@@ -475,6 +476,9 @@ async def test_codex_runtime_emits_configured_native_options(
     ]
     assert Path(argv[11]).name == "schema.json"
     assert Path(argv[13]).name == "result.json"
+    assert result.verification[-1] == (
+        f"runtime.codex: model={model}, effort={reasoning_effort}"
+    )
 
 
 @pytest.mark.asyncio
@@ -503,9 +507,9 @@ async def test_codex_runtime_omits_unset_native_options(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("runtime_factory", "match"),
     [
-        (lambda: ClaudeRuntime(effort="extreme"), "Claude effort"),
+        (lambda: ClaudeRuntime(effort=""), "Claude effort"),
         (lambda: ClaudeRuntime(max_budget_usd="0"), "positive number"),
-        (lambda: CodexRuntime(reasoning_effort="extreme"), "Codex reasoning effort"),
+        (lambda: CodexRuntime(reasoning_effort=" xhigh"), "Codex reasoning effort"),
     ],
 )
 def test_native_runtime_rejects_invalid_configuration(
@@ -587,6 +591,9 @@ async def test_claude_accepts_schema_bounded_output_larger_than_preview_limit(
 async def test_codex_failure_preserves_bounded_stderr_tail(tmp_path: Path) -> None:
     runtime = CodexRuntime(
         executable=str(_fake_runtime_executable(tmp_path, failure_padding=5000)),
+        model="gpt-5.5",
+        reasoning_effort="xhigh",
+        selection_note="runtime.codex: model=gpt-5.5, effort=xhigh",
         timeout=5,
     )
     workspace_path = tmp_path / "workspace"
@@ -602,6 +609,9 @@ async def test_codex_failure_preserves_bounded_stderr_tail(tmp_path: Path) -> No
     assert result.status == "failed"
     assert len(result.summary) == 4000
     assert result.summary.endswith("tail-error\n")
+    assert result.verification == (
+        "runtime.codex: model=gpt-5.5, effort=xhigh",
+    )
 
 
 def test_native_runtime_prompt_maps_profile_result_schemas() -> None:
