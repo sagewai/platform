@@ -173,6 +173,8 @@ def _normalized_target(value: str) -> str:
 
 def _within_target(changed_file: str, target: str) -> bool:
     target = _normalized_target(target)
+    if target.endswith("/**"):
+        target = target.removesuffix("/**")
     if target in {"", "."}:
         return True
     changed_file = _normalized_target(changed_file)
