@@ -27,6 +27,8 @@ interface ProjectContextValue {
   setProject: (slug: string | null) => void;
   /** True when viewing org-global (all projects). */
   isGlobal: boolean;
+  /** True after the persisted/default project scope has been resolved. */
+  ready: boolean;
   /** Refresh the project list (e.g., after creating a new project). */
   refresh: () => void;
 }
@@ -37,6 +39,7 @@ const ProjectContext = createContext<ProjectContextValue>({
   currentSlug: null,
   setProject: () => {},
   isGlobal: true,
+  ready: false,
   refresh: () => {},
 });
 
@@ -103,6 +106,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         currentSlug,
         setProject,
         isGlobal: currentSlug === null,
+        ready: loaded,
         refresh: fetchProjects,
       }}
     >
