@@ -2314,6 +2314,14 @@ class SoftwareLifecycle:
         )
         if blocker is not None and blocker.payload_json.get("reason") == "implement_failed":
             return "READY_TO_IMPLEMENT"
+        if blocker is not None and blocker.payload_json.get("reason") == "contract_drift":
+            run_id = str(blocker.payload_json.get("run_id", ""))
+            run_parts = run_id.rsplit(":", 2)
+            if len(run_parts) == 3 and run_parts[-1].isdigit():
+                if run_parts[-2] == "implement":
+                    return "IMPLEMENTING"
+                if run_parts[-2] == "repair":
+                    return "REPAIRING"
         return None
 
     @staticmethod

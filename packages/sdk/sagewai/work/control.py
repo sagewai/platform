@@ -144,9 +144,16 @@ class OperatorController:
                 or persisted.run_id != request.run_id
             ):
                 raise ValueError("terminal durable result belongs to different work")
-            await self._append_event_once(
+            if durable.status is StepStatus.FAILED and persisted.status == "passed":
+                return await self._validate_result(
+                    durable=durable,
+                    request=request,
+                    result=persisted,
+                    workspace=workspace,
+                    recovered=True,
+                )
+            await self._append_validated_execution_once(
                 request,
-                WorkEventType.EXECUTION_RECORDED,
                 persisted.model_dump(mode="json"),
             )
             return persisted
@@ -269,6 +276,23 @@ class OperatorController:
         except ControlDegradedError:
             return _blocked_result(request, "control degraded during execution")
 
+        return await self._validate_result(
+            durable=durable,
+            request=request,
+            result=result,
+            workspace=workspace,
+            recovered=False,
+        )
+
+    async def _validate_result(
+        self,
+        *,
+        durable: WorkflowRun,
+        request: WorkRequest,
+        result: OperatorResult,
+        workspace: Workspace | None,
+        recovered: bool,
+    ) -> OperatorResult:
         report = await self._result_validator.validate(
             request=request,
             result=result,
@@ -279,19 +303,28 @@ class OperatorController:
             WorkEventType.OPERATOR_DISCIPLINE_RECORDED,
             report.model_dump(mode="json"),
         )
-        if report.verdict != "pass":
-            result = result.model_copy(update={"status": "blocked"})
+        outward = (
+            result
+            if report.verdict == "pass"
+            else result.model_copy(update={"status": "blocked"})
+        )
 
-        durable.status = StepStatus.COMPLETED if result.status == "passed" else StepStatus.FAILED
-        durable.output_data = result.model_dump(mode="json")
+        durable.status = StepStatus.COMPLETED if outward.status == "passed" else StepStatus.FAILED
+        durable.output_data = (
+            result if result.status == "passed" else outward
+        ).model_dump(mode="json")
         durable.completed_at = time.time()
         await self._durability_store.save_run(durable)
-        await self._append_event(
-            request,
-            WorkEventType.EXECUTION_RECORDED,
-            result.model_dump(mode="json"),
-        )
-        return result
+        payload = outward.model_dump(mode="json")
+        if recovered:
+            await self._append_validated_execution_once(request, payload)
+        else:
+            await self._append_event(
+                request,
+                WorkEventType.EXECUTION_RECORDED,
+                payload,
+            )
+        return outward
 
     @staticmethod
     def _risk_mismatches(
@@ -451,10 +484,9 @@ class OperatorController:
         )
         return active_control_precondition_ids(events)
 
-    async def _append_event_once(
+    async def _append_validated_execution_once(
         self,
         request: WorkRequest,
-        event_type: WorkEventType,
         payload: dict,
     ) -> None:
         events = await self._work_store.read_events(
@@ -464,14 +496,22 @@ class OperatorController:
         matching_run = tuple(
             event
             for event in events
-            if event.event_type is event_type
+            if event.event_type is WorkEventType.EXECUTION_RECORDED
             and event.payload_json.get("run_id") == request.run_id
         )
         if any(event.payload_json == payload for event in matching_run):
             return
-        if matching_run:
+        blocked_payload = {**payload, "status": "blocked"}
+        if matching_run and (
+            payload.get("status") != "passed"
+            or any(event.payload_json != blocked_payload for event in matching_run)
+        ):
             raise ValueError("canonical execution evidence differs from durable result")
-        await self._append_event(request, event_type, payload)
+        await self._append_event(
+            request,
+            WorkEventType.EXECUTION_RECORDED,
+            payload,
+        )
 
     async def _append_event(
         self,
