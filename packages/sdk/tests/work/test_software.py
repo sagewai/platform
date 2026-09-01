@@ -25,7 +25,15 @@ import pytest
 import sagewai.work as work
 from sagewai.artifacts import LocalArtifactStore
 from sagewai.sandbox import NetworkPolicy, SandboxLifetime, ToolResult
-from sagewai.work import ActionResult, ActionScope, OperatorResult, WorkItem, WorkRequest
+from sagewai.work import (
+    ActionIntent,
+    ActionResult,
+    ActionScope,
+    OperatorResult,
+    Reversibility,
+    WorkItem,
+    WorkRequest,
+)
 from sagewai.work.knowledge import KnowledgeStore
 from sagewai.work.profiles.software import (
     SandboxedVerificationRunner,
@@ -562,6 +570,98 @@ async def test_post_run_validator_rejects_scope_and_undeclared_effects(
     assert "undeclared change: outside.txt" in report.scope_violations
     assert report.changed_files == 1
     assert report.diff_lines == 1
+
+
+@pytest.mark.asyncio
+async def test_post_run_validator_accepts_recursive_directory_target(
+    tmp_path: Path,
+) -> None:
+    repository, base_sha = _repository(tmp_path)
+    manager = SoftwareWorktreeManager(root=tmp_path / "worktrees")
+    workspace = await manager.prepare(
+        repository=repository,
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="attempt-1",
+        base_sha=base_sha,
+    )
+    nested = workspace.path / "test-apps" / "adaptive-intelligence-platform"
+    nested.mkdir(parents=True)
+    (nested / "index.html").write_text("<!doctype html>\n")
+    target = "test-apps/adaptive-intelligence-platform/**"
+    request = WorkRequest(
+        project_id="project-a",
+        work_id="work-1",
+        run_id="run-1",
+        stage="implement",
+        action_scope=ActionScope(
+            project_id="project-a",
+            objective="Create the bounded browser application",
+            allowed_targets=(target,),
+            allowed_capabilities=("filesystem.write",),
+        ),
+        action_intents=(
+            ActionIntent(
+                project_id="project-a",
+                action_id="action-1",
+                capability="filesystem.write",
+                target=target,
+                expected_effect="Create the application files",
+                scope={"allowed_targets": [target]},
+                risk="low",
+                reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
+                required_permission="workspace.write",
+                evidence_refs=("contract://1",),
+            ),
+        ),
+        control_preconditions=(),
+    )
+    result = _result().model_copy(
+        update={
+            "action_results": (
+                ActionResult(
+                    project_id="project-a",
+                    action_id="action-1",
+                    status="succeeded",
+                    external_ref=None,
+                    evidence_refs=("test-apps/adaptive-intelligence-platform/index.html",),
+                    started_at=NOW,
+                    completed_at=NOW,
+                ),
+            )
+        }
+    )
+
+    report = await SoftwareResultValidator().validate(
+        request=request,
+        result=result,
+        workspace=workspace,
+    )
+
+    assert report.verdict == "pass"
+    assert report.scope_violations == ()
+
+    sibling = workspace.path / "test-apps" / "adaptive-intelligence-platform-old"
+    sibling.mkdir(parents=True)
+    (sibling / "index.html").write_text("<!doctype html>\n")
+    (workspace.path / "outside.txt").write_text("outside\n")
+
+    report = await SoftwareResultValidator().validate(
+        request=request,
+        result=result,
+        workspace=workspace,
+    )
+
+    assert report.verdict == "blocked"
+    assert (
+        "test-apps/adaptive-intelligence-platform-old/index.html "
+        "is outside allowed targets"
+    ) in report.scope_violations
+    assert "outside.txt is outside allowed targets" in report.scope_violations
+    assert not any(
+        violation.startswith("test-apps/adaptive-intelligence-platform/index.html ")
+        for violation in report.scope_violations
+    )
 
 
 @pytest.mark.asyncio
