@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 from sagewai.artifacts import LocalArtifactStore
-from sagewai.core.state import InMemoryStore
+from sagewai.core.state import InMemoryStore, StepStatus
 from sagewai.safety.permissions import PermissionPolicy
 from sagewai.work import (
     AcceptanceCriterion,
@@ -768,6 +768,27 @@ class PassingValidator:
         )
 
 
+class BlockingOnceSoftwareResultValidator(SoftwareResultValidator):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def validate(self, *, request, result, workspace):
+        report = await super().validate(
+            request=request,
+            result=result,
+            workspace=workspace,
+        )
+        self.calls += 1
+        if self.calls > 1:
+            return report
+        return report.model_copy(
+            update={
+                "scope_violations": ("outside.txt is outside allowed targets",),
+                "verdict": "blocked",
+            }
+        )
+
+
 def _controller(
     work_store: WorkStore,
     durability: InMemoryStore,
@@ -848,6 +869,7 @@ def _lifecycle(
     repairer_actor: str | None = None,
     artifact_root: Path | None = None,
     max_inline_diff_bytes: int = 4000,
+    implementer_validator=None,
 ) -> SoftwareLifecycle:
     artifact_store = LocalArtifactStore(
         root=artifact_root or worktree_root.parent / "objects"
@@ -888,7 +910,7 @@ def _lifecycle(
             controller=_controller(
                 work_store,
                 durability,
-                SoftwareResultValidator(),
+                implementer_validator or SoftwareResultValidator(),
             ),
         ),
         reviewer=SoftwareStageOperator(
@@ -1843,6 +1865,66 @@ async def test_conflicting_analysis_knowledge_blocks_on_resume(
 
 
 @pytest.mark.asyncio
+async def test_false_positive_contract_drift_revalidates_without_rerunning_operators(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    durability = InMemoryStore()
+    analyzer = AnalysisRuntime()
+    implementer = MutationRuntime(implement_text="initial", repair_text="unused")
+    validator = BlockingOnceSoftwareResultValidator()
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=durability,
+        analyzer=analyzer,
+        implementer=implementer,
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_command("initial"),),
+        implementer_validator=validator,
+    )
+
+    blocked = await lifecycle.start(
+        work_item=_work_item(),
+        contract=_contract(base_sha),
+    )
+    durable = await durability.load_run(
+        "work:work-1:implement",
+        "work-1:implement:1",
+        project_id="project-a",
+    )
+
+    assert blocked.status == "WORK_BLOCKED"
+    assert durable is not None
+    assert durable.status is StepStatus.FAILED
+    assert durable.output_data["status"] == "passed"
+
+    resumed = await lifecycle.resume("work-1", project_id="project-a")
+
+    assert resumed.status == "READY_TO_MERGE"
+    assert analyzer.calls == 1
+    assert implementer.calls == 1
+    assert validator.calls == 2
+    events = await work_store.read_events("work-1", project_id="project-a")
+    assert [
+        event.payload_json["status"]
+        for event in events
+        if event.event_type is WorkEventType.EXECUTION_RECORDED
+        and event.payload_json.get("run_id") == "work-1:implement:1"
+    ] == ["blocked", "passed"]
+    assert sum(
+        event.event_type is WorkEventType.STAGE_STARTED
+        and event.payload_json.get("run_id") == "work-1:implement:1"
+        for event in events
+    ) == 1
+
+
+@pytest.mark.asyncio
 async def test_analysis_narrows_draft_scope_and_out_of_scope_change_is_rejected(
     stores,
     tmp_path: Path,
@@ -1850,6 +1932,7 @@ async def test_analysis_narrows_draft_scope_and_out_of_scope_change_is_rejected(
     work_store, knowledge_store = stores
     repository, base_sha = _repository(tmp_path)
     durability = InMemoryStore()
+    analyzer = AnalysisRuntime()
     implementer = OutOfScopeMutationRuntime(
         implement_text="unused",
         repair_text="unused",
@@ -1860,6 +1943,7 @@ async def test_analysis_narrows_draft_scope_and_out_of_scope_change_is_rejected(
         work_store=work_store,
         knowledge_store=knowledge_store,
         durability=durability,
+        analyzer=analyzer,
         implementer=implementer,
         reviewer=ReviewRuntime("accept"),
         repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
@@ -1870,8 +1954,10 @@ async def test_analysis_narrows_draft_scope_and_out_of_scope_change_is_rejected(
         work_item=_work_item(),
         contract=_contract(base_sha, allowed_scope=(".",)),
     )
+    resumed = await lifecycle.resume("work-1", project_id="project-a")
 
-    assert record.status == "WORK_BLOCKED"
+    assert record.status == resumed.status == "WORK_BLOCKED"
+    assert analyzer.calls == 1
     assert implementer.calls == 1
     events = await work_store.read_events("work-1", project_id="project-a")
     proposed_event = next(

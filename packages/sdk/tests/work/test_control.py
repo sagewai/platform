@@ -292,6 +292,29 @@ class BlockingResultValidator(PassingResultValidator):
         )
 
 
+class SequenceResultValidator(PassingResultValidator):
+    def __init__(self, *verdicts: str) -> None:
+        self._verdicts = list(verdicts)
+        self.calls = 0
+
+    async def validate(self, *, request, result, workspace) -> OperatorDisciplineReport:
+        report = await super().validate(
+            request=request,
+            result=result,
+            workspace=workspace,
+        )
+        verdict = self._verdicts.pop(0)
+        self.calls += 1
+        if verdict == "pass":
+            return report
+        return report.model_copy(
+            update={
+                "scope_violations": ("undeclared change: outside.txt",),
+                "verdict": "blocked",
+            }
+        )
+
+
 @pytest.fixture
 async def work_store(dialect_engine) -> WorkStore:  # noqa: F811
     store = WorkStore(engine=dialect_engine)
@@ -539,6 +562,103 @@ async def test_post_run_blocking_report_rejects_runtime_result(
     )
     assert result.status == "blocked"
     assert report_event.payload_json["scope_violations"] == ["undeclared change: outside.txt"]
+
+
+@pytest.mark.asyncio
+async def test_failed_validation_retains_raw_result_and_revalidates_without_runtime(
+    work_store: WorkStore,
+) -> None:
+    durability = InMemoryStore()
+    validator = SequenceResultValidator("blocked", "pass")
+    controller = _controller(work_store, durability, result_validator=validator)
+    runtime = RecordingRuntime()
+    request = _request(run_id="run-revalidate")
+
+    blocked = await controller.run(
+        runtime=runtime,
+        request=request,
+        capsule=_capsule(),
+        capabilities=_capabilities(),
+        workspace=None,
+    )
+    durable = await durability.load_run(
+        "work:work-1:implement",
+        request.run_id,
+        project_id="project-a",
+    )
+
+    assert blocked.status == "blocked"
+    assert durable is not None
+    assert durable.status is StepStatus.FAILED
+    assert durable.output_data["status"] == "passed"
+
+    passed = await controller.run(
+        runtime=runtime,
+        request=request,
+        capsule=_capsule(),
+        capabilities=_capabilities(),
+        workspace=None,
+    )
+    durable = await durability.load_run(
+        "work:work-1:implement",
+        request.run_id,
+        project_id="project-a",
+    )
+    events = await work_store.read_events("work-1", project_id="project-a")
+
+    assert passed.status == "passed"
+    assert runtime.started == 1
+    assert validator.calls == 2
+    assert durable is not None
+    assert durable.status is StepStatus.COMPLETED
+    assert durable.output_data["status"] == "passed"
+    assert [
+        event.payload_json["status"]
+        for event in events
+        if event.event_type is WorkEventType.EXECUTION_RECORDED
+    ] == ["blocked", "passed"]
+
+
+@pytest.mark.asyncio
+async def test_failed_validation_remains_blocked_without_runtime_reexecution(
+    work_store: WorkStore,
+) -> None:
+    durability = InMemoryStore()
+    validator = SequenceResultValidator("blocked", "blocked")
+    controller = _controller(work_store, durability, result_validator=validator)
+    runtime = RecordingRuntime()
+    request = _request(run_id="run-still-invalid")
+
+    first = await controller.run(
+        runtime=runtime,
+        request=request,
+        capsule=_capsule(),
+        capabilities=_capabilities(),
+        workspace=None,
+    )
+    second = await controller.run(
+        runtime=runtime,
+        request=request,
+        capsule=_capsule(),
+        capabilities=_capabilities(),
+        workspace=None,
+    )
+    durable = await durability.load_run(
+        "work:work-1:implement",
+        request.run_id,
+        project_id="project-a",
+    )
+    events = await work_store.read_events("work-1", project_id="project-a")
+
+    assert first.status == second.status == "blocked"
+    assert runtime.started == 1
+    assert validator.calls == 2
+    assert durable is not None
+    assert durable.status is StepStatus.FAILED
+    assert durable.output_data["status"] == "passed"
+    assert sum(
+        event.event_type is WorkEventType.EXECUTION_RECORDED for event in events
+    ) == 1
 
 
 @pytest.mark.asyncio
