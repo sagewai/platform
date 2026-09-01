@@ -32,17 +32,6 @@ from sagewai.work.models import (
 
 BoundedText = Annotated[str, Field(max_length=2000)]
 
-CLAUDE_EFFORT_VALUES = ("low", "medium", "high", "xhigh", "max")
-CODEX_REASONING_EFFORT_VALUES = (
-    "minimal",
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-    "max",
-    "ultra",
-)
-
 
 class CapabilityGrant(BaseModel):
     """One scoped capability available to an operator attempt."""
@@ -183,10 +172,15 @@ class _NativeRuntime:
         executable: str,
         secret_provider: SecretProvider | None = None,
         timeout: float = 1800,
+        selection_note: str | None = None,
     ) -> None:
         self._executable = executable
         self._secret_provider = secret_provider
         self._timeout = timeout
+        self._selection_note = _validate_runtime_value(
+            "runtime selection evidence",
+            selection_note,
+        )
 
     async def _environment(
         self,
@@ -283,6 +277,13 @@ class _NativeRuntime:
             raise ValueError("operator result belongs to a different request")
         return result
 
+    def _with_selection_evidence(self, result: OperatorResult) -> OperatorResult:
+        if self._selection_note is None:
+            return result
+        return result.model_copy(
+            update={"verification": (*result.verification, self._selection_note)}
+        )
+
 
 def _codex_result_schema() -> dict[str, Any]:
     schema = OperatorResult.model_json_schema()
@@ -308,17 +309,18 @@ class CodexRuntime(_NativeRuntime):
         timeout: float = 1800,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        selection_note: str | None = None,
     ) -> None:
         super().__init__(
             executable=executable,
             secret_provider=secret_provider,
             timeout=timeout,
+            selection_note=selection_note,
         )
-        self._model = model
-        self._reasoning_effort = _validate_runtime_choice(
+        self._model = _validate_runtime_value("Codex model", model)
+        self._reasoning_effort = _validate_runtime_value(
             "Codex reasoning effort",
             reasoning_effort,
-            CODEX_REASONING_EFFORT_VALUES,
         )
 
     async def run(
@@ -366,12 +368,16 @@ class CodexRuntime(_NativeRuntime):
                 output_limit=None,
             )
             if process.returncode != 0:
-                return _failed_result(request, process.stderr)
+                return self._with_selection_evidence(
+                    _failed_result(request, process.stderr)
+                )
             payload = {
                 **json.loads(result_path.read_text()),
                 "output_tokens": None,
             }
-            return self._validate_result(payload, request)
+            return self._with_selection_evidence(
+                self._validate_result(payload, request)
+            )
 
 
 class ClaudeRuntime(_NativeRuntime):
@@ -388,18 +394,16 @@ class ClaudeRuntime(_NativeRuntime):
         model: str | None = None,
         effort: str | None = None,
         max_budget_usd: str | None = None,
+        selection_note: str | None = None,
     ) -> None:
         super().__init__(
             executable=executable,
             secret_provider=secret_provider,
             timeout=timeout,
+            selection_note=selection_note,
         )
-        self._model = model
-        self._effort = _validate_runtime_choice(
-            "Claude effort",
-            effort,
-            CLAUDE_EFFORT_VALUES,
-        )
+        self._model = _validate_runtime_value("Claude model", model)
+        self._effort = _validate_runtime_value("Claude effort", effort)
         self._max_budget_usd = _validate_positive_number(
             "Claude max budget USD",
             max_budget_usd,
@@ -455,13 +459,17 @@ class ClaudeRuntime(_NativeRuntime):
             output_limit=None,
         )
         if process.returncode != 0:
-            return _failed_result(request, process.stderr)
+            return self._with_selection_evidence(
+                _failed_result(request, process.stderr)
+            )
         envelope = json.loads(process.stdout)
         payload = {
             **envelope["structured_output"],
             "output_tokens": envelope.get("usage", {}).get("output_tokens"),
         }
-        return self._validate_result(payload, request)
+        return self._with_selection_evidence(
+            self._validate_result(payload, request)
+        )
 
 
 def _claude_tool_scope(
@@ -495,16 +503,11 @@ def _claude_tool_scope(
     return tuple(sorted(builtin_tools)), tuple(sorted(allowed_tools))
 
 
-def _validate_runtime_choice(
-    name: str,
-    value: str | None,
-    allowed: tuple[str, ...],
-) -> str | None:
+def _validate_runtime_value(name: str, value: str | None) -> str | None:
     if value is None:
         return None
-    if value not in allowed:
-        choices = ", ".join(allowed)
-        raise ValueError(f"{name} must be one of: {choices}")
+    if not value or value != value.strip():
+        raise ValueError(f"{name} must be non-empty and trimmed")
     return value
 
 

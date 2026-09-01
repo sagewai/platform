@@ -36,6 +36,10 @@ EXEC_ENV_ALLOWLIST = frozenset(
 )
 
 
+class WorkerConfigurationError(RuntimeError):
+    """A trusted worker-local configuration check failed before task execution."""
+
+
 @dataclass(frozen=True)
 class WorkerProcessResult:
     """Bounded receipt from one worker-side subprocess."""

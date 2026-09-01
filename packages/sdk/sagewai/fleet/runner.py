@@ -29,7 +29,7 @@ from typing import Any
 
 import httpx
 
-from sagewai.fleet.execution import run_worker_subprocess
+from sagewai.fleet.execution import WorkerConfigurationError, run_worker_subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -240,6 +240,9 @@ class WorkerRunner:
                         capability_names=tuple(self.capability_names),
                     ),
                 )
+            except WorkerConfigurationError as exc:
+                logger.error("work.operator configuration check failed: %s", exc)
+                return "failed", None, str(exc)[:500]
             except Exception:
                 logger.error("work.operator task execution failed")
                 return "failed", None, "work.operator task execution failed"
