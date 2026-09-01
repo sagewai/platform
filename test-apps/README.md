@@ -9,9 +9,10 @@ verification, independent Claude review, repair, and durable resume.
 |---|---|---|
 | [Signal Runner](./browser-game/) | Deterministic engine; syntax-checked browser UI with keyboard and touch controls | `cd browser-game && npm run smoke && npm run serve` |
 | [Approval Desk](./approval-desk/) | Project isolation, evidence gates, immutable decisions, restart-safe SQLite persistence | `cd approval-desk && python3 -m unittest -v` |
+| [Adaptive Intelligence Platform](./adaptive-intelligence-platform/) | Deterministic seven-step simulated Smart Application journey with separately tested workflow state | `cd adaptive-intelligence-platform && npm run smoke && npm run serve` |
 
-Run both suites from the repository root with `just test-apps-smoke`. The normal
-`just smoke` contract includes them, so a Sagewai change to either application
+Run all suites from the repository root with `just test-apps-smoke`. The normal
+`just smoke` contract includes them, so a Sagewai change to any application
 is verified by the same root command used for the rest of the repository.
 
 See [Using Sagewai as the coordinator](../docs/operations/work-coordinator.md)
