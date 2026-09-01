@@ -25,6 +25,10 @@ from sagewai.cli.work import work as work_cli
 from sagewai.core.state import InMemoryStore
 from sagewai.work import WorkEventType, WorkMetrics
 from sagewai.work.profiles.software import SoftwareContractContext, SoftwareStageOperator
+from sagewai.work.runtime_capabilities import (
+    RuntimeCapabilitySnapshot,
+    RuntimeModelCapability,
+)
 from tests.db.conftest import dialect_engine  # noqa: F401
 
 work_module = import_module("sagewai.cli.work")
@@ -1096,13 +1100,33 @@ def test_fleet_native_runtime_requires_explicit_project_and_repository(tmp_path)
 def test_fleet_native_runtime_builds_typed_local_handler(monkeypatch, tmp_path) -> None:
     seen = {}
 
+    async def fake_probe(runtime):
+        efforts = ("low", "medium", "high", "xhigh", "max")
+        model = "gpt-5.6-sol" if runtime == "runtime.codex" else "default"
+        return RuntimeCapabilitySnapshot(
+            runtime=runtime,
+            cli_version="test-cli",
+            default_model=model,
+            models=(
+                RuntimeModelCapability(
+                    model=model,
+                    resolved_model=(
+                        "gpt-5.6-sol" if runtime == "runtime.codex" else "claude-opus-5"
+                    ),
+                    supported_efforts=efforts,
+                    default_effort="low" if runtime == "runtime.codex" else None,
+                ),
+            ),
+        )
+
     class FakeResolver:
         def __init__(self, *, repository):
             seen["repository"] = repository
 
     class FakeHandler:
-        def __init__(self, *, workspace_resolver):
+        def __init__(self, *, workspace_resolver, **runtime_kwargs):
             seen["resolver"] = workspace_resolver
+            seen["runtime_kwargs"] = runtime_kwargs
 
     class FakeRunner:
         def __init__(self, **kwargs):
@@ -1119,6 +1143,7 @@ def test_fleet_native_runtime_builds_typed_local_handler(monkeypatch, tmp_path) 
     monkeypatch.setattr(fleet_module, "SoftwareFleetWorkspaceResolver", FakeResolver)
     monkeypatch.setattr(fleet_module, "SoftwareFleetTaskHandler", FakeHandler)
     monkeypatch.setattr(fleet_module, "WorkerRunner", FakeRunner)
+    monkeypatch.setattr(fleet_module, "probe_runtime_capabilities", fake_probe)
 
     result = CliRunner().invoke(
         fleet_group,
@@ -1140,4 +1165,9 @@ def test_fleet_native_runtime_builds_typed_local_handler(monkeypatch, tmp_path) 
     assert seen["repository"] == repository.resolve()
     assert seen["runner"]["project"] == "project-a"
     assert seen["runner"]["task_handler"].__class__ is FakeHandler
+    assert set(seen["runtime_kwargs"]) == {
+        "claude_analysis_runtime",
+        "claude_review_runtime",
+        "codex_runtime",
+    }
     assert "token" not in seen["runner"]["task_handler"].__dict__
