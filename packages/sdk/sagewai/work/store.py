@@ -29,6 +29,7 @@ from sagewai.work.knowledge.control_failure import control_failure_finding
 from sagewai.work.knowledge.store import insert_knowledge_item
 from sagewai.work.metrics import WorkMetrics, derive_work_metrics
 from sagewai.work.models import (
+    SUPERSEDED,
     ExternalOutcomeIncident,
     PendingAttention,
     PendingAttentionKind,
@@ -192,7 +193,7 @@ class WorkStore:
         table = self._work_items
         query = select(table).where(table.c.project_scope_key == project_scope_key(project_id))
         if active_only:
-            query = query.where(table.c.status.notin_(("COMPLETE", "SUPERSEDED")))
+            query = query.where(table.c.status.notin_(("COMPLETE", SUPERSEDED)))
         query = query.order_by(table.c.created_at, table.c.work_id)
         async with self._engine.connect() as conn:
             rows = (await conn.execute(query)).all()
@@ -261,7 +262,7 @@ class WorkStore:
         pending: list[PendingAttention] = []
         for row in work_rows:
             projection = row._mapping
-            if projection["status"] == "SUPERSEDED":
+            if projection["status"] == SUPERSEDED:
                 continue
             work_id = str(projection["work_id"])
             source_ref = projection["source_ref"]

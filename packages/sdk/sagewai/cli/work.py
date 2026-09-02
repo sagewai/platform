@@ -28,6 +28,7 @@ from sagewai.fleet.task_store import PostgresTaskStore
 from sagewai.safety.permissions import PermissionPolicy
 from sagewai.tools import factory as tool_factory
 from sagewai.work import (
+    SUPERSEDED,
     AcceptanceCriterion,
     CapabilityGrant,
     CapabilitySet,
@@ -405,6 +406,7 @@ async def _resume_work(
         "PRODUCTION_ROLLOUT",
         "SOAKING",
         "ROLLING_BACK",
+        SUPERSEDED,
     }:
         return record
     expected_execution, expected_fleet_org = await _stored_work_execution_route(
@@ -453,6 +455,8 @@ async def _approve_work(
         return record
     if record.status == "TRIAGING":
         raise ValueError("cannot approve a stale gate from TRIAGING")
+    if record.status == "BASE_MOVED":
+        raise ValueError("Work is held: the default branch moved; supersede and rerun")
     if record.source_ref is None or not is_github_issue_url(record.source_ref):
         raise ValueError("merge approval requires GitHub-sourced Work")
     await factory.ensure_schema()

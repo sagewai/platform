@@ -138,6 +138,8 @@ def _fake_runtime_executable(
     *,
     envelope_padding: int = 0,
     failure_padding: int = 0,
+    include_usage: bool = True,
+    include_cost: bool = True,
 ) -> Path:
     executable = tmp_path / "fake-operator"
     executable.write_text(
@@ -193,12 +195,15 @@ def _fake_runtime_executable(
                 output = pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1])
                 output.write_text(json.dumps(result))
             else:
-                print(json.dumps({{
+                envelope = {{
                     "structured_output": result,
                     "result": "x" * {envelope_padding},
-                    "usage": {{"input_tokens": 12, "output_tokens": 7}},
-                    "total_cost_usd": 0.01,
-                }}))
+                }}
+                if {include_usage!r}:
+                    envelope["usage"] = {{"input_tokens": 12, "output_tokens": 7}}
+                if {include_cost!r}:
+                    envelope["total_cost_usd"] = 0.01
+                print(json.dumps(envelope))
             """
         )
     )
@@ -303,6 +308,8 @@ async def test_native_runtime_uses_fake_executable_without_session_or_api_key(
     assert provider.declared_scopes == ["credential://workspace"]
     assert not hasattr(runtime, "intercept_tool_call")
     if runtime_type is CodexRuntime:
+        assert result.input_tokens is None
+        assert result.cost_usd is None
         assert argv[:7] == [
             "exec",
             "--ephemeral",
@@ -354,6 +361,33 @@ async def test_native_runtime_uses_fake_executable_without_session_or_api_key(
             "Read(/packages/sdk/sagewai/work/**)",
         ]
         assert "Bash" not in tools
+
+
+@pytest.mark.asyncio
+async def test_claude_runtime_omitted_usage_fields_are_none(tmp_path: Path) -> None:
+    runtime = ClaudeRuntime(
+        executable=str(
+            _fake_runtime_executable(
+                tmp_path,
+                include_usage=False,
+                include_cost=False,
+            )
+        ),
+        timeout=5,
+    )
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+
+    result = await runtime.run(
+        _request(),
+        _capsule(),
+        _capabilities(),
+        _workspace(workspace_path),
+    )
+
+    assert result.output_tokens is None
+    assert result.input_tokens is None
+    assert result.cost_usd is None
 
 
 @pytest.mark.asyncio

@@ -44,6 +44,7 @@ from sagewai.work.fleet import (
 )
 from sagewai.work.metrics import WorkMetrics
 from sagewai.work.models import (
+    SUPERSEDED,
     Action,
     ActionIntent,
     ActionPlan,
@@ -131,6 +132,7 @@ __all__ = [
     "TaskCapsule",
     "ReviewFinding",
     "ReviewResult",
+    "SUPERSEDED",
     "TaskCapsuleCompiler",
     "WorkContract",
     "WorkEvent",

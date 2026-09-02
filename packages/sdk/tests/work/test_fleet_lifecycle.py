@@ -571,3 +571,240 @@ async def test_fleet_worker_loss_resumes_only_unfinished_software_stage(
     envelope = FleetOperatorResultEnvelope.model_validate_json(persisted["output"])
     assert envelope.result == expected
     assert envelope.workspace_result is not None
+
+
+@pytest.mark.asyncio
+async def test_fleet_review_exhausts_stage_attempt_budget_and_resume_does_not_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+    dialect_engine,  # noqa: F811
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "worker-local-token")
+    work_store = WorkStore(engine=dialect_engine)
+    knowledge_store = KnowledgeStore(engine=dialect_engine)
+    await work_store.init()
+    await knowledge_store.init()
+    durability = InMemoryStore()
+    task_store = InMemoryTaskStore(lease_ttl_seconds=0.01, max_attempts=1)
+    registry = InMemoryFleetRegistry()
+    repository, base_sha = _repository(tmp_path)
+    subprocess.run(
+        (
+            "git",
+            "-C",
+            str(repository),
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/sagewai/platform.git",
+        ),
+        check=True,
+    )
+    workspace_transport = SoftwareFleetWorkspaceTransport(
+        repository_ref=await software_repository_ref(repository),
+    )
+    analyzer = AnalysisRuntime()
+    implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
+    repairer = MutationRuntime(implement_text="unused", repair_text="fixed")
+    artifact_store = LocalArtifactStore(root=tmp_path / "objects")
+    analyst = StageOperatorLadder(
+        (
+            SoftwareStageOperator(
+                actor_ref="operator:analyst",
+                runtime=analyzer,
+                capabilities=_read_capabilities(),
+                controller=_controller(
+                    work_store,
+                    durability,
+                    SoftwareReadOnlyResultValidator(),
+                ),
+            ),
+        )
+    )
+
+    def fleet_reviewer(actor_ref: str) -> SoftwareStageOperator:
+        return SoftwareStageOperator.fleet(
+            actor_ref=actor_ref,
+            store=task_store,
+            registry=registry,
+            org_id="org-a",
+            runtime_capability="runtime.claude",
+            poll_interval_seconds=0.001,
+            heartbeat_ttl=timedelta(seconds=30),
+            workspace_transport=workspace_transport,
+            capabilities=_read_capabilities(),
+            controller=_controller(
+                work_store,
+                durability,
+                SoftwareReadOnlyResultValidator(),
+            ),
+        )
+
+    lifecycle = SoftwareLifecycle(
+        profile=SoftwareProfile(),
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        capsule_compiler=TaskCapsuleCompiler(
+            knowledge_store=knowledge_store,
+            artifact_store=artifact_store,
+        ),
+        worktree_manager=SoftwareWorktreeManager(root=tmp_path / "worktrees"),
+        verifier=SoftwareVerifier(
+            knowledge_store=knowledge_store,
+            runner=LocalVerificationRunner(),
+            artifact_store=artifact_store,
+        ),
+        artifact_store=artifact_store,
+        repository=repository,
+        analyst=analyst,
+        designer=analyst,
+        implementer=StageOperatorLadder(
+            (
+                SoftwareStageOperator(
+                    actor_ref="operator:implementer",
+                    runtime=implementer,
+                    capabilities=_write_capabilities(),
+                    controller=_controller(
+                        work_store,
+                        durability,
+                        SoftwareResultValidator(),
+                    ),
+                ),
+            )
+        ),
+        reviewer=StageOperatorLadder(
+            (
+                fleet_reviewer("fleet:reviewer:1"),
+                fleet_reviewer("fleet:reviewer:2"),
+            )
+        ),
+        repairer=StageOperatorLadder(
+            (
+                SoftwareStageOperator(
+                    actor_ref="operator:implementer",
+                    runtime=repairer,
+                    capabilities=_write_capabilities(),
+                    controller=_controller(
+                        work_store,
+                        durability,
+                        SoftwareResultValidator(),
+                    ),
+                ),
+            )
+        ),
+        repo_instructions=("AGENTS.md",),
+        verification_commands=(_always_pass_command(),),
+        max_attempts_per_stage=2,
+    )
+
+    first = await _register_worker(
+        registry,
+        name="claude-worker-1",
+        project_id="project-a",
+        capabilities=("runtime.claude", "filesystem.read"),
+    )
+    replacement = await _register_worker(
+        registry,
+        name="claude-worker-2",
+        project_id="project-a",
+        capabilities=("runtime.claude", "filesystem.read"),
+    )
+    first_runtime = _ReviewClaudeRuntime()
+    replacement_runtime = _ReviewClaudeRuntime()
+    dispatcher = FleetDispatcher(
+        task_store,
+        poll_interval=0.001,
+        poll_timeout=0.01,
+    )
+    first_runner = _worker_runner(
+        worker=first,
+        registry=registry,
+        dispatcher=dispatcher,
+        task_store=task_store,
+        task_handler=SoftwareFleetTaskHandler(
+            workspace_resolver=SoftwareFleetWorkspaceResolver(
+                repository=_clone_worker_repository(
+                    repository,
+                    tmp_path / "worker-1-repository",
+                ),
+                worktree_manager=SoftwareWorktreeManager(
+                    root=tmp_path / "worker-1-worktrees"
+                ),
+            ),
+            claude_review_runtime=first_runtime,
+        ),
+    )
+    replacement_runner = _worker_runner(
+        worker=replacement,
+        registry=registry,
+        dispatcher=dispatcher,
+        task_store=task_store,
+        task_handler=SoftwareFleetTaskHandler(
+            workspace_resolver=SoftwareFleetWorkspaceResolver(
+                repository=_clone_worker_repository(
+                    repository,
+                    tmp_path / "worker-2-repository",
+                ),
+                worktree_manager=SoftwareWorktreeManager(
+                    root=tmp_path / "worker-2-worktrees"
+                ),
+            ),
+            claude_review_runtime=replacement_runtime,
+        ),
+    )
+    started = asyncio.create_task(
+        lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+    )
+    run_id = "work-1:review:1"
+    await _wait_for_task(task_store, run_id)
+    assert await first_runner._claim() is not None
+    task_store._claimed[("org-a", "p:project-a", run_id)]["lease_expires_at"] = (
+        datetime.now(timezone.utc) - timedelta(seconds=1)
+    )
+    await registry.revoke_worker(first.id)
+    assert await task_store.reap_expired_leases() == {"failed": 1, "requeued": 0}
+
+    escalated_run_id = "work-1:review:2"
+    await _wait_for_task(task_store, escalated_run_id)
+    assert await replacement_runner._claim() is not None
+    task_store._claimed[("org-a", "p:project-a", escalated_run_id)][
+        "lease_expires_at"
+    ] = datetime.now(timezone.utc) - timedelta(seconds=1)
+    await registry.revoke_worker(replacement.id)
+    assert await task_store.reap_expired_leases() == {"failed": 1, "requeued": 0}
+
+    record = await asyncio.wait_for(started, timeout=1)
+    await first_runner.http_client.aclose()
+    await replacement_runner.http_client.aclose()
+    task_count = len(
+        await task_store.list_tasks(
+            org_id="org-a",
+            project_id="project-a",
+            limit=10,
+        )
+    )
+    resumed = await lifecycle.resume("work-1", project_id="project-a")
+
+    events = await work_store.read_events("work-1", project_id="project-a")
+    selected = [
+        event.payload_json
+        for event in events
+        if event.event_type is WorkEventType.RUNTIME_SELECTED
+        and event.payload_json["stage"] == "review"
+    ]
+    blocker = next(event for event in events if event.event_type is WorkEventType.WORK_BLOCKED)
+    assert record.status == "WORK_BLOCKED"
+    assert resumed == record
+    assert blocker.payload_json["reason"] == "review_failed"
+    assert blocker.payload_json["attempts"] == 2
+    assert [item["position"] for item in selected] == [1, 2]
+    assert [item["reason"] for item in selected] == ["initial", "escalated"]
+    assert len(
+        await task_store.list_tasks(
+            org_id="org-a",
+            project_id="project-a",
+            limit=10,
+        )
+    ) == task_count
+    assert first_runtime.calls == []
+    assert replacement_runtime.calls == []

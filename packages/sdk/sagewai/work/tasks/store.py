@@ -385,7 +385,6 @@ class TaskStore:
                     self._repository_leases.c.project_scope_key == scope,
                     self._repository_leases.c.lease_key == lease_key,
                     (self._repository_leases.c.task_id == task_id)
-                    | (self._repository_leases.c.expires_at.is_(None))
                     | (self._repository_leases.c.expires_at < now),
                 )
                 .values(task_id=task_id, work_id=work_id, acquired_at=now, expires_at=self._expiry_expr(ttl_seconds))

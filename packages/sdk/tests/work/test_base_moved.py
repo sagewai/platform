@@ -13,15 +13,23 @@ from __future__ import annotations
 
 import pytest
 
-from sagewai.work import GateDecision, PendingAttentionKind, WorkEventType, WorkStore
+from sagewai.work import (
+    GateDecision,
+    PendingAttentionKind,
+    WorkEventType,
+    WorkRecord,
+    WorkStore,
+)
 from sagewai.work.profiles.software import SoftwareRepositoryOutcome
 from sagewai.work.profiles.software.github import (
+    BaseMovedError,
     GitHubIssueLifecycle,
     require_merge_approval,
 )
 from tests.db.conftest import dialect_engine  # noqa: F401
 from tests.work.test_github import (
     ISSUE_URL,
+    NOW,
     PROJECT_ID,
     FakeBranchPublisher,
     FakeGitHub,
@@ -64,6 +72,27 @@ async def test_base_moved_before_publication_holds_the_work(
     pending = await store.pending_attention(project_id=PROJECT_ID)
     assert pending[0].kind is PendingAttentionKind.WORK_BLOCKED
     assert "publish" in pending[0].summary
+    assert github.comments
+    assert "default branch moved" in github.comments[-1][1]
+    assert "supersede and rerun" in github.comments[-1][1]
+
+
+@pytest.mark.asyncio
+async def test_base_moved_during_intake_raises_without_creating_work(
+    store: WorkStore,
+) -> None:
+    lifecycle, software, _github, publisher = _flow(store)
+    publisher.fail_phases = {"intake"}
+
+    with pytest.raises(BaseMovedError):
+        await lifecycle.start(
+            issue_url=ISSUE_URL,
+            project_id=PROJECT_ID,
+            base_sha="base",
+        )
+
+    assert software.starts == []
+    assert await store.list_work(project_id=PROJECT_ID) == []
 
 
 @pytest.mark.asyncio
@@ -178,6 +207,35 @@ async def test_merge_base_moved_resume_keeps_gate_decision(
     events = await store.read_events(gated.work_id, project_id=PROJECT_ID)
     assert sum(event.event_type is WorkEventType.GATE_REQUESTED for event in events) == 1
     assert sum(event.event_type is WorkEventType.GATE_DECIDED for event in events) == 1
+
+
+@pytest.mark.asyncio
+async def test_github_resume_superseded_returns_record_without_side_effects(
+    store: WorkStore,
+) -> None:
+    lifecycle, software, _github, _publisher = _flow(store)
+    record = WorkRecord(
+        work_id="work-1",
+        project_id=PROJECT_ID,
+        source_ref=ISSUE_URL,
+        profile="software",
+        status="SUPERSEDED",
+        contract_version=1,
+        active_run_id=None,
+        pending_gate=None,
+        profile_context={},
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    await store.save_work(record)
+    before = await store.read_events("work-1", project_id=PROJECT_ID)
+
+    resumed = await lifecycle.resume("work-1", project_id=PROJECT_ID)
+    after = await store.read_events("work-1", project_id=PROJECT_ID)
+
+    assert resumed == record
+    assert after == before == []
+    assert software.resumes == 0
 
 
 @pytest.mark.asyncio

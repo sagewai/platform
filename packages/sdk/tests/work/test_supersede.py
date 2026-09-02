@@ -154,3 +154,35 @@ async def test_supersede_unknown_work_raises(store: WorkStore) -> None:
             reason="x",
             actor_ref="c",
         )
+
+
+@pytest.mark.asyncio
+async def test_list_work_active_only_includes_blocked_and_ready_to_merge(
+    store: WorkStore,
+) -> None:
+    for index, status in enumerate(
+        ("WORK_BLOCKED", "READY_TO_MERGE", "COMPLETE", "SUPERSEDED"),
+        start=1,
+    ):
+        await store.save_work(
+            WorkRecord(
+                work_id=f"w{index}",
+                project_id="p",
+                source_ref=None,
+                profile="software",
+                status=status,
+                contract_version=1,
+                active_run_id=None,
+                pending_gate=None,
+                profile_context={},
+                created_at=NOW,
+                updated_at=NOW,
+            )
+        )
+
+    active = await store.list_work(project_id="p", active_only=True)
+
+    assert [(item.work_id, item.status) for item in active] == [
+        ("w1", "WORK_BLOCKED"),
+        ("w2", "READY_TO_MERGE"),
+    ]
