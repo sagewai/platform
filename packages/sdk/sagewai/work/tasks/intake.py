@@ -1,0 +1,199 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+#
+# This file is part of Sagewai, licensed under the GNU Affero General
+# Public License v3.0 or later (AGPL-3.0-or-later). You may use,
+# modify, and distribute this file under the terms of the AGPL.
+# See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
+#
+# This file is also available under a commercial license.
+# See COMMERCIAL-LICENSE.md for details.
+"""Deterministic intake: route a brief to a template, extract a schedule, ask questions."""
+
+from __future__ import annotations
+
+import re
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from sagewai.work.tasks.models import SoftwareTarget, TaskDefaults, TaskKind
+from sagewai.work.tasks.templates import CATALOGUE, ClarificationSpec, TaskTemplate
+
+Band = Literal["auto_route", "picker", "synthesis"]
+
+_STOPWORDS = frozenset(
+    "a an and are as at be by for from in into is it me my of on or that the these this to "
+    "with your our each all any using use via per".split()
+)
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+# Golden intake set calibration: _AUTO_MIN=0.36, _AUTO_MARGIN=0.12, _PICKER_MIN=0.18.
+_AUTO_MIN = 0.36
+_AUTO_MARGIN = 0.12
+_PICKER_MIN = 0.18
+_SHORT_BRIEF_WORDS = 25
+_MAX_QUESTIONS = 3
+
+_TIME_RE = re.compile(r"\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", re.IGNORECASE)
+
+
+class ClarificationQuestion(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str
+    text: str
+    kind: Literal["choice", "text"] = "text"
+    options: tuple[str, ...] = ()
+    default: str | None = None
+    defaultable: bool = True
+    rationale: str = ""
+    attention_version: int = Field(default=1, ge=1)
+
+
+class IntakeResult(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    template_id: str
+    template_version: str
+    band: Band
+    confidence: float = Field(ge=0.0, le=1.0)
+    candidates: tuple[str, ...]
+    slots: dict[str, Any]
+    cron: str | None
+    timezone: str
+    questions: tuple[ClarificationQuestion, ...]
+    preview: str
+
+
+def tokenize(text: str) -> list[str]:
+    tokens = _TOKEN_RE.findall(text.lower())
+    return [token for token in tokens if len(token) >= 3 and token not in _STOPWORDS]
+
+
+def score_template(brief_tokens: list[str], template: TaskTemplate) -> float:
+    """Best overlap between the brief and any example goal, plus a category bonus."""
+    if not brief_tokens:
+        return 0.0
+    brief = set(brief_tokens)
+    best = 0.0
+    for goal in template.example_goals:
+        goal_tokens = set(tokenize(goal))
+        if not goal_tokens:
+            continue
+        overlap = len(brief & goal_tokens)
+        best = max(best, overlap / max(len(brief), 1))
+    if template.category in brief:
+        best = min(1.0, best + 0.1)
+    return best
+
+
+def _time_from_match(match: re.Match[str] | None) -> tuple[int, int]:
+    if match is None:
+        return 8, 0
+    hour = int(match.group(1))
+    minute = int(match.group(2) or 0)
+    meridiem = (match.group(3) or "").lower()
+    if meridiem == "pm" and hour < 12:
+        hour += 12
+    if meridiem == "am" and hour == 12:
+        hour = 0
+    if hour > 23 or minute > 59:
+        return 8, 0
+    return hour, minute
+
+
+def extract_schedule(text: str) -> str | None:
+    lowered = text.lower()
+    time_match = _TIME_RE.search(lowered) if re.search(r"\bat\s+\d", lowered) else None
+    hour, minute = _time_from_match(time_match)
+    if re.search(r"\b(every\s+weekday|weekdays)\b", lowered):
+        return f"{minute} {hour} * * 1-5"
+    if re.search(r"\bhourly\b|\bevery\s+hour\b", lowered):
+        return "0 * * * *"
+    if re.search(r"\bnightly\b|\bevery\s+night\b", lowered):
+        return "0 2 * * *" if time_match is None else f"{minute} {hour} * * *"
+    if re.search(r"\bweekly\b|\bevery\s+week\b|\beach\s+week\b", lowered):
+        return f"{minute} {hour} * * 1"
+    if re.search(r"\bdaily\b|\bevery\s+day\b|\beach\s+day\b|\bevery\s+morning\b|\beach\s+morning\b", lowered):
+        return f"{minute} {hour} * * *"
+    return None
+
+
+def _question(spec: ClarificationSpec) -> ClarificationQuestion:
+    return ClarificationQuestion(
+        id=spec.id, text=spec.text, kind=spec.kind, options=spec.options, default=spec.default,
+        defaultable=spec.defaultable, rationale=spec.rationale,
+    )
+
+
+def _preview(template: TaskTemplate, cron: str | None, questions: tuple[ClarificationQuestion, ...]) -> str:
+    reads = {
+        "software": "the trusted repository checkout and the brief",
+        "report": "the declared sources through allow-listed browsing",
+    }[template.profile]
+    changes = {
+        "software": "creates issues, branches, and pull requests in the target repository",
+        "report": "writes a report artifact and, when configured, posts it to a GitHub issue",
+    }[template.profile]
+    spend = "at most the Task budget: Claude attempts are capped per attempt, Codex attempts are counted"
+    approvals = (
+        "a plan approval before execution" if template.authority_floor.plan.value == "require" else "no plan approval"
+    ) + "; irreversible actions always need a project admin"
+    schedule = f" It runs on schedule {cron}." if cron else ""
+    asks = f" It will first ask {len(questions)} question(s)." if questions else ""
+    return (
+        f"This Task will read {reads}. It {changes}. It spends {spend}. "
+        f"It asks for {approvals}.{schedule}{asks}"
+    )
+
+
+def route(brief: str, defaults: TaskDefaults) -> IntakeResult:
+    """Deterministically route a brief to a template with a confidence band."""
+    brief_tokens = tokenize(brief)
+    scored = sorted(
+        ((score_template(brief_tokens, template), template_id) for template_id, template in CATALOGUE.items()),
+        reverse=True,
+    )
+    top_score, top_id = scored[0]
+    second_score = scored[1][0] if len(scored) > 1 else 0.0
+    if top_score >= _AUTO_MIN and top_score - second_score >= _AUTO_MARGIN:
+        band: Band = "auto_route"
+        template = CATALOGUE[top_id]
+    elif top_score >= _PICKER_MIN:
+        band = "picker"
+        template = CATALOGUE[top_id]
+    else:
+        band = "synthesis"
+        template = CATALOGUE["software_delivery"]
+
+    slots: dict[str, Any] = {}
+    if template.profile == "software" and isinstance(defaults.target, SoftwareTarget):
+        slots["repository"] = defaults.target.repository_path
+    cron = extract_schedule(brief) if template.kind is TaskKind.SCHEDULED else None
+    if template.kind is TaskKind.SCHEDULED:
+        cron = cron or template.default_cron
+        slots["cron"] = cron
+
+    questions: list[ClarificationQuestion] = []
+    short = len(brief.split()) < _SHORT_BRIEF_WORDS
+    for spec in template.clarifications:
+        if spec.when == "missing_slot" and spec.slot is not None and spec.slot not in slots:
+            questions.append(_question(spec))
+        elif spec.when == "short_brief" and band == "synthesis" and short:
+            questions.append(_question(spec))
+    questions = questions[:_MAX_QUESTIONS]
+
+    return IntakeResult(
+        template_id=template.id,
+        template_version=template.version,
+        band=band,
+        confidence=round(min(top_score, 1.0), 3),
+        candidates=tuple(template_id for _, template_id in scored[:2]),
+        slots=slots,
+        cron=cron,
+        timezone=defaults.timezone,
+        questions=tuple(questions),
+        preview=_preview(template, cron, tuple(questions)),
+    )
+
+
+__all__ = ["Band", "ClarificationQuestion", "IntakeResult", "extract_schedule", "route", "score_template", "tokenize"]
