@@ -384,6 +384,52 @@ async def test_worktree_is_pinned_retryable_and_detects_unexpected_head_movement
 
 
 @pytest.mark.asyncio
+async def test_restore_uncommitted_resets_tracked_cleans_untracked_keeps_ignored_and_refuses_moved_head(
+    tmp_path: Path,
+) -> None:
+    repository, base_sha = _repository(tmp_path)
+    (repository / ".gitignore").write_text("ignored.txt\n")
+    _git(repository, "add", ".gitignore")
+    _git(repository, "commit", "-m", "ignore test artifacts")
+    base_sha = _git(repository, "rev-parse", "HEAD")
+    manager = SoftwareWorktreeManager(root=tmp_path / "worktrees")
+    workspace = await manager.prepare(
+        repository=repository,
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="attempt-1",
+        base_sha=base_sha,
+    )
+    (workspace.path / "README.md").write_text("dirty\n")
+    (workspace.path / "untracked.txt").write_text("remove\n")
+    (workspace.path / "ignored.txt").write_text("keep\n")
+
+    dirty_diff, dirty_files = await workspace_diff(workspace)
+    await manager.restore_uncommitted(workspace, expected_sha=base_sha)
+    clean_diff, clean_files = await workspace_diff(workspace)
+
+    assert "dirty" in dirty_diff
+    assert dirty_files == ("README.md", "untracked.txt")
+    assert (workspace.path / "README.md").read_text() == "base\n"
+    assert not (workspace.path / "untracked.txt").exists()
+    assert (workspace.path / "ignored.txt").read_text() == "keep\n"
+    assert clean_diff == ""
+    assert clean_files == ()
+
+    (workspace.path / "README.md").write_text("committed\n")
+    _git(workspace.path, "add", "README.md")
+    _git(workspace.path, "commit", "-m", "move head")
+    (workspace.path / "README.md").write_text("dirty after move\n")
+    (workspace.path / "after-move.txt").write_text("survives\n")
+
+    with pytest.raises(WorkspaceStaleError, match="workspace HEAD moved"):
+        await manager.restore_uncommitted(workspace, expected_sha=base_sha)
+
+    assert (workspace.path / "README.md").read_text() == "dirty after move\n"
+    assert (workspace.path / "after-move.txt").read_text() == "survives\n"
+
+
+@pytest.mark.asyncio
 async def test_reviewed_diff_is_canonical_before_and_after_committing_untracked_file(
     tmp_path: Path,
 ) -> None:

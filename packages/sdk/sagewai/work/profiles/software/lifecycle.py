@@ -514,52 +514,65 @@ class SoftwareLifecycle:
         supplied_assumptions: tuple[Assumption, ...],
         workspace: SoftwareWorkspace,
     ) -> tuple[WorkContract, tuple[Assumption, ...]] | None:
-        analyst = self._analyst.for_position(1)
-        run_id = f"{work_item.id}:analysis:1"
-        current_sha = await self._worktree_manager.current_sha(workspace)
-        context = SoftwareAnalysisContext(
-            software=self._software_capsule(draft_contract, current_sha),
-            analysis_result_schema=WorkAnalysisResult.model_json_schema(),
-        )
-        capsule = await self._capsule_compiler.compile(
-            work_item=work_item,
-            contract=draft_contract,
-            stage="analysis",
-            search_text=f"{work_item.title} {work_item.description}",
-            open_assumption_ids=tuple(
-                item.id for item in self._open_assumptions(supplied_assumptions)
-            ),
-            prior_result_refs=draft_contract.evidence_refs,
-            profile_context=context.model_dump(mode="json"),
-        )
-        request = WorkRequest(
-            project_id=work_item.project_id,
-            work_id=work_item.id,
-            run_id=run_id,
-            stage="analysis",
-            action_scope=ActionScope(
-                project_id=work_item.project_id,
-                objective=(
-                    "Ground material claims and propose the smallest sufficient software "
-                    "contract"
-                ),
-                allowed_targets=draft_contract.allowed_scope,
-                allowed_capabilities=tuple(
-                    grant.name for grant in analyst.capabilities.grants
-                ),
-            ),
-            action_intents=(),
-            control_preconditions=(),
-        )
+        retries = 0
+        reason = "initial"
         diff_before, files_before = await workspace_diff(workspace)
-        result = await analyst.controller.run(
-            runtime=analyst.runtime,
-            request=request,
-            capsule=capsule,
-            capabilities=analyst.capabilities,
-            workspace=workspace,
-        )
-        diff_after, files_after = await workspace_diff(workspace)
+        while True:
+            analyst, run_id = await self._select_operator(
+                work_item,
+                stage="analysis",
+                role="analyst",
+                ladder=self._analyst,
+                reason=reason,
+            )
+            current_sha = await self._worktree_manager.current_sha(workspace)
+            context = SoftwareAnalysisContext(
+                software=self._software_capsule(draft_contract, current_sha),
+                analysis_result_schema=WorkAnalysisResult.model_json_schema(),
+            )
+            capsule = await self._capsule_compiler.compile(
+                work_item=work_item,
+                contract=draft_contract,
+                stage="analysis",
+                search_text=f"{work_item.title} {work_item.description}",
+                open_assumption_ids=tuple(
+                    item.id for item in self._open_assumptions(supplied_assumptions)
+                ),
+                prior_result_refs=draft_contract.evidence_refs,
+                profile_context=context.model_dump(mode="json"),
+            )
+            request = WorkRequest(
+                project_id=work_item.project_id,
+                work_id=work_item.id,
+                run_id=run_id,
+                stage="analysis",
+                action_scope=ActionScope(
+                    project_id=work_item.project_id,
+                    objective=(
+                        "Ground material claims and propose the smallest sufficient software "
+                        "contract"
+                    ),
+                    allowed_targets=draft_contract.allowed_scope,
+                    allowed_capabilities=tuple(
+                        grant.name for grant in analyst.capabilities.grants
+                    ),
+                ),
+                action_intents=(),
+                control_preconditions=(),
+            )
+            result = await analyst.controller.run(
+                runtime=analyst.runtime,
+                request=request,
+                capsule=capsule,
+                capabilities=analyst.capabilities,
+                workspace=workspace,
+            )
+            diff_after, files_after = await workspace_diff(workspace)
+            if self._should_escalate(result, retries):
+                retries += 1
+                reason = "escalated"
+                continue
+            break
         if diff_after != diff_before or files_after != files_before:
             await self._block_once(
                 work_item,
@@ -875,57 +888,73 @@ class SoftwareLifecycle:
         assumptions: tuple[Assumption, ...],
         workspace: SoftwareWorkspace,
     ) -> str:
-        designer = self._designer.for_position(1)
-        run_id = f"{work_item.id}:design:1"
-        expected_sha = expected_result_sha(await self._events(work_item), workspace.base_sha)
-        if not await self._preflight_workspace(
-            work_item,
-            workspace=workspace,
-            stage="design",
-            run_id=run_id,
-            expected_sha=expected_sha,
-        ):
-            return "CONTROL_DEGRADED"
-        context = SoftwareDesignContext(
-            software=self._software_capsule(contract, expected_sha),
-            design_result_schema=WorkDesignResult.model_json_schema(),
-        )
-        capsule = await self._capsule_compiler.compile(
-            work_item=work_item,
-            contract=contract,
-            stage="design",
-            search_text=contract.goal,
-            open_assumption_ids=tuple(item.id for item in self._open_assumptions(assumptions)),
-            prior_result_refs=contract.evidence_refs,
-            profile_context=context.model_dump(mode="json"),
-        )
-        request = WorkRequest(
-            project_id=work_item.project_id,
-            work_id=work_item.id,
-            run_id=run_id,
-            stage="design",
-            action_scope=ActionScope(
-                project_id=work_item.project_id,
-                objective="Design the smallest sufficient change within the accepted contract",
-                allowed_targets=contract.allowed_scope,
-                allowed_capabilities=tuple(
-                    grant.name for grant in designer.capabilities.grants
-                ),
-            ),
-            action_intents=(),
-            control_preconditions=(
-                software_workspace_precondition(project_id=work_item.project_id),
-            ),
-        )
+        retries = 0
+        reason = "initial"
         diff_before, files_before = await workspace_diff(workspace)
-        result = await designer.controller.run(
-            runtime=designer.runtime,
-            request=request,
-            capsule=capsule,
-            capabilities=designer.capabilities,
-            workspace=workspace,
-        )
-        diff_after, files_after = await workspace_diff(workspace)
+        while True:
+            designer, run_id = await self._select_operator(
+                work_item,
+                stage="design",
+                role="designer",
+                ladder=self._designer,
+                reason=reason,
+            )
+            expected_sha = expected_result_sha(
+                await self._events(work_item),
+                workspace.base_sha,
+            )
+            if not await self._preflight_workspace(
+                work_item,
+                workspace=workspace,
+                stage="design",
+                run_id=run_id,
+                expected_sha=expected_sha,
+            ):
+                return "CONTROL_DEGRADED"
+            context = SoftwareDesignContext(
+                software=self._software_capsule(contract, expected_sha),
+                design_result_schema=WorkDesignResult.model_json_schema(),
+            )
+            capsule = await self._capsule_compiler.compile(
+                work_item=work_item,
+                contract=contract,
+                stage="design",
+                search_text=contract.goal,
+                open_assumption_ids=tuple(item.id for item in self._open_assumptions(assumptions)),
+                prior_result_refs=contract.evidence_refs,
+                profile_context=context.model_dump(mode="json"),
+            )
+            request = WorkRequest(
+                project_id=work_item.project_id,
+                work_id=work_item.id,
+                run_id=run_id,
+                stage="design",
+                action_scope=ActionScope(
+                    project_id=work_item.project_id,
+                    objective="Design the smallest sufficient change within the accepted contract",
+                    allowed_targets=contract.allowed_scope,
+                    allowed_capabilities=tuple(
+                        grant.name for grant in designer.capabilities.grants
+                    ),
+                ),
+                action_intents=(),
+                control_preconditions=(
+                    software_workspace_precondition(project_id=work_item.project_id),
+                ),
+            )
+            result = await designer.controller.run(
+                runtime=designer.runtime,
+                request=request,
+                capsule=capsule,
+                capabilities=designer.capabilities,
+                workspace=workspace,
+            )
+            diff_after, files_after = await workspace_diff(workspace)
+            if self._should_escalate(result, retries):
+                retries += 1
+                reason = "escalated"
+                continue
+            break
         if diff_after != diff_before or files_after != files_before:
             await self._block_once(
                 work_item,
@@ -1166,7 +1195,11 @@ class SoftwareLifecycle:
 
     @staticmethod
     def _next_run(events: list[WorkEvent], work_id: str, stage: str) -> tuple[str, int]:
-        """A contract-drift revalidation keeps its run; otherwise the kernel rule applies."""
+        """Return the next stage run with lifecycle overlays.
+
+        A contract-drift revalidation keeps its run and a recorded review completes
+        its run; otherwise the kernel rule applies.
+        """
         run_ids = stage_run_ids(events, work_id, stage)
         blocker = next(
             (
@@ -1188,11 +1221,17 @@ class SoftwareLifecycle:
             )
         ):
             return run_ids[-1], len(run_ids)
+        if stage == "review" and run_ids and any(
+            event.event_type is WorkEventType.REVIEW_RECORDED
+            and event.payload_json.get("attempt_id") == run_ids[-1]
+            for event in events
+        ):
+            attempt = len(run_ids) + 1
+            return f"{work_id}:{stage}:{attempt}", attempt
         return next_stage_run(events, work_id, stage)
 
-    @staticmethod
-    def _runtime_failed(result: OperatorResult) -> bool:
-        return result.status == "failed"
+    def _should_escalate(self, result: OperatorResult, retries: int) -> bool:
+        return result.status == "failed" and retries < self._max_attempts_per_stage - 1
 
     async def _run_mutation(
         self,
@@ -1349,10 +1388,21 @@ class SoftwareLifecycle:
                 capabilities=assignment.capabilities,
                 workspace=workspace,
             )
-            if (
-                self._runtime_failed(result)
-                and retries < self._max_attempts_per_stage - 1
-            ):
+            if self._should_escalate(result, retries):
+                try:
+                    await self._worktree_manager.restore_uncommitted(
+                        workspace,
+                        expected_sha=expected_sha,
+                    )
+                except WorkspaceStaleError as exc:
+                    await self._record_workspace_degradation(
+                        work_item,
+                        stage=stage,
+                        run_id=run_id,
+                        detail=str(exc),
+                        evidence_refs=(workspace.ref,),
+                    )
+                    return "CONTROL_DEGRADED"
                 retries += 1
                 reason = "escalated"
                 continue
@@ -1627,13 +1677,21 @@ class SoftwareLifecycle:
         assumptions: tuple[Assumption, ...],
         workspace: SoftwareWorkspace,
     ) -> str:
+        retries = 0
+        reason = "initial"
         events = await self._events(work_item)
         verification = self._latest_verification(events)
         if verification is None or not verification.passed:
             raise ValueError("review requires passing deterministic verification")
-        reviewer = self._reviewer.for_position(1)
-        run_id = f"{work_item.id}:review:{self._review_count(events) + 1}"
         expected_sha = expected_result_sha(events, workspace.base_sha)
+        reviewer, run_id = await self._select_operator(
+            work_item,
+            stage="review",
+            role="reviewer",
+            ladder=self._reviewer,
+            reason=reason,
+        )
+        # Preflight before reading the diff: a vanished workspace degrades control instead of raising.
         if not await self._preflight_workspace(
             work_item,
             workspace=workspace,
@@ -1650,61 +1708,84 @@ class SoftwareLifecycle:
             max_inline_diff_bytes=self._max_inline_diff_bytes,
         )
         diff_workspace_path = _DIFF_WORKSPACE_PATH if inline_diff is None else None
-        context = SoftwareReviewContext(
-            software=self._software_capsule(contract, expected_sha),
-            diff=inline_diff,
-            diff_artifact=diff_artifact,
-            diff_workspace_path=diff_workspace_path,
-            verification=verification,
-            relevant_files=relevant_files,
-            open_assumptions=self._open_assumptions(assumptions),
-            review_result_schema=ReviewResult.model_json_schema(),
-        )
-        capsule = await self._capsule_compiler.compile(
-            work_item=work_item,
-            contract=contract,
-            stage="review",
-            search_text=contract.goal,
-            open_assumption_ids=tuple(item.id for item in self._open_assumptions(assumptions)),
-            prior_result_refs=tuple(
-                dict.fromkeys((*self._design_refs(events), *verification.evidence_refs))
-            ),
-            profile_context=context.model_dump(mode="json"),
-            referenced_artifacts=(diff_artifact,),
-        )
-        request = WorkRequest(
-            project_id=work_item.project_id,
-            work_id=work_item.id,
-            run_id=run_id,
-            stage="review",
-            action_scope=ActionScope(
-                project_id=work_item.project_id,
-                objective="Independently review the verified software change",
-                allowed_targets=contract.allowed_scope,
-                allowed_capabilities=tuple(
-                    grant.name for grant in reviewer.capabilities.grants
-                ),
-            ),
-            action_intents=(),
-            control_preconditions=(
-                software_workspace_precondition(project_id=work_item.project_id),
-            ),
-        )
-        review_runtime = reviewer.runtime
-        if diff_workspace_path is not None:
-            review_runtime = _DiffMaterializingRuntime(
-                delegate=review_runtime,
-                artifact_store=self._artifact_store,
-                artifact=diff_artifact,
-                relative_path=diff_workspace_path,
+        while True:
+            context = SoftwareReviewContext(
+                software=self._software_capsule(contract, expected_sha),
+                diff=inline_diff,
+                diff_artifact=diff_artifact,
+                diff_workspace_path=diff_workspace_path,
+                verification=verification,
+                relevant_files=relevant_files,
+                open_assumptions=self._open_assumptions(assumptions),
+                review_result_schema=ReviewResult.model_json_schema(),
             )
-        result = await reviewer.controller.run(
-            runtime=review_runtime,
-            request=request,
-            capsule=capsule,
-            capabilities=reviewer.capabilities,
-            workspace=workspace,
-        )
+            capsule = await self._capsule_compiler.compile(
+                work_item=work_item,
+                contract=contract,
+                stage="review",
+                search_text=contract.goal,
+                open_assumption_ids=tuple(
+                    item.id for item in self._open_assumptions(assumptions)
+                ),
+                prior_result_refs=tuple(
+                    dict.fromkeys((*self._design_refs(events), *verification.evidence_refs))
+                ),
+                profile_context=context.model_dump(mode="json"),
+                referenced_artifacts=(diff_artifact,),
+            )
+            request = WorkRequest(
+                project_id=work_item.project_id,
+                work_id=work_item.id,
+                run_id=run_id,
+                stage="review",
+                action_scope=ActionScope(
+                    project_id=work_item.project_id,
+                    objective="Independently review the verified software change",
+                    allowed_targets=contract.allowed_scope,
+                    allowed_capabilities=tuple(
+                        grant.name for grant in reviewer.capabilities.grants
+                    ),
+                ),
+                action_intents=(),
+                control_preconditions=(
+                    software_workspace_precondition(project_id=work_item.project_id),
+                ),
+            )
+            review_runtime = reviewer.runtime
+            if diff_workspace_path is not None:
+                review_runtime = _DiffMaterializingRuntime(
+                    delegate=review_runtime,
+                    artifact_store=self._artifact_store,
+                    artifact=diff_artifact,
+                    relative_path=diff_workspace_path,
+                )
+            result = await reviewer.controller.run(
+                runtime=review_runtime,
+                request=request,
+                capsule=capsule,
+                capabilities=reviewer.capabilities,
+                workspace=workspace,
+            )
+            if self._should_escalate(result, retries):
+                retries += 1
+                reason = "escalated"
+                reviewer, run_id = await self._select_operator(
+                    work_item,
+                    stage="review",
+                    role="reviewer",
+                    ladder=self._reviewer,
+                    reason=reason,
+                )
+                if not await self._preflight_workspace(
+                    work_item,
+                    workspace=workspace,
+                    stage="review",
+                    run_id=run_id,
+                    expected_sha=expected_sha,
+                ):
+                    return "CONTROL_DEGRADED"
+                continue
+            break
         if result.status != "passed":
             if await self._stop_for_control_degradation(work_item, run_id=run_id):
                 return "CONTROL_DEGRADED"
@@ -2178,14 +2259,10 @@ class SoftwareLifecycle:
         stage: str,
         events: list[WorkEvent],
     ) -> str:
-        if stage == "design":
-            return f"{work_item.id}:design:1"
-        if stage in {"implement", "repair"}:
-            run_id, _attempt = self._next_run(events, work_item.id, stage)
-            return run_id
         if stage == "repository":
             return f"{work_item.id}:repository:1"
-        return f"{work_item.id}:review:{self._review_count(events) + 1}"
+        run_id, _attempt = self._next_run(events, work_item.id, stage)
+        return run_id
 
     async def _append(
         self,
@@ -2440,10 +2517,6 @@ class SoftwareLifecycle:
             and event.payload_json.get("stage") == "repair"
             for event in events
         )
-
-    @staticmethod
-    def _review_count(events: list[WorkEvent]) -> int:
-        return sum(event.event_type is WorkEventType.REVIEW_RECORDED for event in events)
 
     @staticmethod
     def _design_refs(events: list[WorkEvent]) -> tuple[str, ...]:

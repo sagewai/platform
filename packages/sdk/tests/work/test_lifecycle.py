@@ -55,6 +55,7 @@ from sagewai.work.knowledge import KnowledgeKind, KnowledgeQuery, KnowledgeStore
 from sagewai.work.profiles.software import (
     SOFTWARE_VERIFICATION_ISOLATION_PRECONDITION_ID,
     SOFTWARE_WORKSPACE_CHECK_REF,
+    SOFTWARE_WORKSPACE_PRECONDITION_ID,
     GitHubIssue,
     GitHubIssueLifecycle,
     GitHubMergeResult,
@@ -217,6 +218,12 @@ def _operator_result(request, *, profile_context=None) -> OperatorResult:
             for intent in request.action_intents
         ),
         profile_context=profile_context or {},
+    )
+
+
+def _failed_result(request) -> OperatorResult:
+    return _operator_result(request).model_copy(
+        update={"status": "failed", "summary": "process exit 1"}
     )
 
 
@@ -474,15 +481,53 @@ class FailedMutationRuntime(MutationRuntime):
         )
 
 
+class FailingDirtyMutationRuntime(MutationRuntime):
+    name = "dirty-failing-runtime"
+
+    async def run(self, request, capsule, capabilities, workspace):
+        self.calls += 1
+        self.capsules.append(capsule)
+        self.requests.append(request)
+        (workspace.path / "target.txt").write_text("stray\n")
+        (workspace.path / "source.txt").write_text("dirty\n")
+        return _failed_result(request)
+
+
+class CommittingFailingMutationRuntime(MutationRuntime):
+    name = "committing-failing-runtime"
+
+    async def run(self, request, capsule, capabilities, workspace):
+        self.calls += 1
+        self.capsules.append(capsule)
+        self.requests.append(request)
+        (workspace.path / "target.txt").write_text("committed\n")
+        subprocess.run(("git", "-C", str(workspace.path), "add", "target.txt"), check=True)
+        subprocess.run(
+            ("git", "-C", str(workspace.path), "commit", "-qm", "operator commit"),
+            check=True,
+        )
+        return _failed_result(request)
+
+
+class CleanWorkspaceMutationRuntime(MutationRuntime):
+    def __init__(self, *, implement_text: str, repair_text: str) -> None:
+        super().__init__(implement_text=implement_text, repair_text=repair_text)
+        self.target_existed_before_run = False
+        self.source_text_before_run = ""
+
+    async def run(self, request, capsule, capabilities, workspace):
+        self.target_existed_before_run = (workspace.path / "target.txt").exists()
+        self.source_text_before_run = (workspace.path / "source.txt").read_text()
+        return await super().run(request, capsule, capabilities, workspace)
+
+
 class FailingOnceThenPassingMutationRuntime(MutationRuntime):
     name = "flaky-runtime"
 
     async def run(self, request, capsule, capabilities, workspace):
         self.calls += 1
         if self.calls == 1:
-            return _operator_result(request).model_copy(
-                update={"status": "failed", "summary": "process exit 1"}
-            )
+            return _failed_result(request)
         return await super().run(request, capsule, capabilities, workspace)
 
 
@@ -519,6 +564,50 @@ class PassedWithFailedActionReceiptRuntime(MutationRuntime):
         result = await super().run(request, capsule, capabilities, workspace)
         failed = result.action_results[0].model_copy(update={"status": "failed"})
         return result.model_copy(update={"action_results": (failed,)})
+
+
+class FailingAnalysisRuntime(AnalysisRuntime):
+    name = "failing-analysis-runtime"
+
+    async def run(self, request, capsule, capabilities, workspace):
+        self.calls += 1
+        self.capsules.append(capsule)
+        return _failed_result(request)
+
+
+class DirtyFailingAnalysisRuntime(AnalysisRuntime):
+    name = "dirty-failing-analysis-runtime"
+
+    async def run(self, request, capsule, capabilities, workspace):
+        self.calls += 1
+        self.capsules.append(capsule)
+        (workspace.path / "target.txt").write_text("stray\n")
+        (workspace.path / "source.txt").write_text("dirty\n")
+        return _failed_result(request)
+
+
+class FailingDesignRuntime(AnalysisAndDesignRuntime):
+    name = "failing-design-runtime"
+
+    async def run(self, request, capsule, capabilities, workspace):
+        assert request.stage == "design"
+        self.design_calls += 1
+        self.design_capsules.append(capsule)
+        self.design_requests.append(request)
+        return _failed_result(request)
+
+
+class DirtyFailingDesignRuntime(AnalysisAndDesignRuntime):
+    name = "dirty-failing-design-runtime"
+
+    async def run(self, request, capsule, capabilities, workspace):
+        assert request.stage == "design"
+        self.design_calls += 1
+        self.design_capsules.append(capsule)
+        self.design_requests.append(request)
+        (workspace.path / "target.txt").write_text("stray\n")
+        (workspace.path / "source.txt").write_text("dirty\n")
+        return _failed_result(request)
 
 
 class ReviewRuntime:
@@ -589,6 +678,28 @@ class DiffReadingReviewRuntime(ReviewRuntime):
                 ).stat().st_ino
             )
         return await super().run(request, capsule, capabilities, workspace)
+
+
+class FailingReviewRuntime(ReviewRuntime):
+    name = "failing-review-runtime"
+
+    async def run(self, request, capsule, capabilities, workspace):
+        self.calls += 1
+        self.capsules.append(capsule)
+        self.requests.append(request)
+        return _failed_result(request)
+
+
+class DirtyFailingReviewRuntime(ReviewRuntime):
+    name = "dirty-failing-review-runtime"
+
+    async def run(self, request, capsule, capabilities, workspace):
+        self.calls += 1
+        self.capsules.append(capsule)
+        self.requests.append(request)
+        (workspace.path / "target.txt").write_text("stray\n")
+        (workspace.path / "source.txt").write_text("dirty\n")
+        return _failed_result(request)
 
 
 class InvalidReviewRuntime(ReviewRuntime):
@@ -884,6 +995,10 @@ def _lifecycle(
     max_inline_diff_bytes: int = 4000,
     implementer_validator=None,
     implementer_ladder: tuple[MutationRuntime, ...] | None = None,
+    analyst_ladder: tuple[AnalysisRuntime, ...] | None = None,
+    designer_ladder: tuple[AnalysisAndDesignRuntime, ...] | None = None,
+    reviewer_ladder: tuple[ReviewRuntime, ...] | None = None,
+    reviewer_validator=None,
     max_attempts_per_stage: int = 3,
 ) -> SoftwareLifecycle:
     artifact_store = LocalArtifactStore(
@@ -893,11 +1008,19 @@ def _lifecycle(
         knowledge_store=knowledge_store,
         artifact_store=artifact_store,
     )
+    analyst_positions = (
+        ((analyst_actor, analyzer or AnalysisRuntime()),)
+        if analyst_ladder is None
+        else tuple(
+            (f"operator:analyst:{index}", runtime)
+            for index, runtime in enumerate(analyst_ladder, start=1)
+        )
+    )
     analyst = StageOperatorLadder(
-        (
+        tuple(
             SoftwareStageOperator(
-                actor_ref=analyst_actor,
-                runtime=analyzer or AnalysisRuntime(),
+                actor_ref=actor_ref,
+                runtime=runtime,
                 capabilities=_read_capabilities(),
                 controller=_controller(
                     work_store,
@@ -905,15 +1028,42 @@ def _lifecycle(
                     SoftwareReadOnlyResultValidator(),
                     workspace_control_check=analyst_control_check,
                 ),
-            ),
+            )
+            for actor_ref, runtime in analyst_positions
         )
     )
+    if designer_ladder is None:
+        designer = analyst
+    else:
+        designer = StageOperatorLadder(
+            tuple(
+                SoftwareStageOperator(
+                    actor_ref=f"operator:designer:{index}",
+                    runtime=runtime,
+                    capabilities=_read_capabilities(),
+                    controller=_controller(
+                        work_store,
+                        durability,
+                        SoftwareReadOnlyResultValidator(),
+                    ),
+                )
+                for index, runtime in enumerate(designer_ladder, start=1)
+            )
+        )
     implementer_positions = (
         ((implementer_actor, implementer),)
         if implementer_ladder is None
         else tuple(
             (f"operator:implementer:{index}", runtime)
             for index, runtime in enumerate(implementer_ladder, start=1)
+        )
+    )
+    reviewer_positions = (
+        ((reviewer_actor, reviewer),)
+        if reviewer_ladder is None
+        else tuple(
+            (f"operator:reviewer:{index}", runtime)
+            for index, runtime in enumerate(reviewer_ladder, start=1)
         )
     )
     return SoftwareLifecycle(
@@ -931,7 +1081,7 @@ def _lifecycle(
         artifact_store=artifact_store,
         repository=repository,
         analyst=analyst,
-        designer=analyst,
+        designer=designer,
         implementer=StageOperatorLadder(
             tuple(
                 SoftwareStageOperator(
@@ -948,17 +1098,18 @@ def _lifecycle(
             )
         ),
         reviewer=StageOperatorLadder(
-            (
+            tuple(
                 SoftwareStageOperator(
-                    actor_ref=reviewer_actor,
-                    runtime=reviewer,
+                    actor_ref=actor_ref,
+                    runtime=runtime,
                     capabilities=_read_capabilities(),
                     controller=_controller(
                         work_store,
                         durability,
-                        SoftwareReadOnlyResultValidator(),
+                        reviewer_validator or SoftwareReadOnlyResultValidator(),
                     ),
-                ),
+                )
+                for actor_ref, runtime in reviewer_positions
             )
         ),
         repairer=StageOperatorLadder(
@@ -1039,6 +1190,431 @@ async def test_implementation_escalates_to_the_next_ladder_position_on_runtime_f
     assert flaky.calls == 1
     assert passing.calls == 1
     assert record.status == "READY_TO_MERGE"
+
+
+@pytest.mark.asyncio
+async def test_analysis_escalates_to_the_next_ladder_position_on_runtime_failure(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    failing = FailingAnalysisRuntime()
+    passing = AnalysisRuntime()
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        analyst_ladder=(failing, passing),
+        implementer=MutationRuntime(implement_text="initial", repair_text="unused"),
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_command("initial"),),
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    events = await work_store.read_events("work-1", project_id="project-a")
+    selected = [
+        event.payload_json
+        for event in events
+        if event.event_type is WorkEventType.RUNTIME_SELECTED
+        and event.payload_json["stage"] == "analysis"
+    ]
+    assert [(item["position"], item["reason"]) for item in selected] == [
+        (1, "initial"),
+        (2, "escalated"),
+    ]
+    assert [item["run_id"] for item in selected] == [
+        "work-1:analysis:1",
+        "work-1:analysis:2",
+    ]
+    assert [item["runtime"] for item in selected] == [failing.name, passing.name]
+    assert [item["role"] for item in selected] == ["analyst", "analyst"]
+    assert [item["attempt"] for item in selected] == [1, 2]
+    assert failing.calls == 1
+    assert passing.calls == 1
+    assert record.status == "READY_TO_MERGE"
+
+
+@pytest.mark.asyncio
+async def test_dirty_failed_analysis_attempt_blocks_after_escalation(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    failing = DirtyFailingAnalysisRuntime()
+    passing = AnalysisRuntime()
+    implementer = MutationRuntime(implement_text="must-not-run", repair_text="unused")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        analyst_ladder=(failing, passing),
+        implementer=implementer,
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    events = await work_store.read_events("work-1", project_id="project-a")
+    selected = [
+        event.payload_json
+        for event in events
+        if event.event_type is WorkEventType.RUNTIME_SELECTED
+        and event.payload_json["stage"] == "analysis"
+    ]
+    blocker = next(event for event in events if event.event_type is WorkEventType.WORK_BLOCKED)
+    assert [item["run_id"] for item in selected] == [
+        "work-1:analysis:1",
+        "work-1:analysis:2",
+    ]
+    assert blocker.payload_json["reason"] == "analyst_changed_workspace"
+    assert failing.calls == 1
+    assert passing.calls == 1
+    assert implementer.calls == 0
+    assert record.status == "WORK_BLOCKED"
+
+
+@pytest.mark.asyncio
+async def test_design_escalates_to_the_next_ladder_position_on_runtime_failure(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    analyzer = AnalysisAndDesignRuntime()
+    failing = FailingDesignRuntime()
+    passing = AnalysisAndDesignRuntime()
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        analyzer=analyzer,
+        designer_ladder=(failing, passing),
+        implementer=MutationRuntime(implement_text="initial", repair_text="unused"),
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_command("initial"),),
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    events = await work_store.read_events("work-1", project_id="project-a")
+    selected = [
+        event.payload_json
+        for event in events
+        if event.event_type is WorkEventType.RUNTIME_SELECTED
+        and event.payload_json["stage"] == "design"
+    ]
+    assert [(item["position"], item["reason"]) for item in selected] == [
+        (1, "initial"),
+        (2, "escalated"),
+    ]
+    assert [item["run_id"] for item in selected] == [
+        "work-1:design:1",
+        "work-1:design:2",
+    ]
+    assert [item["runtime"] for item in selected] == [failing.name, passing.name]
+    assert [item["role"] for item in selected] == ["designer", "designer"]
+    assert [item["attempt"] for item in selected] == [1, 2]
+    assert analyzer.calls == 1
+    assert failing.design_calls == 1
+    assert passing.design_calls == 1
+    assert record.status == "READY_TO_MERGE"
+
+
+@pytest.mark.asyncio
+async def test_dirty_failed_design_attempt_blocks_after_escalation(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    analyzer = AnalysisAndDesignRuntime()
+    failing = DirtyFailingDesignRuntime()
+    passing = AnalysisAndDesignRuntime()
+    implementer = MutationRuntime(implement_text="must-not-run", repair_text="unused")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        analyzer=analyzer,
+        designer_ladder=(failing, passing),
+        implementer=implementer,
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    events = await work_store.read_events("work-1", project_id="project-a")
+    selected = [
+        event.payload_json
+        for event in events
+        if event.event_type is WorkEventType.RUNTIME_SELECTED
+        and event.payload_json["stage"] == "design"
+    ]
+    blocker = next(event for event in events if event.event_type is WorkEventType.WORK_BLOCKED)
+    assert [item["run_id"] for item in selected] == [
+        "work-1:design:1",
+        "work-1:design:2",
+    ]
+    assert blocker.payload_json["reason"] == "designer_changed_workspace"
+    assert analyzer.calls == 1
+    assert failing.design_calls == 1
+    assert passing.design_calls == 1
+    assert implementer.calls == 0
+    assert record.status == "WORK_BLOCKED"
+
+
+@pytest.mark.asyncio
+async def test_review_escalates_to_the_next_ladder_position_on_runtime_failure(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    failing = FailingReviewRuntime()
+    passing = ReviewRuntime("accept")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        implementer=MutationRuntime(implement_text="initial", repair_text="unused"),
+        reviewer=passing,
+        reviewer_ladder=(failing, passing),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_command("initial"),),
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    events = await work_store.read_events("work-1", project_id="project-a")
+    selected = [
+        event.payload_json
+        for event in events
+        if event.event_type is WorkEventType.RUNTIME_SELECTED
+        and event.payload_json["stage"] == "review"
+    ]
+    assert [(item["position"], item["reason"]) for item in selected] == [
+        (1, "initial"),
+        (2, "escalated"),
+    ]
+    assert [item["run_id"] for item in selected] == [
+        "work-1:review:1",
+        "work-1:review:2",
+    ]
+    assert [item["runtime"] for item in selected] == [failing.name, passing.name]
+    assert [item["role"] for item in selected] == ["reviewer", "reviewer"]
+    assert [item["attempt"] for item in selected] == [1, 2]
+    assert failing.calls == 1
+    assert passing.calls == 1
+    assert record.status == "READY_TO_MERGE"
+
+
+@pytest.mark.asyncio
+async def test_dirty_failed_review_attempt_blocks_after_escalation(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    failing = DirtyFailingReviewRuntime()
+    passing = ReviewRuntime("accept")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        implementer=MutationRuntime(implement_text="initial", repair_text="unused"),
+        reviewer=passing,
+        reviewer_ladder=(failing, passing),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_command("initial"),),
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    events = await work_store.read_events("work-1", project_id="project-a")
+    selected = [
+        event.payload_json
+        for event in events
+        if event.event_type is WorkEventType.RUNTIME_SELECTED
+        and event.payload_json["stage"] == "review"
+    ]
+    blocker = next(event for event in events if event.event_type is WorkEventType.WORK_BLOCKED)
+    assert [item["run_id"] for item in selected] == [
+        "work-1:review:1",
+        "work-1:review:2",
+    ]
+    assert blocker.payload_json["reason"] == "reviewer_changed_workspace"
+    assert failing.calls == 1
+    assert passing.calls == 1
+    assert record.status == "WORK_BLOCKED"
+
+
+@pytest.mark.asyncio
+async def test_blocked_does_not_escalate_to_next_ladder_position(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    validator = BlockingOnceSoftwareResultValidator()
+    blocked_reviewer = ReviewRuntime("accept")
+    unused_reviewer = ReviewRuntime("accept")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        implementer=MutationRuntime(implement_text="initial", repair_text="unused"),
+        reviewer=blocked_reviewer,
+        reviewer_ladder=(blocked_reviewer, unused_reviewer),
+        reviewer_validator=validator,
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_command("initial"),),
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    events = await work_store.read_events("work-1", project_id="project-a")
+    selected = [
+        event.payload_json
+        for event in events
+        if event.event_type is WorkEventType.RUNTIME_SELECTED
+        and event.payload_json["stage"] == "review"
+    ]
+    blocker = next(event for event in events if event.event_type is WorkEventType.WORK_BLOCKED)
+    assert [item["position"] for item in selected] == [1]
+    assert [item["run_id"] for item in selected] == ["work-1:review:1"]
+    assert blocker.payload_json["reason"] == "review_failed"
+    assert validator.calls == 1
+    assert blocked_reviewer.calls == 1
+    assert unused_reviewer.calls == 0
+    assert record.status == "WORK_BLOCKED"
+
+
+@pytest.mark.asyncio
+async def test_implementation_escalation_restores_workspace_before_next_attempt(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    failing = FailingDirtyMutationRuntime(
+        implement_text="unused",
+        repair_text="unused",
+    )
+    passing = CleanWorkspaceMutationRuntime(
+        implement_text="initial",
+        repair_text="unused",
+    )
+    analyzer = AnalysisRuntime(
+        proposal=WorkContractProposal(
+            goal="Change target deterministically",
+            allowed_scope=("target.txt", "source.txt"),
+            acceptance_criteria=(
+                ProposedAcceptanceCriterion(
+                    statement="deterministic verification passes",
+                    verification_kind="deterministic",
+                ),
+            ),
+            constraints=(),
+            non_goals=(),
+            risk="low",
+            design_required=False,
+        )
+    )
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        analyzer=analyzer,
+        implementer=failing,
+        implementer_ladder=(failing, passing),
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_command("initial"),),
+    )
+
+    record = await lifecycle.start(
+        work_item=_work_item(),
+        contract=_contract(base_sha, allowed_scope=("target.txt", "source.txt")),
+    )
+
+    assert failing.calls == 1
+    assert passing.calls == 1
+    assert passing.target_existed_before_run is False
+    assert passing.source_text_before_run == "base\n"
+    assert record.status == "READY_TO_MERGE"
+
+
+@pytest.mark.asyncio
+async def test_implementation_restore_with_moved_head_degrades_control(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    failing = CommittingFailingMutationRuntime(
+        implement_text="unused",
+        repair_text="unused",
+    )
+    passing = MutationRuntime(implement_text="must-not-run", repair_text="unused")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        implementer=failing,
+        implementer_ladder=(failing, passing),
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    events = await work_store.read_events("work-1", project_id="project-a")
+    degraded = next(
+        event for event in events if event.event_type is WorkEventType.CONTROL_DEGRADED
+    )
+    assert record.status == "CONTROL_DEGRADED"
+    assert failing.calls == 1
+    assert passing.calls == 0
+    assert degraded.payload_json["run_id"] == "work-1:implement:1"
+    assert degraded.payload_json["stage"] == "implement"
+    assert degraded.payload_json["failed_preconditions"] == [
+        SOFTWARE_WORKSPACE_PRECONDITION_ID
+    ]
+    assert degraded.payload_json["evidence_refs"] == ["workspace://workspace"]
+    assert degraded.payload_json["details"].startswith(
+        f"{SOFTWARE_WORKSPACE_PRECONDITION_ID}: workspace HEAD moved:"
+    )
+    assert degraded.payload_json["frozen_action_ids"] == [
+        "work-1:implement:1:change"
+    ]
 
 
 @pytest.mark.asyncio
@@ -2887,6 +3463,13 @@ async def test_review_finding_reaches_repair_as_typed_canonical_context(
     assert all(not path.exists() for path in repairer.materialized_paths)
     assert "initial" not in json.dumps(repairer.capsules[0].model_dump(mode="json"))
     events = await work_store.read_events("work-1", project_id="project-a")
+    review_runs = [
+        event.payload_json["run_id"]
+        for event in events
+        if event.event_type is WorkEventType.RUNTIME_SELECTED
+        and event.payload_json["stage"] == "review"
+    ]
+    assert review_runs == ["work-1:review:1", "work-1:review:2"]
     repair_started = next(
         event
         for event in events

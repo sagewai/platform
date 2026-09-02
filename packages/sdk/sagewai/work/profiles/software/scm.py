@@ -261,6 +261,21 @@ class SoftwareWorktreeManager:
                 f"workspace HEAD moved: expected {expected_sha}, found {actual_sha}"
             )
 
+    async def restore_uncommitted(
+        self,
+        workspace: SoftwareWorkspace,
+        *,
+        expected_sha: str,
+    ) -> None:
+        """Restore an unchanged HEAD to a clean worktree at the same commit."""
+        await self.assert_current(workspace, expected_sha=expected_sha)
+        reset = await _git(workspace.path, "reset", "--hard", expected_sha)
+        if reset.returncode != 0:
+            raise WorkspaceStaleError(reset.stderr)
+        clean = await _git(workspace.path, "clean", "-fd")
+        if clean.returncode != 0:
+            raise WorkspaceStaleError(clean.stderr)
+
     async def commit_reviewed(
         self,
         workspace: SoftwareWorkspace,
