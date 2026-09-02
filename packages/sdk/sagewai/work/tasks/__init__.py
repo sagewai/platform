@@ -17,6 +17,7 @@ from sagewai.work.tasks.events import (
     fold_record,
 )
 from sagewai.work.tasks.feed import FeedBus, FeedEntry
+from sagewai.work.tasks.intake import ClarificationQuestion, IntakeResult, route
 from sagewai.work.tasks.models import (
     Authority,
     Budget,
@@ -39,15 +40,41 @@ from sagewai.work.tasks.models import (
     TaskRecord,
     TaskStatus,
 )
+from sagewai.work.tasks.plan import (
+    AcceptedPlan,
+    MatrixItem,
+    PlanRejectedError,
+    PlanStep,
+    TaskPlanResult,
+    accept_plan,
+)
+from sagewai.work.tasks.planner import PlanningFailedError, TaskPlanner
 from sagewai.work.tasks.schedule import next_fire, preset_to_cron, validate_cron, validate_timezone
+from sagewai.work.tasks.scratch import (
+    ScratchResultValidator,
+    ScratchWorkspace,
+    ScratchWorkspaceManager,
+)
 from sagewai.work.tasks.store import SpendReservation, SpendTotals, StaleTaskError, TaskStore
+from sagewai.work.tasks.templates import (
+    CATALOGUE,
+    SlotSpec,
+    SlotValidationError,
+    TaskTemplate,
+    get_template,
+    validate_slots,
+)
 from sagewai.work.tasks.transitions import IllegalTransitionError, assert_transition
 
 __all__ = [
-    "Authority", "Budget", "BudgetUsed", "ExecutionRoute", "FeedBus", "FeedEntry", "GateMode",
-    "HarnessTier", "IllegalTransitionError", "ReportTarget", "RoleAlias", "RoutingPolicy", "RuntimeRef",
-    "Schedule", "Sensitivity", "Sink", "SoftwareTarget", "SpendReservation", "SpendTotals",
-    "StaleTaskError", "Task", "TaskDefaults", "TaskEvent", "TaskEventType", "TaskKind", "TaskOrigin",
-    "TaskRecord", "TaskStatus", "TaskStore", "assert_transition", "board_column", "derive_attention",
-    "fold_record", "next_fire", "preset_to_cron", "validate_cron", "validate_timezone",
+    "AcceptedPlan", "Authority", "Budget", "BudgetUsed", "CATALOGUE", "ClarificationQuestion",
+    "ExecutionRoute", "FeedBus", "FeedEntry", "GateMode", "HarnessTier", "IllegalTransitionError",
+    "IntakeResult", "MatrixItem", "PlanRejectedError", "PlanStep", "PlanningFailedError",
+    "ReportTarget", "RoleAlias", "RoutingPolicy", "RuntimeRef", "Schedule", "ScratchResultValidator",
+    "ScratchWorkspace", "ScratchWorkspaceManager", "Sensitivity", "Sink", "SlotSpec", "SlotValidationError",
+    "SoftwareTarget", "SpendReservation", "SpendTotals", "StaleTaskError", "Task", "TaskDefaults",
+    "TaskEvent", "TaskEventType", "TaskKind", "TaskOrigin", "TaskPlanResult", "TaskPlanner", "TaskRecord",
+    "TaskStatus", "TaskStore", "TaskTemplate", "accept_plan", "assert_transition", "board_column",
+    "derive_attention", "fold_record", "get_template", "next_fire", "preset_to_cron", "route",
+    "validate_cron", "validate_slots", "validate_timezone",
 ]

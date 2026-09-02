@@ -21,3 +21,16 @@ def test_package_exports_kernel_names() -> None:
         "TaskStore", "StaleTaskError", "FeedBus", "FeedEntry", "next_fire", "validate_cron",
     ):
         assert hasattr(tasks, name), name
+
+
+def test_package_exports_planning_names() -> None:
+    import sagewai.work.tasks as tasks
+
+    for name in (
+        "CATALOGUE", "TaskTemplate", "SlotSpec", "validate_slots", "get_template",
+        "IntakeResult", "ClarificationQuestion", "route",
+        "TaskPlanResult", "PlanStep", "MatrixItem", "AcceptedPlan", "PlanRejectedError", "accept_plan",
+        "ScratchWorkspace", "ScratchWorkspaceManager", "ScratchResultValidator",
+        "TaskPlanner", "PlanningFailedError",
+    ):
+        assert hasattr(tasks, name), name
