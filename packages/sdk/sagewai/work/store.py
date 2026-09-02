@@ -192,7 +192,7 @@ class WorkStore:
         table = self._work_items
         query = select(table).where(table.c.project_scope_key == project_scope_key(project_id))
         if active_only:
-            query = query.where(table.c.status != "COMPLETE")
+            query = query.where(table.c.status.notin_(("COMPLETE", "SUPERSEDED")))
         query = query.order_by(table.c.created_at, table.c.work_id)
         async with self._engine.connect() as conn:
             rows = (await conn.execute(query)).all()
@@ -261,6 +261,8 @@ class WorkStore:
         pending: list[PendingAttention] = []
         for row in work_rows:
             projection = row._mapping
+            if projection["status"] == "SUPERSEDED":
+                continue
             work_id = str(projection["work_id"])
             source_ref = projection["source_ref"]
             events = events_by_work.get(work_id, [])
@@ -337,6 +339,33 @@ class WorkStore:
                                 )
                             ),
                             created_at=blocked.created_at,
+                        )
+                    )
+
+            if projection["status"] == "BASE_MOVED":
+                moved = next(
+                    (
+                        event
+                        for event in reversed(events)
+                        if event.event_type is WorkEventType.BASE_MOVED
+                    ),
+                    None,
+                )
+                if moved is not None:
+                    payload = moved.payload_json
+                    pending.append(
+                        PendingAttention(
+                            attention_id=moved.id,
+                            project_id=project_id,
+                            work_id=work_id,
+                            kind=PendingAttentionKind.WORK_BLOCKED,
+                            source_ref=source_ref,
+                            summary=(
+                                f"default branch moved from {payload['expected_base']} to "
+                                f"{payload['found_base']} before {payload['phase']}; "
+                                "supersede and rerun"
+                            ),
+                            created_at=moved.created_at,
                         )
                     )
 

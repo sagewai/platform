@@ -86,6 +86,7 @@ from sagewai.work.runtime import (
     Workspace,
 )
 from sagewai.work.store import WorkStore
+from sagewai.work.supersede import supersede_work
 
 __all__ = [
     "Action",
@@ -152,6 +153,7 @@ __all__ = [
     "next_stage_run",
     "stage_run_ids",
     "stage_runtime_failures",
+    "supersede_work",
     "validate_criterion_subset",
     "validate_verification_result",
 ]
