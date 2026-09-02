@@ -474,6 +474,18 @@ class FailedMutationRuntime(MutationRuntime):
         )
 
 
+class FailingOnceThenPassingMutationRuntime(MutationRuntime):
+    name = "flaky-runtime"
+
+    async def run(self, request, capsule, capabilities, workspace):
+        self.calls += 1
+        if self.calls == 1:
+            return _operator_result(request).model_copy(
+                update={"status": "failed", "summary": "process exit 1"}
+            )
+        return await super().run(request, capsule, capabilities, workspace)
+
+
 class FailedWithoutActionReceiptRuntime(MutationRuntime):
     async def run(self, request, capsule, capabilities, workspace):
         result = await super().run(request, capsule, capabilities, workspace)
@@ -977,6 +989,147 @@ async def stores(dialect_engine):  # noqa: F811
     await work_store.init()
     await knowledge_store.init()
     return work_store, knowledge_store
+
+
+@pytest.mark.asyncio
+async def test_implementation_escalates_to_the_next_ladder_position_on_runtime_failure(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    flaky = FailingOnceThenPassingMutationRuntime(
+        implement_text="unused",
+        repair_text="unused",
+    )
+    passing = MutationRuntime(implement_text="initial", repair_text="unused")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        implementer=flaky,
+        implementer_ladder=(flaky, passing),
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_command("initial"),),
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    events = await work_store.read_events("work-1", project_id="project-a")
+    selected = [
+        event.payload_json
+        for event in events
+        if event.event_type is WorkEventType.RUNTIME_SELECTED
+        and event.payload_json["stage"] == "implement"
+    ]
+    assert [(item["position"], item["reason"]) for item in selected] == [
+        (1, "initial"),
+        (2, "escalated"),
+    ]
+    assert [item["run_id"] for item in selected] == [
+        "work-1:implement:1",
+        "work-1:implement:2",
+    ]
+    assert [item["runtime"] for item in selected] == [flaky.name, passing.name]
+    assert [item["role"] for item in selected] == ["implementer", "implementer"]
+    assert [item["attempt"] for item in selected] == [1, 2]
+    assert flaky.calls == 1
+    assert passing.calls == 1
+    assert record.status == "READY_TO_MERGE"
+
+
+@pytest.mark.asyncio
+async def test_verification_failure_does_not_escalate(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    implementer = MutationRuntime(implement_text="initial", repair_text="unused")
+    unused_implementer = MutationRuntime(implement_text="unused", repair_text="unused")
+    repairer = MutationRuntime(implement_text="unused", repair_text="fixed")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        implementer=implementer,
+        implementer_ladder=(implementer, unused_implementer),
+        reviewer=ReviewRuntime("accept"),
+        repairer=repairer,
+        commands=(_command("fixed"),),
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    events = await work_store.read_events("work-1", project_id="project-a")
+    selected_implement = [
+        event.payload_json
+        for event in events
+        if event.event_type is WorkEventType.RUNTIME_SELECTED
+        and event.payload_json["stage"] == "implement"
+    ]
+    selected_repair = [
+        event.payload_json
+        for event in events
+        if event.event_type is WorkEventType.RUNTIME_SELECTED
+        and event.payload_json["stage"] == "repair"
+    ]
+    assert [item["position"] for item in selected_implement] == [1]
+    assert [item["position"] for item in selected_repair] == [1]
+    assert implementer.calls == 1
+    assert unused_implementer.calls == 0
+    assert repairer.calls == 1
+    assert record.status == "READY_TO_MERGE"
+
+
+@pytest.mark.asyncio
+async def test_implementation_blocks_after_max_attempts(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    failing = FailedMutationRuntime(implement_text="failed", repair_text="unused")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        implementer=failing,
+        implementer_ladder=(failing,),
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+        max_attempts_per_stage=2,
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    events = await work_store.read_events("work-1", project_id="project-a")
+    selected = [
+        event.payload_json
+        for event in events
+        if event.event_type is WorkEventType.RUNTIME_SELECTED
+        and event.payload_json["stage"] == "implement"
+    ]
+    assert [(item["run_id"], item["position"], item["reason"]) for item in selected] == [
+        ("work-1:implement:1", 1, "initial"),
+        ("work-1:implement:2", 1, "escalated"),
+    ]
+    assert [item["attempt"] for item in selected] == [1, 2]
+    assert failing.calls == 2
+    assert record.status == "WORK_BLOCKED"
+    blocker = next(
+        event for event in events if event.event_type is WorkEventType.WORK_BLOCKED
+    )
+    assert blocker.payload_json["reason"] == "implement_failed"
+    assert blocker.payload_json["attempts"] == 2
 
 
 @pytest.mark.asyncio
@@ -2241,7 +2394,8 @@ async def test_failed_implementation_blocks_with_specific_question_and_evidence(
     blocker = next(event for event in events if event.event_type is WorkEventType.WORK_BLOCKED)
     assert blocker.payload_json == {
         "reason": "implement_failed",
-        "run_id": "work-1:implement:1",
+        "run_id": "work-1:implement:3",
+        "attempts": 3,
         "decision_request": "Inspect the failed implementation evidence and decide whether to retry or stop the work.",
         "evidence_refs": ["runtime://implement-failure"],
     }
@@ -2280,6 +2434,7 @@ async def test_failed_implementation_without_action_receipt_is_not_contract_drif
     assert blocker.payload_json == {
         "reason": "implement_failed",
         "run_id": "work-1:implement:1",
+        "attempts": 1,
         "decision_request": "Inspect the failed implementation evidence and decide whether to retry or stop the work.",
         "evidence_refs": ["runtime://native-failure"],
     }

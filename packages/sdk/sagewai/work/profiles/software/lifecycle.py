@@ -30,6 +30,9 @@ from sagewai.work.events import (
     WorkEvent,
     WorkEventType,
     active_control_precondition_ids,
+    next_stage_run,
+    stage_run_ids,
+    stage_runtime_failures,
 )
 from sagewai.work.fleet import FleetOperatorRuntime, FleetWorkspaceTransport
 from sagewai.work.knowledge import KnowledgeItem, KnowledgeKind, KnowledgeStore
@@ -1095,7 +1098,7 @@ class SoftwareLifecycle:
             if state in {"READY_TO_IMPLEMENT", "IMPLEMENTING"}:
                 state = await self._run_mutation(
                     stage="implement",
-                    assignment=self._implementer.for_position(1),
+                    ladder=self._implementer,
                     work_item=work_item,
                     contract=contract,
                     assumptions=assumptions,
@@ -1123,7 +1126,7 @@ class SoftwareLifecycle:
                     return await self._repair_budget_block(work_item)
                 state = await self._run_mutation(
                     stage="repair",
-                    assignment=self._repairer.for_position(1),
+                    ladder=self._repairer,
                     work_item=work_item,
                     contract=contract,
                     assumptions=assumptions,
@@ -1132,156 +1135,229 @@ class SoftwareLifecycle:
                 continue
             raise ValueError(f"unsupported software lifecycle state: {state}")
 
+    async def _select_operator(
+        self,
+        work_item: WorkItem,
+        *,
+        stage: str,
+        role: str,
+        ladder: StageOperatorLadder,
+        reason: str,
+    ) -> tuple[SoftwareStageOperator, str]:
+        events = await self._events(work_item)
+        run_id, attempt = self._next_run(events, work_item.id, stage)
+        position = stage_runtime_failures(events, work_item.id, stage) + 1
+        operator = ladder.for_position(position)
+        await self._append_once(
+            work_item,
+            WorkEventType.RUNTIME_SELECTED,
+            {
+                "role": role,
+                "stage": stage,
+                "run_id": run_id,
+                "attempt": attempt,
+                "position": min(position, len(ladder)),
+                "runtime": operator.runtime.name,
+                "reason": reason,
+            },
+            actor_ref="software_lifecycle",
+        )
+        return operator, run_id
+
+    @staticmethod
+    def _next_run(events: list[WorkEvent], work_id: str, stage: str) -> tuple[str, int]:
+        """A contract-drift revalidation keeps its run; otherwise the kernel rule applies."""
+        run_ids = stage_run_ids(events, work_id, stage)
+        blocker = next(
+            (
+                event
+                for event in reversed(events)
+                if event.event_type is WorkEventType.WORK_BLOCKED
+            ),
+            None,
+        )
+        if (
+            blocker is not None
+            and blocker.payload_json.get("reason") == "contract_drift"
+            and run_ids
+            and blocker.payload_json.get("run_id") == run_ids[-1]
+            and not any(
+                event.event_type is WorkEventType.STAGE_COMPLETED
+                and event.payload_json.get("run_id") == run_ids[-1]
+                for event in events
+            )
+        ):
+            return run_ids[-1], len(run_ids)
+        return next_stage_run(events, work_id, stage)
+
+    @staticmethod
+    def _runtime_failed(result: OperatorResult) -> bool:
+        return result.status == "failed"
+
     async def _run_mutation(
         self,
         *,
         stage: str,
-        assignment: SoftwareStageOperator,
+        ladder: StageOperatorLadder,
         work_item: WorkItem,
         contract: WorkContract,
         assumptions: tuple[Assumption, ...],
         workspace: SoftwareWorkspace,
     ) -> str:
-        events = await self._events(work_item)
-        repair_number = self._repair_count(events) + 1
-        run_id = (
-            self._implementation_run_id(work_item, events)
-            if stage == "implement"
-            else f"{work_item.id}:repair:{repair_number}"
-        )
-        plan = await self._profile.prepare(work_item, contract)
-        if len(plan.actions) != 1:
-            raise ValueError("software profile requires exactly one change action")
-        planned_action = plan.actions[0].model_copy(
-            update={"id": f"{run_id}:change"}
-        )
-        expected_sha = expected_result_sha(events, workspace.base_sha)
-        if not await self._preflight_workspace(
-            work_item,
-            workspace=workspace,
-            stage=stage,
-            run_id=run_id,
-            expected_sha=expected_sha,
-        ):
-            return "CONTROL_DEGRADED"
-        software = self._software_capsule(contract, expected_sha)
-        open_assumptions = self._open_assumptions(assumptions)
-        prior_refs = self._design_refs(events)
-        referenced_artifacts: tuple[ArtifactRef, ...] = ()
-        diff_workspace_path: str | None = None
-        diff_artifact: ArtifactRef | None = None
-        if stage == "repair":
-            verification = self._latest_verification(events)
-            review = self._latest_review(events)
-            if verification is None:
-                raise ValueError("repair requires a verification result")
-            findings = review.findings if review is not None else ()
-            review_refs = review.evidence_refs if review is not None else ()
-            triage_event = next(
-                (
-                    event
-                    for event in reversed(events)
-                    if event.event_type is WorkEventType.TRIAGE_CREATED
-                ),
-                None,
+        retries = 0
+        reason = "initial"
+        role = "implementer" if stage == "implement" else "repairer"
+        while True:
+            assignment, run_id = await self._select_operator(
+                work_item,
+                stage=stage,
+                role=role,
+                ladder=ladder,
+                reason=reason,
             )
-            triage = (
-                SoftwareDeliveryTriageContext.model_validate(triage_event.payload_json)
-                if triage_event is not None
-                else None
+            events = await self._events(work_item)
+            plan = await self._profile.prepare(work_item, contract)
+            if len(plan.actions) != 1:
+                raise ValueError("software profile requires exactly one change action")
+            planned_action = plan.actions[0].model_copy(
+                update={"id": f"{run_id}:change"}
             )
-            triage_refs: tuple[str, ...] = ()
-            if triage_event is not None and triage is not None:
-                observation_refs = triage.observation.get("evidence_refs", ())
-                triage_refs = (
-                    *triage.evidence_refs,
-                    *(str(ref) for ref in observation_refs),
-                    f"work-event://{triage_event.id}",
+            expected_sha = expected_result_sha(events, workspace.base_sha)
+            if not await self._preflight_workspace(
+                work_item,
+                workspace=workspace,
+                stage=stage,
+                run_id=run_id,
+                expected_sha=expected_sha,
+            ):
+                return "CONTROL_DEGRADED"
+            software = self._software_capsule(contract, expected_sha)
+            open_assumptions = self._open_assumptions(assumptions)
+            prior_refs = self._design_refs(events)
+            referenced_artifacts: tuple[ArtifactRef, ...] = ()
+            diff_workspace_path: str | None = None
+            diff_artifact: ArtifactRef | None = None
+            if stage == "repair":
+                verification = self._latest_verification(events)
+                review = self._latest_review(events)
+                if verification is None:
+                    raise ValueError("repair requires a verification result")
+                findings = review.findings if review is not None else ()
+                review_refs = review.evidence_refs if review is not None else ()
+                triage_event = next(
+                    (
+                        event
+                        for event in reversed(events)
+                        if event.event_type is WorkEventType.TRIAGE_CREATED
+                    ),
+                    None,
                 )
-            raw_diff, relevant_files = await workspace_diff(workspace)
-            inline_diff, diff_artifact = _store_diff_context(
-                artifact_store=self._artifact_store,
-                project_id=work_item.project_id,
-                raw_diff=raw_diff,
-                max_inline_diff_bytes=self._max_inline_diff_bytes,
-            )
-            diff_workspace_path = _DIFF_WORKSPACE_PATH if inline_diff is None else None
-            context = SoftwareRepairContext(
-                software=software,
-                diff=inline_diff,
-                diff_artifact=diff_artifact,
-                diff_workspace_path=diff_workspace_path,
-                verification=verification,
-                relevant_files=relevant_files,
-                open_assumptions=open_assumptions,
-                findings=findings,
-                triage=triage,
-            )
-            profile_context = context.model_dump(mode="json")
-            prior_refs = tuple(
-                dict.fromkeys(
-                    (*prior_refs, *verification.evidence_refs, *review_refs, *triage_refs)
+                triage = (
+                    SoftwareDeliveryTriageContext.model_validate(triage_event.payload_json)
+                    if triage_event is not None
+                    else None
                 )
-            )
-            referenced_artifacts = (diff_artifact,)
-        else:
-            profile_context = software.model_dump(mode="json")
-
-        capsule = await self._capsule_compiler.compile(
-            work_item=work_item,
-            contract=contract,
-            stage=stage,
-            search_text=contract.goal,
-            open_assumption_ids=tuple(item.id for item in open_assumptions),
-            prior_result_refs=prior_refs,
-            profile_context=profile_context,
-            referenced_artifacts=referenced_artifacts,
-        )
-        request = WorkRequest(
-            project_id=work_item.project_id,
-            work_id=work_item.id,
-            run_id=run_id,
-            stage=stage,
-            action_scope=ActionScope(
-                project_id=work_item.project_id,
-                objective=contract.goal,
-                allowed_targets=contract.allowed_scope,
-                allowed_capabilities=(planned_action.capability,),
-            ),
-            action_intents=(
-                ActionIntent(
+                triage_refs: tuple[str, ...] = ()
+                if triage_event is not None and triage is not None:
+                    observation_refs = triage.observation.get("evidence_refs", ())
+                    triage_refs = (
+                        *triage.evidence_refs,
+                        *(str(ref) for ref in observation_refs),
+                        f"work-event://{triage_event.id}",
+                    )
+                raw_diff, relevant_files = await workspace_diff(workspace)
+                inline_diff, diff_artifact = _store_diff_context(
+                    artifact_store=self._artifact_store,
                     project_id=work_item.project_id,
-                    action_id=planned_action.id,
-                    capability=planned_action.capability,
-                    target=contract.allowed_scope[0],
-                    expected_effect=planned_action.expected_effect,
-                    scope=planned_action.scope,
-                    risk=contract.risk,
-                    reversibility=planned_action.reversibility,
-                    required_permission="workspace.write",
-                    evidence_refs=contract.evidence_refs,
-                ),
-            ),
-            control_preconditions=(
-                software_workspace_precondition(project_id=work_item.project_id),
-            ),
-        )
-        runtime = assignment.runtime
-        if diff_workspace_path is not None:
-            assert diff_artifact is not None
-            runtime = _DiffMaterializingRuntime(
-                delegate=runtime,
-                artifact_store=self._artifact_store,
-                artifact=diff_artifact,
-                relative_path=diff_workspace_path,
+                    raw_diff=raw_diff,
+                    max_inline_diff_bytes=self._max_inline_diff_bytes,
+                )
+                diff_workspace_path = _DIFF_WORKSPACE_PATH if inline_diff is None else None
+                context = SoftwareRepairContext(
+                    software=software,
+                    diff=inline_diff,
+                    diff_artifact=diff_artifact,
+                    diff_workspace_path=diff_workspace_path,
+                    verification=verification,
+                    relevant_files=relevant_files,
+                    open_assumptions=open_assumptions,
+                    findings=findings,
+                    triage=triage,
+                )
+                profile_context = context.model_dump(mode="json")
+                prior_refs = tuple(
+                    dict.fromkeys(
+                        (*prior_refs, *verification.evidence_refs, *review_refs, *triage_refs)
+                    )
+                )
+                referenced_artifacts = (diff_artifact,)
+            else:
+                profile_context = software.model_dump(mode="json")
+
+            capsule = await self._capsule_compiler.compile(
+                work_item=work_item,
+                contract=contract,
+                stage=stage,
+                search_text=contract.goal,
+                open_assumption_ids=tuple(item.id for item in open_assumptions),
+                prior_result_refs=prior_refs,
+                profile_context=profile_context,
+                referenced_artifacts=referenced_artifacts,
             )
-        result = await assignment.controller.run(
-            runtime=runtime,
-            request=request,
-            capsule=capsule,
-            capabilities=assignment.capabilities,
-            workspace=workspace,
-        )
+            request = WorkRequest(
+                project_id=work_item.project_id,
+                work_id=work_item.id,
+                run_id=run_id,
+                stage=stage,
+                action_scope=ActionScope(
+                    project_id=work_item.project_id,
+                    objective=contract.goal,
+                    allowed_targets=contract.allowed_scope,
+                    allowed_capabilities=(planned_action.capability,),
+                ),
+                action_intents=(
+                    ActionIntent(
+                        project_id=work_item.project_id,
+                        action_id=planned_action.id,
+                        capability=planned_action.capability,
+                        target=contract.allowed_scope[0],
+                        expected_effect=planned_action.expected_effect,
+                        scope=planned_action.scope,
+                        risk=contract.risk,
+                        reversibility=planned_action.reversibility,
+                        required_permission="workspace.write",
+                        evidence_refs=contract.evidence_refs,
+                    ),
+                ),
+                control_preconditions=(
+                    software_workspace_precondition(project_id=work_item.project_id),
+                ),
+            )
+            runtime = assignment.runtime
+            if diff_workspace_path is not None:
+                assert diff_artifact is not None
+                runtime = _DiffMaterializingRuntime(
+                    delegate=runtime,
+                    artifact_store=self._artifact_store,
+                    artifact=diff_artifact,
+                    relative_path=diff_workspace_path,
+                )
+            result = await assignment.controller.run(
+                runtime=runtime,
+                request=request,
+                capsule=capsule,
+                capabilities=assignment.capabilities,
+                workspace=workspace,
+            )
+            if (
+                self._runtime_failed(result)
+                and retries < self._max_attempts_per_stage - 1
+            ):
+                retries += 1
+                reason = "escalated"
+                continue
+            break
+
         criteria_by_id = {criterion.id: criterion for criterion in contract.acceptance_criteria}
         profile_criterion_ids = tuple(
             criterion_id
@@ -1331,6 +1407,7 @@ class SoftwareLifecycle:
                 {
                     "reason": f"{stage}_failed",
                     "run_id": run_id,
+                    "attempts": retries + 1,
                     "decision_request": (
                         f"Inspect the failed {failed_stage} evidence and decide whether to "
                         "retry or stop the work."
@@ -2103,10 +2180,9 @@ class SoftwareLifecycle:
     ) -> str:
         if stage == "design":
             return f"{work_item.id}:design:1"
-        if stage == "implement":
-            return self._implementation_run_id(work_item, events)
-        if stage == "repair":
-            return f"{work_item.id}:repair:{self._repair_count(events) + 1}"
+        if stage in {"implement", "repair"}:
+            run_id, _attempt = self._next_run(events, work_item.id, stage)
+            return run_id
         if stage == "repository":
             return f"{work_item.id}:repository:1"
         return f"{work_item.id}:review:{self._review_count(events) + 1}"
@@ -2356,54 +2432,6 @@ class SoftwareLifecycle:
                 if run_parts[-2] == "repair":
                     return "REPAIRING"
         return None
-
-    @staticmethod
-    def _implementation_run_id(
-        work_item: WorkItem,
-        events: list[WorkEvent],
-    ) -> str:
-        prefix = f"{work_item.id}:implement:"
-        blocker = next(
-            (
-                event
-                for event in reversed(events)
-                if event.event_type is WorkEventType.WORK_BLOCKED
-            ),
-            None,
-        )
-        if blocker is not None and blocker.payload_json.get("reason") == "implement_failed":
-            failed_run_id = str(blocker.payload_json.get("run_id", ""))
-            if not failed_run_id.startswith(prefix):
-                raise ValueError("implementation blocker has an invalid run ID")
-            try:
-                attempt = int(failed_run_id.removeprefix(prefix))
-            except ValueError as exc:
-                raise ValueError("implementation blocker has an invalid run ID") from exc
-            if attempt < 1:
-                raise ValueError("implementation blocker has an invalid run ID")
-            return f"{prefix}{attempt + 1}"
-
-        active = next(
-            (
-                event
-                for event in reversed(events)
-                if str(event.payload_json.get("run_id", "")).startswith(prefix)
-                and (
-                    (
-                        event.event_type is WorkEventType.STAGE_STARTED
-                        and event.payload_json.get("stage") == "implement"
-                    )
-                    or (
-                        event.event_type is WorkEventType.CONTROL_DEGRADED
-                        and event.payload_json.get("stage") == "implement"
-                    )
-                )
-            ),
-            None,
-        )
-        if active is not None:
-            return str(active.payload_json["run_id"])
-        return f"{prefix}1"
 
     @staticmethod
     def _repair_count(events: list[WorkEvent]) -> int:

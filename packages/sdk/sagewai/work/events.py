@@ -182,14 +182,30 @@ def stage_runtime_failures(events: list[WorkEvent], work_id: str, stage: str) ->
 
 
 def next_stage_run(events: list[WorkEvent], work_id: str, stage: str) -> tuple[str, int]:
-    """The run to execute next for ``stage``: an unfinished started run, else attempt count + 1."""
-    run_ids = stage_run_ids(events, work_id, stage)
-    recorded = {
-        event.payload_json.get("run_id")
-        for event in events
-        if event.event_type is WorkEventType.EXECUTION_RECORDED
-    }
-    if run_ids and run_ids[-1] not in recorded:
-        return run_ids[-1], len(run_ids)
+    """The run to execute next for ``stage``.
+
+    The latest started run is reused while it is neither completed nor recorded as
+    ``failed`` or ``blocked``; otherwise the next attempt number starts a new run.
+    """
+    ordered = sorted(events, key=lambda item: item.sequence)
+    run_ids = stage_run_ids(ordered, work_id, stage)
+    if run_ids:
+        latest = run_ids[-1]
+        completed = any(
+            event.event_type is WorkEventType.STAGE_COMPLETED
+            and event.payload_json.get("run_id") == latest
+            for event in ordered
+        )
+        status = next(
+            (
+                event.payload_json.get("status")
+                for event in reversed(ordered)
+                if event.event_type is WorkEventType.EXECUTION_RECORDED
+                and event.payload_json.get("run_id") == latest
+            ),
+            None,
+        )
+        if not completed and status not in {"failed", "blocked"}:
+            return latest, len(run_ids)
     attempt = len(run_ids) + 1
     return f"{work_id}:{stage}:{attempt}", attempt

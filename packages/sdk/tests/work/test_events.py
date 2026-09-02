@@ -232,3 +232,32 @@ def test_next_stage_run_reuses_an_unfinished_run_and_counts_failures() -> None:
     assert stage_runtime_failures(events, "w", "implement") == 1
     assert next_stage_run(events, "w", "implement") == ("w:implement:3", 3)
     assert next_stage_run(events, "w", "review") == ("w:review:1", 1)
+    events.append(
+        _event(
+            5,
+            WorkEventType.STAGE_STARTED,
+            {"stage": "implement", "run_id": "w:implement:3", "runtime": "codex"},
+            project_id="p",
+            work_id="w",
+        )
+    )
+    events.append(
+        _event(
+            6,
+            WorkEventType.EXECUTION_RECORDED,
+            {"run_id": "w:implement:3", "status": "passed"},
+            project_id="p",
+            work_id="w",
+        )
+    )
+    assert next_stage_run(events, "w", "implement") == ("w:implement:3", 3)
+    events.append(
+        _event(
+            7,
+            WorkEventType.STAGE_COMPLETED,
+            {"stage": "implement", "run_id": "w:implement:3"},
+            project_id="p",
+            work_id="w",
+        )
+    )
+    assert next_stage_run(events, "w", "implement") == ("w:implement:4", 4)
