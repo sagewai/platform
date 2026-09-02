@@ -136,6 +136,10 @@ def _question(spec: ClarificationSpec) -> ClarificationQuestion:
     )
 
 
+def _candidate_titles(candidates: tuple[str, ...]) -> str:
+    return " and ".join(CATALOGUE[candidate].title for candidate in candidates)
+
+
 def _preview(template: TaskTemplate, cron: str | None, questions: tuple[ClarificationQuestion, ...]) -> str:
     reads = {
         "software": "the trusted repository checkout and the brief",
@@ -179,7 +183,8 @@ def route(brief: str, defaults: TaskDefaults) -> IntakeResult:
         template = CATALOGUE[top_id]
     else:
         band = "synthesis"
-        template = CATALOGUE["software_delivery"]
+        template = CATALOGUE[top_id]
+    candidates = tuple(template_id for _, template_id in scored[:2])
 
     slots: dict[str, Any] = {}
     if template.profile == "software" and isinstance(defaults.target, SoftwareTarget):
@@ -207,19 +212,31 @@ def route(brief: str, defaults: TaskDefaults) -> IntakeResult:
             questions.append(_question(spec))
         elif spec.when == "short_brief" and band == "synthesis" and short:
             questions.append(_question(spec))
-    questions = questions[:_MAX_QUESTIONS]
+    questions = sorted(questions, key=lambda question: question.defaultable)[:_MAX_QUESTIONS]
+    preview = _preview(template, cron, tuple(questions))
+    if band == "synthesis":
+        preview = (
+            f"The brief did not clearly match a template; best guess is {template.title}; "
+            f"candidates are {_candidate_titles(candidates)}; the template must be confirmed "
+            f"before creation. {preview}"
+        )
+    elif band == "picker":
+        preview = (
+            f"Best guess is {template.title}; candidates are {_candidate_titles(candidates)}; "
+            f"use this as a suggestion. {preview}"
+        )
 
     return IntakeResult(
         template_id=template.id,
         template_version=template.version,
         band=band,
         confidence=round(min(top_score, 1.0), 3),
-        candidates=tuple(template_id for _, template_id in scored[:2]),
+        candidates=candidates,
         slots=slots,
         cron=cron,
         timezone=defaults.timezone,
         questions=tuple(questions),
-        preview=_preview(template, cron, tuple(questions)),
+        preview=preview,
     )
 
 

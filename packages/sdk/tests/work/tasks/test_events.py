@@ -41,6 +41,7 @@ def _record(**updates) -> TaskRecord:
         title="Build the thing",
         profile="software",
         status=TaskStatus.PLANNING,
+        last_event_sequence=0,
         created_at=NOW,
         updated_at=NOW,
     )
@@ -135,6 +136,7 @@ def test_fold_record_applies_status_gates_questions_cycles_and_budget() -> None:
     ]
     folded = fold_record(_record(), events)
     assert folded.status is TaskStatus.CLARIFYING
+    assert folded.last_event_sequence == 3
     assert folded.pending_questions == 2
     assert folded.pending_material_questions == 1
     assert folded.attention_owner is AttentionOwner.USER
@@ -149,6 +151,7 @@ def test_fold_record_applies_status_gates_questions_cycles_and_budget() -> None:
         _event(9, TaskEventType.TASK_STATUS_CHANGED, {"status": "PLAN_PROPOSED"}),
     ]
     folded = fold_record(_record(), events)
+    assert folded.last_event_sequence == 9
     assert folded.pending_questions == 0 and folded.pending_material_questions == 0
     assert folded.plan_version == 1
     assert folded.pending_gate == "plan:1:1"
@@ -174,6 +177,7 @@ def test_fold_record_applies_status_gates_questions_cycles_and_budget() -> None:
         ),
     ]
     folded = fold_record(_record(), events)
+    assert folded.last_event_sequence == 14
     assert folded.pending_gate is None
     assert folded.current_cycle == 1
     assert folded.attention_owner is AttentionOwner.EXTERNAL
@@ -190,6 +194,7 @@ def test_fold_record_applies_status_gates_questions_cycles_and_budget() -> None:
         _event(16, TaskEventType.TASK_STATUS_CHANGED, {"status": "SCHEDULED"}),
     ]
     folded = fold_record(_record(), events)
+    assert folded.last_event_sequence == 16
     assert folded.next_run_at == datetime(2026, 9, 3, 6, 0, tzinfo=timezone.utc)
     assert folded.attention_owner is None
     assert folded.board_column is BoardColumn.PLANNED
@@ -226,5 +231,6 @@ def test_fold_applies_only_unapplied_events() -> None:
     events = [_event(1, TaskEventType.CLARIFICATION_REQUESTED, {"questions": [{"id": "q1", "defaultable": True}]})]
     once = fold_record(_record(), events)
     assert once.pending_questions == 1
-    assert fold_record(once, []).pending_questions == 1
-    assert fold_record(once, events).pending_questions == 2
+    assert once.last_event_sequence == 1
+    assert fold_record(once, []) == once
+    assert fold_record(once, events) == once

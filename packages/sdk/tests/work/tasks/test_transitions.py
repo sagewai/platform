@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from sagewai.work.tasks.models import TaskStatus
+from sagewai.work.tasks.models import TERMINAL_STATUSES, TaskStatus
 from sagewai.work.tasks.transitions import IllegalTransitionError, assert_transition
 
 
@@ -29,17 +29,31 @@ from sagewai.work.tasks.transitions import IllegalTransitionError, assert_transi
         (TaskStatus.EXECUTING, TaskStatus.PLANNING),
         (TaskStatus.ASSESSING, TaskStatus.COMPLETE),
         (TaskStatus.ASSESSING, TaskStatus.SCHEDULED),
+        (TaskStatus.ASSESSING, TaskStatus.PAUSED),
         (TaskStatus.SCHEDULED, TaskStatus.EXECUTING),
         (TaskStatus.EXECUTING, TaskStatus.PAUSED),
         (TaskStatus.PAUSED, TaskStatus.EXECUTING),
+        (TaskStatus.PAUSED, TaskStatus.ASSESSING),
         (TaskStatus.BLOCKED, TaskStatus.EXECUTING),
+        (TaskStatus.BLOCKED, TaskStatus.PAUSED),
+        (TaskStatus.PAUSED, TaskStatus.BLOCKED),
         (TaskStatus.BUDGET_EXHAUSTED, TaskStatus.EXECUTING),
+        (TaskStatus.BUDGET_EXHAUSTED, TaskStatus.PAUSED),
+        (TaskStatus.PAUSED, TaskStatus.BUDGET_EXHAUSTED),
         (TaskStatus.CONTROL_DEGRADED, TaskStatus.EXECUTING),
+        (TaskStatus.CONTROL_DEGRADED, TaskStatus.PAUSED),
+        (TaskStatus.PAUSED, TaskStatus.CONTROL_DEGRADED),
         (TaskStatus.EXECUTING, TaskStatus.CANCELLED),
     ],
 )
 def test_allowed_transitions(old: TaskStatus, new: TaskStatus) -> None:
     assert_transition(old, new)
+
+
+def test_pause_is_reachable_from_every_non_terminal_status() -> None:
+    for status in TaskStatus:
+        if status not in TERMINAL_STATUSES and status is not TaskStatus.PAUSED:
+            assert_transition(status, TaskStatus.PAUSED)
 
 
 @pytest.mark.parametrize(

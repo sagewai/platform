@@ -125,7 +125,7 @@ class TaskStore:
         if record.task_id != task.id or record.project_id != task.project_id:
             raise ValueError("record belongs to a different task")
         scope = project_scope_key(task.project_id)
-        stored = record.model_copy(update={"revision": 1})
+        stored = record.model_copy(update={"revision": 1, "last_event_sequence": events[-1].sequence})
         try:
             async with self._engine.begin() as conn:
                 await conn.execute(
@@ -157,6 +157,13 @@ class TaskStore:
         self._validate_events(task_id, project_id, events, expected_sequence=expected_sequence)
         if record.task_id != task_id or record.project_id != project_id:
             raise ValueError("record belongs to a different task")
+        expected_last_sequence = expected_sequence + len(events) - 1
+        if record.last_event_sequence != expected_last_sequence:
+            raise ValueError(
+                "projection last_event_sequence "
+                f"{record.last_event_sequence} does not match appended stream ending at "
+                f"{expected_last_sequence}"
+            )
         scope = project_scope_key(project_id)
         try:
             async with self._engine.begin() as conn:

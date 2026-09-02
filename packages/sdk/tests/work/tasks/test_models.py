@@ -174,9 +174,11 @@ def test_defaults_and_record_round_trip() -> None:
         title="Build the thing",
         profile="software",
         status=TaskStatus.PLANNING,
+        last_event_sequence=0,
         created_at=NOW,
         updated_at=NOW,
     )
     assert record.board_column.value == "inbox"
     assert record.budget_used == BudgetUsed()
+    assert record.last_event_sequence == 0
     assert record.revision == 0

@@ -82,6 +82,7 @@ def _record(task: Task) -> TaskRecord:
         title=task.title,
         profile=task.profile,
         status=TaskStatus.PLANNING,
+        last_event_sequence=0,
         created_at=NOW,
         updated_at=NOW,
     )
@@ -112,10 +113,12 @@ async def test_create_persists_definition_projection_events_and_feed(store: Task
     task = _task()
     record = await _create(store, task)
     assert record.revision == 1
+    assert record.last_event_sequence == 1
     loaded = await store.load(task.id, project_id=task.project_id)
     assert loaded is not None
     assert loaded[0] == task
     assert loaded[1].status is TaskStatus.PLANNING
+    assert loaded[1].last_event_sequence == 1
     events = await store.read_events(task.id, project_id=task.project_id)
     assert [event.sequence for event in events] == [1]
     feed = await store.read_feed(task.id, project_id=task.project_id)
@@ -143,6 +146,7 @@ async def test_append_requires_expected_sequence_and_updates_projection(store: T
         task_id=task.id, project_id=task.project_id, events=events, expected_sequence=2, record=folded
     )
     assert appended.revision == 2
+    assert appended.last_event_sequence == 2
     assert appended.status is TaskStatus.CLARIFYING
     with pytest.raises(StaleTaskError):
         await store.append(
@@ -151,7 +155,11 @@ async def test_append_requires_expected_sequence_and_updates_projection(store: T
     stale = (_event(task, 5, TaskEventType.TASK_STATUS_CHANGED, {"status": "PLANNING"}),)
     with pytest.raises(StaleTaskError):
         await store.append(
-            task_id=task.id, project_id=task.project_id, events=stale, expected_sequence=5, record=folded
+            task_id=task.id,
+            project_id=task.project_id,
+            events=stale,
+            expected_sequence=5,
+            record=fold_record(folded, stale),
         )
     feed = await store.read_feed(task.id, project_id=task.project_id, after=1)
     assert [entry.feed_sequence for entry in feed] == [2]
@@ -183,6 +191,7 @@ async def test_list_records_filters_by_status_and_scope(store: TaskStore) -> Non
     await _create(store, _task("task-2", project_id="project-b"))
     records = await store.list_records(project_id="project-a")
     assert [record.task_id for record in records] == ["task-1"]
+    assert records[0].last_event_sequence == 1
     assert await store.list_records(project_id="project-a", statuses=(TaskStatus.COMPLETE,)) == []
 
 
@@ -311,8 +320,26 @@ async def test_append_never_rewrites_lease_and_detects_projection_change(store: 
     with pytest.raises(StaleTaskError):
         await store.append(
             task_id=task.id, project_id=task.project_id, events=more, expected_sequence=3,
-            record=folded, lease_epoch=epoch, expected_revision=7,
+            record=fold_record(folded, more), lease_epoch=epoch, expected_revision=7,
         )
+
+
+@pytest.mark.asyncio
+async def test_append_rejects_projection_sequence_mismatch(store: TaskStore) -> None:
+    task = _task()
+    record = await _create(store, task)
+    events = (_event(task, 2, TaskEventType.TASK_STATUS_CHANGED, {"status": "CLARIFYING"}),)
+    folded = fold_record(record, events)
+    stale_projection = folded.model_copy(update={"last_event_sequence": 1})
+    with pytest.raises(ValueError, match="projection last_event_sequence"):
+        await store.append(
+            task_id=task.id,
+            project_id=task.project_id,
+            events=events,
+            expected_sequence=2,
+            record=stale_projection,
+        )
+    assert [event.sequence for event in await store.read_events(task.id, project_id=task.project_id)] == [1]
 
 
 @pytest.mark.asyncio

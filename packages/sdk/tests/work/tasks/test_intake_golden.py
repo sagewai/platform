@@ -19,18 +19,25 @@ from sagewai.work.tasks.models import TaskDefaults
 from .golden_goals import GOLDEN_GOALS
 
 DEFAULTS = TaskDefaults(project_id="project-a")
-RESEARCH = "SYNTHETIC_scheduled_research"
+RESERVED_BLUEPRINTS = {"SYNTHETIC_event_triage", "SYNTHETIC_batch_extract"}
 
 
-@pytest.mark.parametrize("goal,blueprint,band", GOLDEN_GOALS, ids=[g[0][:40] for g in GOLDEN_GOALS])
-def test_golden_goal_bands(goal: str, blueprint: str, band: str) -> None:
+@pytest.mark.parametrize(
+    "goal,blueprint,blueprint_band,expected_template_id,expected_band",
+    GOLDEN_GOALS,
+    ids=[g[0][:40] for g in GOLDEN_GOALS],
+)
+def test_golden_goal_bands(
+    goal: str,
+    blueprint: str | None,
+    blueprint_band: str,
+    expected_template_id: str,
+    expected_band: str,
+) -> None:
     result = route(goal, DEFAULTS)
-    if blueprint == RESEARCH and band == "auto_route":
-        assert result.template_id == "scheduled_research_report"
-        assert result.band == "auto_route", result
-    else:
-        # Triage, extract, picker, and synthesis goals must never auto-route to the report template.
-        assert not (result.template_id == "scheduled_research_report" and result.band == "auto_route"), result
+    assert (result.template_id, result.band) == (expected_template_id, expected_band)
+    if blueprint in RESERVED_BLUEPRINTS:
+        assert result.band != "auto_route", result
 
 
 def test_golden_set_size() -> None:

@@ -137,7 +137,20 @@ def board_column(status: TaskStatus, owner: AttentionOwner | None) -> BoardColum
 def fold_record(previous: TaskRecord, events: Iterable[TaskEvent]) -> TaskRecord:
     """Apply events not yet reflected in ``previous``, in sequence order.
 
-    Pure; callers pass only unapplied events.
+    Pure; events at or below ``previous.last_event_sequence`` are ignored.
+
+    Payload keys read by the projection:
+    TASK_STATUS_CHANGED: status
+    CLARIFICATION_REQUESTED: questions[*].defaultable
+    CLARIFICATION_ANSWERED: material
+    CLARIFICATION_DEFAULTED: none
+    PLAN_ACCEPTED: version
+    GATE_REQUESTED: gate_id
+    GATE_DECIDED: gate_id
+    CYCLE_STARTED: cycle
+    CYCLE_COMPLETED: next_run_at
+    ATTENTION_CHANGED: owner, reason
+    BUDGET_RECORDED: budget_used
     """
     values = previous.model_dump()
     explicit: tuple[AttentionOwner, str] | None = None
@@ -146,6 +159,8 @@ def fold_record(previous: TaskRecord, events: Iterable[TaskEvent]) -> TaskRecord
     updated_at = previous.updated_at
     for event in sorted(events, key=lambda item: item.sequence):
         if event.task_id != previous.task_id or event.project_id != previous.project_id:
+            continue
+        if event.sequence <= values["last_event_sequence"]:
             continue
         payload = event.payload_json
         event_type = event.event_type
@@ -196,6 +211,7 @@ def fold_record(previous: TaskRecord, events: Iterable[TaskEvent]) -> TaskRecord
         elif event_type is TaskEventType.BUDGET_RECORDED:
             values["budget_used"] = BudgetUsed.model_validate(payload["budget_used"])
         updated_at = max(updated_at, event.created_at)
+        values["last_event_sequence"] = event.sequence
     owner, reason = derive_attention(
         status=values["status"],
         pending_gate=values["pending_gate"],

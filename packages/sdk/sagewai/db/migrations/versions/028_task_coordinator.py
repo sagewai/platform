@@ -54,6 +54,7 @@ def upgrade() -> None:
         sa.Column("title", sa.Text(), nullable=False),
         sa.Column("profile", sa.Text(), nullable=False),
         sa.Column("status", sa.Text(), nullable=False),
+        sa.Column("last_event_sequence", sa.Integer(), nullable=False),
         sa.Column("board_column", sa.Text(), nullable=False),
         sa.Column("attention_owner", sa.Text(), nullable=True),
         sa.Column("waiting_reason", sa.Text(), nullable=True),

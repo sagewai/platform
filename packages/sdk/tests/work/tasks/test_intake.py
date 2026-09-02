@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import sagewai.work.tasks.intake as intake
 from sagewai.work.tasks.intake import (
     extract_schedule,
     route,
@@ -95,15 +96,36 @@ def test_route_short_or_unmatched_brief_is_synthesis_with_outcome_question() -> 
     result = route("make it better", DEFAULTS)
     assert result.template_id == "software_delivery"
     assert result.band == "synthesis"
+    assert result.preview.startswith(
+        "The brief did not clearly match a template; best guess is Software delivery; "
+        "candidates are Software delivery and Scheduled research report; "
+        "the template must be confirmed before creation."
+    )
     ids = [question.id for question in result.questions]
     assert "outcome" in ids and "repository" in ids
     outcome = next(question for question in result.questions if question.id == "outcome")
     assert outcome.defaultable and outcome.default
 
 
+def test_route_picker_preview_names_best_guess_and_candidates() -> None:
+    result = route("Research stuff about my competitors", DEFAULTS)
+    assert result.template_id == "scheduled_research_report"
+    assert result.band == "picker"
+    assert result.preview.startswith(
+        "Best guess is Scheduled research report; candidates are Scheduled research report "
+        "and Software delivery; use this as a suggestion."
+    )
+
+
 def test_route_never_asks_more_than_three_questions() -> None:
     result = route("do", DEFAULTS)
     assert len(result.questions) <= 3
+
+
+def test_route_keeps_material_questions_when_truncating(monkeypatch) -> None:
+    monkeypatch.setattr(intake, "_MAX_QUESTIONS", 1)
+    result = intake.route("Every 2 hours scan these 5 vendor blogs and produce a digest", DEFAULTS)
+    assert [question.id for question in result.questions] == ["sources"]
 
 
 def test_score_template_is_symmetric_in_catalogue_order() -> None:

@@ -2062,6 +2062,7 @@ class TaskModel(Base):
     title: Mapped[str] = mapped_column(Text, nullable=False)
     profile: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False)
+    last_event_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     board_column: Mapped[str] = mapped_column(Text, nullable=False)
     attention_owner: Mapped[str | None] = mapped_column(Text, nullable=True)
     waiting_reason: Mapped[str | None] = mapped_column(Text, nullable=True)

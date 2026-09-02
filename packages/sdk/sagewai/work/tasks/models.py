@@ -363,6 +363,7 @@ class TaskRecord(BaseModel):
     title: str
     profile: Literal["software", "report"]
     status: TaskStatus
+    last_event_sequence: int
     board_column: BoardColumn = BoardColumn.INBOX
     attention_owner: AttentionOwner | None = None
     waiting_reason: str | None = None

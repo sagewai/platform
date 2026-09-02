@@ -906,7 +906,6 @@ def create_admin_serve_app(
         app.state.work_store = WorkStore(engine=_db_factory.get_engine())
         from sagewai.work.tasks import TaskStore
         app.state.task_store = TaskStore(engine=_db_factory.get_engine())
-        await app.state.task_store.init()
 
         # Eager fail-closed startup: build the SQLite schema, or (on Postgres)
         # verify the DB is reachable and migrated. Raises here rather than on the
