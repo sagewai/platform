@@ -57,7 +57,7 @@ New runtime deps added for tool-catalog batch 1 (no-auth tier tools).
 | Package | Version | Licence | Purpose |
 |---------|---------|---------|---------|
 | duckduckgo-search | 8.1.1 | MIT | DuckDuckGo backend for `web_search` tool |
-| pypdf | 6.11.0 | BSD-3-Clause | PDF text extraction for `pdf_parse` tool |
+| pypdf | 6.16.2 | BSD-3-Clause | PDF text extraction for `pdf_parse` tool |
 | readability-lxml | 0.8.4.1 | Apache-2.0 | Main-content extraction for `web_scrape` tool |
 
 Deps promoted to base for durable-persistence (PR2a — SQLite default):
@@ -157,6 +157,7 @@ using `gh attestation verify`.
 | 2026-06-22 | pypdf | 6.13.0 → 6.13.3 | GHSA-jm82-fx9c-mx94 (PDF text extraction — `pdf_parse` tool) | Bumped base-dep pin; re-locked; `pip-audit` clean, smoke green |
 | 2026-06-22 | aiohttp | 3.14.0 → 3.14.1 | 8 CVEs (CVE-2026-54273 / 54274 / 54275 / 54276 / 54277 / 54278 / 54279 / 54280) | Transitive bump via `uv lock --upgrade-package aiohttp` (parents: litellm/aiodocker/kubernetes-asyncio); surfaced by `pip-audit` while fixing the above; gate now clean |
 | 2026-06-22 | starlette | 1.2.0 → 1.3.1 | CVE-2026-54282, CVE-2026-54283 (ASGI framework) | Transitive bump via `uv lock --upgrade-package starlette` (parents: fastapi/sse-starlette); surfaced by `pip-audit`; gate now clean |
+| 2026-09-02 | pypdf | 6.15.0 → 6.16.2 | CVE-2026-84309, CVE-2026-84310, CVE-2026-84311 (PDF text extraction — `pdf_parse` tool) | Bumped base-dep pin in `packages/sdk/pyproject.toml`; re-locked; `pip-audit` clean |
 
 ## Tools
 
