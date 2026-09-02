@@ -369,3 +369,33 @@ def test_work_record_is_a_mutable_projection() -> None:
 def test_pr1_does_not_define_evidence_persistence() -> None:
     assert not hasattr(work, "Evidence")
     assert not hasattr(work, "KnowledgeItem")
+
+
+def test_action_intent_and_request_carry_rollback_and_post_check() -> None:
+    from sagewai.work.models import ActionRequest
+
+    intent = ActionIntent(
+        project_id="p",
+        action_id="w:merge",
+        capability="github.merge",
+        target="pr",
+        expected_effect="merge",
+        scope={},
+        risk="medium",
+        reversibility=Reversibility.COMPENSATABLE,
+        required_permission="github.write",
+        evidence_refs=(),
+        rollback="revert_pull_request",
+        post_check="merged_sha_read_back",
+    )
+    assert intent.rollback == "revert_pull_request"
+    request = ActionRequest(
+        project_id="p",
+        action="merge",
+        work_id="w",
+        risk="medium",
+        reversibility=Reversibility.COMPENSATABLE,
+        scope="pr",
+        evidence_refs=(),
+    )
+    assert request.rollback is None and request.post_check is None

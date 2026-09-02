@@ -1059,10 +1059,10 @@ async def test_build_lifecycle_composes_persistent_fleet_stages(
         call["workspace_transport"].__class__ is FakeTransport
         for call in fleet_calls
     )
-    assert lifecycle._analyst.runtime.name == "fleet:runtime.claude"
-    assert lifecycle._implementer.runtime.name == "fleet:runtime.codex"
-    assert lifecycle._reviewer.runtime.name == "fleet:runtime.claude"
-    assert lifecycle._repairer.runtime.name == "fleet:runtime.codex"
+    assert lifecycle._analyst.for_position(1).runtime.name == "fleet:runtime.claude"
+    assert lifecycle._implementer.for_position(1).runtime.name == "fleet:runtime.codex"
+    assert lifecycle._reviewer.for_position(1).runtime.name == "fleet:runtime.claude"
+    assert lifecycle._repairer.for_position(1).runtime.name == "fleet:runtime.codex"
 
 
 def test_fleet_native_runtime_requires_explicit_project_and_repository(tmp_path) -> None:

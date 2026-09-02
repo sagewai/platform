@@ -30,6 +30,7 @@ from sagewai.db.models import (
     TaskEventModel,
     TaskFeedModel,
     TaskModel,
+    TaskRepositoryLeaseModel,
     TaskSpendModel,
 )
 from sagewai.work.tasks.events import TaskEvent
@@ -91,6 +92,7 @@ class TaskStore:
         self._commands = TaskCommandModel.__table__
         self._spend = TaskSpendModel.__table__
         self._defaults = TaskDefaultsModel.__table__
+        self._repository_leases = TaskRepositoryLeaseModel.__table__
 
     @property
     def feed_bus(self) -> FeedBus:
@@ -369,6 +371,89 @@ class TaskStore:
         async with self._engine.begin() as conn:
             result = await conn.execute(statement)
         return result.rowcount == 1
+
+    async def acquire_repository_lease(
+        self, lease_key: str, *, project_id: str, task_id: str, work_id: str | None, ttl_seconds: int
+    ) -> bool:
+        """Hold the publication lease for one repository and branch; same task re-acquires; expired leases are taken over."""
+        scope = project_scope_key(project_id)
+        now = self._now_expr()
+        async with self._engine.begin() as conn:
+            result = await conn.execute(
+                update(self._repository_leases)
+                .where(
+                    self._repository_leases.c.project_scope_key == scope,
+                    self._repository_leases.c.lease_key == lease_key,
+                    (self._repository_leases.c.task_id == task_id)
+                    | (self._repository_leases.c.expires_at.is_(None))
+                    | (self._repository_leases.c.expires_at < now),
+                )
+                .values(task_id=task_id, work_id=work_id, acquired_at=now, expires_at=self._expiry_expr(ttl_seconds))
+            )
+            if result.rowcount == 1:
+                return True
+            try:
+                async with conn.begin_nested():
+                    await conn.execute(
+                        insert(self._repository_leases).values(
+                            project_scope_key=scope,
+                            lease_key=lease_key,
+                            task_id=task_id,
+                            work_id=work_id,
+                            acquired_at=now,
+                            expires_at=self._expiry_expr(ttl_seconds),
+                        )
+                    )
+            except IntegrityError:
+                return False
+        return True
+
+    async def renew_repository_lease(
+        self, lease_key: str, *, project_id: str, task_id: str, ttl_seconds: int
+    ) -> bool:
+        scope = project_scope_key(project_id)
+        statement = (
+            update(self._repository_leases)
+            .where(
+                self._repository_leases.c.project_scope_key == scope,
+                self._repository_leases.c.lease_key == lease_key,
+                self._repository_leases.c.task_id == task_id,
+                self._repository_leases.c.expires_at >= self._now_expr(),
+            )
+            .values(expires_at=self._expiry_expr(ttl_seconds))
+        )
+        async with self._engine.begin() as conn:
+            result = await conn.execute(statement)
+        return result.rowcount == 1
+
+    async def release_repository_lease(self, lease_key: str, *, project_id: str, task_id: str) -> bool:
+        scope = project_scope_key(project_id)
+        statement = (
+            self._repository_leases.delete()
+            .where(
+                self._repository_leases.c.project_scope_key == scope,
+                self._repository_leases.c.lease_key == lease_key,
+                self._repository_leases.c.task_id == task_id,
+            )
+        )
+        async with self._engine.begin() as conn:
+            result = await conn.execute(statement)
+        return result.rowcount == 1
+
+    async def repository_lease_holder(
+        self, lease_key: str, *, project_id: str
+    ) -> tuple[str, str | None] | None:
+        scope = project_scope_key(project_id)
+        query = select(self._repository_leases.c.task_id, self._repository_leases.c.work_id).where(
+            self._repository_leases.c.project_scope_key == scope,
+            self._repository_leases.c.lease_key == lease_key,
+            self._repository_leases.c.expires_at >= self._now_expr(),
+        )
+        async with self._engine.connect() as conn:
+            row = (await conn.execute(query)).first()
+        if row is None:
+            return None
+        return row._mapping["task_id"], row._mapping["work_id"]
 
     # ── receipts, ledger, defaults ────────────────────────────────────────
 

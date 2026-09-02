@@ -39,6 +39,9 @@ class WorkEventType(str, Enum):
     OBSERVATION_RECORDED = "OBSERVATION_RECORDED"
     EXTERNAL_OUTCOME_RECORDED = "EXTERNAL_OUTCOME_RECORDED"
     OPERATOR_DISCIPLINE_RECORDED = "OPERATOR_DISCIPLINE_RECORDED"
+    WORK_SUPERSEDED = "WORK_SUPERSEDED"
+    RUNTIME_SELECTED = "RUNTIME_SELECTED"
+    BASE_MOVED = "BASE_MOVED"
     CONTROL_DEGRADED = "CONTROL_DEGRADED"
     CONTROL_RESTORED = "CONTROL_RESTORED"
     ROLLBACK_RECORDED = "ROLLBACK_RECORDED"
@@ -153,3 +156,56 @@ def execution_attempt_from_events(
             "profile_context": profile_context,
         }
     )
+
+
+def stage_run_ids(events: list[WorkEvent], work_id: str, stage: str) -> list[str]:
+    """Run ids of every started attempt of ``stage`` for ``work_id``, in sequence order."""
+    prefix = f"{work_id}:{stage}:"
+    return [
+        str(event.payload_json["run_id"])
+        for event in sorted(events, key=lambda item: item.sequence)
+        if event.event_type is WorkEventType.STAGE_STARTED
+        and event.payload_json.get("stage") == stage
+        and str(event.payload_json.get("run_id", "")).startswith(prefix)
+    ]
+
+
+def stage_runtime_failures(events: list[WorkEvent], work_id: str, stage: str) -> int:
+    """Attempts of ``stage`` whose execution record says ``failed`` (runtime failures only)."""
+    run_ids = set(stage_run_ids(events, work_id, stage))
+    return sum(
+        event.event_type is WorkEventType.EXECUTION_RECORDED
+        and event.payload_json.get("run_id") in run_ids
+        and event.payload_json.get("status") == "failed"
+        for event in events
+    )
+
+
+def next_stage_run(events: list[WorkEvent], work_id: str, stage: str) -> tuple[str, int]:
+    """The run to execute next for ``stage``.
+
+    The latest started run is reused while it is neither completed nor recorded as
+    ``failed`` or ``blocked``; otherwise the next attempt number starts a new run.
+    """
+    ordered = sorted(events, key=lambda item: item.sequence)
+    run_ids = stage_run_ids(ordered, work_id, stage)
+    if run_ids:
+        latest = run_ids[-1]
+        completed = any(
+            event.event_type is WorkEventType.STAGE_COMPLETED
+            and event.payload_json.get("run_id") == latest
+            for event in ordered
+        )
+        status = next(
+            (
+                event.payload_json.get("status")
+                for event in reversed(ordered)
+                if event.event_type is WorkEventType.EXECUTION_RECORDED
+                and event.payload_json.get("run_id") == latest
+            ),
+            None,
+        )
+        if not completed and status not in {"failed", "blocked"}:
+            return latest, len(run_ids)
+    attempt = len(run_ids) + 1
+    return f"{work_id}:{stage}:{attempt}", attempt

@@ -47,6 +47,7 @@ from sagewai.work.profiles.software import (
     SoftwareStageOperator,
     SoftwareVerifier,
     SoftwareWorktreeManager,
+    StageOperatorLadder,
 )
 from sagewai.work.profiles.software.fleet_worker import (
     SoftwareFleetTaskHandler,
@@ -240,10 +241,14 @@ def _worker_runner(
     )
 
 
-@pytest.mark.parametrize("terminal_failure", [False, True], ids=["retarget", "attempt-exhausted"])
+@pytest.mark.parametrize(
+    "task_attempts_exhausted",
+    [False, True],
+    ids=["retarget", "escalates-after-task-attempts-exhausted"],
+)
 @pytest.mark.asyncio
 async def test_fleet_worker_loss_resumes_only_unfinished_software_stage(
-    terminal_failure: bool,
+    task_attempts_exhausted: bool,
     monkeypatch: pytest.MonkeyPatch,
     dialect_engine,  # noqa: F811
     tmp_path,
@@ -255,7 +260,7 @@ async def test_fleet_worker_loss_resumes_only_unfinished_software_stage(
     await knowledge_store.init()
     durability = InMemoryStore()
     task_store = InMemoryTaskStore(
-        lease_ttl_seconds=0.01, max_attempts=1 if terminal_failure else 3
+        lease_ttl_seconds=0.01, max_attempts=1 if task_attempts_exhausted else 3
     )
     registry = InMemoryFleetRegistry()
     incompatible = await _register_worker(
@@ -290,6 +295,20 @@ async def test_fleet_worker_loss_resumes_only_unfinished_software_stage(
     implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
     repairer = MutationRuntime(implement_text="unused", repair_text="fixed")
     artifact_store = LocalArtifactStore(root=tmp_path / "objects")
+    analyst = StageOperatorLadder(
+        (
+            SoftwareStageOperator(
+                actor_ref="operator:analyst",
+                runtime=analyzer,
+                capabilities=_read_capabilities(),
+                controller=_controller(
+                    work_store,
+                    durability,
+                    SoftwareReadOnlyResultValidator(),
+                ),
+            ),
+        )
+    )
     lifecycle = SoftwareLifecycle(
         profile=SoftwareProfile(),
         work_store=work_store,
@@ -306,54 +325,59 @@ async def test_fleet_worker_loss_resumes_only_unfinished_software_stage(
         ),
         artifact_store=artifact_store,
         repository=repository,
-        analyst=SoftwareStageOperator(
-            actor_ref="operator:analyst",
-            runtime=analyzer,
-            capabilities=_read_capabilities(),
-            controller=_controller(
-                work_store,
-                durability,
-                SoftwareReadOnlyResultValidator(),
-            ),
+        analyst=analyst,
+        designer=analyst,
+        implementer=StageOperatorLadder(
+            (
+                SoftwareStageOperator(
+                    actor_ref="operator:implementer",
+                    runtime=implementer,
+                    capabilities=_write_capabilities(),
+                    controller=_controller(
+                        work_store,
+                        durability,
+                        SoftwareResultValidator(),
+                    ),
+                ),
+            )
         ),
-        implementer=SoftwareStageOperator(
-            actor_ref="operator:implementer",
-            runtime=implementer,
-            capabilities=_write_capabilities(),
-            controller=_controller(
-                work_store,
-                durability,
-                SoftwareResultValidator(),
-            ),
+        reviewer=StageOperatorLadder(
+            (
+                SoftwareStageOperator.fleet(
+                    actor_ref="fleet:reviewer",
+                    store=task_store,
+                    registry=registry,
+                    org_id="org-a",
+                    runtime_capability="runtime.claude",
+                    poll_interval_seconds=0.001,
+                    heartbeat_ttl=timedelta(seconds=30),
+                    workspace_transport=workspace_transport,
+                    capabilities=_read_capabilities(),
+                    controller=_controller(
+                        work_store,
+                        durability,
+                        SoftwareReadOnlyResultValidator(),
+                    ),
+                ),
+            )
         ),
-        reviewer=SoftwareStageOperator.fleet(
-            actor_ref="fleet:reviewer",
-            store=task_store,
-            registry=registry,
-            org_id="org-a",
-            runtime_capability="runtime.claude",
-            poll_interval_seconds=0.001,
-            heartbeat_ttl=timedelta(seconds=30),
-            workspace_transport=workspace_transport,
-            capabilities=_read_capabilities(),
-            controller=_controller(
-                work_store,
-                durability,
-                SoftwareReadOnlyResultValidator(),
-            ),
-        ),
-        repairer=SoftwareStageOperator(
-            actor_ref="operator:implementer",
-            runtime=repairer,
-            capabilities=_write_capabilities(),
-            controller=_controller(
-                work_store,
-                durability,
-                SoftwareResultValidator(),
-            ),
+        repairer=StageOperatorLadder(
+            (
+                SoftwareStageOperator(
+                    actor_ref="operator:implementer",
+                    runtime=repairer,
+                    capabilities=_write_capabilities(),
+                    controller=_controller(
+                        work_store,
+                        durability,
+                        SoftwareResultValidator(),
+                    ),
+                ),
+            )
         ),
         repo_instructions=("AGENTS.md",),
         verification_commands=(_always_pass_command(),),
+        max_attempts_per_stage=3,
     )
 
     first = await _register_worker(
@@ -452,22 +476,36 @@ async def test_fleet_worker_loss_resumes_only_unfinished_software_stage(
     ) - timedelta(seconds=1)
     await registry.revoke_worker(first.id)
     reaped = await task_store.reap_expired_leases()
-    if terminal_failure:
+    if task_attempts_exhausted:
         assert reaped == {"failed": 1, "requeued": 0}
+        escalated_run_id = "work-1:review:2"
+        await _wait_for_task(task_store, escalated_run_id)
+        worker_result = await replacement_runner.run_once()
+        assert worker_result == {
+            "claimed": True,
+            "run_id": escalated_run_id,
+            "status": "completed",
+            "reported": True,
+        }
         record = await asyncio.wait_for(started, timeout=1)
-        resumed = await lifecycle.resume("work-1", project_id="project-a")
         await first_runner.http_client.aclose()
         await replacement_runner.http_client.aclose()
-        assert record.status == "WORK_BLOCKED"
-        assert resumed.status == "WORK_BLOCKED"
+        assert record.status == "READY_TO_MERGE"
         assert analyzer.calls == 1
         assert implementer.calls == 1
         assert first_runtime.calls == []
-        assert replacement_runtime.calls == []
-        assert len(await task_store.list_tasks(
-            org_id="org-a", project_id="project-a"
-        )) == 1
+        assert replacement_runtime.calls == [escalated_run_id]
         events = await work_store.read_events("work-1", project_id="project-a")
+        selected = [
+            event.payload_json
+            for event in events
+            if event.event_type is WorkEventType.RUNTIME_SELECTED
+            and event.payload_json["stage"] == "review"
+        ]
+        assert [(item["run_id"], item["reason"]) for item in selected] == [
+            (run_id, "initial"),
+            (escalated_run_id, "escalated"),
+        ]
         assert any(
             event.event_type is WorkEventType.EXECUTION_RECORDED
             and event.payload_json.get("run_id") == run_id
@@ -475,7 +513,9 @@ async def test_fleet_worker_loss_resumes_only_unfinished_software_stage(
             for event in events
         )
         assert any(
-            event.event_type is WorkEventType.WORK_BLOCKED for event in events
+            event.event_type is WorkEventType.REVIEW_RECORDED
+            and event.payload_json.get("attempt_id") == escalated_run_id
+            for event in events
         )
         return
 

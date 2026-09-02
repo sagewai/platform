@@ -55,6 +55,18 @@ class GitHubMergeRejectedError(RuntimeError):
     """GitHub deterministically refused an otherwise authorized merge."""
 
 
+class BaseMovedError(ValueError):
+    """The default branch moved away from the pinned base SHA."""
+
+    def __init__(self, *, expected: str, found: str) -> None:
+        super().__init__(
+            "requested base does not match GitHub default branch: "
+            f"expected {expected}, found {found}"
+        )
+        self.expected = expected
+        self.found = found
+
+
 class GitHubIssue(BaseModel):
     """One GitHub issue normalized for software Work intake."""
 
@@ -180,7 +192,9 @@ class GitBranchPublisher(Protocol):
         repo: str,
         base_sha: str,
         default_branch: str,
-    ) -> None: ...
+    ) -> None:
+        """Implementations raise BaseMovedError when the default branch head differs from the pinned base and plain ValueError for every other failure."""
+        ...
 
     async def publish(
         self,
@@ -475,9 +489,7 @@ class WorktreeBranchPublisher:
             raise ValueError(f"GitHub default branch {default_branch} returned no commit")
         remote_sha = fields[0]
         if remote_sha != base_sha:
-            raise ValueError(
-                f"requested base does not match GitHub default branch: expected {base_sha}, found {remote_sha}"
-            )
+            raise BaseMovedError(expected=base_sha, found=remote_sha)
 
     async def publish(
         self,
@@ -679,6 +691,7 @@ class GitHubIssueLifecycle:
             "SOAKING",
             "ROLLING_BACK",
             "COMPLETE",
+            "SUPERSEDED",
         }:
             return record
         if record.status == "WORK_BLOCKED":
@@ -698,7 +711,7 @@ class GitHubIssueLifecycle:
                 pending_gate=None,
             )
 
-        if record.status not in {"READY_TO_MERGE", "MERGING"}:
+        if record.status not in {"READY_TO_MERGE", "MERGING", "BASE_MOVED"}:
             record = await self._software_lifecycle.resume(
                 work_id,
                 project_id=project_id,
@@ -856,6 +869,11 @@ class GitHubIssueLifecycle:
 
         events = await self._events(work_item.id, work_item.project_id)
         cycle_start = self._delivery_cycle_start(events)
+        target_base_sha = self._target_base_sha(
+            events,
+            initial_base_sha=software.base_sha,
+            cycle_start=cycle_start,
+        )
         pull_request = self._pull_request(events, after_sequence=cycle_start)
         if pull_request is None:
             publication = self._branch_publication(
@@ -863,17 +881,20 @@ class GitHubIssueLifecycle:
                 after_sequence=cycle_start,
             )
             if publication is None:
-                target_base_sha = self._target_base_sha(
-                    events,
-                    initial_base_sha=software.base_sha,
-                    cycle_start=cycle_start,
-                )
                 try:
                     await self._branch_publisher.validate_target(
                         owner=issue.owner,
                         repo=issue.repo,
                         base_sha=target_base_sha,
                         default_branch=issue.default_branch,
+                    )
+                except BaseMovedError as exc:
+                    return await self._hold_base_moved(
+                        work_item,
+                        record,
+                        phase="publish",
+                        expected=exc.expected,
+                        found=exc.found,
                     )
                 except ValueError as exc:
                     if not target_control_degraded:
@@ -1033,13 +1054,15 @@ class GitHubIssueLifecycle:
             action="merge",
             work_id=work_item.id,
             risk="medium",
-            reversibility=Reversibility.IRREVERSIBLE,
+            reversibility=Reversibility.COMPENSATABLE,
             scope=pull_request.url,
             evidence_refs=self._merge_evidence(
                 contract,
                 events,
                 pull_request.url,
             ),
+            rollback="revert_pull_request",
+            post_check="merged_sha_read_back",
         )
 
         if decided is None and requested is None:
@@ -1134,6 +1157,21 @@ class GitHubIssueLifecycle:
 
         merge_result: GitHubMergeResult | None = None
         if not state.merged:
+            try:
+                await self._branch_publisher.validate_target(
+                    owner=issue.owner,
+                    repo=issue.repo,
+                    base_sha=target_base_sha,
+                    default_branch=issue.default_branch,
+                )
+            except BaseMovedError as exc:
+                return await self._hold_base_moved(
+                    work_item,
+                    record,
+                    phase="merge",
+                    expected=exc.expected,
+                    found=exc.found,
+                )
             try:
                 merge_result = await self._github.merge_pull_request(
                     pull_request,
@@ -1373,6 +1411,45 @@ class GitHubIssueLifecycle:
             status="COMPLETE",
             pending_gate=None,
         )
+
+    async def _hold_base_moved(
+        self,
+        work_item: WorkItem,
+        record: WorkRecord,
+        *,
+        phase: str,
+        expected: str,
+        found: str,
+    ) -> WorkRecord:
+        payload = {
+            "phase": phase,
+            "expected_base": expected,
+            "found_base": found,
+        }
+        events = await self._events(work_item.id, work_item.project_id)
+        latest = next(
+            (
+                event
+                for event in reversed(events)
+                if event.event_type is WorkEventType.BASE_MOVED
+            ),
+            None,
+        )
+        if latest is None or latest.payload_json != payload:
+            await self._append(
+                work_id=work_item.id,
+                project_id=work_item.project_id,
+                event_type=WorkEventType.BASE_MOVED,
+                payload=payload,
+                actor_ref="github",
+            )
+        record = await self._set_record(
+            record,
+            status="BASE_MOVED",
+            pending_gate=None,
+        )
+        await self.present_pending(work_item.id, project_id=work_item.project_id)
+        return record
 
     async def _block_completion(
         self,
@@ -1704,6 +1781,7 @@ def _attention_comment(item: PendingAttention) -> str:
 
 
 __all__ = [
+    "BaseMovedError",
     "CatalogGitHubClient",
     "GitBranchPublisher",
     "GitHubClient",

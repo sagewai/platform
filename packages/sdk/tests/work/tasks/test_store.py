@@ -234,6 +234,29 @@ async def test_expired_lease_can_be_reclaimed_with_new_epoch(store: TaskStore) -
 
 
 @pytest.mark.asyncio
+async def test_repository_lease_is_exclusive_renewable_and_releasable(store: TaskStore) -> None:
+    key = "project-a:o/r:main"
+    assert await store.acquire_repository_lease(key, project_id="project-a", task_id="task-1", work_id="w1", ttl_seconds=60)
+    assert await store.acquire_repository_lease(key, project_id="project-a", task_id="task-1", work_id="w1", ttl_seconds=60)
+    assert not await store.acquire_repository_lease(key, project_id="project-a", task_id="task-2", work_id="w2", ttl_seconds=60)
+    assert await store.repository_lease_holder(key, project_id="project-a") == ("task-1", "w1")
+    assert await store.renew_repository_lease(key, project_id="project-a", task_id="task-1", ttl_seconds=60)
+    assert not await store.renew_repository_lease(key, project_id="project-a", task_id="task-2", ttl_seconds=60)
+    assert await store.release_repository_lease(key, project_id="project-a", task_id="task-1")
+    assert await store.repository_lease_holder(key, project_id="project-a") is None
+    assert await store.acquire_repository_lease(key, project_id="project-a", task_id="task-2", work_id="w2", ttl_seconds=60)
+
+
+@pytest.mark.asyncio
+async def test_expired_repository_lease_can_be_taken_over(store: TaskStore) -> None:
+    key = "project-a:o/r:main"
+    assert await store.acquire_repository_lease(key, project_id="project-a", task_id="task-1", work_id="w1", ttl_seconds=0)
+    assert await store.acquire_repository_lease(key, project_id="project-a", task_id="task-2", work_id="w2", ttl_seconds=60)
+    assert await store.repository_lease_holder(key, project_id="project-a") == ("task-2", "w2")
+    assert not await store.renew_repository_lease(key, project_id="project-a", task_id="task-1", ttl_seconds=60)
+
+
+@pytest.mark.asyncio
 async def test_terminal_task_cannot_be_claimed(store: TaskStore) -> None:
     task = _task()
     record = await _create(store, task)

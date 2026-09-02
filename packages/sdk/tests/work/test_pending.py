@@ -226,6 +226,34 @@ def test_pending_attention_taxonomy_has_exactly_four_kinds() -> None:
 
 
 @pytest.mark.asyncio
+async def test_base_moved_work_is_reported_as_blocked_attention(
+    store: WorkStore,
+) -> None:
+    await store.save_work(_record(status="BASE_MOVED", pending_gate=None))
+    await store.append_event(
+        _event(
+            1,
+            WorkEventType.BASE_MOVED,
+            {
+                "phase": "publish",
+                "expected_base": "aaa",
+                "found_base": "bbb",
+            },
+        )
+    )
+
+    pending = await store.pending_attention(project_id="project-a")
+
+    assert len(pending) == 1
+    item = pending[0]
+    assert item.kind is PendingAttentionKind.WORK_BLOCKED
+    assert item.attention_id == "work-1-event-1"
+    assert "aaa" in item.summary
+    assert "bbb" in item.summary
+    assert "publish" in item.summary
+
+
+@pytest.mark.asyncio
 async def test_profile_receipts_for_fail_and_rollback_are_one_stable_incident(
     store: WorkStore,
 ) -> None:

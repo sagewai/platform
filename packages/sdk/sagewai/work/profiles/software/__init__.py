@@ -57,6 +57,7 @@ from sagewai.work.profiles.software.fleet_workspace import (
     software_repository_ref,
 )
 from sagewai.work.profiles.software.github import (
+    BaseMovedError,
     CatalogGitHubClient,
     GitHubIssue,
     GitHubIssueLifecycle,
@@ -72,6 +73,7 @@ from sagewai.work.profiles.software.github import (
 from sagewai.work.profiles.software.lifecycle import (
     SoftwareLifecycle,
     SoftwareStageOperator,
+    StageOperatorLadder,
 )
 from sagewai.work.profiles.software.models import (
     SoftwareAnalysisContext,
@@ -109,6 +111,7 @@ from sagewai.work.profiles.software.verification import (
 )
 
 __all__ = [
+    "BaseMovedError",
     "BlastRadius",
     "CatalogGitHubClient",
     "CloudflareDeliveryConfig",
@@ -175,6 +178,7 @@ __all__ = [
     "SoftwareReviewContext",
     "SoftwareReviewFindingContext",
     "SoftwareStageOperator",
+    "StageOperatorLadder",
     "SoftwareVerificationCheck",
     "SoftwareVerifier",
     "VerificationCommandRunner",

@@ -34,6 +34,7 @@ from sagewai.work.profiles.software import (
     SoftwareRepositoryOutcome,
 )
 from sagewai.work.profiles.software.github import (
+    BaseMovedError,
     CatalogGitHubClient,
     GitHubIssue,
     GitHubIssueLifecycle,
@@ -350,7 +351,15 @@ class FakeBranchPublisher:
     def __init__(self) -> None:
         self.validations = []
         self.calls = []
-        self.fail_validation_call = None
+        self.fail_phases: set[str] = set()
+        self.validation_error: Exception | None = None
+
+    def _validation_phase(self) -> str:
+        if self.calls:
+            return "merge"
+        if self.validations:
+            return "publish"
+        return "intake"
 
     async def validate_target(
         self,
@@ -360,9 +369,12 @@ class FakeBranchPublisher:
         base_sha: str,
         default_branch: str,
     ) -> None:
+        phase = self._validation_phase()
         self.validations.append((owner, repo, base_sha, default_branch))
-        if len(self.validations) == self.fail_validation_call:
-            raise ValueError("requested base does not match GitHub default branch")
+        if phase in self.fail_phases:
+            if self.validation_error is not None:
+                raise self.validation_error
+            raise BaseMovedError(expected=base_sha, found="other")
 
     async def publish(
         self,
@@ -558,14 +570,17 @@ async def test_issue_to_pr_requires_gate_then_records_merged_sha(
     assert delivered.profile_context["github"]["merged_sha"] == "c" * 40
     assert len(github.merges) == 1
     assert github.merges[0]["expected_head_sha"] == "b" * 40
-    assert len(publisher.validations) == 2
+    assert len(publisher.validations) == 3
+    assert publisher.validations[-1] == ("octocat", "hello-world", "a" * 40, "main")
     assert await store.pending_attention(project_id=PROJECT_ID) == ()
 
     events = await store.read_events(gated.work_id, project_id=PROJECT_ID)
     requested = next(event for event in events if event.event_type is WorkEventType.GATE_REQUESTED)
     assert requested.payload_json["action"]["action"] == "merge"
     assert requested.payload_json["action"]["risk"] == "medium"
-    assert requested.payload_json["action"]["reversibility"] == "irreversible"
+    assert requested.payload_json["action"]["reversibility"] == "compensatable"
+    assert requested.payload_json["action"]["rollback"] == "revert_pull_request"
+    assert requested.payload_json["action"]["post_check"] == "merged_sha_read_back"
     decided = next(event for event in events if event.event_type is WorkEventType.GATE_DECIDED)
     assert decided.actor_ref == "operator:arda"
     assert decided.payload_json["decision"] == "allow"
@@ -1454,50 +1469,65 @@ async def test_github_rejected_merge_blocks_with_specific_pending_question(
 
 
 @pytest.mark.asyncio
-async def test_target_movement_degrades_control_and_resume_restores_it(
+async def test_target_movement_holds_work_and_resume_revalidates(
     store: WorkStore,
 ) -> None:
     flow, software, github, publisher = _flow(store)
-    publisher.fail_validation_call = 2
+    publisher.fail_phases = {"publish"}
+    publisher.validation_error = ValueError(
+        "local Git origin does not match issue repository"
+    )
 
-    frozen = await flow.start(
+    held = await flow.start(
         issue_url=ISSUE_URL,
         project_id=PROJECT_ID,
         base_sha="a" * 40,
     )
 
-    assert frozen.status == "READY_TO_MERGE"
+    assert held.status == "READY_TO_MERGE"
+    assert held.pending_gate is None
     assert publisher.calls == []
     assert github.pull_requests == []
     pending = await store.pending_attention(project_id=PROJECT_ID)
     assert [item.kind.value for item in pending] == ["CONTROL_DEGRADED"]
     assert pending[0].attention_id == "github-target"
-    assert any("github-target: requested base does not match GitHub default branch" in body for _, body in github.comments)
+    assert pending[0].summary == "local Git origin does not match issue repository"
+    events = await store.read_events(held.work_id, project_id=PROJECT_ID)
+    degraded = [
+        event for event in events if event.event_type is WorkEventType.CONTROL_DEGRADED
+    ]
+    assert len(degraded) == 1
+    assert degraded[0].payload_json == {
+        "failed_preconditions": ["github-target"],
+        "evidence_refs": [ISSUE_URL],
+        "details": "local Git origin does not match issue repository",
+        "frozen_action_ids": [
+            "publish_branch",
+            "create_pull_request",
+            "merge",
+        ],
+    }
+    assert "frozen_actions" not in degraded[0].payload_json
+    assert not any(event.event_type is WorkEventType.BASE_MOVED for event in events)
 
-    publisher.fail_validation_call = None
-    resumed = await flow.resume(frozen.work_id, project_id=PROJECT_ID)
+    publisher.fail_phases = set()
+    publisher.validation_error = None
+    resumed = await flow.resume(held.work_id, project_id=PROJECT_ID)
 
     assert resumed.status == "READY_TO_MERGE"
-    assert resumed.pending_gate == f"merge:{frozen.work_id}:7"
+    assert resumed.pending_gate == f"merge:{held.work_id}:7"
     assert len(software.starts) == 1
-    events = await store.read_events(frozen.work_id, project_id=PROJECT_ID)
-    degraded = next(
-        event for event in events if event.event_type is WorkEventType.CONTROL_DEGRADED
-    )
-    assert degraded.payload_json["frozen_action_ids"] == [
-        "publish_branch",
-        "create_pull_request",
-        "merge",
+    events = await store.read_events(held.work_id, project_id=PROJECT_ID)
+    restored = [
+        event for event in events if event.event_type is WorkEventType.CONTROL_RESTORED
     ]
-    assert "frozen_actions" not in degraded.payload_json
-    assert any(
-        event.event_type is WorkEventType.CONTROL_DEGRADED
-        for event in events
-    )
-    assert any(
-        event.event_type is WorkEventType.CONTROL_RESTORED
-        for event in events
-    )
+    assert len(restored) == 1
+    assert restored[0].payload_json == {
+        "precondition_ids": ["github-target"],
+        "evidence_refs": [ISSUE_URL],
+    }
+    assert len(publisher.calls) == 1
+    assert len(github.pull_requests) == 1
 
 
 @pytest.mark.asyncio
@@ -1701,13 +1731,18 @@ async def test_branch_publisher_rejects_base_not_at_default_branch(monkeypatch, 
         repository=tmp_path,
     )
 
-    with pytest.raises(ValueError, match="requested base does not match GitHub default branch"):
+    with pytest.raises(
+        BaseMovedError,
+        match="requested base does not match GitHub default branch",
+    ) as exc_info:
         await publisher.validate_target(
             owner="octocat",
             repo="hello-world",
             base_sha="a" * 40,
             default_branch="main",
         )
+    assert exc_info.value.expected == "a" * 40
+    assert exc_info.value.found == "b" * 40
 
 
 @pytest.mark.asyncio

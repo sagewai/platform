@@ -15,7 +15,14 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from sagewai.work import WorkEvent, WorkEventType, execution_attempt_from_events
+from sagewai.work import (
+    WorkEvent,
+    WorkEventType,
+    execution_attempt_from_events,
+    next_stage_run,
+    stage_run_ids,
+    stage_runtime_failures,
+)
 
 NOW = datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)
 RUN_ID = "work-1:implement:1"
@@ -173,3 +180,84 @@ def test_execution_attempt_ignores_same_run_from_another_project_and_work() -> N
     assert attempt.project_id == "project-a"
     assert attempt.work_id == "work-1"
     assert attempt.status == "passed"
+
+
+def test_new_event_types_exist() -> None:
+    assert WorkEventType.WORK_SUPERSEDED.value == "WORK_SUPERSEDED"
+    assert WorkEventType.RUNTIME_SELECTED.value == "RUNTIME_SELECTED"
+    assert WorkEventType.BASE_MOVED.value == "BASE_MOVED"
+
+
+def test_next_stage_run_reuses_an_unfinished_run_and_counts_failures() -> None:
+    events = [
+        _event(
+            1,
+            WorkEventType.STAGE_STARTED,
+            {"stage": "implement", "run_id": "w:implement:1", "runtime": "codex"},
+            project_id="p",
+            work_id="w",
+        ),
+    ]
+    assert next_stage_run(events, "w", "implement") == ("w:implement:1", 1)
+    events.append(
+        _event(
+            2,
+            WorkEventType.EXECUTION_RECORDED,
+            {"run_id": "w:implement:1", "status": "failed"},
+            project_id="p",
+            work_id="w",
+        )
+    )
+    assert next_stage_run(events, "w", "implement") == ("w:implement:2", 2)
+    assert stage_run_ids(events, "w", "implement") == ["w:implement:1"]
+    assert stage_runtime_failures(events, "w", "implement") == 1
+    events.append(
+        _event(
+            3,
+            WorkEventType.STAGE_STARTED,
+            {"stage": "implement", "run_id": "w:implement:2", "runtime": "codex"},
+            project_id="p",
+            work_id="w",
+        )
+    )
+    events.append(
+        _event(
+            4,
+            WorkEventType.EXECUTION_RECORDED,
+            {"run_id": "w:implement:2", "status": "blocked"},
+            project_id="p",
+            work_id="w",
+        )
+    )
+    assert stage_runtime_failures(events, "w", "implement") == 1
+    assert next_stage_run(events, "w", "implement") == ("w:implement:3", 3)
+    assert next_stage_run(events, "w", "review") == ("w:review:1", 1)
+    events.append(
+        _event(
+            5,
+            WorkEventType.STAGE_STARTED,
+            {"stage": "implement", "run_id": "w:implement:3", "runtime": "codex"},
+            project_id="p",
+            work_id="w",
+        )
+    )
+    events.append(
+        _event(
+            6,
+            WorkEventType.EXECUTION_RECORDED,
+            {"run_id": "w:implement:3", "status": "passed"},
+            project_id="p",
+            work_id="w",
+        )
+    )
+    assert next_stage_run(events, "w", "implement") == ("w:implement:3", 3)
+    events.append(
+        _event(
+            7,
+            WorkEventType.STAGE_COMPLETED,
+            {"stage": "implement", "run_id": "w:implement:3"},
+            project_id="p",
+            work_id="w",
+        )
+    )
+    assert next_stage_run(events, "w", "implement") == ("w:implement:4", 4)
