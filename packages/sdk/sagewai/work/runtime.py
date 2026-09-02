@@ -14,14 +14,28 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+from collections.abc import Callable, Mapping
 from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from sagewai.artifacts.object_store import ArtifactStore
 from sagewai.fleet.execution import run_worker_subprocess
 from sagewai.sandbox.secret_provider import SecretProvider
+from sagewai.work.activity import (
+    ACTIVITY_LOG_MAX_BYTES,
+    ActivitySink,
+    OperatorActivity,
+    activity_redactor,
+)
+from sagewai.work.activity_parsers import (
+    ActivityCounter,
+    claude_result_from_line,
+    parse_claude_stream_line,
+    parse_codex_json_line,
+)
 from sagewai.work.models import (
     ActionIntent,
     ActionResult,
@@ -175,10 +189,14 @@ class _NativeRuntime:
         secret_provider: SecretProvider | None = None,
         timeout: float = 1800,
         selection_note: str | None = None,
+        activity_sink: ActivitySink | None = None,
+        artifact_store: ArtifactStore | None = None,
     ) -> None:
         self._executable = executable
         self._secret_provider = secret_provider
         self._timeout = timeout
+        self._activity_sink = activity_sink
+        self._artifact_store = artifact_store
         self._selection_note = _validate_runtime_value(
             "runtime selection evidence",
             selection_note,
@@ -286,6 +304,60 @@ class _NativeRuntime:
             update={"verification": (*result.verification, self._selection_note)}
         )
 
+    def _activity_pipeline(
+        self,
+        request: WorkRequest,
+        environment: Mapping[str, str],
+    ) -> tuple[ActivityCounter, Callable[[OperatorActivity], None], list[str]]:
+        counter = ActivityCounter(
+            project_id=request.project_id,
+            work_id=request.work_id,
+            run_id=request.run_id,
+        )
+        redact = activity_redactor(environment)
+        log: list[str] = []
+        log_bytes = 0
+        log_truncated = False
+
+        def emit(activity: OperatorActivity) -> None:
+            nonlocal log_bytes, log_truncated
+            item = redact(activity)
+            if not log_truncated:
+                line = item.model_dump_json()
+                line_bytes = len(line.encode("utf-8")) + 1
+                if log_bytes + line_bytes > ACTIVITY_LOG_MAX_BYTES:
+                    log.append(
+                        item.model_copy(
+                            update={"kind": "raw", "summary": "truncated", "detail": None}
+                        ).model_dump_json()
+                    )
+                    log_truncated = True
+                else:
+                    log.append(line)
+                    log_bytes += line_bytes
+            if self._activity_sink is not None:
+                self._activity_sink.emit(item)
+
+        return counter, emit, log
+
+    def _archive_log(
+        self,
+        request: WorkRequest,
+        log: list[str],
+        result: OperatorResult,
+    ) -> OperatorResult:
+        if self._artifact_store is None or not log:
+            return result
+        artifact = self._artifact_store.put_bytes(
+            ("\n".join(log) + "\n").encode("utf-8"),
+            project_id=request.project_id,
+            media_type="application/x-ndjson",
+            created_by=self.name,
+        )
+        return result.model_copy(
+            update={"artifact_refs": (*result.artifact_refs, artifact.storage_ref)}
+        )
+
 
 def _codex_result_schema() -> dict[str, Any]:
     schema = OperatorResult.model_json_schema()
@@ -313,12 +385,16 @@ class CodexRuntime(_NativeRuntime):
         model: str | None = None,
         reasoning_effort: str | None = None,
         selection_note: str | None = None,
+        activity_sink: ActivitySink | None = None,
+        artifact_store: ArtifactStore | None = None,
     ) -> None:
         super().__init__(
             executable=executable,
             secret_provider=secret_provider,
             timeout=timeout,
             selection_note=selection_note,
+            activity_sink=activity_sink,
+            artifact_store=artifact_store,
         )
         self._model = _validate_runtime_value("Codex model", model)
         self._reasoning_effort = _validate_runtime_value(
@@ -336,6 +412,7 @@ class CodexRuntime(_NativeRuntime):
         if workspace is None:
             raise ValueError("CodexRuntime requires a workspace")
         environment = await self._environment(request, capabilities)
+        counter, emit, log = self._activity_pipeline(request, environment)
         with tempfile.TemporaryDirectory(prefix="sagewai-codex-") as temporary:
             result_path = Path(temporary) / "result.json"
             schema_path = Path(temporary) / "schema.json"
@@ -359,9 +436,15 @@ class CodexRuntime(_NativeRuntime):
                     str(schema_path),
                     "--output-last-message",
                     str(result_path),
+                    "--json",
                     "-",
                 )
             )
+
+            def on_stdout_line(line: str) -> None:
+                for activity in parse_codex_json_line(line, counter):
+                    emit(activity)
+
             process = await run_worker_subprocess(
                 argv=argv,
                 stdin=self._prompt(request, capsule, capabilities),
@@ -369,10 +452,18 @@ class CodexRuntime(_NativeRuntime):
                 cwd=workspace.path,
                 timeout=self._timeout,
                 output_limit=None,
+                on_stdout_line=on_stdout_line,
+                on_stderr_line=lambda line: emit(
+                    counter.next(source="codex", kind="raw", summary=line)
+                ),
             )
             if process.returncode != 0:
-                return self._with_selection_evidence(
-                    _failed_result(request, process.stderr)
+                return self._archive_log(
+                    request,
+                    log,
+                    self._with_selection_evidence(
+                        _failed_result(request, process.stderr)
+                    ),
                 )
             payload = {
                 **json.loads(result_path.read_text()),
@@ -380,8 +471,12 @@ class CodexRuntime(_NativeRuntime):
                 "input_tokens": None,
                 "cost_usd": None,
             }
-            return self._with_selection_evidence(
-                self._validate_result(payload, request)
+            return self._archive_log(
+                request,
+                log,
+                self._with_selection_evidence(
+                    self._validate_result(payload, request)
+                ),
             )
 
 
@@ -400,12 +495,16 @@ class ClaudeRuntime(_NativeRuntime):
         effort: str | None = None,
         max_budget_usd: str | None = None,
         selection_note: str | None = None,
+        activity_sink: ActivitySink | None = None,
+        artifact_store: ArtifactStore | None = None,
     ) -> None:
         super().__init__(
             executable=executable,
             secret_provider=secret_provider,
             timeout=timeout,
             selection_note=selection_note,
+            activity_sink=activity_sink,
+            artifact_store=artifact_store,
         )
         self._model = _validate_runtime_value("Claude model", model)
         self._effort = _validate_runtime_value("Claude effort", effort)
@@ -424,6 +523,7 @@ class ClaudeRuntime(_NativeRuntime):
         if workspace is None:
             raise ValueError("ClaudeRuntime requires a workspace")
         builtin_tools, allowed_tools = _claude_tool_scope(capabilities)
+        schema_json = json.dumps(OperatorResult.model_json_schema(), sort_keys=True)
         argv = [
             self._executable,
         ]
@@ -447,27 +547,94 @@ class ClaudeRuntime(_NativeRuntime):
         )
         if allowed_tools:
             argv.extend(("--allowedTools", ",".join(allowed_tools)))
-        argv.extend(
-            (
-                "--output-format",
-                "json",
-                "--json-schema",
-                json.dumps(OperatorResult.model_json_schema(), sort_keys=True),
-            )
-        )
+        stream_argv = [
+            *argv,
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--json-schema",
+            schema_json,
+        ]
+        environment = await self._environment(request, capabilities)
+        counter, emit, log = self._activity_pipeline(request, environment)
+        claude_result: dict[str, Any] | None = None
+
+        def on_stdout_line(line: str) -> None:
+            nonlocal claude_result
+            for activity in parse_claude_stream_line(line, counter):
+                emit(activity)
+            result = claude_result_from_line(line)
+            if result is not None:
+                claude_result = result
+
         process = await run_worker_subprocess(
-            argv=argv,
+            argv=stream_argv,
             stdin=self._prompt(request, capsule, capabilities),
-            explicit_env=await self._environment(request, capabilities),
+            explicit_env=environment,
             cwd=workspace.path,
             timeout=self._timeout,
             output_limit=None,
+            on_stdout_line=on_stdout_line,
+            on_stderr_line=lambda line: emit(
+                counter.next(source="claude", kind="raw", summary=line)
+            ),
         )
         if process.returncode != 0:
-            return self._with_selection_evidence(
-                _failed_result(request, process.stderr)
+            return self._archive_log(
+                request,
+                log,
+                self._with_selection_evidence(
+                    _failed_result(request, process.stderr)
+                ),
             )
-        envelope = json.loads(process.stdout)
+        if claude_result is not None and "structured_output" in claude_result:
+            usage = claude_result.get("usage", {})
+            payload = {
+                **claude_result["structured_output"],
+                "output_tokens": usage.get("output_tokens"),
+                "input_tokens": usage.get("input_tokens"),
+                "cost_usd": claude_result.get("total_cost_usd"),
+            }
+            return self._archive_log(
+                request,
+                log,
+                self._with_selection_evidence(
+                    self._validate_result(payload, request)
+                ),
+            )
+
+        fallback_note = (
+            "claude: stream-json result lacked structured_output; fallback to --output-format json"
+        )
+        fallback_argv = [
+            *argv,
+            "--output-format",
+            "json",
+            "--json-schema",
+            schema_json,
+        ]
+        fallback = await run_worker_subprocess(
+            argv=fallback_argv,
+            stdin=self._prompt(request, capsule, capabilities),
+            explicit_env=environment,
+            cwd=workspace.path,
+            timeout=self._timeout,
+            output_limit=None,
+            on_stderr_line=lambda line: emit(
+                counter.next(source="claude", kind="raw", summary=line)
+            ),
+        )
+        if fallback.returncode != 0:
+            result = _failed_result(request, fallback.stderr)
+            result = result.model_copy(
+                update={"verification": (*result.verification, fallback_note)}
+            )
+            return self._archive_log(
+                request,
+                log,
+                self._with_selection_evidence(result),
+            )
+        envelope = json.loads(fallback.stdout)
         usage = envelope.get("usage", {})
         payload = {
             **envelope["structured_output"],
@@ -475,8 +642,14 @@ class ClaudeRuntime(_NativeRuntime):
             "input_tokens": usage.get("input_tokens"),
             "cost_usd": envelope.get("total_cost_usd"),
         }
-        return self._with_selection_evidence(
-            self._validate_result(payload, request)
+        result = self._validate_result(payload, request)
+        result = result.model_copy(
+            update={"verification": (*result.verification, fallback_note)}
+        )
+        return self._archive_log(
+            request,
+            log,
+            self._with_selection_evidence(result),
         )
 
 

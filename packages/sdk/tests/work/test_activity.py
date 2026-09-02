@@ -105,6 +105,14 @@ async def test_store_scopes_each_row_by_its_own_project(store: WorkActivityStore
 
 
 @pytest.mark.asyncio
+async def test_store_round_trips_global_scope_activity(store: WorkActivityStore) -> None:
+    item = _activity(1, project_id=None)
+    assert await store.append([item]) == 1
+    assert await store.read("w", run_id="w:implement:1", project_id=None) == [item]
+    assert await store.read("w", run_id="w:implement:1", project_id="p") == []
+
+
+@pytest.mark.asyncio
 async def test_store_writes_one_marker_and_ignores_later_over_cap_batches(store: WorkActivityStore) -> None:
     assert await store.append([_activity(ACTIVITY_ROW_CAP + 5), _activity(ACTIVITY_ROW_CAP)]) == 1
     assert await store.append([_activity(ACTIVITY_ROW_CAP + 6)]) == 0

@@ -28,7 +28,7 @@ from sagewai.work.activity import ActivityKind, ActivitySource, OperatorActivity
 class ActivityCounter:
     """Hands out the per-run activity sequence."""
 
-    def __init__(self, *, project_id: str, work_id: str, run_id: str) -> None:
+    def __init__(self, *, project_id: str | None, work_id: str, run_id: str) -> None:
         self.project_id = project_id
         self.work_id = work_id
         self.run_id = run_id

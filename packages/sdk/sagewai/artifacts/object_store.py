@@ -17,12 +17,26 @@ import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Protocol
 
 from sagewai._project_scope import project_scope_key
 from sagewai.artifacts.models import ArtifactRef
 from sagewai.home import objects_dir
 
 _STORAGE_REF_RE = re.compile(r"artifact://sha256:([0-9a-f]{64})")
+
+
+class ArtifactStore(Protocol):
+    def put_bytes(
+        self,
+        content: bytes,
+        *,
+        project_id: str | None,
+        media_type: str,
+        created_by: str,
+    ) -> ArtifactRef: ...
+
+    def read(self, storage_ref: str, *, project_id: str | None) -> bytes: ...
 
 
 class LocalArtifactStore:

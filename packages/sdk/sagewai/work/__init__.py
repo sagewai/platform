@@ -10,6 +10,7 @@
 """Public API for the generic Work domain."""
 
 from sagewai.work.activity import (
+    ACTIVITY_LOG_MAX_BYTES,
     ACTIVITY_ROW_CAP,
     ActivityKind,
     ActivitySink,
@@ -100,6 +101,7 @@ from sagewai.work.store import WorkStore
 from sagewai.work.supersede import supersede_work
 
 __all__ = [
+    "ACTIVITY_LOG_MAX_BYTES",
     "ACTIVITY_ROW_CAP",
     "Action",
     "AcceptanceCriterion",

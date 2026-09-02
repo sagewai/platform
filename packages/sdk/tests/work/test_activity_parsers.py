@@ -43,6 +43,12 @@ def test_codex_json_stream_yields_messages_usage_and_raw_for_unknown() -> None:
     assert usage and usage[-1].input_tokens is not None and usage[-1].output_tokens is not None
 
 
+def test_activity_counter_accepts_global_scope() -> None:
+    counter = ActivityCounter(project_id=None, work_id="w", run_id="r")
+    event = parse_codex_json_line("not json", counter)[0]
+    assert event.project_id is None
+
+
 def test_codex_tool_and_command_lines_map_to_their_kinds() -> None:
     counter = ActivityCounter(project_id="p", work_id="w", run_id="r")
     command = json.dumps(

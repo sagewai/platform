@@ -25,6 +25,7 @@ from sagewai._project_scope import project_scope_key
 from sagewai.db.models import Base, WorkActivityModel
 
 ACTIVITY_ROW_CAP = 5000
+ACTIVITY_LOG_MAX_BYTES = 4 * 1024 * 1024
 SUMMARY_MAX = 2000
 DETAIL_MAX = 8192
 
@@ -37,7 +38,7 @@ ActivityKind = Literal[
 class OperatorActivity(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    project_id: str
+    project_id: str | None
     work_id: str
     run_id: str
     sequence: int = Field(ge=1)
@@ -142,7 +143,7 @@ class WorkActivityStore:
         return result.rowcount
 
     async def read(
-        self, work_id: str, *, run_id: str, project_id: str, after: int = 0, limit: int = 500
+        self, work_id: str, *, run_id: str, project_id: str | None, after: int = 0, limit: int = 500
     ) -> list[OperatorActivity]:
         table = self._table
         query = (
@@ -189,6 +190,7 @@ class WorkActivityStore:
 
 __all__ = [
     "ACTIVITY_ROW_CAP",
+    "ACTIVITY_LOG_MAX_BYTES",
     "ActivityKind",
     "ActivitySink",
     "ActivitySource",
