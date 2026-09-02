@@ -51,7 +51,7 @@ dependencies = [
     "cryptography==50.0.0",
     "mnemonic==0.21",
     "duckduckgo-search==8.1.1",
-    "pypdf==6.15.0",
+    "pypdf==6.16.2",
     "readability-lxml==0.8.4.1",
     # Durable local persistence (SQLite default; Postgres via SAGEWAI_DATABASE_URL).
     "sqlalchemy[asyncio]==2.0.50",
