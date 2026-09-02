@@ -33,7 +33,11 @@ _PICKER_MIN = 0.18
 _SHORT_BRIEF_WORDS = 25
 _MAX_QUESTIONS = 3
 
-_TIME_RE = re.compile(r"\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", re.IGNORECASE)
+_TIME_RE = re.compile(r"\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", re.IGNORECASE)
+_SCHEDULE_HINT_RE = re.compile(
+    r"\b(every|each)\b|\b(daily|nightly|hourly|weekly|weekdays?|mornings?|minutes?|hours?)\b|\bon\s+(mon|tues|wednes|thurs|fri|satur|sun)days?\b",
+    re.IGNORECASE,
+)
 
 
 class ClarificationQuestion(BaseModel):
@@ -86,7 +90,7 @@ def score_template(brief_tokens: list[str], template: TaskTemplate) -> float:
     return best
 
 
-def _time_from_match(match: re.Match[str] | None) -> tuple[int, int]:
+def _time_from_match(match: re.Match[str] | None) -> tuple[int, int] | None:
     if match is None:
         return 8, 0
     hour = int(match.group(1))
@@ -97,14 +101,17 @@ def _time_from_match(match: re.Match[str] | None) -> tuple[int, int]:
     if meridiem == "am" and hour == 12:
         hour = 0
     if hour > 23 or minute > 59:
-        return 8, 0
+        return None
     return hour, minute
 
 
 def extract_schedule(text: str) -> str | None:
     lowered = text.lower()
-    time_match = _TIME_RE.search(lowered) if re.search(r"\bat\s+\d", lowered) else None
-    hour, minute = _time_from_match(time_match)
+    time_match = _TIME_RE.search(lowered)
+    time_parts = _time_from_match(time_match)
+    if time_parts is None:
+        return None
+    hour, minute = time_parts
     if re.search(r"\b(every\s+weekday|weekdays)\b", lowered):
         return f"{minute} {hour} * * 1-5"
     if re.search(r"\bhourly\b|\bevery\s+hour\b", lowered):
@@ -116,6 +123,10 @@ def extract_schedule(text: str) -> str | None:
     if re.search(r"\bdaily\b|\bevery\s+day\b|\beach\s+day\b|\bevery\s+morning\b|\beach\s+morning\b", lowered):
         return f"{minute} {hour} * * *"
     return None
+
+
+def schedule_mentioned(text: str) -> bool:
+    return _SCHEDULE_HINT_RE.search(text) is not None
 
 
 def _question(spec: ClarificationSpec) -> ClarificationQuestion:
@@ -134,12 +145,17 @@ def _preview(template: TaskTemplate, cron: str | None, questions: tuple[Clarific
         "software": "creates issues, branches, and pull requests in the target repository",
         "report": "writes a report artifact and, when configured, posts it to a GitHub issue",
     }[template.profile]
-    spend = "at most the Task budget: Claude attempts are capped per attempt, Codex attempts are counted"
+    spend = "at most the Task budget; Claude attempts carry a dollar cap, Codex attempts are counted"
     approvals = (
         "a plan approval before execution" if template.authority_floor.plan.value == "require" else "no plan approval"
     ) + "; irreversible actions always need a project admin"
     schedule = f" It runs on schedule {cron}." if cron else ""
-    asks = f" It will first ask {len(questions)} question(s)." if questions else ""
+    if len(questions) == 1:
+        asks = " It will first ask 1 question."
+    elif questions:
+        asks = f" It will first ask {len(questions)} questions."
+    else:
+        asks = ""
     return (
         f"This Task will read {reads}. It {changes}. It spends {spend}. "
         f"It asks for {approvals}.{schedule}{asks}"
@@ -155,7 +171,7 @@ def route(brief: str, defaults: TaskDefaults) -> IntakeResult:
     )
     top_score, top_id = scored[0]
     second_score = scored[1][0] if len(scored) > 1 else 0.0
-    if top_score >= _AUTO_MIN and top_score - second_score >= _AUTO_MARGIN:
+    if len(brief_tokens) >= 4 and top_score >= _AUTO_MIN and top_score - second_score >= _AUTO_MARGIN:
         band: Band = "auto_route"
         template = CATALOGUE[top_id]
     elif top_score >= _PICKER_MIN:
@@ -169,11 +185,22 @@ def route(brief: str, defaults: TaskDefaults) -> IntakeResult:
     if template.profile == "software" and isinstance(defaults.target, SoftwareTarget):
         slots["repository"] = defaults.target.repository_path
     cron = extract_schedule(brief) if template.kind is TaskKind.SCHEDULED else None
+    questions: list[ClarificationQuestion] = []
     if template.kind is TaskKind.SCHEDULED:
+        if cron is None and schedule_mentioned(brief):
+            questions.append(
+                ClarificationQuestion(
+                    id="schedule",
+                    text="Which schedule should this run on? A phrase like 'weekdays at 9' or a cron expression.",
+                    kind="text",
+                    default=template.default_cron,
+                    defaultable=True,
+                    rationale="The schedule phrase in the brief was not understood.",
+                )
+            )
         cron = cron or template.default_cron
         slots["cron"] = cron
 
-    questions: list[ClarificationQuestion] = []
     short = len(brief.split()) < _SHORT_BRIEF_WORDS
     for spec in template.clarifications:
         if spec.when == "missing_slot" and spec.slot is not None and spec.slot not in slots:
@@ -196,4 +223,13 @@ def route(brief: str, defaults: TaskDefaults) -> IntakeResult:
     )
 
 
-__all__ = ["Band", "ClarificationQuestion", "IntakeResult", "extract_schedule", "route", "score_template", "tokenize"]
+__all__ = [
+    "Band",
+    "ClarificationQuestion",
+    "IntakeResult",
+    "extract_schedule",
+    "route",
+    "schedule_mentioned",
+    "score_template",
+    "tokenize",
+]

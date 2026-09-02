@@ -14,6 +14,7 @@ from __future__ import annotations
 from sagewai.work.tasks.intake import (
     extract_schedule,
     route,
+    schedule_mentioned,
     score_template,
     tokenize,
 )
@@ -39,6 +40,21 @@ def test_extract_schedule_compiles_phrases_to_cron() -> None:
     assert extract_schedule("add a pause control to the game") is None
 
 
+def test_extract_schedule_anchors_time_to_the_at_clause() -> None:
+    assert extract_schedule("summarise the 5 vendor blogs at 10 AM daily") == "0 10 * * *"
+    assert extract_schedule("daily at 12 AM") == "0 0 * * *"
+    assert extract_schedule("daily at 12:30 PM") == "30 12 * * *"
+
+
+def test_extract_schedule_returns_none_for_unsupported_or_invalid_phrases() -> None:
+    assert extract_schedule("run it every 2 hours") is None
+    assert extract_schedule("every weekday at 25 run the scan") is None
+    assert schedule_mentioned("run it every 2 hours")
+    assert schedule_mentioned("every weekday at 25 run the scan")
+    assert schedule_mentioned("on Mondays at 9 AM report")
+    assert not schedule_mentioned("add a pause control to the game")
+
+
 def test_route_auto_routes_a_clear_research_brief() -> None:
     result = route("Every weekday at 9 AM scan these 5 vendor blogs and produce a digest", DEFAULTS)
     assert result.template_id == "scheduled_research_report"
@@ -60,6 +76,19 @@ def test_route_auto_routes_a_clear_software_brief() -> None:
     assert result.band == "auto_route"
     assert result.cron is None
     assert [question.id for question in result.questions] == ["repository"]
+
+
+def test_route_asks_for_the_schedule_when_the_phrase_is_not_understood() -> None:
+    result = route("Every 2 hours scan these 5 vendor blogs and produce a digest", DEFAULTS)
+    assert result.template_id == "scheduled_research_report"
+    schedule = next(question for question in result.questions if question.id == "schedule")
+    assert schedule.defaultable and schedule.default == "0 8 * * *"
+    assert result.cron == "0 8 * * *"
+
+
+def test_route_short_briefs_never_auto_route() -> None:
+    for brief in ("research", "vendor blogs", "daily research"):
+        assert route(brief, DEFAULTS).band != "auto_route", brief
 
 
 def test_route_short_or_unmatched_brief_is_synthesis_with_outcome_question() -> None:
