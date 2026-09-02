@@ -1,0 +1,65 @@
+# Copyright 2026 Ali Arda Diri, Berlin, Germany
+#
+# This file is part of Sagewai, licensed under the GNU Affero General
+# Public License v3.0 or later (AGPL-3.0-or-later). You may use,
+# modify, and distribute this file under the terms of the AGPL.
+# See the LICENSE file or https://www.gnu.org/licenses/agpl-3.0.html
+#
+# This file is also available under a commercial license.
+# See COMMERCIAL-LICENSE.md for details.
+"""Static copy of the 52 synthetic Autopilot golden goals (intake regression set)."""
+
+GOLDEN_GOALS: tuple[tuple[str, str, str], ...] = (
+    ('Run daily research on 10 competitor websites and email me a summary each morning', 'SYNTHETIC_scheduled_research', 'auto_route'),
+    ('Every weekday at 9 AM scan the following 5 vendor blogs and produce a digest', 'SYNTHETIC_scheduled_research', 'auto_route'),
+    ('Schedule a recurring job to research what my top vendors shipped each week', 'SYNTHETIC_scheduled_research', 'auto_route'),
+    ('Automatically track competitor product launches daily using web search', 'SYNTHETIC_scheduled_research', 'auto_route'),
+    ('Monitor these 8 news sources every morning and summarise AI-related headlines', 'SYNTHETIC_scheduled_research', 'auto_route'),
+    ('Set up a scheduled research agent that fetches pricing from 3 competitors nightly', 'SYNTHETIC_scheduled_research', 'auto_route'),
+    ('Daily at 7 AM visit each URL in my vendor list and extract any new announcements', 'SYNTHETIC_scheduled_research', 'auto_route'),
+    ('Create a weekly research loop that compiles a market landscape report from vendor sites', 'SYNTHETIC_scheduled_research', 'auto_route'),
+    ('Crawl these 12 product pages every night and flag anything that changed', 'SYNTHETIC_scheduled_research', 'auto_route'),
+    ('Run a cron-driven agent to fetch and summarise the top 5 papers on arxiv daily', 'SYNTHETIC_scheduled_research', 'auto_route'),
+    ('Classify and route incoming support tickets by severity using these 4 category labels', 'SYNTHETIC_event_triage', 'auto_route'),
+    ('Automatically triage GitHub issues as they arrive and assign them to the right team', 'SYNTHETIC_event_triage', 'auto_route'),
+    ('On each new Slack message in #incidents classify urgency and page the on-call if P0', 'SYNTHETIC_event_triage', 'auto_route'),
+    ('Route inbound customer emails to sales or support based on intent classification', 'SYNTHETIC_event_triage', 'auto_route'),
+    ('Triage incoming webhook events from Stripe and classify as fraud or legitimate', 'SYNTHETIC_event_triage', 'auto_route'),
+    ('Event-driven agent: classify every new Jira ticket and assign the correct label', 'SYNTHETIC_event_triage', 'auto_route'),
+    ('When a new form submission arrives classify it and forward to the matching department', 'SYNTHETIC_event_triage', 'auto_route'),
+    ('Automatically tag incoming bug reports by component using these taxonomy labels', 'SYNTHETIC_event_triage', 'auto_route'),
+    ("On each new order event determine if it's high-value and route to account manager", 'SYNTHETIC_event_triage', 'auto_route'),
+    ('Classify real-time sensor alerts by severity and dispatch the right response team', 'SYNTHETIC_event_triage', 'auto_route'),
+    ('Run a nightly ETL job that pulls data from Postgres, transforms it, and loads into BigQuery', 'SYNTHETIC_batch_extract', 'auto_route'),
+    ("Process last month's CSV exports, clean them, and generate a summary report", 'SYNTHETIC_batch_extract', 'auto_route'),
+    ('Batch-transform 500 raw JSON records into normalised form and write them to S3', 'SYNTHETIC_batch_extract', 'auto_route'),
+    ('Overnight: extract sales data from the warehouse, compute KPIs, and email the CFO', 'SYNTHETIC_batch_extract', 'auto_route'),
+    ('Run a weekly batch pipeline that merges CRM exports and deduplicates contacts', 'SYNTHETIC_batch_extract', 'auto_route'),
+    ('Process all images in the upload bucket with our vision model and store results in DB', 'SYNTHETIC_batch_extract', 'auto_route'),
+    ('Batch ingest log files from the last 7 days and flag anomalies using our rules', 'SYNTHETIC_batch_extract', 'auto_route'),
+    ('Monthly: aggregate user behaviour events and produce the retention cohort table', 'SYNTHETIC_batch_extract', 'auto_route'),
+    ("Run offline scoring on today's lead list using our propensity model and write scores", 'SYNTHETIC_batch_extract', 'auto_route'),
+    ("Extract, transform, and load yesterday's order data from MySQL into our analytics DB", 'SYNTHETIC_batch_extract', 'auto_route'),
+    ('Research stuff about my competitors', 'SYNTHETIC_scheduled_research', 'picker'),
+    ('Handle my tickets somehow', 'SYNTHETIC_event_triage', 'picker'),
+    ('Process some data and put it somewhere useful', 'SYNTHETIC_batch_extract', 'picker'),
+    ('I need an agent that does monitoring maybe every day or when something happens', 'SYNTHETIC_scheduled_research', 'picker'),
+    ('Route things based on what kind they are', 'SYNTHETIC_event_triage', 'picker'),
+    ('Pull data and do something with it on a schedule', 'SYNTHETIC_batch_extract', 'picker'),
+    ('Track vendor activity kind of regularly', 'SYNTHETIC_scheduled_research', 'picker'),
+    ('When things come in categorise them', 'SYNTHETIC_event_triage', 'picker'),
+    ('Do some transformation on data overnight maybe', 'SYNTHETIC_batch_extract', 'picker'),
+    ("I want to check some pages and summarise them but I'm not sure how often", 'SYNTHETIC_scheduled_research', 'picker'),
+    ('Build a real-time collaborative whiteboard with AI suggestion sidebars', None, 'synthesis'),
+    ('Generate and publish a full podcast episode from a blog post every week', None, 'synthesis'),
+    ('Run a tournament bracket for my internal hackathon and automatically post results', None, 'synthesis'),
+    ('Translate my entire product documentation to 12 languages and keep them in sync', None, 'synthesis'),
+    ('Design a personalised onboarding journey for each new user based on their role', None, 'synthesis'),
+    ('Negotiate SaaS pricing with vendors on my behalf using multi-turn email threads', None, 'synthesis'),
+    ('Automatically file patent applications based on engineer invention disclosures', None, 'synthesis'),
+    ('Compose and send personalised birthday messages to every customer on their birthday', None, 'synthesis'),
+    ('Run a simulation of our supply chain and surface bottlenecks in a visual report', None, 'synthesis'),
+    ('Write code reviews for every PR automatically and suggest architecture improvements', None, 'synthesis'),
+    ('Manage my calendar and proactively reschedule conflicting meetings with attendees', None, 'synthesis'),
+    ('Do something totally novel that no blueprint could possibly anticipate', None, 'synthesis'),
+)

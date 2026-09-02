@@ -271,8 +271,8 @@ SCHEDULED_RESEARCH_REPORT = TaskTemplate(
     kind=TaskKind.SCHEDULED,
     profile="report",
     example_goals=(
-        "Run daily research on 10 competitor websites, product launches, and agent pricing each morning",
-        "Every weekday at 9 AM scan the following 5 vendor blogs, product pages, and URL announcements",
+        "Run daily research on 10 competitor websites, product launches, and agent pricing, and email me a summary each morning",
+        "Every weekday at 9 AM scan the following 5 vendor blogs, product pages, and URL announcements and produce a digest",
         "Schedule a recurring job to research what my top vendors shipped each week",
         "Monitor these 8 news sources every morning and summarise AI-related headlines",
         "Create a weekly research loop that compiles a market landscape report from vendor sites",
