@@ -37,6 +37,7 @@ from sagewai.work.events import (
 from sagewai.work.fleet import FleetOperatorRuntime, FleetWorkspaceTransport
 from sagewai.work.knowledge import KnowledgeItem, KnowledgeKind, KnowledgeStore
 from sagewai.work.models import (
+    SUPERSEDED,
     ActionIntent,
     ActionScope,
     Assumption,
@@ -410,7 +411,7 @@ class SoftwareLifecycle:
         record = await self._work_store.load_work(work_id, project_id=project_id)
         if record is None:
             raise KeyError(work_id)
-        if record.status in {"READY_TO_MERGE", "COMPLETE", "SUPERSEDED", "BASE_MOVED"}:
+        if record.status in {"READY_TO_MERGE", "COMPLETE", SUPERSEDED, "BASE_MOVED"}:
             return record
 
         events = await self._work_store.read_events(work_id, project_id=project_id)
@@ -594,6 +595,7 @@ class SoftwareLifecycle:
                 {
                     "reason": "analysis_failed",
                     "run_id": run_id,
+                    "attempts": retries + 1,
                     "decision_request": (
                         "Inspect the failed analysis evidence and decide whether to retry "
                         "or stop the work."
@@ -890,27 +892,25 @@ class SoftwareLifecycle:
     ) -> str:
         retries = 0
         reason = "initial"
+        events = await self._events(work_item)
+        expected_sha = expected_result_sha(events, workspace.base_sha)
+        designer, run_id = await self._select_operator(
+            work_item,
+            stage="design",
+            role="designer",
+            ladder=self._designer,
+            reason=reason,
+        )
+        if not await self._preflight_workspace(
+            work_item,
+            workspace=workspace,
+            stage="design",
+            run_id=run_id,
+            expected_sha=expected_sha,
+        ):
+            return "CONTROL_DEGRADED"
         diff_before, files_before = await workspace_diff(workspace)
         while True:
-            designer, run_id = await self._select_operator(
-                work_item,
-                stage="design",
-                role="designer",
-                ladder=self._designer,
-                reason=reason,
-            )
-            expected_sha = expected_result_sha(
-                await self._events(work_item),
-                workspace.base_sha,
-            )
-            if not await self._preflight_workspace(
-                work_item,
-                workspace=workspace,
-                stage="design",
-                run_id=run_id,
-                expected_sha=expected_sha,
-            ):
-                return "CONTROL_DEGRADED"
             context = SoftwareDesignContext(
                 software=self._software_capsule(contract, expected_sha),
                 design_result_schema=WorkDesignResult.model_json_schema(),
@@ -953,6 +953,21 @@ class SoftwareLifecycle:
             if self._should_escalate(result, retries):
                 retries += 1
                 reason = "escalated"
+                designer, run_id = await self._select_operator(
+                    work_item,
+                    stage="design",
+                    role="designer",
+                    ladder=self._designer,
+                    reason=reason,
+                )
+                if not await self._preflight_workspace(
+                    work_item,
+                    workspace=workspace,
+                    stage="design",
+                    run_id=run_id,
+                    expected_sha=expected_sha,
+                ):
+                    return "CONTROL_DEGRADED"
                 continue
             break
         if diff_after != diff_before or files_after != files_before:
@@ -978,6 +993,7 @@ class SoftwareLifecycle:
                 {
                     "reason": "design_failed",
                     "run_id": run_id,
+                    "attempts": retries + 1,
                     "decision_request": (
                         "Inspect the failed design evidence and decide whether to retry "
                         "or stop the work."
@@ -1406,20 +1422,22 @@ class SoftwareLifecycle:
                 workspace=workspace,
             )
             if self._should_escalate(result, retries):
-                try:
-                    await self._worktree_manager.restore_uncommitted(
-                        workspace,
-                        expected_sha=expected_sha,
-                    )
-                except WorkspaceStaleError as exc:
-                    await self._record_workspace_degradation(
-                        work_item,
-                        stage=stage,
-                        run_id=run_id,
-                        detail=str(exc),
-                        evidence_refs=(workspace.ref,),
-                    )
-                    return "CONTROL_DEGRADED"
+                if stage == "implement":
+                    # Nothing is committed before publication: restoring at repair time would wipe the implementation.
+                    try:
+                        await self._worktree_manager.restore_uncommitted(
+                            workspace,
+                            expected_sha=expected_sha,
+                        )
+                    except WorkspaceStaleError as exc:
+                        await self._record_workspace_degradation(
+                            work_item,
+                            stage=stage,
+                            run_id=run_id,
+                            detail=str(exc),
+                            evidence_refs=(workspace.ref,),
+                        )
+                        return "CONTROL_DEGRADED"
                 retries += 1
                 reason = "escalated"
                 continue
@@ -1811,6 +1829,7 @@ class SoftwareLifecycle:
                 {
                     "reason": "review_failed",
                     "run_id": run_id,
+                    "attempts": retries + 1,
                     "decision_request": (
                         "Inspect the failed independent review evidence and decide whether to "
                         "retry or stop the work."

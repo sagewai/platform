@@ -15,7 +15,9 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import update
 
+from sagewai._project_scope import project_scope_key
 from sagewai.artifacts.models import ArtifactRef
 from sagewai.work.tasks.events import TaskEvent, TaskEventType, fold_record
 from sagewai.work.tasks.feed import FeedBus, FeedEntry
@@ -245,6 +247,24 @@ async def test_repository_lease_is_exclusive_renewable_and_releasable(store: Tas
     assert await store.release_repository_lease(key, project_id="project-a", task_id="task-1")
     assert await store.repository_lease_holder(key, project_id="project-a") is None
     assert await store.acquire_repository_lease(key, project_id="project-a", task_id="task-2", work_id="w2", ttl_seconds=60)
+
+
+@pytest.mark.asyncio
+async def test_null_repository_lease_expiry_is_not_open_for_another_task(store: TaskStore) -> None:
+    key = "project-a:o/r:main"
+    assert await store.acquire_repository_lease(key, project_id="project-a", task_id="task-1", work_id="w1", ttl_seconds=60)
+    async with store._engine.begin() as conn:
+        await conn.execute(
+            update(store._repository_leases)
+            .where(
+                store._repository_leases.c.project_scope_key == project_scope_key("project-a"),
+                store._repository_leases.c.lease_key == key,
+            )
+            .values(expires_at=None)
+        )
+
+    assert not await store.acquire_repository_lease(key, project_id="project-a", task_id="task-2", work_id="w2", ttl_seconds=60)
+    assert await store.acquire_repository_lease(key, project_id="project-a", task_id="task-1", work_id="w1", ttl_seconds=60)
 
 
 @pytest.mark.asyncio

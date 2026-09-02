@@ -23,7 +23,7 @@ from sagewai.cli import cli
 from sagewai.cli.fleet import fleet_group
 from sagewai.cli.work import work as work_cli
 from sagewai.core.state import InMemoryStore
-from sagewai.work import WorkEventType, WorkMetrics
+from sagewai.work import SUPERSEDED, WorkEventType, WorkMetrics
 from sagewai.work.profiles.software import SoftwareContractContext, SoftwareStageOperator
 from sagewai.work.runtime_capabilities import (
     RuntimeCapabilitySnapshot,
@@ -71,6 +71,10 @@ async def test_build_lifecycle_shares_one_artifact_store(
     assert lifecycle._capsule_compiler._artifact_store is artifact_store
     assert lifecycle._verifier._artifact_store is artifact_store
     assert lifecycle._verifier._runner._image.endswith("a" * 64)
+    assert (
+        lifecycle._designer.for_position(1).runtime.name
+        == lifecycle._analyst.for_position(1).runtime.name
+    )
 
 
 def test_verification_image_is_required(monkeypatch) -> None:
@@ -762,12 +766,16 @@ async def test_delivery_phase_resume_does_not_infer_provider(
 
 
 
+@pytest.mark.parametrize("status", ("COMPLETE", SUPERSEDED))
 @pytest.mark.asyncio
-async def test_complete_resume_returns_without_repository_or_remote_work(monkeypatch) -> None:
+async def test_terminal_resume_returns_without_repository_or_remote_work(
+    monkeypatch,
+    status: str,
+) -> None:
     record = SimpleNamespace(
         work_id="work-1",
         project_id="project-a",
-        status="COMPLETE",
+        status=status,
         source_ref="https://github.com/octocat/repo/issues/7",
     )
 
@@ -784,6 +792,40 @@ async def test_complete_resume_returns_without_repository_or_remote_work(monkeyp
     result = await work_module._resume_work("work-1", project_id="project-a")
 
     assert result is record
+
+
+@pytest.mark.asyncio
+async def test_base_moved_approval_reports_supersede_instruction(monkeypatch) -> None:
+    record = SimpleNamespace(
+        work_id="work-1",
+        project_id="project-a",
+        status="BASE_MOVED",
+        source_ref="https://github.com/octocat/repo/issues/7",
+    )
+
+    async def fake_status(_work_id, *, project_id):
+        assert project_id == "project-a"
+        return record
+
+    async def unexpected_ensure_schema():
+        raise AssertionError("BASE_MOVED approval must fail before store access")
+
+    async def unexpected_repository_state():
+        raise AssertionError("BASE_MOVED approval must fail before repository work")
+
+    monkeypatch.setattr(work_module, "_status_work", fake_status)
+    monkeypatch.setattr(work_module.factory, "ensure_schema", unexpected_ensure_schema)
+    monkeypatch.setattr(work_module, "_repository_state", unexpected_repository_state)
+
+    with pytest.raises(
+        ValueError,
+        match="Work is held: the default branch moved; supersede and rerun",
+    ):
+        await work_module._approve_work(
+            "work-1",
+            "merge:gate",
+            project_id="project-a",
+        )
 
 
 @pytest.mark.asyncio

@@ -20,6 +20,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sagewai.work.contract import WorkContract
 from sagewai.work.knowledge.models import KnowledgeItem
 
+SUPERSEDED = "SUPERSEDED"
+
 
 class ClaimClassification(str, Enum):
     """Grounding classification for material operator claims."""

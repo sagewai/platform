@@ -15,10 +15,8 @@ import uuid
 from datetime import datetime, timezone
 
 from sagewai.work.events import WorkEvent, WorkEventType
-from sagewai.work.models import WorkRecord
+from sagewai.work.models import SUPERSEDED, WorkRecord
 from sagewai.work.store import WorkStore
-
-SUPERSEDED = "SUPERSEDED"
 
 
 async def supersede_work(
@@ -62,4 +60,4 @@ async def supersede_work(
     return record
 
 
-__all__ = ["SUPERSEDED", "supersede_work"]
+__all__ = ["supersede_work"]

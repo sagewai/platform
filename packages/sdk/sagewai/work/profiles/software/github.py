@@ -26,6 +26,7 @@ from sagewai.work.completion import evaluate_completion, validate_verification_r
 from sagewai.work.contract import AcceptanceCriterion, WorkContract
 from sagewai.work.events import WorkEvent, WorkEventType
 from sagewai.work.models import (
+    SUPERSEDED,
     ActionRequest,
     CompletionEvaluation,
     CriterionVerification,
@@ -691,7 +692,7 @@ class GitHubIssueLifecycle:
             "SOAKING",
             "ROLLING_BACK",
             "COMPLETE",
-            "SUPERSEDED",
+            SUPERSEDED,
         }:
             return record
         if record.status == "WORK_BLOCKED":
