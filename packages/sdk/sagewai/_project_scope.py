@@ -19,3 +19,10 @@ def project_scope_key(project_id: str | None) -> str:
     if not project_id:
         raise ValueError("project_id must be a non-empty slug or None")
     return f"p:{project_id}"
+
+
+def project_id_from_scope_key(key: str) -> str:
+    """Invert ``project_scope_key`` for a project-scoped key; global keys have no project id."""
+    if not key.startswith("p:") or len(key) == 2:
+        raise ValueError("scope key is not project scoped")
+    return key[2:]

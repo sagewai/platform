@@ -2044,6 +2044,181 @@ class KnowledgeSourceRefModel(Base):
     source_ref: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class TaskModel(Base):
+    """Current projection and definition for one Task."""
+
+    __tablename__ = "tasks"
+    __table_args__ = (
+        PrimaryKeyConstraint("project_scope_key", "task_id", name="pk_tasks"),
+        Index("ix_tasks_scope_status", "project_scope_key", "status"),
+        Index("ix_tasks_scope_lease", "project_scope_key", "lease_expires_at"),
+    )
+
+    project_scope_key: Mapped[str] = mapped_column(Text, nullable=False)
+    task_id: Mapped[str] = mapped_column(Text, nullable=False)
+    project_id: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    origin: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    profile: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    last_event_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    board_column: Mapped[str] = mapped_column(Text, nullable=False)
+    attention_owner: Mapped[str | None] = mapped_column(Text, nullable=True)
+    waiting_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    current_cycle: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    plan_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    pending_gate: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pending_questions: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    pending_material_questions: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_owner: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lease_epoch: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    budget_used: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+    task_json: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class TaskEventModel(Base):
+    """One immutable event in a Task stream."""
+
+    __tablename__ = "task_events"
+    __table_args__ = (
+        PrimaryKeyConstraint("project_scope_key", "id", name="pk_task_events"),
+        UniqueConstraint("project_scope_key", "task_id", "sequence", name="uq_task_events_task_sequence"),
+    )
+
+    project_scope_key: Mapped[str] = mapped_column(Text, nullable=False)
+    id: Mapped[str] = mapped_column(Text, nullable=False)
+    project_id: Mapped[str] = mapped_column(Text, nullable=False)
+    task_id: Mapped[str] = mapped_column(Text, nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_type: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload_json: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class TaskFeedModel(Base):
+    """Totally ordered per-Task feed over Task events, Work events, and activity."""
+
+    __tablename__ = "task_feed"
+    __table_args__ = (
+        PrimaryKeyConstraint("project_scope_key", "task_id", "feed_sequence", name="pk_task_feed"),
+    )
+
+    project_scope_key: Mapped[str] = mapped_column(Text, nullable=False)
+    task_id: Mapped[str] = mapped_column(Text, nullable=False)
+    feed_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    source_id: Mapped[str] = mapped_column(Text, nullable=False)
+    event_type: Mapped[str] = mapped_column(Text, nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class TaskCommandModel(Base):
+    """Idempotent coordinator command receipts."""
+
+    __tablename__ = "task_commands"
+    __table_args__ = (
+        PrimaryKeyConstraint("project_scope_key", "task_id", "command_id", name="pk_task_commands"),
+    )
+
+    project_scope_key: Mapped[str] = mapped_column(Text, nullable=False)
+    task_id: Mapped[str] = mapped_column(Text, nullable=False)
+    command_id: Mapped[str] = mapped_column(Text, nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class TaskSpendModel(Base):
+    """Durable reserve-then-settle spend ledger."""
+
+    __tablename__ = "task_spend"
+    __table_args__ = (
+        PrimaryKeyConstraint("project_scope_key", "reservation_id", name="pk_task_spend"),
+        Index("ix_task_spend_scope_task_cycle", "project_scope_key", "task_id", "cycle"),
+    )
+
+    project_scope_key: Mapped[str] = mapped_column(Text, nullable=False)
+    reservation_id: Mapped[str] = mapped_column(Text, nullable=False)
+    task_id: Mapped[str] = mapped_column(Text, nullable=False)
+    cycle: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    runtime: Mapped[str] = mapped_column(Text, nullable=False)
+    usd_reserved: Mapped[str] = mapped_column(Text, nullable=False)
+    usd_actual: Mapped[str | None] = mapped_column(Text, nullable=True)
+    unknown: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="reserved")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TaskRepositoryLeaseModel(Base):
+    """One publication holder per project, repository, and branch."""
+
+    __tablename__ = "task_repository_leases"
+    __table_args__ = (
+        PrimaryKeyConstraint("project_scope_key", "lease_key", name="pk_task_repository_leases"),
+    )
+
+    project_scope_key: Mapped[str] = mapped_column(Text, nullable=False)
+    lease_key: Mapped[str] = mapped_column(Text, nullable=False)
+    task_id: Mapped[str] = mapped_column(Text, nullable=False)
+    work_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TaskDefaultsModel(Base):
+    """Per-project defaults for the composer and coordinator."""
+
+    __tablename__ = "task_defaults"
+    __table_args__ = (PrimaryKeyConstraint("project_scope_key", name="pk_task_defaults"),)
+
+    project_scope_key: Mapped[str] = mapped_column(Text, nullable=False)
+    project_id: Mapped[str] = mapped_column(Text, nullable=False)
+    defaults_json: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class TaskTriggerModel(Base):
+    """Admin-approved trigger specifications (consumed in PR4)."""
+
+    __tablename__ = "task_triggers"
+    __table_args__ = (PrimaryKeyConstraint("project_scope_key", "trigger_id", name="pk_task_triggers"),)
+
+    project_scope_key: Mapped[str] = mapped_column(Text, nullable=False)
+    trigger_id: Mapped[str] = mapped_column(Text, nullable=False)
+    project_id: Mapped[str] = mapped_column(Text, nullable=False)
+    spec_json: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class WorkActivityModel(Base):
+    """Bounded operator activity per stage run (consumed in PR3)."""
+
+    __tablename__ = "work_activity"
+    __table_args__ = (
+        PrimaryKeyConstraint("project_scope_key", "work_id", "run_id", "sequence", name="pk_work_activity"),
+    )
+
+    project_scope_key: Mapped[str] = mapped_column(Text, nullable=False)
+    work_id: Mapped[str] = mapped_column(Text, nullable=False)
+    run_id: Mapped[str] = mapped_column(Text, nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_json: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 event.listen(
     KnowledgeItemModel.__table__,
     "after_create",
