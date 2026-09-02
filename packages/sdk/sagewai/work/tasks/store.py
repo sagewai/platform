@@ -21,7 +21,7 @@ from sqlalchemy import func, insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from sagewai._project_scope import project_scope_key
+from sagewai._project_scope import project_id_from_scope_key, project_scope_key
 from sagewai.db import factory
 from sagewai.db.models import (
     Base,
@@ -64,7 +64,7 @@ class SpendTotals(BaseModel):
 
     usd_reserved: Decimal
     usd_actual: Decimal
-    unknown: int
+    unknown_settlements: int
     reservations: int
 
 
@@ -77,7 +77,10 @@ def _as_utc(value: datetime | None) -> datetime | None:
 
 
 class TaskStore:
-    """Append Task events, project them, and keep leases, receipts, spend, defaults."""
+    """Append Task events, project them, and keep leases, receipts, spend, defaults.
+
+    Distinct from the Fleet job queue protocol ``sagewai.fleet.dispatcher.TaskStore``.
+    """
 
     def __init__(self, *, engine: AsyncEngine | None = None, feed_bus: FeedBus | None = None) -> None:
         self._engine = engine or factory.get_engine()
@@ -144,8 +147,13 @@ class TaskStore:
         expected_sequence: int,
         record: TaskRecord,
         lease_epoch: int | None = None,
+        expected_revision: int | None = None,
     ) -> TaskRecord:
-        """Append events at ``expected_sequence`` and replace the projection in one transaction."""
+        """Append events at ``expected_sequence`` and replace the projection in one transaction.
+
+        Lease columns are never written here; the returned record carries the lease
+        fields as read at the start of the transaction.
+        """
         self._validate_events(task_id, project_id, events, expected_sequence=expected_sequence)
         if record.task_id != task_id or record.project_id != project_id:
             raise ValueError("record belongs to a different task")
@@ -155,6 +163,10 @@ class TaskStore:
                 current = await self._lock_row(conn, scope, task_id)
                 if current is None:
                     raise KeyError(task_id)
+                if expected_revision is not None and int(current["revision"]) != expected_revision:
+                    raise StaleTaskError(
+                        f"expected revision {expected_revision}, projection is at {current['revision']}"
+                    )
                 if lease_epoch is not None and int(current["lease_epoch"]) != lease_epoch:
                     raise StaleTaskError("lease epoch changed; another coordinator owns this task")
                 last = await conn.scalar(
@@ -182,11 +194,20 @@ class TaskStore:
                         "lease_expires_at": _as_utc(current["lease_expires_at"]),
                     }
                 )
-                await conn.execute(
+                values = self._projection_values(stored)
+                for key in ("lease_owner", "lease_epoch", "lease_expires_at"):
+                    values.pop(key)
+                result = await conn.execute(
                     update(self._tasks)
-                    .where(self._tasks.c.project_scope_key == scope, self._tasks.c.task_id == task_id)
-                    .values(**self._projection_values(stored))
+                    .where(
+                        self._tasks.c.project_scope_key == scope,
+                        self._tasks.c.task_id == task_id,
+                        self._tasks.c.revision == int(current["revision"]),
+                    )
+                    .values(**values)
                 )
+                if result.rowcount != 1:
+                    raise StaleTaskError("projection changed under the append")
         except IntegrityError as exc:
             raise StaleTaskError("concurrent append won the sequence") from exc
         for entry in entries:
@@ -200,6 +221,9 @@ class TaskStore:
             scope = project_scope_key(entry.project_id)
             try:
                 async with self._engine.begin() as conn:
+                    current = await self._lock_row(conn, scope, entry.task_id)
+                    if current is None:
+                        raise KeyError(entry.task_id)
                     feed_last = await conn.scalar(
                         select(func.coalesce(func.max(self._feed.c.feed_sequence), 0)).where(
                             self._feed.c.project_scope_key == scope,
@@ -278,7 +302,7 @@ class TaskStore:
             rows = (await conn.execute(query)).all()
         return [self._record_from_row(row._mapping) for row in rows]
 
-    # ── leases (Task 8) ───────────────────────────────────────────────────
+    # ── leases ────────────────────────────────────────────────────────────
 
     async def claim(self, task_id: str, *, project_id: str, owner: str, ttl_seconds: int) -> int | None:
         """Take the lease if free or expired; returns the new epoch, or None."""
@@ -297,17 +321,14 @@ class TaskStore:
                 lease_epoch=self._tasks.c.lease_epoch + 1,
                 lease_expires_at=self._expiry_expr(ttl_seconds),
             )
+            .returning(self._tasks.c.lease_epoch)
         )
         async with self._engine.begin() as conn:
             result = await conn.execute(statement)
-            if result.rowcount != 1:
+            row = result.first()
+            if row is None:
                 return None
-            epoch = await conn.scalar(
-                select(self._tasks.c.lease_epoch).where(
-                    self._tasks.c.project_scope_key == scope, self._tasks.c.task_id == task_id
-                )
-            )
-        return int(epoch)
+        return int(row[0])
 
     async def renew(self, task_id: str, *, project_id: str, owner: str, lease_epoch: int, ttl_seconds: int) -> bool:
         scope = project_scope_key(project_id)
@@ -342,36 +363,149 @@ class TaskStore:
             result = await conn.execute(statement)
         return result.rowcount == 1
 
-    async def expire_lease_for_tests(self, task_id: str, *, project_id: str) -> None:
-        """Force the lease into the past; used by tests, never by the coordinator."""
-        scope = project_scope_key(project_id)
-        past = datetime.now(timezone.utc) - timedelta(hours=1)
-        async with self._engine.begin() as conn:
-            await conn.execute(
-                update(self._tasks)
-                .where(self._tasks.c.project_scope_key == scope, self._tasks.c.task_id == task_id)
-                .values(lease_expires_at=past)
-            )
-
-    # ── receipts, ledger, defaults (Task 9) ───────────────────────────────
+    # ── receipts, ledger, defaults ────────────────────────────────────────
 
     async def record_command(self, *, task_id: str, project_id: str, command_id: str, payload: dict[str, Any]) -> bool:
-        raise NotImplementedError  # replaced in Task 9
+        """Insert a receipt once; False when the command was already recorded.
+
+        A repeat with the same command_id is ignored regardless of payload; command ids are derived from the Task revision, so equal ids mean equal commands.
+        """
+        scope = project_scope_key(project_id)
+        try:
+            async with self._engine.begin() as conn:
+                await conn.execute(
+                    insert(self._commands).values(
+                        project_scope_key=scope,
+                        task_id=task_id,
+                        command_id=command_id,
+                        payload_json=payload,
+                        created_at=datetime.now(timezone.utc),
+                    )
+                )
+        except IntegrityError:
+            return False
+        return True
 
     async def reserve_spend(self, reservation: SpendReservation) -> None:
-        raise NotImplementedError  # replaced in Task 9
+        scope = project_scope_key(reservation.project_id)
+        try:
+            async with self._engine.begin() as conn:
+                await conn.execute(
+                    insert(self._spend).values(
+                        project_scope_key=scope,
+                        reservation_id=reservation.reservation_id,
+                        task_id=reservation.task_id,
+                        cycle=reservation.cycle,
+                        role=reservation.role,
+                        runtime=reservation.runtime,
+                        usd_reserved=str(reservation.usd_reserved),
+                        usd_actual=None,
+                        unknown=False,
+                        status="reserved",
+                        created_at=datetime.now(timezone.utc),
+                    )
+                )
+        except IntegrityError as exc:
+            raise ValueError(f"reservation already exists: {reservation.reservation_id}") from exc
 
     async def settle_spend(self, reservation_id: str, *, project_id: str, usd_actual: Decimal | None) -> None:
-        raise NotImplementedError  # replaced in Task 9
+        scope = project_scope_key(project_id)
+        statement = (
+            update(self._spend)
+            .where(
+                self._spend.c.project_scope_key == scope,
+                self._spend.c.reservation_id == reservation_id,
+                self._spend.c.status == "reserved",
+            )
+            .values(
+                usd_actual=None if usd_actual is None else str(usd_actual),
+                unknown=usd_actual is None,
+                status="settled",
+                settled_at=datetime.now(timezone.utc),
+            )
+        )
+        async with self._engine.begin() as conn:
+            result = await conn.execute(statement)
+        if result.rowcount != 1:
+            raise KeyError(reservation_id)
 
     async def spend_totals(self, *, task_id: str, project_id: str, cycle: int) -> SpendTotals:
-        raise NotImplementedError  # replaced in Task 9
+        scope = project_scope_key(project_id)
+        query = select(self._spend).where(
+            self._spend.c.project_scope_key == scope,
+            self._spend.c.task_id == task_id,
+            self._spend.c.cycle == cycle,
+        )
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(query)).all()
+        reserved = Decimal("0")
+        actual = Decimal("0")
+        unknown_settlements = 0
+        for row in rows:
+            data = row._mapping
+            if data["status"] == "reserved":
+                reserved += Decimal(data["usd_reserved"])
+            elif data["unknown"]:
+                unknown_settlements += 1
+            else:
+                actual += Decimal(data["usd_actual"])
+        return SpendTotals(
+            usd_reserved=reserved,
+            usd_actual=actual,
+            unknown_settlements=unknown_settlements,
+            reservations=len(rows),
+        )
 
     async def get_defaults(self, *, project_id: str) -> TaskDefaults:
-        raise NotImplementedError  # replaced in Task 9
+        scope = project_scope_key(project_id)
+        async with self._engine.connect() as conn:
+            row = (
+                await conn.execute(select(self._defaults).where(self._defaults.c.project_scope_key == scope))
+            ).first()
+        if row is None:
+            return TaskDefaults(project_id=project_id)
+        data = dict(row._mapping["defaults_json"])
+        data["project_id"] = project_id
+        data["revision"] = int(row._mapping["revision"])
+        return TaskDefaults.model_validate(data)
 
     async def put_defaults(self, defaults: TaskDefaults, *, expected_revision: int) -> TaskDefaults:
-        raise NotImplementedError  # replaced in Task 9
+        scope = project_scope_key(defaults.project_id)
+        stored = defaults.model_copy(update={"revision": expected_revision + 1})
+        payload = stored.model_dump(mode="json")
+        payload.pop("revision")
+        now = datetime.now(timezone.utc)
+        async with self._engine.begin() as conn:
+            current = await conn.scalar(
+                select(self._defaults.c.revision).where(self._defaults.c.project_scope_key == scope)
+            )
+            if current is None:
+                if expected_revision != 0:
+                    raise StaleTaskError("defaults do not exist yet; expected revision 0")
+                try:
+                    await conn.execute(
+                        insert(self._defaults).values(
+                            project_scope_key=scope,
+                            project_id=defaults.project_id,
+                            defaults_json=payload,
+                            revision=stored.revision,
+                            updated_at=now,
+                        )
+                    )
+                except IntegrityError as exc:
+                    raise StaleTaskError("defaults were created concurrently") from exc
+            else:
+                result = await conn.execute(
+                    update(self._defaults)
+                    .where(
+                        self._defaults.c.project_scope_key == scope,
+                        self._defaults.c.revision == expected_revision,
+                    )
+                    .values(defaults_json=payload, revision=stored.revision, updated_at=now)
+                )
+                if result.rowcount != 1:
+                    raise StaleTaskError("defaults changed since they were read")
+        return stored
 
     # ── helpers ───────────────────────────────────────────────────────────
 
@@ -470,7 +604,7 @@ class TaskStore:
     def _feed_from_row(values) -> FeedEntry:
         data = dict(values)
         scope = data.pop("project_scope_key")
-        data["project_id"] = scope.removeprefix("p:")
+        data["project_id"] = project_id_from_scope_key(scope)
         data["created_at"] = _as_utc(data["created_at"])
         return FeedEntry.model_validate(data)
 
