@@ -9,6 +9,16 @@
 # See COMMERCIAL-LICENSE.md for details.
 """Public API for the generic Work domain."""
 
+from sagewai.work.activity import (
+    ACTIVITY_ROW_CAP,
+    ActivityKind,
+    ActivitySink,
+    ActivitySource,
+    ListActivitySink,
+    OperatorActivity,
+    WorkActivityStore,
+    activity_redactor,
+)
 from sagewai.work.capsule import TaskCapsuleCompiler
 from sagewai.work.completion import (
     evaluate_completion,
@@ -90,6 +100,7 @@ from sagewai.work.store import WorkStore
 from sagewai.work.supersede import supersede_work
 
 __all__ = [
+    "ACTIVITY_ROW_CAP",
     "Action",
     "AcceptanceCriterion",
     "ActionPlan",
@@ -97,6 +108,9 @@ __all__ = [
     "ActionIntent",
     "ActionResult",
     "ActionScope",
+    "ActivityKind",
+    "ActivitySink",
+    "ActivitySource",
     "CapabilityGrant",
     "Assumption",
     "CapabilitySet",
@@ -121,6 +135,8 @@ __all__ = [
     "NoCompatibleWorkerError",
     "ExecutionAttempt",
     "GateDecision",
+    "ListActivitySink",
+    "OperatorActivity",
     "PendingAttention",
     "PendingAttentionKind",
     "ProposedAcceptanceCriterion",
@@ -139,6 +155,7 @@ __all__ = [
     "WorkMetrics",
     "VerificationResult",
     "WorkAnalysisResult",
+    "WorkActivityStore",
     "WorkContractProposal",
     "WorkDesignResult",
     "WorkEventType",
@@ -149,6 +166,7 @@ __all__ = [
     "WorkStore",
     "Workspace",
     "active_control_precondition_ids",
+    "activity_redactor",
     "execution_attempt_from_events",
     "evaluate_completion",
     "fold_verification_results",
