@@ -47,6 +47,7 @@ from sagewai.work.profiles.software import (
     SoftwareStageOperator,
     SoftwareVerifier,
     SoftwareWorktreeManager,
+    StageOperatorLadder,
 )
 from sagewai.work.profiles.software.fleet_worker import (
     SoftwareFleetTaskHandler,
@@ -290,6 +291,20 @@ async def test_fleet_worker_loss_resumes_only_unfinished_software_stage(
     implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
     repairer = MutationRuntime(implement_text="unused", repair_text="fixed")
     artifact_store = LocalArtifactStore(root=tmp_path / "objects")
+    analyst = StageOperatorLadder(
+        (
+            SoftwareStageOperator(
+                actor_ref="operator:analyst",
+                runtime=analyzer,
+                capabilities=_read_capabilities(),
+                controller=_controller(
+                    work_store,
+                    durability,
+                    SoftwareReadOnlyResultValidator(),
+                ),
+            ),
+        )
+    )
     lifecycle = SoftwareLifecycle(
         profile=SoftwareProfile(),
         work_store=work_store,
@@ -306,51 +321,55 @@ async def test_fleet_worker_loss_resumes_only_unfinished_software_stage(
         ),
         artifact_store=artifact_store,
         repository=repository,
-        analyst=SoftwareStageOperator(
-            actor_ref="operator:analyst",
-            runtime=analyzer,
-            capabilities=_read_capabilities(),
-            controller=_controller(
-                work_store,
-                durability,
-                SoftwareReadOnlyResultValidator(),
-            ),
+        analyst=analyst,
+        designer=analyst,
+        implementer=StageOperatorLadder(
+            (
+                SoftwareStageOperator(
+                    actor_ref="operator:implementer",
+                    runtime=implementer,
+                    capabilities=_write_capabilities(),
+                    controller=_controller(
+                        work_store,
+                        durability,
+                        SoftwareResultValidator(),
+                    ),
+                ),
+            )
         ),
-        implementer=SoftwareStageOperator(
-            actor_ref="operator:implementer",
-            runtime=implementer,
-            capabilities=_write_capabilities(),
-            controller=_controller(
-                work_store,
-                durability,
-                SoftwareResultValidator(),
-            ),
+        reviewer=StageOperatorLadder(
+            (
+                SoftwareStageOperator.fleet(
+                    actor_ref="fleet:reviewer",
+                    store=task_store,
+                    registry=registry,
+                    org_id="org-a",
+                    runtime_capability="runtime.claude",
+                    poll_interval_seconds=0.001,
+                    heartbeat_ttl=timedelta(seconds=30),
+                    workspace_transport=workspace_transport,
+                    capabilities=_read_capabilities(),
+                    controller=_controller(
+                        work_store,
+                        durability,
+                        SoftwareReadOnlyResultValidator(),
+                    ),
+                ),
+            )
         ),
-        reviewer=SoftwareStageOperator.fleet(
-            actor_ref="fleet:reviewer",
-            store=task_store,
-            registry=registry,
-            org_id="org-a",
-            runtime_capability="runtime.claude",
-            poll_interval_seconds=0.001,
-            heartbeat_ttl=timedelta(seconds=30),
-            workspace_transport=workspace_transport,
-            capabilities=_read_capabilities(),
-            controller=_controller(
-                work_store,
-                durability,
-                SoftwareReadOnlyResultValidator(),
-            ),
-        ),
-        repairer=SoftwareStageOperator(
-            actor_ref="operator:implementer",
-            runtime=repairer,
-            capabilities=_write_capabilities(),
-            controller=_controller(
-                work_store,
-                durability,
-                SoftwareResultValidator(),
-            ),
+        repairer=StageOperatorLadder(
+            (
+                SoftwareStageOperator(
+                    actor_ref="operator:implementer",
+                    runtime=repairer,
+                    capabilities=_write_capabilities(),
+                    controller=_controller(
+                        work_store,
+                        durability,
+                        SoftwareResultValidator(),
+                    ),
+                ),
+            )
         ),
         repo_instructions=("AGENTS.md",),
         verification_commands=(_always_pass_command(),),

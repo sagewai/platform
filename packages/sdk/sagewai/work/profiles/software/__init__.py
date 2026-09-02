@@ -72,6 +72,7 @@ from sagewai.work.profiles.software.github import (
 from sagewai.work.profiles.software.lifecycle import (
     SoftwareLifecycle,
     SoftwareStageOperator,
+    StageOperatorLadder,
 )
 from sagewai.work.profiles.software.models import (
     SoftwareAnalysisContext,
@@ -175,6 +176,7 @@ __all__ = [
     "SoftwareReviewContext",
     "SoftwareReviewFindingContext",
     "SoftwareStageOperator",
+    "StageOperatorLadder",
     "SoftwareVerificationCheck",
     "SoftwareVerifier",
     "VerificationCommandRunner",

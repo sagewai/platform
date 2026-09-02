@@ -241,6 +241,27 @@ class SoftwareStageOperator:
         )
 
 
+class StageOperatorLadder:
+    """Ordered operators for one role; runtime attempt N uses position N, the last repeats."""
+
+    def __init__(self, operators: tuple[SoftwareStageOperator, ...]) -> None:
+        if not operators:
+            raise ValueError("a ladder needs at least one operator")
+        self._operators = operators
+
+    def __len__(self) -> int:
+        return len(self._operators)
+
+    def for_position(self, position: int) -> SoftwareStageOperator:
+        if position < 1:
+            raise ValueError("ladder positions start at 1")
+        return self._operators[min(position, len(self._operators)) - 1]
+
+    @property
+    def actor_refs(self) -> tuple[str, ...]:
+        return tuple(operator.actor_ref for operator in self._operators)
+
+
 class SoftwareLifecycle:
     """Drive the first software profile from contract to READY_TO_MERGE."""
 
@@ -257,23 +278,27 @@ class SoftwareLifecycle:
         worktree_manager: SoftwareWorktreeManager,
         verifier: _Verifier,
         repository: Path,
-        analyst: SoftwareStageOperator,
-        implementer: SoftwareStageOperator,
-        reviewer: SoftwareStageOperator,
-        repairer: SoftwareStageOperator,
+        analyst: StageOperatorLadder,
+        designer: StageOperatorLadder,
+        implementer: StageOperatorLadder,
+        reviewer: StageOperatorLadder,
+        repairer: StageOperatorLadder,
         repo_instructions: tuple[str, ...],
         verification_commands: tuple[str, ...],
         artifact_store: LocalArtifactStore | None = None,
         max_inline_diff_bytes: int = 4000,
+        max_attempts_per_stage: int = 3,
     ) -> None:
         if profile.name != "software":
             raise ValueError("software lifecycle requires the software profile")
-        if reviewer.actor_ref in {implementer.actor_ref, repairer.actor_ref}:
+        if set(reviewer.actor_refs) & (set(implementer.actor_refs) | set(repairer.actor_refs)):
             raise ValueError("reviewer cannot review its own result")
         if not verification_commands:
             raise ValueError("at least one verification command is required")
         if max_inline_diff_bytes < 0:
             raise ValueError("max_inline_diff_bytes cannot be negative")
+        if max_attempts_per_stage < 1:
+            raise ValueError("max_attempts_per_stage must be at least 1")
         self._profile = profile
         self._work_store = work_store
         self._knowledge_store = knowledge_store
@@ -284,9 +309,11 @@ class SoftwareLifecycle:
         self._max_inline_diff_bytes = max_inline_diff_bytes
         self._repository = repository.resolve()
         self._analyst = analyst
+        self._designer = designer
         self._implementer = implementer
         self._reviewer = reviewer
         self._repairer = repairer
+        self._max_attempts_per_stage = max_attempts_per_stage
         self._repo_instructions = repo_instructions
         self._verification_commands = verification_commands
 
@@ -484,6 +511,7 @@ class SoftwareLifecycle:
         supplied_assumptions: tuple[Assumption, ...],
         workspace: SoftwareWorkspace,
     ) -> tuple[WorkContract, tuple[Assumption, ...]] | None:
+        analyst = self._analyst.for_position(1)
         run_id = f"{work_item.id}:analysis:1"
         current_sha = await self._worktree_manager.current_sha(workspace)
         context = SoftwareAnalysisContext(
@@ -514,18 +542,18 @@ class SoftwareLifecycle:
                 ),
                 allowed_targets=draft_contract.allowed_scope,
                 allowed_capabilities=tuple(
-                    grant.name for grant in self._analyst.capabilities.grants
+                    grant.name for grant in analyst.capabilities.grants
                 ),
             ),
             action_intents=(),
             control_preconditions=(),
         )
         diff_before, files_before = await workspace_diff(workspace)
-        result = await self._analyst.controller.run(
-            runtime=self._analyst.runtime,
+        result = await analyst.controller.run(
+            runtime=analyst.runtime,
             request=request,
             capsule=capsule,
-            capabilities=self._analyst.capabilities,
+            capabilities=analyst.capabilities,
             workspace=workspace,
         )
         diff_after, files_after = await workspace_diff(workspace)
@@ -541,7 +569,7 @@ class SoftwareLifecycle:
                     ),
                     "evidence_refs": list(result.evidence_refs),
                 },
-                actor_ref=self._analyst.actor_ref,
+                actor_ref=analyst.actor_ref,
             )
             return None
         if result.status != "passed":
@@ -556,7 +584,7 @@ class SoftwareLifecycle:
                     ),
                     "evidence_refs": list(result.evidence_refs),
                 },
-                actor_ref=self._analyst.actor_ref,
+                actor_ref=analyst.actor_ref,
             )
             return None
 
@@ -570,7 +598,7 @@ class SoftwareLifecycle:
                     "decision_request": "Retry analysis with the required structured result.",
                     "evidence_refs": list(result.evidence_refs),
                 },
-                actor_ref=self._analyst.actor_ref,
+                actor_ref=analyst.actor_ref,
             )
             return None
         try:
@@ -649,7 +677,7 @@ class SoftwareLifecycle:
                     ),
                     "evidence_refs": list(result.evidence_refs),
                 },
-                actor_ref=self._analyst.actor_ref,
+                actor_ref=analyst.actor_ref,
             )
             return None
 
@@ -659,6 +687,7 @@ class SoftwareLifecycle:
                 analysis.claims,
                 run_id=run_id,
                 base_sha=workspace.base_sha,
+                actor_ref=analyst.actor_ref,
             )
         except ValueError as exc:
             await self._block_once(
@@ -673,7 +702,7 @@ class SoftwareLifecycle:
                     ),
                     "evidence_refs": list(result.evidence_refs),
                 },
-                actor_ref=self._analyst.actor_ref,
+                actor_ref=analyst.actor_ref,
             )
             return None
         await self._append_once(
@@ -684,13 +713,13 @@ class SoftwareLifecycle:
                 "run_id": run_id,
                 "evidence_refs": list(result.evidence_refs),
             },
-            actor_ref=self._analyst.actor_ref,
+            actor_ref=analyst.actor_ref,
         )
         await self._append_once(
             work_item,
             WorkEventType.CONTRACT_PROPOSED,
             accepted.model_dump(mode="json"),
-            actor_ref=self._analyst.actor_ref,
+            actor_ref=analyst.actor_ref,
         )
         supplied_ids = {item.id for item in supplied_assumptions}
         for assumption in assumptions:
@@ -699,7 +728,7 @@ class SoftwareLifecycle:
                     work_item,
                     WorkEventType.ASSUMPTION_RECORDED,
                     assumption.model_dump(mode="json"),
-                    actor_ref=self._analyst.actor_ref,
+                    actor_ref=analyst.actor_ref,
                 )
         unsupported = self._unsupported_assumption(assumptions)
         if unsupported is not None:
@@ -792,6 +821,7 @@ class SoftwareLifecycle:
         *,
         run_id: str,
         base_sha: str,
+        actor_ref: str,
     ) -> tuple[str, ...]:
         project_id = work_item.project_id
         assert project_id is not None
@@ -822,7 +852,7 @@ class SoftwareLifecycle:
                     and f"git://{base_sha}" in claim.evidence_refs
                     else 0
                 ),
-                created_by=self._analyst.actor_ref,
+                created_by=actor_ref,
                 created_at=(
                     existing.created_at if existing is not None else datetime.now(timezone.utc)
                 ),
@@ -842,6 +872,7 @@ class SoftwareLifecycle:
         assumptions: tuple[Assumption, ...],
         workspace: SoftwareWorkspace,
     ) -> str:
+        designer = self._designer.for_position(1)
         run_id = f"{work_item.id}:design:1"
         expected_sha = expected_result_sha(await self._events(work_item), workspace.base_sha)
         if not await self._preflight_workspace(
@@ -875,7 +906,7 @@ class SoftwareLifecycle:
                 objective="Design the smallest sufficient change within the accepted contract",
                 allowed_targets=contract.allowed_scope,
                 allowed_capabilities=tuple(
-                    grant.name for grant in self._analyst.capabilities.grants
+                    grant.name for grant in designer.capabilities.grants
                 ),
             ),
             action_intents=(),
@@ -884,11 +915,11 @@ class SoftwareLifecycle:
             ),
         )
         diff_before, files_before = await workspace_diff(workspace)
-        result = await self._analyst.controller.run(
-            runtime=self._analyst.runtime,
+        result = await designer.controller.run(
+            runtime=designer.runtime,
             request=request,
             capsule=capsule,
-            capabilities=self._analyst.capabilities,
+            capabilities=designer.capabilities,
             workspace=workspace,
         )
         diff_after, files_after = await workspace_diff(workspace)
@@ -904,7 +935,7 @@ class SoftwareLifecycle:
                     ),
                     "evidence_refs": list(result.evidence_refs),
                 },
-                actor_ref=self._analyst.actor_ref,
+                actor_ref=designer.actor_ref,
             )
             return "WORK_BLOCKED"
         if result.status != "passed":
@@ -921,7 +952,7 @@ class SoftwareLifecycle:
                     ),
                     "evidence_refs": list(result.evidence_refs),
                 },
-                actor_ref=self._analyst.actor_ref,
+                actor_ref=designer.actor_ref,
             )
             return "WORK_BLOCKED"
         payload = result.profile_context.get("design_result")
@@ -934,7 +965,7 @@ class SoftwareLifecycle:
                     "decision_request": "Retry design with the required structured result.",
                     "evidence_refs": list(result.evidence_refs),
                 },
-                actor_ref=self._analyst.actor_ref,
+                actor_ref=designer.actor_ref,
             )
             return "WORK_BLOCKED"
         try:
@@ -951,7 +982,7 @@ class SoftwareLifecycle:
                     "decision_request": "Retry design with a valid structured result.",
                     "evidence_refs": list(result.evidence_refs),
                 },
-                actor_ref=self._analyst.actor_ref,
+                actor_ref=designer.actor_ref,
             )
             return "WORK_BLOCKED"
         try:
@@ -960,6 +991,7 @@ class SoftwareLifecycle:
                 design.claims,
                 run_id=run_id,
                 base_sha=workspace.base_sha,
+                actor_ref=designer.actor_ref,
             )
         except ValueError as exc:
             await self._block_once(
@@ -973,7 +1005,7 @@ class SoftwareLifecycle:
                     ),
                     "evidence_refs": list(result.evidence_refs),
                 },
-                actor_ref=self._analyst.actor_ref,
+                actor_ref=designer.actor_ref,
             )
             return "WORK_BLOCKED"
         design_assumptions = self._assumptions_from_claims(
@@ -984,7 +1016,7 @@ class SoftwareLifecycle:
                 work_item,
                 WorkEventType.ASSUMPTION_RECORDED,
                 assumption.model_dump(mode="json"),
-                actor_ref=self._analyst.actor_ref,
+                actor_ref=designer.actor_ref,
             )
         if design_assumptions:
             await self._block_once(
@@ -995,7 +1027,7 @@ class SoftwareLifecycle:
                     "decision_request": "Provide evidence or revise the accepted contract.",
                     "evidence_refs": list(result.evidence_refs),
                 },
-                actor_ref=self._analyst.actor_ref,
+                actor_ref=designer.actor_ref,
             )
             return "WORK_BLOCKED"
         await self._append_once(
@@ -1008,7 +1040,7 @@ class SoftwareLifecycle:
                 "artifact_refs": list(result.artifact_refs),
                 "knowledge_refs": list(design_knowledge_refs),
             },
-            actor_ref=self._analyst.actor_ref,
+            actor_ref=designer.actor_ref,
         )
         await self._set_status(work_item, "READY_TO_IMPLEMENT", active_run_id=run_id)
         return "READY_TO_IMPLEMENT"
@@ -1063,7 +1095,7 @@ class SoftwareLifecycle:
             if state in {"READY_TO_IMPLEMENT", "IMPLEMENTING"}:
                 state = await self._run_mutation(
                     stage="implement",
-                    assignment=self._implementer,
+                    assignment=self._implementer.for_position(1),
                     work_item=work_item,
                     contract=contract,
                     assumptions=assumptions,
@@ -1091,7 +1123,7 @@ class SoftwareLifecycle:
                     return await self._repair_budget_block(work_item)
                 state = await self._run_mutation(
                     stage="repair",
-                    assignment=self._repairer,
+                    assignment=self._repairer.for_position(1),
                     work_item=work_item,
                     contract=contract,
                     assumptions=assumptions,
@@ -1522,6 +1554,7 @@ class SoftwareLifecycle:
         verification = self._latest_verification(events)
         if verification is None or not verification.passed:
             raise ValueError("review requires passing deterministic verification")
+        reviewer = self._reviewer.for_position(1)
         run_id = f"{work_item.id}:review:{self._review_count(events) + 1}"
         expected_sha = expected_result_sha(events, workspace.base_sha)
         if not await self._preflight_workspace(
@@ -1572,7 +1605,7 @@ class SoftwareLifecycle:
                 objective="Independently review the verified software change",
                 allowed_targets=contract.allowed_scope,
                 allowed_capabilities=tuple(
-                    grant.name for grant in self._reviewer.capabilities.grants
+                    grant.name for grant in reviewer.capabilities.grants
                 ),
             ),
             action_intents=(),
@@ -1580,7 +1613,7 @@ class SoftwareLifecycle:
                 software_workspace_precondition(project_id=work_item.project_id),
             ),
         )
-        review_runtime = self._reviewer.runtime
+        review_runtime = reviewer.runtime
         if diff_workspace_path is not None:
             review_runtime = _DiffMaterializingRuntime(
                 delegate=review_runtime,
@@ -1588,11 +1621,11 @@ class SoftwareLifecycle:
                 artifact=diff_artifact,
                 relative_path=diff_workspace_path,
             )
-        result = await self._reviewer.controller.run(
+        result = await reviewer.controller.run(
             runtime=review_runtime,
             request=request,
             capsule=capsule,
-            capabilities=self._reviewer.capabilities,
+            capabilities=reviewer.capabilities,
             workspace=workspace,
         )
         if result.status != "passed":
@@ -1609,7 +1642,7 @@ class SoftwareLifecycle:
                     ),
                     "evidence_refs": list(result.evidence_refs),
                 },
-                actor_ref=self._reviewer.actor_ref,
+                actor_ref=reviewer.actor_ref,
             )
             return "WORK_BLOCKED"
         diff_after, files_after = await workspace_diff(workspace)
@@ -1625,7 +1658,7 @@ class SoftwareLifecycle:
                     ),
                     "evidence_refs": list(result.evidence_refs),
                 },
-                actor_ref=self._reviewer.actor_ref,
+                actor_ref=reviewer.actor_ref,
             )
             return "WORK_BLOCKED"
         payload = result.profile_context.get("review_result")
@@ -1640,7 +1673,7 @@ class SoftwareLifecycle:
                     ),
                     "evidence_refs": list(result.evidence_refs),
                 },
-                actor_ref=self._reviewer.actor_ref,
+                actor_ref=reviewer.actor_ref,
             )
             return "WORK_BLOCKED"
         try:
@@ -1658,7 +1691,7 @@ class SoftwareLifecycle:
                     ),
                     "evidence_refs": list(result.evidence_refs),
                 },
-                actor_ref=self._reviewer.actor_ref,
+                actor_ref=reviewer.actor_ref,
             )
             return "WORK_BLOCKED"
         if review.project_id != work_item.project_id:
@@ -1687,7 +1720,7 @@ class SoftwareLifecycle:
             work_item,
             WorkEventType.REVIEW_RECORDED,
             review.model_dump(mode="json"),
-            actor_ref=self._reviewer.actor_ref,
+            actor_ref=reviewer.actor_ref,
         )
 
         if review.verdict == "accept":
@@ -1715,7 +1748,7 @@ class SoftwareLifecycle:
                     ),
                     "evidence_refs": list(review.evidence_refs),
                 },
-                actor_ref=self._reviewer.actor_ref,
+                actor_ref=reviewer.actor_ref,
             )
             return "WORK_BLOCKED"
         if self._repair_count(await self._events(work_item)) >= self._max_repairs:

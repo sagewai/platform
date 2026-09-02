@@ -72,6 +72,7 @@ from sagewai.work.profiles.software import (
     SoftwareVerifier,
     SoftwareWorkspaceControlCheck,
     SoftwareWorktreeManager,
+    StageOperatorLadder,
     VerificationIsolationError,
     WorkspaceStaleError,
 )
@@ -870,6 +871,8 @@ def _lifecycle(
     artifact_root: Path | None = None,
     max_inline_diff_bytes: int = 4000,
     implementer_validator=None,
+    implementer_ladder: tuple[MutationRuntime, ...] | None = None,
+    max_attempts_per_stage: int = 3,
 ) -> SoftwareLifecycle:
     artifact_store = LocalArtifactStore(
         root=artifact_root or worktree_root.parent / "objects"
@@ -877,6 +880,29 @@ def _lifecycle(
     compiler = TaskCapsuleCompiler(
         knowledge_store=knowledge_store,
         artifact_store=artifact_store,
+    )
+    analyst = StageOperatorLadder(
+        (
+            SoftwareStageOperator(
+                actor_ref=analyst_actor,
+                runtime=analyzer or AnalysisRuntime(),
+                capabilities=_read_capabilities(),
+                controller=_controller(
+                    work_store,
+                    durability,
+                    SoftwareReadOnlyResultValidator(),
+                    workspace_control_check=analyst_control_check,
+                ),
+            ),
+        )
+    )
+    implementer_positions = (
+        ((implementer_actor, implementer),)
+        if implementer_ladder is None
+        else tuple(
+            (f"operator:implementer:{index}", runtime)
+            for index, runtime in enumerate(implementer_ladder, start=1)
+        )
     )
     return SoftwareLifecycle(
         profile=profile or SoftwareProfile(),
@@ -892,49 +918,54 @@ def _lifecycle(
         ),
         artifact_store=artifact_store,
         repository=repository,
-        analyst=SoftwareStageOperator(
-            actor_ref=analyst_actor,
-            runtime=analyzer or AnalysisRuntime(),
-            capabilities=_read_capabilities(),
-            controller=_controller(
-                work_store,
-                durability,
-                SoftwareReadOnlyResultValidator(),
-                workspace_control_check=analyst_control_check,
-            ),
+        analyst=analyst,
+        designer=analyst,
+        implementer=StageOperatorLadder(
+            tuple(
+                SoftwareStageOperator(
+                    actor_ref=actor_ref,
+                    runtime=runtime,
+                    capabilities=_write_capabilities(),
+                    controller=_controller(
+                        work_store,
+                        durability,
+                        implementer_validator or SoftwareResultValidator(),
+                    ),
+                )
+                for actor_ref, runtime in implementer_positions
+            )
         ),
-        implementer=SoftwareStageOperator(
-            actor_ref=implementer_actor,
-            runtime=implementer,
-            capabilities=_write_capabilities(),
-            controller=_controller(
-                work_store,
-                durability,
-                implementer_validator or SoftwareResultValidator(),
-            ),
+        reviewer=StageOperatorLadder(
+            (
+                SoftwareStageOperator(
+                    actor_ref=reviewer_actor,
+                    runtime=reviewer,
+                    capabilities=_read_capabilities(),
+                    controller=_controller(
+                        work_store,
+                        durability,
+                        SoftwareReadOnlyResultValidator(),
+                    ),
+                ),
+            )
         ),
-        reviewer=SoftwareStageOperator(
-            actor_ref=reviewer_actor,
-            runtime=reviewer,
-            capabilities=_read_capabilities(),
-            controller=_controller(
-                work_store,
-                durability,
-                SoftwareReadOnlyResultValidator(),
-            ),
-        ),
-        repairer=SoftwareStageOperator(
-            actor_ref=repairer_actor or implementer_actor,
-            runtime=repairer,
-            capabilities=_write_capabilities(),
-            controller=_controller(
-                work_store,
-                durability,
-                SoftwareResultValidator(),
-            ),
+        repairer=StageOperatorLadder(
+            (
+                SoftwareStageOperator(
+                    actor_ref=repairer_actor or implementer_actor,
+                    runtime=repairer,
+                    capabilities=_write_capabilities(),
+                    controller=_controller(
+                        work_store,
+                        durability,
+                        SoftwareResultValidator(),
+                    ),
+                ),
+            )
         ),
         repo_instructions=("AGENTS.md",),
         verification_commands=commands,
+        max_attempts_per_stage=max_attempts_per_stage,
         max_inline_diff_bytes=max_inline_diff_bytes,
     )
 
