@@ -39,6 +39,9 @@ class WorkEventType(str, Enum):
     OBSERVATION_RECORDED = "OBSERVATION_RECORDED"
     EXTERNAL_OUTCOME_RECORDED = "EXTERNAL_OUTCOME_RECORDED"
     OPERATOR_DISCIPLINE_RECORDED = "OPERATOR_DISCIPLINE_RECORDED"
+    WORK_SUPERSEDED = "WORK_SUPERSEDED"
+    RUNTIME_SELECTED = "RUNTIME_SELECTED"
+    BASE_MOVED = "BASE_MOVED"
     CONTROL_DEGRADED = "CONTROL_DEGRADED"
     CONTROL_RESTORED = "CONTROL_RESTORED"
     ROLLBACK_RECORDED = "ROLLBACK_RECORDED"
@@ -153,3 +156,40 @@ def execution_attempt_from_events(
             "profile_context": profile_context,
         }
     )
+
+
+def stage_run_ids(events: list[WorkEvent], work_id: str, stage: str) -> list[str]:
+    """Run ids of every started attempt of ``stage`` for ``work_id``, in sequence order."""
+    prefix = f"{work_id}:{stage}:"
+    return [
+        str(event.payload_json["run_id"])
+        for event in sorted(events, key=lambda item: item.sequence)
+        if event.event_type is WorkEventType.STAGE_STARTED
+        and event.payload_json.get("stage") == stage
+        and str(event.payload_json.get("run_id", "")).startswith(prefix)
+    ]
+
+
+def stage_runtime_failures(events: list[WorkEvent], work_id: str, stage: str) -> int:
+    """Attempts of ``stage`` whose execution record says ``failed`` (runtime failures only)."""
+    run_ids = set(stage_run_ids(events, work_id, stage))
+    return sum(
+        event.event_type is WorkEventType.EXECUTION_RECORDED
+        and event.payload_json.get("run_id") in run_ids
+        and event.payload_json.get("status") == "failed"
+        for event in events
+    )
+
+
+def next_stage_run(events: list[WorkEvent], work_id: str, stage: str) -> tuple[str, int]:
+    """The run to execute next for ``stage``: an unfinished started run, else attempt count + 1."""
+    run_ids = stage_run_ids(events, work_id, stage)
+    recorded = {
+        event.payload_json.get("run_id")
+        for event in events
+        if event.event_type is WorkEventType.EXECUTION_RECORDED
+    }
+    if run_ids and run_ids[-1] not in recorded:
+        return run_ids[-1], len(run_ids)
+    attempt = len(run_ids) + 1
+    return f"{work_id}:{stage}:{attempt}", attempt

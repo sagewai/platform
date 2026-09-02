@@ -125,6 +125,8 @@ class OperatorResult(BaseModel):
     risks: tuple[BoundedText, ...] = Field(max_length=100)
     action_results: tuple[ActionResult, ...] = Field(max_length=100)
     output_tokens: int | None = None
+    input_tokens: int | None = None
+    cost_usd: float | None = None
     profile_context: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -291,7 +293,8 @@ def _codex_result_schema() -> dict[str, Any]:
     profile_context = properties["profile_context"]
     profile_context["additionalProperties"] = False
     profile_context["properties"] = {}
-    properties["output_tokens"].pop("default", None)
+    for name in ("output_tokens", "input_tokens", "cost_usd"):
+        properties[name].pop("default", None)
     schema["required"] = list(properties)
     return schema
 
@@ -374,6 +377,8 @@ class CodexRuntime(_NativeRuntime):
             payload = {
                 **json.loads(result_path.read_text()),
                 "output_tokens": None,
+                "input_tokens": None,
+                "cost_usd": None,
             }
             return self._with_selection_evidence(
                 self._validate_result(payload, request)
@@ -463,9 +468,12 @@ class ClaudeRuntime(_NativeRuntime):
                 _failed_result(request, process.stderr)
             )
         envelope = json.loads(process.stdout)
+        usage = envelope.get("usage", {})
         payload = {
             **envelope["structured_output"],
-            "output_tokens": envelope.get("usage", {}).get("output_tokens"),
+            "output_tokens": usage.get("output_tokens"),
+            "input_tokens": usage.get("input_tokens"),
+            "cost_usd": envelope.get("total_cost_usd"),
         }
         return self._with_selection_evidence(
             self._validate_result(payload, request)

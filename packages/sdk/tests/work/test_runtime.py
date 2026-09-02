@@ -196,7 +196,8 @@ def _fake_runtime_executable(
                 print(json.dumps({{
                     "structured_output": result,
                     "result": "x" * {envelope_padding},
-                    "usage": {{"output_tokens": 123}},
+                    "usage": {{"input_tokens": 12, "output_tokens": 7}},
+                    "total_cost_usd": 0.01,
                 }}))
             """
         )
@@ -283,7 +284,7 @@ async def test_native_runtime_uses_fake_executable_without_session_or_api_key(
     output_schema = observation.pop("output_schema")
     assert result.status == "passed"
     assert result.summary == "fake runtime completed"
-    assert result.output_tokens == (123 if runtime_type is ClaudeRuntime else None)
+    assert result.output_tokens == (7 if runtime_type is ClaudeRuntime else None)
     assert observation == {
         "ambient": None,
         "scoped": "worker-local-token",
@@ -327,6 +328,8 @@ async def test_native_runtime_uses_fake_executable_without_session_or_api_key(
     else:
         assert output_schema is None
     if runtime_type is ClaudeRuntime:
+        assert result.input_tokens == 12
+        assert result.cost_usd == 0.01
         assert argv == [
             "--print",
             "--no-session-persistence",
@@ -672,6 +675,38 @@ def test_operator_result_schema_is_structured_and_bounded() -> None:
 
     with pytest.raises(ValidationError):
         OperatorResult.model_validate(values)
+
+
+def test_operator_result_accepts_token_and_cost_fields() -> None:
+    from sagewai.work.runtime import OperatorResult
+
+    result = OperatorResult(
+        project_id="p",
+        work_id="w",
+        run_id="r",
+        status="passed",
+        summary="ok",
+        evidence_refs=(),
+        artifact_refs=(),
+        changes=(),
+        verification=(),
+        risks=(),
+        action_results=(),
+        input_tokens=120,
+        output_tokens=30,
+        cost_usd=0.0042,
+    )
+    assert result.input_tokens == 120 and result.cost_usd == 0.0042
+    assert OperatorResult.model_validate(result.model_dump(mode="json")) == result
+
+
+def test_codex_schema_requires_the_new_fields_without_defaults() -> None:
+    from sagewai.work.runtime import _codex_result_schema
+
+    schema = _codex_result_schema()
+    for name in ("output_tokens", "input_tokens", "cost_usd"):
+        assert name in schema["required"]
+        assert "default" not in schema["properties"][name]
 
 
 def test_work_request_rejects_action_scope_from_different_project() -> None:

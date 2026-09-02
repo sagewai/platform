@@ -130,6 +130,8 @@ class ActionRequest(BaseModel):
     reversibility: Reversibility
     scope: str
     evidence_refs: tuple[str, ...]
+    rollback: str | None = None
+    post_check: str | None = None
 
 
 class ExternalOutcomeIncident(BaseModel):
@@ -270,6 +272,8 @@ class ActionIntent(BaseModel):
     reversibility: Reversibility
     required_permission: str
     evidence_refs: tuple[str, ...]
+    rollback: str | None = None
+    post_check: str | None = None
 
 
 class OperatorDisciplineReport(BaseModel):

@@ -29,6 +29,9 @@ from sagewai.work.events import (
     WorkEventType,
     active_control_precondition_ids,
     execution_attempt_from_events,
+    next_stage_run,
+    stage_run_ids,
+    stage_runtime_failures,
 )
 from sagewai.work.fleet import (
     FleetOperatorResultEnvelope,
@@ -146,6 +149,9 @@ __all__ = [
     "execution_attempt_from_events",
     "evaluate_completion",
     "fold_verification_results",
+    "next_stage_run",
+    "stage_run_ids",
+    "stage_runtime_failures",
     "validate_criterion_subset",
     "validate_verification_result",
 ]
