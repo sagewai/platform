@@ -1,0 +1,6 @@
+Recorded with Claude Code 2.1.226 (`claude --print --output-format stream-json --verbose --json-schema ...`).
+The line shapes (system init, assistant message envelopes, user tool_result, result) are recorded; the system line is
+reduced to the fields the parser reads, the tool_use/tool_result turns and the successful result (structured_output,
+usage, total_cost_usd) were synthesized because the CLI's OAuth session had expired at recording time. `claude-json.json`
+is the same result object as produced by `--output-format json` (the fallback path). Re-record with an authenticated CLI
+when available; the parsers treat unknown lines as raw, so a re-recording must not break them.

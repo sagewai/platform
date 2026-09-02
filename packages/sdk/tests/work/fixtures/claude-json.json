@@ -1,0 +1,28 @@
+{
+  "is_error": false,
+  "duration_api_ms": 1234,
+  "num_turns": 2,
+  "stop_reason": "end_turn",
+  "session_id": "7cedda14-c3f1-4768-b9b7-9722ff51a2cc",
+  "total_cost_usd": 0.0042,
+  "usage": {
+    "input_tokens": 12,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 7
+  },
+  "modelUsage": {},
+  "permission_denials": [],
+  "terminal_reason": null,
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "subtype": "success",
+  "api_error_status": null,
+  "result": "{\"answer\": \"ok\"}",
+  "type": "result",
+  "duration_ms": 1500,
+  "uuid": "9cf86d63-c1e9-48c9-be1f-b7abaa465e83",
+  "structured_output": {
+    "answer": "ok"
+  }
+}
