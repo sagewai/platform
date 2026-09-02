@@ -35,6 +35,7 @@ from sagewai.db.models import (
 from sagewai.work.tasks.events import TaskEvent
 from sagewai.work.tasks.feed import FeedBus, FeedEntry
 from sagewai.work.tasks.models import (
+    TERMINAL_STATUSES,
     Task,
     TaskDefaults,
     TaskRecord,
@@ -280,13 +281,77 @@ class TaskStore:
     # ── leases (Task 8) ───────────────────────────────────────────────────
 
     async def claim(self, task_id: str, *, project_id: str, owner: str, ttl_seconds: int) -> int | None:
-        raise NotImplementedError  # replaced in Task 8
+        """Take the lease if free or expired; returns the new epoch, or None."""
+        scope = project_scope_key(project_id)
+        now = self._now_expr()
+        statement = (
+            update(self._tasks)
+            .where(
+                self._tasks.c.project_scope_key == scope,
+                self._tasks.c.task_id == task_id,
+                self._tasks.c.status.notin_([status.value for status in TERMINAL_STATUSES]),
+                (self._tasks.c.lease_expires_at.is_(None)) | (self._tasks.c.lease_expires_at < now),
+            )
+            .values(
+                lease_owner=owner,
+                lease_epoch=self._tasks.c.lease_epoch + 1,
+                lease_expires_at=self._expiry_expr(ttl_seconds),
+            )
+        )
+        async with self._engine.begin() as conn:
+            result = await conn.execute(statement)
+            if result.rowcount != 1:
+                return None
+            epoch = await conn.scalar(
+                select(self._tasks.c.lease_epoch).where(
+                    self._tasks.c.project_scope_key == scope, self._tasks.c.task_id == task_id
+                )
+            )
+        return int(epoch)
 
     async def renew(self, task_id: str, *, project_id: str, owner: str, lease_epoch: int, ttl_seconds: int) -> bool:
-        raise NotImplementedError  # replaced in Task 8
+        scope = project_scope_key(project_id)
+        statement = (
+            update(self._tasks)
+            .where(
+                self._tasks.c.project_scope_key == scope,
+                self._tasks.c.task_id == task_id,
+                self._tasks.c.lease_owner == owner,
+                self._tasks.c.lease_epoch == lease_epoch,
+                self._tasks.c.lease_expires_at >= self._now_expr(),
+            )
+            .values(lease_expires_at=self._expiry_expr(ttl_seconds))
+        )
+        async with self._engine.begin() as conn:
+            result = await conn.execute(statement)
+        return result.rowcount == 1
 
     async def release(self, task_id: str, *, project_id: str, owner: str, lease_epoch: int) -> bool:
-        raise NotImplementedError  # replaced in Task 8
+        scope = project_scope_key(project_id)
+        statement = (
+            update(self._tasks)
+            .where(
+                self._tasks.c.project_scope_key == scope,
+                self._tasks.c.task_id == task_id,
+                self._tasks.c.lease_owner == owner,
+                self._tasks.c.lease_epoch == lease_epoch,
+            )
+            .values(lease_owner=None, lease_expires_at=None)
+        )
+        async with self._engine.begin() as conn:
+            result = await conn.execute(statement)
+        return result.rowcount == 1
+
+    async def expire_lease_for_tests(self, task_id: str, *, project_id: str) -> None:
+        """Force the lease into the past; used by tests, never by the coordinator."""
+        scope = project_scope_key(project_id)
+        past = datetime.now(timezone.utc) - timedelta(hours=1)
+        async with self._engine.begin() as conn:
+            await conn.execute(
+                update(self._tasks)
+                .where(self._tasks.c.project_scope_key == scope, self._tasks.c.task_id == task_id)
+                .values(lease_expires_at=past)
+            )
 
     # ── receipts, ledger, defaults (Task 9) ───────────────────────────────
 

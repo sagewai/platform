@@ -194,3 +194,42 @@ async def test_feed_publishes_live_entries(dialect_engine) -> None:  # noqa: F81
     await _create(store, task)
     entry = queue.get_nowait()
     assert entry.feed_sequence == 1 and entry.event_type == "TASK_CREATED"
+
+
+@pytest.mark.asyncio
+async def test_claim_renew_release_with_epochs(store: TaskStore) -> None:
+    task = _task()
+    await _create(store, task)
+    first = await store.claim(task.id, project_id=task.project_id, owner="runner-1", ttl_seconds=60)
+    assert first == 1
+    assert await store.claim(task.id, project_id=task.project_id, owner="runner-2", ttl_seconds=60) is None
+    assert await store.renew(task.id, project_id=task.project_id, owner="runner-1", lease_epoch=1, ttl_seconds=60)
+    assert not await store.renew(task.id, project_id=task.project_id, owner="runner-2", lease_epoch=1, ttl_seconds=60)
+    assert not await store.renew(task.id, project_id=task.project_id, owner="runner-1", lease_epoch=0, ttl_seconds=60)
+    record = await store.load_record(task.id, project_id=task.project_id)
+    assert record is not None and record.lease_owner == "runner-1" and record.lease_epoch == 1
+    assert await store.release(task.id, project_id=task.project_id, owner="runner-1", lease_epoch=1)
+    second = await store.claim(task.id, project_id=task.project_id, owner="runner-2", ttl_seconds=60)
+    assert second == 2
+
+
+@pytest.mark.asyncio
+async def test_expired_lease_can_be_reclaimed_with_new_epoch(store: TaskStore) -> None:
+    task = _task()
+    await _create(store, task)
+    assert await store.claim(task.id, project_id=task.project_id, owner="runner-1", ttl_seconds=60) == 1
+    await store.expire_lease_for_tests(task.id, project_id=task.project_id)
+    assert await store.claim(task.id, project_id=task.project_id, owner="runner-2", ttl_seconds=60) == 2
+    assert not await store.renew(task.id, project_id=task.project_id, owner="runner-1", lease_epoch=1, ttl_seconds=60)
+
+
+@pytest.mark.asyncio
+async def test_terminal_task_cannot_be_claimed(store: TaskStore) -> None:
+    task = _task()
+    record = await _create(store, task)
+    events = (_event(task, 2, TaskEventType.TASK_STATUS_CHANGED, {"status": "CANCELLED"}),)
+    await store.append(
+        task_id=task.id, project_id=task.project_id, events=events, expected_sequence=2,
+        record=fold_record(record, events),
+    )
+    assert await store.claim(task.id, project_id=task.project_id, owner="runner-1", ttl_seconds=60) is None
