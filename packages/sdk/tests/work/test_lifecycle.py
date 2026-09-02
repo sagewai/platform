@@ -47,6 +47,7 @@ from sagewai.work import (
     WorkEvent,
     WorkEventType,
     WorkItem,
+    WorkRecord,
     WorkStore,
     execution_attempt_from_events,
 )
@@ -1140,6 +1141,103 @@ async def stores(dialect_engine):  # noqa: F811
     await work_store.init()
     await knowledge_store.init()
     return work_store, knowledge_store
+
+
+def test_next_run_starts_new_attempt_after_base_moved() -> None:
+    events = [
+        WorkEvent(
+            id="start",
+            project_id="project-a",
+            work_id="work-1",
+            sequence=1,
+            event_type=WorkEventType.STAGE_STARTED,
+            actor_type="test",
+            actor_ref=None,
+            payload_json={
+                "stage": "implement",
+                "run_id": "work-1:implement:1",
+                "runtime": "codex",
+            },
+            created_at=NOW,
+        ),
+        WorkEvent(
+            id="execution",
+            project_id="project-a",
+            work_id="work-1",
+            sequence=2,
+            event_type=WorkEventType.EXECUTION_RECORDED,
+            actor_type="test",
+            actor_ref=None,
+            payload_json={
+                "run_id": "work-1:implement:1",
+                "status": "passed",
+            },
+            created_at=NOW,
+        ),
+        WorkEvent(
+            id="base-moved",
+            project_id="project-a",
+            work_id="work-1",
+            sequence=3,
+            event_type=WorkEventType.BASE_MOVED,
+            actor_type="test",
+            actor_ref=None,
+            payload_json={
+                "phase": "publish",
+                "expected_base": "base",
+                "found_base": "other",
+            },
+            created_at=NOW,
+        ),
+    ]
+
+    assert SoftwareLifecycle._next_run(events, "work-1", "implement") == (
+        "work-1:implement:2",
+        2,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ("SUPERSEDED", "BASE_MOVED"))
+async def test_resume_early_return_status_returns_record_without_appending_events(
+    status: str,
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, _base_sha = _repository(tmp_path)
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        implementer=MutationRuntime(implement_text="unused", repair_text="unused"),
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_always_pass_command(),),
+    )
+    record = WorkRecord(
+        work_id="work-1",
+        project_id="project-a",
+        source_ref=None,
+        profile="software",
+        status=status,
+        contract_version=1,
+        active_run_id=None,
+        pending_gate=None,
+        profile_context={"base_sha": "base"},
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    await work_store.save_work(record)
+    before = await work_store.read_events("work-1", project_id="project-a")
+
+    resumed = await lifecycle.resume("work-1", project_id="project-a")
+    after = await work_store.read_events("work-1", project_id="project-a")
+
+    assert resumed == record
+    assert after == before == []
 
 
 @pytest.mark.asyncio

@@ -57,6 +57,7 @@ from sagewai.work.profiles.software.fleet_workspace import (
     software_repository_ref,
 )
 from sagewai.work.profiles.software.github import (
+    BaseMovedError,
     CatalogGitHubClient,
     GitHubIssue,
     GitHubIssueLifecycle,
@@ -110,6 +111,7 @@ from sagewai.work.profiles.software.verification import (
 )
 
 __all__ = [
+    "BaseMovedError",
     "BlastRadius",
     "CatalogGitHubClient",
     "CloudflareDeliveryConfig",

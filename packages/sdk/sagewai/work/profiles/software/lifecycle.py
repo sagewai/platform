@@ -410,7 +410,7 @@ class SoftwareLifecycle:
         record = await self._work_store.load_work(work_id, project_id=project_id)
         if record is None:
             raise KeyError(work_id)
-        if record.status in {"READY_TO_MERGE", "COMPLETE"}:
+        if record.status in {"READY_TO_MERGE", "COMPLETE", "SUPERSEDED", "BASE_MOVED"}:
             return record
 
         events = await self._work_store.read_events(work_id, project_id=project_id)
@@ -1197,14 +1197,15 @@ class SoftwareLifecycle:
     def _next_run(events: list[WorkEvent], work_id: str, stage: str) -> tuple[str, int]:
         """Return the next stage run with lifecycle overlays.
 
-        A contract-drift revalidation keeps its run and a recorded review completes
-        its run; otherwise the kernel rule applies.
+        Contract-drift revalidation keeps its run; recorded reviews and base moves
+        after the latest start require a new run; otherwise the kernel rule applies.
         """
-        run_ids = stage_run_ids(events, work_id, stage)
+        ordered = sorted(events, key=lambda event: event.sequence)
+        run_ids = stage_run_ids(ordered, work_id, stage)
         blocker = next(
             (
                 event
-                for event in reversed(events)
+                for event in reversed(ordered)
                 if event.event_type is WorkEventType.WORK_BLOCKED
             ),
             None,
@@ -1217,17 +1218,33 @@ class SoftwareLifecycle:
             and not any(
                 event.event_type is WorkEventType.STAGE_COMPLETED
                 and event.payload_json.get("run_id") == run_ids[-1]
-                for event in events
+                for event in ordered
             )
         ):
             return run_ids[-1], len(run_ids)
-        if stage == "review" and run_ids and any(
-            event.event_type is WorkEventType.REVIEW_RECORDED
-            and event.payload_json.get("attempt_id") == run_ids[-1]
-            for event in events
-        ):
-            attempt = len(run_ids) + 1
-            return f"{work_id}:{stage}:{attempt}", attempt
+        if run_ids:
+            latest = run_ids[-1]
+            latest_start = next(
+                event
+                for event in reversed(ordered)
+                if event.event_type is WorkEventType.STAGE_STARTED
+                and event.payload_json.get("stage") == stage
+                and event.payload_json.get("run_id") == latest
+            )
+            if any(
+                event.sequence > latest_start.sequence
+                and (
+                    event.event_type is WorkEventType.BASE_MOVED
+                    or (
+                        stage == "review"
+                        and event.event_type is WorkEventType.REVIEW_RECORDED
+                        and event.payload_json.get("attempt_id") == latest
+                    )
+                )
+                for event in ordered
+            ):
+                attempt = len(run_ids) + 1
+                return f"{work_id}:{stage}:{attempt}", attempt
         return next_stage_run(events, work_id, stage)
 
     def _should_escalate(self, result: OperatorResult, retries: int) -> bool:
