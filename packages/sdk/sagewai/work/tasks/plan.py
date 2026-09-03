@@ -11,12 +11,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import PurePosixPath
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from sagewai.work.models import ClassifiedClaim, ProposedAcceptanceCriterion
+from sagewai.work.tasks.events import TaskEvent, TaskEventType
 from sagewai.work.tasks.intake import ClarificationQuestion
 from sagewai.work.tasks.models import Budget, ReportTarget, SoftwareTarget
 
@@ -162,4 +164,34 @@ def accept_plan(
     return AcceptedPlan(version=version, steps=ordered, acceptance_matrix=result.acceptance_matrix)
 
 
-__all__ = ["AcceptedPlan", "MatrixItem", "PlanRejectedError", "PlanStep", "TaskPlanResult", "accept_plan"]
+def plan_from_events(events: Sequence[TaskEvent], *, version: int) -> AcceptedPlan | None:
+    """Read back the plan proposed at ``version`` from the Task stream."""
+    payload = next(
+        (
+            event.payload_json
+            for event in sorted(events, key=lambda item: item.sequence, reverse=True)
+            if event.event_type is TaskEventType.PLAN_PROPOSED
+            and int(event.payload_json["version"]) == version
+        ),
+        None,
+    )
+    if payload is None:
+        return None
+    return AcceptedPlan(
+        version=version,
+        steps=tuple(PlanStep.model_validate(step) for step in payload["steps"]),
+        acceptance_matrix=tuple(
+            MatrixItem.model_validate(item) for item in payload["acceptance_matrix"]
+        ),
+    )
+
+
+__all__ = [
+    "AcceptedPlan",
+    "MatrixItem",
+    "PlanRejectedError",
+    "PlanStep",
+    "TaskPlanResult",
+    "accept_plan",
+    "plan_from_events",
+]

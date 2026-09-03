@@ -34,3 +34,19 @@ def test_package_exports_planning_names() -> None:
         "TaskPlanner", "PlanningFailedError",
     ):
         assert hasattr(tasks, name), name
+
+
+def test_package_exports_task_service_names_and_sorted_all() -> None:
+    import sagewai.work.tasks as tasks
+
+    for name in (
+        "ClarificationDeadlines",
+        "TaskCreationError",
+        "TaskDecisionError",
+        "TaskService",
+        "TaskWriter",
+        "plan_from_events",
+        "status_entry",
+    ):
+        assert hasattr(tasks, name), name
+    assert tasks.__all__ == sorted(tasks.__all__)
