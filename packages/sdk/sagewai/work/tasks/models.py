@@ -353,6 +353,15 @@ class BudgetUsed(BaseModel):
     usd_unknown: int = 0
 
 
+class SpendTotals(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    usd_reserved: Decimal
+    usd_actual: Decimal
+    unknown_settlements: int
+    reservations: int
+
+
 class TaskRecord(BaseModel):
     """Mutable projection derived from Task events."""
 

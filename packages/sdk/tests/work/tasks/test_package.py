@@ -50,3 +50,28 @@ def test_package_exports_task_service_names_and_sorted_all() -> None:
     ):
         assert hasattr(tasks, name), name
     assert tasks.__all__ == sorted(tasks.__all__)
+
+
+def test_package_exports_pure_decision_names() -> None:
+    import sagewai.work.tasks as tasks
+
+    for name in (
+        "AssessCycle",
+        "BlockCycle",
+        "CompleteCycle",
+        "ExhaustBudget",
+        "MirrorAttention",
+        "RecordStepOutcome",
+        "Replan",
+        "ResumeStep",
+        "RunPlanning",
+        "StartCycle",
+        "StartStep",
+        "StepWorkState",
+        "SupersedeStep",
+        "budget_breach",
+        "budget_used_from",
+        "decide",
+        "fold_cycle",
+    ):
+        assert hasattr(tasks, name), name

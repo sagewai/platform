@@ -37,6 +37,7 @@ from sagewai.work.tasks.events import TaskEvent
 from sagewai.work.tasks.feed import FeedBus, FeedEntry
 from sagewai.work.tasks.models import (
     TERMINAL_STATUSES,
+    SpendTotals,
     Task,
     TaskDefaults,
     TaskRecord,
@@ -58,15 +59,6 @@ class SpendReservation(BaseModel):
     role: str
     runtime: str
     usd_reserved: Decimal = Field(ge=0)
-
-
-class SpendTotals(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    usd_reserved: Decimal
-    usd_actual: Decimal
-    unknown_settlements: int
-    reservations: int
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
