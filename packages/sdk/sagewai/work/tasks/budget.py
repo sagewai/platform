@@ -11,12 +11,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
+from sagewai.work.control import OperatorController
 from sagewai.work.tasks.events import TaskEvent, TaskEventType
 from sagewai.work.tasks.models import Budget, BudgetUsed, SpendTotals
+from sagewai.work.tasks.store import SpendReservation, TaskStore
 
 
 def worst_case_usd(runtime_name: str, budget: Budget) -> Decimal:
@@ -74,4 +77,105 @@ def budget_breach(used: BudgetUsed, budget: Budget) -> str | None:
     return None
 
 
-__all__ = ["budget_breach", "budget_used_from", "worst_case_usd"]
+class BudgetLedger:
+    """One cycle's durable spend: reserve the worst case, settle the recorded cost."""
+
+    def __init__(
+        self, *, store: TaskStore, task_id: str, project_id: str, cycle: int, budget: Budget
+    ) -> None:
+        self._store = store
+        self._task_id = task_id
+        self._project_id = project_id
+        self._cycle = cycle
+        self._budget = budget
+        self.reserved: list[tuple[str, str, str, Decimal]] = []
+        self.settled: list[tuple[str, Decimal | None]] = []
+
+    async def reserve(self, *, run_id: str, stage: str, runtime: Any) -> None:
+        usd = worst_case_usd(runtime.name, self._budget)
+        try:
+            await self._store.reserve_spend(
+                SpendReservation(
+                    reservation_id=run_id,
+                    project_id=self._project_id,
+                    task_id=self._task_id,
+                    cycle=self._cycle,
+                    role=stage,
+                    runtime=runtime.name,
+                    usd_reserved=usd,
+                )
+            )
+        except ValueError:
+            return
+        self.reserved.append((run_id, stage, runtime.name, usd))
+
+    async def settle(self, *, run_id: str, cost_usd: float | None) -> None:
+        usd = None if cost_usd is None else Decimal(str(cost_usd))
+        try:
+            await self._store.settle_spend(run_id, project_id=self._project_id, usd_actual=usd)
+        except KeyError:
+            return
+        self.settled.append((run_id, usd))
+
+    async def totals(self) -> SpendTotals:
+        return await self._store.spend_totals(
+            task_id=self._task_id, project_id=self._project_id, cycle=self._cycle
+        )
+
+    def drain(self) -> list[tuple[TaskEventType, dict[str, Any]]]:
+        """The SPEND_RESERVED and SPEND_SETTLED entries written since the last drain."""
+        entries: list[tuple[TaskEventType, dict[str, Any]]] = [
+            (
+                TaskEventType.SPEND_RESERVED,
+                {
+                    "reservation_id": run_id,
+                    "role": role,
+                    "runtime": runtime,
+                    "usd_reserved": str(usd),
+                },
+            )
+            for run_id, role, runtime, usd in self.reserved
+        ]
+        entries.extend(
+            (
+                TaskEventType.SPEND_SETTLED,
+                {"reservation_id": run_id, "usd_actual": None if usd is None else str(usd)},
+            )
+            for run_id, usd in self.settled
+        )
+        self.reserved.clear()
+        self.settled.clear()
+        return entries
+
+
+class MeteredOperatorController(OperatorController):
+    """Bracket every stage attempt with a durable reservation and settlement.
+
+    ``ledger`` is a callable because one cached stack serves many cycles.
+    """
+
+    def __init__(self, *, ledger: Callable[[], BudgetLedger], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._ledger = ledger
+
+    async def run(self, *, runtime, request, capsule, capabilities, workspace):
+        ledger = self._ledger()
+        await ledger.reserve(run_id=request.run_id, stage=request.stage, runtime=runtime)
+        result = await super().run(
+            runtime=runtime,
+            request=request,
+            capsule=capsule,
+            capabilities=capabilities,
+            workspace=workspace,
+        )
+        await ledger.settle(run_id=request.run_id, cost_usd=result.cost_usd)
+        return result
+
+
+__all__ = [
+    "BudgetLedger",
+    "MeteredOperatorController",
+    "budget_breach",
+    "budget_used_from",
+    "worst_case_usd",
+]

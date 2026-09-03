@@ -60,6 +60,10 @@ class FakeProfileRunner:
         self.merged_shas: dict[str, str] = {}
         self.pull_request_urls: dict[str, str] = {}
         self.created_issues: list[tuple[str, str]] = []
+        self.ledgers: list = []
+
+    def use_ledger(self, ledger) -> None:
+        self.ledgers.append(ledger)
 
     async def base_sha(self, task):
         return self.head
@@ -274,6 +278,7 @@ async def test_plan_to_two_steps_to_assess_to_complete(stores, tmp_path, monkeyp
     assert types[-1] is TaskEventType.TASK_STATUS_CHANGED
     assert types.index(TaskEventType.CYCLE_STARTED) < types.index(TaskEventType.STEP_WORK_STARTED)
     assert types.index(TaskEventType.BUDGET_RECORDED) < types.index(TaskEventType.CYCLE_COMPLETED)
+    assert len(runner.ledgers) == 3
     receipts = [event for event in events if event.event_type is TaskEventType.COMMAND_RECEIPT]
     assert [receipt.payload_json["kind"] for receipt in receipts] == [
         "run_planning",

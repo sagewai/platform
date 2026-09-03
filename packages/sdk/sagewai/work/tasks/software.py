@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from sagewai.fleet.execution import run_worker_subprocess
 from sagewai.work.models import SUPERSEDED, WorkRecord
 from sagewai.work.profiles.software.assembly import (
+    ControllerFactory,
     SoftwareStack,
     build_github_lifecycle,
     build_software_stack,
@@ -30,6 +31,7 @@ from sagewai.work.profiles.software.github import (
     GitHubPullRequest,
 )
 from sagewai.work.store import WorkStore
+from sagewai.work.tasks.budget import BudgetLedger, MeteredOperatorController
 from sagewai.work.tasks.decisions import merge_policy_for
 from sagewai.work.tasks.models import SoftwareTarget, Task
 from sagewai.work.tasks.plan import PlanStep, TaskPlanResult
@@ -64,6 +66,11 @@ class SoftwareProfileRunner:
         self._github_factory = github_factory
         self._engine = engine
         self._stacks: OrderedDict[_StackKey, SoftwareStack] = OrderedDict()
+        self._ledger: BudgetLedger | None = None
+
+    def use_ledger(self, ledger: BudgetLedger) -> None:
+        """Meter every stage attempt of the next call into this cycle's ledger."""
+        self._ledger = ledger
 
     async def aclose(self) -> None:
         """Flush every cached stack's activity sink; the runner owns the call."""
@@ -246,6 +253,7 @@ class SoftwareProfileRunner:
             fleet_org=task.execution.fleet_org_id,
             prefer_free_implementation=task.routing.prefer_free_implementation,
             max_attempts_per_stage=task.budget.max_attempts_per_stage,
+            controller_factory=self._controller_factory(),
             engine=self._engine,
         )
         self._stacks[key] = stack
@@ -277,6 +285,10 @@ class SoftwareProfileRunner:
             merge_policy=merge_policy_for(task.authority),
             task_id=task.id,
         )
+
+    def _controller_factory(self) -> ControllerFactory:
+        """The stack is cached per Task, so the controllers read the current ledger each run."""
+        return lambda **kwargs: MeteredOperatorController(ledger=lambda: self._ledger, **kwargs)
 
 
 __all__ = ["SoftwareProfileRunner", "step_marker", "task_label"]

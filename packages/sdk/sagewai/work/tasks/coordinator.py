@@ -23,7 +23,7 @@ from sagewai.work.models import SUPERSEDED, GateDecision, PendingAttention, Work
 from sagewai.work.store import WorkStore
 from sagewai.work.supersede import supersede_work
 from sagewai.work.tasks.assessment import assess_cycle
-from sagewai.work.tasks.budget import budget_used_from
+from sagewai.work.tasks.budget import BudgetLedger, budget_used_from
 from sagewai.work.tasks.decide import (
     AssessCycle,
     BlockCycle,
@@ -69,6 +69,8 @@ _URGENCY = {
 
 class ProfileRunner(Protocol):
     """Profile-specific execution the coordinator drives; PR4b adds the report runner."""
+
+    def use_ledger(self, ledger: BudgetLedger) -> None: ...
 
     async def base_sha(self, task: Task) -> str | None: ...
 
@@ -144,6 +146,18 @@ class TaskCoordinator:
         if loaded is None:
             raise KeyError(task_id)
         return loaded
+
+    def _meter(self, task: Task, record: TaskRecord) -> BudgetLedger:
+        """The ledger this command's attempts bill to; handed to the profile runner."""
+        ledger = BudgetLedger(
+            store=self._task_store,
+            task_id=task.id,
+            project_id=task.project_id,
+            cycle=self._cycle(record),
+            budget=task.budget,
+        )
+        self._profile.use_ledger(ledger)
+        return ledger
 
     async def drive(self, record: TaskRecord, *, lease_epoch: int) -> TaskRecord:
         """Run commands until the Task waits, a command makes no progress, or the cap is hit."""
@@ -281,19 +295,38 @@ class TaskCoordinator:
             return await self._start_step(task, record, command, state, lease_epoch, replay=replay)
         if isinstance(command, ResumeStep):
             before = await self._work_store.load_work(command.work_id, project_id=task.project_id)
+            ledger = self._meter(task, record)
             resumed = await self._profile.resume(
                 task, cycle=record.current_cycle, work_id=command.work_id
             )
             if resumed.status == before.status:
+                entries = ledger.drain()
+                if entries:
+                    spent = await self._budget_used(
+                        task,
+                        record,
+                        await self._task_store.read_events(task.id, project_id=task.project_id),
+                    )
+                    entries.append(
+                        (
+                            TaskEventType.BUDGET_RECORDED,
+                            {"budget_used": spent.model_dump(mode="json")},
+                        )
+                    )
+                    return await self._append(record, entries, lease_epoch, command=command)
                 return record
             spent = await self._budget_used(
                 task,
                 record,
                 await self._task_store.read_events(task.id, project_id=task.project_id),
             )
+            entries = ledger.drain()
+            entries.append(
+                (TaskEventType.BUDGET_RECORDED, {"budget_used": spent.model_dump(mode="json")})
+            )
             return await self._append(
                 record,
-                [(TaskEventType.BUDGET_RECORDED, {"budget_used": spent.model_dump(mode="json")})],
+                entries,
                 lease_epoch,
                 command=command,
             )
@@ -381,6 +414,7 @@ class TaskCoordinator:
             for event in events
             if event.event_type is TaskEventType.CLARIFICATION_ANSWERED
         )
+        ledger = self._meter(task, record)
         try:
             result = await self._profile.plan(
                 task,
@@ -391,30 +425,49 @@ class TaskCoordinator:
                 amendments=amendments,
             )
         except PlanningFailedError as exc:
-            return await self._block(task, record, f"planning failed: {exc}", lease_epoch, command)
+            return await self._block(
+                task,
+                record,
+                f"planning failed: {exc}",
+                lease_epoch,
+                command,
+                prefix=ledger.drain(),
+            )
         if result.asks_first:
             defaults = await self._task_store.get_defaults(project_id=task.project_id)
             deadline = self._now() + timedelta(seconds=defaults.clarification_deadline_seconds)
-            entries = [
-                (
-                    TaskEventType.CLARIFICATION_REQUESTED,
-                    {
-                        "questions": [
-                            question.model_dump(mode="json") for question in result.clarifications
-                        ],
-                        "deadline_at": deadline.isoformat(),
-                    },
-                ),
-                status_entry(record, TaskStatus.CLARIFYING),
-            ]
+            entries = ledger.drain()
+            entries.extend(
+                [
+                    (
+                        TaskEventType.CLARIFICATION_REQUESTED,
+                        {
+                            "questions": [
+                                question.model_dump(mode="json")
+                                for question in result.clarifications
+                            ],
+                            "deadline_at": deadline.isoformat(),
+                        },
+                    ),
+                    status_entry(record, TaskStatus.CLARIFYING),
+                ]
+            )
             return await self._append(record, entries, lease_epoch, command=command)
         try:
             plan = accept_plan(
                 result, budget=task.budget, target=task.target, version=command.plan_version
             )
         except PlanRejectedError as exc:
-            return await self._block(task, record, f"plan rejected: {exc}", lease_epoch, command)
-        entries = [
+            return await self._block(
+                task,
+                record,
+                f"plan rejected: {exc}",
+                lease_epoch,
+                command,
+                prefix=ledger.drain(),
+            )
+        entries = ledger.drain()
+        entries.append(
             (
                 TaskEventType.PLAN_PROPOSED,
                 {
@@ -425,7 +478,7 @@ class TaskCoordinator:
                     ],
                 },
             )
-        ]
+        )
         action = coordinator_action(task.project_id, action="plan", work_id=task.id, scope=task.id)
         if resolve_gate(task.authority.plan, action) is GateDecision.REQUIRE_APPROVAL:
             entries.append(
@@ -463,13 +516,25 @@ class TaskCoordinator:
         return f"{text}: {gaps}"
 
     async def _block(
-        self, task: Task, record: TaskRecord, text: str, lease_epoch: int, command: Command
+        self,
+        task: Task,
+        record: TaskRecord,
+        text: str,
+        lease_epoch: int,
+        command: Command,
+        prefix: Sequence[Entry] = (),
     ) -> TaskRecord:
         message = await self._block_text(task, text)
-        entries: list[Entry] = [
-            (TaskEventType.TASK_MESSAGE, {"author": "coordinator", "text": message, "refs": []}),
-            status_entry(record, TaskStatus.BLOCKED),
-        ]
+        entries: list[Entry] = list(prefix)
+        entries.extend(
+            [
+                (
+                    TaskEventType.TASK_MESSAGE,
+                    {"author": "coordinator", "text": message, "refs": []},
+                ),
+                status_entry(record, TaskStatus.BLOCKED),
+            ]
+        )
         entries.extend(
             await self._present(
                 task,
@@ -627,6 +692,7 @@ class TaskCoordinator:
         base_sha = await self._profile.base_sha(task)
         work = await self._profile.find_work(task, issue_url=issue_url) if replay else None
         if work is None:
+            ledger = self._meter(task, record)
             work = await self._profile.start(
                 task,
                 cycle=record.current_cycle,
@@ -634,11 +700,12 @@ class TaskCoordinator:
                 issue_url=issue_url,
                 base_sha=base_sha,
             )
+            entries = ledger.drain()
         else:
             # The Work already exists from a crashed attempt: record the base it actually
             # pinned (lifecycle.py:375 seeds it), never the head we just fetched.
             base_sha = work.profile_context.get("base_sha", base_sha)
-        entries: list[Entry] = []
+            entries: list[Entry] = []
         if lease_key is not None:
             entries.append(
                 (

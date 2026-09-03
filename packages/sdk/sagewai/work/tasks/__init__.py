@@ -10,7 +10,12 @@
 """Task aggregate: durable coordination above the Work kernel."""
 
 from sagewai.work.tasks.assessment import TaskAssessmentResult, assess_cycle
-from sagewai.work.tasks.budget import budget_breach, budget_used_from
+from sagewai.work.tasks.budget import (
+    BudgetLedger,
+    MeteredOperatorController,
+    budget_breach,
+    budget_used_from,
+)
 from sagewai.work.tasks.coordinator import TaskCoordinator
 from sagewai.work.tasks.decide import (
     AssessCycle,
@@ -116,6 +121,7 @@ __all__ = [
     "Authority",
     "BlockCycle",
     "Budget",
+    "BudgetLedger",
     "BudgetUsed",
     "BurnSeriesPoint",
     "CATALOGUE",
@@ -132,6 +138,7 @@ __all__ = [
     "IllegalTransitionError",
     "IntakeResult",
     "MatrixItem",
+    "MeteredOperatorController",
     "MirrorAttention",
     "PlanRejectedError",
     "PlanStep",
