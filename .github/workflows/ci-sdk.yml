@@ -70,6 +70,7 @@ jobs:
           packages/sdk/tests/work/test_store.py
           packages/sdk/tests/work/knowledge/test_store.py
           packages/sdk/tests/work/tasks/test_store.py
+          packages/sdk/tests/work/tasks/test_store_concurrency.py
           packages/sdk/tests/db/test_migration_021_work_domain.py
           packages/sdk/tests/db/test_migration_028_task_coordinator.py
           -o "addopts="

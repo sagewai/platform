@@ -411,6 +411,7 @@ sdk-smoke:
     uv run --package sagewai --group test pytest \
         packages/sdk/tests/work/test_github.py::test_labeled_intake_starts_one_unseen_issue_once \
         packages/sdk/tests/work/test_lifecycle.py::test_github_flow_uses_real_software_lifecycle_events \
+        packages/sdk/tests/work/tasks/test_coordinator.py::test_plan_to_two_steps_to_assess_to_complete \
         -q -o "addopts="
 
 # Dependency-free applications used as safe Work coordinator targets

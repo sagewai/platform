@@ -2052,6 +2052,7 @@ class TaskModel(Base):
         PrimaryKeyConstraint("project_scope_key", "task_id", name="pk_tasks"),
         Index("ix_tasks_scope_status", "project_scope_key", "status"),
         Index("ix_tasks_scope_lease", "project_scope_key", "lease_expires_at"),
+        Index("ix_tasks_scope_due", "project_scope_key", "next_run_at"),
     )
 
     project_scope_key: Mapped[str] = mapped_column(Text, nullable=False)

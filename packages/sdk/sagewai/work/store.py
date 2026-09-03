@@ -30,6 +30,7 @@ from sagewai.work.knowledge.store import insert_knowledge_item
 from sagewai.work.metrics import WorkMetrics, derive_work_metrics
 from sagewai.work.models import (
     SUPERSEDED,
+    TASK_PLAN_PROFILE,
     ExternalOutcomeIncident,
     PendingAttention,
     PendingAttentionKind,
@@ -239,7 +240,10 @@ class WorkStore:
         *,
         project_id: str | None,
     ) -> tuple[PendingAttention, ...]:
-        """List the four canonical unresolved attention categories for a project."""
+        """List the four canonical unresolved attention categories for a project.
+
+        A planning Work's attention belongs to its Task and is never listed here.
+        """
         work_query = (
             select(self._work_items)
             .where(self._work_items.c.project_scope_key == project_scope_key(project_id))
@@ -262,7 +266,7 @@ class WorkStore:
         pending: list[PendingAttention] = []
         for row in work_rows:
             projection = row._mapping
-            if projection["status"] == SUPERSEDED:
+            if projection["status"] == SUPERSEDED or projection["profile"] == TASK_PLAN_PROFILE:
                 continue
             work_id = str(projection["work_id"])
             source_ref = projection["source_ref"]

@@ -117,12 +117,16 @@ def _schema_signature(bind, table_names: tuple[str, ...]) -> dict[str, dict[str,
 
 def _migration_signature(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str, list[tuple]]]:
     mod = importlib.import_module("sagewai.db.migrations.versions.028_task_coordinator")
+    due_index = importlib.import_module("sagewai.db.migrations.versions.029_task_due_index")
     engine = create_engine("sqlite:///:memory:")
     try:
         with engine.begin() as conn:
             context = MigrationContext.configure(conn)
-            monkeypatch.setattr(mod, "op", Operations(context))
+            operations = Operations(context)
+            monkeypatch.setattr(mod, "op", operations)
+            monkeypatch.setattr(due_index, "op", operations)
             mod.upgrade()
+            due_index.upgrade()
             return _schema_signature(conn, mod.TABLES)
     finally:
         engine.dispose()
@@ -138,6 +142,6 @@ def _metadata_signature(table_names: tuple[str, ...]) -> dict[str, dict[str, lis
         engine.dispose()
 
 
-def test_migration_028_schema_matches_orm_create_all(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_task_coordinator_migrations_match_orm_create_all(monkeypatch: pytest.MonkeyPatch) -> None:
     table_names = tuple(model.__table__.name for model in TASK_COORDINATOR_MODELS)
     assert _migration_signature(monkeypatch) == _metadata_signature(table_names)

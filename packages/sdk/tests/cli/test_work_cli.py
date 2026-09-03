@@ -35,6 +35,7 @@ from sagewai.work.tasks.store import TaskStore as CoordinatorTaskStore
 from tests.db.conftest import dialect_engine  # noqa: F401
 
 work_module = import_module("sagewai.cli.work")
+assembly_module = import_module("sagewai.work.profiles.software.assembly")
 fleet_module = import_module("sagewai.cli.fleet")
 
 
@@ -473,7 +474,7 @@ async def test_build_lifecycle_prefer_free_implementation_inserts_harness(
         }
 
     monkeypatch.setattr(
-        work_module,
+        assembly_module,
         "discover_local_backends",
         fake_discover_local_backends,
     )
@@ -1270,10 +1271,10 @@ async def test_build_lifecycle_composes_persistent_fleet_stages(
     monkeypatch.setattr(work_module.factory, "ensure_schema", fake_ensure_schema)
     monkeypatch.setattr(work_module.factory, "get_engine", lambda: dialect_engine)
     monkeypatch.setattr(work_module.factory, "get_workflow_store", fake_workflow_store)
-    monkeypatch.setattr(work_module, "PostgresFleetRegistry", FakeRegistry)
-    monkeypatch.setattr(work_module, "PostgresTaskStore", FakeTaskStore)
-    monkeypatch.setattr(work_module, "SoftwareFleetWorkspaceTransport", FakeTransport)
-    monkeypatch.setattr(work_module, "_software_repository_ref", fake_repository_ref)
+    monkeypatch.setattr(assembly_module, "PostgresFleetRegistry", FakeRegistry)
+    monkeypatch.setattr(assembly_module, "PostgresTaskStore", FakeTaskStore)
+    monkeypatch.setattr(assembly_module, "SoftwareFleetWorkspaceTransport", FakeTransport)
+    monkeypatch.setattr(assembly_module, "software_repository_ref", fake_repository_ref)
     monkeypatch.setattr(SoftwareStageOperator, "fleet", classmethod(fake_fleet))
 
     lifecycle, _, _, _ = await work_module._build_lifecycle(
@@ -1353,11 +1354,11 @@ async def test_build_lifecycle_composes_persistent_fleet_harness_stage(
     monkeypatch.setattr(work_module.factory, "ensure_schema", fake_ensure_schema)
     monkeypatch.setattr(work_module.factory, "get_engine", lambda: dialect_engine)
     monkeypatch.setattr(work_module.factory, "get_workflow_store", fake_workflow_store)
-    monkeypatch.setattr(work_module, "PostgresFleetRegistry", FakeRegistry)
-    monkeypatch.setattr(work_module, "PostgresTaskStore", FakeFleetTaskStore)
-    monkeypatch.setattr(work_module, "CoordinatorTaskStore", FakeCoordinatorTaskStore)
-    monkeypatch.setattr(work_module, "SoftwareFleetWorkspaceTransport", FakeTransport)
-    monkeypatch.setattr(work_module, "_software_repository_ref", fake_repository_ref)
+    monkeypatch.setattr(assembly_module, "PostgresFleetRegistry", FakeRegistry)
+    monkeypatch.setattr(assembly_module, "PostgresTaskStore", FakeFleetTaskStore)
+    monkeypatch.setattr(assembly_module, "TaskStore", FakeCoordinatorTaskStore)
+    monkeypatch.setattr(assembly_module, "SoftwareFleetWorkspaceTransport", FakeTransport)
+    monkeypatch.setattr(assembly_module, "software_repository_ref", fake_repository_ref)
     monkeypatch.setattr(work_module, "_work_prefer_free_implementation", lambda: True)
 
     lifecycle, _, _, _ = await work_module._build_lifecycle(

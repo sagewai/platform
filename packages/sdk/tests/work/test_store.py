@@ -214,3 +214,41 @@ async def test_source_ref_lookup_is_project_scoped(store: WorkStore) -> None:
         )
         is None
     )
+
+
+@pytest.mark.asyncio
+async def test_pending_attention_skips_task_plan_works(store: WorkStore) -> None:
+    """A planning Work's attention belongs to the Task, not to the Work inbox."""
+    now = datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc)
+    for work_id, profile in (("w-plan", "task_plan"), ("w-code", "software")):
+        await store.save_work(
+            WorkRecord(
+                work_id=work_id,
+                project_id="project-a",
+                source_ref="task-1",
+                profile=profile,
+                status="WORK_BLOCKED",
+                contract_version=1,
+                active_run_id=None,
+                pending_gate=None,
+                profile_context={},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        await store.append_event(
+            WorkEvent(
+                id=f"{work_id}-blocked",
+                project_id="project-a",
+                work_id=work_id,
+                sequence=1,
+                event_type=WorkEventType.WORK_BLOCKED,
+                actor_type="system",
+                actor_ref="test",
+                payload_json={"reason": "needs a decision", "decision_request": "choose"},
+                created_at=now,
+            )
+        )
+    pending = await store.pending_attention(project_id="project-a")
+    assert [item.work_id for item in pending] == ["w-code"]
+

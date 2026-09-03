@@ -28,12 +28,12 @@ from sagewai.work.tasks.events import TaskEvent, TaskEventType
 from sagewai.work.tasks.models import (
     Budget,
     BudgetUsed,
+    SpendTotals,
     TaskKind,
     TaskOrigin,
     TaskRecord,
     TaskStatus,
 )
-from sagewai.work.tasks.store import SpendTotals
 from sagewai.work.tasks.telemetry import derive_task_telemetry
 
 NOW = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)

@@ -182,6 +182,25 @@ class GitHubClient(Protocol):
 
     async def comment_issue(self, issue_url: str, body: str) -> None: ...
 
+    async def create_issue(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        title: str,
+        body: str,
+        labels: tuple[str, ...],
+    ) -> GitHubIssue: ...
+
+
+class GitHubScope(Protocol):
+    """Anything that names the project whose GitHub credentials a client should use."""
+
+    project_id: str
+
+
+GitHubFactory = Callable[[GitHubScope], GitHubClient]
+
 
 class GitBranchPublisher(Protocol):
     """Publish the reviewed local workspace to one Git branch."""
@@ -297,6 +316,31 @@ class CatalogGitHubClient:
             url=str(issue["html_url"]),
             title=str(issue["title"]),
             body=str(issue.get("body") or ""),
+            default_branch=str(repository["default_branch"]),
+        )
+
+    async def create_issue(
+        self, *, owner: str, repo: str, title: str, body: str, labels: tuple[str, ...]
+    ) -> GitHubIssue:
+        repository = await self._call({"_operation": "get_repo", "owner": owner, "repo": repo})
+        issue = await self._call(
+            {
+                "_operation": "create_issue",
+                "owner": owner,
+                "repo": repo,
+                "title": title,
+                "body": body,
+                "labels": list(labels),
+            }
+        )
+        return GitHubIssue(
+            project_id=self._project_id,
+            owner=owner,
+            repo=repo,
+            number=int(issue["number"]),
+            url=str(issue["html_url"]),
+            title=title,
+            body=body,
             default_branch=str(repository["default_branch"]),
         )
 
@@ -538,6 +582,7 @@ class GitHubIssueLifecycle:
         execution_route: str | None = None,
         fleet_org_id: str | None = None,
         merge_policy: Callable[[ActionRequest], GateDecision] = require_merge_approval,
+        task_id: str | None = None,
     ) -> None:
         self._work_store = work_store
         self._software_lifecycle = software_lifecycle
@@ -549,6 +594,7 @@ class GitHubIssueLifecycle:
         self._execution_route = execution_route
         self._fleet_org_id = fleet_org_id
         self._merge_policy = merge_policy
+        self._task_id = task_id
 
     async def start(
         self,
@@ -556,13 +602,15 @@ class GitHubIssueLifecycle:
         issue_url: str,
         project_id: str,
         base_sha: str,
+        evidence_refs: tuple[str, ...] = (),
     ) -> WorkRecord:
-        """Fetch one issue, create canonical Work, and run through the merge gate."""
+        """Start the Work for one issue; extra evidence joins the issue on the contract."""
         issue = await self._github.fetch_issue(issue_url)
         return await self._start_issue(
             issue=issue,
             project_id=project_id,
             base_sha=base_sha,
+            evidence_refs=evidence_refs,
         )
 
     async def intake_labeled(
@@ -600,7 +648,9 @@ class GitHubIssueLifecycle:
         issue: GitHubIssue,
         project_id: str,
         base_sha: str,
+        evidence_refs: tuple[str, ...] = (),
     ) -> WorkRecord:
+        """Create canonical Work for one fetched issue and run through the merge gate."""
         if issue.project_id != project_id:
             raise ValueError("GitHub issue belongs to a different project")
         await self._branch_publisher.validate_target(
@@ -643,7 +693,7 @@ class GitHubIssueLifecycle:
             ),
             constraints=(),
             non_goals=(),
-            evidence_refs=(issue.url,),
+            evidence_refs=(issue.url, *evidence_refs),
             assumption_ids=(),
             risk="low",
             design_required=False,
@@ -655,6 +705,7 @@ class GitHubIssueLifecycle:
                 delivery=None,
                 execution_route=self._execution_route,
                 fleet_org_id=self._fleet_org_id,
+                task_id=self._task_id,
             ).model_dump(mode="json"),
         )
         record = await self._software_lifecycle.start(
@@ -1786,12 +1837,14 @@ __all__ = [
     "CatalogGitHubClient",
     "GitBranchPublisher",
     "GitHubClient",
+    "GitHubFactory",
     "GitHubIssue",
     "GitHubIssueLifecycle",
     "GitHubMergeRejectedError",
     "GitHubMergeResult",
     "GitHubPullRequest",
     "GitHubPullRequestState",
+    "GitHubScope",
     "GitHubWorkContext",
     "WorktreeBranchPublisher",
     "github_remote_repository",

@@ -32,15 +32,18 @@ from sagewai.db.models import (
     TaskModel,
     TaskRepositoryLeaseModel,
     TaskSpendModel,
+    TaskTriggerModel,
 )
 from sagewai.work.tasks.events import TaskEvent
 from sagewai.work.tasks.feed import FeedBus, FeedEntry
 from sagewai.work.tasks.models import (
     TERMINAL_STATUSES,
+    SpendTotals,
     Task,
     TaskDefaults,
     TaskRecord,
     TaskStatus,
+    TaskTriggerSpec,
 )
 
 
@@ -58,15 +61,6 @@ class SpendReservation(BaseModel):
     role: str
     runtime: str
     usd_reserved: Decimal = Field(ge=0)
-
-
-class SpendTotals(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    usd_reserved: Decimal
-    usd_actual: Decimal
-    unknown_settlements: int
-    reservations: int
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -92,6 +86,7 @@ class TaskStore:
         self._commands = TaskCommandModel.__table__
         self._spend = TaskSpendModel.__table__
         self._defaults = TaskDefaultsModel.__table__
+        self._triggers = TaskTriggerModel.__table__
         self._repository_leases = TaskRepositoryLeaseModel.__table__
 
     @property
@@ -318,6 +313,26 @@ class TaskStore:
             rows = (await conn.execute(query)).all()
         return [self._record_from_row(row._mapping) for row in rows]
 
+    async def list_due(
+        self, *, project_id: str, now: datetime, limit: int = 50
+    ) -> list[TaskRecord]:
+        """Scheduled Tasks whose next run has passed, earliest first."""
+        scope = project_scope_key(project_id)
+        query = (
+            select(self._tasks)
+            .where(
+                self._tasks.c.project_scope_key == scope,
+                self._tasks.c.status == TaskStatus.SCHEDULED.value,
+                self._tasks.c.next_run_at.is_not(None),
+                self._tasks.c.next_run_at <= now,
+            )
+            .order_by(self._tasks.c.next_run_at)
+            .limit(limit)
+        )
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(query)).all()
+        return [self._record_from_row(row._mapping) for row in rows]
+
     # ── leases ────────────────────────────────────────────────────────────
 
     async def claim(self, task_id: str, *, project_id: str, owner: str, ttl_seconds: int) -> int | None:
@@ -484,6 +499,18 @@ class TaskStore:
             return False
         return True
 
+    async def delete_command(self, *, task_id: str, project_id: str, command_id: str) -> bool:
+        scope = project_scope_key(project_id)
+        async with self._engine.begin() as conn:
+            result = await conn.execute(
+                self._commands.delete().where(
+                    self._commands.c.project_scope_key == scope,
+                    self._commands.c.task_id == task_id,
+                    self._commands.c.command_id == command_id,
+                )
+            )
+        return result.rowcount == 1
+
     async def reserve_spend(self, reservation: SpendReservation) -> None:
         scope = project_scope_key(reservation.project_id)
         try:
@@ -605,6 +632,57 @@ class TaskStore:
                     raise StaleTaskError("defaults changed since they were read")
         return stored
 
+    async def put_trigger(self, spec: TaskTriggerSpec) -> None:
+        """Insert or replace one admin-approved trigger."""
+        scope = project_scope_key(spec.project_id)
+        payload = spec.model_dump(mode="json")
+        now = datetime.now(timezone.utc)
+        async with self._engine.begin() as conn:
+            result = await conn.execute(
+                update(self._triggers)
+                .where(
+                    self._triggers.c.project_scope_key == scope,
+                    self._triggers.c.trigger_id == spec.trigger_id,
+                )
+                .values(spec_json=payload, enabled=spec.enabled, updated_at=now)
+            )
+            if result.rowcount == 1:
+                return
+            await conn.execute(
+                insert(self._triggers).values(
+                    project_scope_key=scope,
+                    trigger_id=spec.trigger_id,
+                    project_id=spec.project_id,
+                    spec_json=payload,
+                    enabled=spec.enabled,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+
+    async def list_triggers(
+        self, *, project_id: str, enabled_only: bool = True
+    ) -> list[TaskTriggerSpec]:
+        scope = project_scope_key(project_id)
+        query = select(self._triggers).where(self._triggers.c.project_scope_key == scope)
+        if enabled_only:
+            query = query.where(self._triggers.c.enabled.is_(True))
+        query = query.order_by(self._triggers.c.trigger_id)
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(query)).all()
+        return [TaskTriggerSpec.model_validate(row._mapping["spec_json"]) for row in rows]
+
+    async def delete_trigger(self, trigger_id: str, *, project_id: str) -> bool:
+        scope = project_scope_key(project_id)
+        async with self._engine.begin() as conn:
+            result = await conn.execute(
+                self._triggers.delete().where(
+                    self._triggers.c.project_scope_key == scope,
+                    self._triggers.c.trigger_id == trigger_id,
+                )
+            )
+        return result.rowcount == 1
+
     # ── helpers ───────────────────────────────────────────────────────────
 
     @staticmethod
@@ -707,4 +785,4 @@ class TaskStore:
         return FeedEntry.model_validate(data)
 
 
-__all__ = ["SpendReservation", "SpendTotals", "StaleTaskError", "TaskStore"]
+__all__ = ["SpendReservation", "StaleTaskError", "TaskStore"]

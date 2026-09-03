@@ -357,6 +357,78 @@ while `cli:` grants need a sandbox backend and `mcp:` grants need the MCP
 connection resolver (`sagewai.work.mcp_connection_resolver`); neither is wired
 by the CLIs yet, so such grants fail the attempt.
 
+## Running the coordinator
+
+A Task is a brief plus a target, a budget, and an authority. The coordinator plans it, opens
+one GitHub issue per step, drives each step's Work to a merge, assesses the cycle, and
+schedules the next one. It runs inside the backend and, for headless use, from the CLI.
+Run the backend, CLI, and any Fleet workers on the same SDK version during coordinator
+rollouts; the Task runner, Work lifecycle, activity feed, and Fleet envelopes share the
+same event and result shapes.
+
+Create a Task and drive it once:
+
+```bash
+sagewai task --project my-project create "Add a retry queue to the payments service"
+sagewai task --project my-project tick
+```
+
+`create` prints the Task id. `tick` claims up to `SAGEWAI_COORDINATOR_MAX_TASKS` (default 2)
+Tasks that are active or due, drives each under a 90-second lease with a 30-second
+heartbeat, and prints how many it drove. The backend runs the same tick every
+`SAGEWAI_COORDINATOR_INTERVAL_SECONDS` (default 5) and needs no extra process.
+
+What the coordinator needs before the first tick:
+
+- **Project defaults** with a software target: repository path, owner, repo, default branch,
+  the digest-pinned verification image, and the locked verification commands. Set them
+  through the console or `TaskStore.put_defaults`.
+- **Harness tiers, if you set `prefer_free_implementation`.** The routing default is off. When
+  it is on, the coordinator tries the local harness `complex` tier before Codex, and the
+  project defaults must declare that tier — an empty `harness_tiers` raises
+  `configure harness tiers in task defaults` at the first step.
+- **A GitHub token** in `GITHUB_TOKEN` with permission to read the repository and to create
+  issues, branches, pull requests, and comments, and to merge. It is read per call from the
+  backend or CLI process environment through the injected credential callable and is never
+  stored, logged, or passed to a subprocess.
+- **A trusted checkout** at the target's repository path, with `origin` pointing at the
+  GitHub repository. The coordinator fetches `origin/<default branch>` before every step and
+  pins that head as the step's base. The fetch runs with a default-deny environment that
+  carries `HOME` but not `SSH_AUTH_SOCK` or any `GIT_*` variable, so an **HTTPS remote with a
+  credential helper works and an SSH remote that needs an agent does not**. Use an HTTPS
+  origin for coordinator-driven repositories.
+
+What it does per step: takes the repository lease for `project:owner/repo:branch` so only one
+Task publishes to a branch at a time, creates an issue labelled `sagewai-task:<task id>`,
+starts the issue's Work, and releases the lease when the step's outcome is recorded. If the
+Task blocks while that step is open, the lease remains held until the step records an
+outcome. The step issue carries the plan step's goal, acceptance criteria, and allowed scope
+as prose; the Work contract fences the repository only. If the default branch moves under a step, the
+step's Work is superseded and rerun on the new head; a merge-phase move is confirmed against
+the pull request before anything is superseded.
+
+Budget: each attempt reserves its tier's worst case before the call and settles the actual
+cost after it. Crossing any limit — works, attempts, re-plans, seconds, or dollars — moves
+the Task to `BUDGET_EXHAUSTED` and asks you. Codex attempts are counted, never priced.
+Telemetry Decimal fields, including spend, are JSON strings.
+
+Schedules and health: a scheduled Task fires at its cron in its own timezone, once per fire
+even when the backend was down. Three consecutive failed cycles pause the schedule; a single
+failed cycle is retried, counted against the budget; a cost or duration spike, or a success
+rate below 80 percent over the last five cycles, raises an alert with a cooldown of one window. An alert holds the Task in `Needs you` until its next fire.
+Nothing creates a monitoring Task on its own.
+
+Questions and gates: an unanswered question that carries a default is defaulted once its
+deadline passes and the Task returns to planning; a question that cannot be defaulted stays
+open and keeps the Task in `Needs you`. The plan and re-plan gates are decided on the Task; a
+merge gate belongs to the Work, so approve it with `sagewai work approve`.
+
+Triggers: an approved `github_label` trigger turns each newly labelled issue into one Task of
+origin `trigger`, bounded by the trigger's authority, which a Task may only tighten. **A
+non-human origin never merges automatically**: plan, merge, and deliver are forced to
+`require` for every origin that is not a human, whatever the trigger says, and such a Task
+never prefers the free implementation.
+
 ## 7. Operate it as your middleman
 
 A practical rollout is:

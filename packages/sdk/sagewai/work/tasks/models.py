@@ -341,6 +341,28 @@ class TaskDefaults(BaseModel):
         return validate_timezone(value)
 
 
+class TaskTriggerSpec(BaseModel):
+    """A versioned, admin-approved rule that turns external events into Tasks."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    trigger_id: str = Field(min_length=1)
+    project_id: str = Field(min_length=1)
+    source: Literal["github_label"]
+    filter: dict[str, str]
+    template_id: str = Field(min_length=1)
+    template_version: str = Field(min_length=1)
+    slots: dict[str, Any] = Field(default_factory=dict)
+    authority: Authority = Field(default_factory=Authority)
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def _filter_matches_source(self) -> TaskTriggerSpec:
+        if self.source == "github_label" and set(self.filter) != {"owner", "repo", "label"}:
+            raise ValueError("a github_label trigger filters on owner, repo, and label")
+        return self
+
+
 class BudgetUsed(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -351,6 +373,15 @@ class BudgetUsed(BaseModel):
     usd_actual: Decimal = Decimal("0")
     usd_reserved: Decimal = Decimal("0")
     usd_unknown: int = 0
+
+
+class SpendTotals(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    usd_reserved: Decimal
+    usd_actual: Decimal
+    unknown_settlements: int
+    reservations: int
 
 
 class TaskRecord(BaseModel):

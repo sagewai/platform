@@ -14,35 +14,21 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import click
 
 import sagewai.cli as _cli
-from sagewai.artifacts import LocalArtifactStore
 from sagewai.db import factory
 from sagewai.fleet.execution import run_worker_subprocess
-from sagewai.fleet.registry import PostgresFleetRegistry
-from sagewai.fleet.task_store import PostgresTaskStore
-from sagewai.harness.discovery import discover_local_backends, openai_base_url
-from sagewai.safety.permissions import PermissionPolicy
 from sagewai.tools import factory as tool_factory
 from sagewai.work import (
     SUPERSEDED,
     AcceptanceCriterion,
-    ActivityIngestion,
     BatchingActivitySink,
-    CapabilityGrant,
-    CapabilitySet,
-    ClaudeRuntime,
-    CodexRuntime,
     ControlDegradedError,
-    HarnessRuntime,
-    OperatorController,
     PendingAttention,
-    TaskCapsuleCompiler,
-    WorkActivityStore,
     WorkContract,
     WorkEvent,
     WorkEventType,
@@ -51,34 +37,22 @@ from sagewai.work import (
     WorkRecord,
     WorkStore,
 )
-from sagewai.work.knowledge import KnowledgeStore
 from sagewai.work.profiles.software import (
-    SOFTWARE_WORKSPACE_CHECK_REF,
     CatalogGitHubClient,
     GitHubIssueLifecycle,
-    SandboxedVerificationRunner,
     SoftwareContractContext,
     SoftwareLifecycle,
-    SoftwareProfile,
-    SoftwareReadOnlyResultValidator,
     SoftwareRepositoryOutcome,
-    SoftwareResultValidator,
-    SoftwareStageOperator,
-    SoftwareVerifier,
-    SoftwareWorkspaceControlCheck,
     SoftwareWorktreeManager,
-    StageOperatorLadder,
-    WorktreeBranchPublisher,
     github_remote_repository,
     is_github_issue_url,
+    require_merge_approval,
 )
-from sagewai.work.profiles.software.fleet_workspace import (
-    SoftwareFleetWorkspaceTransport,
+from sagewai.work.profiles.software.assembly import (
+    build_github_lifecycle,
+    build_software_stack,
+    github_token_credentials,
 )
-from sagewai.work.profiles.software.fleet_workspace import (
-    software_repository_ref as _software_repository_ref,
-)
-from sagewai.work.tasks.store import TaskStore as CoordinatorTaskStore
 
 
 @click.group()
@@ -570,8 +544,6 @@ async def _build_lifecycle(
     execution: str | None = None,
     fleet_org: str | None = None,
 ) -> tuple[SoftwareLifecycle, WorkStore, SoftwareWorktreeManager, BatchingActivitySink]:
-    await factory.ensure_schema()
-    engine = factory.get_engine()
     prefer_free_implementation = _work_prefer_free_implementation()
     if execution is None:
         execution, selected_fleet_org = _work_execution_config()
@@ -583,212 +555,15 @@ async def _build_lifecycle(
         raise ValueError("fleet execution requires an explicit Fleet organization ID")
     if execution == "local" and fleet_org is not None:
         raise ValueError("Fleet organization ID requires fleet execution")
-    work_store = WorkStore(engine=engine)
-    knowledge_store = KnowledgeStore(engine=engine)
-    task_store = CoordinatorTaskStore(engine=engine)
-    activity_store = WorkActivityStore(engine=engine)
-    await work_store.init()
-    await knowledge_store.init()
-    activity_sink = ActivityIngestion(
-        work_store=work_store,
-        task_store=task_store,
-        activity_store=activity_store,
-    ).sink()
-    durability_store = await factory.get_workflow_store()
-    permission_policy = PermissionPolicy()
-
-    implementation_controller = OperatorController(
-        work_store=work_store,
-        durability_store=durability_store,
-        permission_policy=permission_policy,
-        control_checks={
-            SOFTWARE_WORKSPACE_CHECK_REF: SoftwareWorkspaceControlCheck(),
-        },
-        result_validator=SoftwareResultValidator(),
-    )
-    review_controller = OperatorController(
-        work_store=work_store,
-        durability_store=durability_store,
-        permission_policy=permission_policy,
-        control_checks={
-            SOFTWARE_WORKSPACE_CHECK_REF: SoftwareWorkspaceControlCheck(),
-        },
-        result_validator=SoftwareReadOnlyResultValidator(),
-    )
-    write_capabilities = CapabilitySet(
+    stack = await build_software_stack(
         project_id=project_id,
-        grants=(
-            CapabilityGrant(
-                project_id=project_id,
-                name="filesystem.write",
-                kind="filesystem",
-                scope={"roots": ["."]},
-                permissions=("workspace.read", "workspace.write"),
-            ),
-        ),
-    )
-    read_capabilities = CapabilitySet(
-        project_id=project_id,
-        grants=(
-            CapabilityGrant(
-                project_id=project_id,
-                name="filesystem.read",
-                kind="filesystem",
-                scope={"roots": ["."]},
-                permissions=("workspace.read",),
-            ),
-        ),
-    )
-    worktree_manager = SoftwareWorktreeManager()
-    artifact_store = LocalArtifactStore()
-    if execution == "fleet":
-        assert fleet_org is not None
-        fleet_registry = PostgresFleetRegistry(engine=engine)
-        fleet_store = PostgresTaskStore(engine=engine)
-        await fleet_registry.init()
-        await fleet_store.init()
-        workspace_transport = SoftwareFleetWorkspaceTransport(
-            repository_ref=await _software_repository_ref(repository),
-        )
-
-        def fleet_stage(
-            *,
-            actor_ref: str,
-            runtime_capability: str,
-            harness_tier: str | None = None,
-            capabilities: CapabilitySet,
-            controller: OperatorController,
-        ) -> SoftwareStageOperator:
-            return SoftwareStageOperator.fleet(
-                actor_ref=actor_ref,
-                store=fleet_store,
-                registry=fleet_registry,
-                org_id=fleet_org,
-                runtime_capability=runtime_capability,
-                poll_interval_seconds=0.25,
-                heartbeat_ttl=timedelta(seconds=30),
-                workspace_transport=workspace_transport,
-                artifact_store=artifact_store,
-                harness_tier=harness_tier,
-                capabilities=capabilities,
-                controller=controller,
-            )
-
-        analyst = fleet_stage(
-            actor_ref="fleet:claude:analyst",
-            runtime_capability="runtime.claude",
-            capabilities=read_capabilities,
-            controller=review_controller,
-        )
-        implementer = fleet_stage(
-            actor_ref="fleet:codex:implementer",
-            runtime_capability="runtime.codex",
-            capabilities=write_capabilities,
-            controller=implementation_controller,
-        )
-        implementers = (implementer,)
-        if prefer_free_implementation:
-            implementers = (
-                fleet_stage(
-                    actor_ref="fleet:harness:implementer",
-                    runtime_capability="runtime.harness",
-                    harness_tier="complex",
-                    capabilities=write_capabilities,
-                    controller=implementation_controller,
-                ),
-                implementer,
-            )
-        reviewer = fleet_stage(
-            actor_ref="fleet:claude:reviewer",
-            runtime_capability="runtime.claude",
-            capabilities=read_capabilities,
-            controller=review_controller,
-        )
-        repairer = fleet_stage(
-            actor_ref="fleet:codex:repairer",
-            runtime_capability="runtime.codex",
-            capabilities=write_capabilities,
-            controller=implementation_controller,
-        )
-    else:
-        codex = CodexRuntime(activity_sink=activity_sink, artifact_store=artifact_store)
-        claude = ClaudeRuntime(activity_sink=activity_sink, artifact_store=artifact_store)
-        analyst = SoftwareStageOperator(
-            actor_ref="runtime:claude:analyst",
-            runtime=claude,
-            capabilities=read_capabilities,
-            controller=review_controller,
-        )
-        codex_implementer = SoftwareStageOperator(
-            actor_ref="runtime:codex:implementer",
-            runtime=codex,
-            capabilities=write_capabilities,
-            controller=implementation_controller,
-        )
-        reviewer = SoftwareStageOperator(
-            actor_ref="runtime:claude:reviewer",
-            runtime=claude,
-            capabilities=read_capabilities,
-            controller=review_controller,
-        )
-        repairer = SoftwareStageOperator(
-            actor_ref="runtime:codex:implementer",
-            runtime=codex,
-            capabilities=write_capabilities,
-            controller=implementation_controller,
-        )
-        implementers = (codex_implementer,)
-        if prefer_free_implementation:
-            if project_id is None:
-                raise ValueError("--prefer-free-implementation requires a project")
-            defaults = await task_store.get_defaults(project_id=project_id)
-            if "complex" not in defaults.harness_tiers:
-                raise ValueError("configure harness tiers in task defaults")
-            backends = {
-                name: openai_base_url(discovered.openai_compat_url)
-                for name, discovered in (await discover_local_backends()).items()
-            }
-            implementers = (
-                SoftwareStageOperator(
-                    actor_ref="runtime:harness:implementer",
-                    runtime=HarnessRuntime(
-                        tier="complex",
-                        tiers=dict(defaults.harness_tiers),
-                        backends=backends,
-                        activity_sink=activity_sink,
-                        artifact_store=artifact_store,
-                    ),
-                    capabilities=write_capabilities,
-                    controller=implementation_controller,
-                ),
-                codex_implementer,
-            )
-    lifecycle = SoftwareLifecycle(
-        profile=SoftwareProfile(),
-        work_store=work_store,
-        knowledge_store=knowledge_store,
-        capsule_compiler=TaskCapsuleCompiler(
-            knowledge_store=knowledge_store,
-            artifact_store=artifact_store,
-        ),
-        worktree_manager=worktree_manager,
-        verifier=SoftwareVerifier(
-            knowledge_store=knowledge_store,
-            runner=SandboxedVerificationRunner(image=_verification_image()),
-            artifact_store=artifact_store,
-            activity_sink=activity_sink,
-        ),
-        artifact_store=artifact_store,
         repository=repository,
-        analyst=StageOperatorLadder((analyst,)),
-        designer=StageOperatorLadder((analyst,)),
-        implementer=StageOperatorLadder(implementers),
-        reviewer=StageOperatorLadder((reviewer,)),
-        repairer=StageOperatorLadder((repairer,)),
-        repo_instructions=(("AGENTS.md",) if (repository / "AGENTS.md").is_file() else ()),
-        verification_commands=("just smoke",),
+        verification_image=_verification_image(),
+        execution=execution,
+        fleet_org=fleet_org,
+        prefer_free_implementation=prefer_free_implementation,
     )
-    return lifecycle, work_store, worktree_manager, activity_sink
+    return stack.lifecycle, stack.work_store, stack.worktree_manager, stack.activity_sink
 
 
 def _verification_image() -> str:
@@ -809,41 +584,40 @@ async def _build_github_lifecycle(
     if project_id is None:
         raise ValueError("GitHub software lifecycle requires a project")
     execution, fleet_org = _work_execution_config()
-    lifecycle, work_store, worktree_manager, activity_sink = await _build_lifecycle(
+    stack = await build_software_stack(
         project_id=project_id,
         repository=repository,
+        verification_image=_verification_image(),
         execution=execution,
         fleet_org=fleet_org,
+        prefer_free_implementation=_work_prefer_free_implementation(),
     )
     callables = tool_factory.build_callables(
         project_id=project_id,
         get_credentials=_local_github_credentials,
     )
     return (
-        GitHubIssueLifecycle(
-            work_store=work_store,
-            software_lifecycle=lifecycle,
+        build_github_lifecycle(
+            stack,
+            project_id=project_id,
+            repository=repository,
             github=CatalogGitHubClient(
                 project_id=project_id,
                 github_callable=callables["github"],
             ),
-            branch_publisher=WorktreeBranchPublisher(
-                worktree_manager=worktree_manager,
-                repository=repository,
-            ),
-            repository_outcome=SoftwareRepositoryOutcome.MERGED,
-            execution_route=execution,
-            fleet_org_id=fleet_org,
+            execution=execution,
+            fleet_org=fleet_org,
+            merge_policy=require_merge_approval,
         ),
-        activity_sink,
+        stack.activity_sink,
     )
 
 
-def _local_github_credentials(**_kwargs) -> dict[str, str]:
-    token = os.environ.get("GITHUB_TOKEN")
-    if token is None or not token.strip():
-        raise click.ClickException("GITHUB_TOKEN is required for GitHub Work")
-    return {"GITHUB_TOKEN": token}
+def _local_github_credentials(**kwargs) -> dict[str, str]:
+    try:
+        return github_token_credentials(**kwargs)
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 async def _repository_state() -> tuple[Path, str]:

@@ -1371,6 +1371,41 @@ async def test_implementation_escalates_to_the_next_ladder_position_on_runtime_f
 
 
 @pytest.mark.asyncio
+async def test_start_carries_task_id_to_record_profile_context(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        implementer=MutationRuntime(implement_text="initial", repair_text="unused"),
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_command("initial"),),
+    )
+    contract = _contract(base_sha).model_copy(
+        update={
+            "profile_context": SoftwareContractContext(
+                project_id="project-a",
+                base_sha=base_sha,
+                repository_outcome=SoftwareRepositoryOutcome.MERGED,
+                repository_criterion_id="criterion-repository",
+                task_id="task-1",
+            ).model_dump(mode="json")
+        }
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=contract)
+
+    assert record.profile_context["task_id"] == "task-1"
+
+
+@pytest.mark.asyncio
 async def test_analysis_escalates_to_the_next_ladder_position_on_runtime_failure(
     stores,
     tmp_path: Path,

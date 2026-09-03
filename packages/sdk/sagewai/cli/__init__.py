@@ -170,6 +170,7 @@ from sagewai.cli.strategy import strategy  # noqa: E402
 from sagewai.cli.token import token  # noqa: E402
 from sagewai.cli.workflow import workflow  # noqa: E402
 from sagewai.cli.work import work  # noqa: E402
+from sagewai.cli.tasks import task_group  # noqa: E402
 
 cli.add_command(agent)
 cli.add_command(workflow)
@@ -188,6 +189,7 @@ cli.add_command(session)
 cli.add_command(strategy)
 cli.add_command(budget)
 cli.add_command(safety)
+cli.add_command(task_group, "task")
 cli.add_command(memory)
 cli.add_command(work)
 

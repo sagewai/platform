@@ -9,6 +9,31 @@
 # See COMMERCIAL-LICENSE.md for details.
 """Task aggregate: durable coordination above the Work kernel."""
 
+from sagewai.work.tasks.assessment import TaskAssessmentResult, assess_cycle
+from sagewai.work.tasks.budget import (
+    BudgetLedger,
+    MeteredOperatorController,
+    budget_breach,
+    budget_used_from,
+)
+from sagewai.work.tasks.coordinator import TaskCoordinator
+from sagewai.work.tasks.decide import (
+    AssessCycle,
+    BlockCycle,
+    CompleteCycle,
+    ExhaustBudget,
+    MirrorAttention,
+    RecordStepOutcome,
+    Replan,
+    ResumeStep,
+    RunPlanning,
+    StartCycle,
+    StartStep,
+    StepWorkState,
+    SupersedeStep,
+    decide,
+    fold_cycle,
+)
 from sagewai.work.tasks.events import (
     TaskEvent,
     TaskEventType,
@@ -17,6 +42,7 @@ from sagewai.work.tasks.events import (
     fold_record,
 )
 from sagewai.work.tasks.feed import FeedBus, FeedEntry
+from sagewai.work.tasks.health import evaluate_health
 from sagewai.work.tasks.intake import ClarificationQuestion, IntakeResult, route
 from sagewai.work.tasks.models import (
     Authority,
@@ -33,12 +59,14 @@ from sagewai.work.tasks.models import (
     Sensitivity,
     Sink,
     SoftwareTarget,
+    SpendTotals,
     Task,
     TaskDefaults,
     TaskKind,
     TaskOrigin,
     TaskRecord,
     TaskStatus,
+    TaskTriggerSpec,
 )
 from sagewai.work.tasks.plan import (
     AcceptedPlan,
@@ -47,15 +75,23 @@ from sagewai.work.tasks.plan import (
     PlanStep,
     TaskPlanResult,
     accept_plan,
+    plan_from_events,
 )
 from sagewai.work.tasks.planner import PlanningFailedError, TaskPlanner
+from sagewai.work.tasks.runner import TaskCoordinatorRunner
 from sagewai.work.tasks.schedule import next_fire, preset_to_cron, validate_cron, validate_timezone
 from sagewai.work.tasks.scratch import (
     ScratchResultValidator,
     ScratchWorkspace,
     ScratchWorkspaceManager,
 )
-from sagewai.work.tasks.store import SpendReservation, SpendTotals, StaleTaskError, TaskStore
+from sagewai.work.tasks.service import (
+    ClarificationDeadlines,
+    TaskCreationError,
+    TaskDecisionError,
+    TaskService,
+)
+from sagewai.work.tasks.store import SpendReservation, StaleTaskError, TaskStore
 from sagewai.work.tasks.telemetry import (
     AttentionHistoryEntry,
     BurnSeriesPoint,
@@ -79,21 +115,28 @@ from sagewai.work.tasks.templates import (
     validate_slots,
 )
 from sagewai.work.tasks.transitions import IllegalTransitionError, assert_transition
+from sagewai.work.tasks.writer import TaskWriter, status_entry
 
 __all__ = [
-    "AcceptedPlan", "AttentionHistoryEntry", "Authority", "Budget", "BudgetUsed",
-    "BurnSeriesPoint", "CATALOGUE", "ClarificationQuestion", "CycleTelemetry", "ExecutionRoute",
-    "FeedBus", "FeedEntry", "GateMode", "HarnessTier", "IllegalTransitionError", "IntakeResult",
-    "MatrixItem", "PlanRejectedError", "PlanStep", "PlanningFailedError", "ProjectTelemetry",
-    "ReportTarget", "RoleAlias", "RoutingPolicy", "RuntimeRef", "Schedule",
+    "AcceptedPlan", "AssessCycle", "AttentionHistoryEntry", "Authority", "BlockCycle", "Budget",
+    "BudgetLedger", "BudgetUsed", "BurnSeriesPoint", "CATALOGUE", "ClarificationDeadlines",
+    "ClarificationQuestion", "CompleteCycle", "CycleTelemetry", "ExecutionRoute",
+    "ExhaustBudget", "FeedBus", "FeedEntry", "GateMode", "HarnessTier",
+    "IllegalTransitionError", "IntakeResult", "MatrixItem", "MeteredOperatorController",
+    "MirrorAttention", "PlanRejectedError", "PlanStep", "PlanningFailedError",
+    "ProjectTelemetry", "RecordStepOutcome", "Replan", "ReportTarget", "ResumeStep",
+    "RoleAlias", "RoutingPolicy", "RunPlanning", "RuntimeRef", "Schedule",
     "ScheduledCycleTelemetry", "ScheduledTelemetry", "ScratchResultValidator",
     "ScratchWorkspace", "ScratchWorkspaceManager", "Sensitivity", "Sink", "SlotSpec",
     "SlotValidationError", "SoftwareTarget", "SpendReservation", "SpendTotals",
-    "StageAttemptTelemetry", "StageTimelineEntry", "StaleTaskError", "Task", "TaskDefaults",
+    "StageAttemptTelemetry", "StageTimelineEntry", "StaleTaskError", "StartCycle", "StartStep",
+    "StepWorkState", "SupersedeStep", "Task", "TaskAssessmentResult", "TaskCoordinator",
+    "TaskCoordinatorRunner", "TaskCreationError", "TaskDecisionError", "TaskDefaults",
     "TaskEvent", "TaskEventType", "TaskKind", "TaskOrigin", "TaskPlanResult", "TaskPlanner",
-    "TaskRecord", "TaskStatus", "TaskStore", "TaskTelemetry", "TaskTemplate",
-    "VerificationRunTelemetry", "WorkTelemetry", "accept_plan", "assert_transition",
-    "board_column", "derive_attention", "derive_task_telemetry", "fold_record", "get_template",
-    "next_fire", "preset_to_cron", "route", "validate_cron", "validate_slots",
-    "validate_timezone",
+    "TaskRecord", "TaskService", "TaskStatus", "TaskStore", "TaskTelemetry", "TaskTemplate",
+    "TaskTriggerSpec", "TaskWriter", "VerificationRunTelemetry", "WorkTelemetry", "accept_plan",
+    "assert_transition", "assess_cycle", "board_column", "budget_breach", "budget_used_from",
+    "decide", "derive_attention", "derive_task_telemetry", "evaluate_health", "fold_cycle",
+    "fold_record", "get_template", "next_fire", "plan_from_events", "preset_to_cron", "route",
+    "status_entry", "validate_cron", "validate_slots", "validate_timezone",
 ]

@@ -45,6 +45,7 @@ from tests.work.test_fleet_primary_interface import (
 from tests.work.test_lifecycle import _repository
 
 work_module = import_module("sagewai.cli.work")
+assembly_module = import_module("sagewai.work.profiles.software.assembly")
 
 
 @pytest.mark.asyncio
@@ -143,7 +144,7 @@ async def test_work_cli_resume_requires_the_original_fleet_route(
         "example.invalid/verifier@sha256:" + "a" * 64,
     )
     monkeypatch.setattr(work_module.factory, "get_engine", lambda: engine)
-    monkeypatch.setattr(work_module, "SandboxedVerificationRunner", _LocalVerification)
+    monkeypatch.setattr(assembly_module, "SandboxedVerificationRunner", _LocalVerification)
 
     async def repository_state():
         return repository, base_sha
