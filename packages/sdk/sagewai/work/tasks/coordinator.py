@@ -31,8 +31,10 @@ from sagewai.work.models import (
 from sagewai.work.store import WorkStore
 from sagewai.work.supersede import supersede_work
 from sagewai.work.tasks.actions import (
+    DeliveryReceipt,
     RollbackExecutor,
     RollbackRefusedError,
+    deliver_action_id,
     rollback_action,
     rollback_action_id,
 )
@@ -45,10 +47,13 @@ from sagewai.work.tasks.decide import (
     Command,
     CompleteCycle,
     CycleState,
+    DeliverReport,
     ExhaustBudget,
     MirrorAttention,
+    MirrorGateDecision,
     RecordStepOutcome,
     Replan,
+    RequestDeliverGate,
     ResumeStep,
     RollbackWork,
     RunPlanning,
@@ -60,6 +65,7 @@ from sagewai.work.tasks.decide import (
     fold_cycle,
 )
 from sagewai.work.tasks.decisions import (
+    TASK_GATES,
     ConsoleDecisionChannel,
     DecisionChannel,
     DecisionRequest,
@@ -125,6 +131,31 @@ def _lost_rollback(project_id: str, action_id: str) -> tuple[ActionResult, dict[
     )
 
 
+def _lost_delivery(
+    project_id: str, action_id: str, action: ActionRequest
+) -> tuple[ActionResult, dict[str, object]]:
+    """A delivery whose receipt was consumed before its batch landed: ask, never repeat."""
+    now = datetime.now(timezone.utc)
+    return (
+        ActionResult(
+            project_id=project_id,
+            action_id=action_id,
+            status="blocked",
+            external_ref=None,
+            evidence_refs=action.evidence_refs,
+            started_at=now,
+            completed_at=now,
+        ),
+        {
+            "action_id": action_id,
+            "check": "delivery_receipt",
+            "passed": None,
+            "detail": "the delivery may have run before a crash; confirm the sink",
+            "evidence_refs": list(action.evidence_refs),
+        },
+    )
+
+
 def _accepted_plan_text(plan: AcceptedPlan) -> str:
     return "\n".join(
         [
@@ -181,6 +212,12 @@ class ProfileRunner(Protocol):
 
     async def is_merged(self, task: Task, *, work_id: str) -> bool: ...
 
+    async def deliver(
+        self, task: Task, *, work_id: str, sink_version: int
+    ) -> tuple[WorkRecord, tuple[DeliveryReceipt, ...]]:
+        """Deliver to sink_version; receipt results are recorded under the coordinator action id."""
+        ...
+
 
 class TaskCoordinator:
     """One command per decision, each behind a receipt and the Task's lease epoch."""
@@ -210,6 +247,10 @@ class TaskCoordinator:
 
     def _now(self) -> datetime:
         return datetime.now(timezone.utc)
+
+    def _profile_for(self, task: Task) -> ProfileRunner:
+        """One runner today; task 10 makes this the per-profile selector."""
+        return self._profile
 
     @staticmethod
     def _cycle(record: TaskRecord) -> int:
@@ -242,7 +283,7 @@ class TaskCoordinator:
         for _ in range(self._MAX_COMMANDS):
             events = await self._task_store.read_events(task.id, project_id=task.project_id)
             state = fold_cycle(events, plan_version=record.plan_version)
-            works = await self._work_states(task, state)
+            works = await self._work_states(task, state, record.pending_gate)
             used = await self._budget_used(task, record, events)
             command = decide(task, record, events, works, budget_used=used, now=self._now())
             if command is None:
@@ -261,7 +302,9 @@ class TaskCoordinator:
                 return record
         return record
 
-    async def _work_states(self, task: Task, state: CycleState) -> dict[str, StepWorkState]:
+    async def _work_states(
+        self, task: Task, state: CycleState, pending_gate: str | None
+    ) -> dict[str, StepWorkState]:
         pending: dict[str, PendingAttention] = {}
         for item in await self._work_store.pending_attention(project_id=task.project_id):
             pending.setdefault(item.work_id, item)
@@ -294,6 +337,16 @@ class TaskCoordinator:
                 if phase == "merge" and await self._profile.is_merged(task, work_id=work_id):
                     phase = None
             github = work.profile_context.get("github") or {}
+            report = work.profile_context.get("report") or {}
+            decided = None
+            if (
+                pending_gate is not None
+                and not pending_gate.startswith(TASK_GATES)
+                and work.pending_gate != pending_gate
+            ):
+                if events is None:
+                    events = await self._work_store.read_events(work_id, project_id=task.project_id)
+                decided = self._gate_decision(events, pending_gate)
             states[step_id] = StepWorkState(
                 step_id=step_id,
                 work_id=work_id,
@@ -305,8 +358,22 @@ class TaskCoordinator:
                 evidence_refs=() if attention is None else attention.evidence_refs,
                 base_moved_phase=phase,
                 merged_sha=github.get("merged_sha"),
+                deliver_sink_version=report.get("pending_sink_version"),
+                decided_gate=decided,
             )
         return states
+
+    @staticmethod
+    def _gate_decision(events: Sequence[WorkEvent], gate_id: str) -> str | None:
+        return next(
+            (
+                str(event.payload_json["decision"])
+                for event in reversed(events)
+                if event.event_type is WorkEventType.GATE_DECIDED
+                and event.payload_json["gate_id"] == gate_id
+            ),
+            None,
+        )
 
     @staticmethod
     def _base_moved_phase(events: Sequence[WorkEvent]) -> str:
@@ -421,6 +488,30 @@ class TaskCoordinator:
             return await self._append(record, entries, lease_epoch, command=command)
         if isinstance(command, MirrorAttention):
             return await self._mirror(task, record, command, lease_epoch)
+        if isinstance(command, MirrorGateDecision):
+            entries = [
+                (
+                    TaskEventType.GATE_DECIDED,
+                    {"gate_id": command.gate_id, "decision": command.decision},
+                ),
+                (
+                    TaskEventType.TASK_MESSAGE,
+                    {
+                        "author": "coordinator",
+                        "text": (
+                            f"gate {command.gate_id} was decided {command.decision} on the Work"
+                        ),
+                        "refs": [command.work_id],
+                    },
+                ),
+            ]
+            if command.decision != GateDecision.ALLOW.value:
+                entries.append(status_entry(record, TaskStatus.BLOCKED))
+            return await self._append(record, entries, lease_epoch, command=command)
+        if isinstance(command, RequestDeliverGate):
+            return await self._request_deliver(task, record, command, lease_epoch)
+        if isinstance(command, DeliverReport):
+            return await self._deliver(task, record, command, lease_epoch)
         if isinstance(command, StartStep):
             return await self._start_step(task, record, command, state, lease_epoch, replay=replay)
         if isinstance(command, ResumeStep):
@@ -620,6 +711,157 @@ class TaskCoordinator:
                 *entries,
             ]
         return await self._writer.append(record, entries, lease_epoch=lease_epoch, now=self._now())
+
+    async def _request_deliver(
+        self, task: Task, record: TaskRecord, command: RequestDeliverGate, lease_epoch: int
+    ) -> TaskRecord:
+        """Section 8.8: a compensatable delivery runs; an irreversible one asks an admin."""
+        work = await self._work_store.load_work(command.work_id, project_id=task.project_id)
+        action = ActionRequest.model_validate(work.profile_context["report"]["deliver_action"])
+        gate_id = deliver_action_id(command.work_id, sink_version=command.sink_version)
+        decision = resolve_gate(task.authority.deliver, action)
+        if decision is GateDecision.ALLOW:
+            entries: list[Entry] = [
+                (
+                    TaskEventType.GATE_DECIDED,
+                    {
+                        "gate_id": gate_id,
+                        "decision": GateDecision.ALLOW.value,
+                        "action": action.model_dump(mode="json"),
+                    },
+                )
+            ]
+        else:
+            entries = [
+                (
+                    TaskEventType.GATE_REQUESTED,
+                    {
+                        "gate_id": gate_id,
+                        "question": f"Deliver the report to {action.scope}?",
+                        "action": action.model_dump(mode="json"),
+                        "work_id": command.work_id,
+                    },
+                )
+            ]
+            entries.extend(
+                await self._present(
+                    task,
+                    record,
+                    attention_id=gate_id,
+                    summary=f"Approve delivery of the report to {action.scope}",
+                    urgency="today",
+                    evidence_refs=action.evidence_refs,
+                )
+            )
+        return await self._append(record, entries, lease_epoch, command=command)
+
+    async def _deliver(
+        self, task: Task, record: TaskRecord, command: DeliverReport, lease_epoch: int
+    ) -> TaskRecord:
+        """Section 8.8 in one batch: the receipt precedes the side effect, the records follow."""
+        action_id = deliver_action_id(command.work_id, sink_version=command.sink_version)
+        events = await self._task_store.read_events(task.id, project_id=task.project_id)
+        requested = next(
+            event
+            for event in reversed(events)
+            if event.event_type in {TaskEventType.GATE_REQUESTED, TaskEventType.GATE_DECIDED}
+            and event.payload_json["gate_id"] == action_id
+            and "action" in event.payload_json
+        )
+        action = ActionRequest.model_validate(requested.payload_json["action"])
+        entries: list[Entry] = [
+            (
+                TaskEventType.ACTION_INTENT_RECORDED,
+                {
+                    "action_id": action_id,
+                    "work_id": command.work_id,
+                    "gate_id": action_id,
+                    "action": action.model_dump(mode="json"),
+                },
+            )
+        ]
+        first = await self._task_store.record_command(
+            task_id=task.id,
+            project_id=task.project_id,
+            command_id=action_id,
+            payload={"work_id": command.work_id, "sink_version": command.sink_version},
+        )
+        if not first:
+            result, observation = _lost_delivery(task.project_id, action_id, action)
+            entries.append(
+                (
+                    TaskEventType.ACTION_RESULT_RECORDED,
+                    {"work_id": command.work_id, **result.model_dump(mode="json")},
+                )
+            )
+            entries.append(
+                (
+                    TaskEventType.OBSERVATION_RECORDED,
+                    {"work_id": command.work_id, **observation},
+                )
+            )
+            entries.append(
+                (
+                    TaskEventType.TASK_MESSAGE,
+                    {
+                        "author": "coordinator",
+                        "text": f"deliver on {action.scope}: blocked ({observation['detail']})",
+                        "refs": [command.work_id],
+                    },
+                )
+            )
+            entries.append(status_entry(record, TaskStatus.BLOCKED))
+            return await self._append(record, entries, lease_epoch, command=command)
+        _work, receipts = await self._profile_for(task).deliver(
+            task, work_id=command.work_id, sink_version=command.sink_version
+        )
+        failed: DeliveryReceipt | None = None
+        for receipt in receipts:
+            result = receipt.result.model_dump(mode="json")
+            result["action_id"] = action_id
+            entries.append(
+                (
+                    TaskEventType.ACTION_RESULT_RECORDED,
+                    {"work_id": command.work_id, **result},
+                )
+            )
+            entries.append(
+                (
+                    TaskEventType.OBSERVATION_RECORDED,
+                    {"work_id": command.work_id, **receipt.observation, "action_id": action_id},
+                )
+            )
+            if not receipt.observation["passed"]:
+                failed = receipt
+        if failed is not None and failed.action.rollback is not None:
+            action = failed.action.model_copy(
+                update={"scope": failed.result.external_ref or failed.action.scope}
+            )
+            entries.append(
+                (
+                    TaskEventType.GATE_REQUESTED,
+                    {
+                        "gate_id": f"rollback:{command.work_id}",
+                        "question": (
+                            f"The delivery post-check {failed.observation['check']} failed. "
+                            f"Allow the recorded rollback ({action.rollback})?"
+                        ),
+                        "action": action.model_dump(mode="json"),
+                        "work_id": command.work_id,
+                    },
+                )
+            )
+            entries.extend(
+                await self._present(
+                    task,
+                    record,
+                    attention_id=f"rollback:{command.work_id}",
+                    summary=f"Delivery post-check failed on {action.scope}",
+                    urgency="now",
+                    evidence_refs=failed.result.evidence_refs,
+                )
+            )
+        return await self._append(record, entries, lease_epoch, command=command)
 
     async def _run_planning(
         self, task: Task, record: TaskRecord, command: RunPlanning, lease_epoch: int

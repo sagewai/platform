@@ -19,10 +19,17 @@ import pytest
 
 from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.work.events import WorkEvent, WorkEventType
-from sagewai.work.models import SUPERSEDED, ActionRequest, GateDecision, Reversibility, WorkRecord
+from sagewai.work.models import (
+    SUPERSEDED,
+    ActionRequest,
+    ActionResult,
+    GateDecision,
+    Reversibility,
+    WorkRecord,
+)
 from sagewai.work.profiles.software.scm import SoftwareWorktreeManager
 from sagewai.work.store import WorkStore
-from sagewai.work.tasks.actions import RollbackExecutor, RollbackRefusedError
+from sagewai.work.tasks.actions import DeliveryReceipt, RollbackExecutor, RollbackRefusedError
 from sagewai.work.tasks.assessment import AssessmentGap, TaskAssessmentResult
 from sagewai.work.tasks.coordinator import TaskCoordinator
 from sagewai.work.tasks.decisions import ConsoleDecisionChannel, merge_policy_for, resolve_gate
@@ -66,6 +73,14 @@ class FakeProfileRunner:
         self.plan_result = plan_result
         self.plan_error: Exception | None = None
         self.statuses: dict[str, str] = {}
+        self.gates: dict[str, str] = {}
+        self.delivered: list[tuple[str, int]] = []
+        self.deliver_sink_versions: dict[str, int] = {}
+        self.deliver_action: dict | None = None
+        self.delivery_action_id: str | None = None
+        self.delivery_external_ref: str | None = None
+        self.delivery_passed = True
+        self.clear_report_on_deliver = False
         self.merged_shas: dict[str, str] = {}
         self.pull_request_urls: dict[str, str] = {}
         self.created_issues: list[tuple[str, str]] = []
@@ -106,13 +121,17 @@ class FakeProfileRunner:
         work_id = f"w-{step.id}-{len(self.started) + 1}"
         self.started.append(work_id)
         self.evidence.append(tuple(evidence_refs))
-        return await self._save(
+        record = await self._save(
             task,
             work_id,
             issue_url,
             self.statuses.pop(step.id, "COMPLETE"),
             base_sha=base_sha,
         )
+        gate_id = self.gates.get(step.id)
+        if gate_id is not None:
+            record = await self._open_gate(task, record, gate_id)
+        return record
 
     async def resume(self, task, *, cycle, work_id):
         self.resumed.append(work_id)
@@ -132,6 +151,60 @@ class FakeProfileRunner:
     async def is_merged(self, task, *, work_id):
         return self.merged
 
+    async def deliver(self, task, *, work_id: str, sink_version: int):
+        self.delivered.append((work_id, sink_version))
+        record = await self._work_store.load_work(work_id, project_id=task.project_id)
+        action = ActionRequest.model_validate(record.profile_context["report"]["deliver_action"])
+        update = {"status": "COMPLETE"}
+        if self.clear_report_on_deliver:
+            profile_context = dict(record.profile_context)
+            profile_context.pop("report", None)
+            update["profile_context"] = profile_context
+        record = record.model_copy(update=update)
+        await self._work_store.save_work(record)
+        now = datetime.now(timezone.utc)
+        action_id = self.delivery_action_id or f"deliver:{work_id}:{sink_version}"
+        receipt = DeliveryReceipt(
+            action=action,
+            result=ActionResult(
+                project_id=task.project_id,
+                action_id=action_id,
+                status="succeeded",
+                external_ref=self.delivery_external_ref or action.scope,
+                evidence_refs=action.evidence_refs,
+                started_at=now,
+                completed_at=now,
+            ),
+            observation={
+                "action_id": action_id,
+                "check": action.post_check,
+                "passed": self.delivery_passed,
+                "detail": f"delivered {self.delivery_external_ref or action.scope}",
+                "evidence_refs": list(action.evidence_refs),
+            },
+        )
+        return record, (receipt,)
+
+    async def approve(self, work_id: str, *, gate_id: str, decision: str) -> WorkRecord:
+        record = await self._work_store.load_work(work_id, project_id=PROJECT)
+        record = record.model_copy(update={"pending_gate": None})
+        await self._work_store.save_work(record)
+        events = await self._work_store.read_events(work_id, project_id=PROJECT)
+        await self._work_store.append_event(
+            WorkEvent(
+                id=f"{work_id}:gate-decided:{len(events) + 1}",
+                project_id=PROJECT,
+                work_id=work_id,
+                sequence=len(events) + 1,
+                event_type=WorkEventType.GATE_DECIDED,
+                actor_type="human",
+                actor_ref="arda",
+                payload_json={"gate_id": gate_id, "decision": decision},
+                created_at=NOW,
+            )
+        )
+        return record
+
     async def _save(self, task, work_id, issue_url, status, *, base_sha=None):
         now = datetime.now(timezone.utc)
         github: dict[str, str] = {}
@@ -142,6 +215,11 @@ class FakeProfileRunner:
         profile_context = {"task_id": task.id, "github": github}
         if base_sha is not None:
             profile_context["base_sha"] = base_sha
+        if work_id in self.deliver_sink_versions:
+            profile_context["report"] = {
+                "pending_sink_version": self.deliver_sink_versions[work_id],
+                "deliver_action": self.deliver_action,
+            }
         record = WorkRecord(
             work_id=work_id,
             project_id=task.project_id,
@@ -176,6 +254,41 @@ class FakeProfileRunner:
                 )
             )
             self.head = new_head
+        return record
+
+    async def _open_gate(self, task, record: WorkRecord, gate_id: str) -> WorkRecord:
+        record = record.model_copy(update={"pending_gate": gate_id})
+        await self._work_store.save_work(record)
+        events = await self._work_store.read_events(record.work_id, project_id=task.project_id)
+        action = ActionRequest(
+            project_id=task.project_id,
+            action="merge",
+            work_id=record.work_id,
+            risk="medium",
+            reversibility=Reversibility.COMPENSATABLE,
+            scope="https://github.com/o/r/pull/7",
+            evidence_refs=("pr://7",),
+            rollback="revert_pull_request",
+            post_check="merged_sha_read_back",
+        )
+        await self._work_store.append_event(
+            WorkEvent(
+                id=f"{record.work_id}:gate-requested:{len(events) + 1}",
+                project_id=task.project_id,
+                work_id=record.work_id,
+                sequence=len(events) + 1,
+                event_type=WorkEventType.GATE_REQUESTED,
+                actor_type="system",
+                actor_ref="test",
+                payload_json={
+                    "gate_id": gate_id,
+                    "question": "Approve merge of PR #7.",
+                    "action": action.model_dump(mode="json"),
+                    "evidence_refs": ("pr://7",),
+                },
+                created_at=NOW,
+            )
+        )
         return record
 
 
@@ -224,7 +337,7 @@ async def stores(dialect_engine):  # noqa: F811
     return task_store, work_store
 
 
-async def _seed(stores, tmp_path, *, plan_auto: bool = True):
+async def _seed(stores, tmp_path, *, plan_auto: bool = True, origin: TaskOrigin = TaskOrigin.HUMAN):
     from sagewai.artifacts.object_store import LocalArtifactStore
 
     task_store, work_store = stores
@@ -234,12 +347,14 @@ async def _seed(stores, tmp_path, *, plan_auto: bool = True):
         "Implement the retry queue in the payments service repository with a failing test first "
         "and open a pull request when the deterministic verification command passes.",
         project_id=PROJECT,
-        origin=TaskOrigin.HUMAN,
+        origin=origin,
         created_by="arda",
         now=NOW,
     )
     if plan_auto:
-        task = task.model_copy(update={"authority": Authority(plan=GateMode.AUTO)})
+        task = task.model_copy(
+            update={"authority": task.authority.model_copy(update={"plan": GateMode.AUTO})}
+        )
     runner = FakeProfileRunner(work_store, plan_result=_plan_result())
     coordinator = TaskCoordinator(
         task_store=task_store,

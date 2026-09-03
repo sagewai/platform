@@ -18,6 +18,7 @@ from typing import Any, Literal
 
 from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.work.tasks import intake as intake_module
+from sagewai.work.tasks.decisions import TASK_GATES
 from sagewai.work.tasks.events import TaskEvent, TaskEventType, fold_record
 from sagewai.work.tasks.models import (
     Authority,
@@ -39,7 +40,6 @@ from sagewai.work.tasks.writer import Entry, TaskWriter, build_events, status_en
 
 _MAX_TITLE = 200
 _MAX_SUMMARY = 2000
-_TASK_GATES = ("plan:", "replan:", "deliver:", "rollback:")
 _NON_HUMAN_FLOOR = Authority(
     plan=GateMode.REQUIRE, merge=GateMode.REQUIRE, deliver=GateMode.REQUIRE
 )
@@ -297,7 +297,7 @@ class TaskService:
         now: datetime | None = None,
     ) -> TaskRecord:
         """Decide one gate the Task itself opened; a refusal blocks the Task for a human."""
-        if not gate_id.startswith(_TASK_GATES):
+        if not gate_id.startswith(TASK_GATES):
             raise TaskDecisionError(
                 f"gate {gate_id} belongs to a Work; approve it there (sagewai work approve)"
             )

@@ -21,6 +21,7 @@ from sagewai.work.models import ActionRequest, GateDecision, Reversibility
 from sagewai.work.tasks.models import Authority, GateMode
 
 _NEVER_GATES = frozenset({Reversibility.PURE, Reversibility.SNAPSHOT_REVERSIBLE})
+TASK_GATES = ("plan:", "replan:", "deliver:", "rollback:")
 
 
 def resolve_gate(mode: GateMode, action: ActionRequest) -> GateDecision:
@@ -127,6 +128,7 @@ __all__ = [
     "DecisionChannel",
     "DecisionRequest",
     "NullDecisionScheduler",
+    "TASK_GATES",
     "channel_error_detail",
     "coordinator_action",
     "merge_policy_for",

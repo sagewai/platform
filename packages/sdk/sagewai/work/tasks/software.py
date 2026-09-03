@@ -31,6 +31,7 @@ from sagewai.work.profiles.software.github import (
 )
 from sagewai.work.profiles.software.scm import fetch_default_branch_head
 from sagewai.work.store import WorkStore
+from sagewai.work.tasks.actions import DeliveryReceipt
 from sagewai.work.tasks.budget import BudgetLedger, MeteredOperatorController
 from sagewai.work.tasks.decisions import merge_policy_for
 from sagewai.work.tasks.models import SoftwareTarget, Task
@@ -214,6 +215,11 @@ class SoftwareProfileRunner:
             )
         )
         return state.merged
+
+    async def deliver(
+        self, task: Task, *, work_id: str, sink_version: int
+    ) -> tuple[WorkRecord, tuple[DeliveryReceipt, ...]]:
+        raise ValueError(f"task {task.id} is a software Task and has no deliver stage")
 
     @staticmethod
     def _target(task: Task) -> SoftwareTarget:
