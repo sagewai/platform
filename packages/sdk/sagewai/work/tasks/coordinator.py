@@ -950,8 +950,9 @@ class TaskCoordinator:
         urgency: str,
         evidence_refs: tuple[str, ...] = (),
     ) -> list[Entry]:
-        """Present once per channel; a channel that raises loses its receipt, so the item can be
-        presented again."""
+        """Present once per channel: ``now`` fans out to every channel, ``today`` and
+        ``this_week`` present to the first only and ``DecisionEscalation`` walks the rest (§15);
+        a channel that raises loses its receipt, so the item can be presented again."""
         due_at = await self._due_at(task, record, urgency)
         decision = DecisionRequest(
             project_id=task.project_id,
@@ -963,7 +964,7 @@ class TaskCoordinator:
             evidence_refs=tuple(evidence_refs),
         )
         entries: list[Entry] = []
-        for channel in self._channels:
+        for channel in self._channels if urgency == "now" else self._channels[:1]:
             command_id = f"notify:{channel.name}:{attention_id}"
             recorded = await self._task_store.record_command(
                 task_id=task.id,

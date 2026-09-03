@@ -190,7 +190,8 @@ def _plan_result(attempt_id: str = "plan") -> TaskPlanResult:
 class RecordingDecisionChannel:
     name = "recording"
 
-    def __init__(self) -> None:
+    def __init__(self, name: str = "recording") -> None:
+        self.name = name
         self.calls = []
 
     async def notify(self, decision):
@@ -883,6 +884,22 @@ async def test_needs_you_items_carry_a_due_time(stores, tmp_path) -> None:
     due = datetime.fromisoformat(entries[0][1]["due_at"])
     assert timedelta(hours=23) < due - coordinator._now() <= timedelta(hours=24)
     assert channel.calls[0].due_at == due
+
+
+@pytest.mark.asyncio
+async def test_today_needs_you_items_present_to_the_first_channel_only(stores, tmp_path) -> None:
+    task, record, _runner, coordinator = await _seed(stores, tmp_path)
+    first = RecordingDecisionChannel("first")
+    second = RecordingDecisionChannel("second")
+    coordinator._channels = (first, second)
+
+    entries = await coordinator._present(
+        task, record, attention_id="gate:1", summary="Approve merge", urgency="today"
+    )
+
+    assert [entry[1]["channel"] for entry in entries] == ["first"]
+    assert [call.attention_id for call in first.calls] == ["gate:1"]
+    assert second.calls == []
 
 
 @pytest.mark.asyncio
