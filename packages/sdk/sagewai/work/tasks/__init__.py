@@ -9,6 +9,7 @@
 # See COMMERCIAL-LICENSE.md for details.
 """Task aggregate: durable coordination above the Work kernel."""
 
+from sagewai.work.tasks.assessment import TaskAssessmentResult, assess_cycle
 from sagewai.work.tasks.budget import budget_breach, budget_used_from
 from sagewai.work.tasks.decide import (
     AssessCycle,
@@ -164,6 +165,7 @@ __all__ = [
     "StepWorkState",
     "SupersedeStep",
     "Task",
+    "TaskAssessmentResult",
     "TaskCreationError",
     "TaskDecisionError",
     "TaskDefaults",
@@ -184,6 +186,7 @@ __all__ = [
     "WorkTelemetry",
     "accept_plan",
     "assert_transition",
+    "assess_cycle",
     "board_column",
     "budget_breach",
     "budget_used_from",
