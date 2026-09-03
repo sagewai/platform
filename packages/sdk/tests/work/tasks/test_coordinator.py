@@ -39,6 +39,7 @@ from sagewai.work.tasks.models import (
     TaskStatus,
 )
 from sagewai.work.tasks.plan import ClarificationQuestion, MatrixItem, PlanStep, TaskPlanResult
+from sagewai.work.tasks.planner import PlanningFailedError
 from sagewai.work.tasks.service import TaskService
 from sagewai.work.tasks.store import SpendReservation, TaskStore
 from sagewai.work.tasks.writer import TaskWriter
@@ -63,6 +64,7 @@ class FakeProfileRunner:
         self.evidence: list[tuple[str, ...]] = []
         self.merged = False
         self.plan_result = plan_result
+        self.plan_error: Exception | None = None
         self.statuses: dict[str, str] = {}
         self.merged_shas: dict[str, str] = {}
         self.pull_request_urls: dict[str, str] = {}
@@ -77,6 +79,8 @@ class FakeProfileRunner:
 
     async def plan(self, task, *, cycle, plan_version, base_sha, brief_text, amendments):
         assert base_sha == self.head
+        if self.plan_error is not None:
+            raise self.plan_error
         return self.plan_result
 
     async def find_issue(self, task, *, cycle, step):
@@ -192,6 +196,19 @@ class RecordingDecisionChannel:
     async def notify(self, decision):
         self.calls.append(decision)
         return f"recording:{decision.task_id}:{decision.attention_id}:{len(self.calls)}"
+
+
+class _AngryChannel:
+    name = "angry"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def notify(self, decision):
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("webhook 503")
+        return f"angry:{decision.attention_id}"
 
 
 @pytest.fixture
@@ -508,7 +525,15 @@ async def test_a_blocked_step_work_blocks_the_task_and_presents_the_decision(
         event for event in events if event.event_type is TaskEventType.NOTIFICATION_PRESENTED
     )
     assert presented.payload_json["urgency"] == "now"
-    assert set(presented.payload_json) == {"channel", "ref", "attention_id", "urgency", "due_at"}
+    assert set(presented.payload_json) == {
+        "channel",
+        "ref",
+        "attention_id",
+        "urgency",
+        "due_at",
+        "summary",
+        "evidence_refs",
+    }
 
 
 @pytest.mark.asyncio
@@ -746,7 +771,15 @@ async def test_work_gate_mirror_copies_the_action_and_notifies_today(
     assert record.attention_owner.value == "user"
     assert set(gate.payload_json) == {"gate_id", "question", "action", "work_id", "attention_id"}
     assert gate.payload_json["action"] == action.model_dump(mode="json")
-    assert set(presented.payload_json) == {"channel", "ref", "attention_id", "urgency", "due_at"}
+    assert set(presented.payload_json) == {
+        "channel",
+        "ref",
+        "attention_id",
+        "urgency",
+        "due_at",
+        "summary",
+        "evidence_refs",
+    }
     assert presented.payload_json["urgency"] == "today"
     assert channel.calls[0].evidence_refs == ("pr://7", work_id)
 
@@ -805,6 +838,128 @@ async def test_a_lost_mirror_batch_notifies_the_channel_once(stores, tmp_path, m
     record = await _drive_to_rest(coordinator, record, epoch)
     assert record.status is TaskStatus.BLOCKED
     assert [call.attention_id for call in channel.calls] == ["blocked-1"]
+
+
+@pytest.mark.asyncio
+async def test_a_failing_channel_retries_on_the_next_tick(stores, tmp_path) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    angry = _AngryChannel()
+    coordinator._channels = (angry, ConsoleDecisionChannel())
+    runner.plan_error = PlanningFailedError("planner unavailable")
+
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+    presented = [
+        event
+        for event in await task_store.read_events(task.id, project_id=PROJECT)
+        if event.event_type is TaskEventType.NOTIFICATION_PRESENTED
+    ]
+    assert [event.payload_json["channel"] for event in presented] == ["console"]
+    attention_id = presented[0].payload_json["attention_id"]
+    assert record.status is TaskStatus.BLOCKED
+
+    entries = await coordinator._present(
+        task,
+        record,
+        attention_id=attention_id,
+        summary="retry",
+        urgency="now",
+    )
+    assert angry.calls == 2
+    assert [entry[1]["channel"] for entry in entries] == ["angry"]
+
+
+@pytest.mark.asyncio
+async def test_needs_you_items_carry_a_due_time(stores, tmp_path) -> None:
+    task, record, _runner, coordinator = await _seed(stores, tmp_path)
+    channel = RecordingDecisionChannel()
+    coordinator._channels = (channel,)
+
+    entries = await coordinator._present(
+        task, record, attention_id="gate:1", summary="Approve merge", urgency="today"
+    )
+
+    due = datetime.fromisoformat(entries[0][1]["due_at"])
+    assert timedelta(hours=23) < due - coordinator._now() <= timedelta(hours=24)
+    assert channel.calls[0].due_at == due
+
+
+@pytest.mark.asyncio
+async def test_needs_you_uses_an_open_clarification_deadline(stores, tmp_path, monkeypatch) -> None:
+    task_store, _ = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    channel = RecordingDecisionChannel()
+    coordinator._channels = (channel,)
+    runner.plan_result = TaskPlanResult(
+        attempt_id="plan",
+        clarifications=(
+            ClarificationQuestion(
+                id="q1",
+                text="Which queue?",
+                kind="choice",
+                options=("redis", "sqs"),
+                defaultable=False,
+            ),
+        ),
+    )
+    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
+    monkeypatch.setattr(coordinator, "_now", lambda: NOW)
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    asked = [
+        event for event in events if event.event_type is TaskEventType.CLARIFICATION_REQUESTED
+    ][-1]
+    deadline = datetime.fromisoformat(asked.payload_json["deadline_at"])
+
+    entries = await coordinator._present(
+        task, record, attention_id="clarify:1", summary="Need an answer", urgency="today"
+    )
+
+    due = datetime.fromisoformat(entries[0][1]["due_at"])
+    assert record.status is TaskStatus.CLARIFYING
+    assert due == deadline
+    assert channel.calls[0].due_at == deadline
+    assert deadline - NOW == timedelta(hours=4)
+
+
+@pytest.mark.asyncio
+async def test_a_block_hands_the_assessment_gaps_to_the_channel(
+    stores, tmp_path, monkeypatch
+) -> None:
+    import sagewai.work.tasks.coordinator as module
+
+    task_store, _work_store = stores
+    task, record, _runner, coordinator = await _seed(stores, tmp_path)
+    channel = RecordingDecisionChannel()
+    coordinator._channels = (channel,)
+    task = task.model_copy(update={"budget": Budget(max_replans=0)})
+    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
+    monkeypatch.setattr(
+        module,
+        "assess_cycle",
+        lambda *args, **kwargs: TaskAssessmentResult(
+            attempt_id="a1",
+            gaps=(
+                AssessmentGap(
+                    statement="step s1 did not reach an accepted outcome",
+                    severity="high",
+                    suggested_step="s1",
+                ),
+            ),
+            verdict="replan",
+        ),
+    )
+
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    assert record.status is TaskStatus.BLOCKED
+    assert channel.calls[-1].evidence_refs == (
+        "step s1 did not reach an accepted outcome (suggested step: s1)",
+    )
+    assert "did not reach an accepted outcome" in channel.calls[-1].summary
 
 
 @pytest.mark.asyncio

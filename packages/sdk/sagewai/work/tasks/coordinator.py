@@ -62,6 +62,7 @@ from sagewai.work.tasks.decisions import (
     ConsoleDecisionChannel,
     DecisionChannel,
     DecisionRequest,
+    channel_error_detail,
     coordinator_action,
     resolve_gate,
 )
@@ -86,6 +87,11 @@ _URGENCY = {
     "CONTROL_DEGRADED": "now",
     "EXTERNAL_OUTCOME_INCIDENT": "now",
     "GATE_REQUESTED": "today",
+}
+_DUE_IN = {
+    "now": timedelta(0),
+    "today": timedelta(hours=24),
+    "this_week": timedelta(days=7),
 }
 
 
@@ -671,7 +677,7 @@ class TaskCoordinator:
             entries.append(status_entry(record, TaskStatus.EXECUTING))
         return await self._append(record, entries, lease_epoch, command=command)
 
-    async def _block_text(self, task: Task, text: str) -> str:
+    async def _block_gaps(self, task: Task) -> tuple[str, ...]:
         events = await self._task_store.read_events(task.id, project_id=task.project_id)
         latest = next(
             (
@@ -686,12 +692,11 @@ class TaskCoordinator:
             or latest.event_type is not TaskEventType.ASSESSMENT_RECORDED
             or not latest.payload_json.get("gaps")
         ):
-            return text
-        gaps = "; ".join(
+            return ()
+        return tuple(
             f"{gap['statement']} (suggested step: {gap['suggested_step']})"
             for gap in latest.payload_json["gaps"]
         )
-        return f"{text}: {gaps}"
 
     async def _block(
         self,
@@ -702,7 +707,8 @@ class TaskCoordinator:
         command: Command,
         prefix: Sequence[Entry] = (),
     ) -> TaskRecord:
-        message = await self._block_text(task, text)
+        gaps = await self._block_gaps(task)
+        message = text if not gaps else f"{text}: {'; '.join(gaps)}"
         entries: list[Entry] = list(prefix)
         entries.extend(
             [
@@ -720,6 +726,7 @@ class TaskCoordinator:
                 attention_id=f"block:{record.current_cycle}:{record.revision}",
                 summary=message,
                 urgency="now",
+                evidence_refs=gaps,
             )
         )
         return await self._append(
@@ -918,6 +925,21 @@ class TaskCoordinator:
         entries.append(status_entry(record, TaskStatus.BLOCKED))
         return await self._append(record, entries, lease_epoch, command=command)
 
+    async def _due_at(self, task: Task, record: TaskRecord, urgency: str) -> datetime:
+        derived = self._now() + _DUE_IN[urgency]
+        if record.pending_questions == 0:
+            return derived
+        events = await self._task_store.read_events(task.id, project_id=task.project_id)
+        deadline = next(
+            (
+                datetime.fromisoformat(event.payload_json["deadline_at"])
+                for event in reversed(events)
+                if event.event_type is TaskEventType.CLARIFICATION_REQUESTED
+            ),
+            None,
+        )
+        return derived if deadline is None else min(derived, deadline)
+
     async def _present(
         self,
         task: Task,
@@ -928,25 +950,46 @@ class TaskCoordinator:
         urgency: str,
         evidence_refs: tuple[str, ...] = (),
     ) -> list[Entry]:
+        """Present once per channel; a channel that raises loses its receipt, so the item can be
+        presented again."""
+        due_at = await self._due_at(task, record, urgency)
         decision = DecisionRequest(
             project_id=task.project_id,
             task_id=task.id,
             attention_id=attention_id,
             summary=summary,
             urgency=urgency,
+            due_at=due_at,
             evidence_refs=tuple(evidence_refs),
         )
         entries: list[Entry] = []
         for channel in self._channels:
+            command_id = f"notify:{channel.name}:{attention_id}"
             recorded = await self._task_store.record_command(
                 task_id=task.id,
                 project_id=task.project_id,
-                command_id=f"notify:{channel.name}:{attention_id}",
+                command_id=command_id,
                 payload={"decision": decision.model_dump(mode="json")},
             )
             if not recorded:
                 continue
-            reference = await channel.notify(decision)
+            try:
+                reference = await channel.notify(decision)
+            except Exception as exc:
+                logger.warning(
+                    "decision channel failed",
+                    extra={
+                        "event": "task.notify.failed",
+                        "task": task.id,
+                        "channel": channel.name,
+                        "attention_id": attention_id,
+                        "error": channel_error_detail(exc),
+                    },
+                )
+                await self._task_store.delete_command(
+                    task_id=task.id, project_id=task.project_id, command_id=command_id
+                )
+                continue
             if reference is None:
                 continue
             entries.append(
@@ -957,7 +1000,9 @@ class TaskCoordinator:
                         "ref": reference,
                         "attention_id": attention_id,
                         "urgency": urgency,
-                        "due_at": None,
+                        "due_at": due_at.isoformat(),
+                        "summary": summary,
+                        "evidence_refs": list(evidence_refs),
                     },
                 )
             )
