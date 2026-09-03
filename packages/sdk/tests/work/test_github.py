@@ -36,6 +36,7 @@ from sagewai.work.profiles.software import (
 from sagewai.work.profiles.software.github import (
     BaseMovedError,
     CatalogGitHubClient,
+    GitHubComment,
     GitHubIssue,
     GitHubIssueLifecycle,
     GitHubMergeRejectedError,
@@ -43,6 +44,9 @@ from sagewai.work.profiles.software.github import (
     GitHubPullRequest,
     GitHubPullRequestState,
     WorktreeBranchPublisher,
+    is_github_comment_url,
+    parse_comment_url,
+    parse_pull_request_url,
 )
 from tests.db.conftest import dialect_engine  # noqa: F401
 
@@ -237,6 +241,7 @@ class FakeGitHub:
         self.pull_request_searches = []
         self.merges = []
         self.comments = []
+        self.deleted_comments: list[str] = []
         self.merged_sha = None
         self.fail_after_merge_once = False
         self.fail_create_once = False
@@ -345,11 +350,20 @@ class FakeGitHub:
             merge_commit_sha=self.readback_sha or self.merged_sha,
         )
 
-    async def comment_issue(self, issue_url: str, body: str) -> None:
+    async def comment_issue(self, issue_url: str, body: str) -> GitHubComment:
         if self.fail_comment_once:
             self.fail_comment_once = False
             raise RuntimeError("GitHub comment unavailable")
         self.comments.append((issue_url, body))
+        return GitHubComment(
+            project_id=PROJECT_ID,
+            id=len(self.comments),
+            url=f"{issue_url}#issuecomment-{len(self.comments)}",
+            body=body,
+        )
+
+    async def delete_comment(self, comment_url: str) -> None:
+        self.deleted_comments.append(comment_url)
 
 
 class FakeBranchPublisher:
@@ -2276,6 +2290,49 @@ async def test_catalog_client_adapts_existing_github_callable() -> None:
         "create_comment",
         "merge_pull_request",
     ]
+
+
+@pytest.mark.asyncio
+async def test_catalog_client_identifies_and_deletes_comments() -> None:
+    calls: list[dict] = []
+
+    async def call(payload: dict):
+        calls.append(payload)
+        if payload["_operation"] == "create_comment":
+            return {
+                "id": 991,
+                "html_url": f"{ISSUE_URL}#issuecomment-991",
+                "body": payload["body"],
+            }
+        assert payload["_operation"] == "delete_comment"
+        return {}
+
+    client = CatalogGitHubClient(project_id=PROJECT_ID, github_callable=call)
+
+    comment = await client.comment_issue(ISSUE_URL, "Pending approval")
+    await client.delete_comment(comment.url)
+
+    assert (comment.project_id, comment.id, comment.body) == (PROJECT_ID, 991, "Pending approval")
+    assert comment.url.endswith("#issuecomment-991")
+    assert calls[-1] == {
+        "_operation": "delete_comment",
+        "owner": "octocat",
+        "repo": "hello-world",
+        "comment_id": 991,
+    }
+
+
+def test_pull_request_and_comment_urls_parse() -> None:
+    assert parse_pull_request_url("https://github.com/octocat/hello-world/pull/7") == (
+        "octocat",
+        "hello-world",
+        7,
+    )
+    assert parse_comment_url(f"{ISSUE_URL}#issuecomment-991") == ("octocat", "hello-world", 991)
+    assert is_github_comment_url(ISSUE_URL) is False
+    assert is_github_comment_url(f"{ISSUE_URL}#issuecomment-991") is True
+    with pytest.raises(ValueError):
+        parse_pull_request_url(ISSUE_URL)
 
 
 @pytest.mark.asyncio

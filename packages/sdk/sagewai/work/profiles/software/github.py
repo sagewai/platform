@@ -50,6 +50,11 @@ _ISSUE_PATH = re.compile(
     r"^/(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+)/"
     r"issues/(?P<number>[1-9][0-9]*)/?$"
 )
+_PULL_PATH = re.compile(
+    r"^/(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+)/"
+    r"pull/(?P<number>[1-9][0-9]*)/?$"
+)
+_COMMENT_FRAGMENT = re.compile(r"^issuecomment-(?P<comment_id>[1-9][0-9]*)$")
 
 
 class GitHubMergeRejectedError(RuntimeError):
@@ -96,6 +101,17 @@ class GitHubPullRequest(BaseModel):
     head: str
     head_sha: str
     base: str
+
+
+class GitHubComment(BaseModel):
+    """One issue comment, identified so it can be deleted again."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    project_id: str
+    id: int
+    url: str
+    body: str
 
 
 class GitHubPullRequestState(BaseModel):
@@ -180,7 +196,9 @@ class GitHubClient(Protocol):
         expected_head_sha: str,
     ) -> GitHubMergeResult: ...
 
-    async def comment_issue(self, issue_url: str, body: str) -> None: ...
+    async def comment_issue(self, issue_url: str, body: str) -> GitHubComment: ...
+
+    async def delete_comment(self, comment_url: str) -> None: ...
 
     async def create_issue(
         self,
@@ -461,15 +479,32 @@ class CatalogGitHubClient:
             merged_sha=str(result["sha"]),
         )
 
-    async def comment_issue(self, issue_url: str, body: str) -> None:
+    async def comment_issue(self, issue_url: str, body: str) -> GitHubComment:
         owner, repo, number = _parse_issue_url(issue_url)
-        await self._call(
+        comment = await self._call(
             {
                 "_operation": "create_comment",
                 "owner": owner,
                 "repo": repo,
                 "number": number,
                 "body": body,
+            }
+        )
+        return GitHubComment(
+            project_id=self._project_id,
+            id=int(comment["id"]),
+            url=str(comment["html_url"]),
+            body=str(comment["body"]),
+        )
+
+    async def delete_comment(self, comment_url: str) -> None:
+        owner, repo, comment_id = parse_comment_url(comment_url)
+        await self._call(
+            {
+                "_operation": "delete_comment",
+                "owner": owner,
+                "repo": repo,
+                "comment_id": comment_id,
             }
         )
 
@@ -1790,6 +1825,37 @@ def github_remote_repository(value: str) -> tuple[str, str]:
     return parts[0], parts[1]
 
 
+def parse_pull_request_url(value: str) -> tuple[str, str, int]:
+    """Split one canonical github.com pull request URL into owner, repo, and number."""
+    from urllib.parse import urlsplit
+
+    parsed = urlsplit(value)
+    match = _PULL_PATH.fullmatch(parsed.path)
+    if parsed.scheme != "https" or parsed.netloc != "github.com" or match is None:
+        raise ValueError(f"not a GitHub pull request URL: {value}")
+    return match.group("owner"), match.group("repo"), int(match.group("number"))
+
+
+def parse_comment_url(value: str) -> tuple[str, str, int]:
+    """Split one issue-comment permalink into owner, repo, and comment id."""
+    from urllib.parse import urlsplit
+
+    owner, repo, _number = _parse_issue_url(value)
+    match = _COMMENT_FRAGMENT.fullmatch(urlsplit(value).fragment)
+    if match is None:
+        raise ValueError(f"not a GitHub issue comment URL: {value}")
+    return owner, repo, int(match.group("comment_id"))
+
+
+def is_github_comment_url(value: str) -> bool:
+    """Return whether VALUE is one canonical github.com issue-comment permalink."""
+    try:
+        parse_comment_url(value)
+    except ValueError:
+        return False
+    return True
+
+
 def _parse_issue_url(value: str) -> tuple[str, str, int]:
     from urllib.parse import urlsplit
 
@@ -1837,6 +1903,7 @@ __all__ = [
     "CatalogGitHubClient",
     "GitBranchPublisher",
     "GitHubClient",
+    "GitHubComment",
     "GitHubFactory",
     "GitHubIssue",
     "GitHubIssueLifecycle",
@@ -1848,6 +1915,9 @@ __all__ = [
     "GitHubWorkContext",
     "WorktreeBranchPublisher",
     "github_remote_repository",
+    "is_github_comment_url",
     "is_github_issue_url",
+    "parse_comment_url",
+    "parse_pull_request_url",
     "require_merge_approval",
 ]
