@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from sagewai.work.profiles.software.github import GitHubFactory
 from sagewai.work.store import WorkStore
 from sagewai.work.tasks.models import TaskOrigin, TaskTriggerSpec
@@ -34,13 +36,13 @@ class TriggerIntake:
         self._service = service
         self._github_factory = github_factory
 
-    async def run(self, *, project_id: str) -> list[str]:
+    async def run(self, *, project_id: str, now: datetime) -> list[str]:
         created: list[str] = []
         for spec in await self._task_store.list_triggers(project_id=project_id):
-            created.extend(await self._run_one(spec))
+            created.extend(await self._run_one(spec, now))
         return created
 
-    async def _run_one(self, spec: TaskTriggerSpec) -> list[str]:
+    async def _run_one(self, spec: TaskTriggerSpec, now: datetime) -> list[str]:
         issues = await self._github_factory(spec).list_labeled_issues(
             owner=spec.filter["owner"], repo=spec.filter["repo"], label=spec.filter["label"]
         )
@@ -66,6 +68,7 @@ class TriggerIntake:
                 authority_floor=spec.authority,
                 origin_ref=spec.trigger_id,
                 source_ref=issue.url,
+                now=now,
             )
             created.append(task.id)
         return created

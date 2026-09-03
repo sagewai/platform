@@ -27,7 +27,7 @@ from sagewai.work.tasks.service import TaskService
 from sagewai.work.tasks.store import TaskStore
 from sagewai.work.tasks.triggers import TriggerIntake
 from tests.db.conftest import dialect_engine  # noqa: F401
-from tests.work.tasks.test_store import _task
+from tests.work.tasks.test_store import NOW, _task
 
 PROJECT = "project-a"
 SPEC = TaskTriggerSpec(
@@ -109,7 +109,7 @@ async def test_each_labelled_issue_becomes_one_task_bounded_by_trigger_authority
     intake,
 ) -> None:
     trigger_intake, task_store, github = intake
-    created = await trigger_intake.run(project_id=PROJECT)
+    created = await trigger_intake.run(project_id=PROJECT, now=NOW)
     assert len(created) == 2
     assert github.calls == [("octocat", "hello-world", "sagewai")]
     task, _record = await task_store.load(created[0], project_id=PROJECT)
@@ -123,8 +123,8 @@ async def test_each_labelled_issue_becomes_one_task_bounded_by_trigger_authority
 @pytest.mark.asyncio
 async def test_a_second_run_creates_nothing(intake) -> None:
     trigger_intake, task_store, _github = intake
-    await trigger_intake.run(project_id=PROJECT)
-    assert await trigger_intake.run(project_id=PROJECT) == []
+    await trigger_intake.run(project_id=PROJECT, now=NOW)
+    assert await trigger_intake.run(project_id=PROJECT, now=NOW) == []
     assert len(await task_store.list_records(project_id=PROJECT)) == 2
 
 
@@ -132,7 +132,7 @@ async def test_a_second_run_creates_nothing(intake) -> None:
 async def test_a_disabled_trigger_is_skipped(intake) -> None:
     trigger_intake, task_store, _github = intake
     await task_store.put_trigger(SPEC.model_copy(update={"enabled": False}))
-    assert await trigger_intake.run(project_id=PROJECT) == []
+    assert await trigger_intake.run(project_id=PROJECT, now=NOW) == []
 
 
 def test_a_github_label_trigger_must_filter_on_owner_repo_and_label() -> None:

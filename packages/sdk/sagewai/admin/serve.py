@@ -912,6 +912,55 @@ def create_admin_serve_app(
             task_store=app.state.task_store,
             activity_store=app.state.activity_store,
         )
+        from sagewai.artifacts import LocalArtifactStore as _TaskArtifactStore
+        from sagewai.work.profiles.software.assembly import github_client_for
+        from sagewai.work.tasks.coordinator import TaskCoordinator
+        from sagewai.work.tasks.runner import (
+            TaskCoordinatorRunner,
+            interval_from_env,
+            max_tasks_from_env,
+        )
+        from sagewai.work.tasks.service import ClarificationDeadlines, TaskService
+        from sagewai.work.tasks.software import SoftwareProfileRunner
+        from sagewai.work.tasks.triggers import TriggerIntake
+
+        async def _coordinator_projects() -> list[str]:
+            if _is_multi_tenant():
+                projects: list[str] = []
+                for org in await identity_store.list_orgs():
+                    for project in await identity_store.list_projects(org["id"]):
+                        projects.append(project["id"])
+                return projects
+            return [project["id"] for project in sf.list_projects()]
+
+        _task_service = TaskService(
+            store=app.state.task_store, artifact_store=_TaskArtifactStore()
+        )
+        app.state.task_profile_runner = SoftwareProfileRunner(
+            work_store=app.state.work_store, github_factory=github_client_for
+        )
+        app.state.task_coordinator_runner = TaskCoordinatorRunner(
+            task_store=app.state.task_store,
+            driver=TaskCoordinator(
+                task_store=app.state.task_store,
+                work_store=app.state.work_store,
+                profile_runner=app.state.task_profile_runner,
+                activity_store=app.state.activity_store,
+            ),
+            list_project_ids=_coordinator_projects,
+            sweepers=(
+                TriggerIntake(
+                    task_store=app.state.task_store,
+                    work_store=app.state.work_store,
+                    service=_task_service,
+                    github_factory=github_client_for,
+                ),
+                ClarificationDeadlines(store=app.state.task_store, service=_task_service),
+            ),
+            interval_seconds=interval_from_env(),
+            max_tasks=max_tasks_from_env(),
+        )
+        app.state.task_coordinator_runner.start()
 
         # Eager fail-closed startup: build the SQLite schema, or (on Postgres)
         # verify the DB is reachable and migrated. Raises here rather than on the
@@ -1003,6 +1052,9 @@ def create_admin_serve_app(
             if getattr(app.state, "fleet_reaper", None) is not None:
                 await app.state.fleet_reaper.aclose()
             set_subscription_manager(None)
+            if getattr(app.state, "task_coordinator_runner", None) is not None:
+                await app.state.task_coordinator_runner.aclose()
+                await app.state.task_profile_runner.aclose()
             await runner.stop()
             # Clear the process-wide workflow store default on shutdown so
             # that in-process test runners (TestClient) don't leak the

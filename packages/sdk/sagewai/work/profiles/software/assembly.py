@@ -25,6 +25,7 @@ from sagewai.fleet.registry import PostgresFleetRegistry
 from sagewai.fleet.task_store import PostgresTaskStore
 from sagewai.harness.discovery import discover_local_backends, openai_base_url
 from sagewai.safety.permissions import PermissionPolicy
+from sagewai.tools import factory as tool_factory
 from sagewai.work.activity import WorkActivityStore
 from sagewai.work.activity_ingestion import ActivityIngestion, BatchingActivitySink
 from sagewai.work.capsule import TaskCapsuleCompiler
@@ -34,7 +35,12 @@ from sagewai.work.profiles.software.fleet_workspace import (
     SoftwareFleetWorkspaceTransport,
     software_repository_ref,
 )
-from sagewai.work.profiles.software.github import GitHubIssueLifecycle, WorktreeBranchPublisher
+from sagewai.work.profiles.software.github import (
+    CatalogGitHubClient,
+    GitHubIssueLifecycle,
+    GitHubScope,
+    WorktreeBranchPublisher,
+)
 from sagewai.work.profiles.software.lifecycle import (
     SoftwareLifecycle,
     SoftwareStageOperator,
@@ -74,6 +80,14 @@ def github_token_credentials(**_kwargs: object) -> dict[str, str]:
         raise RuntimeError("GITHUB_TOKEN is required for GitHub Work")
     return {"GITHUB_TOKEN": token}
 
+
+
+def github_client_for(scope: GitHubScope) -> CatalogGitHubClient:
+    """One GitHub client per project scope; a Task and a trigger spec both name one."""
+    callables = tool_factory.build_callables(
+        project_id=scope.project_id, get_credentials=github_token_credentials
+    )
+    return CatalogGitHubClient(project_id=scope.project_id, github_callable=callables["github"])
 
 @dataclass(frozen=True)
 class SoftwareStack:
