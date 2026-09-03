@@ -220,6 +220,34 @@ def test_terminal_status_clears_questions_and_attention() -> None:
     assert folded.board_column is BoardColumn.DONE
 
 
+def test_an_explicit_user_owner_holds_needs_you_while_scheduled() -> None:
+    """A health alert on a SCHEDULED Task must keep the Needs-you column."""
+    record = _record(status=TaskStatus.SCHEDULED)
+    folded = fold_record(
+        record,
+        (
+            _event(
+                1,
+                TaskEventType.ATTENTION_CHANGED,
+                {"owner": "user", "reason": "health:cost_spike:5"},
+            ),
+        ),
+    )
+    assert folded.attention_owner is AttentionOwner.USER
+    assert folded.waiting_reason == "health:cost_spike:5"
+    assert folded.board_column is BoardColumn.NEEDS_YOU
+
+
+def test_a_terminal_status_never_holds_an_explicit_owner() -> None:
+    record = _record(status=TaskStatus.COMPLETE)
+    folded = fold_record(
+        record,
+        (_event(1, TaskEventType.ATTENTION_CHANGED, {"owner": "user", "reason": "x"}),),
+    )
+    assert folded.attention_owner is None
+    assert folded.board_column is BoardColumn.DONE
+
+
 def test_status_change_drops_explicit_wait_reason() -> None:
     waiting = _record(status=TaskStatus.EXECUTING, attention_owner=AttentionOwner.EXTERNAL, waiting_reason="waiting for fleet worker")
     folded = fold_record(waiting, [_event(1, TaskEventType.TASK_STATUS_CHANGED, {"status": "ASSESSING"})])

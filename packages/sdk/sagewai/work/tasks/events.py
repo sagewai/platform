@@ -115,10 +115,10 @@ def derive_attention(
         return AttentionOwner.USER, f"questions:{pending_material_questions}"
     if status is TaskStatus.CLARIFYING:
         return AttentionOwner.SYSTEM, "awaiting defaults"
+    if explicit is not None and status not in TERMINAL_STATUSES:
+        return explicit
     if status not in _ACTIVE_STATUSES:
         return None, None
-    if explicit is not None:
-        return explicit
     return AttentionOwner.SYSTEM, "working"
 
 

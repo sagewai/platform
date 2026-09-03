@@ -51,6 +51,13 @@ from sagewai.work.tasks.decisions import (
     resolve_gate,
 )
 from sagewai.work.tasks.events import TaskEvent, TaskEventType
+from sagewai.work.tasks.health import (
+    AlertOperator,
+    HealthPolicy,
+    PauseSchedule,
+    cycle_history,
+    evaluate_health,
+)
 from sagewai.work.tasks.models import BudgetUsed, Task, TaskKind, TaskRecord, TaskStatus
 from sagewai.work.tasks.plan import PlanRejectedError, PlanStep, TaskPlanResult, accept_plan
 from sagewai.work.tasks.planner import PlanningFailedError
@@ -383,7 +390,80 @@ class TaskCoordinator:
             ),
             status_entry(record, final),
         ]
-        return await self._append(record, entries, lease_epoch, command=command)
+        record = await self._append(record, entries, lease_epoch, command=command)
+        await self._prune_activity(task, state)
+        if task.kind is not TaskKind.SCHEDULED:
+            return record
+        return await self._act_on_health(task, record, command, lease_epoch)
+
+    async def _prune_activity(self, task: Task, state: CycleState) -> None:
+        """Section 14.2 retention: drop this cycle's activity past the Task's window."""
+        if self._activity_store is None or not state.step_works:
+            return
+        await self._activity_store.prune(
+            project_id=task.project_id,
+            completed_work_ids=tuple(state.step_works.values()),
+            older_than=self._now() - timedelta(days=task.retention_days),
+        )
+
+    @staticmethod
+    def _last_health_cycle(events: Sequence[TaskEvent]) -> int | None:
+        """The cycle of the most recent health action, for the policy's cooldown."""
+        return next(
+            (
+                int(event.payload_json["cycle"])
+                for event in sorted(events, key=lambda item: item.sequence, reverse=True)
+                if event.event_type is TaskEventType.HEALTH_ACTION
+            ),
+            None,
+        )
+
+    async def _act_on_health(self, task, record, command, lease_epoch):
+        """Judge the completed cycle and take at most one action (section 8.6).
+
+        Only scheduled Tasks reach here: PauseSchedule from COMPLETE has no transition edge.
+        """
+        events = await self._task_store.read_events(task.id, project_id=task.project_id)
+        spend = {
+            cycle: await self._task_store.spend_totals(
+                task_id=task.id, project_id=task.project_id, cycle=cycle
+            )
+            for cycle in range(1, command.cycle + 1)
+        }
+        signal, action = evaluate_health(
+            cycle_history(events, spend=spend),
+            policy=HealthPolicy(),
+            last_action_cycle=self._last_health_cycle(events),
+        )
+        if signal is None:
+            return record
+        health: list[Entry] = [(TaskEventType.HEALTH_SIGNAL, signal.model_dump(mode="json"))]
+        if action is not None:
+            health.append(
+                (
+                    TaskEventType.HEALTH_ACTION,
+                    {**action.model_dump(mode="json"), "cycle": signal.cycle},
+                )
+            )
+            if isinstance(action, PauseSchedule):
+                health.append(status_entry(record, TaskStatus.PAUSED))
+            if isinstance(action, AlertOperator):
+                health.append(
+                    (
+                        TaskEventType.ATTENTION_CHANGED,
+                        {"owner": "user", "reason": f"health:{signal.kind}:{signal.cycle}"},
+                    )
+                )
+                health.extend(
+                    await self._present(
+                        task,
+                        record,
+                        attention_id=f"health:{signal.kind}:{signal.cycle}",
+                        summary=signal.detail,
+                        urgency="today",
+                    )
+                )
+        return await self._append(record, health, lease_epoch)
 
     async def _append(
         self,

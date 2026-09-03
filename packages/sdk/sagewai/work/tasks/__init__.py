@@ -42,6 +42,7 @@ from sagewai.work.tasks.events import (
     fold_record,
 )
 from sagewai.work.tasks.feed import FeedBus, FeedEntry
+from sagewai.work.tasks.health import evaluate_health
 from sagewai.work.tasks.intake import ClarificationQuestion, IntakeResult, route
 from sagewai.work.tasks.models import (
     Authority,
@@ -202,6 +203,7 @@ __all__ = [
     "decide",
     "derive_attention",
     "derive_task_telemetry",
+    "evaluate_health",
     "fold_cycle",
     "fold_record",
     "get_template",

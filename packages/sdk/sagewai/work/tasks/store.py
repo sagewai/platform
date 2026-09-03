@@ -719,4 +719,4 @@ class TaskStore:
         return FeedEntry.model_validate(data)
 
 
-__all__ = ["SpendReservation", "SpendTotals", "StaleTaskError", "TaskStore"]
+__all__ = ["SpendReservation", "StaleTaskError", "TaskStore"]
