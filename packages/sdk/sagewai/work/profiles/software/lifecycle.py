@@ -372,7 +372,11 @@ class SoftwareLifecycle:
             contract_version=None,
             active_run_id=None,
             pending_gate=None,
-            profile_context={"base_sha": software.base_sha},
+            profile_context=(
+                {"base_sha": software.base_sha}
+                if software.task_id is None
+                else {"base_sha": software.base_sha, "task_id": software.task_id}
+            ),
             created_at=now,
             updated_at=now,
         )

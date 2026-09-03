@@ -1,7 +1,7 @@
 # Copyright 2026 Ali Arda Diri, Berlin, Germany
 # Licensed under AGPL-3.0-or-later. See LICENSE.
 id: github
-version: 0.3.0
+version: 0.3.1
 title: GitHub — Repository read + write
 description: |
   Read repositories, search code, create issues / comments / pull requests,
@@ -90,6 +90,9 @@ exec:
             repo:  { type: string }
             title: { type: string }
             body:  { type: string }
+            labels:
+              type: array
+              items: { type: string }
         output_schema:
           type: object
           properties:

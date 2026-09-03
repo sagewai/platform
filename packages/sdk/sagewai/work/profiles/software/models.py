@@ -63,6 +63,7 @@ class SoftwareContractContext(BaseModel):
     delivery: SoftwareDeliveryContractContext | None = None
     execution_route: Literal["local", "fleet"] | None = None
     fleet_org_id: str | None = Field(default=None, min_length=1, pattern=r"\S")
+    task_id: str | None = None
 
     @model_validator(mode="after")
     def _validate_delivery_boundary(self) -> SoftwareContractContext:
