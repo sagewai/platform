@@ -18,6 +18,7 @@ from sagewai.work.runtime_capabilities import (
     RuntimeCapabilitySnapshot,
     RuntimeModelCapability,
 )
+from sagewai.work.tasks.models import HarnessTier
 
 
 @pytest.fixture(autouse=True)
@@ -91,6 +92,8 @@ def test_run_help_lists_key_options():
         "--claude-review-max-budget-usd",
         "--codex-model",
         "--codex-reasoning-effort",
+        "--harness-tier",
+        "--harness-backend",
         "--exec",
         "--exec-timeout",
         "--env",
@@ -273,6 +276,122 @@ def test_run_register_only_configures_worker_local_native_runtimes(
     assert handler._claude_review_runtime._max_budget_usd == "2.50"
     assert handler._codex_runtime._model == "gpt-5.6-sol"
     assert handler._codex_runtime._reasoning_effort == "ultra"
+
+
+def test_run_register_only_configures_harness_worker(
+    monkeypatch,
+    tmp_path,
+):
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    calls = {}
+
+    class _FakeRunner:
+        def __init__(self, **kw):
+            calls.update(kw)
+
+        async def register(self):
+            return "wid-123", "pending"
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr("sagewai.cli.fleet.WorkerRunner", _FakeRunner)
+    res = CliRunner().invoke(
+        fleet_group,
+        [
+            "run",
+            "--name",
+            "harness-worker",
+            "--capabilities",
+            "runtime.harness,filesystem.write",
+            "--project",
+            "project-a",
+            "--work-repository",
+            str(repository),
+            "--harness-tier",
+            "complex=ollama:qwen3:8b",
+            "--harness-backend",
+            "ollama=http://127.0.0.1:11434",
+            "--register-only",
+        ],
+    )
+
+    assert res.exit_code == 0, res.output
+    assert calls["capability_names"] == ["runtime.harness", "filesystem.write"]
+    handler = calls["task_handler"]
+    assert handler._harness_tiers == {
+        "complex": HarnessTier(backend="ollama", model="qwen3:8b"),
+    }
+    assert handler._harness_backends == {"ollama": "http://127.0.0.1:11434/v1"}
+
+
+def test_run_rejects_harness_capability_without_tiers(monkeypatch, tmp_path):
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    runner_called = False
+
+    class _FakeRunner:
+        def __init__(self, **kw):
+            nonlocal runner_called
+            runner_called = True
+
+    monkeypatch.setattr("sagewai.cli.fleet.WorkerRunner", _FakeRunner)
+    res = CliRunner().invoke(
+        fleet_group,
+        [
+            "run",
+            "--name",
+            "harness-worker",
+            "--models",
+            "advertised-model",
+            "--capabilities",
+            "runtime.harness",
+            "--project",
+            "project-a",
+            "--work-repository",
+            str(repository),
+            "--register-only",
+        ],
+    )
+
+    assert res.exit_code != 0
+    assert "--harness-tier" in res.output
+    assert runner_called is False
+
+
+def test_run_rejects_harness_tier_without_backend(monkeypatch, tmp_path):
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    runner_called = False
+
+    class _FakeRunner:
+        def __init__(self, **kw):
+            nonlocal runner_called
+            runner_called = True
+
+    monkeypatch.setattr("sagewai.cli.fleet.WorkerRunner", _FakeRunner)
+    res = CliRunner().invoke(
+        fleet_group,
+        [
+            "run",
+            "--name",
+            "harness-worker",
+            "--capabilities",
+            "runtime.harness",
+            "--project",
+            "project-a",
+            "--work-repository",
+            str(repository),
+            "--harness-tier",
+            "complex=ollama:qwen3:8b",
+            "--register-only",
+        ],
+    )
+
+    assert res.exit_code == 2
+    assert "--harness-backend" in res.output
+    assert runner_called is False
 
 
 def test_run_rejects_runtime_options_without_native_capability(monkeypatch):
@@ -490,3 +609,39 @@ def test_run_daemon_terminal_auth_exits_2(monkeypatch):
     res = CliRunner().invoke(fleet_group, ["run", "--worker-id", "w-rev"])
     assert res.exit_code == 2
     assert "stopped" in res.output.lower() or "revoked" in res.output.lower()
+
+
+def test_run_rejects_harness_tiers_without_complex(monkeypatch, tmp_path):
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    runner_called = False
+
+    class _FakeRunner:
+        def __init__(self, **kw):
+            nonlocal runner_called
+            runner_called = True
+
+    monkeypatch.setattr("sagewai.cli.fleet.WorkerRunner", _FakeRunner)
+    res = CliRunner().invoke(
+        fleet_group,
+        [
+            "run",
+            "--name",
+            "harness-worker",
+            "--capabilities",
+            "runtime.harness",
+            "--project",
+            "project-a",
+            "--work-repository",
+            str(repository),
+            "--harness-tier",
+            "simple=ollama:qwen3:8b",
+            "--harness-backend",
+            "ollama=http://127.0.0.1:11434",
+            "--register-only",
+        ],
+    )
+
+    assert res.exit_code == 2
+    assert "complex" in res.output
+    assert runner_called is False

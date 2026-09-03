@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import subprocess
+from importlib import import_module
 from pathlib import Path
 
 import pytest
@@ -39,8 +40,11 @@ from sagewai.work.profiles.software.fleet_workspace import (
 from sagewai.work.profiles.software.models import SoftwareWorkspace
 from sagewai.work.profiles.software.scm import SoftwareWorktreeManager, workspace_diff
 from sagewai.work.runtime import ClaudeRuntime, CodexRuntime
+from sagewai.work.tasks.models import HarnessTier
 
 from .test_fleet_runtime import _capabilities, _capsule, _request, _result
+
+fleet_worker_module = import_module("sagewai.work.profiles.software.fleet_worker")
 
 
 def _digest(value: bytes) -> str:
@@ -207,6 +211,18 @@ class _Codex(CodexRuntime):
         return _result()
 
 
+async def _noop_progress(run_id, activities) -> None:
+    return None
+
+
+def _context(*, capabilities: tuple[str, ...]) -> WorkerTaskContext:
+    return WorkerTaskContext(
+        project_id="project-a",
+        capability_names=capabilities,
+        report_progress=_noop_progress,
+    )
+
+
 @pytest.mark.asyncio
 async def test_worker_runner_fails_closed_for_work_task_without_handler() -> None:
     runner = WorkerRunner(base_url="http://test", exec_cmd="printf should-not-run")
@@ -237,12 +253,10 @@ async def test_worker_runner_executes_work_task_only_through_injected_handler() 
     status, output, error = await runner._execute(_task())
 
     assert (status, output, error) == ("completed", "typed-result", None)
-    assert contexts == [
-        WorkerTaskContext(
-            project_id="project-a",
-            capability_names=("runtime.claude", "cli.git"),
-        )
-    ]
+    assert len(contexts) == 1
+    assert contexts[0].project_id == "project-a"
+    assert contexts[0].capability_names == ("runtime.claude", "cli.git")
+    assert contexts[0].report_progress == runner._report_progress
 
 
 @pytest.mark.asyncio
@@ -282,10 +296,7 @@ async def test_software_handler_runs_only_advertised_native_runtime() -> None:
 
     raw = await handler(
         _task(),
-        WorkerTaskContext(
-            project_id="project-a",
-            capability_names=("runtime.claude", "cli.git"),
-        ),
+        _context(capabilities=("runtime.claude", "cli.git")),
     )
 
     output = FleetOperatorResultEnvelope.model_validate_json(raw)
@@ -318,10 +329,7 @@ async def test_software_handler_maps_codex_capability_only_to_codex_runtime(
 
     await handler(
         _task(runtime="runtime.codex", stage=stage),
-        WorkerTaskContext(
-            project_id="project-a",
-            capability_names=("runtime.codex", "cli.git"),
-        ),
+        _context(capabilities=("runtime.codex", "cli.git")),
     )
 
     assert len(codex.calls) == 1
@@ -345,10 +353,7 @@ async def test_software_handler_rejects_unsupported_codex_stage_before_runtime(
     with pytest.raises(ValueError, match="does not support stage"):
         await handler(
             _task(runtime="runtime.codex", stage=stage),
-            WorkerTaskContext(
-                project_id="project-a",
-                capability_names=("runtime.codex", "cli.git"),
-            ),
+            _context(capabilities=("runtime.codex", "cli.git")),
         )
 
     assert codex.calls == []
@@ -403,10 +408,7 @@ async def test_software_handler_selects_claude_runtime_by_stage(
 
     await handler(
         _task(stage=stage),
-        WorkerTaskContext(
-            project_id="project-a",
-            capability_names=("runtime.claude", "cli.git"),
-        ),
+        _context(capabilities=("runtime.claude", "cli.git")),
     )
 
     assert claude_analysis is not claude_review
@@ -430,10 +432,7 @@ async def test_software_handler_rejects_unsupported_claude_stage_before_runtime(
     with pytest.raises(ValueError, match="does not support stage"):
         await handler(
             _task(stage="repair"),
-            WorkerTaskContext(
-                project_id="project-a",
-                capability_names=("runtime.claude", "cli.git"),
-            ),
+            _context(capabilities=("runtime.claude", "cli.git")),
         )
 
     assert claude_analysis.calls == []
@@ -442,13 +441,50 @@ async def test_software_handler_rejects_unsupported_claude_stage_before_runtime(
     assert resolver.captured == []
 
 
-def test_fleet_operator_task_payload_has_no_runtime_configuration_fields() -> None:
+@pytest.mark.asyncio
+async def test_software_handler_closes_progress_sink_when_harness_tier_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed: list[object] = []
+
+    class RecordingBatchingActivitySink(fleet_worker_module.BatchingActivitySink):
+        async def close(self) -> None:
+            closed.append(self)
+            await super().close()
+
+    task = _task(runtime="runtime.harness", stage="implement")
+    task["payload"]["harness_tier"] = "complex"
+    handler = SoftwareFleetTaskHandler(
+        workspace_resolver=_Resolver(),
+        harness_tiers={
+            "simple": HarnessTier(backend="ollama", model="qwen3:8b"),
+        },
+        harness_backends={"ollama": "http://127.0.0.1:11434/v1"},
+    )
+
+    monkeypatch.setattr(
+        fleet_worker_module,
+        "BatchingActivitySink",
+        RecordingBatchingActivitySink,
+    )
+
+    with pytest.raises(ValueError, match="not configured"):
+        await handler(
+            task,
+            _context(capabilities=("runtime.harness", "cli.git")),
+        )
+
+    assert len(closed) == 1
+
+
+def test_fleet_operator_task_payload_has_only_harness_tier_runtime_configuration() -> None:
     assert tuple(FleetOperatorTaskPayload.model_fields) == (
         "kind",
         "request",
         "capsule",
         "capabilities",
         "required_capabilities",
+        "harness_tier",
         "workspace",
     )
 
@@ -489,10 +525,7 @@ async def test_software_handler_rejects_mismatched_task_identity(mutate, match) 
     with pytest.raises(ValueError, match=match):
         await handler(
             task,
-            WorkerTaskContext(
-                project_id="project-a",
-                capability_names=("runtime.claude", "cli.git"),
-            ),
+            _context(capabilities=("runtime.claude", "cli.git")),
         )
 
 
@@ -503,10 +536,7 @@ async def test_software_handler_rejects_unadvertised_or_ambiguous_runtime() -> N
         claude_review_runtime=_Claude(),
         codex_runtime=_Codex(),
     )
-    context = WorkerTaskContext(
-        project_id="project-a",
-        capability_names=("runtime.codex", "cli.git"),
-    )
+    context = _context(capabilities=("runtime.codex", "cli.git"))
 
     with pytest.raises(ValueError, match="worker did not advertise"):
         await handler(_task(), context)
@@ -516,10 +546,7 @@ async def test_software_handler_rejects_unadvertised_or_ambiguous_runtime() -> N
     with pytest.raises(ValueError, match="exactly one supported runtime"):
         await handler(
             task,
-            WorkerTaskContext(
-                project_id="project-a",
-                capability_names=("runtime.claude", "runtime.codex", "cli.git"),
-            ),
+            _context(capabilities=("runtime.claude", "runtime.codex", "cli.git")),
         )
 
 
@@ -534,10 +561,7 @@ async def test_software_handler_rejects_workspace_delta_without_write_capability
     with pytest.raises(ValueError, match="read-only operator changed the workspace"):
         await handler(
             _task(),
-            WorkerTaskContext(
-                project_id="project-a",
-                capability_names=("runtime.claude", "cli.git"),
-            ),
+            _context(capabilities=("runtime.claude", "cli.git")),
         )
 
 
@@ -556,10 +580,7 @@ async def test_software_handler_rejects_central_credential_reference() -> None:
     with pytest.raises(ValueError, match="credential"):
         await handler(
             task,
-            WorkerTaskContext(
-                project_id="project-a",
-                capability_names=("runtime.claude", "cli.git"),
-            ),
+            _context(capabilities=("runtime.claude", "cli.git")),
         )
 
 

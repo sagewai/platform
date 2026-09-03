@@ -43,6 +43,7 @@ from sagewai.fleet.models import (
 )
 from sagewai.fleet.normalizer import ModelNormalizer
 from sagewai.fleet.runner import RegistrationError, TerminalAuthError, WorkerRunner
+from sagewai.harness.discovery import openai_base_url
 from sagewai.work.profiles.software.fleet_worker import (
     SoftwareFleetTaskHandler,
     SoftwareFleetWorkspaceResolver,
@@ -55,6 +56,7 @@ from sagewai.work.runtime_capabilities import (
     select_codex_task_configuration,
     select_runtime_configuration,
 )
+from sagewai.work.tasks.models import HarnessTier
 
 # ---------------------------------------------------------------------------
 # In-memory registry for local/demo use (gateway will use Postgres)
@@ -138,6 +140,35 @@ def _parse_positive_budget(
     if not parsed.is_finite() or parsed <= 0:
         raise click.BadParameter("must be a positive number")
     return value
+
+
+def _parse_harness_tiers(values: tuple[str, ...]) -> dict[str, HarnessTier]:
+    tiers: dict[str, HarnessTier] = {}
+    for value in values:
+        name, separator, remainder = value.partition("=")
+        backend, backend_separator, model = remainder.partition(":")
+        if (
+            separator != "="
+            or backend_separator != ":"
+            or name not in {"simple", "medium", "complex"}
+            or not backend
+            or not model
+        ):
+            raise click.UsageError(
+                "--harness-tier must use NAME=BACKEND:MODEL with NAME in simple, medium, complex."
+            )
+        tiers[name] = HarnessTier(backend=backend, model=model)
+    return tiers
+
+
+def _parse_harness_backends(values: tuple[str, ...]) -> dict[str, str]:
+    backends: dict[str, str] = {}
+    for value in values:
+        name, separator, url = value.partition("=")
+        if separator != "=" or not name or not url:
+            raise click.UsageError("--harness-backend must use NAME=URL.")
+        backends[name] = openai_base_url(url)
+    return backends
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +352,18 @@ def register(
         "model support is determined by that worker's Codex CLI."
     ),
 )
+@click.option(
+    "--harness-tier",
+    "harness_tier_options",
+    multiple=True,
+    help="Harness tier mapping NAME=BACKEND:MODEL (repeatable).",
+)
+@click.option(
+    "--harness-backend",
+    "harness_backend_options",
+    multiple=True,
+    help="Harness backend mapping NAME=URL (repeatable); /v1 is appended when missing.",
+)
 @click.option("--enrollment-key", default=None, help="Enrollment key for auto-approval.")
 @click.option("--worker-id", default=None, help="Reuse an approved worker; skip registration.")
 @click.option(
@@ -371,6 +414,8 @@ def run(
     claude_review_max_budget_usd,
     codex_model,
     codex_reasoning_effort,
+    harness_tier_options,
+    harness_backend_options,
     enrollment_key,
     worker_id,
     worker_secret,
@@ -397,7 +442,7 @@ def run(
     capability_names = [name.strip() for name in (capabilities or "").split(",") if name.strip()]
     native_runtime_capabilities = {
         name for name in capability_names
-        if name in {"runtime.codex", "runtime.claude"}
+        if name in {"runtime.codex", "runtime.claude", "runtime.harness"}
     }
     has_native_runtime_options = any(
         value is not None
@@ -411,7 +456,9 @@ def run(
             codex_model,
             codex_reasoning_effort,
         )
-    )
+    ) or bool(harness_tier_options or harness_backend_options)
+    harness_tiers = _parse_harness_tiers(harness_tier_options)
+    harness_backends = _parse_harness_backends(harness_backend_options)
     task_handler = None
     if native_runtime_capabilities:
         if not project:
@@ -442,6 +489,21 @@ def run(
             value is not None for value in claude_options
         ):
             raise click.UsageError("Claude runtime options require runtime.claude capability.")
+        if "runtime.harness" not in native_runtime_capabilities and (
+            harness_tiers or harness_backends
+        ):
+            raise click.UsageError("Harness runtime options require runtime.harness capability.")
+        if "runtime.harness" in native_runtime_capabilities and "complex" not in harness_tiers:
+            raise click.UsageError(
+                "runtime.harness capability requires --harness-tier complex=BACKEND:MODEL "
+                "(the control plane dispatches the complex tier)."
+            )
+        if "runtime.harness" in native_runtime_capabilities:
+            missing = {tier.backend for tier in harness_tiers.values()} - harness_backends.keys()
+            if missing:
+                raise click.UsageError(
+                    f"--harness-tier backends need --harness-backend: {', '.join(sorted(missing))}"
+                )
 
         async def resolve_native_handler():
             handler_kwargs = {}
@@ -520,6 +582,9 @@ def run(
                     requested_effort=claude_review_effort,
                     max_budget_usd=claude_review_max_budget_usd,
                 )
+            if "runtime.harness" in native_runtime_capabilities:
+                handler_kwargs["harness_tiers"] = harness_tiers
+                handler_kwargs["harness_backends"] = harness_backends
             return (
                 SoftwareFleetTaskHandler(
                     workspace_resolver=SoftwareFleetWorkspaceResolver(
@@ -537,11 +602,11 @@ def run(
         model_list = list(dict.fromkeys((*model_list, *discovered_models)))
     elif work_repository is not None:
         raise click.UsageError(
-            "--work-repository requires runtime.codex or runtime.claude capability."
+            "--work-repository requires runtime.codex, runtime.claude, or runtime.harness capability."
         )
     elif has_native_runtime_options:
         raise click.UsageError(
-            "native runtime options require runtime.codex or runtime.claude capability."
+            "native runtime options require runtime.codex, runtime.claude, or runtime.harness capability."
         )
     parsed_labels: dict[str, str] = {}
     if labels:

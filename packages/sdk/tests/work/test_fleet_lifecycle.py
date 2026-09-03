@@ -12,10 +12,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import subprocess
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -29,15 +32,23 @@ from sagewai.fleet import (
     InMemoryTaskStore,
     WorkerCapabilities,
 )
-from sagewai.fleet.runner import WorkerRunner
+from sagewai.fleet.runner import WorkerRunner, WorkerTaskContext
 from sagewai.work import (
+    FLEET_ACTIVITY_LOG_MAX_BYTES,
+    CapabilityGrant,
+    CapabilitySet,
     FleetOperatorResultEnvelope,
+    FleetOperatorRuntime,
+    FleetOperatorTaskPayload,
+    FleetWorkspaceTransfer,
+    FleetWorkspaceTransferResult,
     OperatorResult,
     ReviewResult,
     TaskCapsuleCompiler,
     WorkEventType,
     WorkStore,
 )
+from sagewai.work.activity import OperatorActivity, bounded_ndjson
 from sagewai.work.knowledge import KnowledgeStore
 from sagewai.work.profiles.software import (
     SoftwareLifecycle,
@@ -54,12 +65,27 @@ from sagewai.work.profiles.software.fleet_worker import (
     SoftwareFleetWorkspaceResolver,
 )
 from sagewai.work.profiles.software.fleet_workspace import (
+    SOFTWARE_FLEET_WORKSPACE_KIND,
+    SoftwareFleetWorkspaceInput,
+    SoftwareFleetWorkspaceOutput,
     SoftwareFleetWorkspaceTransport,
     software_repository_ref,
 )
 from sagewai.work.runtime import ClaudeRuntime
+from sagewai.work.tasks.models import HarnessTier
 from tests.db.conftest import dialect_engine  # noqa: F401
 from tests.work.fakes_verification import LocalVerificationRunner
+from tests.work.test_fleet_runtime import (
+    _capabilities as _fleet_capabilities,
+)
+from tests.work.test_fleet_runtime import (
+    _capsule as _fleet_capsule,
+)
+from tests.work.test_fleet_runtime import (
+    _request as _fleet_request,
+)
+from tests.work.test_fleet_worker import _Resolver
+from tests.work.test_fleet_worker import _task as _worker_task
 from tests.work.test_lifecycle import (
     AnalysisRuntime,
     MutationRuntime,
@@ -159,6 +185,42 @@ class _ReviewClaudeRuntime(ClaudeRuntime):
         return _accepted_review(request.run_id)
 
 
+class _ActivityClaudeRuntime(ClaudeRuntime):
+    async def run(self, request, capsule, capabilities, workspace):
+        self._activity_sink.emit(
+            OperatorActivity.model_validate_json(_activity_line(1, request=request))
+        )
+        self._activity_sink.emit(
+            OperatorActivity.model_validate_json(_activity_line(2, request=request))
+        )
+        return _accepted_review(request.run_id)
+
+
+@dataclass
+class _ConcurrentActivityState:
+    started: int = 0
+    both_started: asyncio.Event = field(default_factory=asyncio.Event)
+
+
+class _ConcurrentActivityClaudeRuntime(ClaudeRuntime):
+    def __init__(self) -> None:
+        self._state = _ConcurrentActivityState()
+
+    async def run(self, request, capsule, capabilities, workspace):
+        self._state.started += 1
+        if self._state.started == 2:
+            self._state.both_started.set()
+        await self._state.both_started.wait()
+        self._activity_sink.emit(
+            OperatorActivity.model_validate_json(_activity_line(1, request=request))
+        )
+        await asyncio.sleep(0)
+        self._activity_sink.emit(
+            OperatorActivity.model_validate_json(_activity_line(2, request=request))
+        )
+        return _accepted_review(request.run_id)
+
+
 def _clone_worker_repository(repository: Path, destination: Path) -> Path:
     subprocess.run(
         ("git", "clone", "-q", str(repository), str(destination)),
@@ -239,6 +301,422 @@ def _worker_runner(
         poll_timeout=0.01,
         heartbeat_interval=0.005,
     )
+
+
+def _activity_line(
+    sequence: int,
+    *,
+    request=None,
+    summary: str = "worker activity",
+) -> str:
+    request = request or _fleet_request()
+    return OperatorActivity(
+        project_id=request.project_id,
+        work_id=request.work_id,
+        run_id=request.run_id,
+        sequence=sequence,
+        at=datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc),
+        source="claude",
+        kind="message",
+        summary=summary,
+    ).model_dump_json()
+
+
+def _worker_task_for_run(run_id: str) -> dict:
+    task = _worker_task()
+    request = _fleet_request().model_copy(update={"run_id": run_id})
+    task["run_id"] = run_id
+    task["payload"]["request"] = request.model_dump(mode="json")
+    return task
+
+
+def _harness_capabilities() -> CapabilitySet:
+    return CapabilitySet(
+        project_id="project-a",
+        grants=(
+            CapabilityGrant(
+                project_id="project-a",
+                name="filesystem.write",
+                kind="filesystem",
+                scope={"roots": ["."]},
+                permissions=("workspace.read", "workspace.write"),
+            ),
+        ),
+    )
+
+
+def _harness_task(workspace_path: Path) -> dict:
+    request = _fleet_request().model_copy(update={"stage": "implement"})
+    capsule = _fleet_capsule().model_copy(update={"stage": "implement"})
+    payload = SoftwareFleetWorkspaceInput(
+        repository_ref=f"git-origin://sha256:{'1' * 64}",
+        base_sha="a" * 40,
+        current_sha="b" * 40,
+        cumulative_diff_base64="",
+    )
+    workspace = FleetWorkspaceTransfer(
+        ref="workspace://harness-run",
+        project_id="project-a",
+        work_id="work-1",
+        kind=SOFTWARE_FLEET_WORKSPACE_KIND,
+        input_digest=hashlib.sha256(b"").hexdigest(),
+        payload=payload.model_dump(mode="json"),
+    )
+    return {
+        "run_id": request.run_id,
+        "project_id": request.project_id,
+        "payload": {
+            "kind": "work.operator",
+            "request": request.model_dump(mode="json"),
+            "capsule": capsule.model_dump(mode="json"),
+            "capabilities": _harness_capabilities().model_dump(mode="json"),
+            "required_capabilities": ["runtime.harness", "filesystem.write"],
+            "harness_tier": "complex",
+            "workspace": workspace.model_dump(mode="json"),
+        },
+        "workspace_path": workspace_path,
+    }
+
+
+class _HarnessResolver:
+    def __init__(self, workspace_path: Path) -> None:
+        self._workspace_path = workspace_path
+
+    async def materialize(self, snapshot: FleetWorkspaceTransfer):
+        return SimpleNamespace(
+            ref=snapshot.ref,
+            project_id=snapshot.project_id,
+            work_id=snapshot.work_id,
+            path=self._workspace_path,
+        )
+
+    async def capture(self, snapshot: FleetWorkspaceTransfer, workspace) -> FleetWorkspaceTransferResult:
+        input_payload = SoftwareFleetWorkspaceInput.model_validate(snapshot.payload)
+        output_payload = SoftwareFleetWorkspaceOutput(
+            repository_ref=input_payload.repository_ref,
+            base_sha=input_payload.base_sha,
+            current_sha=input_payload.current_sha,
+            delta_diff_base64="",
+            delta_diff_sha256=hashlib.sha256(b"").hexdigest(),
+        )
+        return FleetWorkspaceTransferResult(
+            ref=snapshot.ref,
+            project_id=snapshot.project_id,
+            work_id=snapshot.work_id,
+            kind=snapshot.kind,
+            input_digest=snapshot.input_digest,
+            result_digest=hashlib.sha256(b"").hexdigest(),
+            payload=output_payload.model_dump(mode="json"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_software_worker_envelope_carries_activity_log_and_reports_progress() -> None:
+    batches: list[tuple[str, list[OperatorActivity]]] = []
+
+    async def report_progress(run_id: str, batch: list[OperatorActivity]) -> None:
+        batches.append((run_id, batch))
+
+    handler = SoftwareFleetTaskHandler(
+        workspace_resolver=_Resolver(),
+        claude_review_runtime=_ActivityClaudeRuntime(),
+    )
+
+    raw = await handler(
+        _worker_task(),
+        WorkerTaskContext(
+            project_id="project-a",
+            capability_names=("runtime.claude", "cli.git"),
+            report_progress=report_progress,
+        ),
+    )
+
+    envelope = FleetOperatorResultEnvelope.model_validate_json(raw)
+    assert (
+        envelope.activity_log
+        == "\n".join((_activity_line(1), _activity_line(2))) + "\n"
+    )
+    assert [(run_id, [item.sequence for item in batch]) for run_id, batch in batches] == [
+        ("run-1", [1, 2])
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fleet_harness_payload_and_worker_runtime_construction(tmp_path) -> None:
+    task_store = InMemoryTaskStore()
+    registry = InMemoryFleetRegistry()
+    worker = await _register_worker(
+        registry,
+        name="harness-worker",
+        project_id="project-a",
+        capabilities=("runtime.harness", "filesystem.write"),
+    )
+    operator = SoftwareStageOperator.fleet(
+        actor_ref="fleet:harness:implementer",
+        store=task_store,
+        registry=registry,
+        org_id="org-a",
+        runtime_capability="runtime.harness",
+        harness_tier="complex",
+        poll_interval_seconds=0.001,
+        heartbeat_ttl=timedelta(seconds=30),
+        workspace_transport=None,
+        artifact_store=None,
+        capabilities=_harness_capabilities(),
+        controller=object(),
+    )
+    waiter = asyncio.create_task(
+        operator.runtime.run(
+            _fleet_request().model_copy(update={"stage": "implement"}),
+            _fleet_capsule().model_copy(update={"stage": "implement"}),
+            _harness_capabilities(),
+            workspace=None,
+        )
+    )
+    await _wait_for_task(task_store, "run-1")
+    task = await FleetDispatcher(
+        task_store,
+        poll_interval=0.001,
+        poll_timeout=0.01,
+    ).claim(
+        worker_id=worker.id,
+        org_id="org-a",
+        models_canonical=[],
+        labels=WorkerCapabilities(
+            capability_names=["runtime.harness", "filesystem.write"],
+        ).routing_labels(),
+        project_id="project-a",
+    )
+    assert task is not None
+    assert task["payload"]["required_capabilities"] == [
+        "runtime.harness",
+        "filesystem.write",
+    ]
+    assert task["payload"]["harness_tier"] == "complex"
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+
+    workspace_path = tmp_path / "worker-workspace"
+    workspace_path.mkdir()
+    task = _harness_task(workspace_path)
+    recorded: list[dict] = []
+
+    class RecordingAgent:
+        def __init__(self, **kwargs) -> None:
+            recorded.append(kwargs)
+
+        def on_event(self, _callback) -> None:
+            return None
+
+        async def chat_with_history(self, _messages):
+            return type(
+                "Reply",
+                (),
+                {"content": _accepted_review("run-1").model_dump_json()},
+            )()
+
+    handler = SoftwareFleetTaskHandler(
+        workspace_resolver=_HarnessResolver(workspace_path),
+        harness_tiers={
+            "complex": HarnessTier(backend="ollama", model="qwen3:8b"),
+        },
+        harness_backends={"ollama": "http://127.0.0.1:11434/v1"},
+        agent_factory=RecordingAgent,
+    )
+
+    async def report_progress(_run_id, _batch) -> None:
+        return None
+
+    await handler(
+        {key: value for key, value in task.items() if key != "workspace_path"},
+        WorkerTaskContext(
+            project_id="project-a",
+            capability_names=("runtime.harness", "filesystem.write"),
+            report_progress=report_progress,
+        ),
+    )
+
+    assert recorded[0]["name"] == "harness:complex"
+    assert recorded[0]["model"] == "qwen3:8b"
+    assert recorded[0]["api_base"] == "http://127.0.0.1:11434/v1"
+
+
+def test_fleet_operator_task_payload_requires_harness_tier_boundary() -> None:
+    capabilities = _fleet_capabilities().model_dump(mode="json")
+    capabilities["grants"][0]["credential_ref"] = None
+    payload = {
+        "request": _fleet_request().model_dump(mode="json"),
+        "capsule": _fleet_capsule().model_dump(mode="json"),
+        "capabilities": capabilities,
+        "workspace": None,
+    }
+
+    with pytest.raises(ValueError, match="harness_tier"):
+        FleetOperatorTaskPayload.model_validate(
+            {
+                **payload,
+                "required_capabilities": ["runtime.claude", "cli.git"],
+                "harness_tier": "complex",
+            }
+        )
+
+    with pytest.raises(ValueError, match="harness_tier"):
+        FleetOperatorTaskPayload.model_validate(
+            {
+                **payload,
+                "required_capabilities": ["runtime.harness", "cli.git"],
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_software_worker_concurrent_runs_keep_activity_logs_per_run() -> None:
+    async def report_progress(run_id: str, batch: list[OperatorActivity]) -> None:
+        return None
+
+    handler = SoftwareFleetTaskHandler(
+        workspace_resolver=_Resolver(),
+        claude_review_runtime=_ConcurrentActivityClaudeRuntime(),
+    )
+
+    async def run_task(run_id: str) -> FleetOperatorResultEnvelope:
+        raw = await handler(
+            _worker_task_for_run(run_id),
+            WorkerTaskContext(
+                project_id="project-a",
+                capability_names=("runtime.claude", "cli.git"),
+                report_progress=report_progress,
+            ),
+        )
+        return FleetOperatorResultEnvelope.model_validate_json(raw)
+
+    first, second = await asyncio.gather(run_task("run-a"), run_task("run-b"))
+
+    for run_id, envelope in (("run-a", first), ("run-b", second)):
+        assert envelope.activity_log is not None
+        archived = [
+            OperatorActivity.model_validate_json(line)
+            for line in envelope.activity_log.splitlines()
+        ]
+        assert [item.run_id for item in archived] == [run_id, run_id]
+        assert [item.sequence for item in archived] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_fleet_runtime_archives_activity_log_from_result_envelope(tmp_path) -> None:
+    task_store = InMemoryTaskStore()
+    registry = InMemoryFleetRegistry()
+    worker = await _register_worker(
+        registry,
+        name="claude-worker",
+        project_id="project-a",
+        capabilities=("runtime.claude", "cli.git"),
+    )
+    artifact_store = LocalArtifactStore(root=tmp_path / "objects")
+    runtime = FleetOperatorRuntime(
+        store=task_store,
+        registry=registry,
+        org_id="org-a",
+        runtime_capability="runtime.claude",
+        poll_interval_seconds=0.001,
+        heartbeat_ttl=timedelta(seconds=30),
+        artifact_store=artifact_store,
+    )
+    request = _fleet_request()
+    waiter = asyncio.create_task(
+        runtime.run(
+            request,
+            _fleet_capsule(),
+            _fleet_capabilities(),
+            workspace=None,
+        )
+    )
+    await _wait_for_task(task_store, request.run_id)
+    dispatcher = FleetDispatcher(
+        task_store,
+        poll_interval=0.001,
+        poll_timeout=0.01,
+    )
+    claimed = await dispatcher.claim(
+        worker_id=worker.id,
+        org_id="org-a",
+        models_canonical=[],
+        labels=worker.capabilities.routing_labels(),
+        project_id="project-a",
+    )
+    assert claimed is not None
+    log = "\n".join((_activity_line(1), _activity_line(2))) + "\n"
+    await dispatcher.report(
+        worker_id=worker.id,
+        org_id="org-a",
+        project_id="project-a",
+        run_id=request.run_id,
+        status="completed",
+        output=FleetOperatorResultEnvelope(
+            result=_accepted_review(request.run_id),
+            workspace_result=None,
+            activity_log=log,
+        ).model_dump_json(),
+        error=None,
+    )
+
+    result = await asyncio.wait_for(waiter, timeout=1)
+
+    assert len(result.artifact_refs) == 1
+    archive_ref = result.artifact_refs[0]
+    assert archive_ref.startswith("artifact://sha256:")
+    assert artifact_store.read(archive_ref, project_id="project-a") == log.encode()
+
+
+@pytest.mark.asyncio
+async def test_fleet_stage_operator_threads_artifact_store_to_runtime(
+    dialect_engine,  # noqa: F811
+    tmp_path,
+) -> None:
+    work_store = WorkStore(engine=dialect_engine)
+    await work_store.init()
+    artifact_store = LocalArtifactStore(root=tmp_path / "objects")
+
+    operator = SoftwareStageOperator.fleet(
+        actor_ref="fleet:reviewer",
+        store=InMemoryTaskStore(),
+        registry=InMemoryFleetRegistry(),
+        org_id="org-a",
+        runtime_capability="runtime.claude",
+        poll_interval_seconds=0.001,
+        heartbeat_ttl=timedelta(seconds=30),
+        workspace_transport=None,
+        artifact_store=artifact_store,
+        capabilities=_read_capabilities(),
+        controller=_controller(
+            work_store,
+            InMemoryStore(),
+            SoftwareReadOnlyResultValidator(),
+        ),
+    )
+
+    assert isinstance(operator.runtime, FleetOperatorRuntime)
+    assert operator.runtime._artifact_store is artifact_store
+
+
+def test_bounded_ndjson_cuts_worker_activity_log_with_truncated_marker() -> None:
+    log = [
+        _activity_line(sequence, summary="x" * 2000)
+        for sequence in range(1, 3000)
+    ]
+
+    bounded = bounded_ndjson(log, FLEET_ACTIVITY_LOG_MAX_BYTES)
+
+    assert len(bounded.encode("utf-8")) <= FLEET_ACTIVITY_LOG_MAX_BYTES
+    archived = [
+        OperatorActivity.model_validate_json(line)
+        for line in bounded.splitlines()
+    ]
+    assert len(archived) < len(log)
+    assert archived[-1].kind == "raw"
+    assert archived[-1].summary == "truncated"
+    assert archived[-1].detail is None
 
 
 @pytest.mark.parametrize(
@@ -352,6 +830,7 @@ async def test_fleet_worker_loss_resumes_only_unfinished_software_stage(
                     poll_interval_seconds=0.001,
                     heartbeat_ttl=timedelta(seconds=30),
                     workspace_transport=workspace_transport,
+                    artifact_store=artifact_store,
                     capabilities=_read_capabilities(),
                     controller=_controller(
                         work_store,
@@ -632,6 +1111,7 @@ async def test_fleet_review_exhausts_stage_attempt_budget_and_resume_does_not_di
             poll_interval_seconds=0.001,
             heartbeat_ttl=timedelta(seconds=30),
             workspace_transport=workspace_transport,
+            artifact_store=artifact_store,
             capabilities=_read_capabilities(),
             controller=_controller(
                 work_store,

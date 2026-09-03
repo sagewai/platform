@@ -19,6 +19,7 @@ from sagewai.harness.discovery import (
     DiscoveredServer,
     build_local_backends,
     discover_local_backends,
+    openai_base_url,
     probe_server,
 )
 
@@ -215,3 +216,16 @@ class TestDiscoveredServer:
             models=["model-a", "model-b"],
         )
         assert len(server.models) == 2
+
+
+class TestOpenAiBaseUrl:
+    @pytest.mark.parametrize(
+        ("url", "expected"),
+        [
+            ("http://127.0.0.1:11434", "http://127.0.0.1:11434/v1"),
+            ("http://127.0.0.1:11434/v1", "http://127.0.0.1:11434/v1"),
+            ("http://127.0.0.1:11434/", "http://127.0.0.1:11434/v1"),
+        ],
+    )
+    def test_returns_single_v1_suffix(self, url: str, expected: str) -> None:
+        assert openai_base_url(url) == expected

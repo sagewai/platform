@@ -25,19 +25,24 @@ from sagewai.db import factory
 from sagewai.fleet.execution import run_worker_subprocess
 from sagewai.fleet.registry import PostgresFleetRegistry
 from sagewai.fleet.task_store import PostgresTaskStore
+from sagewai.harness.discovery import discover_local_backends, openai_base_url
 from sagewai.safety.permissions import PermissionPolicy
 from sagewai.tools import factory as tool_factory
 from sagewai.work import (
     SUPERSEDED,
     AcceptanceCriterion,
+    ActivityIngestion,
+    BatchingActivitySink,
     CapabilityGrant,
     CapabilitySet,
     ClaudeRuntime,
     CodexRuntime,
     ControlDegradedError,
+    HarnessRuntime,
     OperatorController,
     PendingAttention,
     TaskCapsuleCompiler,
+    WorkActivityStore,
     WorkContract,
     WorkEvent,
     WorkEventType,
@@ -73,6 +78,7 @@ from sagewai.work.profiles.software.fleet_workspace import (
 from sagewai.work.profiles.software.fleet_workspace import (
     software_repository_ref as _software_repository_ref,
 )
+from sagewai.work.tasks.store import TaskStore as CoordinatorTaskStore
 
 
 @click.group()
@@ -96,12 +102,19 @@ from sagewai.work.profiles.software.fleet_workspace import (
     metavar="ORG_ID",
     help="Fleet organization ID (required with --execution fleet).",
 )
+@click.option(
+    "--prefer-free-implementation",
+    is_flag=True,
+    default=False,
+    help="Try the configured local harness complex tier before Codex for implementation.",
+)
 @click.pass_context
 def work(
     ctx: click.Context,
     project_scope: str,
     execution: str,
     fleet_org: str | None,
+    prefer_free_implementation: bool,
 ) -> None:
     """Run deterministic software work through the selected execution path."""
     if not project_scope:
@@ -130,6 +143,15 @@ def _work_execution_config() -> tuple[str, str | None]:
             )
         context = context.parent
     return "local", None
+
+
+def _work_prefer_free_implementation() -> bool:
+    context = click.get_current_context(silent=True)
+    while context is not None:
+        if "prefer_free_implementation" in context.params:
+            return bool(context.params["prefer_free_implementation"])
+        context = context.parent
+    return False
 
 
 @work.command("start")
@@ -247,17 +269,20 @@ async def _start_work(
     repository, base_sha = await _repository_state()
     execution, fleet_org = _work_execution_config()
     if is_github_issue_url(description):
-        github = await _build_github_lifecycle(
+        github, activity_sink = await _build_github_lifecycle(
             project_id=project_id,
             repository=repository,
         )
-        return await github.start(
-            issue_url=description,
-            project_id=project_id,
-            base_sha=base_sha,
-        )
+        try:
+            return await github.start(
+                issue_url=description,
+                project_id=project_id,
+                base_sha=base_sha,
+            )
+        finally:
+            await activity_sink.close()
 
-    lifecycle, _, _ = await _build_lifecycle(
+    lifecycle, _, _, activity_sink = await _build_lifecycle(
         project_id=project_id,
         repository=repository,
         execution=execution,
@@ -309,7 +334,10 @@ async def _start_work(
             fleet_org_id=fleet_org,
         ).model_dump(mode="json"),
     )
-    return await lifecycle.start(work_item=work_item, contract=contract)
+    try:
+        return await lifecycle.start(work_item=work_item, contract=contract)
+    finally:
+        await activity_sink.close()
 
 
 async def _status_work(
@@ -366,17 +394,20 @@ async def _intake_work(
         raise ValueError("GitHub intake label must not be empty")
     repository, base_sha = await _repository_state()
     owner, repo = await _repository_github_target(repository)
-    lifecycle = await _build_github_lifecycle(
+    lifecycle, activity_sink = await _build_github_lifecycle(
         project_id=project_id,
         repository=repository,
     )
-    return await lifecycle.intake_labeled(
-        owner=owner,
-        repo=repo,
-        label=label,
-        project_id=project_id,
-        base_sha=base_sha,
-    )
+    try:
+        return await lifecycle.intake_labeled(
+            owner=owner,
+            repo=repo,
+            label=label,
+            project_id=project_id,
+            base_sha=base_sha,
+        )
+    finally:
+        await activity_sink.close()
 
 
 async def _repository_github_target(repository: Path) -> tuple[str, str]:
@@ -430,16 +461,22 @@ async def _resume_work(
         )
     repository, _ = await _repository_state()
     if record.source_ref and is_github_issue_url(record.source_ref):
-        github = await _build_github_lifecycle(
+        github, activity_sink = await _build_github_lifecycle(
             project_id=project_id,
             repository=repository,
         )
-        return await github.resume(work_id, project_id=project_id)
-    lifecycle, _, _ = await _build_lifecycle(
+        try:
+            return await github.resume(work_id, project_id=project_id)
+        finally:
+            await activity_sink.close()
+    lifecycle, _, _, activity_sink = await _build_lifecycle(
         project_id=project_id,
         repository=repository,
     )
-    return await lifecycle.resume(work_id, project_id=project_id)
+    try:
+        return await lifecycle.resume(work_id, project_id=project_id)
+    finally:
+        await activity_sink.close()
 
 
 async def _approve_work(
@@ -483,16 +520,19 @@ async def _approve_work(
             "delivery approval requires an explicitly selected adapter"
         )
     repository, _ = await _repository_state()
-    github = await _build_github_lifecycle(
+    github, activity_sink = await _build_github_lifecycle(
         project_id=project_id,
         repository=repository,
     )
-    return await github.approve(
-        work_id,
-        project_id=project_id,
-        gate_id=gate_id,
-        actor_ref="cli",
-    )
+    try:
+        return await github.approve(
+            work_id,
+            project_id=project_id,
+            gate_id=gate_id,
+            actor_ref="cli",
+        )
+    finally:
+        await activity_sink.close()
 
 
 async def _pending_work(
@@ -529,9 +569,10 @@ async def _build_lifecycle(
     repository: Path,
     execution: str | None = None,
     fleet_org: str | None = None,
-) -> tuple[SoftwareLifecycle, WorkStore, SoftwareWorktreeManager]:
+) -> tuple[SoftwareLifecycle, WorkStore, SoftwareWorktreeManager, BatchingActivitySink]:
     await factory.ensure_schema()
     engine = factory.get_engine()
+    prefer_free_implementation = _work_prefer_free_implementation()
     if execution is None:
         execution, selected_fleet_org = _work_execution_config()
         if fleet_org is None:
@@ -544,8 +585,15 @@ async def _build_lifecycle(
         raise ValueError("Fleet organization ID requires fleet execution")
     work_store = WorkStore(engine=engine)
     knowledge_store = KnowledgeStore(engine=engine)
+    task_store = CoordinatorTaskStore(engine=engine)
+    activity_store = WorkActivityStore(engine=engine)
     await work_store.init()
     await knowledge_store.init()
+    activity_sink = ActivityIngestion(
+        work_store=work_store,
+        task_store=task_store,
+        activity_store=activity_store,
+    ).sink()
     durability_store = await factory.get_workflow_store()
     permission_policy = PermissionPolicy()
 
@@ -607,6 +655,7 @@ async def _build_lifecycle(
             *,
             actor_ref: str,
             runtime_capability: str,
+            harness_tier: str | None = None,
             capabilities: CapabilitySet,
             controller: OperatorController,
         ) -> SoftwareStageOperator:
@@ -619,6 +668,8 @@ async def _build_lifecycle(
                 poll_interval_seconds=0.25,
                 heartbeat_ttl=timedelta(seconds=30),
                 workspace_transport=workspace_transport,
+                artifact_store=artifact_store,
+                harness_tier=harness_tier,
                 capabilities=capabilities,
                 controller=controller,
             )
@@ -635,6 +686,18 @@ async def _build_lifecycle(
             capabilities=write_capabilities,
             controller=implementation_controller,
         )
+        implementers = (implementer,)
+        if prefer_free_implementation:
+            implementers = (
+                fleet_stage(
+                    actor_ref="fleet:harness:implementer",
+                    runtime_capability="runtime.harness",
+                    harness_tier="complex",
+                    capabilities=write_capabilities,
+                    controller=implementation_controller,
+                ),
+                implementer,
+            )
         reviewer = fleet_stage(
             actor_ref="fleet:claude:reviewer",
             runtime_capability="runtime.claude",
@@ -648,15 +711,15 @@ async def _build_lifecycle(
             controller=implementation_controller,
         )
     else:
-        codex = CodexRuntime()
-        claude = ClaudeRuntime()
+        codex = CodexRuntime(activity_sink=activity_sink, artifact_store=artifact_store)
+        claude = ClaudeRuntime(activity_sink=activity_sink, artifact_store=artifact_store)
         analyst = SoftwareStageOperator(
             actor_ref="runtime:claude:analyst",
             runtime=claude,
             capabilities=read_capabilities,
             controller=review_controller,
         )
-        implementer = SoftwareStageOperator(
+        codex_implementer = SoftwareStageOperator(
             actor_ref="runtime:codex:implementer",
             runtime=codex,
             capabilities=write_capabilities,
@@ -674,6 +737,32 @@ async def _build_lifecycle(
             capabilities=write_capabilities,
             controller=implementation_controller,
         )
+        implementers = (codex_implementer,)
+        if prefer_free_implementation:
+            if project_id is None:
+                raise ValueError("--prefer-free-implementation requires a project")
+            defaults = await task_store.get_defaults(project_id=project_id)
+            if "complex" not in defaults.harness_tiers:
+                raise ValueError("configure harness tiers in task defaults")
+            backends = {
+                name: openai_base_url(discovered.openai_compat_url)
+                for name, discovered in (await discover_local_backends()).items()
+            }
+            implementers = (
+                SoftwareStageOperator(
+                    actor_ref="runtime:harness:implementer",
+                    runtime=HarnessRuntime(
+                        tier="complex",
+                        tiers=dict(defaults.harness_tiers),
+                        backends=backends,
+                        activity_sink=activity_sink,
+                        artifact_store=artifact_store,
+                    ),
+                    capabilities=write_capabilities,
+                    controller=implementation_controller,
+                ),
+                codex_implementer,
+            )
     lifecycle = SoftwareLifecycle(
         profile=SoftwareProfile(),
         work_store=work_store,
@@ -687,18 +776,19 @@ async def _build_lifecycle(
             knowledge_store=knowledge_store,
             runner=SandboxedVerificationRunner(image=_verification_image()),
             artifact_store=artifact_store,
+            activity_sink=activity_sink,
         ),
         artifact_store=artifact_store,
         repository=repository,
         analyst=StageOperatorLadder((analyst,)),
         designer=StageOperatorLadder((analyst,)),
-        implementer=StageOperatorLadder((implementer,)),
+        implementer=StageOperatorLadder(implementers),
         reviewer=StageOperatorLadder((reviewer,)),
         repairer=StageOperatorLadder((repairer,)),
         repo_instructions=(("AGENTS.md",) if (repository / "AGENTS.md").is_file() else ()),
         verification_commands=("just smoke",),
     )
-    return lifecycle, work_store, worktree_manager
+    return lifecycle, work_store, worktree_manager, activity_sink
 
 
 def _verification_image() -> str:
@@ -715,11 +805,11 @@ async def _build_github_lifecycle(
     *,
     project_id: str | None,
     repository: Path,
-) -> GitHubIssueLifecycle:
+) -> tuple[GitHubIssueLifecycle, BatchingActivitySink]:
     if project_id is None:
         raise ValueError("GitHub software lifecycle requires a project")
     execution, fleet_org = _work_execution_config()
-    lifecycle, work_store, worktree_manager = await _build_lifecycle(
+    lifecycle, work_store, worktree_manager, activity_sink = await _build_lifecycle(
         project_id=project_id,
         repository=repository,
         execution=execution,
@@ -729,20 +819,23 @@ async def _build_github_lifecycle(
         project_id=project_id,
         get_credentials=_local_github_credentials,
     )
-    return GitHubIssueLifecycle(
-        work_store=work_store,
-        software_lifecycle=lifecycle,
-        github=CatalogGitHubClient(
-            project_id=project_id,
-            github_callable=callables["github"],
+    return (
+        GitHubIssueLifecycle(
+            work_store=work_store,
+            software_lifecycle=lifecycle,
+            github=CatalogGitHubClient(
+                project_id=project_id,
+                github_callable=callables["github"],
+            ),
+            branch_publisher=WorktreeBranchPublisher(
+                worktree_manager=worktree_manager,
+                repository=repository,
+            ),
+            repository_outcome=SoftwareRepositoryOutcome.MERGED,
+            execution_route=execution,
+            fleet_org_id=fleet_org,
         ),
-        branch_publisher=WorktreeBranchPublisher(
-            worktree_manager=worktree_manager,
-            repository=repository,
-        ),
-        repository_outcome=SoftwareRepositoryOutcome.MERGED,
-        execution_route=execution,
-        fleet_org_id=fleet_org,
+        activity_sink,
     )
 
 

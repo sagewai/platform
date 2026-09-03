@@ -16,6 +16,7 @@ from decimal import Decimal
 
 import pytest
 from sqlalchemy import update
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from sagewai._project_scope import project_scope_key
 from sagewai.artifacts.models import ArtifactRef
@@ -399,3 +400,43 @@ async def test_append_feed_sequences_after_task_events_and_requires_task(store: 
     assert [(item.feed_sequence, item.source) for item in feed] == [(1, "task_event"), (2, "work_event")]
     with pytest.raises(KeyError):
         await store.append_feed((entry.model_copy(update={"task_id": "missing"}),))
+
+
+@pytest.mark.asyncio
+async def test_append_feed_retries_a_stale_sequence(store: TaskStore, monkeypatch) -> None:
+    task = _task()
+    await _create(store, task)
+    entry = FeedEntry(
+        project_id=task.project_id,
+        task_id=task.id,
+        feed_sequence=1,
+        source="activity",
+        source_id="work:implement:1:1",
+        event_type="activity.message",
+        payload_json={"summary": "hi"},
+        created_at=NOW,
+    )
+    original_scalar = AsyncConnection.scalar
+    stale_once = True
+
+    async def scalar_stale_once(self, statement, *args, **kwargs):
+        nonlocal stale_once
+        if stale_once and "task_feed" in str(statement) and "max" in str(statement).lower():
+            stale_once = False
+            return 0
+        return await original_scalar(self, statement, *args, **kwargs)
+
+    monkeypatch.setattr(AsyncConnection, "scalar", scalar_stale_once)
+    stored = await store.append_feed((entry,))
+    assert [item.feed_sequence for item in stored] == [2]
+    feed = await store.read_feed(task.id, project_id=task.project_id)
+    assert [item.feed_sequence for item in feed] == [1, 2]
+
+    async def scalar_always_stale(self, statement, *args, **kwargs):
+        if "task_feed" in str(statement) and "max" in str(statement).lower():
+            return 0
+        return await original_scalar(self, statement, *args, **kwargs)
+
+    monkeypatch.setattr(AsyncConnection, "scalar", scalar_always_stale)
+    with pytest.raises(StaleTaskError):
+        await store.append_feed((entry.model_copy(update={"source_id": "work:implement:1:2"}),))

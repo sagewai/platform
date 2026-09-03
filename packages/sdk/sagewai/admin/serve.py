@@ -902,10 +902,16 @@ def create_admin_serve_app(
         # Must run before any store reads/writes so all tables exist.
         await _db_factory.ensure_schema()
 
-        from sagewai.work import WorkStore
+        from sagewai.work import ActivityIngestion, WorkActivityStore, WorkStore
         app.state.work_store = WorkStore(engine=_db_factory.get_engine())
+        app.state.activity_store = WorkActivityStore(engine=_db_factory.get_engine())
         from sagewai.work.tasks import TaskStore
         app.state.task_store = TaskStore(engine=_db_factory.get_engine())
+        app.state.activity_ingestion = ActivityIngestion(
+            work_store=app.state.work_store,
+            task_store=app.state.task_store,
+            activity_store=app.state.activity_store,
+        )
 
         # Eager fail-closed startup: build the SQLite schema, or (on Postgres)
         # verify the DB is reachable and migrated. Raises here rather than on the
@@ -1545,6 +1551,10 @@ def create_admin_serve_app(
         ),
         prefix="/api/v1/harness",
     )
+
+    from sagewai.admin.tasks_routes import router as tasks_router
+
+    app.include_router(tasks_router)
 
     # ── Setup ────────────────────────────────────────────────────
 
@@ -4203,12 +4213,15 @@ def create_admin_serve_app(
     # Uses the durable PostgresFleetRegistry + PostgresTaskStore + FleetDispatcher.
     # Workers register, get approved, claim tasks by project/model/tags.
 
+    from pydantic import TypeAdapter, ValidationError
+
     from sagewai.fleet import (
         FleetDispatcher,
         PostgresFleetRegistry,
         WorkerCapabilities,
     )
     from sagewai.fleet.task_store import PostgresTaskStore
+    from sagewai.work.activity import OperatorActivity
 
     fleet_registry = PostgresFleetRegistry()  # factory engine; persistent
     fleet_task_store = PostgresTaskStore()  # factory engine; durable
@@ -4218,6 +4231,7 @@ def create_admin_serve_app(
     app.state.fleet_registry = fleet_registry
     app.state.fleet_task_store = fleet_task_store
     app.state.fleet_dispatcher = fleet_dispatcher
+    operator_activity_batch = TypeAdapter(list[OperatorActivity])
 
     import hashlib as _hashlib
 
@@ -4368,6 +4382,62 @@ def create_admin_serve_app(
         except ValueError as e:
             return JSONResponse({"detail": str(e)}, status_code=400)
         return JSONResponse({"status": "ok"})
+
+    @app.post("/api/v1/fleet/progress")
+    async def fleet_progress(request: Request) -> JSONResponse:
+        worker = request.state.worker
+        if worker.approval_status != WorkerApprovalStatus.APPROVED:
+            return JSONResponse(
+                {"detail": "Worker not approved", "status": worker.approval_status.value},
+                status_code=403,
+            )
+        raw = await request.body()
+        if len(raw) > 640 * 1024:
+            return JSONResponse({"detail": "batch too large"}, status_code=413)
+        try:
+            body = json.loads(raw)
+            run_id = str(body.get("run_id", ""))
+            activities = operator_activity_batch.validate_python(body.get("activities", ()))
+        except (AttributeError, ValidationError, ValueError):
+            return JSONResponse({"detail": "invalid activity"}, status_code=422)
+        if len(activities) > 50:
+            return JSONResponse({"detail": "batch too large"}, status_code=413)
+        task = await fleet_task_store.get_task(
+            run_id,
+            org_id=worker.org_id,
+            project_id=worker.project_id,
+        )
+        if task is None:
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        if task["status"] != "claimed" or task["worker_id"] != worker.id:
+            return JSONResponse({"detail": "not the claiming worker"}, status_code=409)
+        expected = (
+            task["project_id"],
+            task["work_id"],
+            run_id,
+        )
+        if any((a.project_id, a.work_id, a.run_id) != expected for a in activities):
+            return JSONResponse({"detail": "activity identity mismatch"}, status_code=422)
+        last = await request.app.state.activity_store.last_sequence(
+            expected[1],
+            run_id=expected[2],
+            project_id=expected[0],
+        )
+        if not activities or activities[0].sequence <= last:
+            return JSONResponse(
+                {"detail": "batch out of order", "last_sequence": last},
+                status_code=409,
+            )
+        await request.app.state.activity_ingestion.ingest(activities)
+        last = await request.app.state.activity_store.last_sequence(
+            expected[1],
+            run_id=expected[2],
+            project_id=expected[0],
+        )
+        return JSONResponse(
+            {"accepted": len(activities), "last_sequence": last},
+            status_code=202,
+        )
 
     @app.post("/api/v1/fleet/heartbeat")
     async def fleet_heartbeat(request: Request) -> JSONResponse:

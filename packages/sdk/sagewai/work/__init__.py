@@ -9,6 +9,22 @@
 # See COMMERCIAL-LICENSE.md for details.
 """Public API for the generic Work domain."""
 
+from sagewai.work.activity import (
+    ACTIVITY_LOG_MAX_BYTES,
+    ACTIVITY_ROW_CAP,
+    FLEET_ACTIVITY_LOG_MAX_BYTES,
+    ActivityKind,
+    ActivitySink,
+    ActivitySource,
+    ListActivitySink,
+    OperatorActivity,
+    WorkActivityStore,
+    activity_pipeline,
+    activity_redactor,
+    archive_activity_log,
+    bounded_ndjson,
+)
+from sagewai.work.activity_ingestion import ActivityIngestion, BatchingActivitySink
 from sagewai.work.capsule import TaskCapsuleCompiler
 from sagewai.work.completion import (
     evaluate_completion,
@@ -42,6 +58,8 @@ from sagewai.work.fleet import (
     FleetWorkspaceTransport,
     NoCompatibleWorkerError,
 )
+from sagewai.work.harness_mcp import mcp_connection_resolver
+from sagewai.work.harness_tools import FILE_SIZE_CAP, HarnessTools, as_data, build_harness_tools
 from sagewai.work.metrics import WorkMetrics
 from sagewai.work.models import (
     SUPERSEDED,
@@ -85,11 +103,17 @@ from sagewai.work.runtime import (
     OperatorRuntime,
     WorkRequest,
     Workspace,
+    build_operator_prompt,
 )
+from sagewai.work.runtime_harness import HarnessBudget, HarnessRuntime, HarnessTierResolution
 from sagewai.work.store import WorkStore
 from sagewai.work.supersede import supersede_work
 
 __all__ = [
+    "ACTIVITY_LOG_MAX_BYTES",
+    "ACTIVITY_ROW_CAP",
+    "FLEET_ACTIVITY_LOG_MAX_BYTES",
+    "FILE_SIZE_CAP",
     "Action",
     "AcceptanceCriterion",
     "ActionPlan",
@@ -97,6 +121,11 @@ __all__ = [
     "ActionIntent",
     "ActionResult",
     "ActionScope",
+    "ActivityKind",
+    "ActivityIngestion",
+    "ActivitySink",
+    "ActivitySource",
+    "BatchingActivitySink",
     "CapabilityGrant",
     "Assumption",
     "CapabilitySet",
@@ -118,9 +147,15 @@ __all__ = [
     "FleetWorkspaceTransferResult",
     "FleetWorkspaceTransfer",
     "FleetWorkspaceTransport",
+    "HarnessTools",
+    "HarnessBudget",
+    "HarnessRuntime",
+    "HarnessTierResolution",
     "NoCompatibleWorkerError",
     "ExecutionAttempt",
     "GateDecision",
+    "ListActivitySink",
+    "OperatorActivity",
     "PendingAttention",
     "PendingAttentionKind",
     "ProposedAcceptanceCriterion",
@@ -139,6 +174,7 @@ __all__ = [
     "WorkMetrics",
     "VerificationResult",
     "WorkAnalysisResult",
+    "WorkActivityStore",
     "WorkContractProposal",
     "WorkDesignResult",
     "WorkEventType",
@@ -149,9 +185,17 @@ __all__ = [
     "WorkStore",
     "Workspace",
     "active_control_precondition_ids",
+    "activity_pipeline",
+    "activity_redactor",
+    "as_data",
+    "archive_activity_log",
+    "build_harness_tools",
+    "build_operator_prompt",
+    "bounded_ndjson",
     "execution_attempt_from_events",
     "evaluate_completion",
     "fold_verification_results",
+    "mcp_connection_resolver",
     "next_stage_run",
     "stage_run_ids",
     "stage_runtime_failures",

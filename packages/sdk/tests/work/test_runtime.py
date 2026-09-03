@@ -194,6 +194,23 @@ def _fake_runtime_executable(
             if "--output-last-message" in sys.argv:
                 output = pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1])
                 output.write_text(json.dumps(result))
+            elif "--output-format" in sys.argv and sys.argv[sys.argv.index("--output-format") + 1] == "stream-json":
+                print(json.dumps({{
+                    "type": "assistant",
+                    "message": {{"content": [{{"type": "text", "text": "fake runtime completed"}}]}},
+                }}))
+                final = {{
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": False,
+                    "structured_output": result,
+                    "result": json.dumps(result),
+                }}
+                if {include_usage!r}:
+                    final["usage"] = {{"input_tokens": 12, "output_tokens": 7}}
+                if {include_cost!r}:
+                    final["total_cost_usd"] = 0.01
+                print(json.dumps(final))
             else:
                 envelope = {{
                     "structured_output": result,
@@ -322,7 +339,7 @@ async def test_native_runtime_uses_fake_executable_without_session_or_api_key(
         assert Path(argv[7]).name == "schema.json"
         assert argv[8] == "--output-last-message"
         assert Path(argv[9]).name == "result.json"
-        assert argv[10:] == ["-"]
+        assert argv[10:] == ["--json", "-"]
         properties = output_schema["properties"]
         assert properties["profile_context"] == {
             "additionalProperties": False,
@@ -349,7 +366,8 @@ async def test_native_runtime_uses_fake_executable_without_session_or_api_key(
             "--allowedTools",
             "Edit(/packages/sdk/sagewai/work/**),Read(/packages/sdk/sagewai/work/**)",
             "--output-format",
-            "json",
+            "stream-json",
+            "--verbose",
             "--json-schema",
             json.dumps(OperatorResult.model_json_schema(), sort_keys=True),
         ]
@@ -430,7 +448,8 @@ async def test_claude_runtime_emits_configured_native_options(
         "--allowedTools",
         "Edit(/packages/sdk/sagewai/work/**),Read(/packages/sdk/sagewai/work/**)",
         "--output-format",
-        "json",
+        "stream-json",
+        "--verbose",
         "--json-schema",
         json.dumps(OperatorResult.model_json_schema(), sort_keys=True),
     ]
@@ -509,6 +528,7 @@ async def test_codex_runtime_emits_configured_native_options(
         argv[11],
         "--output-last-message",
         argv[13],
+        "--json",
         "-",
     ]
     assert Path(argv[11]).name == "schema.json"

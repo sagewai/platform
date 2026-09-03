@@ -224,27 +224,34 @@ class TaskStore:
         return stored
 
     async def append_feed(self, entries: Sequence[FeedEntry]) -> list[FeedEntry]:
-        """Append feed rows from Work events or activity (ingestion path), own transaction."""
+        """Append feed rows from Work events or activity (ingestion path), own transaction.
+
+        Appends retry three times on a lost sequence; SQLite has no row lock.
+        """
         stored: list[FeedEntry] = []
         for entry in entries:
             scope = project_scope_key(entry.project_id)
-            try:
-                async with self._engine.begin() as conn:
-                    current = await self._lock_row(conn, scope, entry.task_id)
-                    if current is None:
-                        raise KeyError(entry.task_id)
-                    feed_last = await conn.scalar(
-                        select(func.coalesce(func.max(self._feed.c.feed_sequence), 0)).where(
-                            self._feed.c.project_scope_key == scope,
-                            self._feed.c.task_id == entry.task_id,
+            for attempt in range(3):
+                try:
+                    async with self._engine.begin() as conn:
+                        current = await self._lock_row(conn, scope, entry.task_id)
+                        if current is None:
+                            raise KeyError(entry.task_id)
+                        feed_last = await conn.scalar(
+                            select(func.coalesce(func.max(self._feed.c.feed_sequence), 0)).where(
+                                self._feed.c.project_scope_key == scope,
+                                self._feed.c.task_id == entry.task_id,
+                            )
                         )
-                    )
-                    sequenced = entry.model_copy(update={"feed_sequence": int(feed_last or 0) + 1})
-                    await conn.execute(insert(self._feed).values(**self._feed_row(scope, sequenced)))
-            except IntegrityError as exc:
-                raise StaleTaskError("concurrent feed append") from exc
-            await self._feed_bus.publish(sequenced)
-            stored.append(sequenced)
+                        sequenced = entry.model_copy(update={"feed_sequence": int(feed_last or 0) + 1})
+                        await conn.execute(insert(self._feed).values(**self._feed_row(scope, sequenced)))
+                except IntegrityError as exc:
+                    if attempt == 2:
+                        raise StaleTaskError("concurrent feed append") from exc
+                    continue
+                await self._feed_bus.publish(sequenced)
+                stored.append(sequenced)
+                break
         return stored
 
     # ── reads ─────────────────────────────────────────────────────────────

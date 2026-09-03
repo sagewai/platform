@@ -56,6 +56,20 @@ from sagewai.work.tasks.scratch import (
     ScratchWorkspaceManager,
 )
 from sagewai.work.tasks.store import SpendReservation, SpendTotals, StaleTaskError, TaskStore
+from sagewai.work.tasks.telemetry import (
+    AttentionHistoryEntry,
+    BurnSeriesPoint,
+    CycleTelemetry,
+    ProjectTelemetry,
+    ScheduledCycleTelemetry,
+    ScheduledTelemetry,
+    StageAttemptTelemetry,
+    StageTimelineEntry,
+    TaskTelemetry,
+    VerificationRunTelemetry,
+    WorkTelemetry,
+    derive_task_telemetry,
+)
 from sagewai.work.tasks.templates import (
     CATALOGUE,
     SlotSpec,
@@ -67,14 +81,19 @@ from sagewai.work.tasks.templates import (
 from sagewai.work.tasks.transitions import IllegalTransitionError, assert_transition
 
 __all__ = [
-    "AcceptedPlan", "Authority", "Budget", "BudgetUsed", "CATALOGUE", "ClarificationQuestion",
-    "ExecutionRoute", "FeedBus", "FeedEntry", "GateMode", "HarnessTier", "IllegalTransitionError",
-    "IntakeResult", "MatrixItem", "PlanRejectedError", "PlanStep", "PlanningFailedError",
-    "ReportTarget", "RoleAlias", "RoutingPolicy", "RuntimeRef", "Schedule", "ScratchResultValidator",
-    "ScratchWorkspace", "ScratchWorkspaceManager", "Sensitivity", "Sink", "SlotSpec", "SlotValidationError",
-    "SoftwareTarget", "SpendReservation", "SpendTotals", "StaleTaskError", "Task", "TaskDefaults",
-    "TaskEvent", "TaskEventType", "TaskKind", "TaskOrigin", "TaskPlanResult", "TaskPlanner", "TaskRecord",
-    "TaskStatus", "TaskStore", "TaskTemplate", "accept_plan", "assert_transition", "board_column",
-    "derive_attention", "fold_record", "get_template", "next_fire", "preset_to_cron", "route",
-    "validate_cron", "validate_slots", "validate_timezone",
+    "AcceptedPlan", "AttentionHistoryEntry", "Authority", "Budget", "BudgetUsed",
+    "BurnSeriesPoint", "CATALOGUE", "ClarificationQuestion", "CycleTelemetry", "ExecutionRoute",
+    "FeedBus", "FeedEntry", "GateMode", "HarnessTier", "IllegalTransitionError", "IntakeResult",
+    "MatrixItem", "PlanRejectedError", "PlanStep", "PlanningFailedError", "ProjectTelemetry",
+    "ReportTarget", "RoleAlias", "RoutingPolicy", "RuntimeRef", "Schedule",
+    "ScheduledCycleTelemetry", "ScheduledTelemetry", "ScratchResultValidator",
+    "ScratchWorkspace", "ScratchWorkspaceManager", "Sensitivity", "Sink", "SlotSpec",
+    "SlotValidationError", "SoftwareTarget", "SpendReservation", "SpendTotals",
+    "StageAttemptTelemetry", "StageTimelineEntry", "StaleTaskError", "Task", "TaskDefaults",
+    "TaskEvent", "TaskEventType", "TaskKind", "TaskOrigin", "TaskPlanResult", "TaskPlanner",
+    "TaskRecord", "TaskStatus", "TaskStore", "TaskTelemetry", "TaskTemplate",
+    "VerificationRunTelemetry", "WorkTelemetry", "accept_plan", "assert_transition",
+    "board_column", "derive_attention", "derive_task_telemetry", "fold_record", "get_template",
+    "next_fire", "preset_to_cron", "route", "validate_cron", "validate_slots",
+    "validate_timezone",
 ]

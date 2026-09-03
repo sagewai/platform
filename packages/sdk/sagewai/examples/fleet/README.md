@@ -23,8 +23,9 @@ sagewai fleet enqueue --agent helper -m "…"  ──►│   gateway queues a t
 ## Native Work operators
 
 Fleet can run the same durable software Work lifecycle on machines that keep
-their own Codex or Claude authentication. Start project-scoped workers from a
-trusted local checkout and advertise only the runtime they can execute:
+their own Codex or Claude authentication, or their own HarnessRuntime model
+endpoints. Start project-scoped workers from a trusted local checkout and
+advertise only the runtime they can execute:
 
 ```bash
 sagewai fleet run --name codex-worker --project my-project \
@@ -34,6 +35,12 @@ sagewai fleet run --name codex-worker --project my-project \
 sagewai fleet run --name claude-worker --project my-project \
   --capabilities runtime.claude,filesystem.read \
   --work-repository /path/to/platform
+
+sagewai fleet run --name harness-worker --project my-project \
+  --capabilities runtime.harness,filesystem.write \
+  --work-repository /path/to/platform \
+  --harness-tier complex=localai:mlx-community/Mistral-7B-Instruct-v0.3 \
+  --harness-backend localai=http://127.0.0.1:8080/v1
 ```
 
 Then select Fleet execution explicitly when starting or resuming Work:
@@ -44,8 +51,9 @@ sagewai work --project my-project --execution fleet --fleet-org my-org \
 ```
 
 The control plane persists Work state and sends a credential-free workspace
-snapshot. Each selected worker uses its local native CLI authentication; Codex
-or Claude credentials are never submitted to the control plane. If a selected
+snapshot. Each selected worker uses its local native CLI authentication or
+HarnessRuntime backend configuration; Codex and Claude credentials and harness
+model endpoints are never submitted to the control plane. If a selected
 worker disappears, the existing Fleet lease recovery can reassign only the
 unfinished stage to another compatible project-scoped worker.
 

@@ -44,7 +44,7 @@ sagewai work --project my-project approve WORK_ID GATE_ID
 sagewai work --project my-project resume WORK_ID
 ```
 
-Local execution is the default. Fleet execution is opt-in with `sagewai work --project my-project --execution fleet --fleet-org ORG_ID ...`; approved workers advertise `runtime.codex` or `runtime.claude` and use their own local CLI authentication. See the [native Work worker guide](sagewai/examples/fleet/README.md#native-work-operators).
+Local execution is the default. Fleet execution is opt-in with `sagewai work --project my-project --execution fleet --fleet-org ORG_ID ...`; approved workers advertise `runtime.codex`, `runtime.claude`, or `runtime.harness` and use their own local runtime authentication and model endpoints. See the [native Work worker guide](sagewai/examples/fleet/README.md#native-work-operators).
 
 A `pip install sagewai` includes the CLI and authenticated Work API (`sagewai admin serve`). The browser Work Control Console ships in the separate admin container; fresh full-stack installations must complete the first-time setup wizard and have no default credentials. A verified software outcome does not imply deployment unless its contract explicitly selects a delivery extension.
 

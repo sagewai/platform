@@ -18,7 +18,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
+from sagewai.artifacts.object_store import ArtifactStore
 from sagewai.fleet.execution import WorkerConfigurationError, run_worker_subprocess
+from sagewai.work.activity import ActivitySink
 from sagewai.work.runtime import (
     CapabilitySet,
     ClaudeRuntime,
@@ -435,6 +437,8 @@ class RefreshingCodexRuntime(CodexRuntime):
         timeout: float = 1800,
         probe_timeout: float = 30,
         refresh_interval_seconds: float = 3600,
+        activity_sink: ActivitySink | None = None,
+        artifact_store: ArtifactStore | None = None,
     ) -> None:
         if refresh_interval_seconds <= 0:
             raise ValueError("runtime capability refresh interval must be positive")
@@ -460,6 +464,8 @@ class RefreshingCodexRuntime(CodexRuntime):
             model=selection.model,
             reasoning_effort=selection.effort,
             selection_note=selection.verification_text(),
+            activity_sink=activity_sink,
+            artifact_store=artifact_store,
         )
 
     async def _refresh_if_due(self) -> None:
@@ -516,6 +522,8 @@ class RefreshingClaudeRuntime(ClaudeRuntime):
         timeout: float = 1800,
         probe_timeout: float = 30,
         refresh_interval_seconds: float = 3600,
+        activity_sink: ActivitySink | None = None,
+        artifact_store: ArtifactStore | None = None,
     ) -> None:
         if refresh_interval_seconds <= 0:
             raise ValueError("runtime capability refresh interval must be positive")
@@ -538,6 +546,8 @@ class RefreshingClaudeRuntime(ClaudeRuntime):
             effort=selection.effort,
             max_budget_usd=max_budget_usd,
             selection_note=selection.verification_text(),
+            activity_sink=activity_sink,
+            artifact_store=artifact_store,
         )
 
     async def _refresh_if_due(self) -> None:

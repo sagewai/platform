@@ -17,10 +17,10 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Protocol
+from typing import Literal, Protocol
 
 from sagewai.artifacts.models import ArtifactRef
-from sagewai.artifacts.object_store import LocalArtifactStore
+from sagewai.artifacts.object_store import ArtifactStore, LocalArtifactStore
 from sagewai.fleet import FleetRegistry, TaskStore
 from sagewai.work.capsule import TaskCapsuleCompiler
 from sagewai.work.completion import evaluate_completion, validate_verification_result
@@ -199,6 +199,7 @@ class _Verifier(Protocol):
         contract: WorkContract,
         criterion_ids: tuple[str, ...],
         attempt_id: str,
+        run_id: str,
         workspace: SoftwareWorkspace,
         commands: tuple[str, ...],
     ) -> VerificationResult: ...
@@ -225,8 +226,10 @@ class SoftwareStageOperator:
         poll_interval_seconds: float,
         heartbeat_ttl: timedelta,
         workspace_transport: FleetWorkspaceTransport,
+        artifact_store: ArtifactStore | None,
         capabilities: CapabilitySet,
         controller: OperatorController,
+        harness_tier: Literal["simple", "medium", "complex"] | None = None,
     ) -> SoftwareStageOperator:
         """Select durable Fleet execution for one software lifecycle role."""
         return cls(
@@ -236,9 +239,11 @@ class SoftwareStageOperator:
                 registry=registry,
                 org_id=org_id,
                 runtime_capability=runtime_capability,
+                harness_tier=harness_tier,
                 poll_interval_seconds=poll_interval_seconds,
                 heartbeat_ttl=heartbeat_ttl,
                 workspace_transport=workspace_transport,
+                artifact_store=artifact_store,
             ),
             capabilities=capabilities,
             controller=controller,
@@ -730,6 +735,7 @@ class SoftwareLifecycle:
                 "stage": "analysis",
                 "run_id": run_id,
                 "evidence_refs": list(result.evidence_refs),
+                "artifact_refs": list(result.artifact_refs),
             },
             actor_ref=analyst.actor_ref,
         )
@@ -1548,6 +1554,12 @@ class SoftwareLifecycle:
             and event.payload_json.get("stage") in {"implement", "repair"}
         )
         attempt_id = str(completed.payload_json["run_id"])
+        verification_count = sum(
+            event.event_type is WorkEventType.VERIFICATION_RECORDED
+            and event.payload_json.get("stage") == "verification"
+            for event in events
+        )
+        verification_run_id = f"{work_item.id}:verify:{verification_count + 1}"
         criterion_ids = tuple(
             str(criterion_id)
             for criterion_id in completed.payload_json["criterion_ids"]
@@ -1586,6 +1598,7 @@ class SoftwareLifecycle:
                     contract=contract,
                     criterion_ids=deterministic_criterion_ids,
                     attempt_id=attempt_id,
+                    run_id=verification_run_id,
                     workspace=workspace,
                     commands=self._verification_commands,
                 )
