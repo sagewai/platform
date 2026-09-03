@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import re
 import tempfile
-from collections.abc import Callable, Mapping
 from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal, Protocol, runtime_checkable
@@ -25,14 +24,11 @@ from sagewai.artifacts.object_store import ArtifactStore
 from sagewai.fleet.execution import run_worker_subprocess
 from sagewai.sandbox.secret_provider import SecretProvider
 from sagewai.work.activity import (
-    ACTIVITY_LOG_MAX_BYTES,
     ActivitySink,
-    OperatorActivity,
-    activity_redactor,
-    bounded_ndjson,
+    activity_pipeline,
+    archive_activity_log,
 )
 from sagewai.work.activity_parsers import (
-    ActivityCounter,
     claude_result_from_line,
     parse_claude_stream_line,
     parse_codex_json_line,
@@ -180,6 +176,72 @@ class OperatorRuntime(Protocol):
     ) -> OperatorResult: ...
 
 
+def build_operator_prompt(
+    request: WorkRequest,
+    capsule: TaskCapsule,
+    capabilities: CapabilitySet,
+) -> str:
+    expected_profile_identity = {
+        "project_id": request.project_id,
+        "work_id": request.work_id,
+        "run_id": request.run_id,
+        "attempt_id": request.run_id,
+    }
+    required_profile_context: dict[str, dict[str, Any]] = {}
+    for key, schema in capsule.profile_context.items():
+        if not key.endswith("_result_schema") or not isinstance(schema, dict):
+            continue
+        properties = schema.get("properties")
+        identity = (
+            {
+                field: value
+                for field, value in expected_profile_identity.items()
+                if field in properties
+            }
+            if isinstance(properties, dict)
+            else {}
+        )
+        result_requirement: dict[str, Any] = {
+            "schema_ref": f"capsule.profile_context.{key}"
+        }
+        if identity:
+            result_requirement["identity"] = identity
+        required_profile_context[key.removesuffix("_schema")] = result_requirement
+    result_contract = {
+        "identity": {
+            "project_id": request.project_id,
+            "work_id": request.work_id,
+            "run_id": request.run_id,
+        },
+        "required_action_results": [
+            {
+                "project_id": intent.project_id,
+                "action_id": intent.action_id,
+            }
+            for intent in request.action_intents
+        ],
+        "required_profile_context": required_profile_context,
+        "rules": [
+            "Return exactly one OperatorResult JSON object matching the output schema.",
+            "Copy result_contract.identity exactly into the result identity fields.",
+            "Return one action_results receipt for every required_action_results entry and no undeclared action receipts.",
+            "For every required_profile_context entry, place the result under that exact profile_context key and make it match the referenced schema.",
+            "When a required_profile_context entry contains identity, copy it exactly into the profile result identity fields.",
+            "Do not place required profile result fields directly at the profile_context root.",
+            "Ground every evidence reference in material actually observed or produced.",
+        ],
+    }
+    return json.dumps(
+        {
+            "result_contract": result_contract,
+            "request": request.model_dump(mode="json"),
+            "capsule": capsule.model_dump(mode="json"),
+            "capabilities": capabilities.model_dump(mode="json"),
+        },
+        sort_keys=True,
+    )
+
+
 class _NativeRuntime:
     name: str
 
@@ -227,65 +289,7 @@ class _NativeRuntime:
         capsule: TaskCapsule,
         capabilities: CapabilitySet,
     ) -> str:
-        expected_profile_identity = {
-            "project_id": request.project_id,
-            "work_id": request.work_id,
-            "run_id": request.run_id,
-            "attempt_id": request.run_id,
-        }
-        required_profile_context: dict[str, dict[str, Any]] = {}
-        for key, schema in capsule.profile_context.items():
-            if not key.endswith("_result_schema") or not isinstance(schema, dict):
-                continue
-            properties = schema.get("properties")
-            identity = (
-                {
-                    field: value
-                    for field, value in expected_profile_identity.items()
-                    if field in properties
-                }
-                if isinstance(properties, dict)
-                else {}
-            )
-            result_requirement: dict[str, Any] = {
-                "schema_ref": f"capsule.profile_context.{key}"
-            }
-            if identity:
-                result_requirement["identity"] = identity
-            required_profile_context[key.removesuffix("_schema")] = result_requirement
-        result_contract = {
-            "identity": {
-                "project_id": request.project_id,
-                "work_id": request.work_id,
-                "run_id": request.run_id,
-            },
-            "required_action_results": [
-                {
-                    "project_id": intent.project_id,
-                    "action_id": intent.action_id,
-                }
-                for intent in request.action_intents
-            ],
-            "required_profile_context": required_profile_context,
-            "rules": [
-                "Return exactly one OperatorResult JSON object matching the output schema.",
-                "Copy result_contract.identity exactly into the result identity fields.",
-                "Return one action_results receipt for every required_action_results entry and no undeclared action receipts.",
-                "For every required_profile_context entry, place the result under that exact profile_context key and make it match the referenced schema.",
-                "When a required_profile_context entry contains identity, copy it exactly into the profile result identity fields.",
-                "Do not place required profile result fields directly at the profile_context root.",
-                "Ground every evidence reference in material actually observed or produced.",
-            ],
-        }
-        return json.dumps(
-            {
-                "result_contract": result_contract,
-                "request": request.model_dump(mode="json"),
-                "capsule": capsule.model_dump(mode="json"),
-                "capabilities": capabilities.model_dump(mode="json"),
-            },
-            sort_keys=True,
-        )
+        return build_operator_prompt(request, capsule, capabilities)
 
     @staticmethod
     def _validate_result(payload: Any, request: WorkRequest) -> OperatorResult:
@@ -301,39 +305,12 @@ class _NativeRuntime:
     def _with_selection_evidence(self, result: OperatorResult) -> OperatorResult:
         if self._selection_note is None:
             return result
-        return result.model_copy(
-            update={"verification": (*result.verification, self._selection_note)}
+        return OperatorResult.model_validate(
+            {
+                **result.model_dump(),
+                "verification": (*result.verification, self._selection_note),
+            }
         )
-
-    def _activity_pipeline(
-        self,
-        request: WorkRequest,
-        environment: Mapping[str, str],
-    ) -> tuple[ActivityCounter, Callable[[OperatorActivity], None], list[str]]:
-        counter = ActivityCounter(
-            project_id=request.project_id,
-            work_id=request.work_id,
-            run_id=request.run_id,
-        )
-        redact = activity_redactor(environment)
-        log: list[str] = []
-        log_bytes = 0
-        log_overflowed = False
-
-        def emit(activity: OperatorActivity) -> None:
-            nonlocal log_bytes, log_overflowed
-            item = redact(activity)
-            if not log_overflowed:
-                line = item.model_dump_json()
-                line_bytes = len(line.encode("utf-8")) + 1
-                log.append(line)
-                log_bytes += line_bytes
-                if log_bytes > ACTIVITY_LOG_MAX_BYTES:
-                    log_overflowed = True
-            if self._activity_sink is not None:
-                self._activity_sink.emit(item)
-
-        return counter, emit, log
 
     def _archive_log(
         self,
@@ -341,17 +318,12 @@ class _NativeRuntime:
         log: list[str],
         result: OperatorResult,
     ) -> OperatorResult:
-        if self._artifact_store is None or not log:
-            return result
-        bounded = bounded_ndjson(log, ACTIVITY_LOG_MAX_BYTES)
-        artifact = self._artifact_store.put_bytes(
-            bounded.encode("utf-8"),
-            project_id=request.project_id,
-            media_type="application/x-ndjson",
+        return archive_activity_log(
+            self._artifact_store,
+            request,
+            log,
+            result,
             created_by=self.name,
-        )
-        return result.model_copy(
-            update={"artifact_refs": (*result.artifact_refs, artifact.storage_ref)}
         )
 
 
@@ -408,7 +380,7 @@ class CodexRuntime(_NativeRuntime):
         if workspace is None:
             raise ValueError("CodexRuntime requires a workspace")
         environment = await self._environment(request, capabilities)
-        counter, emit, log = self._activity_pipeline(request, environment)
+        counter, emit, log = activity_pipeline(request, environment, self._activity_sink)
         with tempfile.TemporaryDirectory(prefix="sagewai-codex-") as temporary:
             result_path = Path(temporary) / "result.json"
             schema_path = Path(temporary) / "schema.json"
@@ -552,7 +524,7 @@ class ClaudeRuntime(_NativeRuntime):
             schema_json,
         ]
         environment = await self._environment(request, capabilities)
-        counter, emit, log = self._activity_pipeline(request, environment)
+        counter, emit, log = activity_pipeline(request, environment, self._activity_sink)
         claude_result: dict[str, Any] | None = None
 
         def on_stdout_line(line: str) -> None:

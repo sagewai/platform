@@ -310,6 +310,8 @@ class Task(BaseModel):
 
 
 class HarnessTier(BaseModel):
+    """A local harness tier; a priced backend would need a price field."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     backend: str = Field(min_length=1)

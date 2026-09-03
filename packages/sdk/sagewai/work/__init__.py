@@ -19,7 +19,9 @@ from sagewai.work.activity import (
     ListActivitySink,
     OperatorActivity,
     WorkActivityStore,
+    activity_pipeline,
     activity_redactor,
+    archive_activity_log,
     bounded_ndjson,
 )
 from sagewai.work.activity_ingestion import ActivityIngestion, BatchingActivitySink
@@ -100,7 +102,9 @@ from sagewai.work.runtime import (
     OperatorRuntime,
     WorkRequest,
     Workspace,
+    build_operator_prompt,
 )
+from sagewai.work.runtime_harness import HarnessBudget, HarnessRuntime, HarnessTierResolution
 from sagewai.work.store import WorkStore
 from sagewai.work.supersede import supersede_work
 
@@ -143,6 +147,9 @@ __all__ = [
     "FleetWorkspaceTransfer",
     "FleetWorkspaceTransport",
     "HarnessTools",
+    "HarnessBudget",
+    "HarnessRuntime",
+    "HarnessTierResolution",
     "NoCompatibleWorkerError",
     "ExecutionAttempt",
     "GateDecision",
@@ -177,9 +184,12 @@ __all__ = [
     "WorkStore",
     "Workspace",
     "active_control_precondition_ids",
+    "activity_pipeline",
     "activity_redactor",
     "as_data",
+    "archive_activity_log",
     "build_harness_tools",
+    "build_operator_prompt",
     "bounded_ndjson",
     "execution_attempt_from_events",
     "evaluate_completion",

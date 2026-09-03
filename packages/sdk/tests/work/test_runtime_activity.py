@@ -388,7 +388,7 @@ async def test_codex_runtime_truncates_archived_activity_log_after_the_byte_budg
 ) -> None:
     sink = ListActivitySink()
     artifacts = LocalArtifactStore(root=tmp_path / "objects")
-    monkeypatch.setattr("sagewai.work.runtime.ACTIVITY_LOG_MAX_BYTES", 2100)
+    monkeypatch.setattr("sagewai.work.activity.ACTIVITY_LOG_MAX_BYTES", 2100)
     runtime = CodexRuntime(
         executable=fake_codex_long_activity_log,
         activity_sink=sink,

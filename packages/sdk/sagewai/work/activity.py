@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import delete, func, select
@@ -23,6 +23,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from sagewai._project_scope import project_scope_key
 from sagewai.db.models import Base, WorkActivityModel
+
+if TYPE_CHECKING:
+    from sagewai.work.activity_parsers import ActivityCounter
 
 ACTIVITY_ROW_CAP = 5000
 ACTIVITY_LOG_MAX_BYTES = 4 * 1024 * 1024
@@ -101,6 +104,39 @@ def activity_redactor(values: Mapping[str, str]) -> Callable[[OperatorActivity],
     return _redact
 
 
+def activity_pipeline(
+    request: Any,
+    values: Mapping[str, str],
+    sink: ActivitySink | None,
+) -> tuple[ActivityCounter, Callable[[OperatorActivity], None], list[str]]:
+    from sagewai.work.activity_parsers import ActivityCounter
+
+    counter = ActivityCounter(
+        project_id=request.project_id,
+        work_id=request.work_id,
+        run_id=request.run_id,
+    )
+    redact = activity_redactor(values)
+    log: list[str] = []
+    log_bytes = 0
+    log_overflowed = False
+
+    def emit(activity: OperatorActivity) -> None:
+        nonlocal log_bytes, log_overflowed
+        item = redact(activity)
+        if not log_overflowed:
+            line = item.model_dump_json()
+            line_bytes = len(line.encode("utf-8")) + 1
+            log.append(line)
+            log_bytes += line_bytes
+            if log_bytes > ACTIVITY_LOG_MAX_BYTES:
+                log_overflowed = True
+        if sink is not None:
+            sink.emit(item)
+
+    return counter, emit, log
+
+
 def bounded_ndjson(log: Sequence[str], budget: int = ACTIVITY_LOG_MAX_BYTES) -> str:
     """Return NDJSON capped at ``budget`` with a final truncation marker."""
     kept: list[str] = []
@@ -122,6 +158,29 @@ def bounded_ndjson(log: Sequence[str], budget: int = ACTIVITY_LOG_MAX_BYTES) -> 
         kept.append(marker)
         return "\n".join(kept) + "\n"
     return "\n".join(kept) + ("\n" if kept else "")
+
+
+def archive_activity_log(
+    artifact_store: Any,
+    request: Any,
+    log: Sequence[str],
+    result: Any,
+    *,
+    created_by: str,
+    budget: int | None = None,
+) -> Any:
+    if artifact_store is None or not log:
+        return result
+    bounded = bounded_ndjson(log, ACTIVITY_LOG_MAX_BYTES if budget is None else budget)
+    artifact = artifact_store.put_bytes(
+        bounded.encode("utf-8"),
+        project_id=request.project_id,
+        media_type="application/x-ndjson",
+        created_by=created_by,
+    )
+    return result.model_copy(
+        update={"artifact_refs": (*result.artifact_refs, artifact.storage_ref)}
+    )
 
 
 class WorkActivityStore:
@@ -238,6 +297,8 @@ __all__ = [
     "ListActivitySink",
     "OperatorActivity",
     "WorkActivityStore",
+    "activity_pipeline",
     "activity_redactor",
+    "archive_activity_log",
     "bounded_ndjson",
 ]
