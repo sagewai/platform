@@ -36,8 +36,9 @@ from sagewai.work.tasks.actions import (
     rollback_action,
     rollback_action_id,
 )
-from sagewai.work.tasks.assessment import assess_cycle
+from sagewai.work.tasks.assessment import TaskAssessmentResult, assess_cycle
 from sagewai.work.tasks.budget import BudgetLedger, budget_used_from
+from sagewai.work.tasks.channels import TrackingDecisionChannel
 from sagewai.work.tasks.decide import (
     AssessCycle,
     BlockCycle,
@@ -75,7 +76,13 @@ from sagewai.work.tasks.health import (
     evaluate_health,
 )
 from sagewai.work.tasks.models import BudgetUsed, Task, TaskKind, TaskRecord, TaskStatus
-from sagewai.work.tasks.plan import PlanRejectedError, PlanStep, TaskPlanResult, accept_plan
+from sagewai.work.tasks.plan import (
+    AcceptedPlan,
+    PlanRejectedError,
+    PlanStep,
+    TaskPlanResult,
+    accept_plan,
+)
 from sagewai.work.tasks.planner import PlanningFailedError
 from sagewai.work.tasks.store import StaleTaskError, TaskStore
 from sagewai.work.tasks.writer import Entry, TaskWriter, status_entry
@@ -116,6 +123,21 @@ def _lost_rollback(project_id: str, action_id: str) -> tuple[ActionResult, dict[
             "evidence_refs": [],
         },
     )
+
+
+def _accepted_plan_text(plan: AcceptedPlan) -> str:
+    return "\n".join(
+        [
+            f"Accepted plan v{plan.version}",
+            *(f"- {step.id}: {step.title}" for step in plan.steps),
+        ]
+    )
+
+
+def _assessment_tracking_text(cycle: int, result: TaskAssessmentResult) -> str:
+    lines = [f"Assessment cycle {cycle}: {result.verdict}"]
+    lines.extend(f"- {gap.statement} (suggested step: {gap.suggested_step})" for gap in result.gaps)
+    return "\n".join(lines)
 
 
 class ProfileRunner(Protocol):
@@ -368,6 +390,15 @@ class TaskCoordinator:
                     {"cycle": command.cycle, "scheduled_for": command.scheduled_for},
                 )
             ]
+            if state.plan is not None:
+                entries.extend(
+                    await self._track(
+                        task,
+                        record,
+                        key=f"plan:{state.plan.version}",
+                        text=_accepted_plan_text(state.plan),
+                    )
+                )
             if record.status is not TaskStatus.EXECUTING:
                 entries.append(status_entry(record, TaskStatus.EXECUTING))
             return await self._append(record, entries, lease_epoch, command=command)
@@ -456,6 +487,15 @@ class TaskCoordinator:
                             "question": command.reason,
                             "action": action.model_dump(mode="json"),
                         },
+                    )
+                )
+                entries.extend(
+                    await self._present(
+                        task,
+                        record,
+                        attention_id=f"replan:{task.id}:{command.plan_version}",
+                        summary=command.reason,
+                        urgency="today",
                     )
                 )
             else:
@@ -669,6 +709,15 @@ class TaskCoordinator:
                         "question": f"Approve the {len(plan.steps)}-step plan.",
                         "action": action.model_dump(mode="json"),
                     },
+                )
+            )
+            entries.extend(
+                await self._present(
+                    task,
+                    record,
+                    attention_id=f"plan:{task.id}:{plan.version}",
+                    summary=f"Approve the {len(plan.steps)}-step plan.",
+                    urgency="today",
                 )
             )
             entries.append(status_entry(record, TaskStatus.PLAN_PROPOSED))
@@ -952,7 +1001,8 @@ class TaskCoordinator:
     ) -> list[Entry]:
         """Present once per channel: ``now`` fans out to every channel, ``today`` and
         ``this_week`` present to the first only and ``DecisionEscalation`` walks the rest (§15);
-        a channel that raises loses its receipt, so the item can be presented again."""
+        a ``TrackingDecisionChannel`` is always presented to; a channel that raises loses its
+        receipt, so the item can be presented again."""
         due_at = await self._due_at(task, record, urgency)
         decision = DecisionRequest(
             project_id=task.project_id,
@@ -964,7 +1014,16 @@ class TaskCoordinator:
             evidence_refs=tuple(evidence_refs),
         )
         entries: list[Entry] = []
-        for channel in self._channels if urgency == "now" else self._channels[:1]:
+        channels = (
+            self._channels
+            if urgency == "now"
+            else tuple(
+                channel
+                for index, channel in enumerate(self._channels)
+                if index == 0 or isinstance(channel, TrackingDecisionChannel)
+            )
+        )
+        for channel in channels:
             command_id = f"notify:{channel.name}:{attention_id}"
             recorded = await self._task_store.record_command(
                 task_id=task.id,
@@ -992,7 +1051,14 @@ class TaskCoordinator:
                 )
                 continue
             if reference is None:
+                await self._task_store.delete_command(
+                    task_id=task.id, project_id=task.project_id, command_id=command_id
+                )
                 continue
+            if isinstance(channel, TrackingDecisionChannel):
+                established = channel.established(task.id)
+                if established is not None:
+                    entries.append((TaskEventType.TRACKING_ISSUE_RECORDED, {"url": established}))
             entries.append(
                 (
                     TaskEventType.NOTIFICATION_PRESENTED,
@@ -1008,6 +1074,53 @@ class TaskCoordinator:
                 )
             )
         return entries
+
+    async def _track(self, task: Task, record: TaskRecord, *, key: str, text: str) -> list[Entry]:
+        channel = next(
+            (
+                candidate
+                for candidate in self._channels
+                if isinstance(candidate, TrackingDecisionChannel)
+            ),
+            None,
+        )
+        if channel is None:
+            return []
+        command_id = f"track:{key}"
+        recorded = await self._task_store.record_command(
+            task_id=task.id,
+            project_id=task.project_id,
+            command_id=command_id,
+            payload={"text": text},
+        )
+        if not recorded:
+            return []
+        try:
+            reference = await channel.track(task, text)
+        except Exception as exc:
+            logger.warning(
+                "tracking channel failed",
+                extra={
+                    "event": "task.track.failed",
+                    "task": task.id,
+                    "channel": channel.name,
+                    "key": key,
+                    "error": channel_error_detail(exc),
+                },
+            )
+            await self._task_store.delete_command(
+                task_id=task.id, project_id=task.project_id, command_id=command_id
+            )
+            return []
+        if reference is None:
+            await self._task_store.delete_command(
+                task_id=task.id, project_id=task.project_id, command_id=command_id
+            )
+            return []
+        established = channel.established(task.id)
+        if established is not None:
+            return [(TaskEventType.TRACKING_ISSUE_RECORDED, {"url": established})]
+        return []
 
     async def _start_step(
         self,
@@ -1072,6 +1185,14 @@ class TaskCoordinator:
                     {"lease_key": lease_key, "work_id": work.work_id},
                 )
             )
+        entries.extend(
+            await self._track(
+                task,
+                record,
+                key=f"step:{step.id}:{work.work_id}",
+                text=f"Step {step.id} started as {work.work_id}\nIssue: {issue_url}",
+            )
+        )
         entries.append(
             (
                 TaskEventType.STEP_WORK_STARTED,
@@ -1107,6 +1228,20 @@ class TaskCoordinator:
                         "work_id": command.work_id,
                         "merged_sha": command.merged_sha,
                     },
+                )
+            )
+            work = await self._work_store.load_work(command.work_id, project_id=task.project_id)
+            github = {} if work is None else (work.profile_context.get("github") or {})
+            pull_request_url = github.get("pull_request_url") or f"work://{command.work_id}"
+            entries.extend(
+                await self._track(
+                    task,
+                    record,
+                    key=f"merge:{command.work_id}",
+                    text=(
+                        f"Step {command.step_id} merged through {command.work_id}\n"
+                        f"Pull request: {pull_request_url}"
+                    ),
                 )
             )
         lease_key = task.repository_lease_key
@@ -1206,6 +1341,14 @@ class TaskCoordinator:
             (
                 TaskEventType.ASSESSMENT_RECORDED,
                 {"cycle": command.cycle, **result.model_dump(mode="json")},
+            )
+        )
+        entries.extend(
+            await self._track(
+                task,
+                record,
+                key=f"assess:{command.cycle}",
+                text=_assessment_tracking_text(command.cycle, result),
             )
         )
         return await self._append(record, entries, lease_epoch, command=command)

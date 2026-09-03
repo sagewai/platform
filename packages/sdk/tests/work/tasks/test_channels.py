@@ -135,6 +135,12 @@ class _StalingChannel(_RecordingChannel):
         return f"{self.name}:{decision.task_id}:{decision.attention_id}:{len(self.calls)}"
 
 
+class _NullChannel(_RecordingChannel):
+    async def notify(self, decision: DecisionRequest) -> str | None:
+        self.calls.append(decision)
+        return None
+
+
 @pytest.fixture
 async def store(dialect_engine) -> TaskStore:  # noqa: F811
     result = TaskStore(engine=dialect_engine)
@@ -327,7 +333,7 @@ def test_the_open_item_preserves_presented_channels() -> None:
 
 
 @pytest.mark.asyncio
-async def test_escalation_run_notifies_next_channel_and_recovers_failed_receipts(
+async def test_escalation_run_notifies_next_channel_after_half_the_remaining_time(
     store: TaskStore,
 ) -> None:
     due_at = NOW + timedelta(hours=24)
@@ -377,6 +383,27 @@ async def test_escalation_run_notifies_next_channel_and_recovers_failed_receipts
     assert await escalation.run(project_id="project-escalate", now=NOW + timedelta(hours=18)) == 0
     assert len(second.calls) == 1
 
+
+@pytest.mark.asyncio
+async def test_escalation_run_honors_the_present_once_receipt(store: TaskStore) -> None:
+    await _seed_open_item(store, task_id="task-receipt", project_id="project-receipt")
+    channel = _RecordingChannel("slack_webhook")
+    await store.record_command(
+        task_id="task-receipt",
+        project_id="project-receipt",
+        command_id="notify:slack_webhook:gate:1",
+        payload={"decision": _decision(task_id="task-receipt").model_dump(mode="json")},
+    )
+    escalation = DecisionEscalation(
+        store=store, channels=_channels(_RecordingChannel("console"), channel)
+    )
+
+    assert await escalation.run(project_id="project-receipt", now=NOW + timedelta(hours=18)) == 0
+    assert channel.calls == []
+
+
+@pytest.mark.asyncio
+async def test_escalation_run_skips_now_urgency_items(store: TaskStore) -> None:
     await _seed_open_item(
         store,
         task_id="task-now",
@@ -392,6 +419,10 @@ async def test_escalation_run_notifies_next_channel_and_recovers_failed_receipts
     assert await now_escalation.run(project_id="project-now", now=NOW + timedelta(hours=1)) == 0
     assert now_channel.calls == []
 
+
+@pytest.mark.asyncio
+async def test_escalation_run_recovers_a_failed_channel_receipt(store: TaskStore) -> None:
+    escalated_at = NOW + timedelta(hours=12, seconds=1)
     await _seed_open_item(store, task_id="task-raise", project_id="project-raise")
     flaky = _FlakyChannel("slack_webhook", failures=1)
     flaky_escalation = DecisionEscalation(
@@ -407,6 +438,28 @@ async def test_escalation_run_notifies_next_channel_and_recovers_failed_receipts
     assert await flaky_escalation.run(project_id="project-raise", now=escalated_at) == 1
     assert len(flaky.calls) == 2
 
+
+@pytest.mark.asyncio
+async def test_escalation_run_recovers_a_none_reference_receipt(store: TaskStore) -> None:
+    await _seed_open_item(store, task_id="task-none", project_id="project-none")
+    missing = _NullChannel("github_issue")
+    escalation = DecisionEscalation(
+        store=store, channels=_channels(_RecordingChannel("console"), missing)
+    )
+
+    assert await escalation.run(project_id="project-none", now=NOW + timedelta(hours=18)) == 0
+    assert len(missing.calls) == 1
+    assert await store.record_command(
+        task_id="task-none",
+        project_id="project-none",
+        command_id="notify:github_issue:gate:1",
+        payload={"probe": True},
+    )
+
+
+@pytest.mark.asyncio
+async def test_escalation_run_recovers_a_stale_append_receipt(store: TaskStore) -> None:
+    escalated_at = NOW + timedelta(hours=12, seconds=1)
     await _seed_open_item(store, task_id="task-stale", project_id="project-stale")
     staling = _StalingChannel(
         "slack_webhook", store=store, task_id="task-stale", project_id="project-stale"

@@ -2081,6 +2081,7 @@ class TaskModel(Base):
     task_json: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    tracking_issue_url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class TaskEventModel(Base):

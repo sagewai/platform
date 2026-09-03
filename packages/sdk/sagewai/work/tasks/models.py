@@ -403,6 +403,7 @@ class TaskRecord(BaseModel):
     current_cycle: int = 0
     plan_version: int = 0
     pending_gate: str | None = None
+    tracking_issue_url: str | None = None
     pending_questions: int = 0
     pending_material_questions: int = 0
     next_run_at: datetime | None = None

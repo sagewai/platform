@@ -19,6 +19,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
+from sagewai.work.profiles.software.github import GitHubClient, GitHubFactory, _parse_issue_url
 from sagewai.work.tasks.decisions import (
     ChannelDeliveryError,
     ConsoleDecisionChannel,
@@ -27,7 +28,14 @@ from sagewai.work.tasks.decisions import (
     channel_error_detail,
 )
 from sagewai.work.tasks.events import TaskEvent, TaskEventType
-from sagewai.work.tasks.models import AttentionOwner, TaskDefaults, TaskRecord
+from sagewai.work.tasks.models import (
+    AttentionOwner,
+    ReportTarget,
+    SoftwareTarget,
+    Task,
+    TaskDefaults,
+    TaskRecord,
+)
 from sagewai.work.tasks.store import StaleTaskError, TaskStore
 from sagewai.work.tasks.writer import TaskWriter
 
@@ -54,6 +62,13 @@ class ChannelConfigStore(Protocol):
 @runtime_checkable
 class TrackingDecisionChannel(Protocol):
     """A channel that establishes one durable per-Task reference worth projecting."""
+
+    @property
+    def name(self) -> str: ...
+
+    async def notify(self, decision: DecisionRequest) -> str | None: ...
+
+    async def track(self, task: Task, text: str) -> str | None: ...
 
     def established(self, task_id: str) -> str | None: ...
 
@@ -143,6 +158,97 @@ class GoogleChatWebhookDecisionChannel:
         lines.extend(decision.evidence_refs[:8])
         await _post(self.name, self._webhook_url, {"text": "\n".join(lines)})
         return f"{self.name}:{decision.task_id}:{decision.attention_id}"
+
+
+class GitHubIssueDecisionChannel:
+    """One tracking issue per Task: created on first use, commented on thereafter."""
+
+    name = "github_issue"
+
+    def __init__(self, *, store: TaskStore, github_factory: GitHubFactory) -> None:
+        self._store = store
+        self._github_factory = github_factory
+        self._established: dict[str, str] = {}
+
+    def established(self, task_id: str) -> str | None:
+        """The issue URL this channel established during the notify just performed."""
+        return self._established.pop(task_id, None)
+
+    async def notify(self, decision: DecisionRequest) -> str | None:
+        self._established.pop(decision.task_id, None)
+        loaded = await self._store.load(decision.task_id, project_id=decision.project_id)
+        if loaded is None:
+            return None
+        task, record = loaded
+        established = await self._establish_issue(task, record)
+        if established is None:
+            return None
+        github, issue_url = established
+        comment = await github.comment_issue(issue_url, _tracking_comment(decision))
+        return comment.url
+
+    async def track(self, task: Task, text: str) -> str | None:
+        self._established.pop(task.id, None)
+        loaded = await self._store.load(task.id, project_id=task.project_id)
+        if loaded is None:
+            return None
+        stored_task, record = loaded
+        established = await self._establish_issue(stored_task, record)
+        if established is None:
+            return None
+        github, issue_url = established
+        comment = await github.comment_issue(issue_url, text)
+        return comment.url
+
+    async def _establish_issue(
+        self, task: Task, record: TaskRecord
+    ) -> tuple[GitHubClient, str] | None:
+        issue_url = task.tracking_issue_url or record.tracking_issue_url
+        if issue_url is None:
+            target = _issue_target(task)
+            if target is None:
+                return None
+            github = self._github_factory(task)
+            owner, repo = target
+            label = f"sagewai-task:{task.id}"
+            existing = await github.list_labeled_issues(owner=owner, repo=repo, label=label)
+            issue_url = (
+                existing[0].url
+                if existing
+                else (
+                    await github.create_issue(
+                        owner=owner,
+                        repo=repo,
+                        title=f"Sagewai Task: {task.title}",
+                        body=(
+                            f"Sagewai is coordinating this Task.\n\n{task.brief_summary}\n\n"
+                            f"sagewai-task: {task.id}\n"
+                        ),
+                        labels=(label,),
+                    )
+                ).url
+            )
+            self._established[task.id] = issue_url
+            return github, issue_url
+        return self._github_factory(task), issue_url
+
+
+def _issue_target(task: Task) -> tuple[str, str] | None:
+    """Where the tracking issue lives: the software repository, or the report's sink issue."""
+    if isinstance(task.target, SoftwareTarget):
+        return task.target.owner, task.target.repo
+    if isinstance(task.target, ReportTarget):
+        for sink in task.target.sinks:
+            if sink.kind == "github_issue" and sink.issue_url:
+                owner, repo, _number = _parse_issue_url(sink.issue_url)
+                return owner, repo
+    return None
+
+
+def _tracking_comment(decision: DecisionRequest) -> str:
+    lines = [f"**{decision.summary}**", "", _due_line(decision)]
+    lines.extend(f"- {ref}" for ref in decision.evidence_refs[:16])
+    return "\n".join(lines)
 
 
 async def build_decision_channels(
@@ -272,6 +378,9 @@ class DecisionEscalation:
             )
             return 0
         if reference is None:
+            await self._store.delete_command(
+                task_id=record.task_id, project_id=record.project_id, command_id=command_id
+            )
             return 0
         try:
             await TaskWriter(self._store).append(
@@ -347,6 +456,7 @@ __all__ = [
     "ChannelConfigStore",
     "ChannelNotConfiguredError",
     "DecisionEscalation",
+    "GitHubIssueDecisionChannel",
     "GoogleChatWebhookDecisionChannel",
     "SlackWebhookDecisionChannel",
     "TrackingDecisionChannel",
