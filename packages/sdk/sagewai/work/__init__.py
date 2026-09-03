@@ -56,6 +56,7 @@ from sagewai.work.fleet import (
     FleetWorkspaceTransport,
     NoCompatibleWorkerError,
 )
+from sagewai.work.harness_tools import FILE_SIZE_CAP, HarnessTools, as_data, build_harness_tools
 from sagewai.work.metrics import WorkMetrics
 from sagewai.work.models import (
     SUPERSEDED,
@@ -107,6 +108,7 @@ __all__ = [
     "ACTIVITY_LOG_MAX_BYTES",
     "ACTIVITY_ROW_CAP",
     "FLEET_ACTIVITY_LOG_MAX_BYTES",
+    "FILE_SIZE_CAP",
     "Action",
     "AcceptanceCriterion",
     "ActionPlan",
@@ -140,6 +142,7 @@ __all__ = [
     "FleetWorkspaceTransferResult",
     "FleetWorkspaceTransfer",
     "FleetWorkspaceTransport",
+    "HarnessTools",
     "NoCompatibleWorkerError",
     "ExecutionAttempt",
     "GateDecision",
@@ -175,6 +178,8 @@ __all__ = [
     "Workspace",
     "active_control_precondition_ids",
     "activity_redactor",
+    "as_data",
+    "build_harness_tools",
     "bounded_ndjson",
     "execution_attempt_from_events",
     "evaluate_completion",
