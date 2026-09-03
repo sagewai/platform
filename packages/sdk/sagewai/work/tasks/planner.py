@@ -20,7 +20,7 @@ from sagewai.work.capsule import TaskCapsuleCompiler
 from sagewai.work.contract import AcceptanceCriterion, WorkContract
 from sagewai.work.control import OperatorController
 from sagewai.work.events import WorkEvent, WorkEventType
-from sagewai.work.models import ActionScope, WorkItem, WorkRecord
+from sagewai.work.models import TASK_PLAN_PROFILE, ActionScope, WorkItem, WorkRecord
 from sagewai.work.profiles.software.scm import SoftwareWorktreeManager
 from sagewai.work.runtime import CapabilitySet, OperatorRuntime, WorkRequest, Workspace
 from sagewai.work.store import WorkStore
@@ -28,7 +28,6 @@ from sagewai.work.tasks.models import SoftwareTarget, Task
 from sagewai.work.tasks.plan import TaskPlanResult
 from sagewai.work.tasks.scratch import ScratchWorkspaceManager
 
-PLANNING_PROFILE = "task_plan"
 _MAX_BRIEF_CHARS = 20_000
 
 
@@ -169,7 +168,7 @@ class TaskPlanner:
         work_item = WorkItem(
             id=work_id,
             project_id=task.project_id,
-            profile=PLANNING_PROFILE,
+            profile=TASK_PLAN_PROFILE,
             source="task",
             source_ref=task.id,
             title=f"Plan: {task.title}",
@@ -322,4 +321,4 @@ class TaskPlanner:
         )
 
 
-__all__ = ["PLANNING_PROFILE", "PlanningFailedError", "TaskPlanner"]
+__all__ = ["PlanningFailedError", "TaskPlanner"]

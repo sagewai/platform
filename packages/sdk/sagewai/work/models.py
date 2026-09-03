@@ -21,6 +21,7 @@ from sagewai.work.contract import WorkContract
 from sagewai.work.knowledge.models import KnowledgeItem
 
 SUPERSEDED = "SUPERSEDED"
+TASK_PLAN_PROFILE = "task_plan"
 
 
 class ClaimClassification(str, Enum):
