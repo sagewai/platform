@@ -14,13 +14,18 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
 from sagewai.admin.serve import _work_project_scope
+from sagewai.work.events import WorkEvent, WorkEventType
+from sagewai.work.store import WorkStore
+from sagewai.work.tasks.events import TaskEventType
 from sagewai.work.tasks.feed import FeedEntry
 from sagewai.work.tasks.store import TaskStore
+from sagewai.work.tasks.telemetry import derive_task_telemetry
 
 router = APIRouter(prefix="/api/v1/tasks")
 
@@ -44,6 +49,50 @@ async def task_events(task_id: str, request: Request) -> EventSourceResponse:
             heartbeat_seconds=heartbeat_seconds,
         )
     )
+
+
+@router.get("/{task_id}/telemetry")
+async def task_telemetry(task_id: str, request: Request) -> dict:
+    project_id = _work_project_scope(request)
+    task_store: TaskStore = request.app.state.task_store
+    loaded = await task_store.load(task_id, project_id=project_id)
+    if loaded is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    task, record = loaded
+    task_events = await task_store.read_events(task_id, project_id=project_id)
+    work_store: WorkStore = request.app.state.work_store
+    work_records = await work_store.list_work(project_id=project_id, active_only=False)
+    work_events: dict[str, list[WorkEvent]] = {}
+    project_selections: list[WorkEvent] = []
+    for work_record in work_records:
+        events = await work_store.read_events(work_record.work_id, project_id=project_id)
+        project_selections.extend(
+            event for event in events if event.event_type is WorkEventType.RUNTIME_SELECTED
+        )
+        if work_record.profile_context.get("task_id") == task_id:
+            work_events[work_record.work_id] = events
+    cycles = {
+        int(event.payload_json["cycle"])
+        for event in task_events
+        if event.event_type is TaskEventType.CYCLE_STARTED
+    }
+    spend = {
+        cycle: await task_store.spend_totals(
+            task_id=task_id,
+            project_id=project_id,
+            cycle=cycle,
+        )
+        for cycle in cycles
+    }
+    return derive_task_telemetry(
+        record=record,
+        task_events=task_events,
+        work_events=work_events,
+        spend=spend,
+        budget=task.budget,
+        project_selections=project_selections,
+        now=datetime.now(timezone.utc),
+    ).model_dump(mode="json")
 
 
 async def _task_event_stream(
