@@ -66,6 +66,7 @@ from sagewai.work.tasks.models import (
     TaskOrigin,
     TaskRecord,
     TaskStatus,
+    TaskTriggerSpec,
 )
 from sagewai.work.tasks.plan import (
     AcceptedPlan,
@@ -191,6 +192,7 @@ __all__ = [
     "TaskStore",
     "TaskTelemetry",
     "TaskTemplate",
+    "TaskTriggerSpec",
     "TaskWriter",
     "VerificationRunTelemetry",
     "WorkTelemetry",

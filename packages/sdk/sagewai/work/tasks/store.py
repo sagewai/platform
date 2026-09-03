@@ -32,6 +32,7 @@ from sagewai.db.models import (
     TaskModel,
     TaskRepositoryLeaseModel,
     TaskSpendModel,
+    TaskTriggerModel,
 )
 from sagewai.work.tasks.events import TaskEvent
 from sagewai.work.tasks.feed import FeedBus, FeedEntry
@@ -42,6 +43,7 @@ from sagewai.work.tasks.models import (
     TaskDefaults,
     TaskRecord,
     TaskStatus,
+    TaskTriggerSpec,
 )
 
 
@@ -84,6 +86,7 @@ class TaskStore:
         self._commands = TaskCommandModel.__table__
         self._spend = TaskSpendModel.__table__
         self._defaults = TaskDefaultsModel.__table__
+        self._triggers = TaskTriggerModel.__table__
         self._repository_leases = TaskRepositoryLeaseModel.__table__
 
     @property
@@ -616,6 +619,57 @@ class TaskStore:
                 if result.rowcount != 1:
                     raise StaleTaskError("defaults changed since they were read")
         return stored
+
+    async def put_trigger(self, spec: TaskTriggerSpec) -> None:
+        """Insert or replace one admin-approved trigger."""
+        scope = project_scope_key(spec.project_id)
+        payload = spec.model_dump(mode="json")
+        now = datetime.now(timezone.utc)
+        async with self._engine.begin() as conn:
+            result = await conn.execute(
+                update(self._triggers)
+                .where(
+                    self._triggers.c.project_scope_key == scope,
+                    self._triggers.c.trigger_id == spec.trigger_id,
+                )
+                .values(spec_json=payload, enabled=spec.enabled, updated_at=now)
+            )
+            if result.rowcount == 1:
+                return
+            await conn.execute(
+                insert(self._triggers).values(
+                    project_scope_key=scope,
+                    trigger_id=spec.trigger_id,
+                    project_id=spec.project_id,
+                    spec_json=payload,
+                    enabled=spec.enabled,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+
+    async def list_triggers(
+        self, *, project_id: str, enabled_only: bool = True
+    ) -> list[TaskTriggerSpec]:
+        scope = project_scope_key(project_id)
+        query = select(self._triggers).where(self._triggers.c.project_scope_key == scope)
+        if enabled_only:
+            query = query.where(self._triggers.c.enabled.is_(True))
+        query = query.order_by(self._triggers.c.trigger_id)
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(query)).all()
+        return [TaskTriggerSpec.model_validate(row._mapping["spec_json"]) for row in rows]
+
+    async def delete_trigger(self, trigger_id: str, *, project_id: str) -> bool:
+        scope = project_scope_key(project_id)
+        async with self._engine.begin() as conn:
+            result = await conn.execute(
+                self._triggers.delete().where(
+                    self._triggers.c.project_scope_key == scope,
+                    self._triggers.c.trigger_id == trigger_id,
+                )
+            )
+        return result.rowcount == 1
 
     # ── helpers ───────────────────────────────────────────────────────────
 
