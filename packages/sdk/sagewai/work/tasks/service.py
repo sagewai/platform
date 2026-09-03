@@ -306,7 +306,9 @@ class TaskService:
         entries: list[Entry] = [
             (TaskEventType.GATE_DECIDED, {"gate_id": gate_id, "decision": decision})
         ]
-        if decision != "allow":
+        if decision == "allow" and gate_id.startswith("replan:"):
+            entries.append(status_entry(record, TaskStatus.PLANNING))
+        elif decision != "allow":
             entries.append(
                 (
                     TaskEventType.TASK_MESSAGE,

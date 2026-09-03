@@ -523,6 +523,83 @@ async def test_denying_the_plan_gate_blocks_the_task(service: TaskService, store
     assert record.attention_owner is AttentionOwner.USER
 
 
+async def _replan_gate(service: TaskService, store: TaskStore):
+    task, record = await _proposed(service, store)
+    record = await service.accept_plan(
+        task.id, project_id="project-a", version=1, actor_ref="arda", now=NOW
+    )
+    gate_id = f"replan:{task.id}:2"
+    record = await TaskWriter(store).append(
+        record,
+        [
+            (TaskEventType.CYCLE_STARTED, {"cycle": 1, "scheduled_for": None}),
+            status_entry(record, TaskStatus.ASSESSING),
+            (
+                TaskEventType.ASSESSMENT_RECORDED,
+                {
+                    "cycle": 1,
+                    "attempt_id": "assess",
+                    "matrix_results": [],
+                    "gaps": [
+                        {
+                            "statement": "deterministic check failed",
+                            "severity": "high",
+                            "suggested_step": "repair-step",
+                        }
+                    ],
+                    "verdict": "replan",
+                },
+            ),
+            (
+                TaskEventType.REPLAN_PROPOSED,
+                {"version": 2, "reason": "assessment requested a re-plan"},
+            ),
+            (
+                TaskEventType.GATE_REQUESTED,
+                {"gate_id": gate_id, "question": "Approve the re-plan.", "action": {}},
+            ),
+        ],
+        now=NOW,
+    )
+    return task, record, gate_id
+
+
+@pytest.mark.asyncio
+async def test_allowing_a_replan_gate_returns_the_task_to_planning(
+    service: TaskService, store: TaskStore
+) -> None:
+    task, record, gate_id = await _replan_gate(service, store)
+    assert record.status is TaskStatus.ASSESSING
+    record = await service.decide_gate(
+        task.id,
+        project_id="project-a",
+        gate_id=gate_id,
+        decision="allow",
+        actor_ref="arda",
+        now=NOW,
+    )
+    assert record.status is TaskStatus.PLANNING
+    assert record.pending_gate is None
+
+
+@pytest.mark.asyncio
+async def test_denying_a_replan_gate_blocks_the_task_for_the_user(
+    service: TaskService, store: TaskStore
+) -> None:
+    task, _record, gate_id = await _replan_gate(service, store)
+    record = await service.decide_gate(
+        task.id,
+        project_id="project-a",
+        gate_id=gate_id,
+        decision="deny",
+        actor_ref="arda",
+        now=NOW,
+    )
+    assert record.status is TaskStatus.BLOCKED
+    assert record.pending_gate is None
+    assert record.attention_owner is AttentionOwner.USER
+
+
 @pytest.mark.asyncio
 async def test_a_work_gate_mirrored_onto_the_task_is_not_decidable_here(
     service: TaskService, store: TaskStore

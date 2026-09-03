@@ -51,6 +51,7 @@ class StepWorkState(BaseModel):
     attention_id: str | None = None
     attention_summary: str = ""
     gate_id: str | None = None
+    evidence_refs: tuple[str, ...] = ()
     base_moved_phase: str | None = None
     merged_sha: str | None = None
 
@@ -95,6 +96,7 @@ class MirrorAttention(_Command):
     attention_id: str
     summary: str
     gate_id: str | None = None
+    evidence_refs: tuple[str, ...] = ()
 
 
 class SupersedeStep(_Command):
@@ -241,6 +243,16 @@ def _next_run_at(task: Task, now: datetime) -> str | None:
     return next_fire(task.schedule.cron, after=now, timezone_name=task.schedule.timezone).isoformat()
 
 
+def _planning_version(record: TaskRecord, events: Sequence[TaskEvent]) -> int:
+    version = record.plan_version + 1
+    for event in sorted(events, key=lambda item: item.sequence):
+        if event.event_type is TaskEventType.REPLAN_PROPOSED:
+            proposed = int(event.payload_json["version"])
+            if proposed > record.plan_version:
+                version = proposed
+    return version
+
+
 def decide(
     task: Task,
     record: TaskRecord,
@@ -264,7 +276,7 @@ def decide(
             cycle=record.current_cycle + 1, scheduled_for=record.next_run_at.isoformat()
         )
     if record.status is TaskStatus.PLANNING:
-        return RunPlanning(plan_version=record.plan_version + 1)
+        return RunPlanning(plan_version=_planning_version(record, events))
     state = fold_cycle(events, plan_version=record.plan_version)
     if state.plan is None:
         return None
@@ -289,6 +301,7 @@ def decide(
                 attention_id=active.attention_id,
                 summary=active.attention_summary,
                 gate_id=active.gate_id,
+                evidence_refs=active.evidence_refs,
             )
         if active.base_moved_phase is not None:
             return SupersedeStep(

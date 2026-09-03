@@ -11,6 +11,7 @@
 
 from sagewai.work.tasks.assessment import TaskAssessmentResult, assess_cycle
 from sagewai.work.tasks.budget import budget_breach, budget_used_from
+from sagewai.work.tasks.coordinator import TaskCoordinator
 from sagewai.work.tasks.decide import (
     AssessCycle,
     BlockCycle,
@@ -166,6 +167,7 @@ __all__ = [
     "SupersedeStep",
     "Task",
     "TaskAssessmentResult",
+    "TaskCoordinator",
     "TaskCreationError",
     "TaskDecisionError",
     "TaskDefaults",
