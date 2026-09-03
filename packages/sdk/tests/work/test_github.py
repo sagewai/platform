@@ -249,6 +249,7 @@ class FakeGitHub:
         self.fail_comment_once = False
         self.merge_rejection = None
         self.readback_sha = None
+        self.readback_merged_once: bool | None = None
         self.remote_pull_request = None
         self.labeled_issues = ()
 
@@ -343,10 +344,16 @@ class FakeGitHub:
         pull_request: GitHubPullRequest,
     ) -> GitHubPullRequestState:
         self.pull_request_reads.append(pull_request)
+        readback_merged_once = self.readback_merged_once
+        self.readback_merged_once = None
         return GitHubPullRequestState(
             project_id=pull_request.project_id,
             pull_request_number=pull_request.number,
-            merged=self.merged_sha is not None,
+            merged=(
+                self.merged_sha is not None
+                if readback_merged_once is None
+                else readback_merged_once
+            ),
             merge_commit_sha=self.readback_sha or self.merged_sha,
         )
 
@@ -633,6 +640,125 @@ async def test_issue_to_pr_requires_gate_then_records_merged_sha(
     assert evaluation.work_id == gated.work_id
     assert evaluation.contract_id == contract.id
     assert evaluation.passed is True
+
+
+@pytest.mark.asyncio
+async def test_a_successful_merge_records_its_post_check(store: WorkStore) -> None:
+    flow, _, github, _ = _flow(store, decision=GateDecision.ALLOW)
+
+    delivered = await flow.start(
+        issue_url=ISSUE_URL, project_id=PROJECT_ID, base_sha="a" * 40
+    )
+
+    observations = [
+        event
+        for event in await store.read_events(delivered.work_id, project_id=PROJECT_ID)
+        if event.event_type is WorkEventType.OBSERVATION_RECORDED
+    ]
+    assert [event.payload_json["check"] for event in observations] == [
+        "merged_sha_read_back"
+    ]
+    assert observations[0].payload_json["passed"] is True
+    assert observations[0].payload_json["action_id"] == f"merge:{delivered.work_id}:7"
+    assert delivered.status == "COMPLETE"
+
+
+@pytest.mark.asyncio
+async def test_an_unmerged_read_back_blocks_without_a_revertable_sha(
+    store: WorkStore, monkeypatch
+) -> None:
+    flow, _, github, _ = _flow(store, decision=GateDecision.ALLOW)
+    get_pull_request = github.get_pull_request
+
+    async def never_merged(pull_request):
+        state = await get_pull_request(pull_request)
+        return state.model_copy(update={"merged": False})
+
+    monkeypatch.setattr(github, "get_pull_request", never_merged)
+    record = await flow.start(issue_url=ISSUE_URL, project_id=PROJECT_ID, base_sha="a" * 40)
+
+    assert record.status == "WORK_BLOCKED"
+    events = await store.read_events(record.work_id, project_id=PROJECT_ID)
+    observation = next(
+        event for event in events if event.event_type is WorkEventType.OBSERVATION_RECORDED
+    )
+    assert observation.payload_json["detail"] == "GitHub did not report the pull request as merged"
+    assert observation.payload_json["merged_sha"] is None
+    blocked = next(
+        event for event in reversed(events) if event.event_type is WorkEventType.WORK_BLOCKED
+    )
+    assert blocked.payload_json["merged_sha"] is None
+    assert len(github.merges) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_transient_failed_merge_read_back_is_absorbed(
+    store: WorkStore,
+) -> None:
+    flow, _, github, _ = _flow(store, decision=GateDecision.ALLOW)
+    merge_pull_request = github.merge_pull_request
+
+    async def merge_then_report_transient_false(pull_request, *, expected_head_sha):
+        result = await merge_pull_request(
+            pull_request,
+            expected_head_sha=expected_head_sha,
+        )
+        github.readback_merged_once = False
+        return result
+
+    github.merge_pull_request = merge_then_report_transient_false
+
+    record = await flow.start(
+        issue_url=ISSUE_URL, project_id=PROJECT_ID, base_sha="a" * 40
+    )
+
+    assert record.status == "COMPLETE"
+    events = await store.read_events(record.work_id, project_id=PROJECT_ID)
+    observation = next(
+        event for event in events if event.event_type is WorkEventType.OBSERVATION_RECORDED
+    )
+    assert observation.payload_json["passed"] is True
+    assert len(github.merges) == 1
+    assert len(github.pull_request_reads) >= 3
+    assert len(github.comments) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_failed_merge_read_back_blocks_for_a_human(
+    store: WorkStore,
+    monkeypatch,
+) -> None:
+    flow, _, github, _ = _flow(store, decision=GateDecision.ALLOW)
+    get_pull_request = github.get_pull_request
+
+    async def get_pull_request_without_sha(pull_request):
+        state = await get_pull_request(pull_request)
+        if github.merged_sha is None:
+            return state
+        return state.model_copy(update={"merged": True, "merge_commit_sha": None})
+
+    monkeypatch.setattr(github, "get_pull_request", get_pull_request_without_sha)
+
+    record = await flow.start(
+        issue_url=ISSUE_URL, project_id=PROJECT_ID, base_sha="a" * 40
+    )
+
+    assert record.status == "WORK_BLOCKED"
+    events = await store.read_events(record.work_id, project_id=PROJECT_ID)
+    observation = next(
+        event for event in events if event.event_type is WorkEventType.OBSERVATION_RECORDED
+    )
+    assert observation.payload_json["detail"] == (
+        "GitHub did not report the merged commit SHA"
+    )
+    blocked = next(
+        event for event in reversed(events) if event.event_type is WorkEventType.WORK_BLOCKED
+    )
+    assert blocked.payload_json["decision_request"] == (
+        "GitHub did not report the merged commit SHA. "
+        "Resolve the pull request on GitHub."
+    )
+    assert blocked.payload_json["merged_sha"] is None
 
 
 @pytest.mark.asyncio
@@ -1556,14 +1682,28 @@ async def test_merge_response_sha_must_match_github_readback(
     flow, _, github, _ = _flow(store, decision=GateDecision.ALLOW)
     github.readback_sha = "d" * 40
 
-    with pytest.raises(RuntimeError, match="merge response SHA conflicts"):
-        await flow.start(
-            issue_url=ISSUE_URL,
-            project_id=PROJECT_ID,
-            base_sha="a" * 40,
-        )
+    record = await flow.start(
+        issue_url=ISSUE_URL,
+        project_id=PROJECT_ID,
+        base_sha="a" * 40,
+    )
 
+    assert record.status == "WORK_BLOCKED"
     assert len(github.merges) == 1
+    events = await store.read_events(record.work_id, project_id=PROJECT_ID)
+    observation = next(
+        event for event in events if event.event_type is WorkEventType.OBSERVATION_RECORDED
+    )
+    assert (
+        observation.payload_json["detail"]
+        == "merge response SHA conflicts with GitHub read-back"
+    )
+    blocked = next(
+        event for event in reversed(events) if event.event_type is WorkEventType.WORK_BLOCKED
+    )
+    assert blocked.payload_json["reason"] == "merge_post_check_failed"
+    assert blocked.payload_json["merged_sha"] == "d" * 40
+    assert "revert_pull_request" in blocked.payload_json["decision_request"]
 
 
 @pytest.mark.asyncio
@@ -1834,18 +1974,10 @@ async def test_resume_recovers_merge_completed_before_event_persistence(
     assert len(repository_events) == len(completion_events) == 1
     assert merge_events[0].payload_json["merged_sha"] == "c" * 40
 
-@pytest.mark.parametrize(
-    ("remote_sha", "error"),
-    (
-        (None, "canonical merge event conflicts with GitHub state"),
-        ("d" * 40, "canonical merged SHA conflicts with GitHub state"),
-    ),
-)
+
 @pytest.mark.asyncio
-async def test_canonical_merge_event_must_match_github_state(
+async def test_canonical_merge_event_without_a_merge_raises(
     store: WorkStore,
-    remote_sha,
-    error,
 ) -> None:
     flow, _, github, _ = _flow(store, decision=GateDecision.ALLOW)
     delivered = await flow.start(
@@ -1854,13 +1986,48 @@ async def test_canonical_merge_event_must_match_github_state(
         base_sha="a" * 40,
     )
     await store.save_work(delivered.model_copy(update={"status": "MERGING"}))
-    github.merged_sha = remote_sha
+    github.merged_sha = None
 
-    with pytest.raises(RuntimeError, match=error):
+    with pytest.raises(RuntimeError, match="canonical merge event conflicts"):
         await flow.resume(delivered.work_id, project_id=PROJECT_ID)
 
     assert len(github.merges) == 1
 
+
+@pytest.mark.asyncio
+async def test_canonical_merged_sha_conflict_blocks(
+    store: WorkStore,
+) -> None:
+    flow, _, github, _ = _flow(store, decision=GateDecision.ALLOW)
+    delivered = await flow.start(
+        issue_url=ISSUE_URL,
+        project_id=PROJECT_ID,
+        base_sha="a" * 40,
+    )
+    await store.save_work(delivered.model_copy(update={"status": "MERGING"}))
+    github.merged_sha = "d" * 40
+
+    record = await flow.resume(delivered.work_id, project_id=PROJECT_ID)
+
+    assert record.status == "WORK_BLOCKED"
+    events = await store.read_events(record.work_id, project_id=PROJECT_ID)
+    observation = next(
+        event
+        for event in events
+        if event.event_type is WorkEventType.OBSERVATION_RECORDED
+        and event.payload_json["passed"] is False
+    )
+    assert observation.payload_json["detail"] == (
+        "canonical merged SHA conflicts with GitHub state"
+    )
+    blocked = next(
+        event
+        for event in reversed(events)
+        if event.event_type is WorkEventType.WORK_BLOCKED
+    )
+    assert blocked.payload_json["reason"] == "merge_post_check_failed"
+
+    assert len(github.merges) == 1
 
 
 @pytest.mark.asyncio

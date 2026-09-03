@@ -517,6 +517,74 @@ async def test_nonpassing_full_rollout_does_not_project_soaking(
 
 
 @pytest.mark.asyncio
+async def test_github_merge_observation_does_not_block_delivery_projection_or_deploy(
+    store: WorkStore,
+) -> None:
+    from tests.work.test_github import ISSUE_URL as GITHUB_ISSUE_URL
+    from tests.work.test_github import _flow as github_flow
+
+    github_lifecycle, _, _, _ = github_flow(
+        store,
+        decision=GateDecision.ALLOW,
+        delivery=True,
+    )
+    ready = await github_lifecycle.start(
+        issue_url=GITHUB_ISSUE_URL,
+        project_id=PROJECT_ID,
+        base_sha="a" * 40,
+    )
+    events = await store.read_events(ready.work_id, project_id=PROJECT_ID)
+    assert ready.status == "READY_TO_DELIVER"
+    assert any(
+        event.event_type is WorkEventType.OBSERVATION_RECORDED
+        and event.payload_json["check"] == "merged_sha_read_back"
+        for event in events
+    )
+
+    candidate = _candidate(
+        work_id=ready.work_id,
+        commit_sha=ready.profile_context["github"]["merged_sha"],
+    )
+    deployment_provider = DeterministicFakeDeploymentProvider()
+    lifecycle = DeliveryLifecycle(
+        work_store=store,
+        release_provider=DeterministicFakeReleaseProvider(candidate),
+        deployment_provider=deployment_provider,
+        observation_provider=DeterministicFakeObservationProvider(
+            ({"availability": True},)
+        ),
+        control_probe=_passing_probe(),
+        control_preconditions=_preconditions(),
+        action_policy=RecordingPolicy(),
+    )
+
+    built = await lifecycle.build(
+        work_id=ready.work_id,
+        project_id=PROJECT_ID,
+        commit_sha=candidate.commit_sha,
+        evidence_refs=("merge://sha",),
+    )
+    record = await store.load_work(ready.work_id, project_id=PROJECT_ID)
+    assert built == candidate
+    assert record is not None and record.status == "RELEASING"
+
+    deployed = await lifecycle.deploy(
+        candidate,
+        environment="staging",
+        risk="medium",
+        reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
+        exposure=BlastRadius(dimension="instances", value="1"),
+        known_good_candidate=_known_good(),
+        evidence_refs=("policy://staging",),
+        expected_duration_seconds=60,
+    )
+
+    assert deployment_provider.deployments == [deployed]
+    record = await store.load_work(ready.work_id, project_id=PROJECT_ID)
+    assert record is not None and record.status == "STAGING"
+
+
+@pytest.mark.asyncio
 async def test_fake_lifecycle_drives_staging_canary_rollout_observation_and_rollback(
     store: WorkStore,
 ) -> None:

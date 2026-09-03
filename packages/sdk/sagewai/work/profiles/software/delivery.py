@@ -295,7 +295,10 @@ def _project_delivery_status(events: list[WorkEvent]) -> str | None:
             elif traffic == Decimal(100):
                 status = "PRODUCTION_ROLLOUT"
         elif event.event_type is WorkEventType.OBSERVATION_RECORDED:
-            observation = ObservationResult.model_validate(event.payload_json["observation"])
+            payload = event.payload_json.get("observation")
+            if payload is None:
+                continue
+            observation = ObservationResult.model_validate(payload)
             observed_deployment = deployments.get(observation.deployment_id)
             if observation.deployment_id in rollback_deployment_ids:
                 status = "ROLLING_BACK"
@@ -1457,7 +1460,10 @@ class DeliveryLifecycle:
                 if deployment.release_candidate_id == candidate.id:
                     candidate_deployments.add(deployment.id)
             elif event.event_type is WorkEventType.OBSERVATION_RECORDED:
-                observation = ObservationResult.model_validate(event.payload_json["observation"])
+                payload = event.payload_json.get("observation")
+                if payload is None:
+                    continue
+                observation = ObservationResult.model_validate(payload)
                 if observation.deployment_id not in candidate_deployments:
                     continue
                 if observation.verdict is HealthVerdict.FAIL:

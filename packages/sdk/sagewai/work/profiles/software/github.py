@@ -603,6 +603,26 @@ def require_merge_approval(_request: ActionRequest) -> GateDecision:
     return GateDecision.REQUIRE_APPROVAL
 
 
+def _merge_post_check_detail(
+    state: GitHubPullRequestState,
+    merge_result: GitHubMergeResult | None,
+    merge_event: WorkEvent | None,
+) -> str | None:
+    """The reason merged_sha_read_back failed, or None when the merge is confirmed."""
+    if not state.merged:
+        return "GitHub did not report the pull request as merged"
+    if state.merge_commit_sha is None:
+        return "GitHub did not report the merged commit SHA"
+    if merge_result is not None and merge_result.merged_sha != state.merge_commit_sha:
+        return "merge response SHA conflicts with GitHub read-back"
+    if (
+        merge_event is not None
+        and str(merge_event.payload_json["merged_sha"]) != state.merge_commit_sha
+    ):
+        return "canonical merged SHA conflicts with GitHub state"
+    return None
+
+
 class GitHubIssueLifecycle:
     """Extend the PR 4 lifecycle through pull request and merge delivery."""
 
@@ -1233,12 +1253,7 @@ class GitHubIssueLifecycle:
             pull_request.number,
             after_sequence=cycle_start,
         )
-        state = await self._github.get_pull_request(pull_request)
-        if (
-            state.project_id != work_item.project_id
-            or state.pull_request_number != pull_request.number
-        ):
-            raise ValueError("pull request state belongs to a different WorkItem")
+        state = await self._read_pull_request_state(work_item, pull_request)
         if merge_event is not None and not state.merged:
             raise RuntimeError("canonical merge event conflicts with GitHub state")
 
@@ -1291,27 +1306,74 @@ class GitHubIssueLifecycle:
                 or merge_result.pull_request_number != pull_request.number
             ):
                 raise ValueError("merge result belongs to a different WorkItem")
-            state = await self._github.get_pull_request(pull_request)
-            if (
-                state.project_id != work_item.project_id
-                or state.pull_request_number != pull_request.number
-            ):
-                raise ValueError("pull request state belongs to a different WorkItem")
+            state = await self._read_pull_request_state(work_item, pull_request)
 
-        if not state.merged:
-            raise RuntimeError("GitHub did not report the pull request as merged")
-        if state.merge_commit_sha is None:
-            raise RuntimeError("GitHub did not report the merged commit SHA")
+        if not state.merged or state.merge_commit_sha is None:
+            # GitHub can report merged=False briefly after a successful merge; read once
+            # more before asking for operator attention.
+            state = await self._read_pull_request_state(work_item, pull_request)
+        detail = _merge_post_check_detail(state, merge_result, merge_event)
+        action_id = f"merge:{work_item.id}:{pull_request.number}"
+        observed_merged_sha = state.merge_commit_sha if state.merged else None
+        observation_payload = {
+            "check": "merged_sha_read_back",
+            "action_id": action_id,
+            "passed": detail is None,
+            "detail": detail,
+            "merged_sha": observed_merged_sha,
+            "evidence_refs": [pull_request.url],
+        }
+        previous_observation = next(
+            (
+                event
+                for event in reversed(events)
+                if event.event_type is WorkEventType.OBSERVATION_RECORDED
+                and event.sequence > cycle_start
+                and event.payload_json.get("check") == "merged_sha_read_back"
+                and event.payload_json.get("action_id") == action_id
+            ),
+            None,
+        )
         if (
-            merge_result is not None
-            and merge_result.merged_sha != state.merge_commit_sha
+            previous_observation is None
+            or previous_observation.payload_json != observation_payload
         ):
-            raise RuntimeError("merge response SHA conflicts with GitHub read-back")
-        if merge_event is not None:
-            recorded_sha = str(merge_event.payload_json["merged_sha"])
-            if recorded_sha != state.merge_commit_sha:
-                raise RuntimeError("canonical merged SHA conflicts with GitHub state")
-        else:
+            await self._append(
+                work_id=work_item.id,
+                project_id=work_item.project_id,
+                event_type=WorkEventType.OBSERVATION_RECORDED,
+                payload=observation_payload,
+                actor_ref="github",
+            )
+        if detail is not None:
+            await self._append(
+                work_id=work_item.id,
+                project_id=work_item.project_id,
+                event_type=WorkEventType.WORK_BLOCKED,
+                payload={
+                    "reason": "merge_post_check_failed",
+                    "decision_request": (
+                        (
+                            f"{detail}. Allow the recorded rollback ({action.rollback}) "
+                            "or resolve the pull request on GitHub."
+                        )
+                        if observed_merged_sha is not None
+                        else f"{detail}. Resolve the pull request on GitHub."
+                    ),
+                    "merged_sha": observed_merged_sha,
+                    "issue_url": issue.url,
+                    "evidence_refs": list(action.evidence_refs),
+                },
+                actor_ref="github",
+            )
+            record = await self._set_record(
+                record,
+                status="WORK_BLOCKED",
+                pending_gate=None,
+            )
+            await self.present_pending(work_item.id, project_id=issue.project_id)
+            return record
+        if merge_event is None:
             await self._append(
                 work_id=work_item.id,
                 project_id=work_item.project_id,
@@ -1343,6 +1405,19 @@ class GitHubIssueLifecycle:
             pull_request=pull_request,
             result_sha=state.merge_commit_sha,
         )
+
+    async def _read_pull_request_state(
+        self,
+        work_item: WorkItem,
+        pull_request: GitHubPullRequest,
+    ) -> GitHubPullRequestState:
+        state = await self._github.get_pull_request(pull_request)
+        if (
+            state.project_id != work_item.project_id
+            or state.pull_request_number != pull_request.number
+        ):
+            raise ValueError("pull request state belongs to a different WorkItem")
+        return state
 
     async def _finish_repository_outcome(
         self,
