@@ -101,6 +101,31 @@ async def test_batching_sink_close_flushes_tail_immediately_and_clears_pending()
 
 
 @pytest.mark.asyncio
+async def test_batching_sink_serializes_flushes_in_emission_order() -> None:
+    first_started = asyncio.Event()
+    allow_first = asyncio.Event()
+    flushed: list[list[int]] = []
+
+    async def flush(batch: list[OperatorActivity]) -> None:
+        if batch[0].sequence == 1:
+            first_started.set()
+            await allow_first.wait()
+        flushed.append([item.sequence for item in batch])
+
+    sink = BatchingActivitySink(flush, max_batch=1, interval=60)
+    sink.emit(_activity(1))
+    await asyncio.wait_for(first_started.wait(), timeout=1)
+    sink.emit(_activity(2))
+    await asyncio.sleep(0)
+
+    assert flushed == []
+
+    allow_first.set()
+    await sink.close()
+    assert flushed == [[1], [2]]
+
+
+@pytest.mark.asyncio
 async def test_batching_sink_logs_flush_errors_without_propagating(caplog) -> None:
     async def flush(batch: list[OperatorActivity]) -> None:
         raise RuntimeError("boom")

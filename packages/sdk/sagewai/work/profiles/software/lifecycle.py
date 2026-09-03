@@ -20,7 +20,7 @@ from pathlib import Path, PurePosixPath
 from typing import Protocol
 
 from sagewai.artifacts.models import ArtifactRef
-from sagewai.artifacts.object_store import LocalArtifactStore
+from sagewai.artifacts.object_store import ArtifactStore, LocalArtifactStore
 from sagewai.fleet import FleetRegistry, TaskStore
 from sagewai.work.capsule import TaskCapsuleCompiler
 from sagewai.work.completion import evaluate_completion, validate_verification_result
@@ -226,6 +226,7 @@ class SoftwareStageOperator:
         poll_interval_seconds: float,
         heartbeat_ttl: timedelta,
         workspace_transport: FleetWorkspaceTransport,
+        artifact_store: ArtifactStore | None,
         capabilities: CapabilitySet,
         controller: OperatorController,
     ) -> SoftwareStageOperator:
@@ -240,6 +241,7 @@ class SoftwareStageOperator:
                 poll_interval_seconds=poll_interval_seconds,
                 heartbeat_ttl=heartbeat_ttl,
                 workspace_transport=workspace_transport,
+                artifact_store=artifact_store,
             ),
             capabilities=capabilities,
             controller=controller,

@@ -15,7 +15,9 @@ from datetime import datetime, timezone
 
 import pytest
 
+from sagewai.work import FLEET_ACTIVITY_LOG_MAX_BYTES, bounded_ndjson
 from sagewai.work.activity import (
+    ACTIVITY_LOG_MAX_BYTES,
     ACTIVITY_ROW_CAP,
     ListActivitySink,
     OperatorActivity,
@@ -62,6 +64,38 @@ def test_list_sink_collects_in_order() -> None:
     sink.emit(_activity(1))
     sink.emit(_activity(2))
     assert [item.sequence for item in sink.items] == [1, 2]
+
+
+def test_fleet_activity_log_budget_is_half_the_local_archive_budget() -> None:
+    assert FLEET_ACTIVITY_LOG_MAX_BYTES == ACTIVITY_LOG_MAX_BYTES // 2
+
+
+def test_bounded_ndjson_preserves_untruncated_input_lines() -> None:
+    line = _activity(1).model_dump_json() + " "
+
+    assert bounded_ndjson([line], len(line.encode("utf-8")) + 1) == f"{line}\n"
+
+
+def test_bounded_ndjson_appends_one_marker_from_the_first_overflowing_line() -> None:
+    first = _activity(1).model_dump_json()
+    overflow = _activity(2, summary="x" * 2000).model_dump_json()
+    marker = _activity(2, kind="raw", summary="truncated", detail=None).model_dump_json()
+    budget = len(first.encode("utf-8")) + len(marker.encode("utf-8")) + 2
+
+    bounded = bounded_ndjson([first, overflow, "not-json"], budget)
+    archived = [
+        OperatorActivity.model_validate_json(line)
+        for line in bounded.splitlines()
+    ]
+
+    assert len(bounded.encode("utf-8")) <= budget
+    assert [item.sequence for item in archived] == [1, 2]
+    assert archived[-1].kind == "raw"
+    assert archived[-1].summary == "truncated"
+    assert (
+        sum(item.kind == "raw" and item.summary == "truncated" for item in archived)
+        == 1
+    )
 
 
 @pytest.fixture

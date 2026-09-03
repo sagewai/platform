@@ -333,6 +333,7 @@ class InMemoryTaskStore:
 
     @staticmethod
     def _status_view(task: dict[str, Any]) -> dict[str, Any]:
+        payload = task.get("payload") or {}
         return {
             "run_id": task.get("run_id"),
             "status": task.get("status", "pending"),
@@ -345,11 +346,12 @@ class InMemoryTaskStore:
             "output": task.get("output"),
             "reported_at": task.get("reported_at"),
             "created_at": task.get("created_at"),
+            "work_id": (payload.get("request") or {}).get("work_id"),
             "selected_worker_id": (task.get("labels") or {}).get(
                 WORKER_ID_ROUTING_LABEL
             ),
             "workspace_input_digest": (
-                (task.get("payload") or {}).get("workspace") or {}
+                payload.get("workspace") or {}
             ).get("input_digest"),
         }
 

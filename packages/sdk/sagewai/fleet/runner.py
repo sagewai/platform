@@ -30,6 +30,7 @@ from typing import Any
 import httpx
 
 from sagewai.fleet.execution import WorkerConfigurationError, run_worker_subprocess
+from sagewai.work.activity import OperatorActivity
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,10 @@ class WorkerTaskContext:
 
     project_id: str | None
     capability_names: tuple[str, ...]
+    report_progress: Callable[
+        [str, list[OperatorActivity]],
+        Awaitable[None],
+    ]
 
 
 TaskHandler = Callable[[dict[str, Any], WorkerTaskContext], Awaitable[str]]
@@ -238,6 +243,7 @@ class WorkerRunner:
                     WorkerTaskContext(
                         project_id=self.project,
                         capability_names=tuple(self.capability_names),
+                        report_progress=self._report_progress,
                     ),
                 )
             except WorkerConfigurationError as exc:
@@ -330,6 +336,47 @@ class WorkerRunner:
             return False
         logger.error("report giving up for run %s", run_id)
         return False
+
+    async def _report_progress(
+        self,
+        run_id: str,
+        activities: list[OperatorActivity],
+    ) -> None:
+        delay = 0.5
+        payload = {
+            "run_id": run_id,
+            "activities": [
+                activity.model_dump(mode="json")
+                for activity in activities
+            ],
+        }
+        for attempt in range(5):
+            try:
+                r = await self._client().post(
+                    "/api/v1/fleet/progress",
+                    json=payload,
+                    headers=self._worker_headers(),
+                )
+            except httpx.HTTPError as exc:
+                logger.warning("progress network error (try %d): %s", attempt + 1, exc)
+                await self._sleep_or_stop(delay)
+                delay *= 2
+                continue
+            if r.status_code < 300:
+                return
+            if 500 <= r.status_code < 600:
+                logger.warning("progress 5xx (try %d): %s", attempt + 1, r.status_code)
+                await self._sleep_or_stop(delay)
+                delay *= 2
+                continue
+            logger.warning(
+                "progress dropped for run %s after %s: %s",
+                run_id,
+                r.status_code,
+                r.text[:200],
+            )
+            return
+        logger.warning("progress giving up for run %s", run_id)
 
     async def _heartbeat_once(self) -> None:
         try:

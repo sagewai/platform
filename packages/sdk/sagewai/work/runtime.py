@@ -29,6 +29,7 @@ from sagewai.work.activity import (
     ActivitySink,
     OperatorActivity,
     activity_redactor,
+    bounded_ndjson,
 )
 from sagewai.work.activity_parsers import (
     ActivityCounter,
@@ -317,24 +318,18 @@ class _NativeRuntime:
         redact = activity_redactor(environment)
         log: list[str] = []
         log_bytes = 0
-        log_truncated = False
+        log_overflowed = False
 
         def emit(activity: OperatorActivity) -> None:
-            nonlocal log_bytes, log_truncated
+            nonlocal log_bytes, log_overflowed
             item = redact(activity)
-            if not log_truncated:
+            if not log_overflowed:
                 line = item.model_dump_json()
                 line_bytes = len(line.encode("utf-8")) + 1
-                if log_bytes + line_bytes > ACTIVITY_LOG_MAX_BYTES:
-                    log.append(
-                        item.model_copy(
-                            update={"kind": "raw", "summary": "truncated", "detail": None}
-                        ).model_dump_json()
-                    )
-                    log_truncated = True
-                else:
-                    log.append(line)
-                    log_bytes += line_bytes
+                log.append(line)
+                log_bytes += line_bytes
+                if log_bytes > ACTIVITY_LOG_MAX_BYTES:
+                    log_overflowed = True
             if self._activity_sink is not None:
                 self._activity_sink.emit(item)
 
@@ -348,8 +343,9 @@ class _NativeRuntime:
     ) -> OperatorResult:
         if self._artifact_store is None or not log:
             return result
+        bounded = bounded_ndjson(log, ACTIVITY_LOG_MAX_BYTES)
         artifact = self._artifact_store.put_bytes(
-            ("\n".join(log) + "\n").encode("utf-8"),
+            bounded.encode("utf-8"),
             project_id=request.project_id,
             media_type="application/x-ndjson",
             created_by=self.name,

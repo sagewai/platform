@@ -41,6 +41,7 @@ class BatchingActivitySink:
         self._buffer: list[OperatorActivity] = []
         self._timer: asyncio.TimerHandle | None = None
         self._pending: set[asyncio.Task[None]] = set()
+        self._flush_lock = asyncio.Lock()
 
     def emit(self, activity: OperatorActivity) -> None:
         self._buffer.append(activity)
@@ -62,7 +63,8 @@ class BatchingActivitySink:
 
     async def _run_flush(self, batch: list[OperatorActivity]) -> None:
         try:
-            await self._flush(batch)
+            async with self._flush_lock:
+                await self._flush(batch)
         except Exception:
             logger.exception("activity flush failed")
 

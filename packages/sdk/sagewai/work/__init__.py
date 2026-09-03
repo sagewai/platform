@@ -12,6 +12,7 @@
 from sagewai.work.activity import (
     ACTIVITY_LOG_MAX_BYTES,
     ACTIVITY_ROW_CAP,
+    FLEET_ACTIVITY_LOG_MAX_BYTES,
     ActivityKind,
     ActivitySink,
     ActivitySource,
@@ -19,6 +20,7 @@ from sagewai.work.activity import (
     OperatorActivity,
     WorkActivityStore,
     activity_redactor,
+    bounded_ndjson,
 )
 from sagewai.work.activity_ingestion import ActivityIngestion, BatchingActivitySink
 from sagewai.work.capsule import TaskCapsuleCompiler
@@ -104,6 +106,7 @@ from sagewai.work.supersede import supersede_work
 __all__ = [
     "ACTIVITY_LOG_MAX_BYTES",
     "ACTIVITY_ROW_CAP",
+    "FLEET_ACTIVITY_LOG_MAX_BYTES",
     "Action",
     "AcceptanceCriterion",
     "ActionPlan",
@@ -172,6 +175,7 @@ __all__ = [
     "Workspace",
     "active_control_precondition_ids",
     "activity_redactor",
+    "bounded_ndjson",
     "execution_attempt_from_events",
     "evaluate_completion",
     "fold_verification_results",

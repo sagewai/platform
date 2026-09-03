@@ -69,6 +69,7 @@ _ADMIN_FLEET_ACTIONS = ("/approve", "/reject", "/revoke")
 _FLEET_WORKER_ROUTES = (
     "/api/v1/fleet/claim",
     "/api/v1/fleet/report",
+    "/api/v1/fleet/progress",
     "/api/v1/fleet/heartbeat",
 )
 _FLEET_REGISTER_PATH = "/api/v1/fleet/register"

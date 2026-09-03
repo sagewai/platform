@@ -19,9 +19,19 @@ from sagewai.fleet.dispatcher import InMemoryTaskStore, NotTaskOwnerError, TaskS
 async def test_async_enqueue_and_status_views():
     s = InMemoryTaskStore()
     assert isinstance(s, TaskStore)  # Protocol still satisfied after it grows
-    await s.enqueue({"run_id": "r1", "org_id": "o", "project_id": None, "pool": "default"})
+    await s.enqueue(
+        {
+            "run_id": "r1",
+            "org_id": "o",
+            "project_id": None,
+            "pool": "default",
+            "payload": {"request": {"work_id": "work-1"}},
+        }
+    )
     got = await s.get_task("r1", org_id="o", project_id=None)
     assert got and got["run_id"] == "r1" and got["status"] == "pending"
+    assert got["work_id"] == "work-1"
+    assert "payload" not in got
     # scope mismatch -> None
     assert await s.get_task("r1", org_id="other", project_id=None) is None
     listed = await s.list_tasks(org_id="o", project_id=None)

@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -26,6 +26,7 @@ from sagewai.db.models import Base, WorkActivityModel
 
 ACTIVITY_ROW_CAP = 5000
 ACTIVITY_LOG_MAX_BYTES = 4 * 1024 * 1024
+FLEET_ACTIVITY_LOG_MAX_BYTES = ACTIVITY_LOG_MAX_BYTES // 2
 SUMMARY_MAX = 2000
 DETAIL_MAX = 8192
 
@@ -100,6 +101,29 @@ def activity_redactor(values: Mapping[str, str]) -> Callable[[OperatorActivity],
     return _redact
 
 
+def bounded_ndjson(log: Sequence[str], budget: int = ACTIVITY_LOG_MAX_BYTES) -> str:
+    """Return NDJSON capped at ``budget`` with a final truncation marker."""
+    kept: list[str] = []
+    kept_bytes = 0
+    for line in log:
+        kept.append(line)
+        kept_bytes += len(line.encode("utf-8")) + 1
+        if kept_bytes <= budget:
+            continue
+        marker = (
+            OperatorActivity.model_validate_json(line)
+            .model_copy(update={"kind": "raw", "summary": "truncated", "detail": None})
+            .model_dump_json()
+        )
+        marker_bytes = len(marker.encode("utf-8")) + 1
+        while kept and kept_bytes + marker_bytes > budget:
+            removed = kept.pop()
+            kept_bytes -= len(removed.encode("utf-8")) + 1
+        kept.append(marker)
+        return "\n".join(kept) + "\n"
+    return "\n".join(kept) + ("\n" if kept else "")
+
+
 class WorkActivityStore:
     """Durable per-run activity, capped at ``ACTIVITY_ROW_CAP`` rows with a final truncation marker."""
 
@@ -141,6 +165,22 @@ class WorkActivityStore:
                 ).returning(self._table.c.event_json)
             )
         return [OperatorActivity.model_validate(row) for row in result.scalars().all()]
+
+    async def last_sequence(
+        self,
+        work_id: str,
+        *,
+        run_id: str,
+        project_id: str | None,
+    ) -> int:
+        table = self._table
+        query = select(func.coalesce(func.max(table.c.sequence), 0)).where(
+            table.c.project_scope_key == project_scope_key(project_id),
+            table.c.work_id == work_id,
+            table.c.run_id == run_id,
+        )
+        async with self._engine.connect() as conn:
+            return int(await conn.scalar(query))
 
     async def read(
         self, work_id: str, *, run_id: str, project_id: str | None, after: int = 0, limit: int = 500
@@ -191,6 +231,7 @@ class WorkActivityStore:
 __all__ = [
     "ACTIVITY_ROW_CAP",
     "ACTIVITY_LOG_MAX_BYTES",
+    "FLEET_ACTIVITY_LOG_MAX_BYTES",
     "ActivityKind",
     "ActivitySink",
     "ActivitySource",
@@ -198,4 +239,5 @@ __all__ = [
     "OperatorActivity",
     "WorkActivityStore",
     "activity_redactor",
+    "bounded_ndjson",
 ]

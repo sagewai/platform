@@ -162,14 +162,16 @@ class PostgresTaskStore:
     def _status_view(row) -> dict[str, Any]:
         """The metadata+result view returned by get_task/list_tasks (no payload)."""
         m = row._mapping
+        payload = m["payload"] or {}
         return {
             "run_id": m["run_id"], "status": m["status"], "project_id": m["project_id"],
             "pool": m["pool"], "model": m["model"], "worker_id": m["worker_id"],
             "claimed_at": _iso(m["claimed_at"]), "error": m["error"], "output": m["output"],
+            "work_id": (payload.get("request") or {}).get("work_id"),
             "reported_at": _iso(m["reported_at"]), "created_at": _iso(m["created_at"]),
             "selected_worker_id": (m["labels"] or {}).get(WORKER_ID_ROUTING_LABEL),
             "workspace_input_digest": (
-                (m["payload"] or {}).get("workspace") or {}
+                payload.get("workspace") or {}
             ).get("input_digest"),
         }
 

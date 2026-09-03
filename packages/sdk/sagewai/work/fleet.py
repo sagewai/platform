@@ -17,6 +17,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from sagewai.artifacts.object_store import ArtifactStore
 from sagewai.fleet.dispatcher import TaskStore
 from sagewai.fleet.models import (
     WORKER_ID_ROUTING_LABEL,
@@ -102,6 +103,7 @@ class FleetOperatorResultEnvelope(BaseModel):
     kind: Literal["work.operator.result"] = "work.operator.result"
     result: OperatorResult
     workspace_result: FleetWorkspaceTransferResult | None
+    activity_log: str | None
 
 
 class FleetWorkspaceTransport(Protocol):
@@ -134,6 +136,7 @@ class FleetOperatorRuntime:
         poll_interval_seconds: float,
         heartbeat_ttl: timedelta,
         workspace_transport: FleetWorkspaceTransport | None = None,
+        artifact_store: ArtifactStore | None = None,
     ) -> None:
         if poll_interval_seconds <= 0:
             raise ValueError("poll_interval_seconds must be positive")
@@ -146,6 +149,7 @@ class FleetOperatorRuntime:
         self._poll_interval_seconds = poll_interval_seconds
         self._heartbeat_ttl = heartbeat_ttl
         self._workspace_transport = workspace_transport
+        self._artifact_store = artifact_store
         self.name = f"fleet:{org_id}:{runtime_capability}"
 
     async def _select_worker(
@@ -308,7 +312,8 @@ class FleetOperatorRuntime:
                 if not output:
                     raise ValueError("fleet worker completed without an OperatorResult")
                 envelope = FleetOperatorResultEnvelope.model_validate_json(output)
-                self._validate_result_identity(request=request, result=envelope.result)
+                result = envelope.result
+                self._validate_result_identity(request=request, result=result)
                 if snapshot is None:
                     if envelope.workspace_result is not None:
                         raise ValueError("workspace result returned for a workspace-free task")
@@ -325,7 +330,22 @@ class FleetOperatorRuntime:
                     await self._workspace_transport.apply(
                         workspace, snapshot, envelope.workspace_result
                     )
-                return envelope.result
+                if self._artifact_store is not None and envelope.activity_log is not None:
+                    artifact = self._artifact_store.put_bytes(
+                        envelope.activity_log.encode("utf-8"),
+                        project_id=request.project_id,
+                        media_type="application/x-ndjson",
+                        created_by=self.name,
+                    )
+                    result = result.model_copy(
+                        update={
+                            "artifact_refs": (
+                                *result.artifact_refs,
+                                artifact.storage_ref,
+                            )
+                        }
+                    )
+                return result
             await asyncio.sleep(self._poll_interval_seconds)
 
 

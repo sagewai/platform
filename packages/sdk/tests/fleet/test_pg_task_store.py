@@ -66,10 +66,12 @@ def _task(run_id="r1", org="o", project=None, pool="default", model=None, labels
 @pytest.mark.asyncio
 async def test_enqueue_persists_across_instances(store):
     s, engine = store
-    await s.enqueue(_task(payload={"hello": 1}))
+    await s.enqueue(_task(payload={"request": {"work_id": "work-1"}, "hello": 1}))
     s2 = PostgresTaskStore(engine=engine)  # fresh instance = "restart"
     got = await s2.get_task("r1", org_id="o", project_id=None)
     assert got is not None and got["status"] == "pending"
+    assert got["work_id"] == "work-1"
+    assert "payload" not in got
 
 
 @pytest.mark.asyncio

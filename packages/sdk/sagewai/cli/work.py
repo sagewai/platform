@@ -619,6 +619,7 @@ async def _build_lifecycle(
                 poll_interval_seconds=0.25,
                 heartbeat_ttl=timedelta(seconds=30),
                 workspace_transport=workspace_transport,
+                artifact_store=artifact_store,
                 capabilities=capabilities,
                 controller=controller,
             )

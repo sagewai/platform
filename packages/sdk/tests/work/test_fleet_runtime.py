@@ -338,6 +338,7 @@ async def test_fleet_runtime_matches_capabilities_and_resumes_after_worker_loss(
         FleetOperatorResultEnvelope(
             result=expected,
             workspace_result=None,
+            activity_log=None,
         ).model_dump_json(),
         None,
         worker_id=replacement_worker.id,
@@ -379,7 +380,9 @@ async def test_fleet_runtime_rejects_result_for_another_run() -> None:
         "run-1",
         "completed",
         FleetOperatorResultEnvelope(
-            result=_result(run_id="another-run"), workspace_result=None
+            result=_result(run_id="another-run"),
+            workspace_result=None,
+            activity_log=None,
         ).model_dump_json(),
         None,
         worker_id=worker_id,
@@ -434,7 +437,12 @@ async def test_fleet_runtime_rejects_serialized_nested_result_from_another_proje
         "run-1",
         "completed",
         json.dumps(
-            {"kind": "work.operator.result", "result": hostile_result, "workspace_result": None}
+            {
+                "kind": "work.operator.result",
+                "result": hostile_result,
+                "workspace_result": None,
+                "activity_log": None,
+            }
         ),
         None,
         worker_id=worker_id,

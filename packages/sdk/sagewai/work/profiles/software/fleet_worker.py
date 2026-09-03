@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,13 @@ from typing import Any, Protocol
 
 from sagewai.fleet.execution import run_worker_subprocess
 from sagewai.fleet.runner import WorkerTaskContext
+from sagewai.work.activity import (
+    FLEET_ACTIVITY_LOG_MAX_BYTES,
+    ActivitySink,
+    OperatorActivity,
+    bounded_ndjson,
+)
+from sagewai.work.activity_ingestion import BatchingActivitySink
 from sagewai.work.fleet import (
     FleetOperatorResultEnvelope,
     FleetOperatorTaskPayload,
@@ -60,6 +68,25 @@ class FleetWorkerWorkspaceResolver(Protocol):
 class _MaterializedState:
     path: Path
     input_tree: str
+
+
+class _ActivityFanoutSink:
+    def __init__(
+        self,
+        *,
+        log: list[str],
+        progress_sink: ActivitySink,
+    ) -> None:
+        self._log = log
+        self._progress_sink = progress_sink
+        self._log_bytes = 0
+
+    def emit(self, activity: OperatorActivity) -> None:
+        if self._log_bytes <= FLEET_ACTIVITY_LOG_MAX_BYTES:
+            line = activity.model_dump_json()
+            self._log.append(line)
+            self._log_bytes += len(line.encode("utf-8")) + 1
+        self._progress_sink.emit(activity)
 
 
 class SoftwareFleetWorkspaceResolver:
@@ -247,32 +274,42 @@ class SoftwareFleetTaskHandler:
             raise ValueError("worker belongs to a different project")
         if not set(payload.required_capabilities).issubset(context.capability_names):
             raise ValueError("worker did not advertise every required capability")
-        runtime = self._runtime(runtime_capability, request.stage)
-
-        if payload.workspace is None:
-            raise ValueError("software work.operator requires a workspace snapshot")
-        workspace = await self._workspace_resolver.materialize(payload.workspace)
-        self._validate_materialized_workspace(payload.workspace, workspace)
-        result = await runtime.run(
-            request,
-            payload.capsule,
-            payload.capabilities,
-            workspace,
+        runtime = copy.copy(self._runtime(runtime_capability, request.stage))
+        log: list[str] = []
+        progress_sink = BatchingActivitySink(
+            lambda batch: context.report_progress(request.run_id, batch)
         )
-        self._validate_result(request, result)
-        workspace_result = await self._workspace_resolver.capture(payload.workspace, workspace)
-        self._validate_workspace_result(payload, workspace_result)
-        output_payload = SoftwareFleetWorkspaceOutput.model_validate(
-            workspace_result.payload
-        )
-        if not self._can_write(payload.capabilities) and base64.b64decode(
-            output_payload.delta_diff_base64,
-            validate=True,
-        ):
-            raise ValueError("read-only operator changed the workspace")
+        runtime._activity_sink = _ActivityFanoutSink(log=log, progress_sink=progress_sink)
+        try:
+            if payload.workspace is None:
+                raise ValueError("software work.operator requires a workspace snapshot")
+            workspace = await self._workspace_resolver.materialize(payload.workspace)
+            self._validate_materialized_workspace(payload.workspace, workspace)
+            result = await runtime.run(
+                request,
+                payload.capsule,
+                payload.capabilities,
+                workspace,
+            )
+            self._validate_result(request, result)
+            workspace_result = await self._workspace_resolver.capture(
+                payload.workspace, workspace
+            )
+            self._validate_workspace_result(payload, workspace_result)
+            output_payload = SoftwareFleetWorkspaceOutput.model_validate(
+                workspace_result.payload
+            )
+            if not self._can_write(payload.capabilities) and base64.b64decode(
+                output_payload.delta_diff_base64,
+                validate=True,
+            ):
+                raise ValueError("read-only operator changed the workspace")
+        finally:
+            await progress_sink.close()
         return FleetOperatorResultEnvelope(
             result=result,
             workspace_result=workspace_result,
+            activity_log=bounded_ndjson(log, FLEET_ACTIVITY_LOG_MAX_BYTES) or None,
         ).model_dump_json()
 
     def _runtime(self, runtime_capability: str, stage: str) -> OperatorRuntime:
