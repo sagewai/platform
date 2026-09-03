@@ -296,7 +296,9 @@ async def test_plan_to_two_steps_to_assess_to_complete(stores, tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_a_completed_task_projects_telemetry_without_raising(stores, tmp_path, monkeypatch) -> None:
+async def test_a_completed_task_projects_telemetry_without_raising(
+    stores, tmp_path, monkeypatch
+) -> None:
     from sagewai.work.tasks.telemetry import derive_task_telemetry
 
     task_store, work_store = stores
@@ -383,7 +385,9 @@ async def test_a_blocked_step_work_blocks_the_task_and_presents_the_decision(
     types = [event.event_type for event in events]
     assert TaskEventType.TASK_MESSAGE in types
     assert TaskEventType.NOTIFICATION_PRESENTED in types
-    presented = next(event for event in events if event.event_type is TaskEventType.NOTIFICATION_PRESENTED)
+    presented = next(
+        event for event in events if event.event_type is TaskEventType.NOTIFICATION_PRESENTED
+    )
     assert presented.payload_json["urgency"] == "now"
     assert set(presented.payload_json) == {"channel", "ref", "attention_id", "urgency", "due_at"}
 
@@ -410,7 +414,9 @@ async def test_a_base_moved_work_is_superseded_and_rerun_on_the_new_head(
 
 
 @pytest.mark.asyncio
-async def test_a_stale_lease_epoch_never_reaches_a_side_effect(stores, tmp_path, monkeypatch) -> None:
+async def test_a_stale_lease_epoch_never_reaches_a_side_effect(
+    stores, tmp_path, monkeypatch
+) -> None:
     from sagewai.work.tasks.store import StaleTaskError
 
     task_store, _ = stores
@@ -461,7 +467,9 @@ async def test_a_crash_before_the_append_replays_onto_the_same_issue_and_work(
 
 
 @pytest.mark.asyncio
-async def test_replay_after_create_issue_uses_the_existing_issue(stores, tmp_path, monkeypatch) -> None:
+async def test_replay_after_create_issue_uses_the_existing_issue(
+    stores, tmp_path, monkeypatch
+) -> None:
     task_store, _ = stores
     task, record, runner, coordinator = await _seed(stores, tmp_path)
     monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
@@ -537,7 +545,9 @@ async def test_replay_after_supersede_work_before_the_batch_completes_the_record
     monkeypatch.setattr(module, "supersede_work", original)
     record = await _drive_to_rest(coordinator, record, epoch)
     events = await task_store.read_events(task.id, project_id=PROJECT)
-    superseded = [event for event in events if event.event_type is TaskEventType.STEP_WORK_SUPERSEDED]
+    superseded = [
+        event for event in events if event.event_type is TaskEventType.STEP_WORK_SUPERSEDED
+    ]
     replacement_started = [
         event
         for event in events
@@ -610,7 +620,9 @@ async def test_work_gate_mirror_copies_the_action_and_notifies_today(
     record = await _drive_to_rest(coordinator, record, epoch)
     events = await task_store.read_events(task.id, project_id=PROJECT)
     gate = next(event for event in events if event.event_type is TaskEventType.GATE_REQUESTED)
-    presented = next(event for event in events if event.event_type is TaskEventType.NOTIFICATION_PRESENTED)
+    presented = next(
+        event for event in events if event.event_type is TaskEventType.NOTIFICATION_PRESENTED
+    )
     assert record.pending_gate == "merge:w1:7"
     assert record.attention_owner.value == "user"
     assert set(gate.payload_json) == {"gate_id", "question", "action", "work_id", "attention_id"}
@@ -745,12 +757,15 @@ async def test_planning_clarification_uses_the_project_deadline(
     epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
     record = await _drive_to_rest(coordinator, record, epoch)
     events = await task_store.read_events(task.id, project_id=PROJECT)
-    asked = [event for event in events if event.event_type is TaskEventType.CLARIFICATION_REQUESTED][-1]
+    asked = [
+        event for event in events if event.event_type is TaskEventType.CLARIFICATION_REQUESTED
+    ][-1]
     defaults = await task_store.get_defaults(project_id=PROJECT)
     assert record.status is TaskStatus.CLARIFYING
-    assert asked.payload_json["deadline_at"] == (
-        NOW + timedelta(seconds=defaults.clarification_deadline_seconds)
-    ).isoformat()
+    assert (
+        asked.payload_json["deadline_at"]
+        == (NOW + timedelta(seconds=defaults.clarification_deadline_seconds)).isoformat()
+    )
 
 
 @pytest.mark.asyncio
@@ -778,7 +793,9 @@ async def test_budget_exhaustion_records_ledger_usage_and_notifies_now(
     record = await _drive_to_rest(coordinator, record, epoch)
     events = await task_store.read_events(task.id, project_id=PROJECT)
     budget = [event for event in events if event.event_type is TaskEventType.BUDGET_RECORDED][-1]
-    presented = [event for event in events if event.event_type is TaskEventType.NOTIFICATION_PRESENTED][-1]
+    presented = [
+        event for event in events if event.event_type is TaskEventType.NOTIFICATION_PRESENTED
+    ][-1]
     assert record.status is TaskStatus.BUDGET_EXHAUSTED
     assert record.attention_owner.value == "user"
     assert budget.payload_json["budget_used"]["usd_reserved"] == "1.00"
@@ -794,7 +811,9 @@ async def test_ungated_replan_reenters_planning_and_runs_the_planner_again(
 
     task_store, _ = stores
     task, record, runner, coordinator = await _seed(stores, tmp_path)
-    task = task.model_copy(update={"authority": Authority(plan=GateMode.AUTO, replan=GateMode.AUTO)})
+    task = task.model_copy(
+        update={"authority": Authority(plan=GateMode.AUTO, replan=GateMode.AUTO)}
+    )
     monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
     verdicts = iter(
         (
@@ -829,7 +848,9 @@ async def test_gated_replan_allow_returns_to_planning_and_runs_the_planner(
 
     task_store, _ = stores
     task, record, runner, coordinator = await _seed(stores, tmp_path)
-    task = task.model_copy(update={"authority": Authority(plan=GateMode.AUTO, replan=GateMode.REQUIRE)})
+    task = task.model_copy(
+        update={"authority": Authority(plan=GateMode.AUTO, replan=GateMode.REQUIRE)}
+    )
     monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
     plan_calls = {"n": 0}
     original_plan = runner.plan
@@ -872,7 +893,9 @@ async def test_gated_replan_deny_blocks_for_the_user(stores, tmp_path, monkeypat
 
     task_store, _ = stores
     task, record, _runner, coordinator = await _seed(stores, tmp_path)
-    task = task.model_copy(update={"authority": Authority(plan=GateMode.AUTO, replan=GateMode.REQUIRE)})
+    task = task.model_copy(
+        update={"authority": Authority(plan=GateMode.AUTO, replan=GateMode.REQUIRE)}
+    )
     monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
     monkeypatch.setattr(
         module,
@@ -925,7 +948,9 @@ async def test_spent_replan_budget_blocks_with_gap_text_and_notifies_now(
     record = await _drive_to_rest(coordinator, record, epoch)
     events = await task_store.read_events(task.id, project_id=PROJECT)
     message = [event for event in events if event.event_type is TaskEventType.TASK_MESSAGE][-1]
-    presented = [event for event in events if event.event_type is TaskEventType.NOTIFICATION_PRESENTED][-1]
+    presented = [
+        event for event in events if event.event_type is TaskEventType.NOTIFICATION_PRESENTED
+    ][-1]
     assert record.status is TaskStatus.BLOCKED
     assert "deterministic check failed" in message.payload_json["text"]
     assert "repair-step" in message.payload_json["text"]
@@ -1080,3 +1105,44 @@ def _fixed_task(store, task):
         return task, record
 
     return _load
+
+
+@pytest.mark.asyncio
+async def test_a_task_without_retention_completes_without_pruning(
+    stores, tmp_path, monkeypatch
+) -> None:
+    from sagewai.work.activity import WorkActivityStore
+
+    task_store, work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    assert task.retention_days is None
+    pruned: list[dict] = []
+
+    class RecordingActivityStore(WorkActivityStore):
+        async def prune(self, **kwargs):
+            pruned.append(kwargs)
+            return 0
+
+    coordinator._activity_store = RecordingActivityStore(engine=task_store._engine)
+    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
+    for _ in range(20):
+        record = await coordinator.drive(record, lease_epoch=epoch)
+        if record.status is TaskStatus.COMPLETE:
+            break
+    else:
+        pytest.fail("the Task never completed")
+    assert pruned == []
+
+    task2, record2, runner2, coordinator2 = await _seed(stores, tmp_path)
+    retained = task2.model_copy(update={"retention_days": 1})
+    coordinator2._activity_store = RecordingActivityStore(engine=task_store._engine)
+    monkeypatch.setattr(coordinator2, "_load", _fixed_task(task_store, retained))
+    epoch2 = await task_store.claim(task2.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
+    for _ in range(20):
+        record2 = await coordinator2.drive(record2, lease_epoch=epoch2)
+        if record2.status is TaskStatus.COMPLETE:
+            break
+    else:
+        pytest.fail("the Task never completed")
+    assert len(pruned) == 1 and pruned[0]["project_id"] == PROJECT

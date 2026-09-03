@@ -397,8 +397,11 @@ class TaskCoordinator:
         return await self._act_on_health(task, record, command, lease_epoch)
 
     async def _prune_activity(self, task: Task, state: CycleState) -> None:
-        """Section 14.2 retention: drop this cycle's activity past the Task's window."""
-        if self._activity_store is None or not state.step_works:
+        """Section 14.2 retention: drop this cycle's activity past the Task's window.
+
+        A Task without ``retention_days`` keeps its activity.
+        """
+        if self._activity_store is None or task.retention_days is None or not state.step_works:
             return
         await self._activity_store.prune(
             project_id=task.project_id,
@@ -495,9 +498,9 @@ class TaskCoordinator:
         self, task: Task, record: TaskRecord, command: RunPlanning, lease_epoch: int
     ) -> TaskRecord:
         base_sha = await self._profile.base_sha(task)
-        brief = self._artifacts.read(
-            task.brief_ref.storage_ref, project_id=task.project_id
-        ).decode("utf-8")
+        brief = self._artifacts.read(task.brief_ref.storage_ref, project_id=task.project_id).decode(
+            "utf-8"
+        )
         events = await self._task_store.read_events(task.id, project_id=task.project_id)
         amendments = tuple(
             f"{event.payload_json['question_id']}: {event.payload_json['answer']}"
@@ -783,7 +786,9 @@ class TaskCoordinator:
         if issue_url is None and replay:
             issue_url = await self._profile.find_issue(task, cycle=record.current_cycle, step=step)
         if issue_url is None:
-            issue_url = await self._profile.create_issue(task, cycle=record.current_cycle, step=step)
+            issue_url = await self._profile.create_issue(
+                task, cycle=record.current_cycle, step=step
+            )
             await self._task_store.record_command(
                 task_id=task.id,
                 project_id=task.project_id,
@@ -833,7 +838,11 @@ class TaskCoordinator:
         entries: list[Entry] = [
             (
                 TaskEventType.STEP_WORK_OUTCOME,
-                {"step_id": command.step_id, "work_id": command.work_id, "outcome": command.outcome},
+                {
+                    "step_id": command.step_id,
+                    "work_id": command.work_id,
+                    "outcome": command.outcome,
+                },
             )
         ]
         if command.merged_sha is not None:
