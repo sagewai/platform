@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -84,6 +85,49 @@ async def test_batching_sink_flushes_on_size_and_interval(dialect_engine) -> Non
     await asyncio.sleep(0.2)
     await sink.close()
     assert [len(batch) for batch in flushed] == [2, 1]
+
+
+@pytest.mark.asyncio
+async def test_batching_sink_splits_cjk_batches_by_wire_bytes() -> None:
+    flushed: list[list[OperatorActivity]] = []
+
+    async def flush(batch: list[OperatorActivity]) -> None:
+        flushed.append(list(batch))
+
+    max_batch_bytes = 512 * 1024
+    activities = [
+        _activity(
+            sequence,
+            source="claude",
+            kind="tool_result",
+            summary="中" * 2000,
+            detail="中" * 8192,
+        )
+        for sequence in range(1, 51)
+    ]
+    assert all(
+        len(json.dumps(activity.model_dump(mode="json"))) <= max_batch_bytes
+        for activity in activities
+    )
+
+    sink = BatchingActivitySink(
+        flush,
+        max_batch=50,
+        max_batch_bytes=max_batch_bytes,
+        interval=60,
+    )
+    for activity in activities:
+        sink.emit(activity)
+    await sink.close()
+
+    assert len(flushed) > 1
+    assert [item.sequence for batch in flushed for item in batch] == list(range(1, 51))
+    for batch in flushed:
+        body = {
+            "run_id": "w:implement:1",
+            "activities": [activity.model_dump(mode="json") for activity in batch],
+        }
+        assert len(json.dumps(body)) <= 640 * 1024
 
 
 @pytest.mark.asyncio

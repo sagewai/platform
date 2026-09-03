@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from itertools import groupby
@@ -26,25 +27,32 @@ logger = logging.getLogger(__name__)
 
 
 class BatchingActivitySink:
-    """Sync ``emit`` that batches into an async flush every ``interval`` seconds or ``max_batch`` items."""
+    """Sync ``emit`` that batches into an async flush by interval, count, or JSON wire bytes."""
 
     def __init__(
         self,
         flush: Callable[[list[OperatorActivity]], Awaitable[None]],
         *,
         max_batch: int = 50,
+        max_batch_bytes: int = 512 * 1024,
         interval: float = 1.0,
     ) -> None:
         self._flush = flush
         self._max_batch = max_batch
+        self._max_batch_bytes = max_batch_bytes
         self._interval = interval
         self._buffer: list[OperatorActivity] = []
+        self._buffer_bytes = 0
         self._timer: asyncio.TimerHandle | None = None
         self._pending: set[asyncio.Task[None]] = set()
         self._flush_lock = asyncio.Lock()
 
     def emit(self, activity: OperatorActivity) -> None:
+        size = len(json.dumps(activity.model_dump(mode="json")))
+        if self._buffer and self._buffer_bytes + size > self._max_batch_bytes:
+            self._schedule_flush()
         self._buffer.append(activity)
+        self._buffer_bytes += size
         if len(self._buffer) >= self._max_batch:
             self._schedule_flush()
         elif self._timer is None:
@@ -57,6 +65,7 @@ class BatchingActivitySink:
         if not self._buffer:
             return
         batch, self._buffer = self._buffer, []
+        self._buffer_bytes = 0
         task = asyncio.get_running_loop().create_task(self._run_flush(batch))
         self._pending.add(task)
         task.add_done_callback(self._pending.discard)

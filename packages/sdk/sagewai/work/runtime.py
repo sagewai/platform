@@ -308,7 +308,7 @@ class _NativeRuntime:
         return OperatorResult.model_validate(
             {
                 **result.model_dump(),
-                "verification": (*result.verification, self._selection_note),
+                "verification": (*result.verification[:99], self._selection_note),
             }
         )
 
@@ -529,11 +529,11 @@ class ClaudeRuntime(_NativeRuntime):
 
         def on_stdout_line(line: str) -> None:
             nonlocal claude_result
-            for activity in parse_claude_stream_line(line, counter):
-                emit(activity)
             result = claude_result_from_line(line)
             if result is not None:
                 claude_result = result
+            for activity in parse_claude_stream_line(line, counter):
+                emit(activity)
 
         process = await run_worker_subprocess(
             argv=stream_argv,

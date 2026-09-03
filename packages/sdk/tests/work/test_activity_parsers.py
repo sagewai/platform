@@ -106,6 +106,44 @@ def test_claude_synthetic_lines_map_thinking_errors_and_unknowns() -> None:
     assert parse_claude_stream_line(json.dumps({"type": "system", "subtype": "init"}), counter) == []
 
 
+def test_claude_string_assistant_content_becomes_raw() -> None:
+    counter = ActivityCounter(project_id="p", work_id="w", run_id="r")
+    line = json.dumps({"type": "assistant", "message": {"content": "plain string"}})
+
+    events = parse_claude_stream_line(line, counter)
+
+    assert [(event.kind, event.summary) for event in events] == [("raw", line)]
+
+
+def test_claude_non_list_user_content_becomes_raw() -> None:
+    counter = ActivityCounter(project_id="p", work_id="w", run_id="r")
+    line = json.dumps(
+        {"type": "user", "message": {"content": {"type": "tool_result", "content": "done"}}}
+    )
+
+    events = parse_claude_stream_line(line, counter)
+
+    assert [(event.kind, event.summary) for event in events] == [("raw", line)]
+
+
+def test_claude_non_mapping_result_usage_becomes_raw() -> None:
+    counter = ActivityCounter(project_id="p", work_id="w", run_id="r")
+    line = json.dumps(
+        {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "usage": [{"input_tokens": 5}],
+            "total_cost_usd": 0.01,
+            "structured_output": {"project_id": "p", "work_id": "w", "run_id": "r"},
+        }
+    )
+
+    events = parse_claude_stream_line(line, counter)
+
+    assert [(event.kind, event.summary) for event in events] == [("raw", line)]
+
+
 def test_claude_result_line_exposes_structured_output() -> None:
     from sagewai.work.activity_parsers import claude_result_from_line
 

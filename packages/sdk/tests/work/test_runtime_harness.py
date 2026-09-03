@@ -211,6 +211,23 @@ async def test_valid_result_on_first_turn_passes_with_selection_note_and_usage(t
 
 
 @pytest.mark.asyncio
+async def test_harness_selection_note_replaces_last_verification_entry_at_bound(tmp_path) -> None:
+    payload = json.loads(_valid(_request()))
+    payload["verification"] = [f"v{index}" for index in range(100)]
+    runtime = HarnessRuntime(
+        tier="simple",
+        tiers=TIERS,
+        backends=BACKENDS,
+        agent_factory=_factory([json.dumps(payload)]),
+    )
+
+    result = await runtime.run(_request(), _capsule(), _capabilities(), _workspace(tmp_path))
+
+    assert len(result.verification) == 100
+    assert result.verification[-1] == "harness tier=simple backend=ollama model=qwen3:8b"
+
+
+@pytest.mark.asyncio
 async def test_invalid_answer_gets_feedback_turns_then_fails(tmp_path) -> None:
     factory = _factory(["not json", "{\"status\": \"passed\"}", "still wrong"])
     runtime = HarnessRuntime(tier="simple", tiers=TIERS, backends=BACKENDS, agent_factory=factory)
@@ -361,7 +378,7 @@ async def test_router_decision_rejects_unconfigured_models(tmp_path) -> None:
     result = await runtime.run(_request(), _capsule(), _capabilities(), _workspace(tmp_path))
 
     assert result.status == "failed"
-    assert result.summary == "provider failure: router selected an unconfigured model"
+    assert result.summary == "configuration failure: router selected an unconfigured model"
 
 
 def test_unknown_tier_or_backend_is_rejected_at_construction() -> None:
@@ -435,7 +452,7 @@ async def test_tools_close_on_build_failure(tmp_path, monkeypatch: pytest.Monkey
     result = await runtime.run(_request(), _capsule(), _capabilities(), _workspace(tmp_path))
 
     assert result.status == "failed"
-    assert result.summary == "filesystem: bad grant"
+    assert result.summary == "configuration failure: filesystem: bad grant"
     assert tools[0].close_calls == 1
 
 
@@ -457,7 +474,7 @@ async def test_tools_close_on_mid_run_exception(tmp_path, monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
-async def test_provider_value_error_is_provider_failure(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_provider_value_error_is_configuration_failure(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     _tools, _calls = _fake_tools(monkeypatch)
     runtime = HarnessRuntime(
         tier="simple",
@@ -469,7 +486,7 @@ async def test_provider_value_error_is_provider_failure(tmp_path, monkeypatch: p
     result = await runtime.run(_request(), _capsule(), _capabilities(), _workspace(tmp_path))
 
     assert result.status == "failed"
-    assert result.summary == "provider failure: bad provider payload"
+    assert result.summary == "configuration failure: bad provider payload"
 
 
 @pytest.mark.asyncio
@@ -488,7 +505,7 @@ async def test_grant_config_value_error_fails_and_names_the_grant(
     result = await runtime.run(_request(), _capsule(), _capabilities(), _workspace(tmp_path))
 
     assert result.status == "failed"
-    assert result.summary == "filesystem: roots missing"
+    assert result.summary == "configuration failure: filesystem: roots missing"
 
 
 def _cli_capabilities() -> CapabilitySet:
@@ -518,7 +535,7 @@ async def test_cli_grant_without_sandbox_fails(tmp_path) -> None:
     result = await runtime.run(_request(), _capsule(), _cli_capabilities(), _workspace(tmp_path))
 
     assert result.status == "failed"
-    assert result.summary == "cli:echo: cli grants require a sandbox backend"
+    assert result.summary == "configuration failure: cli:echo: cli grants require a sandbox backend"
 
 
 @pytest.mark.asyncio

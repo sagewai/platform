@@ -333,6 +333,10 @@ appear as `fleet:<org>`. Task API callers should send project scope with
 `X-Project-ID`; missing scope returns 400, while an unknown Task or a Task
 outside the scope returns 404.
 
+Fleet workers and the control plane must run the same SDK version: the result
+envelope and the progress path changed together, and neither side accepts the
+other's older shape.
+
 Fleet workers post live activity for claimed `work.operator` tasks to
 `POST /api/v1/fleet/progress`. The endpoint accepts batches of at most 50
 entries and 640 KiB, in sequence order per run, and feeds the same activity

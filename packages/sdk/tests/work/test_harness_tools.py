@@ -28,6 +28,8 @@ from sagewai.models.tool import ToolSpec
 from sagewai.work.harness_tools import FILE_SIZE_CAP, HarnessTools, as_data, build_harness_tools
 from sagewai.work.runtime import CapabilityGrant
 
+_SANDBOX = object()  # build-time tests never execute cli tools
+
 
 def _grant(
     name: str,
@@ -311,7 +313,11 @@ async def test_filesystem_fd_walk_refuses_swapped_directory_symlink(
 
 
 @pytest.mark.asyncio
-async def test_cli_tool_runs_the_exact_executable_with_validated_args(tmp_path: Path) -> None:
+async def test_cli_tool_rejects_args_outside_the_grant(tmp_path: Path) -> None:
+    class RefusingSandbox:
+        async def exec(self, tool_call: Any) -> Any:
+            raise AssertionError("rejected arguments must never reach the sandbox")
+
     grant = _grant(
         "cli:python",
         "cli",
@@ -324,17 +330,13 @@ async def test_cli_tool_runs_the_exact_executable_with_validated_args(tmp_path: 
     tools = await _tools(
         grants=(grant,),
         workspace_path=tmp_path,
-        sandbox=None,
+        sandbox=RefusingSandbox(),
         write=False,
     )
-    result = await tools["cli_python"].handler(args=["-c", "print(7)"])
-    assert result["data"]["returncode"] == 0 and result["data"]["stdout"].strip() == "7"
-    assert "error" in (
-        await tools["cli_python"].handler(args=["-c", "print(1); import os"])
-    )["data"]
-    assert "error" in (await tools["cli_python"].handler(args=["a", "b", "c", "d", "e"]))[
-        "data"
-    ]
+    rejected = await tools["cli_python"].handler(args=["-c", "print(1); import os"])
+    assert "error" in rejected["data"]
+    too_many = await tools["cli_python"].handler(args=["a", "b", "c", "d", "e"])
+    assert "error" in too_many["data"]
 
 
 @pytest.mark.asyncio
@@ -345,7 +347,7 @@ async def test_cli_executable_must_be_absolute(tmp_path: Path) -> None:
         {"executable": "python", "arg_pattern": ".*", "max_args": 1},
     )
     with pytest.raises(ValueError, match="absolute"):
-        await build_harness_tools(grants=(grant,), workspace_path=tmp_path, sandbox=None, write=False)
+        await build_harness_tools(grants=(grant,), workspace_path=tmp_path, sandbox=_SANDBOX, write=False)
 
 
 @pytest.mark.asyncio
@@ -408,7 +410,7 @@ async def test_cli_and_mcp_grant_shape_errors_are_value_errors_with_grant_name(
             await build_harness_tools(
                 grants=(grant,),
                 workspace_path=tmp_path,
-                sandbox=None,
+                sandbox=_SANDBOX if grant.kind == "cli" else None,
                 write=False,
                 mcp_connections=mcp_connections,
             )
@@ -432,6 +434,7 @@ async def test_cli_rejects_overlong_argument_before_regex(
             ),
         ),
         workspace_path=tmp_path,
+        sandbox=_SANDBOX,
     )
     start = time.monotonic()
     result = await tools["cli_echo"].handler(args=["a" * 5_000])
@@ -443,10 +446,11 @@ def test_cli_rejects_nested_quantifier_patterns_at_build(tmp_path: Path) -> None
     for pattern in (r"^(a+)+$", r"^([A-Za-z0-9_]+\s?)+$", r"^(\w+\s?)*$"):
         grant = _grant("cli:python", "cli", {"executable": sys.executable, "arg_pattern": pattern, "max_args": 2})
         with pytest.raises(ValueError, match="nested quantifier"):
-            asyncio.run(build_harness_tools(grants=(grant,), workspace_path=tmp_path, sandbox=None, write=False))
+            asyncio.run(build_harness_tools(grants=(grant,), workspace_path=tmp_path, sandbox=_SANDBOX, write=False))
     benign = _grant("cli:python", "cli", {"executable": sys.executable, "arg_pattern": r"^[-A-Za-z0-9_.=/()]+$", "max_args": 2})
-    tools = asyncio.run(build_harness_tools(grants=(benign,), workspace_path=tmp_path, sandbox=None, write=False))
+    tools = asyncio.run(build_harness_tools(grants=(benign,), workspace_path=tmp_path, sandbox=_SANDBOX, write=False))
     asyncio.run(tools.close())
+
 
 @pytest.mark.asyncio
 async def test_cli_sandbox_call_receives_workspace_cwd(tmp_path: Path) -> None:
@@ -480,8 +484,9 @@ async def test_cli_sandbox_call_receives_workspace_cwd(tmp_path: Path) -> None:
     }
 
 
+@pytest.mark.parametrize("write", [False, True])
 @pytest.mark.asyncio
-async def test_cli_grants_are_refused_for_write_stages_without_a_sandbox(tmp_path: Path) -> None:
+async def test_cli_grants_are_refused_without_a_sandbox(tmp_path: Path, write: bool) -> None:
     grant = _grant(
         "cli:python",
         "cli",
@@ -489,7 +494,7 @@ async def test_cli_grants_are_refused_for_write_stages_without_a_sandbox(tmp_pat
     )
     with pytest.raises(ValueError, match="sandbox"):
         await build_harness_tools(
-            grants=(grant,), workspace_path=tmp_path, sandbox=None, write=True
+            grants=(grant,), workspace_path=tmp_path, sandbox=None, write=write
         )
 
 
@@ -887,7 +892,7 @@ async def test_duplicate_tool_names_and_unknown_grant_kinds_raise_at_build(tmp_p
         await build_harness_tools(
             grants=duplicate_grants,
             workspace_path=tmp_path,
-            sandbox=None,
+            sandbox=_SANDBOX,
             write=False,
         )
 

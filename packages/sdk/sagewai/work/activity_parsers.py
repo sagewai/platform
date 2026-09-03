@@ -19,6 +19,7 @@ Pinned integrations: codex-cli 0.147 (`codex exec --json`, one JSON object per l
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
@@ -121,7 +122,10 @@ def parse_claude_stream_line(line: str, counter: ActivityCounter) -> list[Operat
     kind = payload.get("type", "")
     if kind == "assistant":
         events = []
-        for block in (payload.get("message") or {}).get("content", ()):
+        content = (payload.get("message") or {}).get("content", ())
+        if not isinstance(content, list):
+            return [counter.next(source="claude", kind="raw", summary=line)]
+        for block in content:
             block_type = block.get("type")
             if block_type == "text":
                 events.append(counter.next(source="claude", kind="message", summary=block.get("text", "")))
@@ -139,14 +143,23 @@ def parse_claude_stream_line(line: str, counter: ActivityCounter) -> list[Operat
         return events
     if kind == "user":
         events = []
-        for block in (payload.get("message") or {}).get("content", ()):
+        content = (payload.get("message") or {}).get("content", ())
+        if not isinstance(content, list):
+            return [counter.next(source="claude", kind="raw", summary=line)]
+        for block in content:
             if block.get("type") == "tool_result":
-                content = block.get("content")
-                text = content if isinstance(content, str) else json.dumps(content, sort_keys=True)
+                block_content = block.get("content")
+                text = (
+                    block_content
+                    if isinstance(block_content, str)
+                    else json.dumps(block_content, sort_keys=True)
+                )
                 events.append(counter.next(source="claude", kind="tool_result", summary=text, detail=text))
         return events
     if kind == "result":
         usage = payload.get("usage") or {}
+        if not isinstance(usage, Mapping):
+            return [counter.next(source="claude", kind="raw", summary=line)]
         return [
             counter.next(
                 source="claude",

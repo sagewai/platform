@@ -18,7 +18,14 @@ from pathlib import Path
 import pytest
 
 from sagewai.artifacts import LocalArtifactStore
-from sagewai.work import ClaudeRuntime, CodexRuntime, ListActivitySink, OperatorActivity
+from sagewai.work import (
+    ClaudeRuntime,
+    CodexRuntime,
+    ListActivitySink,
+    OperatorActivity,
+    OperatorResult,
+)
+from sagewai.work.runtime import _NativeRuntime
 
 from .test_runtime import _capabilities, _capsule, _request, _workspace
 
@@ -53,6 +60,23 @@ def _write_fake(tmp_path: Path, name: str, body: str, *, calls_path: Path | None
     executable.write_text(textwrap.dedent(body))
     executable.chmod(0o755)
     return FakeExecutable(executable, calls_path=calls_path)
+
+
+def _operator_result_with_verification(count: int) -> OperatorResult:
+    return OperatorResult(
+        project_id="project-a",
+        work_id="work-1",
+        run_id="run-1",
+        status="passed",
+        summary="done",
+        evidence_refs=(),
+        artifact_refs=(),
+        changes=(),
+        verification=tuple(f"v{index}" for index in range(count)),
+        risks=(),
+        action_results=(),
+        profile_context={},
+    )
 
 
 def _global_request():
@@ -307,6 +331,70 @@ def fake_claude_stream_without_structured_output(tmp_path: Path) -> FakeExecutab
     )
 
 
+@pytest.fixture
+def fake_claude_stream_with_structured_output(tmp_path: Path) -> FakeExecutable:
+    calls_path = tmp_path.parent / f"{tmp_path.name}-claude-structured-calls.txt"
+    return _write_fake(
+        tmp_path,
+        "fake-claude-stream-with-structured-output",
+        f"""\
+        #!{sys.executable}
+        import json
+        import pathlib
+        import sys
+
+        calls_path = pathlib.Path({str(calls_path)!r})
+        output_format = sys.argv[sys.argv.index("--output-format") + 1]
+        with calls_path.open("a") as handle:
+            handle.write(output_format + "\\n")
+        prompt = json.load(sys.stdin)
+        result = {{
+            "project_id": prompt["request"]["project_id"],
+            "work_id": prompt["request"]["work_id"],
+            "run_id": prompt["request"]["run_id"],
+            "status": "passed",
+            "summary": "fake runtime completed",
+            "evidence_refs": ["command://fake"],
+            "artifact_refs": [],
+            "changes": [],
+            "verification": ["fake executable"],
+            "risks": [],
+            "action_results": [{{
+                "project_id": prompt["request"]["project_id"],
+                "action_id": "action-1",
+                "status": "succeeded",
+                "external_ref": None,
+                "evidence_refs": ["command://fake"],
+                "started_at": "2026-08-26T12:00:00Z",
+                "completed_at": "2026-08-26T12:00:00Z"
+            }}],
+            "profile_context": {{}}
+        }}
+        print(json.dumps({{
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "structured_output": result,
+            "usage": {{"input_tokens": 12, "output_tokens": 7}},
+            "total_cost_usd": 0.01
+        }}), flush=True)
+        """,
+        calls_path=calls_path,
+    )
+
+
+def test_native_runtime_selection_note_replaces_last_verification_entry_at_bound() -> None:
+    runtime = _NativeRuntime(
+        executable="/bin/true",
+        selection_note="runtime selection: codex gpt-5",
+    )
+
+    result = runtime._with_selection_evidence(_operator_result_with_verification(100))
+
+    assert len(result.verification) == 100
+    assert result.verification[-1] == "runtime selection: codex gpt-5"
+
+
 @pytest.mark.asyncio
 async def test_codex_runtime_streams_activity_and_archives_the_log(
     tmp_path: Path,
@@ -424,3 +512,30 @@ async def test_claude_runtime_uses_stream_json_and_falls_back_to_json(
     )
     assert result.verification[-1] == "claude: note"
     assert fake_claude_stream_without_structured_output.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_claude_runtime_keeps_structured_result_when_activity_parser_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_claude_stream_with_structured_output: FakeExecutable,
+) -> None:
+    def fail_parse_claude_stream_line(_line, _counter):
+        raise RuntimeError("parser exploded")
+
+    monkeypatch.setattr(
+        "sagewai.work.runtime.parse_claude_stream_line",
+        fail_parse_claude_stream_line,
+    )
+    runtime = ClaudeRuntime(
+        executable=fake_claude_stream_with_structured_output,
+        timeout=5,
+    )
+
+    result = await runtime.run(_request(), _capsule(), _capabilities(), _workspace(tmp_path))
+
+    assert result.status == "passed"
+    assert result.summary == "fake runtime completed"
+    assert result.input_tokens == 12
+    assert result.output_tokens == 7
+    assert fake_claude_stream_with_structured_output.calls == 1

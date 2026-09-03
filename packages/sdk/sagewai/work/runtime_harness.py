@@ -241,7 +241,7 @@ class HarnessRuntime:
                     mcp_connections=self._mcp_connections,
                 )
             except ValueError as exc:
-                result = _failed_result(request, str(exc))
+                result = _failed_result(request, f"configuration failure: {exc}")
             else:
                 agent = self._agent_factory(
                     name=f"harness:{resolved.tier}",
@@ -273,6 +273,8 @@ class HarnessRuntime:
             result = _failed_result(request, str(exc))
         except _InvalidResultError as exc:
             result = _failed_result(request, str(exc))
+        except ValueError as exc:
+            result = _failed_result(request, f"configuration failure: {exc}")
         except Exception as exc:
             result = _failed_result(request, f"provider failure: {exc}")
         finally:
@@ -284,7 +286,7 @@ class HarnessRuntime:
                 "input_tokens": meter.input_tokens,
                 "output_tokens": meter.output_tokens,
                 "cost_usd": meter.cost_usd,
-                "verification": (*result.verification, resolved.note()),
+                "verification": (*result.verification[:99], resolved.note()),
             }
         )
         return archive_activity_log(

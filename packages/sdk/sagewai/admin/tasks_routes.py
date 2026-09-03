@@ -36,7 +36,16 @@ async def task_events(task_id: str, request: Request) -> EventSourceResponse:
     store: TaskStore = request.app.state.task_store
     if await store.load_record(task_id, project_id=project_id) is None:
         raise HTTPException(status_code=404, detail="Not found")
-    after = int(request.headers.get("last-event-id", "0") or 0)
+    last_event_id = request.headers.get("last-event-id")
+    if last_event_id is None:
+        after = 0
+    else:
+        try:
+            after = int(last_event_id)
+        except ValueError as exc:
+            raise HTTPException(400, "Last-Event-ID must be a non-negative integer") from exc
+        if after < 0 or after > 2**63 - 1:
+            raise HTTPException(400, "Last-Event-ID must be a non-negative integer")
     heartbeat_seconds = float(os.environ.get("TASK_SSE_HEARTBEAT", "15"))
     queue = store.feed_bus.subscribe(project_id, task_id)
     return EventSourceResponse(

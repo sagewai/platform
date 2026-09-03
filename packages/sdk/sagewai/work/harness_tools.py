@@ -26,7 +26,6 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import SplitResult, quote, urljoin, urlsplit
 
-from sagewai.fleet.execution import run_worker_subprocess
 from sagewai.models.tool import ToolSpec
 from sagewai.sandbox.tool_dispatcher import SandboxedToolDispatcher
 from sagewai.tools.builtins import http_parsing
@@ -126,9 +125,9 @@ async def build_harness_tools(
                 roots.extend(grant_roots)
                 _append_specs(specs=specs, names=names, new_specs=grant_specs)
             elif grant.kind == "cli":
+                if sandbox is None:
+                    raise ValueError("cli grants require a sandbox backend")
                 cli_tool = _cli_tool(grant=grant, workspace=workspace, sandbox=sandbox)
-                if write and sandbox is None:
-                    raise ValueError("cli grants require a sandbox backend for write stages")
                 _append_specs(
                     specs=specs,
                     names=names,
@@ -479,46 +478,28 @@ def _cli_tool(*, grant: CapabilityGrant, workspace: Path, sandbox: Any) -> ToolS
         if error is not None:
             return as_data({"error": error})
         argv = [executable, *args]
-        if sandbox is not None:
-            sandbox_result = await SandboxedToolDispatcher(sandbox).run(
-                tool="bash",
-                args={"command": shlex.join(argv), "cwd": str(workspace)},
-                call_id=f"cli-{uuid.uuid4().hex}",
-                timeout_s=timeout,
-            )
-            payload = {
-                "returncode": (
-                    sandbox_result.exit_code
-                    if sandbox_result.exit_code is not None
-                    else int(not sandbox_result.ok)
-                ),
-                "stdout": sandbox_result.stdout[-16_000:],
-                "stderr": sandbox_result.stderr[-16_000:],
-                "timed_out": (
-                    sandbox_result.error is not None
-                    and "timeout" in sandbox_result.error.lower()
-                ),
-            }
-            if sandbox_result.error is not None:
-                payload["error"] = sandbox_result.error
-            return as_data(payload)
-        try:
-            host_result = await run_worker_subprocess(
-                argv=argv,
-                cwd=workspace,
-                timeout=timeout,
-                output_limit=16_000,
-            )
-        except OSError as exc:
-            return as_data({"error": str(exc)})
-        return as_data(
-            {
-                "returncode": host_result.returncode,
-                "stdout": host_result.stdout,
-                "stderr": host_result.stderr,
-                "timed_out": host_result.timed_out,
-            }
+        sandbox_result = await SandboxedToolDispatcher(sandbox).run(
+            tool="bash",
+            args={"command": shlex.join(argv), "cwd": str(workspace)},
+            call_id=f"cli-{uuid.uuid4().hex}",
+            timeout_s=timeout,
         )
+        payload = {
+            "returncode": (
+                sandbox_result.exit_code
+                if sandbox_result.exit_code is not None
+                else int(not sandbox_result.ok)
+            ),
+            "stdout": sandbox_result.stdout[-16_000:],
+            "stderr": sandbox_result.stderr[-16_000:],
+            "timed_out": (
+                sandbox_result.error is not None
+                and "timeout" in sandbox_result.error.lower()
+            ),
+        }
+        if sandbox_result.error is not None:
+            payload["error"] = sandbox_result.error
+        return as_data(payload)
 
     return ToolSpec(
         name=f"cli_{suffix}",

@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -25,18 +26,40 @@ from tests.work.test_fleet_runtime import _request
 NOW = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
 
 
-def _activity_json(sequence: int) -> dict[str, Any]:
+def _activity_json(sequence: int, fill: str | None = None) -> dict[str, Any]:
     request = _request()
-    return OperatorActivity(
-        project_id=request.project_id,
-        work_id=request.work_id,
-        run_id=request.run_id,
-        sequence=sequence,
-        at=NOW,
-        source="claude",
-        kind="message",
-        summary=f"activity {sequence}",
-    ).model_dump(mode="json")
+    values = {
+        "project_id": request.project_id,
+        "work_id": request.work_id,
+        "run_id": request.run_id,
+        "sequence": sequence,
+        "at": NOW,
+        "source": "claude",
+        "kind": "message",
+        "summary": f"activity {sequence}",
+    }
+    if fill is not None:
+        values.update(
+            kind="tool_result",
+            summary=fill * 2000,
+            detail=fill * 8192,
+        )
+    return OperatorActivity(**values).model_dump(mode="json")
+
+
+def _maximal_cjk_batch_for_sink_budget() -> list[dict[str, Any]]:
+    batch: list[dict[str, Any]] = []
+    total = 0
+    for sequence in range(1, 51):
+        activity = _activity_json(sequence, "中")
+        size = len(json.dumps(activity))
+        if total + size > 512 * 1024:
+            break
+        batch.append(activity)
+        total += size
+    assert batch
+    assert total <= 512 * 1024
+    return batch
 
 
 @pytest.mark.asyncio
@@ -63,6 +86,55 @@ async def test_progress_accepts_a_batch_for_the_claimed_run_and_ingests_it(
         project_id=claimed_task["project_id"],
     )
     assert [item.sequence for item in stored] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_progress_accepts_maximal_cjk_batch_bounded_by_sink_budget(
+    client: httpx.AsyncClient,
+    worker: Worker,
+    claimed_task: dict[str, str],
+) -> None:
+    body = {
+        "run_id": claimed_task["run_id"],
+        "activities": _maximal_cjk_batch_for_sink_budget(),
+    }
+    assert len(json.dumps(body)) <= 640 * 1024
+
+    response = await client.post(
+        "/api/v1/fleet/progress",
+        json=body,
+        headers=worker.headers,
+    )
+
+    assert response.status_code == 202
+
+
+@pytest.mark.asyncio
+async def test_progress_rejects_empty_and_non_object_body_with_422(
+    client: httpx.AsyncClient,
+    worker: Worker,
+) -> None:
+    headers = {**worker.headers, "content-type": "application/json"}
+
+    empty = await client.post(
+        "/api/v1/fleet/progress",
+        content=b"",
+        headers=headers,
+    )
+    non_object = await client.post(
+        "/api/v1/fleet/progress",
+        content=b"[]",
+        headers=headers,
+    )
+    string_body = await client.post(
+        "/api/v1/fleet/progress",
+        content=b'"not an object"',
+        headers=headers,
+    )
+
+    assert empty.status_code == 422
+    assert non_object.status_code == 422
+    assert string_body.status_code == 422
 
 
 @pytest.mark.asyncio

@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timezone
 
 import pytest
@@ -152,3 +153,42 @@ async def test_store_writes_one_marker_and_ignores_later_over_cap_batches(store:
     assert len(await store.append([_activity(ACTIVITY_ROW_CAP + 6)])) == 0
     rows = await store.read("w", run_id="w:implement:1", project_id="p", limit=10)
     assert [(item.sequence, item.kind, item.summary) for item in rows] == [(ACTIVITY_ROW_CAP, "raw", "truncated")]
+
+
+@pytest.mark.asyncio
+async def test_store_writes_one_marker_per_over_cap_run_in_same_batch(store: WorkActivityStore) -> None:
+    inserted = await store.append(
+        [
+            _activity(ACTIVITY_ROW_CAP + 5, run_id="run-a"),
+            _activity(ACTIVITY_ROW_CAP + 6, run_id="run-a"),
+            _activity(ACTIVITY_ROW_CAP + 5, run_id="run-b"),
+            _activity(ACTIVITY_ROW_CAP + 6, run_id="run-b"),
+        ]
+    )
+
+    assert len(inserted) == 2
+    run_a = await store.read("w", run_id="run-a", project_id="p", limit=10)
+    run_b = await store.read("w", run_id="run-b", project_id="p", limit=10)
+    assert [(item.sequence, item.kind, item.summary) for item in run_a] == [
+        (ACTIVITY_ROW_CAP, "raw", "truncated")
+    ]
+    assert [(item.sequence, item.kind, item.summary) for item in run_b] == [
+        (ACTIVITY_ROW_CAP, "raw", "truncated")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_store_refuses_sqlite_before_multi_row_returning_floor(
+    dialect_engine,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 34, 1))
+
+    if dialect_engine.dialect.name == "sqlite":
+        with pytest.raises(
+            RuntimeError,
+            match="work_activity requires SQLite 3.35 or newer for multi-row RETURNING",
+        ):
+            WorkActivityStore(engine=dialect_engine)
+    else:
+        WorkActivityStore(engine=dialect_engine)

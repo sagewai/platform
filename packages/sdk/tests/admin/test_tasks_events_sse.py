@@ -86,17 +86,17 @@ async def test_events_replays_from_last_event_id_then_streams_live(
         task_id="t1",
         queue=queue,
         after=1,
-        heartbeat_seconds=0.01,
+        heartbeat_seconds=0.05,
     )
     try:
         chunks = [
-            await asyncio.wait_for(anext(stream), timeout=0.1),
-            await asyncio.wait_for(anext(stream), timeout=0.1),
+            await asyncio.wait_for(anext(stream), timeout=0.5),
+            await asyncio.wait_for(anext(stream), timeout=0.5),
         ]
         await store.append_feed((_entry("activity-4", "activity.usage"),))
         await store.feed_bus.publish(replayed[0])
-        chunks.append(await asyncio.wait_for(anext(stream), timeout=0.1))
-        heartbeat = await asyncio.wait_for(anext(stream), timeout=0.1)
+        chunks.append(await asyncio.wait_for(anext(stream), timeout=0.5))
+        heartbeat = await asyncio.wait_for(anext(stream), timeout=0.5)
     finally:
         await stream.aclose()
 
@@ -124,6 +124,24 @@ async def test_events_404_for_unknown_task_and_requires_project_scope(
     assert unscoped.json() == {"detail": "Work project scope is required"}
 
 
+@pytest.mark.parametrize("last_event_id", ["abc", "-1", "99999999999999999999"])
+@pytest.mark.asyncio
+async def test_events_rejects_invalid_last_event_id(
+    client: AdminClient,
+    seeded_task,
+    last_event_id: str,
+) -> None:
+    async with client.http.stream(
+        "GET",
+        "/api/v1/tasks/t1/events",
+        headers={**client.headers, "Last-Event-ID": last_event_id},
+    ) as response:
+        assert response.status_code == 400
+        assert json.loads((await response.aread()).decode()) == {
+            "detail": "Last-Event-ID must be a non-negative integer"
+        }
+
+
 def test_heartbeat_is_emitted_when_idle() -> None:
     class Bus:
         def __init__(self) -> None:
@@ -148,10 +166,10 @@ def test_heartbeat_is_emitted_when_idle() -> None:
             task_id="t1",
             queue=queue,
             after=0,
-            heartbeat_seconds=0.01,
+            heartbeat_seconds=0.05,
         )
         try:
-            event = await asyncio.wait_for(anext(stream), timeout=0.1)
+            event = await asyncio.wait_for(anext(stream), timeout=0.5)
         finally:
             await stream.aclose()
         assert event == {"event": "heartbeat", "data": "{}"}

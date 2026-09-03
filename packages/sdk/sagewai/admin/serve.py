@@ -4394,11 +4394,11 @@ def create_admin_serve_app(
         raw = await request.body()
         if len(raw) > 640 * 1024:
             return JSONResponse({"detail": "batch too large"}, status_code=413)
-        body = json.loads(raw)
         try:
+            body = json.loads(raw)
             run_id = str(body.get("run_id", ""))
             activities = operator_activity_batch.validate_python(body.get("activities", ()))
-        except (AttributeError, ValidationError):
+        except (AttributeError, ValidationError, ValueError):
             return JSONResponse({"detail": "invalid activity"}, status_code=422)
         if len(activities) > 50:
             return JSONResponse({"detail": "batch too large"}, status_code=413)

@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, Protocol
@@ -187,6 +188,8 @@ class WorkActivityStore:
     """Durable per-run activity, capped at ``ACTIVITY_ROW_CAP`` rows with a final truncation marker."""
 
     def __init__(self, *, engine: AsyncEngine) -> None:
+        if engine.dialect.name == "sqlite" and sqlite3.sqlite_version_info < (3, 35, 0):
+            raise RuntimeError("work_activity requires SQLite 3.35 or newer for multi-row RETURNING")
         self._engine = engine
         self._table = WorkActivityModel.__table__
 
@@ -201,11 +204,11 @@ class WorkActivityStore:
         if not activities:
             return []
         rows = []
-        marker_written = False
+        marker_written: set[tuple[str | None, str, str]] = set()
         for activity in activities:
             if activity.sequence < ACTIVITY_ROW_CAP:
                 rows.append(self._row(activity))
-            elif not marker_written:
+            elif (activity.project_id, activity.work_id, activity.run_id) not in marker_written:
                 rows.append(
                     self._row(
                         activity.model_copy(
@@ -213,7 +216,7 @@ class WorkActivityStore:
                         )
                     )
                 )
-                marker_written = True
+                marker_written.add((activity.project_id, activity.work_id, activity.run_id))
         statement = (
             pg_insert(self._table) if self._engine.dialect.name == "postgresql" else sqlite_insert(self._table)
         ).values(rows)
