@@ -263,6 +263,13 @@ class TaskCoordinator:
         replay: bool,
     ) -> TaskRecord:
         if isinstance(command, StartCycle):
+            if command.scheduled_for is not None and not await self._task_store.record_command(
+                task_id=task.id,
+                project_id=task.project_id,
+                command_id=f"cycle:{command.scheduled_for}",
+                payload={"cycle": command.cycle},
+            ):
+                return record
             entries: list[Entry] = [
                 (
                     TaskEventType.CYCLE_STARTED,

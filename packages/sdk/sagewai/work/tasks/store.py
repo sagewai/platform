@@ -310,6 +310,26 @@ class TaskStore:
             rows = (await conn.execute(query)).all()
         return [self._record_from_row(row._mapping) for row in rows]
 
+    async def list_due(
+        self, *, project_id: str, now: datetime, limit: int = 50
+    ) -> list[TaskRecord]:
+        """Scheduled Tasks whose next run has passed, earliest first."""
+        scope = project_scope_key(project_id)
+        query = (
+            select(self._tasks)
+            .where(
+                self._tasks.c.project_scope_key == scope,
+                self._tasks.c.status == TaskStatus.SCHEDULED.value,
+                self._tasks.c.next_run_at.is_not(None),
+                self._tasks.c.next_run_at <= now,
+            )
+            .order_by(self._tasks.c.next_run_at)
+            .limit(limit)
+        )
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(query)).all()
+        return [self._record_from_row(row._mapping) for row in rows]
+
     # ── leases ────────────────────────────────────────────────────────────
 
     async def claim(self, task_id: str, *, project_id: str, owner: str, ttl_seconds: int) -> int | None:
