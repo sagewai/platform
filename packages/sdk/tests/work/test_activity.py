@@ -98,7 +98,7 @@ async def test_store_prunes_old_rows_for_completed_work(store: WorkActivityStore
 
 @pytest.mark.asyncio
 async def test_store_scopes_each_row_by_its_own_project(store: WorkActivityStore) -> None:
-    assert await store.append([]) == 0
+    assert len(await store.append([])) == 0
     await store.append([_activity(1), _activity(1, project_id="other")])
     assert [item.project_id for item in await store.read("w", run_id="w:implement:1", project_id="p")] == ["p"]
     assert [item.project_id for item in await store.read("w", run_id="w:implement:1", project_id="other")] == ["other"]
@@ -107,14 +107,14 @@ async def test_store_scopes_each_row_by_its_own_project(store: WorkActivityStore
 @pytest.mark.asyncio
 async def test_store_round_trips_global_scope_activity(store: WorkActivityStore) -> None:
     item = _activity(1, project_id=None)
-    assert await store.append([item]) == 1
+    assert len(await store.append([item])) == 1
     assert await store.read("w", run_id="w:implement:1", project_id=None) == [item]
     assert await store.read("w", run_id="w:implement:1", project_id="p") == []
 
 
 @pytest.mark.asyncio
 async def test_store_writes_one_marker_and_ignores_later_over_cap_batches(store: WorkActivityStore) -> None:
-    assert await store.append([_activity(ACTIVITY_ROW_CAP + 5), _activity(ACTIVITY_ROW_CAP)]) == 1
-    assert await store.append([_activity(ACTIVITY_ROW_CAP + 6)]) == 0
+    assert len(await store.append([_activity(ACTIVITY_ROW_CAP + 5), _activity(ACTIVITY_ROW_CAP)])) == 1
+    assert len(await store.append([_activity(ACTIVITY_ROW_CAP + 6)])) == 0
     rows = await store.read("w", run_id="w:implement:1", project_id="p", limit=10)
     assert [(item.sequence, item.kind, item.summary) for item in rows] == [(ACTIVITY_ROW_CAP, "raw", "truncated")]

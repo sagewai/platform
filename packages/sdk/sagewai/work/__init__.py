@@ -20,6 +20,7 @@ from sagewai.work.activity import (
     WorkActivityStore,
     activity_redactor,
 )
+from sagewai.work.activity_ingestion import ActivityIngestion, BatchingActivitySink
 from sagewai.work.capsule import TaskCapsuleCompiler
 from sagewai.work.completion import (
     evaluate_completion,
@@ -111,8 +112,10 @@ __all__ = [
     "ActionResult",
     "ActionScope",
     "ActivityKind",
+    "ActivityIngestion",
     "ActivitySink",
     "ActivitySource",
+    "BatchingActivitySink",
     "CapabilityGrant",
     "Assumption",
     "CapabilitySet",

@@ -113,10 +113,10 @@ class WorkActivityStore:
         async with self._engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all, tables=[self._table])
 
-    async def append(self, activities: Sequence[OperatorActivity]) -> int:
+    async def append(self, activities: Sequence[OperatorActivity]) -> list[OperatorActivity]:
         """Insert rows idempotently by sequence; rows beyond the cap collapse into one marker."""
         if not activities:
-            return 0
+            return []
         rows = []
         marker_written = False
         for activity in activities:
@@ -138,9 +138,9 @@ class WorkActivityStore:
             result = await conn.execute(
                 statement.on_conflict_do_nothing(
                     index_elements=["project_scope_key", "work_id", "run_id", "sequence"]
-                )
+                ).returning(self._table.c.event_json)
             )
-        return result.rowcount
+        return [OperatorActivity.model_validate(row) for row in result.scalars().all()]
 
     async def read(
         self, work_id: str, *, run_id: str, project_id: str | None, after: int = 0, limit: int = 500

@@ -902,8 +902,9 @@ def create_admin_serve_app(
         # Must run before any store reads/writes so all tables exist.
         await _db_factory.ensure_schema()
 
-        from sagewai.work import WorkStore
+        from sagewai.work import WorkActivityStore, WorkStore
         app.state.work_store = WorkStore(engine=_db_factory.get_engine())
+        app.state.activity_store = WorkActivityStore(engine=_db_factory.get_engine())
         from sagewai.work.tasks import TaskStore
         app.state.task_store = TaskStore(engine=_db_factory.get_engine())
 
@@ -1545,6 +1546,10 @@ def create_admin_serve_app(
         ),
         prefix="/api/v1/harness",
     )
+
+    from sagewai.admin.tasks_routes import router as tasks_router
+
+    app.include_router(tasks_router)
 
     # ── Setup ────────────────────────────────────────────────────
 
