@@ -65,6 +65,7 @@ async def _pump_workers_until_done(invocation, *runners) -> list[dict]:
 
 
 work_module = import_module("sagewai.cli.work")
+assembly_module = import_module("sagewai.work.profiles.software.assembly")
 
 
 class _LocalVerification:
@@ -237,7 +238,7 @@ async def test_work_cli_completes_through_heterogeneous_fleet_workers(
         "example.invalid/verifier@sha256:" + "a" * 64,
     )
     monkeypatch.setattr(work_module.factory, "get_engine", lambda: engine)
-    monkeypatch.setattr(work_module, "SandboxedVerificationRunner", _LocalVerification)
+    monkeypatch.setattr(assembly_module, "SandboxedVerificationRunner", _LocalVerification)
 
     async def repository_state():
         return repository, base_sha

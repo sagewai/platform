@@ -55,6 +55,9 @@ class RecordingGitHub(FakeGitHub):
         self.labeled_issues = (*self.labeled_issues, issue)
         return issue
 
+    async def fetch_issue(self, issue_url: str) -> GitHubIssue:
+        return next(issue for issue in self.labeled_issues if issue.url == issue_url)
+
 
 def _flow(store: WorkStore, **kwargs) -> GitHubIssueLifecycle:
     return GitHubIssueLifecycle(

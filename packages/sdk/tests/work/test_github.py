@@ -167,6 +167,7 @@ class FakeSoftwareLifecycle:
             )
         if self.pause_analysis:
             self.analysis_contracts[work_item.id] = contract
+        software = SoftwareContractContext.model_validate(contract.profile_context)
         record = WorkRecord(
             work_id=work_item.id,
             project_id=work_item.project_id,
@@ -176,7 +177,11 @@ class FakeSoftwareLifecycle:
             contract_version=None if self.pause_analysis else contract.version,
             active_run_id="review-1",
             pending_gate=None,
-            profile_context={"base_sha": contract.profile_context["base_sha"]},
+            profile_context=(
+                {"base_sha": software.base_sha}
+                if software.task_id is None
+                else {"base_sha": software.base_sha, "task_id": software.task_id}
+            ),
             created_at=NOW,
             updated_at=NOW,
         )
