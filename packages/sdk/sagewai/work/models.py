@@ -211,7 +211,14 @@ class Action(BaseModel):
 
 
 class ActionResult(BaseModel):
-    """Receipt produced by execution of an action."""
+    """Receipt produced by execution of an action.
+
+    ``action_id`` is a stable key derived from durable facts —
+    ``revert:<work_id>:<pull_request_number>``, ``delete_comment:<work_id>:<comment_id>``,
+    ``deliver:<work_id>:<sink_version>`` on the Task stream and
+    ``merge:<work_id>:<pull_request_number>`` on the Work stream — not a foreign key into an
+    ``Action`` row.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

@@ -384,6 +384,36 @@ async def test_worktree_is_pinned_retryable_and_detects_unexpected_head_movement
 
 
 @pytest.mark.asyncio
+async def test_worktree_release_allows_reprepare_at_a_new_base(tmp_path: Path) -> None:
+    repository, base_sha = _repository(tmp_path)
+    manager = SoftwareWorktreeManager(root=tmp_path / "worktrees")
+    workspace = await manager.prepare(
+        repository=repository,
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="attempt-1",
+        base_sha=base_sha,
+    )
+
+    await manager.release(workspace)
+    assert not workspace.path.exists()
+    (repository / "README.md").write_text("second base\n")
+    _git(repository, "add", "README.md")
+    _git(repository, "commit", "-m", "second base")
+    second_sha = _git(repository, "rev-parse", "HEAD")
+    reprepared = await manager.prepare(
+        repository=repository,
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="attempt-1",
+        base_sha=second_sha,
+    )
+
+    assert reprepared.initial_sha == second_sha
+    assert (reprepared.path / "README.md").read_text() == "second base\n"
+
+
+@pytest.mark.asyncio
 async def test_restore_uncommitted_resets_tracked_cleans_untracked_keeps_ignored_and_refuses_moved_head(
     tmp_path: Path,
 ) -> None:

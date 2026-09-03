@@ -16,7 +16,6 @@ from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from sagewai.fleet.execution import run_worker_subprocess
 from sagewai.work.models import SUPERSEDED, WorkRecord
 from sagewai.work.profiles.software.assembly import (
     ControllerFactory,
@@ -30,6 +29,7 @@ from sagewai.work.profiles.software.github import (
     GitHubIssueLifecycle,
     GitHubPullRequest,
 )
+from sagewai.work.profiles.software.scm import fetch_default_branch_head
 from sagewai.work.store import WorkStore
 from sagewai.work.tasks.budget import BudgetLedger, MeteredOperatorController
 from sagewai.work.tasks.decisions import merge_policy_for
@@ -85,17 +85,10 @@ class SoftwareProfileRunner:
         """Fetch origin and return the default-branch head that the next Work pins."""
         target = self._target(task)
         repository = Path(target.repository_path)
-        fetched = await run_worker_subprocess(
-            argv=("git", "fetch", "origin", target.default_branch), cwd=repository
-        )
-        if fetched.returncode != 0:
-            raise ValueError(f"git fetch failed for {target.owner}/{target.repo}: {fetched.stderr}")
-        head = await run_worker_subprocess(
-            argv=("git", "rev-parse", f"origin/{target.default_branch}"), cwd=repository
-        )
-        if head.returncode != 0:
-            raise ValueError(f"no head for origin/{target.default_branch}: {head.stderr}")
-        return head.stdout.strip()
+        try:
+            return await fetch_default_branch_head(repository, target.default_branch)
+        except ValueError as exc:
+            raise ValueError(f"{exc} for {target.owner}/{target.repo}") from exc
 
     async def plan(
         self,
