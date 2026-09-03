@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import subprocess
+from importlib import import_module
 from pathlib import Path
 
 import pytest
@@ -39,8 +40,11 @@ from sagewai.work.profiles.software.fleet_workspace import (
 from sagewai.work.profiles.software.models import SoftwareWorkspace
 from sagewai.work.profiles.software.scm import SoftwareWorktreeManager, workspace_diff
 from sagewai.work.runtime import ClaudeRuntime, CodexRuntime
+from sagewai.work.tasks.models import HarnessTier
 
 from .test_fleet_runtime import _capabilities, _capsule, _request, _result
+
+fleet_worker_module = import_module("sagewai.work.profiles.software.fleet_worker")
 
 
 def _digest(value: bytes) -> str:
@@ -437,13 +441,50 @@ async def test_software_handler_rejects_unsupported_claude_stage_before_runtime(
     assert resolver.captured == []
 
 
-def test_fleet_operator_task_payload_has_no_runtime_configuration_fields() -> None:
+@pytest.mark.asyncio
+async def test_software_handler_closes_progress_sink_when_harness_tier_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed: list[object] = []
+
+    class RecordingBatchingActivitySink(fleet_worker_module.BatchingActivitySink):
+        async def close(self) -> None:
+            closed.append(self)
+            await super().close()
+
+    task = _task(runtime="runtime.harness", stage="implement")
+    task["payload"]["harness_tier"] = "complex"
+    handler = SoftwareFleetTaskHandler(
+        workspace_resolver=_Resolver(),
+        harness_tiers={
+            "simple": HarnessTier(backend="ollama", model="qwen3:8b"),
+        },
+        harness_backends={"ollama": "http://127.0.0.1:11434/v1"},
+    )
+
+    monkeypatch.setattr(
+        fleet_worker_module,
+        "BatchingActivitySink",
+        RecordingBatchingActivitySink,
+    )
+
+    with pytest.raises(ValueError, match="not configured"):
+        await handler(
+            task,
+            _context(capabilities=("runtime.harness", "cli.git")),
+        )
+
+    assert len(closed) == 1
+
+
+def test_fleet_operator_task_payload_has_only_harness_tier_runtime_configuration() -> None:
     assert tuple(FleetOperatorTaskPayload.model_fields) == (
         "kind",
         "request",
         "capsule",
         "capabilities",
         "required_capabilities",
+        "harness_tier",
         "workspace",
     )
 

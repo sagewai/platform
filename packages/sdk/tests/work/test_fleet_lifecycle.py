@@ -12,11 +12,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -33,8 +35,13 @@ from sagewai.fleet import (
 from sagewai.fleet.runner import WorkerRunner, WorkerTaskContext
 from sagewai.work import (
     FLEET_ACTIVITY_LOG_MAX_BYTES,
+    CapabilityGrant,
+    CapabilitySet,
     FleetOperatorResultEnvelope,
     FleetOperatorRuntime,
+    FleetOperatorTaskPayload,
+    FleetWorkspaceTransfer,
+    FleetWorkspaceTransferResult,
     OperatorResult,
     ReviewResult,
     TaskCapsuleCompiler,
@@ -58,10 +65,14 @@ from sagewai.work.profiles.software.fleet_worker import (
     SoftwareFleetWorkspaceResolver,
 )
 from sagewai.work.profiles.software.fleet_workspace import (
+    SOFTWARE_FLEET_WORKSPACE_KIND,
+    SoftwareFleetWorkspaceInput,
+    SoftwareFleetWorkspaceOutput,
     SoftwareFleetWorkspaceTransport,
     software_repository_ref,
 )
 from sagewai.work.runtime import ClaudeRuntime
+from sagewai.work.tasks.models import HarnessTier
 from tests.db.conftest import dialect_engine  # noqa: F401
 from tests.work.fakes_verification import LocalVerificationRunner
 from tests.work.test_fleet_runtime import (
@@ -319,6 +330,86 @@ def _worker_task_for_run(run_id: str) -> dict:
     return task
 
 
+def _harness_capabilities() -> CapabilitySet:
+    return CapabilitySet(
+        project_id="project-a",
+        grants=(
+            CapabilityGrant(
+                project_id="project-a",
+                name="filesystem.write",
+                kind="filesystem",
+                scope={"roots": ["."]},
+                permissions=("workspace.read", "workspace.write"),
+            ),
+        ),
+    )
+
+
+def _harness_task(workspace_path: Path) -> dict:
+    request = _fleet_request().model_copy(update={"stage": "implement"})
+    capsule = _fleet_capsule().model_copy(update={"stage": "implement"})
+    payload = SoftwareFleetWorkspaceInput(
+        repository_ref=f"git-origin://sha256:{'1' * 64}",
+        base_sha="a" * 40,
+        current_sha="b" * 40,
+        cumulative_diff_base64="",
+    )
+    workspace = FleetWorkspaceTransfer(
+        ref="workspace://harness-run",
+        project_id="project-a",
+        work_id="work-1",
+        kind=SOFTWARE_FLEET_WORKSPACE_KIND,
+        input_digest=hashlib.sha256(b"").hexdigest(),
+        payload=payload.model_dump(mode="json"),
+    )
+    return {
+        "run_id": request.run_id,
+        "project_id": request.project_id,
+        "payload": {
+            "kind": "work.operator",
+            "request": request.model_dump(mode="json"),
+            "capsule": capsule.model_dump(mode="json"),
+            "capabilities": _harness_capabilities().model_dump(mode="json"),
+            "required_capabilities": ["runtime.harness", "filesystem.write"],
+            "harness_tier": "complex",
+            "workspace": workspace.model_dump(mode="json"),
+        },
+        "workspace_path": workspace_path,
+    }
+
+
+class _HarnessResolver:
+    def __init__(self, workspace_path: Path) -> None:
+        self._workspace_path = workspace_path
+
+    async def materialize(self, snapshot: FleetWorkspaceTransfer):
+        return SimpleNamespace(
+            ref=snapshot.ref,
+            project_id=snapshot.project_id,
+            work_id=snapshot.work_id,
+            path=self._workspace_path,
+        )
+
+    async def capture(self, snapshot: FleetWorkspaceTransfer, workspace) -> FleetWorkspaceTransferResult:
+        input_payload = SoftwareFleetWorkspaceInput.model_validate(snapshot.payload)
+        output_payload = SoftwareFleetWorkspaceOutput(
+            repository_ref=input_payload.repository_ref,
+            base_sha=input_payload.base_sha,
+            current_sha=input_payload.current_sha,
+            delta_diff_base64="",
+            delta_diff_sha256=hashlib.sha256(b"").hexdigest(),
+        )
+        return FleetWorkspaceTransferResult(
+            ref=snapshot.ref,
+            project_id=snapshot.project_id,
+            work_id=snapshot.work_id,
+            kind=snapshot.kind,
+            input_digest=snapshot.input_digest,
+            result_digest=hashlib.sha256(b"").hexdigest(),
+            payload=output_payload.model_dump(mode="json"),
+        )
+
+
 @pytest.mark.asyncio
 async def test_software_worker_envelope_carries_activity_log_and_reports_progress() -> None:
     batches: list[tuple[str, list[OperatorActivity]]] = []
@@ -348,6 +439,135 @@ async def test_software_worker_envelope_carries_activity_log_and_reports_progres
     assert [(run_id, [item.sequence for item in batch]) for run_id, batch in batches] == [
         ("run-1", [1, 2])
     ]
+
+
+@pytest.mark.asyncio
+async def test_fleet_harness_payload_and_worker_runtime_construction(tmp_path) -> None:
+    task_store = InMemoryTaskStore()
+    registry = InMemoryFleetRegistry()
+    worker = await _register_worker(
+        registry,
+        name="harness-worker",
+        project_id="project-a",
+        capabilities=("runtime.harness", "filesystem.write"),
+    )
+    operator = SoftwareStageOperator.fleet(
+        actor_ref="fleet:harness:implementer",
+        store=task_store,
+        registry=registry,
+        org_id="org-a",
+        runtime_capability="runtime.harness",
+        harness_tier="complex",
+        poll_interval_seconds=0.001,
+        heartbeat_ttl=timedelta(seconds=30),
+        workspace_transport=None,
+        artifact_store=None,
+        capabilities=_harness_capabilities(),
+        controller=object(),
+    )
+    waiter = asyncio.create_task(
+        operator.runtime.run(
+            _fleet_request().model_copy(update={"stage": "implement"}),
+            _fleet_capsule().model_copy(update={"stage": "implement"}),
+            _harness_capabilities(),
+            workspace=None,
+        )
+    )
+    await _wait_for_task(task_store, "run-1")
+    task = await FleetDispatcher(
+        task_store,
+        poll_interval=0.001,
+        poll_timeout=0.01,
+    ).claim(
+        worker_id=worker.id,
+        org_id="org-a",
+        models_canonical=[],
+        labels=WorkerCapabilities(
+            capability_names=["runtime.harness", "filesystem.write"],
+        ).routing_labels(),
+        project_id="project-a",
+    )
+    assert task is not None
+    assert task["payload"]["required_capabilities"] == [
+        "runtime.harness",
+        "filesystem.write",
+    ]
+    assert task["payload"]["harness_tier"] == "complex"
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+
+    workspace_path = tmp_path / "worker-workspace"
+    workspace_path.mkdir()
+    task = _harness_task(workspace_path)
+    recorded: list[dict] = []
+
+    class RecordingAgent:
+        def __init__(self, **kwargs) -> None:
+            recorded.append(kwargs)
+
+        def on_event(self, _callback) -> None:
+            return None
+
+        async def chat_with_history(self, _messages):
+            return type(
+                "Reply",
+                (),
+                {"content": _accepted_review("run-1").model_dump_json()},
+            )()
+
+    handler = SoftwareFleetTaskHandler(
+        workspace_resolver=_HarnessResolver(workspace_path),
+        harness_tiers={
+            "complex": HarnessTier(backend="ollama", model="qwen3:8b"),
+        },
+        harness_backends={"ollama": "http://127.0.0.1:11434/v1"},
+        agent_factory=RecordingAgent,
+    )
+
+    async def report_progress(_run_id, _batch) -> None:
+        return None
+
+    await handler(
+        {key: value for key, value in task.items() if key != "workspace_path"},
+        WorkerTaskContext(
+            project_id="project-a",
+            capability_names=("runtime.harness", "filesystem.write"),
+            report_progress=report_progress,
+        ),
+    )
+
+    assert recorded[0]["name"] == "harness:complex"
+    assert recorded[0]["model"] == "qwen3:8b"
+    assert recorded[0]["api_base"] == "http://127.0.0.1:11434/v1"
+
+
+def test_fleet_operator_task_payload_requires_harness_tier_boundary() -> None:
+    capabilities = _fleet_capabilities().model_dump(mode="json")
+    capabilities["grants"][0]["credential_ref"] = None
+    payload = {
+        "request": _fleet_request().model_dump(mode="json"),
+        "capsule": _fleet_capsule().model_dump(mode="json"),
+        "capabilities": capabilities,
+        "workspace": None,
+    }
+
+    with pytest.raises(ValueError, match="harness_tier"):
+        FleetOperatorTaskPayload.model_validate(
+            {
+                **payload,
+                "required_capabilities": ["runtime.claude", "cli.git"],
+                "harness_tier": "complex",
+            }
+        )
+
+    with pytest.raises(ValueError, match="harness_tier"):
+        FleetOperatorTaskPayload.model_validate(
+            {
+                **payload,
+                "required_capabilities": ["runtime.harness", "cli.git"],
+            }
+        )
 
 
 @pytest.mark.asyncio

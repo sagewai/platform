@@ -197,6 +197,10 @@ async def test_valid_result_on_first_turn_passes_with_selection_note_and_usage(t
     assert factory.made[0].kwargs["model"] == "qwen3:32b" and factory.made[0].kwargs["api_base"] == BACKENDS["ollama"]
     assert factory.made[0].kwargs["api_key"] == "local"
     assert factory.made[0].kwargs["temperature"] == 0.1
+    assert (
+        factory.made[0].kwargs["strategy"].max_tool_calls_per_name
+        == HarnessBudget().max_tool_calls
+    )
     assert [item.kind for item in sink.items] == ["usage", "message"] or [item.kind for item in sink.items] == [
         "message",
         "usage",

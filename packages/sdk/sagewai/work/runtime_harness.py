@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict
 from sagewai.artifacts.object_store import ArtifactStore
 from sagewai.core._strategy_utils import parse_json
 from sagewai.core.events import AgentEvent
+from sagewai.core.strategies import ReActStrategy
 from sagewai.engines.universal import UniversalAgent
 from sagewai.harness.models import HarnessIdentity
 from sagewai.models import ChatMessage
@@ -252,6 +253,9 @@ class HarnessRuntime:
                     tools=list(tools.specs),
                     max_iterations=self._budget.max_turns,
                     permission_policy=meter,
+                    strategy=ReActStrategy(
+                        max_tool_calls_per_name=self._budget.max_tool_calls
+                    ),
                     temperature=0.1,
                 )
 

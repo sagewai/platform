@@ -17,7 +17,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Protocol
+from typing import Literal, Protocol
 
 from sagewai.artifacts.models import ArtifactRef
 from sagewai.artifacts.object_store import ArtifactStore, LocalArtifactStore
@@ -229,6 +229,7 @@ class SoftwareStageOperator:
         artifact_store: ArtifactStore | None,
         capabilities: CapabilitySet,
         controller: OperatorController,
+        harness_tier: Literal["simple", "medium", "complex"] | None = None,
     ) -> SoftwareStageOperator:
         """Select durable Fleet execution for one software lifecycle role."""
         return cls(
@@ -238,6 +239,7 @@ class SoftwareStageOperator:
                 registry=registry,
                 org_id=org_id,
                 runtime_capability=runtime_capability,
+                harness_tier=harness_tier,
                 poll_interval_seconds=poll_interval_seconds,
                 heartbeat_ttl=heartbeat_ttl,
                 workspace_transport=workspace_transport,

@@ -17,7 +17,7 @@ Supported servers:
 - **LM Studio** — port 1234, ``/v1/models``
 - **Unsloth** (llama-server) — port 8001, ``/v1/models``
 - **vLLM** — port 8000, ``/v1/models``
-- **LocalAI** — port 8080, ``/v1/models``
+- **LocalAI** — port 8080, ``/v1/models`` (any OpenAI-compatible server on 8080, such as ``mlx_lm.server``, is reported under this name)
 
 Usage::
 
@@ -200,6 +200,12 @@ async def discover_local_backends(
         logger.debug("Local LLM discovery: no servers found")
 
     return discovered
+
+
+def openai_base_url(url: str) -> str:
+    """Return ``url`` with a single ``/v1`` suffix, as OpenAI-compatible clients expect."""
+    stripped = url.rstrip("/")
+    return stripped if stripped.endswith("/v1") else f"{stripped}/v1"
 
 
 def build_local_backends(

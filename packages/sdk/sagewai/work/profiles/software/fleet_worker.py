@@ -14,10 +14,12 @@ from __future__ import annotations
 import base64
 import copy
 import hashlib
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from sagewai.engines.universal import UniversalAgent
 from sagewai.fleet.execution import run_worker_subprocess
 from sagewai.fleet.runner import WorkerTaskContext
 from sagewai.work.activity import (
@@ -33,6 +35,7 @@ from sagewai.work.fleet import (
     FleetWorkspaceTransfer,
     FleetWorkspaceTransferResult,
 )
+from sagewai.work.harness_tools import McpConnectionResolver
 from sagewai.work.profiles.software.fleet_workspace import (
     SOFTWARE_FLEET_WORKSPACE_KIND,
     SoftwareFleetWorkspaceInput,
@@ -50,6 +53,8 @@ from sagewai.work.runtime import (
     WorkRequest,
     Workspace,
 )
+from sagewai.work.runtime_harness import HarnessRuntime
+from sagewai.work.tasks.models import HarnessTier
 
 
 class FleetWorkerWorkspaceResolver(Protocol):
@@ -248,11 +253,21 @@ class SoftwareFleetTaskHandler:
         codex_runtime: CodexRuntime | None = None,
         claude_analysis_runtime: ClaudeRuntime | None = None,
         claude_review_runtime: ClaudeRuntime | None = None,
+        harness_tiers: Mapping[str, HarnessTier] | None = None,
+        harness_backends: Mapping[str, str] | None = None,
+        sandbox: Any = None,
+        mcp_connections: McpConnectionResolver | None = None,
+        agent_factory: Callable[..., Any] = UniversalAgent,
     ) -> None:
         self._workspace_resolver = workspace_resolver
         self._codex_runtime = codex_runtime or CodexRuntime()
         self._claude_analysis_runtime = claude_analysis_runtime or ClaudeRuntime()
         self._claude_review_runtime = claude_review_runtime or ClaudeRuntime()
+        self._harness_tiers = dict(harness_tiers or {})
+        self._harness_backends = dict(harness_backends or {})
+        self._sandbox = sandbox
+        self._mcp_connections = mcp_connections
+        self._agent_factory = agent_factory
         if self._claude_analysis_runtime is self._claude_review_runtime:
             raise ValueError("analysis and review require distinct Claude runtimes")
         if not isinstance(self._codex_runtime, CodexRuntime):
@@ -274,13 +289,16 @@ class SoftwareFleetTaskHandler:
             raise ValueError("worker belongs to a different project")
         if not set(payload.required_capabilities).issubset(context.capability_names):
             raise ValueError("worker did not advertise every required capability")
-        runtime = copy.copy(self._runtime(runtime_capability, request.stage))
         log: list[str] = []
         progress_sink = BatchingActivitySink(
             lambda batch: context.report_progress(request.run_id, batch)
         )
-        runtime._activity_sink = _ActivityFanoutSink(log=log, progress_sink=progress_sink)
+        activity_sink = _ActivityFanoutSink(log=log, progress_sink=progress_sink)
         try:
+            runtime = copy.copy(
+                self._runtime(runtime_capability, request.stage, payload.harness_tier)
+            )
+            runtime._activity_sink = activity_sink
             if payload.workspace is None:
                 raise ValueError("software work.operator requires a workspace snapshot")
             workspace = await self._workspace_resolver.materialize(payload.workspace)
@@ -312,11 +330,25 @@ class SoftwareFleetTaskHandler:
             activity_log=bounded_ndjson(log, FLEET_ACTIVITY_LOG_MAX_BYTES) or None,
         ).model_dump_json()
 
-    def _runtime(self, runtime_capability: str, stage: str) -> OperatorRuntime:
+    def _runtime(
+        self,
+        runtime_capability: str,
+        stage: str,
+        harness_tier: str | None,
+    ) -> OperatorRuntime:
         if runtime_capability == "runtime.codex":
             if stage not in {"implement", "repair"}:
                 raise ValueError(f"runtime.codex does not support stage {stage!r}")
             return self._codex_runtime
+        if runtime_capability == "runtime.harness":
+            return HarnessRuntime(
+                tier=harness_tier,
+                tiers=self._harness_tiers,
+                backends=self._harness_backends,
+                sandbox=self._sandbox,
+                mcp_connections=self._mcp_connections,
+                agent_factory=self._agent_factory,
+            )
         if runtime_capability != "runtime.claude":
             raise ValueError("unsupported native runtime capability")
         if stage in {"analysis", "design"}:
@@ -356,6 +388,7 @@ class SoftwareFleetTaskHandler:
         if len(runtime_capabilities) != 1 or runtime_capabilities[0] not in {
             "runtime.codex",
             "runtime.claude",
+            "runtime.harness",
         }:
             raise ValueError("work.operator requires exactly one supported runtime")
         expected = {

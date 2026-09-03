@@ -74,6 +74,7 @@ class FleetOperatorTaskPayload(BaseModel):
     capsule: TaskCapsule
     capabilities: CapabilitySet
     required_capabilities: tuple[str, ...]
+    harness_tier: Literal["simple", "medium", "complex"] | None = None
     workspace: FleetWorkspaceTransfer | None
 
     @model_validator(mode="after")
@@ -92,6 +93,10 @@ class FleetOperatorTaskPayload(BaseModel):
             or self.workspace.work_id != self.request.work_id
         ):
             raise ValueError("Fleet workspace belongs to a different request")
+        if ("runtime.harness" in self.required_capabilities) != (
+            self.harness_tier is not None
+        ):
+            raise ValueError("harness_tier is required for runtime.harness and forbidden otherwise")
         return self
 
 
@@ -137,6 +142,7 @@ class FleetOperatorRuntime:
         heartbeat_ttl: timedelta,
         workspace_transport: FleetWorkspaceTransport | None = None,
         artifact_store: ArtifactStore | None = None,
+        harness_tier: Literal["simple", "medium", "complex"] | None = None,
     ) -> None:
         if poll_interval_seconds <= 0:
             raise ValueError("poll_interval_seconds must be positive")
@@ -146,6 +152,7 @@ class FleetOperatorRuntime:
         self._registry = registry
         self._org_id = org_id
         self._runtime_capability = runtime_capability
+        self._harness_tier = harness_tier
         self._poll_interval_seconds = poll_interval_seconds
         self._heartbeat_ttl = heartbeat_ttl
         self._workspace_transport = workspace_transport
@@ -258,6 +265,7 @@ class FleetOperatorRuntime:
                 capsule=capsule,
                 capabilities=self._transport_capabilities(capabilities),
                 required_capabilities=required_capabilities,
+                harness_tier=self._harness_tier,
                 workspace=snapshot,
             )
             await self._store.enqueue(

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import json as _json
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, ClassVar, Literal
 
@@ -488,13 +489,24 @@ class McpProtocolPlugin:
                 headers[header_name] = template.format(value=cred_value)
         return env, headers
 
+    def client_for(self, connection: Connection) -> MCPClient:
+        """Build the transport client for ``connection``; its protocol_data must already be decrypted."""
+        effective = self._resolve_effective_config(connection)
+        env, headers = self._dispatch_credentials(
+            connection, connection.protocol_data.get("credentials", {}) or {}
+        )
+        return MCPClient(
+            transport=effective["transport"],
+            command=effective.get("command"),
+            args=effective.get("args"),
+            url=effective.get("url"),
+            env=env or None,
+            headers=headers or None,
+        )
+
     async def test(self, connection: Connection, *, ctx: PluginContext) -> TestResult:
         pd = connection.protocol_data
 
-        # 1. Resolve effective command/args/url from registry + overrides
-        effective = self._resolve_effective_config(connection)
-
-        # 2. Decrypt credentials via ctx.creds (router from PR3)
         if ctx.creds is not None:
             try:
                 decrypted_pd = ctx.creds.decrypt(
@@ -507,26 +519,14 @@ class McpProtocolPlugin:
                 decrypted_pd = pd
         else:
             decrypted_pd = pd
-        decrypted_creds = decrypted_pd.get("credentials", {}) or {}
 
-        # 3. Dispatch to env vs header per registry's injection axis
-        env, headers = self._dispatch_credentials(connection, decrypted_creds)
-
-        # 4. Connect + list_tools
+        resolved = replace(connection, protocol_data=decrypted_pd)
         try:
-            async with MCPClient(
-                transport=effective["transport"],
-                command=effective.get("command"),
-                args=effective.get("args"),
-                url=effective.get("url"),
-                env=env or None,
-                headers=headers or None,
-            ) as client:
+            async with self.client_for(resolved) as client:
                 tools = await client.list_tools()
         except Exception as exc:
             return TestResult(ok=False, message=f"{type(exc).__name__}: {exc}")
 
-        # 5. Persist discovered_tools + last_discovered_at, re-encrypted
         new_pd = dict(decrypted_pd)
         new_pd["discovered_tools"] = [
             {
@@ -554,7 +554,7 @@ class McpProtocolPlugin:
         return TestResult(
             ok=True,
             message=(
-                f"connected via {effective['transport']}; "
+                f"connected via {self._resolve_effective_config(resolved)['transport']}; "
                 f"discovered {len(tools)} tools"
             ),
         )

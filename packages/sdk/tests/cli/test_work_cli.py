@@ -23,16 +23,27 @@ from sagewai.cli import cli
 from sagewai.cli.fleet import fleet_group
 from sagewai.cli.work import work as work_cli
 from sagewai.core.state import InMemoryStore
+from sagewai.harness.discovery import DiscoveredServer
 from sagewai.work import SUPERSEDED, WorkEventType, WorkMetrics
 from sagewai.work.profiles.software import SoftwareContractContext, SoftwareStageOperator
 from sagewai.work.runtime_capabilities import (
     RuntimeCapabilitySnapshot,
     RuntimeModelCapability,
 )
+from sagewai.work.tasks.models import HarnessTier, TaskDefaults
+from sagewai.work.tasks.store import TaskStore as CoordinatorTaskStore
 from tests.db.conftest import dialect_engine  # noqa: F401
 
 work_module = import_module("sagewai.cli.work")
 fleet_module = import_module("sagewai.cli.fleet")
+
+
+class _FakeActivitySink:
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 @pytest.mark.asyncio
@@ -62,7 +73,7 @@ async def test_build_lifecycle_shares_one_artifact_store(
         fake_workflow_store,
     )
 
-    lifecycle, _, _ = await work_module._build_lifecycle(
+    lifecycle, _, _, _ = await work_module._build_lifecycle(
         project_id="project-a",
         repository=repository,
     )
@@ -98,6 +109,7 @@ def test_work_group_is_registered() -> None:
     assert "--project" in result.output
     assert "--execution" in result.output
     assert "--fleet-org" in result.output
+    assert "--prefer-free-implementation" in result.output
 
 
 @pytest.mark.parametrize(
@@ -227,9 +239,11 @@ async def test_intake_work_targets_the_local_github_repository(monkeypatch) -> N
             seen.append(kwargs)
             return SimpleNamespace(work_id="work-1", status="READY_TO_MERGE")
 
+    sink = _FakeActivitySink()
+
     async def fake_build_github_lifecycle(*, project_id, repository):
         seen.append({"build": (project_id, repository)})
-        return FakeGitHubLifecycle()
+        return FakeGitHubLifecycle(), sink
 
     monkeypatch.setattr(work_module, "_repository_state", fake_repository_state)
     monkeypatch.setattr(
@@ -252,13 +266,14 @@ async def test_intake_work_targets_the_local_github_repository(monkeypatch) -> N
             "base_sha": "a" * 40,
         },
     ]
+    assert sink.closed is True
 
 
 def test_work_start_runs_direct_lifecycle(monkeypatch) -> None:
     seen = []
 
     async def fake_start(description: str, *, project_id: str | None):
-        seen.append((description, project_id))
+        seen.append((description, project_id, work_module._work_prefer_free_implementation()))
         return SimpleNamespace(work_id="work-1", status="READY_TO_MERGE")
 
     monkeypatch.setattr(work_module, "_start_work", fake_start)
@@ -269,10 +284,34 @@ def test_work_start_runs_direct_lifecycle(monkeypatch) -> None:
     )
 
     assert result.exit_code == 0, result.output
-    assert seen == [("local change description", "project-a")]
+    assert seen == [("local change description", "project-a", False)]
     assert "work-1" in result.output
     assert "READY_TO_MERGE" in result.output
     assert "COMPLETE" not in result.output
+
+
+def test_work_start_accepts_prefer_free_implementation_flag(monkeypatch) -> None:
+    seen = []
+
+    async def fake_start(description: str, *, project_id: str | None):
+        seen.append((description, project_id, work_module._work_prefer_free_implementation()))
+        return SimpleNamespace(work_id="work-1", status="READY_TO_MERGE")
+
+    monkeypatch.setattr(work_module, "_start_work", fake_start)
+
+    result = CliRunner().invoke(
+        work_cli,
+        [
+            "--project",
+            "project-a",
+            "--prefer-free-implementation",
+            "start",
+            "local change description",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen == [("local change description", "project-a", True)]
 
 
 def test_work_start_reports_target_validation_error(monkeypatch) -> None:
@@ -311,9 +350,11 @@ async def test_start_work_routes_github_issue_to_github_lifecycle(monkeypatch) -
             seen.append(("start", issue_url, project_id, base_sha))
             return SimpleNamespace(work_id="work-1", status="READY_TO_MERGE")
 
+    sink = _FakeActivitySink()
+
     async def fake_build_github_lifecycle(*, project_id, repository):
         seen.append(("build", project_id, repository))
-        return FakeGitHubLifecycle()
+        return FakeGitHubLifecycle(), sink
 
     monkeypatch.setattr(work_module, "_repository_state", fake_repository_state)
     monkeypatch.setattr(work_module, "_build_github_lifecycle", fake_build_github_lifecycle)
@@ -324,6 +365,7 @@ async def test_start_work_routes_github_issue_to_github_lifecycle(monkeypatch) -
     )
 
     assert record.status == "READY_TO_MERGE"
+    assert sink.closed is True
     assert seen == [
         ("build", "project-a", repository),
         (
@@ -348,6 +390,8 @@ async def test_start_work_records_selected_execution_route(monkeypatch) -> None:
             captured.append((work_item, contract))
             return SimpleNamespace(work_id=work_item.id, status="READY_TO_MERGE")
 
+    sink = _FakeActivitySink()
+
     async def fake_build_lifecycle(
         *,
         project_id,
@@ -358,12 +402,13 @@ async def test_start_work_records_selected_execution_route(monkeypatch) -> None:
         assert project_id == "project-a"
         assert execution == "local"
         assert fleet_org is None
-        return FakeLifecycle(), SimpleNamespace(), SimpleNamespace()
+        return FakeLifecycle(), SimpleNamespace(), SimpleNamespace(), sink
 
     monkeypatch.setattr(work_module, "_repository_state", fake_repository_state)
     monkeypatch.setattr(work_module, "_build_lifecycle", fake_build_lifecycle)
 
     await work_module._start_work("bounded change", project_id="project-a")
+    assert sink.closed is True
 
     context = SoftwareContractContext.model_validate(captured[0][1].profile_context)
     assert context.execution_route == "local"
@@ -377,6 +422,149 @@ async def test_start_work_records_selected_execution_route(monkeypatch) -> None:
         ]
     )
     assert projected == ("local", None)
+
+
+@pytest.mark.asyncio
+async def test_build_lifecycle_prefer_free_implementation_inserts_harness(
+    monkeypatch,
+    dialect_engine,  # noqa: F811
+    tmp_path,
+) -> None:
+    async def fake_ensure_schema() -> None:
+        return None
+
+    async def fake_workflow_store():
+        return InMemoryStore()
+
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    monkeypatch.setenv(
+        "SAGEWAI_WORK_VERIFICATION_IMAGE",
+        "example.invalid/verifier@sha256:" + "a" * 64,
+    )
+    monkeypatch.setattr(work_module.factory, "ensure_schema", fake_ensure_schema)
+    monkeypatch.setattr(work_module.factory, "get_engine", lambda: dialect_engine)
+    monkeypatch.setattr(
+        work_module.factory,
+        "get_workflow_store",
+        fake_workflow_store,
+    )
+    monkeypatch.setattr(work_module, "_work_prefer_free_implementation", lambda: True)
+    defaults_store = CoordinatorTaskStore(engine=dialect_engine)
+    await defaults_store.init()
+    await defaults_store.put_defaults(
+        TaskDefaults(
+            project_id="project-a",
+            harness_tiers={
+                "complex": HarnessTier(backend="ollama", model="qwen3:8b"),
+            },
+        ),
+        expected_revision=0,
+    )
+
+    async def fake_discover_local_backends():
+        return {
+            "ollama": DiscoveredServer(
+                name="ollama",
+                base_url="http://127.0.0.1:11434",
+                openai_compat_url="http://127.0.0.1:11434",
+                models=["qwen3:8b"],
+            )
+        }
+
+    monkeypatch.setattr(
+        work_module,
+        "discover_local_backends",
+        fake_discover_local_backends,
+    )
+
+    lifecycle, _, _, _ = await work_module._build_lifecycle(
+        project_id="project-a",
+        repository=repository,
+    )
+
+    assert lifecycle._implementer.actor_refs == (
+        "runtime:harness:implementer",
+        "runtime:codex:implementer",
+    )
+    harness_operator = lifecycle._implementer.for_position(1)
+    codex_operator = lifecycle._implementer.for_position(2)
+    assert harness_operator.capabilities == codex_operator.capabilities
+    assert harness_operator.controller is codex_operator.controller
+    assert harness_operator.runtime._resolved.tier == "complex"
+    assert harness_operator.runtime._resolved.model == "qwen3:8b"
+    assert harness_operator.runtime._resolved.base_url == "http://127.0.0.1:11434/v1"
+    assert lifecycle._repairer.actor_refs == ("runtime:codex:implementer",)
+
+
+@pytest.mark.asyncio
+async def test_build_lifecycle_prefer_free_implementation_requires_configured_tiers(
+    monkeypatch,
+    dialect_engine,  # noqa: F811
+    tmp_path,
+) -> None:
+    async def fake_ensure_schema() -> None:
+        return None
+
+    async def fake_workflow_store():
+        return InMemoryStore()
+
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    monkeypatch.setenv(
+        "SAGEWAI_WORK_VERIFICATION_IMAGE",
+        "example.invalid/verifier@sha256:" + "a" * 64,
+    )
+    monkeypatch.setattr(work_module.factory, "ensure_schema", fake_ensure_schema)
+    monkeypatch.setattr(work_module.factory, "get_engine", lambda: dialect_engine)
+    monkeypatch.setattr(
+        work_module.factory,
+        "get_workflow_store",
+        fake_workflow_store,
+    )
+    monkeypatch.setattr(work_module, "_work_prefer_free_implementation", lambda: True)
+    defaults_store = CoordinatorTaskStore(engine=dialect_engine)
+    await defaults_store.init()
+
+    with pytest.raises(ValueError, match="configure harness tiers in task defaults"):
+        await work_module._build_lifecycle(
+            project_id="project-a",
+            repository=repository,
+        )
+
+
+@pytest.mark.asyncio
+async def test_build_lifecycle_prefer_free_implementation_requires_project(
+    monkeypatch,
+    dialect_engine,  # noqa: F811
+    tmp_path,
+) -> None:
+    async def fake_ensure_schema() -> None:
+        return None
+
+    async def fake_workflow_store():
+        return InMemoryStore()
+
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    monkeypatch.setenv(
+        "SAGEWAI_WORK_VERIFICATION_IMAGE",
+        "example.invalid/verifier@sha256:" + "a" * 64,
+    )
+    monkeypatch.setattr(work_module.factory, "ensure_schema", fake_ensure_schema)
+    monkeypatch.setattr(work_module.factory, "get_engine", lambda: dialect_engine)
+    monkeypatch.setattr(
+        work_module.factory,
+        "get_workflow_store",
+        fake_workflow_store,
+    )
+    monkeypatch.setattr(work_module, "_work_prefer_free_implementation", lambda: True)
+
+    with pytest.raises(ValueError, match="--prefer-free-implementation requires a project"):
+        await work_module._build_lifecycle(
+            project_id=None,
+            repository=repository,
+        )
 
 
 def test_work_status_is_project_scoped_and_reports_not_found(monkeypatch) -> None:
@@ -498,10 +686,12 @@ def test_resume_accepts_the_same_fleet_route(monkeypatch) -> None:
             assert (work_id, project_id) == ("work-1", "project-a")
             return SimpleNamespace(work_id=work_id, status="WORK_BLOCKED")
 
+    sink = _FakeActivitySink()
+
     async def fake_build_lifecycle(*, project_id, repository):
         assert project_id == "project-a"
         assert repository is not None
-        return FakeLifecycle(), SimpleNamespace(), SimpleNamespace()
+        return FakeLifecycle(), SimpleNamespace(), SimpleNamespace(), sink
 
     monkeypatch.setattr(work_module, "_status_work", fake_status)
     monkeypatch.setattr(
@@ -529,6 +719,7 @@ def test_resume_accepts_the_same_fleet_route(monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     assert route_reads == [("work-1", "project-a")]
+    assert sink.closed is True
     assert "WORK_BLOCKED" in result.output
 
 
@@ -866,9 +1057,11 @@ async def test_triaging_resume_repairs_without_inferring_delivery(monkeypatch) -
             current = repaired
             return repaired
 
+    sink = _FakeActivitySink()
+
     async def fake_build_github_lifecycle(*, project_id, repository):
         seen.append(("build", project_id, repository))
-        return FakeGitHubLifecycle()
+        return FakeGitHubLifecycle(), sink
 
     monkeypatch.setattr(work_module, "_status_work", fake_status)
     monkeypatch.setattr(
@@ -891,6 +1084,7 @@ async def test_triaging_resume_repairs_without_inferring_delivery(monkeypatch) -
     )
 
     assert repair_result is frozen_result is repaired
+    assert sink.closed is True
     assert seen == [
         "repository",
         ("build", "project-a", repository),
@@ -1082,7 +1276,7 @@ async def test_build_lifecycle_composes_persistent_fleet_stages(
     monkeypatch.setattr(work_module, "_software_repository_ref", fake_repository_ref)
     monkeypatch.setattr(SoftwareStageOperator, "fleet", classmethod(fake_fleet))
 
-    lifecycle, _, _ = await work_module._build_lifecycle(
+    lifecycle, _, _, _ = await work_module._build_lifecycle(
         project_id="project-a",
         repository=repository,
         execution="fleet",
@@ -1105,6 +1299,82 @@ async def test_build_lifecycle_composes_persistent_fleet_stages(
     assert lifecycle._implementer.for_position(1).runtime.name == "fleet:runtime.codex"
     assert lifecycle._reviewer.for_position(1).runtime.name == "fleet:runtime.claude"
     assert lifecycle._repairer.for_position(1).runtime.name == "fleet:runtime.codex"
+
+
+@pytest.mark.asyncio
+async def test_build_lifecycle_composes_persistent_fleet_harness_stage(
+    monkeypatch,
+    dialect_engine,  # noqa: F811
+    tmp_path,
+) -> None:
+    org = "org-a"
+
+    class FakeRegistry:
+        def __init__(self, *, engine):
+            assert engine is dialect_engine
+
+        async def init(self):
+            return None
+
+    class FakeFleetTaskStore:
+        def __init__(self, *, engine):
+            assert engine is dialect_engine
+
+        async def init(self):
+            return None
+
+    class FakeCoordinatorTaskStore:
+        def __init__(self, *, engine):
+            assert engine is dialect_engine
+
+        async def get_defaults(self, *, project_id):
+            raise AssertionError("fleet route must not read task defaults")
+
+    class FakeTransport:
+        def __init__(self, *, repository_ref):
+            assert repository_ref == "github://sagewai/platform"
+
+    async def fake_ensure_schema() -> None:
+        return None
+
+    async def fake_workflow_store():
+        return InMemoryStore()
+
+    async def fake_repository_ref(_repository):
+        return "github://sagewai/platform"
+
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    monkeypatch.setenv("SAGEWAI_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv(
+        "SAGEWAI_WORK_VERIFICATION_IMAGE",
+        "example.invalid/verifier@sha256:" + "a" * 64,
+    )
+    monkeypatch.setattr(work_module.factory, "ensure_schema", fake_ensure_schema)
+    monkeypatch.setattr(work_module.factory, "get_engine", lambda: dialect_engine)
+    monkeypatch.setattr(work_module.factory, "get_workflow_store", fake_workflow_store)
+    monkeypatch.setattr(work_module, "PostgresFleetRegistry", FakeRegistry)
+    monkeypatch.setattr(work_module, "PostgresTaskStore", FakeFleetTaskStore)
+    monkeypatch.setattr(work_module, "CoordinatorTaskStore", FakeCoordinatorTaskStore)
+    monkeypatch.setattr(work_module, "SoftwareFleetWorkspaceTransport", FakeTransport)
+    monkeypatch.setattr(work_module, "_software_repository_ref", fake_repository_ref)
+    monkeypatch.setattr(work_module, "_work_prefer_free_implementation", lambda: True)
+
+    lifecycle, _, _, _ = await work_module._build_lifecycle(
+        project_id="project-a",
+        repository=repository,
+        execution="fleet",
+        fleet_org=org,
+    )
+
+    assert lifecycle._implementer.actor_refs == (
+        "fleet:harness:implementer",
+        "fleet:codex:implementer",
+    )
+    harness_runtime = lifecycle._implementer.for_position(1).runtime
+    assert harness_runtime._harness_tier == "complex"
+    assert harness_runtime.name == f"fleet:{org}:runtime.harness"
+    assert lifecycle._repairer.actor_refs == ("fleet:codex:repairer",)
 
 
 def test_fleet_native_runtime_requires_explicit_project_and_repository(tmp_path) -> None:

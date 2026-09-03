@@ -58,6 +58,7 @@ from sagewai.work.fleet import (
     FleetWorkspaceTransport,
     NoCompatibleWorkerError,
 )
+from sagewai.work.harness_mcp import mcp_connection_resolver
 from sagewai.work.harness_tools import FILE_SIZE_CAP, HarnessTools, as_data, build_harness_tools
 from sagewai.work.metrics import WorkMetrics
 from sagewai.work.models import (
@@ -194,6 +195,7 @@ __all__ = [
     "execution_attempt_from_events",
     "evaluate_completion",
     "fold_verification_results",
+    "mcp_connection_resolver",
     "next_stage_run",
     "stage_run_ids",
     "stage_runtime_failures",
