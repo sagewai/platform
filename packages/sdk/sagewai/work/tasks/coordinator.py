@@ -402,7 +402,7 @@ class TaskCoordinator:
             return
         await self._activity_store.prune(
             project_id=task.project_id,
-            completed_work_ids=tuple(state.step_works.values()),
+            completed_work_ids=(*state.step_works.values(), *state.superseded_works),
             older_than=self._now() - timedelta(days=task.retention_days),
         )
 
@@ -414,6 +414,7 @@ class TaskCoordinator:
                 int(event.payload_json["cycle"])
                 for event in sorted(events, key=lambda item: item.sequence, reverse=True)
                 if event.event_type is TaskEventType.HEALTH_ACTION
+                and event.payload_json["kind"] != "retry_cycle"
             ),
             None,
         )
@@ -424,15 +425,17 @@ class TaskCoordinator:
         Only scheduled Tasks reach here: PauseSchedule from COMPLETE has no transition edge.
         """
         events = await self._task_store.read_events(task.id, project_id=task.project_id)
+        policy = HealthPolicy()
+        first_cycle = max(1, command.cycle - policy.window + 1)
         spend = {
             cycle: await self._task_store.spend_totals(
                 task_id=task.id, project_id=task.project_id, cycle=cycle
             )
-            for cycle in range(1, command.cycle + 1)
+            for cycle in range(first_cycle, command.cycle + 1)
         }
         signal, action = evaluate_health(
             cycle_history(events, spend=spend),
-            policy=HealthPolicy(),
+            policy=policy,
             last_action_cycle=self._last_health_cycle(events),
         )
         if signal is None:
@@ -651,11 +654,18 @@ class TaskCoordinator:
                 command.work_id, project_id=task.project_id
             )
             gate = next(
-                event
-                for event in reversed(work_events)
-                if event.event_type is WorkEventType.GATE_REQUESTED
-                and event.payload_json["gate_id"] == command.gate_id
+                (
+                    event
+                    for event in reversed(work_events)
+                    if event.event_type is WorkEventType.GATE_REQUESTED
+                    and event.payload_json["gate_id"] == command.gate_id
+                ),
+                None,
             )
+            if gate is None:
+                raise ValueError(
+                    f"Work {command.work_id} has no GATE_REQUESTED for {command.gate_id}"
+                )
             entries.append(
                 (
                     TaskEventType.GATE_REQUESTED,

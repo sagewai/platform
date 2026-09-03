@@ -499,6 +499,18 @@ class TaskStore:
             return False
         return True
 
+    async def delete_command(self, *, task_id: str, project_id: str, command_id: str) -> bool:
+        scope = project_scope_key(project_id)
+        async with self._engine.begin() as conn:
+            result = await conn.execute(
+                self._commands.delete().where(
+                    self._commands.c.project_scope_key == scope,
+                    self._commands.c.task_id == task_id,
+                    self._commands.c.command_id == command_id,
+                )
+            )
+        return result.rowcount == 1
+
     async def reserve_spend(self, reservation: SpendReservation) -> None:
         scope = project_scope_key(reservation.project_id)
         try:

@@ -91,6 +91,10 @@ class BudgetLedger:
         self.reserved: list[tuple[str, str, str, Decimal]] = []
         self.settled: list[tuple[str, Decimal | None]] = []
 
+    @property
+    def task_id(self) -> str:
+        return self._task_id
+
     async def reserve(self, *, run_id: str, stage: str, runtime: Any) -> None:
         usd = worst_case_usd(runtime.name, self._budget)
         try:

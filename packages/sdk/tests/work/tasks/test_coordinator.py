@@ -621,6 +621,31 @@ async def test_work_gate_mirror_copies_the_action_and_notifies_today(
 
 
 @pytest.mark.asyncio
+async def test_a_missing_work_gate_event_raises_the_named_value_error(
+    stores, tmp_path, monkeypatch
+) -> None:
+    from sagewai.work.tasks.decide import MirrorAttention
+
+    task_store, _work_store = stores
+    task, record, _runner, coordinator = await _seed(stores, tmp_path)
+    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
+    command = MirrorAttention(
+        step_id="s1",
+        work_id="work-without-gate",
+        attention_kind="GATE_REQUESTED",
+        attention_id="attention-1",
+        summary="Approve the merge?",
+        gate_id="merge:work-without-gate:1",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Work work-without-gate has no GATE_REQUESTED for merge:work-without-gate:1",
+    ):
+        await coordinator._mirror(task, record, command, lease_epoch=1)
+
+
+@pytest.mark.asyncio
 async def test_a_lost_mirror_batch_notifies_the_channel_once(stores, tmp_path, monkeypatch) -> None:
     task_store, work_store = stores
     task, record, runner, coordinator = await _seed(stores, tmp_path)
@@ -649,6 +674,35 @@ async def test_a_lost_mirror_batch_notifies_the_channel_once(stores, tmp_path, m
     record = await _drive_to_rest(coordinator, record, epoch)
     assert record.status is TaskStatus.BLOCKED
     assert [call.attention_id for call in channel.calls] == ["blocked-1"]
+
+
+@pytest.mark.asyncio
+async def test_pruning_activity_includes_superseded_step_works(stores, tmp_path) -> None:
+    from sagewai.work.tasks.decide import CycleState
+
+    task_store, work_store = stores
+    task, _record, runner, _coordinator = await _seed(stores, tmp_path)
+    task = task.model_copy(update={"retention_days": 7})
+    calls = []
+
+    class Activity:
+        async def prune(self, **kwargs) -> None:
+            calls.append(kwargs)
+
+    coordinator = TaskCoordinator(
+        task_store=task_store,
+        work_store=work_store,
+        profile_runner=runner,
+        activity_store=Activity(),
+    )
+    state = CycleState(
+        step_works={"s1": "work-new"},
+        superseded_works=frozenset({"work-old"}),
+    )
+
+    await coordinator._prune_activity(task, state)
+
+    assert set(calls[0]["completed_work_ids"]) == {"work-new", "work-old"}
 
 
 @pytest.mark.asyncio

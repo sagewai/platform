@@ -23,7 +23,7 @@ from sagewai.work.tasks.models import (
     TaskOrigin,
     TaskTriggerSpec,
 )
-from sagewai.work.tasks.service import TaskService
+from sagewai.work.tasks.service import TaskCreationError, TaskService
 from sagewai.work.tasks.store import TaskStore
 from sagewai.work.tasks.triggers import TriggerIntake
 from tests.db.conftest import dialect_engine  # noqa: F401
@@ -133,6 +133,43 @@ async def test_a_disabled_trigger_is_skipped(intake) -> None:
     trigger_intake, task_store, _github = intake
     await task_store.put_trigger(SPEC.model_copy(update={"enabled": False}))
     assert await trigger_intake.run(project_id=PROJECT, now=NOW) == []
+
+
+@pytest.mark.asyncio
+async def test_a_failed_task_create_does_not_consume_the_trigger_receipt(
+    dialect_engine,  # noqa: F811
+    tmp_path,
+) -> None:
+    task_store = TaskStore(engine=dialect_engine)
+    work_store = WorkStore(engine=dialect_engine)
+    await task_store.init()
+    await work_store.init()
+    await task_store.put_defaults(TaskDefaults(project_id=PROJECT), expected_revision=0)
+    await task_store.put_trigger(SPEC)
+    github = _Issues(_issue(7))
+    service = TaskService(
+        store=task_store, artifact_store=LocalArtifactStore(root=tmp_path / "objects")
+    )
+    trigger_intake = TriggerIntake(
+        task_store=task_store,
+        work_store=work_store,
+        service=service,
+        github_factory=lambda _spec: github,
+    )
+
+    with pytest.raises(TaskCreationError):
+        await trigger_intake.run(project_id=PROJECT, now=NOW)
+
+    defaults = await task_store.get_defaults(project_id=PROJECT)
+    await task_store.put_defaults(
+        TaskDefaults(project_id=PROJECT, target=_task().target),
+        expected_revision=defaults.revision,
+    )
+    created = await trigger_intake.run(project_id=PROJECT, now=NOW)
+
+    assert len(created) == 1
+    task, _record = await task_store.load(created[0], project_id=PROJECT)
+    assert task.source_ref.endswith("/issues/7")
 
 
 def test_a_github_label_trigger_must_filter_on_owner_repo_and_label() -> None:

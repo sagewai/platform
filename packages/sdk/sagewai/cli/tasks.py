@@ -83,7 +83,11 @@ async def _create(brief: str, *, project_id: str) -> str:
 async def _tick(project_id: str) -> int:
     task_store, work_store, activity_store = await _stores()
     service = TaskService(store=task_store, artifact_store=LocalArtifactStore())
-    profile_runner = SoftwareProfileRunner(work_store=work_store, github_factory=github_client_for)
+    profile_runner = SoftwareProfileRunner(
+        work_store=work_store,
+        github_factory=github_client_for,
+        stack_cache_limit=max(8, max_tasks_from_env()),
+    )
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,

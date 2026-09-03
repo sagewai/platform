@@ -83,6 +83,31 @@ def test_the_cooldown_suppresses_a_second_action_within_one_window() -> None:
     assert action is not None
 
 
+def test_retry_cycle_actions_do_not_hold_the_pause_cooldown() -> None:
+    from sagewai.work.tasks.coordinator import TaskCoordinator
+    from sagewai.work.tasks.events import TaskEvent, TaskEventType
+
+    retry = TaskEvent(
+        id="health-retry-1",
+        project_id="project-a",
+        task_id="task-health",
+        sequence=1,
+        event_type=TaskEventType.HEALTH_ACTION,
+        actor_type="system",
+        actor_ref="coordinator",
+        payload_json={"kind": "retry_cycle", "reason": "the last cycle failed", "cycle": 1},
+        created_at=NOW,
+    )
+    signal, action = evaluate_health(
+        [_cycle(1, status="failed"), _cycle(2, status="failed"), _cycle(3, status="failed")],
+        policy=HealthPolicy(),
+        last_action_cycle=TaskCoordinator._last_health_cycle((retry,)),
+    )
+
+    assert signal.kind == "consecutive_failures" and signal.cycle == 3
+    assert isinstance(action, PauseSchedule)
+
+
 def test_a_healthy_history_produces_nothing() -> None:
     assert evaluate_health([_cycle(n) for n in range(1, 6)], policy=HealthPolicy(), last_action_cycle=None) == (None, None)
     assert evaluate_health([], policy=HealthPolicy(), last_action_cycle=None) == (None, None)
@@ -112,73 +137,158 @@ def test_cycle_history_reads_the_task_stream_and_the_ledger() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_cost_spike_on_a_scheduled_task_holds_needs_you(stores, tmp_path, monkeypatch) -> None:  # noqa: F811
+async def test_a_cost_spike_on_a_scheduled_task_holds_needs_you(
+    stores, monkeypatch  # noqa: F811
+) -> None:  # noqa: F811
+    from sagewai.work.tasks.coordinator import TaskCoordinator
     from sagewai.work.tasks.events import TaskEventType
     from sagewai.work.tasks.models import (
         AttentionOwner,
         BoardColumn,
-        Schedule,
-        TaskKind,
         TaskStatus,
     )
-    from tests.work.tasks.test_coordinator import _fixed_task, _seed
-
-    task_store, _work_store = stores
-    task, record, _runner, coordinator = await _seed(stores, tmp_path)
-    task = task.model_copy(
-        update={
-            "kind": TaskKind.SCHEDULED,
-            "schedule": Schedule(cron="0 8 * * *", timezone="Europe/Berlin"),
-        }
+    from sagewai.work.tasks.store import SpendReservation
+    from sagewai.work.tasks.writer import TaskWriter
+    from tests.work.tasks.test_coordinator import (
+        FakeProfileRunner,
+        RecordingDecisionChannel,
+        _plan_result,
     )
-    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
-    monkeypatch.setattr(
-        coordinator,
-        "_act_on_health",
-        _forced_alert(coordinator),
+    from tests.work.tasks.test_schedules import _scheduled
+    from tests.work.tasks.test_store import _create
+
+    task_store, work_store = stores
+    task = _scheduled("task-health")
+    record = await _create(task_store, task)
+    plan = _plan_result()
+    entries = [
+        (
+            TaskEventType.PLAN_PROPOSED,
+            {
+                "version": 1,
+                "steps": [step.model_dump(mode="json") for step in plan.steps],
+                "acceptance_matrix": [
+                    item.model_dump(mode="json") for item in plan.acceptance_matrix
+                ],
+            },
+        ),
+        (TaskEventType.PLAN_ACCEPTED, {"version": 1}),
+        (TaskEventType.TASK_STATUS_CHANGED, {"status": TaskStatus.EXECUTING.value}),
+    ]
+    for cycle in range(1, 7):
+        entries.extend(
+            [
+                (
+                    TaskEventType.CYCLE_STARTED,
+                    {"cycle": cycle, "scheduled_for": f"2026-09-0{cycle}T08:00:00+00:00"},
+                ),
+                (TaskEventType.TASK_STATUS_CHANGED, {"status": TaskStatus.ASSESSING.value}),
+                (
+                    TaskEventType.ASSESSMENT_RECORDED,
+                    {
+                        "cycle": cycle,
+                        "attempt_id": f"assess-{cycle}",
+                        "matrix_results": [],
+                        "gaps": [],
+                        "verdict": "accept",
+                    },
+                ),
+                (
+                    TaskEventType.CYCLE_COMPLETED,
+                    {
+                        "cycle": cycle,
+                        "outcome": "succeeded",
+                        "next_run_at": "2026-09-08T08:00:00+00:00",
+                    },
+                ),
+                (TaskEventType.TASK_STATUS_CHANGED, {"status": TaskStatus.SCHEDULED.value}),
+                (TaskEventType.TASK_STATUS_CHANGED, {"status": TaskStatus.EXECUTING.value}),
+            ]
+        )
+    entries.append(
+        (
+            TaskEventType.CYCLE_STARTED,
+            {"cycle": 7, "scheduled_for": "2026-09-08T08:00:00+00:00"},
+        )
+    )
+    for step in plan.steps:
+        entries.extend(
+            [
+                (
+                    TaskEventType.STEP_WORK_STARTED,
+                    {
+                        "step_id": step.id,
+                        "work_id": f"work-{step.id}",
+                        "issue_url": f"https://github.com/o/r/issues/{step.id}",
+                        "base_sha": "a" * 40,
+                    },
+                ),
+                (
+                    TaskEventType.STEP_WORK_OUTCOME,
+                    {"step_id": step.id, "work_id": f"work-{step.id}", "outcome": "accepted"},
+                ),
+            ]
+        )
+    entries.extend(
+        [
+            (TaskEventType.TASK_STATUS_CHANGED, {"status": TaskStatus.ASSESSING.value}),
+            (
+                TaskEventType.ASSESSMENT_RECORDED,
+                {
+                    "cycle": 7,
+                    "attempt_id": "assess-7",
+                    "matrix_results": [],
+                    "gaps": [],
+                    "verdict": "accept",
+                },
+            ),
+        ]
+    )
+    record = await TaskWriter(task_store).append(record, entries, now=NOW)
+    for cycle in range(1, 8):
+        await task_store.reserve_spend(
+            SpendReservation(
+                reservation_id=f"cost-{cycle}",
+                project_id=task.project_id,
+                task_id=task.id,
+                cycle=cycle,
+                role="implementer",
+                runtime="claude",
+                usd_reserved=Decimal("0"),
+            )
+        )
+        await task_store.settle_spend(
+            f"cost-{cycle}",
+            project_id=task.project_id,
+            usd_actual=Decimal("9.00" if cycle == 7 else "1.00"),
+        )
+    queried_cycles: list[int] = []
+    original_spend_totals = task_store.spend_totals
+
+    async def capture_spend_totals(*args, **kwargs):
+        queried_cycles.append(kwargs["cycle"])
+        return await original_spend_totals(*args, **kwargs)
+
+    monkeypatch.setattr(task_store, "spend_totals", capture_spend_totals)
+    channel = RecordingDecisionChannel()
+    coordinator = TaskCoordinator(
+        task_store=task_store,
+        work_store=work_store,
+        profile_runner=FakeProfileRunner(work_store, plan_result=plan),
+        decision_channels=(channel,),
     )
     epoch = await task_store.claim(task.id, project_id=task.project_id, owner="r1", ttl_seconds=90)
-    for _ in range(20):
-        record = await coordinator.drive(record, lease_epoch=epoch)
-        if record.status is TaskStatus.SCHEDULED:
-            break
+    record = await coordinator.drive(record, lease_epoch=epoch)
+
     assert record.status is TaskStatus.SCHEDULED
     assert record.attention_owner is AttentionOwner.USER
     assert record.board_column is BoardColumn.NEEDS_YOU
+    assert queried_cycles[1:-1] == [3, 4, 5, 6, 7]
     types = [e.event_type for e in await task_store.read_events(task.id, project_id=task.project_id)]
-    assert types[-3:] == [
+    assert types[-4:] == [
+        TaskEventType.HEALTH_SIGNAL,
         TaskEventType.HEALTH_ACTION,
         TaskEventType.ATTENTION_CHANGED,
         TaskEventType.NOTIFICATION_PRESENTED,
     ]
-
-
-def _forced_alert(coordinator):
-    """Drive the alert branch on one cycle; evaluate_health itself is unit-tested above."""
-    from sagewai.work.tasks.events import TaskEventType
-    from sagewai.work.tasks.health import AlertOperator, HealthSignal
-
-    async def _act(task, record, command, lease_epoch):
-        signal = HealthSignal(kind="cost_spike", detail="cycle cost 9 above the median", cycle=1)
-        action = AlertOperator(reason=signal.detail)
-        health = [
-            (TaskEventType.HEALTH_SIGNAL, signal.model_dump(mode="json")),
-            (
-                TaskEventType.HEALTH_ACTION,
-                {**action.model_dump(mode="json"), "cycle": signal.cycle},
-            ),
-            (
-                TaskEventType.ATTENTION_CHANGED,
-                {"owner": "user", "reason": f"health:{signal.kind}:{signal.cycle}"},
-            ),
-            *await coordinator._present(
-                task,
-                record,
-                attention_id=f"health:{signal.kind}:{signal.cycle}",
-                summary=signal.detail,
-                urgency="today",
-            ),
-        ]
-        return await coordinator._append(record, health, lease_epoch)
-
-    return _act
+    assert channel.calls[-1].attention_id == "health:cost_spike:7"

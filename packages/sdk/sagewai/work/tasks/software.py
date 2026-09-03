@@ -61,22 +61,25 @@ class SoftwareProfileRunner:
         work_store: WorkStore,
         github_factory: GitHubFactory,
         engine: AsyncEngine | None = None,
+        stack_cache_limit: int = _STACK_CACHE_LIMIT,
     ) -> None:
         self._work_store = work_store
         self._github_factory = github_factory
         self._engine = engine
         self._stacks: OrderedDict[_StackKey, SoftwareStack] = OrderedDict()
-        self._ledger: BudgetLedger | None = None
+        self._stack_cache_limit = stack_cache_limit
+        self._ledgers: dict[str, BudgetLedger] = {}
 
     def use_ledger(self, ledger: BudgetLedger) -> None:
-        """Meter every stage attempt of the next call into this cycle's ledger."""
-        self._ledger = ledger
+        """Meter this Task's stage attempts into this cycle's ledger."""
+        self._ledgers[ledger.task_id] = ledger
 
     async def aclose(self) -> None:
         """Flush every cached stack's activity sink; the runner owns the call."""
         for stack in tuple(self._stacks.values()):
             await stack.activity_sink.close()
         self._stacks.clear()
+        self._ledgers.clear()
 
     async def base_sha(self, task: Task) -> str:
         """Fetch origin and return the default-branch head that the next Work pins."""
@@ -253,14 +256,20 @@ class SoftwareProfileRunner:
             fleet_org=task.execution.fleet_org_id,
             prefer_free_implementation=task.routing.prefer_free_implementation,
             max_attempts_per_stage=task.budget.max_attempts_per_stage,
-            controller_factory=self._controller_factory(),
+            controller_factory=self._controller_factory(task.id),
             engine=self._engine,
         )
         self._stacks[key] = stack
-        if len(self._stacks) > _STACK_CACHE_LIMIT:
-            _, evicted = self._stacks.popitem(last=False)
-            await evicted.activity_sink.close()
+        if len(self._stacks) > self._stack_cache_limit:
+            await self._evict_oldest()
         return stack
+
+    async def _evict_oldest(self) -> None:
+        """Close the least recently used stack; its Task's ledger stays while another stack of that Task remains."""
+        evicted_key, evicted = self._stacks.popitem(last=False)
+        await evicted.activity_sink.close()
+        if not any(key[0] == evicted_key[0] for key in self._stacks):
+            self._ledgers.pop(evicted_key[0], None)
 
     @staticmethod
     def _stack_key(task: Task) -> _StackKey:
@@ -286,9 +295,11 @@ class SoftwareProfileRunner:
             task_id=task.id,
         )
 
-    def _controller_factory(self) -> ControllerFactory:
+    def _controller_factory(self, task_id: str) -> ControllerFactory:
         """The stack is cached per Task, so the controllers read the current ledger each run."""
-        return lambda **kwargs: MeteredOperatorController(ledger=lambda: self._ledger, **kwargs)
+        return lambda **kwargs: MeteredOperatorController(
+            ledger=lambda: self._ledgers[task_id], **kwargs
+        )
 
 
 __all__ = ["SoftwareProfileRunner", "step_marker", "task_label"]

@@ -11,22 +11,30 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from datetime import datetime, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
 
+from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.work.models import ProposedAcceptanceCriterion, WorkRecord
 from sagewai.work.profiles.software.github import BaseMovedError
 from sagewai.work.store import WorkStore
-from sagewai.work.tasks.models import ExecutionRoute
+from sagewai.work.tasks.coordinator import TaskCoordinator
+from sagewai.work.tasks.events import TaskEventType
+from sagewai.work.tasks.models import ExecutionRoute, TaskDefaults, TaskOrigin
 from sagewai.work.tasks.plan import MatrixItem, PlanStep, TaskPlanResult
+from sagewai.work.tasks.runner import TaskCoordinatorRunner
+from sagewai.work.tasks.service import TaskService
 from sagewai.work.tasks.software import (
     SoftwareProfileRunner,
     step_marker,
     task_label,
 )
+from sagewai.work.tasks.store import TaskStore
 from tests.db.conftest import dialect_engine  # noqa: F401
 from tests.work.tasks.test_software_kernel import RecordingGitHub
 from tests.work.tasks.test_store import _task
@@ -43,6 +51,10 @@ STEP = PlanStep(
     ),
     risk="low",
     domain="backend",
+)
+BRIEF = (
+    "Implement the retry queue in the payments service repository with a failing test first "
+    "and open a pull request when the deterministic verification command passes."
 )
 
 
@@ -93,6 +105,10 @@ def _stack_object(
     )
 
 
+async def _project_a() -> tuple[str, ...]:
+    return ("project-a",)
+
+
 async def _save_work(
     work_store: WorkStore,
     *,
@@ -118,6 +134,121 @@ async def _save_work(
     )
     await work_store.save_work(record)
     return record
+
+
+@pytest.mark.asyncio
+async def test_concurrent_software_tasks_meter_into_their_own_ledgers(
+    dialect_engine,  # noqa: F811
+    tmp_path,
+    monkeypatch,
+) -> None:
+    task_store = TaskStore(engine=dialect_engine)
+    work_store = WorkStore(engine=dialect_engine)
+    await task_store.init()
+    await work_store.init()
+    await task_store.put_defaults(
+        TaskDefaults(project_id="project-a", target=_task().target), expected_revision=0
+    )
+    artifacts = LocalArtifactStore(root=tmp_path / "objects")
+    service = TaskService(store=task_store, artifact_store=artifacts)
+    tasks = [
+        (
+            await service.create(
+                BRIEF,
+                project_id="project-a",
+                origin=TaskOrigin.HUMAN,
+                created_by="test",
+                now=datetime.now(timezone.utc),
+            )
+        )[0]
+        for _ in range(2)
+    ]
+    gate = asyncio.Event()
+    waiting = 0
+    bound_ledgers: list[tuple[str, str]] = []
+    reservations = []
+    original_reserve = task_store.reserve_spend
+
+    async def capture_reservation(reservation):
+        reservations.append(reservation)
+        await original_reserve(reservation)
+
+    class ReservingPlanner:
+        def __init__(self, **kwargs) -> None:
+            self.controller = kwargs["controller"]
+
+        async def plan(self, task, **_kwargs) -> TaskPlanResult:
+            nonlocal waiting
+            waiting += 1
+            if waiting == 2:
+                gate.set()
+            await asyncio.wait_for(gate.wait(), timeout=5)
+            ledger = self.controller._ledger()
+            await ledger.reserve(
+                run_id=f"plan-{task.id}",
+                stage="analysis",
+                runtime=SimpleNamespace(name="claude"),
+            )
+            bound_ledgers.append((task.id, ledger.task_id))
+            return TaskPlanResult(
+                attempt_id=f"plan-{task.id}",
+                steps=(STEP,),
+                acceptance_matrix=(
+                    MatrixItem(
+                        id="m1",
+                        statement="verification passes",
+                        verification_kind="deterministic",
+                        command="just smoke",
+                    ),
+                ),
+            )
+
+    async def fake_stack(**kwargs):
+        controller = kwargs["controller_factory"](
+            work_store=work_store,
+            durability_store=object(),
+            permission_policy=object(),
+            control_checks={},
+            result_validator=object(),
+        )
+        stack = _stack_object(work_store, lifecycle=object())
+        stack.read_controller = controller
+        return stack
+
+    async def fake_base_sha(_task):
+        return "a" * 40
+
+    monkeypatch.setattr(task_store, "reserve_spend", capture_reservation)
+    monkeypatch.setattr("sagewai.work.tasks.software.build_software_stack", fake_stack)
+    monkeypatch.setattr("sagewai.work.tasks.software.TaskPlanner", ReservingPlanner)
+    profile = _runner(work_store, RecordingGitHub(), engine=dialect_engine)
+    monkeypatch.setattr(profile, "base_sha", fake_base_sha)
+    coordinator = TaskCoordinator(
+        task_store=task_store,
+        work_store=work_store,
+        profile_runner=profile,
+        artifact_store=artifacts,
+    )
+    runner = TaskCoordinatorRunner(
+        task_store=task_store,
+        driver=coordinator,
+        list_project_ids=_project_a,
+        max_tasks=2,
+    )
+
+    assert await runner.tick() == 2
+
+    assert sorted(bound_ledgers) == sorted((task.id, task.id) for task in tasks)
+    assert sorted((item.project_id, item.task_id, item.cycle) for item in reservations) == [
+        ("project-a", task.id, 1) for task in sorted(tasks, key=lambda item: item.id)
+    ]
+    for task in tasks:
+        totals = await task_store.spend_totals(task_id=task.id, project_id="project-a", cycle=1)
+        assert totals.reservations == 1
+        assert totals.usd_reserved == Decimal("5.00")
+        events = await task_store.read_events(task.id, project_id="project-a")
+        spend = [event for event in events if event.event_type is TaskEventType.SPEND_RESERVED]
+        assert [event.payload_json["reservation_id"] for event in spend] == [f"plan-{task.id}"]
 
 
 @pytest.mark.asyncio
@@ -572,3 +703,54 @@ async def test_start_drives_one_step_on_a_stack_built_from_the_test_engine(
     assert record.profile_context["task_id"] == task.id
     assert record.source_ref == issue_url
     await runner.aclose()
+
+
+@pytest.mark.asyncio
+async def test_eviction_keeps_a_ledger_while_another_key_of_the_task_remains(
+    dialect_engine,  # noqa: F811
+) -> None:
+    from sagewai.work.tasks.budget import BudgetLedger
+    from sagewai.work.tasks.store import TaskStore
+
+    class _Sink:
+        def __init__(self) -> None:
+            self.closed = 0
+
+        async def close(self) -> None:
+            self.closed += 1
+
+    class _Stack:
+        def __init__(self) -> None:
+            self.activity_sink = _Sink()
+
+    work_store = WorkStore(engine=dialect_engine)
+    await work_store.init()
+    runner = SoftwareProfileRunner(work_store=work_store, github_factory=lambda scope: RecordingGitHub())
+    task = _task()
+    ledger = BudgetLedger(
+        store=TaskStore(engine=dialect_engine),
+        task_id=task.id,
+        project_id=task.project_id,
+        cycle=1,
+        budget=task.budget,
+    )
+    runner.use_ledger(ledger)
+    local = task.model_copy(update={"execution": task.execution.model_copy(update={"route": "local"})})
+    fleet = task.model_copy(
+        update={
+            "execution": task.execution.model_copy(
+                update={"route": "fleet", "fleet_org_id": "org-1"}
+            )
+        }
+    )
+    first, second = _Stack(), _Stack()
+    runner._stacks[runner._stack_key(local)] = first  # type: ignore[assignment]
+    runner._stacks[runner._stack_key(fleet)] = second  # type: ignore[assignment]
+
+    await runner._evict_oldest()
+    assert first.activity_sink.closed == 1
+    assert runner._ledgers[task.id] is ledger
+
+    await runner._evict_oldest()
+    assert second.activity_sink.closed == 1
+    assert task.id not in runner._ledgers

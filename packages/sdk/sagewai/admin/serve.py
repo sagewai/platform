@@ -931,13 +931,17 @@ def create_admin_serve_app(
                     for project in await identity_store.list_projects(org["id"]):
                         projects.append(project["id"])
                 return projects
-            return [project["id"] for project in sf.list_projects()]
+            import asyncio
+
+            return [project["id"] for project in await asyncio.to_thread(sf.list_projects)]
 
         _task_service = TaskService(
             store=app.state.task_store, artifact_store=_TaskArtifactStore()
         )
         app.state.task_profile_runner = SoftwareProfileRunner(
-            work_store=app.state.work_store, github_factory=github_client_for
+            work_store=app.state.work_store,
+            github_factory=github_client_for,
+            stack_cache_limit=max(8, max_tasks_from_env()),
         )
         app.state.task_coordinator_runner = TaskCoordinatorRunner(
             task_store=app.state.task_store,
@@ -1053,7 +1057,12 @@ def create_admin_serve_app(
                 await app.state.fleet_reaper.aclose()
             set_subscription_manager(None)
             if getattr(app.state, "task_coordinator_runner", None) is not None:
-                await app.state.task_coordinator_runner.aclose()
+                try:
+                    await app.state.task_coordinator_runner.aclose()
+                finally:
+                    if getattr(app.state, "task_profile_runner", None) is not None:
+                        await app.state.task_profile_runner.aclose()
+            elif getattr(app.state, "task_profile_runner", None) is not None:
                 await app.state.task_profile_runner.aclose()
             await runner.stop()
             # Clear the process-wide workflow store default on shutdown so

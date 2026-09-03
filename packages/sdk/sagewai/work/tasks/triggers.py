@@ -53,23 +53,32 @@ class TriggerIntake:
             )
             if bound is not None:
                 continue
+            command_id = f"trigger:{spec.trigger_id}:{issue.url}"
             if not await self._task_store.record_command(
                 task_id=f"trigger:{spec.trigger_id}",
                 project_id=spec.project_id,
-                command_id=f"trigger:{spec.trigger_id}:{issue.url}",
+                command_id=command_id,
                 payload={"issue_url": issue.url},
             ):
                 continue
-            task, _record = await self._service.create(
-                f"{issue.title}\n\n{issue.body}",
-                project_id=spec.project_id,
-                origin=TaskOrigin.TRIGGER,
-                created_by=f"trigger:{spec.trigger_id}",
-                authority_floor=spec.authority,
-                origin_ref=spec.trigger_id,
-                source_ref=issue.url,
-                now=now,
-            )
+            try:
+                task, _record = await self._service.create(
+                    f"{issue.title}\n\n{issue.body}",
+                    project_id=spec.project_id,
+                    origin=TaskOrigin.TRIGGER,
+                    created_by=f"trigger:{spec.trigger_id}",
+                    authority_floor=spec.authority,
+                    origin_ref=spec.trigger_id,
+                    source_ref=issue.url,
+                    now=now,
+                )
+            except Exception:
+                await self._task_store.delete_command(
+                    task_id=f"trigger:{spec.trigger_id}",
+                    project_id=spec.project_id,
+                    command_id=command_id,
+                )
+                raise
             created.append(task.id)
         return created
 

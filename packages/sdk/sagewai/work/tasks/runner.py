@@ -85,9 +85,26 @@ class TaskCoordinatorRunner:
                         "project sweeper failed",
                         extra={"project": project_id, "sweeper": type(sweeper).__name__},
                     )
-            records = await self._claimable(project_id, now)
+            claimed: list[tuple[TaskRecord, int]] = []
+            for record in await self._claimable(project_id, now):
+                if len(claimed) == self._max_tasks:
+                    break
+                try:
+                    epoch = await self._task_store.claim(
+                        record.task_id,
+                        project_id=record.project_id,
+                        owner=self._owner,
+                        ttl_seconds=self._lease_ttl,
+                    )
+                except Exception:
+                    logger.exception(
+                        "task claim failed", extra={"project": project_id, "task": record.task_id}
+                    )
+                    break
+                if epoch is not None:
+                    claimed.append((record, epoch))
             results = await asyncio.gather(
-                *(self._drive(record) for record in records[: self._max_tasks]),
+                *(self._drive(record, epoch) for record, epoch in claimed),
                 return_exceptions=True,
             )
             for result in results:
@@ -99,7 +116,7 @@ class TaskCoordinatorRunner:
 
     async def _claimable(self, project_id: str, now: datetime) -> list[TaskRecord]:
         active = await self._task_store.list_records(project_id=project_id, statuses=_ACTIVE)
-        due = await self._task_store.list_due(project_id=project_id, now=now, limit=self._max_tasks)
+        due = await self._task_store.list_due(project_id=project_id, now=now)
         seen: set[str] = set()
         records: list[TaskRecord] = []
         for record in [*active, *due]:
@@ -109,15 +126,7 @@ class TaskCoordinatorRunner:
             records.append(record)
         return records
 
-    async def _drive(self, record: TaskRecord) -> int:
-        epoch = await self._task_store.claim(
-            record.task_id,
-            project_id=record.project_id,
-            owner=self._owner,
-            ttl_seconds=self._lease_ttl,
-        )
-        if epoch is None:
-            return 0
+    async def _drive(self, record: TaskRecord, epoch: int) -> int:
         beat = asyncio.ensure_future(self._renew(record, epoch))
         try:
             await self._driver.drive(record, lease_epoch=epoch)
@@ -136,13 +145,19 @@ class TaskCoordinatorRunner:
     async def _renew(self, record: TaskRecord, epoch: int) -> None:
         while True:
             await asyncio.sleep(self._heartbeat)
-            await self._task_store.renew(
-                record.task_id,
-                project_id=record.project_id,
-                owner=self._owner,
-                lease_epoch=epoch,
-                ttl_seconds=self._lease_ttl,
-            )
+            try:
+                await self._task_store.renew(
+                    record.task_id,
+                    project_id=record.project_id,
+                    owner=self._owner,
+                    lease_epoch=epoch,
+                    ttl_seconds=self._lease_ttl,
+                )
+            except Exception:
+                logger.exception(
+                    "task lease renew failed",
+                    extra={"project": record.project_id, "task": record.task_id},
+                )
 
     async def _loop(self) -> None:
         while True:
