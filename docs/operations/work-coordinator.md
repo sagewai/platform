@@ -1,11 +1,11 @@
 # Using Sagewai as the work coordinator
 
-Sagewai coordinates bounded software work between you, Codex, Claude, and a
-deterministic verifier. You state an outcome and its limits. Sagewai persists
-the contract and evidence, assigns write stages to Codex, assigns independent
-read-only analysis and review to Claude, runs the repository's locked
-verification contract, and stops when human attention or control evidence is
-required.
+Sagewai coordinates bounded software work between you, Codex, Claude,
+HarnessRuntime, and a deterministic verifier. You state an outcome and its
+limits. Sagewai persists the contract and evidence, assigns write stages to
+Codex or an opted-in harness tier, assigns independent read-only analysis and
+review to Claude, runs the repository's locked verification contract, and stops
+when human attention or control evidence is required.
 
 The durable Work record is authoritative. Neither model's chat history is.
 
@@ -15,6 +15,8 @@ The shipped software profile can coordinate a local request or GitHub issue
 through analysis, implementation, verification, independent review, bounded
 repair, pull request and merge gates, and a verified result. It can resume after
 a process or worker disappears without repeating completed stages.
+Implementation uses Codex by default; HarnessRuntime is opt-in with
+`--prefer-free-implementation`.
 
 The generic Work kernel can host more profiles, but arbitrary business-work
 automation is not implied by the current software profile. The Approval Desk
@@ -171,8 +173,9 @@ on the Mac mini and `claude` only on the laptop; Sagewai never sends those nativ
 credentials to the backend.
 
 In Admin, create project `coordinator-demo`, then open
-<http://localhost:3008/fleet/enrollment-keys>. Create one key with max uses `2`
-and allowed pool `default`. Copy the secret when it appears; it is shown once.
+<http://localhost:3008/fleet/enrollment-keys>. Create one key with max uses `2`,
+or `3` if you will also register the harness worker below, and allowed pool
+`default`. Copy the secret when it appears; it is shown once.
 
 If the backend listens only on laptop loopback, open a tunnel from the Mac mini:
 
@@ -225,10 +228,34 @@ These native runtime settings are worker-local: Sagewai never sends them to the
 control plane, worker registration capabilities, Fleet task payloads, or Fleet
 result payloads.
 
+To advertise a HarnessRuntime worker, run a local OpenAI-compatible backend on
+the worker and publish the `runtime.harness` capability. The implementer ladder
+uses the `complex` tier, so a harness worker must configure that tier at worker
+start:
+
+```bash
+sagewai fleet run --name harness-worker --project coordinator-demo \
+  --capabilities runtime.harness,filesystem.write \
+  --pool default \
+  --enrollment-key 'PASTE_ENROLLMENT_KEY' \
+  --work-repository /absolute/path/to/platform \
+  --harness-tier complex=localai:mlx-community/Mistral-7B-Instruct-v0.3 \
+  --harness-backend localai=http://127.0.0.1:8080/v1
+```
+
+`sagewai fleet run --harness-tier NAME=BACKEND:MODEL` splits on the first colon
+after the backend name, so model names may contain colons. `--harness-backend
+NAME=URL` appends `/v1` when missing, and every backend named by a configured
+tier must have a matching `--harness-backend`. The control plane sends only the
+tier name; the worker owns tiers, backend URLs, model names, and its own spend
+metering. A worker may also configure `simple` or `medium` tiers for a future
+router, but `runtime.harness` currently requires `complex` because that is the
+tier dispatched for the implementer ladder.
+
 The enrollment key authenticates registration without copying an Admin bearer
-token to either worker. Open <http://localhost:3008/fleet>, verify both workers
-are approved and online, and open each worker detail to check its advertised
-capability. The detail page shows the organization ID needed below.
+token to any worker. Open <http://localhost:3008/fleet>, verify the registered
+workers are approved and online, and open each worker detail to check its
+advertised capability. The detail page shows the organization ID needed below.
 
 On the laptop, build the verifier as described in section 1, copy the printed
 export, then select Fleet explicitly when starting the Work:
@@ -258,6 +285,74 @@ sagewai work --project coordinator-demo \
 
 Sagewai rejects a different route before it runs repository or model work.
 
+## Activity and telemetry
+
+Codex, Claude, HarnessRuntime, the verifier, and Fleet progress batches emit
+`OperatorActivity` for model messages, reasoning, tool calls, tool results,
+commands, file changes, usage, errors, and parser raw lines. `WorkActivityStore`
+persists activity in `work_activity` by `project_scope_key`, `work_id`, `run_id`,
+and sequence. SQLite deployments now require SQLite 3.35 or newer because the
+store uses multi-row `INSERT ... ON CONFLICT DO NOTHING RETURNING`; PostgreSQL
+is unaffected.
+
+Activity rows are capped at 5,000 per run. Rows beyond the cap collapse into a
+single `truncated` marker at sequence 5,000. No time-based retention job runs
+for `work_activity` yet; rows persist until an operator prunes them. Native CLI
+and harness runtimes also write the full
+NDJSON activity stream as an artifact referenced from the `OperatorResult`;
+that local archive keeps up to 4 MiB and ends with a `truncated` marker when
+cut. Fleet result envelopes carry `activity_log` up to
+`FLEET_ACTIVITY_LOG_MAX_BYTES` (2 MiB). The admin request cap
+`SAGEWAI_MAX_REQUEST_BYTES` defaults to 10 MiB, leaving room for the bounded
+Fleet envelope.
+
+Local runtimes redact only credential values handed to the runtime through
+scoped credentials. Fleet runs redact nothing because worker-local CLI
+credentials are unknown to the platform and Fleet capabilities carry no
+credential refs. Operators must keep secrets out of worker CLI output.
+
+When a Work record has `profile_context["task_id"]`, activity ingestion also
+mirrors entries into `task_feed`. `GET /api/v1/tasks/{id}/events` streams that
+feed as Server-Sent Events. The stream replays stored entries after
+`Last-Event-ID` and sends a heartbeat every 15 seconds, configurable with
+`TASK_SSE_HEARTBEAT`.
+
+`GET /api/v1/tasks/{id}/telemetry` returns
+`sagewai.work.tasks.telemetry.derive_task_telemetry`, a pure projection over
+Task events, Work events, and the spend ledger. It stores no new state. The
+response includes `works[*].stage_attempts`, `works[*].verification_runs`,
+`works[*].stage_timeline`, `works[*].attention_history`, `cycles[*]` with
+`usd_actual`, `usd_reserved`, `usd_unknown`, `limits`,
+`worst_case_next_attempt`, `free_attempts`, `paid_attempts`, `by_device`, and
+`burn_series`, `scheduled` with `cycles`, `success_rate`,
+`consecutive_failures`, `last_success_at`, and `overdue`, plus
+`project.escalation_rate_per_role`. Decimal fields are JSON strings.
+`worst_case_next_attempt` is `null` when the next implementer is Codex or no
+selection exists yet; harness attempts are free with cost 0, and Fleet devices
+appear as `fleet:<org>`. Task API callers should send project scope with
+`X-Project-ID`; missing scope returns 400, while an unknown Task or a Task
+outside the scope returns 404.
+
+Fleet workers post live activity for claimed `work.operator` tasks to
+`POST /api/v1/fleet/progress`. The endpoint accepts batches of at most 50
+entries and 640 KiB, in sequence order per run, and feeds the same activity
+store and Task feed path as final result ingestion.
+
+Harness tiers live in project `task_defaults` as `simple`, `medium`, and
+`complex` backend/model pairs. `sagewai work --project coordinator-demo
+--prefer-free-implementation start ...` is off by default. On the local route it
+reads `harness_tiers` from the project's task defaults, discovers local
+OpenAI-compatible backends through `sagewai.harness.discovery`, and inserts the
+configured `complex` harness tier before Codex on the implementer ladder. An
+OpenAI-compatible server on port 8080, including LocalAI or `mlx_lm.server`, is
+reported as `localai`; tiers reference that backend name. On the Fleet route,
+`--prefer-free-implementation` dispatches `runtime.harness` with tier `complex`
+before Codex on the implementer ladder only. On both routes, current harness
+runtime grants are limited: `filesystem` and `browser` grants are served today,
+while `cli:` grants need a sandbox backend and `mcp:` grants need the MCP
+connection resolver (`sagewai.work.mcp_connection_resolver`); neither is wired
+by the CLIs yet, so such grants fail the attempt.
+
 ## 7. Operate it as your middleman
 
 A practical rollout is:
@@ -283,8 +378,8 @@ control stops new side effects.
 - **Work needs attention:** run `pending`, act on the exact reported ID, then
   `resume`; do not restart the Work under a new ID.
 - **No compatible Fleet worker:** verify project scope and advertised
-  `runtime.codex` or `runtime.claude` capability. Do not send model credentials to
-  the control plane.
+  `runtime.codex`, `runtime.claude`, or `runtime.harness` capability. Do not
+  send model credentials or harness backend configuration to the control plane.
 - **Control degraded:** restore the failed authority, observability, or
   reversibility precondition. A successful HTTP status with stale observations is
   still degraded.

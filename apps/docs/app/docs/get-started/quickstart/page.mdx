@@ -164,10 +164,10 @@ that label. It is an invoked intake command, not a background poller or webhook.
 
 ## 5. Optional Fleet workers
 
-Local execution is the default. Fleet is useful when Codex and Claude should run
-on separate machines. Each worker must be approved, scoped to the same project,
-started from a trusted checkout, and advertise only the native runtime it can
-execute:
+Local execution is the default. Fleet is useful when Codex, Claude, or
+HarnessRuntime should run on separate machines. Each worker must be approved,
+scoped to the same project, started from a trusted checkout, and advertise only
+the runtime it can execute:
 
 ```bash
 sagewai fleet run --name codex-worker --project my-project \
@@ -177,6 +177,12 @@ sagewai fleet run --name codex-worker --project my-project \
 sagewai fleet run --name claude-worker --project my-project \
   --capabilities runtime.claude,filesystem.read \
   --work-repository /path/to/repository
+
+sagewai fleet run --name harness-worker --project my-project \
+  --capabilities runtime.harness,filesystem.write \
+  --work-repository /path/to/repository \
+  --harness-tier complex=localai:mlx-community/Mistral-7B-Instruct-v0.3 \
+  --harness-backend localai=http://127.0.0.1:8080/v1
 ```
 
 Start or resume Work with Fleet selected explicitly:
@@ -188,9 +194,10 @@ sagewai work --project my-project \
 ```
 
 The control plane persists Work state and dispatches credential-free stage
-payloads to compatible workers. Codex and Claude authentication stays on each
-worker. If a worker disappears, lease recovery can reassign the unfinished
-stage without erasing Work state or rerunning completed stages.
+payloads to compatible workers. Codex and Claude authentication and
+HarnessRuntime backend configuration stay on each worker. If a worker
+disappears, lease recovery can reassign the unfinished stage without erasing
+Work state or rerunning completed stages.
 
 ## 6. Work API and Control Console
 
