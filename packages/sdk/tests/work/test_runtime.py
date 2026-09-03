@@ -199,15 +199,18 @@ def _fake_runtime_executable(
                     "type": "assistant",
                     "message": {{"content": [{{"type": "text", "text": "fake runtime completed"}}]}},
                 }}))
-                print(json.dumps({{
+                final = {{
                     "type": "result",
                     "subtype": "success",
                     "is_error": False,
                     "structured_output": result,
                     "result": json.dumps(result),
-                    "usage": {{"input_tokens": 12, "output_tokens": 7}},
-                    "total_cost_usd": 0.01,
-                }}))
+                }}
+                if {include_usage!r}:
+                    final["usage"] = {{"input_tokens": 12, "output_tokens": 7}}
+                if {include_cost!r}:
+                    final["total_cost_usd"] = 0.01
+                print(json.dumps(final))
             else:
                 envelope = {{
                     "structured_output": result,

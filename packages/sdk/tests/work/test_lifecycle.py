@@ -27,12 +27,14 @@ from sagewai.safety.permissions import PermissionPolicy
 from sagewai.work import (
     AcceptanceCriterion,
     ActionResult,
+    ActivitySink,
     Assumption,
     CapabilityGrant,
     CapabilitySet,
     ClaimClassification,
     ClassifiedClaim,
     ControlPreconditionKind,
+    ListActivitySink,
     OperatorDisciplineReport,
     OperatorResult,
     ProposedAcceptanceCriterion,
@@ -1068,6 +1070,7 @@ def _lifecycle(
     repairer_ladder: tuple[MutationRuntime, ...] | None = None,
     reviewer_validator=None,
     max_attempts_per_stage: int = 3,
+    activity_sink: ActivitySink | None = None,
 ) -> SoftwareLifecycle:
     artifact_store = LocalArtifactStore(
         root=artifact_root or worktree_root.parent / "objects"
@@ -1153,6 +1156,7 @@ def _lifecycle(
             knowledge_store=knowledge_store,
             runner=LocalVerificationRunner(),
             artifact_store=artifact_store,
+            activity_sink=activity_sink,
         ),
         artifact_store=artifact_store,
         repository=repository,
@@ -1968,6 +1972,7 @@ async def test_verification_failure_does_not_escalate(
     implementer = MutationRuntime(implement_text="initial", repair_text="unused")
     unused_implementer = MutationRuntime(implement_text="unused", repair_text="unused")
     repairer = MutationRuntime(implement_text="unused", repair_text="fixed")
+    sink = ListActivitySink()
     lifecycle = _lifecycle(
         repository=repository,
         worktree_root=tmp_path / "worktrees",
@@ -1979,6 +1984,7 @@ async def test_verification_failure_does_not_escalate(
         reviewer=ReviewRuntime("accept"),
         repairer=repairer,
         commands=(_command("fixed"),),
+        activity_sink=sink,
     )
 
     record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
@@ -2002,6 +2008,8 @@ async def test_verification_failure_does_not_escalate(
     assert unused_implementer.calls == 0
     assert repairer.calls == 1
     assert record.status == "READY_TO_MERGE"
+    verify_runs = [item.run_id for item in sink.items if item.source == "verifier" and item.kind == "command"]
+    assert verify_runs == ["work-1:verify:1", "work-1:verify:2"]
 
 
 @pytest.mark.asyncio
@@ -2247,6 +2255,74 @@ async def test_successful_implement_verify_review_reaches_ready_to_merge(
         ),
     }
     assert "chat_history" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_verifier_emits_command_and_tool_result_activity(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    sink = ListActivitySink()
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        implementer=MutationRuntime(implement_text="initial", repair_text="unused"),
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_command("initial"),),
+        activity_sink=sink,
+    )
+    await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    verifier_events = [item for item in sink.items if item.source == "verifier"]
+    assert [item.kind for item in verifier_events] == ["command", "tool_result"]
+    assert verifier_events[0].summary == _command("initial")
+    assert verifier_events[1].summary.startswith("exit 0")
+    assert verifier_events[0].run_id == verifier_events[1].run_id
+    assert verifier_events[0].run_id == "work-1:verify:1"
+
+
+@pytest.mark.asyncio
+async def test_analysis_stage_completed_carries_artifact_refs(
+    stores,
+    tmp_path: Path,
+) -> None:
+    class ArtifactAnalysisRuntime(AnalysisRuntime):
+        async def run(self, request, capsule, capabilities, workspace):
+            result = await super().run(request, capsule, capabilities, workspace)
+            return result.model_copy(
+                update={"artifact_refs": ("artifact://sha256:analysis",)}
+            )
+
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        analyzer=ArtifactAnalysisRuntime(),
+        implementer=MutationRuntime(implement_text="initial", repair_text="unused"),
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_command("initial"),),
+    )
+    await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    events = await work_store.read_events("work-1", project_id="project-a")
+    completed = next(
+        event
+        for event in events
+        if event.event_type is WorkEventType.STAGE_COMPLETED
+        and event.payload_json.get("stage") == "analysis"
+    )
+    assert completed.payload_json["artifact_refs"] == ["artifact://sha256:analysis"]
 
 
 @pytest.mark.asyncio

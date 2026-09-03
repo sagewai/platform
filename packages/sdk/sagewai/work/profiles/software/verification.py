@@ -31,6 +31,8 @@ from sagewai.sandbox.models import (
     SandboxLifetime,
     ToolCall,
 )
+from sagewai.work.activity import ActivitySink, OperatorActivity
+from sagewai.work.activity_parsers import ActivityCounter
 from sagewai.work.completion import (
     validate_criterion_subset,
     validate_verification_result,
@@ -510,12 +512,18 @@ class SoftwareVerifier:
         knowledge_store: KnowledgeStore,
         runner: VerificationCommandRunner,
         artifact_store: LocalArtifactStore | None = None,
+        activity_sink: ActivitySink | None = None,
         timeout: float = 600,
     ) -> None:
         self._knowledge_store = knowledge_store
         self._runner = runner
         self._artifact_store = artifact_store
+        self._activity_sink = activity_sink
         self._timeout = timeout
+
+    def _emit(self, activity: OperatorActivity) -> None:
+        if self._activity_sink is not None:
+            self._activity_sink.emit(activity)
 
     async def verify(
         self,
@@ -524,6 +532,7 @@ class SoftwareVerifier:
         contract: WorkContract,
         criterion_ids: tuple[str, ...],
         attempt_id: str,
+        run_id: str,
         workspace: SoftwareWorkspace,
         commands: tuple[str, ...],
     ) -> VerificationResult:
@@ -558,6 +567,13 @@ class SoftwareVerifier:
             if not argv:
                 raise ValueError("verification command cannot be empty")
             parsed_commands.append(argv)
+        counter = ActivityCounter(
+            project_id=work_item.project_id,
+            work_id=work_item.id,
+            run_id=run_id,
+        )
+        for command in commands:
+            self._emit(counter.next(source="verifier", kind="command", summary=command))
         processes = await self._runner.run(
             project_id=work_item.project_id,
             work_id=work_item.id,
@@ -573,6 +589,15 @@ class SoftwareVerifier:
         evidence_refs: list[str] = []
         passed = True
         for index, (command, process) in enumerate(zip(commands, processes), start=1):
+            self._emit(
+                counter.next(
+                    source="verifier",
+                    kind="tool_result",
+                    summary=f"exit {process.returncode}"
+                    + (" (timed out)" if process.timed_out else ""),
+                    detail=(process.stdout + process.stderr) or None,
+                )
+            )
             output = f"stdout:\n{process.stdout}\nstderr:\n{process.stderr}"
             output_bytes = output.encode()
             artifact_ref = None

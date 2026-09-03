@@ -199,6 +199,7 @@ class _Verifier(Protocol):
         contract: WorkContract,
         criterion_ids: tuple[str, ...],
         attempt_id: str,
+        run_id: str,
         workspace: SoftwareWorkspace,
         commands: tuple[str, ...],
     ) -> VerificationResult: ...
@@ -730,6 +731,7 @@ class SoftwareLifecycle:
                 "stage": "analysis",
                 "run_id": run_id,
                 "evidence_refs": list(result.evidence_refs),
+                "artifact_refs": list(result.artifact_refs),
             },
             actor_ref=analyst.actor_ref,
         )
@@ -1548,6 +1550,12 @@ class SoftwareLifecycle:
             and event.payload_json.get("stage") in {"implement", "repair"}
         )
         attempt_id = str(completed.payload_json["run_id"])
+        verification_count = sum(
+            event.event_type is WorkEventType.VERIFICATION_RECORDED
+            and event.payload_json.get("stage") == "verification"
+            for event in events
+        )
+        verification_run_id = f"{work_item.id}:verify:{verification_count + 1}"
         criterion_ids = tuple(
             str(criterion_id)
             for criterion_id in completed.payload_json["criterion_ids"]
@@ -1586,6 +1594,7 @@ class SoftwareLifecycle:
                     contract=contract,
                     criterion_ids=deterministic_criterion_ids,
                     attempt_id=attempt_id,
+                    run_id=verification_run_id,
                     workspace=workspace,
                     commands=self._verification_commands,
                 )

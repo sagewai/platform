@@ -1113,6 +1113,7 @@ async def test_large_verification_output_is_deduplicated_artifact_evidence(
     command = f"{sys.executable} -c \"import sys; sys.stdout.write('x' * 5001)\""
 
     result = await verifier.verify(
+        run_id="work-1:verify:1",
         work_item=work_item,
         contract=_verification_contract(),
         criterion_ids=("criterion-execution",),
@@ -1194,6 +1195,7 @@ async def test_small_verification_output_remains_inline(
     command = f"{sys.executable} -c \"print('small-output')\""
 
     result = await verifier.verify(
+        run_id="work-1:verify:2",
         work_item=work_item,
         contract=_verification_contract(),
         criterion_ids=("criterion-execution",),
@@ -1212,6 +1214,7 @@ async def test_small_verification_output_remains_inline(
     for mismatched_id in ("criterion-repository", "criterion-profile", "criterion-policy"):
         with pytest.raises(ValueError, match="criterion subset"):
             await verifier.verify(
+        run_id="work-1:verify:3",
                 work_item=work_item,
                 contract=_verification_contract(),
                 criterion_ids=(mismatched_id,),
