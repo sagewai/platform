@@ -81,13 +81,13 @@ def github_token_credentials(**_kwargs: object) -> dict[str, str]:
     return {"GITHUB_TOKEN": token}
 
 
-
 def github_client_for(scope: GitHubScope) -> CatalogGitHubClient:
     """One GitHub client per project scope; a Task and a trigger spec both name one."""
     callables = tool_factory.build_callables(
         project_id=scope.project_id, get_credentials=github_token_credentials
     )
     return CatalogGitHubClient(project_id=scope.project_id, github_callable=callables["github"])
+
 
 @dataclass(frozen=True)
 class SoftwareStack:
@@ -101,6 +101,7 @@ class SoftwareStack:
     read_controller: OperatorController
     read_capabilities: CapabilitySet
     analysis_runtime: OperatorRuntime
+    verifier: SoftwareVerifier
 
 
 async def build_software_stack(
@@ -306,18 +307,19 @@ async def build_software_stack(
         knowledge_store=knowledge_store,
         artifact_store=artifact_store,
     )
+    verifier = SoftwareVerifier(
+        knowledge_store=knowledge_store,
+        runner=SandboxedVerificationRunner(image=verification_image),
+        artifact_store=artifact_store,
+        activity_sink=activity_sink,
+    )
     lifecycle = SoftwareLifecycle(
         profile=SoftwareProfile(),
         work_store=work_store,
         knowledge_store=knowledge_store,
         capsule_compiler=capsule_compiler,
         worktree_manager=worktree_manager,
-        verifier=SoftwareVerifier(
-            knowledge_store=knowledge_store,
-            runner=SandboxedVerificationRunner(image=verification_image),
-            artifact_store=artifact_store,
-            activity_sink=activity_sink,
-        ),
+        verifier=verifier,
         artifact_store=artifact_store,
         repository=repository,
         analyst=StageOperatorLadder((analyst,)),
@@ -338,6 +340,7 @@ async def build_software_stack(
         read_controller=review_controller,
         read_capabilities=read_capabilities,
         analysis_runtime=analysis_runtime,
+        verifier=verifier,
     )
 
 

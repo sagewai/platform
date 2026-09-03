@@ -12,11 +12,13 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from collections.abc import Mapping
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from sagewai.work.models import SUPERSEDED, WorkRecord
+from sagewai.work.contract import WorkContract
+from sagewai.work.models import SUPERSEDED, WorkItem, WorkRecord
 from sagewai.work.profiles.software.assembly import (
     ControllerFactory,
     SoftwareStack,
@@ -29,13 +31,20 @@ from sagewai.work.profiles.software.github import (
     GitHubIssueLifecycle,
     GitHubPullRequest,
 )
+from sagewai.work.profiles.software.models import (
+    SoftwareContractContext,
+    SoftwareRepositoryOutcome,
+    SoftwareWorkspace,
+)
 from sagewai.work.profiles.software.scm import fetch_default_branch_head
 from sagewai.work.store import WorkStore
 from sagewai.work.tasks.actions import DeliveryReceipt
+from sagewai.work.tasks.assessment import MatrixResult, TaskAssessmentResult
+from sagewai.work.tasks.assessor import DeterministicCheck, TaskAssessor
 from sagewai.work.tasks.budget import BudgetLedger, MeteredOperatorController
 from sagewai.work.tasks.decisions import merge_policy_for
 from sagewai.work.tasks.models import SoftwareTarget, Task
-from sagewai.work.tasks.plan import PlanStep, TaskPlanResult
+from sagewai.work.tasks.plan import AcceptedPlan, PlanStep, TaskPlanResult
 from sagewai.work.tasks.planner import TaskPlanner
 from sagewai.work.tasks.scratch import ScratchWorkspaceManager
 
@@ -215,6 +224,105 @@ class SoftwareProfileRunner:
             )
         )
         return state.merged
+
+    async def assess(
+        self,
+        task: Task,
+        *,
+        cycle: int,
+        plan_version: int,
+        plan: AcceptedPlan,
+        outcomes: Mapping[str, str],
+        merged_sha: str | None,
+        evidence: tuple[str, ...],
+    ) -> TaskAssessmentResult:
+        """Re-run the locked commands at the merged head, then judge (spec section 11)."""
+        target = self._target(task)
+        stack = await self._stack(task)
+        base_sha = merged_sha or await self.base_sha(task)
+        work_id = TaskAssessor.work_id(task, cycle=cycle, plan_version=plan_version)
+        workspace = await stack.worktree_manager.prepare(
+            repository=Path(target.repository_path),
+            project_id=task.project_id,
+            work_id=work_id,
+            attempt_id=f"assess-{plan_version}",
+            base_sha=base_sha,
+        )
+        assessor = TaskAssessor(
+            work_store=stack.work_store,
+            capsule_compiler=stack.capsule_compiler,
+            controller=stack.read_controller,
+            runtime=stack.analysis_runtime,
+            capabilities=stack.read_capabilities,
+        )
+        try:
+            return await assessor.assess(
+                task,
+                cycle=cycle,
+                plan_version=plan_version,
+                plan=plan,
+                outcomes=outcomes,
+                workspace=workspace,
+                evidence=evidence,
+                profile_context=SoftwareContractContext(
+                    project_id=task.project_id,
+                    base_sha=base_sha,
+                    repository_outcome=SoftwareRepositoryOutcome.MERGED,
+                    repository_criterion_id=f"{work_id}:assessment",
+                    execution_route=task.execution.route,
+                    fleet_org_id=task.execution.fleet_org_id,
+                    task_id=task.id,
+                ).model_dump(mode="json"),
+                deterministic=self._verify_at_head(stack, plan, work_id),
+            )
+        finally:
+            await stack.worktree_manager.release(workspace)
+
+    def _verify_at_head(
+        self, stack: SoftwareStack, plan: AcceptedPlan, work_id: str
+    ) -> DeterministicCheck:
+        """Section 11 step 1: the target's locked commands, in the sandbox, at the merged head.
+
+        SoftwareVerifier stamps one aggregate verdict and evidence set onto every criterion.
+        """
+        items = tuple(
+            item for item in plan.acceptance_matrix if item.verification_kind == "deterministic"
+        )
+
+        async def run(
+            work_item: WorkItem,
+            contract: WorkContract,
+            workspace: SoftwareWorkspace,
+            run_id: str,
+        ) -> tuple[MatrixResult, ...]:
+            if not items:
+                return ()
+            verification = await stack.verifier.verify(
+                work_item=work_item,
+                contract=contract,
+                criterion_ids=tuple(
+                    TaskAssessor.matrix_criterion_id(work_id, item.id) for item in items
+                ),
+                attempt_id="assess",
+                run_id=run_id,
+                workspace=workspace,
+                commands=tuple(item.command for item in items),
+            )
+            by_criterion = {
+                result.criterion_id: result for result in verification.criterion_results
+            }
+            return tuple(
+                MatrixResult(
+                    item_id=item.id,
+                    passed=by_criterion[TaskAssessor.matrix_criterion_id(work_id, item.id)].passed,
+                    evidence_refs=by_criterion[
+                        TaskAssessor.matrix_criterion_id(work_id, item.id)
+                    ].evidence_refs,
+                )
+                for item in items
+            )
+
+        return run
 
     async def deliver(
         self, task: Task, *, work_id: str, sink_version: int

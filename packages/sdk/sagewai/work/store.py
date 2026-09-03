@@ -29,8 +29,8 @@ from sagewai.work.knowledge.control_failure import control_failure_finding
 from sagewai.work.knowledge.store import insert_knowledge_item
 from sagewai.work.metrics import WorkMetrics, derive_work_metrics
 from sagewai.work.models import (
+    INTERNAL_PROFILES,
     SUPERSEDED,
-    TASK_PLAN_PROFILE,
     ExternalOutcomeIncident,
     PendingAttention,
     PendingAttentionKind,
@@ -242,7 +242,7 @@ class WorkStore:
     ) -> tuple[PendingAttention, ...]:
         """List the four canonical unresolved attention categories for a project.
 
-        A planning Work's attention belongs to its Task and is never listed here.
+        Internal Task planning and assessment attention belongs to the Task.
         """
         work_query = (
             select(self._work_items)
@@ -266,7 +266,7 @@ class WorkStore:
         pending: list[PendingAttention] = []
         for row in work_rows:
             projection = row._mapping
-            if projection["status"] == SUPERSEDED or projection["profile"] == TASK_PLAN_PROFILE:
+            if projection["status"] == SUPERSEDED or projection["profile"] in INTERNAL_PROFILES:
                 continue
             work_id = str(projection["work_id"])
             source_ref = projection["source_ref"]

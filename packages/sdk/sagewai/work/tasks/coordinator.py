@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
@@ -38,7 +38,8 @@ from sagewai.work.tasks.actions import (
     rollback_action,
     rollback_action_id,
 )
-from sagewai.work.tasks.assessment import TaskAssessmentResult, assess_cycle
+from sagewai.work.tasks.assessment import TaskAssessmentResult
+from sagewai.work.tasks.assessor import AssessmentFailedError
 from sagewai.work.tasks.budget import BudgetLedger, budget_used_from
 from sagewai.work.tasks.channels import TrackingDecisionChannel
 from sagewai.work.tasks.decide import (
@@ -211,6 +212,18 @@ class ProfileRunner(Protocol):
     async def resume(self, task: Task, *, cycle: int, work_id: str) -> WorkRecord: ...
 
     async def is_merged(self, task: Task, *, work_id: str) -> bool: ...
+
+    async def assess(
+        self,
+        task: Task,
+        *,
+        cycle: int,
+        plan_version: int,
+        plan: AcceptedPlan,
+        outcomes: Mapping[str, str],
+        merged_sha: str | None,
+        evidence: tuple[str, ...],
+    ) -> TaskAssessmentResult: ...
 
     async def deliver(
         self, task: Task, *, work_id: str, sink_version: int
@@ -1567,18 +1580,33 @@ class TaskCoordinator:
         state: CycleState,
         lease_epoch: int,
     ) -> TaskRecord:
-        evidence = tuple(
-            f"git://{event.payload_json['merged_sha']}"
+        advanced = [
+            str(event.payload_json["merged_sha"])
             for event in await self._task_store.read_events(task.id, project_id=task.project_id)
             if event.event_type is TaskEventType.BASE_ADVANCED
-        )
-        result = assess_cycle(
-            state.plan,
-            attempt_id=f"{task.id}:assess:{command.cycle}",
-            outcomes=state.step_outcomes,
-            evidence=evidence,
-        )
-        entries: list[Entry] = [status_entry(record, TaskStatus.ASSESSING)]
+        ]
+        ledger = self._meter(task, record)
+        try:
+            result = await self._profile_for(task).assess(
+                task,
+                cycle=command.cycle,
+                plan_version=record.plan_version,
+                plan=state.plan,
+                outcomes=state.step_outcomes,
+                merged_sha=advanced[-1] if advanced else None,
+                evidence=tuple(f"git://{sha}" for sha in advanced),
+            )
+        except AssessmentFailedError as exc:
+            return await self._block(
+                task,
+                record,
+                f"assessment failed: {exc}",
+                lease_epoch,
+                command,
+                prefix=ledger.drain(),
+            )
+        entries: list[Entry] = ledger.drain()
+        entries.append(status_entry(record, TaskStatus.ASSESSING))
         entries.append(
             (
                 TaskEventType.ASSESSMENT_RECORDED,

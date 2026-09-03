@@ -30,7 +30,12 @@ from sagewai.work.models import (
 from sagewai.work.profiles.software.scm import SoftwareWorktreeManager
 from sagewai.work.store import WorkStore
 from sagewai.work.tasks.actions import DeliveryReceipt, RollbackExecutor, RollbackRefusedError
-from sagewai.work.tasks.assessment import AssessmentGap, TaskAssessmentResult
+from sagewai.work.tasks.assessment import (
+    AssessmentGap,
+    MatrixResult,
+    TaskAssessmentResult,
+    merge_assessment,
+)
 from sagewai.work.tasks.coordinator import TaskCoordinator
 from sagewai.work.tasks.decisions import ConsoleDecisionChannel, merge_policy_for, resolve_gate
 from sagewai.work.tasks.events import TaskEventType
@@ -85,6 +90,9 @@ class FakeProfileRunner:
         self.pull_request_urls: dict[str, str] = {}
         self.created_issues: list[tuple[str, str]] = []
         self.ledgers: list = []
+        self.assessed: list = []
+        self.assessor_verdict = "accept"
+        self.assessor_gaps = ()
 
     def use_ledger(self, ledger) -> None:
         self.ledgers.append(ledger)
@@ -150,6 +158,30 @@ class FakeProfileRunner:
 
     async def is_merged(self, task, *, work_id):
         return self.merged
+
+    async def assess(self, task, *, cycle, plan_version, plan, outcomes, merged_sha, evidence):
+        self.assessed.append((cycle, plan_version, merged_sha))
+        attempt_id = f"{task.id}:assess:{cycle}:{plan_version}"
+        return merge_assessment(
+            plan,
+            attempt_id=attempt_id,
+            outcomes=outcomes,
+            deterministic=tuple(
+                MatrixResult(item_id=item.id, passed=True, evidence_refs=evidence)
+                for item in plan.acceptance_matrix
+                if item.verification_kind == "deterministic"
+            ),
+            assessor=TaskAssessmentResult(
+                attempt_id=attempt_id,
+                matrix_results=tuple(
+                    MatrixResult(item_id=item.id, passed=True)
+                    for item in plan.acceptance_matrix
+                    if item.verification_kind == "assessment"
+                ),
+                gaps=self.assessor_gaps,
+                verdict=self.assessor_verdict,
+            ),
+        )
 
     async def deliver(self, task, *, work_id: str, sink_version: int):
         self.delivered.append((work_id, sink_version))
@@ -524,13 +556,13 @@ async def test_plan_to_two_steps_to_assess_to_complete(stores, tmp_path, monkeyp
     assert types.count(TaskEventType.STEP_WORK_OUTCOME) == 2
     assert TaskEventType.PLAN_ACCEPTED in types
     assert TaskEventType.CYCLE_STARTED in types
-    assert TaskEventType.BASE_ADVANCED in types
     assert TaskEventType.ASSESSMENT_RECORDED in types
+    assert TaskEventType.BASE_ADVANCED in types
     assert TaskEventType.BUDGET_RECORDED in types
     assert types[-1] is TaskEventType.TASK_STATUS_CHANGED
     assert types.index(TaskEventType.CYCLE_STARTED) < types.index(TaskEventType.STEP_WORK_STARTED)
     assert types.index(TaskEventType.BUDGET_RECORDED) < types.index(TaskEventType.CYCLE_COMPLETED)
-    assert len(runner.ledgers) == 3
+    assert len(runner.ledgers) == 4
     receipts = [event for event in events if event.event_type is TaskEventType.COMMAND_RECEIPT]
     assert [receipt.payload_json["kind"] for receipt in receipts] == [
         "run_planning",
@@ -545,6 +577,24 @@ async def test_plan_to_two_steps_to_assess_to_complete(stores, tmp_path, monkeyp
     assert set(receipts[0].payload_json) == {"command_id", "kind", "payload"}
     for receipt in receipts:
         assert events[events.index(receipt) + 1].event_type is not TaskEventType.COMMAND_RECEIPT
+    assert runner.assessed == [(1, 1, "c" * 40)]
+
+
+@pytest.mark.asyncio
+async def test_assessment_receives_the_latest_base_advanced_sha(
+    stores, tmp_path, monkeypatch
+) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    runner.merged_shas["w-s1-1"] = "b" * 40
+    runner.merged_shas["w-s2-2"] = "d" * 40
+    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
+
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    assert record.status is TaskStatus.COMPLETE
+    assert runner.assessed == [(1, 1, "d" * 40)]
 
 
 @pytest.mark.asyncio
@@ -1060,27 +1110,18 @@ async def test_needs_you_uses_an_open_clarification_deadline(stores, tmp_path, m
 async def test_a_block_hands_the_assessment_gaps_to_the_channel(
     stores, tmp_path, monkeypatch
 ) -> None:
-    import sagewai.work.tasks.coordinator as module
-
     task_store, _work_store = stores
-    task, record, _runner, coordinator = await _seed(stores, tmp_path)
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
     channel = RecordingDecisionChannel()
     coordinator._channels = (channel,)
     task = task.model_copy(update={"budget": Budget(max_replans=0)})
     monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
-    monkeypatch.setattr(
-        module,
-        "assess_cycle",
-        lambda *args, **kwargs: TaskAssessmentResult(
-            attempt_id="a1",
-            gaps=(
-                AssessmentGap(
-                    statement="step s1 did not reach an accepted outcome",
-                    severity="high",
-                    suggested_step="s1",
-                ),
-            ),
-            verdict="replan",
+    runner.assessor_verdict = "replan"
+    runner.assessor_gaps = (
+        AssessmentGap(
+            statement="step s1 did not reach an accepted outcome",
+            severity="high",
+            suggested_step="s1",
         ),
     )
 
@@ -1555,8 +1596,6 @@ async def test_budget_exhaustion_records_ledger_usage_and_notifies_now(
 async def test_ungated_replan_reenters_planning_and_runs_the_planner_again(
     stores, tmp_path, monkeypatch
 ) -> None:
-    import sagewai.work.tasks.coordinator as module
-
     task_store, _ = stores
     task, record, runner, coordinator = await _seed(stores, tmp_path)
     task = task.model_copy(
@@ -1573,7 +1612,11 @@ async def test_ungated_replan_reenters_planning_and_runs_the_planner_again(
             TaskAssessmentResult(attempt_id="a2", verdict="accept"),
         )
     )
-    monkeypatch.setattr(module, "assess_cycle", lambda *args, **kwargs: next(verdicts))
+
+    async def assess(*args, **kwargs):
+        return next(verdicts)
+
+    runner.assess = assess
     plan_calls = {"n": 0}
     original_plan = runner.plan
 
@@ -1592,8 +1635,6 @@ async def test_ungated_replan_reenters_planning_and_runs_the_planner_again(
 async def test_gated_replan_allow_returns_to_planning_and_runs_the_planner(
     stores, tmp_path, monkeypatch
 ) -> None:
-    import sagewai.work.tasks.coordinator as module
-
     task_store, _ = stores
     task, record, runner, coordinator = await _seed(stores, tmp_path)
     task = task.model_copy(
@@ -1608,15 +1649,8 @@ async def test_gated_replan_allow_returns_to_planning_and_runs_the_planner(
         return await original_plan(task_, **kwargs)
 
     runner.plan = counted_plan
-    monkeypatch.setattr(
-        module,
-        "assess_cycle",
-        lambda *args, **kwargs: TaskAssessmentResult(
-            attempt_id="a1",
-            gaps=(AssessmentGap(statement="gap", severity="high", suggested_step="s1"),),
-            verdict="replan",
-        ),
-    )
+    runner.assessor_verdict = "replan"
+    runner.assessor_gaps = (AssessmentGap(statement="gap", severity="high", suggested_step="s1"),)
     epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
     record = await _drive_to_rest(coordinator, record, epoch)
     assert record.pending_gate == f"replan:{task.id}:2"
@@ -1637,19 +1671,13 @@ async def test_gated_replan_allow_returns_to_planning_and_runs_the_planner(
 
 @pytest.mark.asyncio
 async def test_gated_replan_deny_blocks_for_the_user(stores, tmp_path, monkeypatch) -> None:
-    import sagewai.work.tasks.coordinator as module
-
     task_store, _ = stores
-    task, record, _runner, coordinator = await _seed(stores, tmp_path)
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
     task = task.model_copy(
         update={"authority": Authority(plan=GateMode.AUTO, replan=GateMode.REQUIRE)}
     )
     monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
-    monkeypatch.setattr(
-        module,
-        "assess_cycle",
-        lambda *args, **kwargs: TaskAssessmentResult(attempt_id="a1", verdict="replan"),
-    )
+    runner.assessor_verdict = "replan"
     epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
     record = await _drive_to_rest(coordinator, record, epoch)
     service = TaskService(store=task_store)
@@ -1669,27 +1697,18 @@ async def test_gated_replan_deny_blocks_for_the_user(stores, tmp_path, monkeypat
 async def test_spent_replan_budget_blocks_with_gap_text_and_notifies_now(
     stores, tmp_path, monkeypatch
 ) -> None:
-    import sagewai.work.tasks.coordinator as module
-
     task_store, _ = stores
-    task, record, _runner, coordinator = await _seed(stores, tmp_path)
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
     channel = RecordingDecisionChannel()
     monkeypatch.setattr(coordinator, "_channels", (channel,))
     task = task.model_copy(update={"budget": task.budget.model_copy(update={"max_replans": 0})})
     monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
-    monkeypatch.setattr(
-        module,
-        "assess_cycle",
-        lambda *args, **kwargs: TaskAssessmentResult(
-            attempt_id="a1",
-            gaps=(
-                AssessmentGap(
-                    statement="deterministic check failed",
-                    severity="high",
-                    suggested_step="repair-step",
-                ),
-            ),
-            verdict="replan",
+    runner.assessor_verdict = "replan"
+    runner.assessor_gaps = (
+        AssessmentGap(
+            statement="deterministic check failed",
+            severity="high",
+            suggested_step="repair-step",
         ),
     )
     epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)

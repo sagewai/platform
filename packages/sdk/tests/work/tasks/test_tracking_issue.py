@@ -17,7 +17,7 @@ import pytest
 
 from sagewai.work.profiles.software.github import GitHubIssue
 from sagewai.work.store import WorkStore
-from sagewai.work.tasks.assessment import AssessmentGap, TaskAssessmentResult
+from sagewai.work.tasks.assessment import AssessmentGap
 from sagewai.work.tasks.channels import GitHubIssueDecisionChannel
 from sagewai.work.tasks.coordinator import TaskCoordinator
 from sagewai.work.tasks.decisions import ConsoleDecisionChannel
@@ -372,19 +372,13 @@ async def test_a_plan_gate_is_presented_to_the_tracking_issue_once(stores, tmp_p
 async def test_a_replan_gate_is_presented_to_the_tracking_issue_once(
     stores, tmp_path, monkeypatch
 ) -> None:
-    import sagewai.work.tasks.coordinator as module
-
     task_store, _work_store = stores
-    task, record, _runner, coordinator = await _seed(stores, tmp_path)
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
     task = task.model_copy(
         update={"authority": Authority(plan=GateMode.AUTO, replan=GateMode.REQUIRE)}
     )
     monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
-    monkeypatch.setattr(
-        module,
-        "assess_cycle",
-        lambda *args, **kwargs: TaskAssessmentResult(attempt_id="a1", verdict="replan"),
-    )
+    runner.assessor_verdict = "replan"
     github = RecordingGitHub()
     coordinator._channels = (
         GitHubIssueDecisionChannel(store=task_store, github_factory=lambda _s: github),
@@ -403,7 +397,7 @@ async def test_a_replan_gate_is_presented_to_the_tracking_issue_once(
 @pytest.mark.asyncio
 async def test_cycle_start_tracks_the_accepted_plan_once(stores, tmp_path, monkeypatch) -> None:
     task_store, _work_store = stores
-    task, record, _runner, coordinator = await _seed(stores, tmp_path)
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
     monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
     github = RecordingGitHub()
     coordinator._channels = (
@@ -540,25 +534,16 @@ async def test_record_outcome_tracks_the_pull_request_once(stores, tmp_path, mon
 
 @pytest.mark.asyncio
 async def test_assessment_tracks_verdict_and_gaps_once(stores, tmp_path, monkeypatch) -> None:
-    import sagewai.work.tasks.coordinator as module
-
     task_store, _work_store = stores
-    task, record, _runner, coordinator = await _seed(stores, tmp_path)
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
     task = task.model_copy(update={"budget": task.budget.model_copy(update={"max_replans": 0})})
     monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
-    monkeypatch.setattr(
-        module,
-        "assess_cycle",
-        lambda *args, **kwargs: TaskAssessmentResult(
-            attempt_id="a1",
-            gaps=(
-                AssessmentGap(
-                    statement="deterministic check failed",
-                    severity="high",
-                    suggested_step="repair-step",
-                ),
-            ),
-            verdict="replan",
+    runner.assessor_verdict = "replan"
+    runner.assessor_gaps = (
+        AssessmentGap(
+            statement="deterministic check failed",
+            severity="high",
+            suggested_step="repair-step",
         ),
     )
     github = RecordingGitHub()

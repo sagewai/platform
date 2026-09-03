@@ -22,6 +22,8 @@ from sagewai.work.knowledge.models import KnowledgeItem
 
 SUPERSEDED = "SUPERSEDED"
 TASK_PLAN_PROFILE = "task_plan"
+TASK_ASSESS_PROFILE = "task_assess"
+INTERNAL_PROFILES = frozenset({TASK_PLAN_PROFILE, TASK_ASSESS_PROFILE})
 
 
 class ClaimClassification(str, Enum):
