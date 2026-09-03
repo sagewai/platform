@@ -499,19 +499,23 @@ class TaskCoordinator:
 
     async def _block_text(self, task: Task, text: str) -> str:
         events = await self._task_store.read_events(task.id, project_id=task.project_id)
-        assessment = next(
+        latest = next(
             (
                 event
                 for event in reversed(events)
-                if event.event_type is TaskEventType.ASSESSMENT_RECORDED
+                if event.event_type is not TaskEventType.COMMAND_RECEIPT
             ),
             None,
         )
-        if assessment is None or not assessment.payload_json.get("gaps"):
+        if (
+            latest is None
+            or latest.event_type is not TaskEventType.ASSESSMENT_RECORDED
+            or not latest.payload_json.get("gaps")
+        ):
             return text
         gaps = "; ".join(
             f"{gap['statement']} (suggested step: {gap['suggested_step']})"
-            for gap in assessment.payload_json["gaps"]
+            for gap in latest.payload_json["gaps"]
         )
         return f"{text}: {gaps}"
 
@@ -775,10 +779,8 @@ class TaskCoordinator:
         issue_url = state.issue_urls[step.id]
         evidence = await self._supersede_evidence(task, command.work_id)
         base_sha = await self._profile.base_sha(task)
-        replacement = (
-            await self._profile.find_work(task, issue_url=issue_url, exclude=command.work_id)
-            if replay
-            else None
+        replacement = await self._profile.find_work(
+            task, issue_url=issue_url, exclude=command.work_id
         )
         if replacement is None:
             replacement = await self._profile.start(
