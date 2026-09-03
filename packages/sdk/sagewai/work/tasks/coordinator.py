@@ -14,14 +14,28 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
-from typing import Protocol
+from typing import Any, Protocol
 
 from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.work.activity import WorkActivityStore
 from sagewai.work.events import WorkEvent, WorkEventType
-from sagewai.work.models import SUPERSEDED, GateDecision, PendingAttention, WorkRecord
+from sagewai.work.models import (
+    SUPERSEDED,
+    ActionRequest,
+    ActionResult,
+    GateDecision,
+    PendingAttention,
+    Reversibility,
+    WorkRecord,
+)
 from sagewai.work.store import WorkStore
 from sagewai.work.supersede import supersede_work
+from sagewai.work.tasks.actions import (
+    RollbackExecutor,
+    RollbackRefusedError,
+    rollback_action,
+    rollback_action_id,
+)
 from sagewai.work.tasks.assessment import assess_cycle
 from sagewai.work.tasks.budget import BudgetLedger, budget_used_from
 from sagewai.work.tasks.decide import (
@@ -35,6 +49,7 @@ from sagewai.work.tasks.decide import (
     RecordStepOutcome,
     Replan,
     ResumeStep,
+    RollbackWork,
     RunPlanning,
     StartCycle,
     StartStep,
@@ -72,6 +87,29 @@ _URGENCY = {
     "EXTERNAL_OUTCOME_INCIDENT": "now",
     "GATE_REQUESTED": "today",
 }
+
+
+def _lost_rollback(project_id: str, action_id: str) -> tuple[ActionResult, dict[str, object]]:
+    """A rollback whose receipt was consumed before its batch landed: ask, never repeat."""
+    now = datetime.now(timezone.utc)
+    return (
+        ActionResult(
+            project_id=project_id,
+            action_id=action_id,
+            status="blocked",
+            external_ref=None,
+            evidence_refs=(),
+            started_at=now,
+            completed_at=now,
+        ),
+        {
+            "action_id": action_id,
+            "check": "rollback_receipt",
+            "passed": False,
+            "detail": "the rollback may have run before a crash; confirm the outcome on GitHub",
+            "evidence_refs": [],
+        },
+    )
 
 
 class ProfileRunner(Protocol):
@@ -130,6 +168,7 @@ class TaskCoordinator:
         artifact_store: LocalArtifactStore | None = None,
         activity_store: WorkActivityStore | None = None,
         decision_channels: Sequence[DecisionChannel] = (),
+        rollbacks: RollbackExecutor | None = None,
         actor_ref: str = "coordinator",
     ) -> None:
         self._task_store = task_store
@@ -138,6 +177,7 @@ class TaskCoordinator:
         self._artifacts = artifact_store or LocalArtifactStore()
         self._activity_store = activity_store
         self._channels = tuple(decision_channels) or (ConsoleDecisionChannel(),)
+        self._rollbacks = rollbacks
         self._writer = TaskWriter(task_store, actor_ref=actor_ref)
 
     def _now(self) -> datetime:
@@ -248,6 +288,45 @@ class TaskCoordinator:
         )
         return "publish" if latest is None else str(latest.payload_json["phase"])
 
+    @staticmethod
+    def _gate_action(events: Sequence[WorkEvent], prefix: str) -> ActionRequest | None:
+        """The action record a Work gate carries, from its request or its decision."""
+        for event in reversed(events):
+            if event.event_type not in {
+                WorkEventType.GATE_REQUESTED,
+                WorkEventType.GATE_DECIDED,
+            }:
+                continue
+            if not str(event.payload_json["gate_id"]).startswith(prefix):
+                continue
+            action = event.payload_json.get("action")
+            if action is not None:
+                return ActionRequest.model_validate(action)
+        return None
+
+    @staticmethod
+    def _blocked_merge_post_check(events: Sequence[WorkEvent]) -> dict[str, Any] | None:
+        """The failed merge post-check's payload, but only when a merge is there to undo.
+
+        A post-check that failed because GitHub never merged carries a null ``merged_sha``:
+        there is nothing to revert, so no rollback is offered and the Task blocks with the
+        plain message instead (decision 11).
+        """
+        blocked = next(
+            (event for event in reversed(events) if event.event_type is WorkEventType.WORK_BLOCKED),
+            None,
+        )
+        if blocked is None or blocked.payload_json.get("reason") != "merge_post_check_failed":
+            return None
+        merged_sha = blocked.payload_json.get("merged_sha")
+        issue_url = blocked.payload_json.get("issue_url")
+        if not merged_sha or not issue_url:
+            return None
+        return {
+            "merged_sha": str(merged_sha),
+            "issue_url": str(issue_url),
+        }
+
     async def _budget_used(
         self, task: Task, record: TaskRecord, events: Sequence[TaskEvent]
     ) -> BudgetUsed:
@@ -348,6 +427,8 @@ class TaskCoordinator:
             return await self._record_outcome(task, record, command, lease_epoch)
         if isinstance(command, SupersedeStep):
             return await self._supersede(task, record, command, state, lease_epoch, replay=replay)
+        if isinstance(command, RollbackWork):
+            return await self._rollback(task, record, command, lease_epoch)
         if isinstance(command, AssessCycle):
             return await self._assess(task, record, command, state, lease_epoch)
         if isinstance(command, Replan):
@@ -682,23 +763,47 @@ class TaskCoordinator:
                 )
             )
         else:
-            entries.append(
-                (
-                    TaskEventType.TASK_MESSAGE,
-                    {
-                        "author": "coordinator",
-                        "text": command.summary,
-                        "refs": [command.work_id],
-                        "attention_id": command.attention_id,
-                    },
+            work_events = await self._work_store.read_events(
+                command.work_id, project_id=task.project_id
+            )
+            blocked = self._blocked_merge_post_check(work_events)
+            action = self._gate_action(work_events, "merge:") if blocked is not None else None
+            if action is not None:
+                entries.append(
+                    (
+                        TaskEventType.GATE_REQUESTED,
+                        {
+                            "gate_id": f"rollback:{command.work_id}",
+                            "question": (
+                                f"The merge post-check failed on {action.scope}. "
+                                "Allow the recorded rollback to revert and merge the revert?"
+                            ),
+                            "action": action.model_dump(mode="json"),
+                            "work_id": command.work_id,
+                            "attention_id": command.attention_id,
+                            "merged_sha": blocked["merged_sha"],
+                            "issue_url": blocked["issue_url"],
+                        },
+                    )
                 )
-            )
-            target = (
-                TaskStatus.CONTROL_DEGRADED
-                if command.attention_kind == "CONTROL_DEGRADED"
-                else TaskStatus.BLOCKED
-            )
-            entries.append(status_entry(record, target))
+            else:
+                entries.append(
+                    (
+                        TaskEventType.TASK_MESSAGE,
+                        {
+                            "author": "coordinator",
+                            "text": command.summary,
+                            "refs": [command.work_id],
+                            "attention_id": command.attention_id,
+                        },
+                    )
+                )
+                target = (
+                    TaskStatus.CONTROL_DEGRADED
+                    if command.attention_kind == "CONTROL_DEGRADED"
+                    else TaskStatus.BLOCKED
+                )
+                entries.append(status_entry(record, target))
         entries.extend(
             await self._present(
                 task,
@@ -709,6 +814,108 @@ class TaskCoordinator:
                 evidence_refs=(*command.evidence_refs, command.work_id),
             )
         )
+        return await self._append(record, entries, lease_epoch, command=command)
+
+    async def _rollback(
+        self, task: Task, record: TaskRecord, command: RollbackWork, lease_epoch: int
+    ) -> TaskRecord:
+        """Execute the recorded recipe once; a lost batch asks a human, never repeats."""
+        events = await self._task_store.read_events(task.id, project_id=task.project_id)
+        gate_id = f"rollback:{command.work_id}"
+        requested = next(
+            event
+            for event in reversed(events)
+            if event.event_type is TaskEventType.GATE_REQUESTED
+            and event.payload_json["gate_id"] == gate_id
+        )
+        action = ActionRequest.model_validate(requested.payload_json["action"])
+        try:
+            intent = rollback_action(action)
+            if intent.reversibility is Reversibility.IRREVERSIBLE:
+                return await self._block(
+                    task,
+                    record,
+                    f"the recorded rollback for {action.scope} is irreversible and was not run",
+                    lease_epoch,
+                    command,
+                )
+            action_id = rollback_action_id(action)
+        except RollbackRefusedError as exc:
+            return await self._block(
+                task, record, f"the recorded rollback cannot run: {exc}", lease_epoch, command
+            )
+        entries: list[Entry] = [
+            (
+                TaskEventType.ACTION_INTENT_RECORDED,
+                {
+                    "action_id": action_id,
+                    "work_id": command.work_id,
+                    "gate_id": gate_id,
+                    "action": intent.model_dump(mode="json"),
+                },
+            )
+        ]
+        first = await self._task_store.record_command(
+            task_id=task.id,
+            project_id=task.project_id,
+            command_id=gate_id,
+            payload={"action_id": action_id},
+        )
+        if first:
+            try:
+                result, observation = await self._rollbacks.run(
+                    task,
+                    action=action,
+                    action_id=action_id,
+                    merged_sha=requested.payload_json.get("merged_sha"),
+                    issue_url=requested.payload_json.get("issue_url"),
+                )
+            except RollbackRefusedError as exc:
+                now = self._now()
+                result = ActionResult(
+                    project_id=task.project_id,
+                    action_id=action_id,
+                    status="failed",
+                    external_ref=None,
+                    evidence_refs=(),
+                    started_at=now,
+                    completed_at=now,
+                )
+                observation = {
+                    "action_id": action_id,
+                    "check": "rollback_refused",
+                    "passed": False,
+                    "detail": str(exc),
+                    "evidence_refs": [],
+                }
+        else:
+            result, observation = _lost_rollback(task.project_id, action_id)
+        message = f"{intent.action} on {action.scope}: {result.status}"
+        if result.status == "failed":
+            message = f"{message} ({observation['detail']})"
+        entries.append(
+            (
+                TaskEventType.ACTION_RESULT_RECORDED,
+                {"work_id": command.work_id, **result.model_dump(mode="json")},
+            )
+        )
+        entries.append(
+            (
+                TaskEventType.OBSERVATION_RECORDED,
+                {"work_id": command.work_id, **observation},
+            )
+        )
+        entries.append(
+            (
+                TaskEventType.TASK_MESSAGE,
+                {
+                    "author": "coordinator",
+                    "text": message,
+                    "refs": [command.work_id],
+                },
+            )
+        )
+        entries.append(status_entry(record, TaskStatus.BLOCKED))
         return await self._append(record, entries, lease_epoch, command=command)
 
     async def _present(

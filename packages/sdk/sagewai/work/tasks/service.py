@@ -39,7 +39,7 @@ from sagewai.work.tasks.writer import Entry, TaskWriter, build_events, status_en
 
 _MAX_TITLE = 200
 _MAX_SUMMARY = 2000
-_TASK_GATES = ("plan:", "replan:")
+_TASK_GATES = ("plan:", "replan:", "deliver:", "rollback:")
 _NON_HUMAN_FLOOR = Authority(
     plan=GateMode.REQUIRE, merge=GateMode.REQUIRE, deliver=GateMode.REQUIRE
 )
@@ -270,9 +270,10 @@ class TaskService:
             raise TaskDecisionError(f"no plan proposed at version {version}")
         if record.plan_version == version:
             return record
-        if record.pending_gate is not None and not record.pending_gate.startswith(_TASK_GATES):
+        if record.pending_gate is not None and not record.pending_gate.startswith("plan:"):
             raise TaskDecisionError(
-                f"gate {record.pending_gate} belongs to a Work; approve it there (sagewai work approve)"
+                f"gate {record.pending_gate} is not the plan gate; decide it where it was raised "
+                "(Work gates: sagewai work approve)"
             )
         entries: list[Entry] = []
         if record.pending_gate is not None:
@@ -308,6 +309,12 @@ class TaskService:
         ]
         if decision == "allow" and gate_id.startswith("replan:"):
             entries.append(status_entry(record, TaskStatus.PLANNING))
+        elif (
+            decision == "allow"
+            and gate_id.startswith("rollback:")
+            and record.status is not TaskStatus.EXECUTING
+        ):
+            entries.append(status_entry(record, TaskStatus.EXECUTING))
         elif decision != "allow":
             entries.append(
                 (

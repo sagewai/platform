@@ -37,6 +37,7 @@ _WAITING = frozenset(
 )
 # The only statuses the transition table lets reach BUDGET_EXHAUSTED (transitions.py:18-32).
 _BUDGETED = frozenset({TaskStatus.PLANNING, TaskStatus.EXECUTING, TaskStatus.ASSESSING})
+_ROLLBACK_ACTION_PREFIXES = ("revert:", "delete_comment:")
 
 
 class StepWorkState(BaseModel):
@@ -106,6 +107,11 @@ class SupersedeStep(_Command):
     phase: str
 
 
+class RollbackWork(_Command):
+    kind: Literal["rollback_work"] = "rollback_work"
+    work_id: str
+
+
 class StartStep(_Command):
     kind: Literal["start_step"] = "start_step"
     step_id: str
@@ -147,6 +153,7 @@ Command = (
     | RecordStepOutcome
     | MirrorAttention
     | SupersedeStep
+    | RollbackWork
     | StartStep
     | ResumeStep
     | AssessCycle
@@ -170,6 +177,8 @@ class CycleState(BaseModel):
     superseded_works: frozenset[str] = frozenset()
     mirrored: frozenset[str] = frozenset()
     assessment: str | None = None
+    decided_gates: dict[str, str] = {}
+    rolled_back: frozenset[str] = frozenset()
 
 
 def fold_cycle(events: Sequence[TaskEvent], *, plan_version: int) -> CycleState:
@@ -182,6 +191,8 @@ def fold_cycle(events: Sequence[TaskEvent], *, plan_version: int) -> CycleState:
     superseded: set[str] = set()
     mirrored: set[str] = set()
     assessment: str | None = None
+    decided_gates: dict[str, str] = {}
+    rolled_back: set[str] = set()
     for event in sorted(events, key=lambda item: item.sequence):
         payload = event.payload_json
         if event.event_type is TaskEventType.CYCLE_STARTED:
@@ -190,6 +201,8 @@ def fold_cycle(events: Sequence[TaskEvent], *, plan_version: int) -> CycleState:
             step_works, issue_urls, step_outcomes, assessment = {}, {}, {}, None
             superseded = set()
             mirrored = set()
+            decided_gates = {}
+            rolled_back = set()
         elif event.event_type is TaskEventType.PLAN_ACCEPTED:
             assessment = None
         elif event.event_type is TaskEventType.STEP_WORK_STARTED:
@@ -205,6 +218,12 @@ def fold_cycle(events: Sequence[TaskEvent], *, plan_version: int) -> CycleState:
             attention_id = payload.get("attention_id")
             if attention_id is not None:
                 mirrored.add(str(attention_id))
+        elif event.event_type is TaskEventType.GATE_DECIDED:
+            decided_gates[str(payload["gate_id"])] = str(payload["decision"])
+        elif event.event_type is TaskEventType.ACTION_RESULT_RECORDED and str(
+            payload["action_id"]
+        ).startswith(_ROLLBACK_ACTION_PREFIXES):
+            rolled_back.add(str(payload["work_id"]))
     return CycleState(
         cycle=cycle,
         started_at=started_at,
@@ -215,6 +234,8 @@ def fold_cycle(events: Sequence[TaskEvent], *, plan_version: int) -> CycleState:
         superseded_works=frozenset(superseded),
         mirrored=frozenset(mirrored),
         assessment=assessment,
+        decided_gates=decided_gates,
+        rolled_back=frozenset(rolled_back),
     )
 
 
@@ -225,6 +246,15 @@ def _active(state: CycleState, works: Mapping[str, StepWorkState]) -> StepWorkSt
         work = works.get(step.id)
         if work is not None:
             return work
+    return None
+
+
+def _pending_rollback(state: CycleState) -> str | None:
+    for work_id in state.step_works.values():
+        if work_id in state.rolled_back:
+            continue
+        if state.decided_gates.get(f"rollback:{work_id}") == "allow":
+            return work_id
     return None
 
 
@@ -282,6 +312,9 @@ def decide(
         return None
     if record.current_cycle == 0:
         return StartCycle(cycle=record.current_cycle + 1)
+    rollback = _pending_rollback(state)
+    if rollback is not None:
+        return RollbackWork(work_id=rollback)
     active = _active(state, works)
     if active is not None:
         if active.status == "COMPLETE":
@@ -335,6 +368,7 @@ __all__ = [
     "RecordStepOutcome",
     "Replan",
     "ResumeStep",
+    "RollbackWork",
     "RunPlanning",
     "StartCycle",
     "StartStep",

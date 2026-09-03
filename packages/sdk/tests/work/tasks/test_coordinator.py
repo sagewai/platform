@@ -13,12 +13,16 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
+from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.work.events import WorkEvent, WorkEventType
 from sagewai.work.models import SUPERSEDED, ActionRequest, GateDecision, Reversibility, WorkRecord
+from sagewai.work.profiles.software.scm import SoftwareWorktreeManager
 from sagewai.work.store import WorkStore
+from sagewai.work.tasks.actions import RollbackExecutor, RollbackRefusedError
 from sagewai.work.tasks.assessment import AssessmentGap, TaskAssessmentResult
 from sagewai.work.tasks.coordinator import TaskCoordinator
 from sagewai.work.tasks.decisions import ConsoleDecisionChannel, merge_policy_for, resolve_gate
@@ -28,6 +32,7 @@ from sagewai.work.tasks.models import (
     Budget,
     GateMode,
     Schedule,
+    SoftwareTarget,
     TaskDefaults,
     TaskKind,
     TaskOrigin,
@@ -38,7 +43,9 @@ from sagewai.work.tasks.service import TaskService
 from sagewai.work.tasks.store import SpendReservation, TaskStore
 from sagewai.work.tasks.writer import TaskWriter
 from tests.db.conftest import dialect_engine  # noqa: F401
+from tests.work.tasks.test_actions import merged_repository  # noqa: F401
 from tests.work.tasks.test_decide import MATRIX, NOW, STEPS
+from tests.work.tasks.test_software_kernel import RecordingGitHub
 from tests.work.tasks.test_store import _task
 
 PROJECT = "project-a"
@@ -252,6 +259,118 @@ def _lose_the_batch(monkeypatch, *, kind: str):
 
     monkeypatch.setattr(TaskWriter, "append", append)
     return state
+
+
+def _work_event(work_id: str, sequence: int, event_type, payload) -> WorkEvent:
+    return WorkEvent(
+        id=f"{work_id}:{sequence}",
+        project_id=PROJECT,
+        work_id=work_id,
+        sequence=sequence,
+        event_type=event_type,
+        actor_type="system",
+        actor_ref="test",
+        payload_json=payload,
+        created_at=NOW,
+    )
+
+
+def _software_target(repository: Path) -> SoftwareTarget:
+    return SoftwareTarget(
+        owner="octocat",
+        repo="hello-world",
+        repository_path=str(repository),
+        default_branch="main",
+        verification_image="sha256:" + "b" * 64,
+    )
+
+
+def _merge_action_payload(work_id: str) -> dict:
+    return ActionRequest(
+        project_id=PROJECT,
+        action="merge",
+        work_id=work_id,
+        risk="medium",
+        reversibility=Reversibility.COMPENSATABLE,
+        scope="https://github.com/octocat/hello-world/pull/7",
+        evidence_refs=("https://github.com/octocat/hello-world/issues/42",),
+        rollback="revert_pull_request",
+        post_check="merged_sha_read_back",
+    ).model_dump(mode="json")
+
+
+def _blocked_merge(
+    work_id: str,
+    merged_sha: str | None,
+    *,
+    action: ActionRequest | None = None,
+    issue_url: str | None = "https://github.com/octocat/hello-world/issues/42",
+) -> tuple[WorkEvent, ...]:
+    return (
+        _work_event(
+            work_id,
+            1,
+            WorkEventType.GATE_REQUESTED,
+            {
+                "gate_id": f"merge:{work_id}:7",
+                "question": "Approve merge of PR #7.",
+                "action": (
+                    action.model_dump(mode="json")
+                    if action is not None
+                    else _merge_action_payload(work_id)
+                ),
+                "evidence_refs": [],
+            },
+        ),
+        _work_event(
+            work_id,
+            2,
+            WorkEventType.WORK_BLOCKED,
+            {
+                "reason": "merge_post_check_failed",
+                "decision_request": "merge response SHA conflicts with GitHub read-back",
+                "merged_sha": merged_sha,
+                "issue_url": issue_url,
+                "evidence_refs": ["https://github.com/octocat/hello-world/pull/7"],
+            },
+        ),
+    )
+
+
+async def _rollback_ready(
+    stores,
+    tmp_path,
+    monkeypatch,
+    merged_repository,  # noqa: F811
+    *,
+    action_factory=None,
+    issue_url: str | None = "https://github.com/octocat/hello-world/issues/42",
+):
+    task_store, work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    repository, merged_sha = merged_repository
+    github = RecordingGitHub()
+    github.labeled_issues = (github.issue,)
+    coordinator._rollbacks = RollbackExecutor(
+        github_factory=lambda _scope: github,
+        worktrees=SoftwareWorktreeManager(root=tmp_path / "worktrees"),
+    )
+    monkeypatch.setattr(
+        coordinator,
+        "_load",
+        _fixed_task(task_store, task.model_copy(update={"target": _software_target(repository)})),
+    )
+    runner.statuses["s1"] = "WORK_BLOCKED"
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+    work_id = runner.started[0]
+    action = action_factory(work_id) if action_factory is not None else None
+    await work_store.append_events(
+        _blocked_merge(work_id, merged_sha, action=action, issue_url=issue_url)
+    )
+    record = await _drive_to_rest(coordinator, record, epoch)
+    service = TaskService(store=task_store, artifact_store=LocalArtifactStore(root=tmp_path))
+    return record, coordinator, github, work_id, service
 
 
 @pytest.mark.asyncio
@@ -686,6 +805,348 @@ async def test_a_lost_mirror_batch_notifies_the_channel_once(stores, tmp_path, m
     record = await _drive_to_rest(coordinator, record, epoch)
     assert record.status is TaskStatus.BLOCKED
     assert [call.attention_id for call in channel.calls] == ["blocked-1"]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_merge_post_check_offers_a_rollback_a_human_allows(
+    stores,
+    tmp_path,
+    monkeypatch,
+    merged_repository,  # noqa: F811
+) -> None:
+    task_store, _work_store = stores
+    record, coordinator, github, work_id, service = await _rollback_ready(
+        stores, tmp_path, monkeypatch, merged_repository
+    )
+    assert record.pending_gate == f"rollback:{work_id}"
+
+    task, _stored = await task_store.load(record.task_id, project_id=PROJECT)
+    record = await service.decide_gate(
+        task.id,
+        project_id=PROJECT,
+        gate_id=f"rollback:{work_id}",
+        decision="allow",
+        actor_ref="arda",
+    )
+    record = await _drive_to_rest(coordinator, record, record.lease_epoch)
+
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    kinds = [event.event_type for event in events]
+    assert (
+        kinds.index(TaskEventType.ACTION_INTENT_RECORDED)
+        < kinds.index(TaskEventType.ACTION_RESULT_RECORDED)
+        < kinds.index(TaskEventType.OBSERVATION_RECORDED)
+    )
+    result = next(
+        event for event in events if event.event_type is TaskEventType.ACTION_RESULT_RECORDED
+    )
+    assert result.payload_json["action_id"] == f"revert:{work_id}:7"
+    assert result.payload_json["status"] == "succeeded"
+    merged_sha = merged_repository[1]
+    assert github.pull_requests[0]["head"] == f"sagewai/revert-7-{merged_sha[:12]}"
+    assert len(github.merges) == 1
+    assert record.status is TaskStatus.BLOCKED
+
+
+@pytest.mark.asyncio
+async def test_a_rollback_whose_batch_is_lost_asks_instead_of_reverting_twice(
+    stores,
+    tmp_path,
+    monkeypatch,
+    merged_repository,  # noqa: F811
+) -> None:
+    task_store, _work_store = stores
+    record, coordinator, github, work_id, service = await _rollback_ready(
+        stores, tmp_path, monkeypatch, merged_repository
+    )
+    task, _stored = await task_store.load(record.task_id, project_id=PROJECT)
+    record = await service.decide_gate(
+        task.id,
+        project_id=PROJECT,
+        gate_id=f"rollback:{work_id}",
+        decision="allow",
+        actor_ref="arda",
+    )
+
+    _lose_the_batch(monkeypatch, kind="rollback_work")
+    with pytest.raises(RuntimeError):
+        await coordinator.drive(record, lease_epoch=record.lease_epoch)
+    record = (await task_store.load(task.id, project_id=PROJECT))[1]
+    record = await _drive_to_rest(coordinator, record, record.lease_epoch)
+
+    assert len(github.merges) == 1
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    result = next(
+        event for event in events if event.event_type is TaskEventType.ACTION_RESULT_RECORDED
+    )
+    observation = next(
+        event for event in events if event.event_type is TaskEventType.OBSERVATION_RECORDED
+    )
+    assert result.payload_json["status"] == "blocked"
+    assert observation.payload_json["check"] == "rollback_receipt"
+    assert (
+        observation.payload_json["detail"]
+        == "the rollback may have run before a crash; confirm the outcome on GitHub"
+    )
+
+
+@pytest.mark.asyncio
+async def test_denying_a_rollback_gate_blocks_without_running_actions(
+    stores,
+    tmp_path,
+    monkeypatch,
+    merged_repository,  # noqa: F811
+) -> None:
+    task_store, _work_store = stores
+    record, coordinator, github, work_id, service = await _rollback_ready(
+        stores, tmp_path, monkeypatch, merged_repository
+    )
+    task, _stored = await task_store.load(record.task_id, project_id=PROJECT)
+
+    record = await service.decide_gate(
+        task.id,
+        project_id=PROJECT,
+        gate_id=f"rollback:{work_id}",
+        decision="deny",
+        actor_ref="arda",
+    )
+    record = await _drive_to_rest(coordinator, record, record.lease_epoch)
+
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    assert record.status is TaskStatus.BLOCKED
+    assert record.pending_gate is None
+    assert not any(
+        event.event_type
+        in {TaskEventType.ACTION_INTENT_RECORDED, TaskEventType.ACTION_RESULT_RECORDED}
+        for event in events
+    )
+    assert github.merges == []
+
+
+@pytest.mark.asyncio
+async def test_a_refused_rollback_records_failed_action_and_blocks(
+    stores,
+    tmp_path,
+    monkeypatch,
+    merged_repository,  # noqa: F811
+) -> None:
+    task_store, _work_store = stores
+    record, coordinator, _github, work_id, service = await _rollback_ready(
+        stores, tmp_path, monkeypatch, merged_repository
+    )
+
+    class RefusingRollbackExecutor(RollbackExecutor):
+        async def run(self, *args, **kwargs):
+            raise RollbackRefusedError("revert conflicts")
+
+    coordinator._rollbacks = RefusingRollbackExecutor(
+        github_factory=lambda _scope: RecordingGitHub()
+    )
+    task, _stored = await task_store.load(record.task_id, project_id=PROJECT)
+    record = await service.decide_gate(
+        task.id,
+        project_id=PROJECT,
+        gate_id=f"rollback:{work_id}",
+        decision="allow",
+        actor_ref="arda",
+    )
+    record = await _drive_to_rest(coordinator, record, record.lease_epoch)
+
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    receipt = next(
+        event
+        for event in events
+        if event.event_type is TaskEventType.COMMAND_RECEIPT
+        and event.payload_json["kind"] == "rollback_work"
+    )
+    intent = next(
+        event for event in events if event.event_type is TaskEventType.ACTION_INTENT_RECORDED
+    )
+    result = next(
+        event for event in events if event.event_type is TaskEventType.ACTION_RESULT_RECORDED
+    )
+    observation = next(
+        event for event in events if event.event_type is TaskEventType.OBSERVATION_RECORDED
+    )
+    message = [event for event in events if event.event_type is TaskEventType.TASK_MESSAGE][-1]
+    assert receipt.sequence < intent.sequence < result.sequence < observation.sequence
+    assert receipt.payload_json["payload"] == {"kind": "rollback_work", "work_id": work_id}
+    assert intent.payload_json["action_id"] == f"revert:{work_id}:7"
+    assert result.payload_json["action_id"] == f"revert:{work_id}:7"
+    assert result.payload_json["status"] == "failed"
+    assert observation.payload_json == {
+        "work_id": work_id,
+        "action_id": f"revert:{work_id}:7",
+        "check": "rollback_refused",
+        "passed": False,
+        "detail": "revert conflicts",
+        "evidence_refs": [],
+    }
+    assert "revert conflicts" in message.payload_json["text"]
+    assert record.status is TaskStatus.BLOCKED
+
+
+@pytest.mark.asyncio
+async def test_an_irreversible_rollback_blocks_without_running_the_executor(
+    stores,
+    tmp_path,
+    monkeypatch,
+    merged_repository,  # noqa: F811
+) -> None:
+    task_store, _work_store = stores
+
+    def irreversible(work_id: str) -> ActionRequest:
+        return ActionRequest(
+            project_id=PROJECT,
+            action="deliver",
+            work_id=work_id,
+            risk="medium",
+            reversibility=Reversibility.COMPENSATABLE,
+            scope="https://github.com/octocat/hello-world/issues/42",
+            evidence_refs=("artifact://report",),
+            rollback="delete_comment",
+            post_check="comment_read_back",
+        )
+
+    record, coordinator, _github, work_id, service = await _rollback_ready(
+        stores,
+        tmp_path,
+        monkeypatch,
+        merged_repository,
+        action_factory=irreversible,
+    )
+    task, _stored = await task_store.load(record.task_id, project_id=PROJECT)
+
+    class CountingRollbackExecutor(RollbackExecutor):
+        calls = 0
+
+        async def run(self, *args, **kwargs):
+            self.calls += 1
+            raise AssertionError("executor should not run")
+
+    executor = CountingRollbackExecutor(github_factory=lambda _scope: RecordingGitHub())
+    coordinator._rollbacks = executor
+    record = await service.decide_gate(
+        task.id,
+        project_id=PROJECT,
+        gate_id=f"rollback:{work_id}",
+        decision="allow",
+        actor_ref="arda",
+    )
+    record = await _drive_to_rest(coordinator, record, record.lease_epoch)
+
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    message = [event for event in events if event.event_type is TaskEventType.TASK_MESSAGE][-1]
+    assert "irreversible and was not run" in message.payload_json["text"]
+    assert not any(
+        event.event_type
+        in {TaskEventType.ACTION_INTENT_RECORDED, TaskEventType.ACTION_RESULT_RECORDED}
+        for event in events
+    )
+    assert executor.calls == 0
+    assert record.status is TaskStatus.BLOCKED
+
+
+@pytest.mark.asyncio
+async def test_allowing_a_rollback_gate_from_blocked_appends_executing_status(
+    stores,
+    tmp_path,
+    monkeypatch,
+    merged_repository,  # noqa: F811
+) -> None:
+    task_store, _work_store = stores
+    record, _coordinator, _github, work_id, service = await _rollback_ready(
+        stores, tmp_path, monkeypatch, merged_repository
+    )
+    task, _stored = await task_store.load(record.task_id, project_id=PROJECT)
+    record = await TaskWriter(task_store).append(
+        record,
+        [(TaskEventType.TASK_STATUS_CHANGED, {"status": TaskStatus.BLOCKED.value})],
+        lease_epoch=record.lease_epoch,
+        now=NOW,
+    )
+    blocked_sequence = record.last_event_sequence
+
+    record = await service.decide_gate(
+        task.id,
+        project_id=PROJECT,
+        gate_id=f"rollback:{work_id}",
+        decision="allow",
+        actor_ref="arda",
+    )
+
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    new_events = [event for event in events if event.sequence > blocked_sequence]
+    assert record.status is TaskStatus.EXECUTING
+    assert [event.event_type for event in new_events] == [
+        TaskEventType.GATE_DECIDED,
+        TaskEventType.TASK_STATUS_CHANGED,
+    ]
+    assert new_events[-1].payload_json["status"] == TaskStatus.EXECUTING.value
+
+
+@pytest.mark.asyncio
+async def test_a_failed_merge_post_check_without_a_merge_sha_blocks_without_rollback_gate(
+    stores,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    task_store, work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    monkeypatch.setattr(
+        coordinator,
+        "_load",
+        _fixed_task(task_store, task.model_copy(update={"target": _software_target(tmp_path)})),
+    )
+    runner.statuses["s1"] = "WORK_BLOCKED"
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+    work_id = runner.started[0]
+
+    await work_store.append_events(_blocked_merge(work_id, None))
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    gates = [
+        event.payload_json["gate_id"]
+        for event in events
+        if event.event_type is TaskEventType.GATE_REQUESTED
+    ]
+    assert f"rollback:{work_id}" not in gates
+    assert record.pending_gate is None
+    assert record.status is TaskStatus.BLOCKED
+
+
+@pytest.mark.asyncio
+async def test_a_failed_merge_post_check_without_an_issue_url_blocks_without_rollback_gate(
+    stores,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    task_store, work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    monkeypatch.setattr(
+        coordinator,
+        "_load",
+        _fixed_task(task_store, task.model_copy(update={"target": _software_target(tmp_path)})),
+    )
+    runner.statuses["s1"] = "WORK_BLOCKED"
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+    work_id = runner.started[0]
+
+    await work_store.append_events(_blocked_merge(work_id, "c" * 40, issue_url=None))
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    gates = [
+        event.payload_json["gate_id"]
+        for event in events
+        if event.event_type is TaskEventType.GATE_REQUESTED
+    ]
+    assert f"rollback:{work_id}" not in gates
+    assert record.pending_gate is None
+    assert record.status is TaskStatus.BLOCKED
 
 
 @pytest.mark.asyncio
