@@ -656,6 +656,29 @@ async def test_fetch_url_refuses_port_22_before_fetching(
     assert "error" in result["data"]
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://bad_host.example/",
+        "https://example.com./",
+    ],
+)
+@pytest.mark.asyncio
+async def test_fetch_url_refuses_invalid_hostnames_before_fetching(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, url: str
+) -> None:
+    async def fake_resolve(host: str) -> list[str]:
+        raise AssertionError(f"resolved invalid host {host}")
+
+    monkeypatch.setattr(ht, "_resolve_public", fake_resolve)
+    tools = await _tools(
+        grants=(_grant("browser", "browser", {"allowed_hosts": ["example.com"]}),),
+        workspace_path=tmp_path,
+    )
+    result = await tools["fetch_url"].handler(url=url)
+    assert result["data"]["error"] == "invalid hostname"
+
+
 @pytest.mark.asyncio
 async def test_web_search_returns_error_on_upstream_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
