@@ -36,6 +36,11 @@ from starlette.responses import Response, StreamingResponse
 
 from sagewai import __version__ as _SDK_VERSION
 from sagewai.admin.authz import require_in_project_scope, require_org_admin
+from sagewai.admin.notification_secrets import (
+    NOTIFICATION_SECRET_KEYS,
+    NotificationSecretDecryptionError,
+    decrypt_notification_secrets,
+)
 from sagewai.admin.state_file import SHARED_ONLY, AdminStateFile, _slugify
 from sagewai.fleet.dispatcher import NotTaskOwnerError
 from sagewai.fleet.models import WorkerApprovalStatus
@@ -4910,15 +4915,7 @@ def create_admin_serve_app(
 
     # ── Notifications ────────────────────────────────────────────
 
-    _NOTIFICATION_SECRET_KEYS = {
-        "webhook_url",
-        "email_api_key",
-        "smtp_password",
-        "api_key",
-        "token",
-        "secret",
-        "password",
-    }
+    _NOTIFICATION_SECRET_KEYS = NOTIFICATION_SECRET_KEYS
     _REDACTED_MARKERS = {"***", "********", "***configured***"}
 
     def _notification_public(record: dict[str, Any]) -> dict[str, Any]:
@@ -4974,29 +4971,6 @@ def create_admin_serve_app(
                     identity_store, ctx.org_id, ctx.project_id, v
                 )
 
-    async def _decrypt_notification_secret(
-        value: str, row_project_id: str | None, ctx
-    ) -> str:
-        """Decrypt one stored notification secret for USE — FAIL CLOSED.
-
-        Decrypts under the data key of the row's own ``project_id`` (org master
-        key for org-shared rows). A value that cannot be decrypted (corrupt or
-        missing key) raises :class:`NotificationSecretDecryptionError` so the
-        send/test path can never fall back to the stored ciphertext or to a
-        plaintext passthrough.
-        """
-        from sagewai.admin import tenant_keys
-        from sagewai.sealed.crypto import SecretCorrupted
-
-        try:
-            return await tenant_keys.decrypt_for_project(
-                identity_store, ctx.org_id, row_project_id, value
-            )
-        except SecretCorrupted as exc:
-            raise NotificationSecretDecryptionError(
-                "notification secret could not be decrypted"
-            ) from exc
-
     async def _notification_channel_for_type_decrypted(
         request: Request, channel_type: str
     ) -> dict[str, Any] | None:
@@ -5025,13 +4999,9 @@ def create_admin_serve_app(
         )
         if channel is None:
             return None
-        row_project_id = channel.get("project_id") or None
-        out = dict(channel)
-        for key in _NOTIFICATION_SECRET_KEYS:
-            v = out.get(key)
-            if isinstance(v, str) and v:
-                out[key] = await _decrypt_notification_secret(v, row_project_id, ctx)
-        return out
+        return await decrypt_notification_secrets(
+            channel, identity_store=identity_store, org_id=ctx.org_id
+        )
 
     @app.get("/api/v1/notifications/channels")
     async def list_notification_channels(request: Request) -> JSONResponse:
@@ -6785,11 +6755,6 @@ def _in_write_scope(item_project_id: str | None, request: Request) -> bool:
 # enrollment-key create/revoke; connector save/delete. Remaining durable-audit
 # gap (tracked in a parallel PR, NOT a single-org-launch blocker): memory/context
 # ingest.
-class NotificationSecretDecryptionError(RuntimeError):
-    """A stored notification secret could not be decrypted; the send/test path
-    fails closed (never emits the stored ciphertext or a plaintext fallback)."""
-
-
 class _AuditUnavailableError(Exception):
     """Durable audit could not be recorded — the write fails closed (HTTP 503)."""
 
