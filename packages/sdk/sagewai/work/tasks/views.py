@@ -232,4 +232,116 @@ def thread_from_events(events: Sequence[TaskEvent]) -> ThreadView:
     )
 
 
-__all__ = ["ThreadEntry", "ThreadKind", "ThreadView", "thread_from_events"]
+class ActionRecordView(BaseModel):
+    """One section 8.8 action: what was intended, what happened, what the post-check saw."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    action_id: str
+    work_id: str
+    action: str
+    reversibility: str
+    risk: str
+    scope: str
+    rollback: str | None
+    post_check: str | None
+    gate_id: str | None
+    requested_at: datetime
+    status: Literal["succeeded", "failed", "blocked"] | None = None
+    external_ref: str | None = None
+    completed_at: datetime | None = None
+    check: str | None = None
+    passed: bool | None = None
+    detail: str | None = None
+    evidence_refs: tuple[str, ...] = ()
+
+
+def actions_from_events(events: Sequence[TaskEvent]) -> tuple[ActionRecordView, ...]:
+    """Every action the Task recorded, in intent order, with its result and observation."""
+    records: dict[str, dict] = {}
+    for event in sorted(events, key=lambda item: item.sequence):
+        payload = event.payload_json
+        if event.event_type is TaskEventType.ACTION_INTENT_RECORDED:
+            action = payload["action"]
+            records[str(payload["action_id"])] = {
+                "action_id": str(payload["action_id"]),
+                "work_id": str(payload["work_id"]),
+                "action": str(action["action"]),
+                "reversibility": str(action["reversibility"]),
+                "risk": str(action["risk"]),
+                "scope": str(action["scope"]),
+                "rollback": action["rollback"],
+                "post_check": action["post_check"],
+                "gate_id": payload["gate_id"],
+                "requested_at": event.created_at,
+                "evidence_refs": tuple(str(ref) for ref in action["evidence_refs"]),
+            }
+        elif event.event_type is TaskEventType.ACTION_RESULT_RECORDED:
+            record = records.get(str(payload["action_id"]))
+            if record is None:
+                continue
+            record["status"] = str(payload["status"])
+            record["external_ref"] = payload["external_ref"]
+            record["completed_at"] = event.created_at
+            record["evidence_refs"] = (
+                *record["evidence_refs"],
+                *(
+                    str(ref)
+                    for ref in payload["evidence_refs"]
+                    if str(ref) not in record["evidence_refs"]
+                ),
+            )
+        elif event.event_type is TaskEventType.OBSERVATION_RECORDED:
+            record = records.get(str(payload["action_id"]))
+            if record is None:
+                continue
+            record["check"] = str(payload["check"])
+            record["passed"] = payload["passed"]
+            record["detail"] = payload["detail"]
+    return tuple(ActionRecordView.model_validate(record) for record in records.values())
+
+
+def referenced_artifacts(events: Sequence[TaskEvent]) -> frozenset[str]:
+    """Every artifact reference the Task's own stream carries.
+
+    The artifact route serves nothing else: content-addressed objects are owned per project,
+    so without this fence a project member could read any digest stored under the project.
+    """
+    refs: set[str] = set()
+    for event in events:
+        payload = event.payload_json
+        if event.event_type is TaskEventType.BRIEF_RECORDED:
+            refs.add(str(payload["brief_ref"]))
+        for candidate in (*payload.get("evidence_refs", ()), payload.get("external_ref")):
+            if isinstance(candidate, str) and candidate.startswith("artifact://"):
+                refs.add(candidate)
+        action = payload.get("action")
+        if isinstance(action, dict):
+            refs.update(
+                ref for ref in action["evidence_refs"] if str(ref).startswith("artifact://")
+            )
+    return frozenset(refs)
+
+
+def task_work_ids(events: Sequence[TaskEvent]) -> tuple[str, ...]:
+    """The Works this Task started, in first-start order (section 24 revision 5's emitter)."""
+    work_ids: list[str] = []
+    for event in sorted(events, key=lambda item: item.sequence):
+        if event.event_type is not TaskEventType.STEP_WORK_STARTED:
+            continue
+        work_id = str(event.payload_json["work_id"])
+        if work_id not in work_ids:
+            work_ids.append(work_id)
+    return tuple(work_ids)
+
+
+__all__ = [
+    "ActionRecordView",
+    "ThreadEntry",
+    "ThreadKind",
+    "ThreadView",
+    "actions_from_events",
+    "referenced_artifacts",
+    "task_work_ids",
+    "thread_from_events",
+]

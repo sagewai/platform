@@ -15,7 +15,12 @@ from datetime import datetime, timezone
 
 from sagewai.work.tasks.events import TaskEvent, TaskEventType
 from sagewai.work.tasks.models import TaskStatus
-from sagewai.work.tasks.views import thread_from_events
+from sagewai.work.tasks.views import (
+    actions_from_events,
+    referenced_artifacts,
+    task_work_ids,
+    thread_from_events,
+)
 
 NOW = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
 
@@ -367,3 +372,211 @@ def test_output_and_budget_events_are_rendered_in_sequence_order() -> None:
         "https://github.com/o/r/issues/1#issuecomment-9",
         "artifact://sha256:" + "b" * 64,
     )
+
+
+def _action_stream() -> tuple[TaskEvent, ...]:
+    action = {
+        "project_id": "p",
+        "action": "report_delivered",
+        "work_id": "w1",
+        "risk": "medium",
+        "reversibility": "compensatable",
+        "scope": "https://github.com/o/r/issues/1",
+        "evidence_refs": ["artifact://sha256:" + "b" * 64],
+        "rollback": "delete_comment",
+        "post_check": "comment_read_back",
+    }
+    shared_ref = "artifact://sha256:" + "d" * 64
+    artifact_external_ref = "artifact://sha256:" + "e" * 64
+    artifact_action = {
+        "project_id": "p",
+        "action": "artifact_delivered",
+        "work_id": "w2",
+        "risk": "low",
+        "reversibility": "none",
+        "scope": "https://github.com/o/r/issues/2",
+        "evidence_refs": [shared_ref],
+        "rollback": None,
+        "post_check": None,
+    }
+    return (
+        _event(
+            1,
+            TaskEventType.BRIEF_RECORDED,
+            {"brief_ref": "artifact://sha256:" + "a" * 64, "summary": "s"},
+        ),
+        _event(
+            2,
+            TaskEventType.ACTION_INTENT_RECORDED,
+            {
+                "action_id": "deliver:w1:2",
+                "work_id": "w1",
+                "gate_id": "deliver:w1:2",
+                "action": action,
+            },
+        ),
+        _event(
+            3,
+            TaskEventType.ACTION_RESULT_RECORDED,
+            {
+                "work_id": "w1",
+                "project_id": "p",
+                "action_id": "deliver:w1:2",
+                "status": "succeeded",
+                "external_ref": "https://github.com/o/r/issues/1#issuecomment-9",
+                "evidence_refs": ["artifact://sha256:" + "c" * 64],
+                "started_at": NOW.isoformat(),
+                "completed_at": NOW.isoformat(),
+            },
+        ),
+        _event(
+            4,
+            TaskEventType.OBSERVATION_RECORDED,
+            {
+                "work_id": "w1",
+                "action_id": "deliver:w1:2",
+                "check": "comment_read_back",
+                "passed": True,
+                "detail": "read back",
+                "evidence_refs": [],
+            },
+        ),
+        _event(
+            5,
+            TaskEventType.ACTION_INTENT_RECORDED,
+            {
+                "action_id": "deliver:w2:5",
+                "work_id": "w2",
+                "gate_id": "deliver:w2:5",
+                "action": artifact_action,
+            },
+        ),
+        _event(
+            6,
+            TaskEventType.ACTION_RESULT_RECORDED,
+            {
+                "work_id": "w2",
+                "project_id": "p",
+                "action_id": "deliver:w2:5",
+                "status": "succeeded",
+                "external_ref": artifact_external_ref,
+                "evidence_refs": [shared_ref],
+                "started_at": NOW.isoformat(),
+                "completed_at": NOW.isoformat(),
+            },
+        ),
+        _event(7, TaskEventType.STEP_WORK_STARTED, {"step_id": "s1", "work_id": "w1"}),
+        _event(8, TaskEventType.STEP_WORK_STARTED, {"step_id": "s2", "work_id": "w2"}),
+        _event(9, TaskEventType.STEP_WORK_STARTED, {"step_id": "s1", "work_id": "w1"}),
+    )
+
+
+def _shuffled_action_stream() -> tuple[TaskEvent, ...]:
+    events = _action_stream()
+    return (
+        events[8],
+        events[2],
+        events[0],
+        events[5],
+        events[1],
+        events[7],
+        events[3],
+        events[6],
+        events[4],
+    )
+
+
+def test_an_action_folds_intent_result_and_observation_into_one_record() -> None:
+    records = actions_from_events(_shuffled_action_stream())
+
+    assert [record.action_id for record in records] == ["deliver:w1:2", "deliver:w2:5"]
+    record = records[0]
+    assert record.work_id == "w1"
+    assert record.action == "report_delivered"
+    assert record.reversibility == "compensatable"
+    assert record.risk == "medium"
+    assert record.scope == "https://github.com/o/r/issues/1"
+    assert record.rollback == "delete_comment"
+    assert record.post_check == "comment_read_back"
+    assert record.gate_id == "deliver:w1:2"
+    assert record.requested_at == NOW
+    assert record.status == "succeeded"
+    assert record.external_ref == "https://github.com/o/r/issues/1#issuecomment-9"
+    assert record.completed_at == NOW
+    assert record.check == "comment_read_back"
+    assert record.passed is True
+    assert record.detail == "read back"
+    assert record.evidence_refs == (
+        "artifact://sha256:" + "b" * 64,
+        "artifact://sha256:" + "c" * 64,
+    )
+    artifact_record = records[1]
+    shared_ref = "artifact://sha256:" + "d" * 64
+    assert artifact_record.external_ref == "artifact://sha256:" + "e" * 64
+    assert artifact_record.evidence_refs == (shared_ref,)
+    assert artifact_record.evidence_refs.count(shared_ref) == 1
+
+
+def test_an_action_with_no_result_yet_reports_no_status() -> None:
+    records = actions_from_events(_action_stream()[:2])
+
+    assert records[0].status is None
+    assert records[0].external_ref is None
+    assert records[0].completed_at is None
+    assert records[0].check is None
+    assert records[0].passed is None
+    assert records[0].detail is None
+
+
+def test_a_refused_result_without_an_intent_is_skipped() -> None:
+    events = (
+        *_action_stream(),
+        _event(
+            10,
+            TaskEventType.ACTION_RESULT_RECORDED,
+            {
+                "work_id": "w3",
+                "project_id": "p",
+                "action_id": "revert:w3:refused",
+                "status": "failed",
+                "external_ref": None,
+                "evidence_refs": [],
+                "started_at": NOW.isoformat(),
+                "completed_at": NOW.isoformat(),
+            },
+        ),
+        _event(
+            11,
+            TaskEventType.OBSERVATION_RECORDED,
+            {
+                "work_id": "w3",
+                "action_id": "revert:w3:refused",
+                "check": "rollback_refused",
+                "passed": False,
+                "detail": "not a GitHub pull request URL",
+                "evidence_refs": [],
+            },
+        ),
+    )
+
+    records = actions_from_events(events)
+
+    assert [record.action_id for record in records] == ["deliver:w1:2", "deliver:w2:5"]
+
+
+def test_referenced_artifacts_are_the_brief_and_every_artifact_evidence_ref() -> None:
+    refs = referenced_artifacts(_action_stream())
+
+    assert refs == frozenset(
+        {
+            "artifact://sha256:" + "a" * 64,
+            "artifact://sha256:" + "b" * 64,
+            "artifact://sha256:" + "c" * 64,
+            "artifact://sha256:" + "d" * 64,
+            "artifact://sha256:" + "e" * 64,
+        }
+    )
+
+
+def test_task_work_ids_are_unique_and_in_first_start_order() -> None:
+    assert task_work_ids(_shuffled_action_stream()) == ("w1", "w2")
