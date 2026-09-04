@@ -76,8 +76,18 @@ _EXTERNAL_EFFECT_GATES = ("deliver:", "rollback:")
 _ARTIFACT_MEDIA_TYPE = "application/octet-stream"
 _CURSOR_SEPARATOR = "|"
 _CURSOR_ORDER_SEPARATOR = ":"
-_CURSOR_PREFIX_BY_ORDER = {"created_at": "c", "updated_at": "u"}
-_CURSOR_ORDER_BY_PREFIX = {"c": "created_at", "u": "updated_at"}
+_CURSOR_PREFIX_BY_ORDER = {
+    ("created_at", False): "c",
+    ("created_at", True): "cd",
+    ("updated_at", False): "u",
+    ("updated_at", True): "ud",
+}
+_CURSOR_ORDER_BY_PREFIX = {
+    "c": ("created_at", False),
+    "cd": ("created_at", True),
+    "u": ("updated_at", False),
+    "ud": ("updated_at", True),
+}
 
 
 def _task_project_scope(request: Request) -> str:
@@ -120,16 +130,18 @@ def _strip_brief(value: object) -> str:
     return value.strip()
 
 
-def _encode_cursor(record: TaskRecord, order_by: Literal["created_at", "updated_at"]) -> str:
+def _encode_cursor(
+    record: TaskRecord, order_by: Literal["created_at", "updated_at"], descending: bool
+) -> str:
     moment = record.created_at if order_by == "created_at" else record.updated_at
     return (
-        f"{_CURSOR_PREFIX_BY_ORDER[order_by]}{_CURSOR_ORDER_SEPARATOR}"
+        f"{_CURSOR_PREFIX_BY_ORDER[(order_by, descending)]}{_CURSOR_ORDER_SEPARATOR}"
         f"{moment.isoformat()}{_CURSOR_SEPARATOR}{record.task_id}"
     )
 
 
 def _decode_cursor(
-    cursor: str, order_by: Literal["created_at", "updated_at"]
+    cursor: str, order_by: Literal["created_at", "updated_at"], descending: bool
 ) -> tuple[datetime, str]:
     raw_ordered, separator, task_id = cursor.partition(_CURSOR_SEPARATOR)
     if separator == "" or not task_id:
@@ -137,8 +149,8 @@ def _decode_cursor(
     prefix, order_separator, raw_moment = raw_ordered.partition(_CURSOR_ORDER_SEPARATOR)
     if order_separator == "" or prefix not in _CURSOR_ORDER_BY_PREFIX:
         raise HTTPException(status_code=400, detail="cursor is not a list cursor")
-    if _CURSOR_ORDER_BY_PREFIX[prefix] != order_by:
-        raise HTTPException(status_code=400, detail="cursor does not match order_by")
+    if _CURSOR_ORDER_BY_PREFIX[prefix] != (order_by, descending):
+        raise HTTPException(status_code=400, detail="cursor does not match order_by/descending")
     try:
         return datetime.fromisoformat(raw_moment), task_id
     except ValueError as exc:
@@ -153,6 +165,7 @@ async def list_tasks(
     origin: Annotated[list[TaskOrigin] | None, Query()] = None,
     column: Annotated[list[BoardColumn] | None, Query()] = None,
     order_by: Literal["created_at", "updated_at"] = "created_at",
+    descending: bool = False,
     cursor: str | None = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> dict:
@@ -165,12 +178,15 @@ async def list_tasks(
         origins=origin,
         board_columns=column,
         order_by=order_by,
-        after=None if cursor is None else _decode_cursor(cursor, order_by),
+        descending=descending,
+        after=None if cursor is None else _decode_cursor(cursor, order_by, descending),
         limit=limit,
     )
     return {
         "tasks": [record.model_dump(mode="json") for record in records],
-        "next_cursor": _encode_cursor(records[-1], order_by) if len(records) == limit else None,
+        "next_cursor": (
+            _encode_cursor(records[-1], order_by, descending) if len(records) == limit else None
+        ),
     }
 
 

@@ -182,6 +182,38 @@ async def test_list_filters_and_pages(client: AdminClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_pages_descending_with_the_cursor(client: AdminClient) -> None:
+    await _seed(client, "t-1", minutes=0)
+    await _seed(client, "t-2", minutes=1)
+    await _seed(client, "t-3", minutes=2)
+    await _seed(client, "t-4", minutes=3)
+    await _seed(client, "t-5", minutes=4)
+
+    first = await client.http.get(
+        "/api/v1/tasks",
+        headers=client.headers,
+        params={"order_by": "updated_at", "descending": "true", "limit": 3},
+    )
+    second = await client.http.get(
+        "/api/v1/tasks",
+        headers=client.headers,
+        params={
+            "order_by": "updated_at",
+            "descending": "true",
+            "limit": 3,
+            "cursor": first.json()["next_cursor"],
+        },
+    )
+
+    assert [task["task_id"] for task in first.json()["tasks"]] == ["t-5", "t-4", "t-3"]
+    assert first.json()["next_cursor"] is not None
+    assert [task["task_id"] for task in second.json()["tasks"]] == ["t-2", "t-1"]
+    assert {task["task_id"] for task in first.json()["tasks"]}.isdisjoint(
+        {task["task_id"] for task in second.json()["tasks"]}
+    )
+
+
+@pytest.mark.asyncio
 async def test_list_rejects_an_unknown_filter_value(client: AdminClient) -> None:
     response = await client.http.get(
         "/api/v1/tasks", headers=client.headers, params={"status": "SLEEPING"}
@@ -232,7 +264,34 @@ async def test_list_rejects_a_cursor_minted_for_a_different_order(
     )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "cursor does not match order_by"
+    assert response.json()["detail"] == "cursor does not match order_by/descending"
+
+
+@pytest.mark.asyncio
+async def test_list_rejects_a_cursor_minted_for_a_different_direction(
+    client: AdminClient,
+) -> None:
+    await _seed(client, "t-1", minutes=0)
+    await _seed(client, "t-2", minutes=1)
+
+    first = await client.http.get(
+        "/api/v1/tasks",
+        headers=client.headers,
+        params={"order_by": "updated_at", "limit": 1},
+    )
+    response = await client.http.get(
+        "/api/v1/tasks",
+        headers=client.headers,
+        params={
+            "order_by": "updated_at",
+            "descending": "true",
+            "limit": 1,
+            "cursor": first.json()["next_cursor"],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "cursor does not match order_by/descending"
 
 
 @pytest.mark.asyncio
