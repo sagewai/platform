@@ -40,6 +40,7 @@ from sagewai.work.tasks.models import (
     TaskTarget,
     TaskTriggerSpec,
 )
+from sagewai.work.tasks.plan import plan_from_events
 from sagewai.work.tasks.service import (
     TaskCreationError,
     TaskDecisionError,
@@ -50,6 +51,7 @@ from sagewai.work.tasks.store import StaleTaskError, TaskStore
 from sagewai.work.tasks.telemetry import derive_task_telemetry
 from sagewai.work.tasks.templates import CATALOGUE, RESERVED_TEMPLATE_IDS
 from sagewai.work.tasks.transitions import IllegalTransitionError
+from sagewai.work.tasks.views import thread_from_events
 
 router = APIRouter(prefix="/api/v1/tasks")
 _CURSOR_SEPARATOR = "|"
@@ -323,6 +325,35 @@ async def delete_task_trigger(trigger_id: str, request: Request) -> dict:
         request, "task.trigger.delete", target_type="task_trigger", target_id=trigger_id
     )
     return {"status": "ok"}
+
+
+@router.get("/{task_id}")
+async def get_task(task_id: str, request: Request) -> dict:
+    project_id = _task_project_scope(request)
+    store: TaskStore = request.app.state.task_store
+    loaded = await store.load(task_id, project_id=project_id)
+    if loaded is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    task, record = loaded
+    plan = None
+    if record.plan_version != 0:
+        events = await store.read_events(task_id, project_id=project_id)
+        plan = plan_from_events(events, version=record.plan_version)
+    return {
+        "task": task.model_dump(mode="json"),
+        "record": record.model_dump(mode="json"),
+        "plan": None if plan is None else plan.model_dump(mode="json"),
+    }
+
+
+@router.get("/{task_id}/thread")
+async def get_task_thread(task_id: str, request: Request) -> dict:
+    project_id = _task_project_scope(request)
+    store: TaskStore = request.app.state.task_store
+    if await store.load_record(task_id, project_id=project_id) is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    events = await store.read_events(task_id, project_id=project_id)
+    return thread_from_events(events).model_dump(mode="json")
 
 
 @router.get("/{task_id}/events")

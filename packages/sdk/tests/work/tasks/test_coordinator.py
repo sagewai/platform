@@ -947,8 +947,17 @@ async def test_work_gate_mirror_copies_the_action_and_notifies_today(
     )
     assert record.pending_gate == "merge:w1:7"
     assert record.attention_owner.value == "user"
-    assert set(gate.payload_json) == {"gate_id", "question", "action", "work_id", "attention_id"}
+    assert set(gate.payload_json) == {
+        "gate_id",
+        "question",
+        "action",
+        "work_id",
+        "attention_id",
+        "decided_by",
+    }
     assert gate.payload_json["action"] == action.model_dump(mode="json")
+    assert gate.payload_json["decided_by"] == "work"
+    assert gate.payload_json["work_id"] == work_id
     assert set(presented.payload_json) == {
         "channel",
         "ref",

@@ -1129,6 +1129,7 @@ class TaskCoordinator:
                         "action": gate.payload_json["action"],
                         "work_id": command.work_id,
                         "attention_id": command.attention_id,
+                        "decided_by": "work",
                     },
                 )
             )

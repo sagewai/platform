@@ -118,6 +118,7 @@ from sagewai.work.tasks.templates import (
     validate_slots,
 )
 from sagewai.work.tasks.transitions import IllegalTransitionError, assert_transition
+from sagewai.work.tasks.views import ThreadEntry, ThreadView, thread_from_events
 from sagewai.work.tasks.writer import TaskWriter, status_entry
 
 __all__ = [
@@ -136,10 +137,10 @@ __all__ = [
     "TaskCoordinator", "TaskCoordinatorRunner", "TaskCreationError", "TaskDecisionError",
     "TaskDefaults", "TaskEvent", "TaskEventType", "TaskKind", "TaskNotFoundError", "TaskOrigin",
     "TaskPlanResult", "TaskPlanner", "TaskRecord", "TaskService", "TaskStatus", "TaskStore",
-    "TaskTelemetry", "TaskTemplate", "TaskTriggerSpec", "TaskWriter", "VerificationRunTelemetry",
-    "WorkTelemetry", "accept_plan", "assert_transition", "board_column", "budget_breach",
-    "budget_used_from", "decide", "derive_attention", "derive_task_telemetry", "evaluate_health",
-    "fold_cycle", "fold_record", "get_template", "merge_assessment", "next_fire",
-    "plan_from_events", "preset_to_cron", "route", "status_entry", "validate_cron",
-    "validate_slots", "validate_timezone",
+    "TaskTelemetry", "TaskTemplate", "TaskTriggerSpec", "TaskWriter", "ThreadEntry",
+    "ThreadView", "VerificationRunTelemetry", "WorkTelemetry", "accept_plan", "assert_transition",
+    "board_column", "budget_breach", "budget_used_from", "decide", "derive_attention",
+    "derive_task_telemetry", "evaluate_health", "fold_cycle", "fold_record", "get_template",
+    "merge_assessment", "next_fire", "plan_from_events", "preset_to_cron", "route",
+    "status_entry", "thread_from_events", "validate_cron", "validate_slots", "validate_timezone",
 ]
