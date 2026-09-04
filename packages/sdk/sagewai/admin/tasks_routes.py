@@ -30,9 +30,26 @@ from sagewai.work.tasks.telemetry import derive_task_telemetry
 router = APIRouter(prefix="/api/v1/tasks")
 
 
+def _task_project_scope(request: Request) -> str:
+    """The Task read and write scope: one explicit project, never the global scope.
+
+    ``_work_project_scope`` maps ``X-Project-ID: global`` to ``None``, which is a real
+    organization-global scope for Work. A Task cannot live there — ``Task.project_id`` is
+    ``Field(min_length=1)`` and section 19 says there is no global Task scope — so the header
+    is refused here instead of resolving to an always-empty scope that 404s.
+    """
+    project_id = _work_project_scope(request)
+    if project_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Tasks require an explicit project; there is no global Task scope",
+        )
+    return project_id
+
+
 @router.get("/{task_id}/events")
 async def task_events(task_id: str, request: Request) -> EventSourceResponse:
-    project_id = _work_project_scope(request)
+    project_id = _task_project_scope(request)
     store: TaskStore = request.app.state.task_store
     if await store.load_record(task_id, project_id=project_id) is None:
         raise HTTPException(status_code=404, detail="Not found")
@@ -62,7 +79,7 @@ async def task_events(task_id: str, request: Request) -> EventSourceResponse:
 
 @router.get("/{task_id}/telemetry")
 async def task_telemetry(task_id: str, request: Request) -> dict:
-    project_id = _work_project_scope(request)
+    project_id = _task_project_scope(request)
     task_store: TaskStore = request.app.state.task_store
     loaded = await task_store.load(task_id, project_id=project_id)
     if loaded is None:
@@ -107,7 +124,7 @@ async def task_telemetry(task_id: str, request: Request) -> dict:
 async def _task_event_stream(
     *,
     store: TaskStore,
-    project_id: str | None,
+    project_id: str,
     task_id: str,
     queue: asyncio.Queue[FeedEntry],
     after: int,

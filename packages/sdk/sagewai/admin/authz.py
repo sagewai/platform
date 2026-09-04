@@ -73,6 +73,7 @@ _GRANTS: dict[str, frozenset[str]] = {
 # check (_in_scope) runs; a project admin may act only on their own project,
 # and an org admin only through a concrete resolved project context.
 _TARGETED_GRANTS: dict[str, frozenset[str]] = {
+    "project:admin": _ORG_ADMINS | {"project:admin"},
     "project:member": _ORG_ADMINS | {"project:admin"},
     "audit:read": _ORG_ADMINS | {"project:admin"},
 }
@@ -89,6 +90,7 @@ _NAMED_SCOPE: dict[str, str] = {
     "project:create": SCOPE_ADMIN,
     "project:list": SCOPE_ADMIN,
     "project:manage": SCOPE_ADMIN,
+    "project:admin": SCOPE_WRITE,  # the tier, not an admin op: project admins hold read+write
     "project:member": SCOPE_ADMIN,
     "audit:read": SCOPE_ADMIN,
 }

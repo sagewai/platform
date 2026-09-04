@@ -112,16 +112,23 @@ async def test_events_replays_from_last_event_id_then_streams_live(
 
 
 @pytest.mark.asyncio
-async def test_events_404_for_unknown_task_and_requires_project_scope(
+async def test_events_404_for_unknown_task_and_refuses_missing_or_global_scope(
     client: AdminClient,
     seeded_task,
 ) -> None:
     missing = await client.http.get("/api/v1/tasks/missing/events", headers=client.headers)
     unscoped = await client.http.get("/api/v1/tasks/t1/events")
+    globally = await client.http.get(
+        "/api/v1/tasks/t1/events", headers={"X-Project-ID": "global"}
+    )
 
     assert missing.status_code == 404
     assert unscoped.status_code == 400
     assert unscoped.json() == {"detail": "Work project scope is required"}
+    assert globally.status_code == 400
+    assert globally.json() == {
+        "detail": "Tasks require an explicit project; there is no global Task scope"
+    }
 
 
 @pytest.mark.parametrize("last_event_id", ["abc", "-1", "99999999999999999999"])

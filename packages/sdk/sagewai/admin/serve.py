@@ -6951,6 +6951,22 @@ def _require_resource_write(request: Request) -> None:
     require("resource:write", ctx, on=Resource(ctx.org_id, ctx.project_id))
 
 
+def _require_project_admin(request: Request) -> None:
+    """Enforce the project-admin tier on a project-scoped route (multi-tenant only).
+
+    Project admins and org owners/admins pass; members and viewers are refused. Mounted as a
+    router ``dependencies=[Depends(...)]`` entry so it runs before request-body validation and
+    a denial is a 403 rather than a 422. No-op in single-org mode, where one admin holds every
+    role.
+    """
+    ctx = _multi_ctx(request)
+    if ctx is None:
+        return
+    from sagewai.admin.authz import Resource, require
+
+    require("project:admin", ctx, on=Resource(ctx.org_id, ctx.project_id))
+
+
 def _multi_ctx(request: Request):
     """The RequestContext if running in multi-tenant mode, else None."""
     ctx = getattr(request.state, "context", None)

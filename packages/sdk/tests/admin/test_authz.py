@@ -162,7 +162,7 @@ def test_require_org_admin_enforces_admin_scope():
 
 
 def test_targeted_permissions_require_a_target():
-    for perm in ("audit:read", "project:member"):
+    for perm in ("audit:read", "project:admin", "project:member"):
         with pytest.raises(ValueError):
             require(perm, _ctx({"project:admin"}, project="p1"))  # no on=
 

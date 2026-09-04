@@ -225,4 +225,7 @@ async def test_telemetry_route_404s_unknown_task_and_requires_project_scope(
     assert unscoped.status_code == 400
     assert unscoped.json() == {"detail": "Work project scope is required"}
     assert other_project.status_code == 404
-    assert global_scope.status_code == 404
+    assert global_scope.status_code == 400
+    assert global_scope.json() == {
+        "detail": "Tasks require an explicit project; there is no global Task scope"
+    }
