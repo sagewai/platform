@@ -25,6 +25,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from sagewai.admin.serve import _emit_audit, _require_project_admin, _work_project_scope
 from sagewai.artifacts.object_store import LocalArtifactStore
+from sagewai.work.activity import WorkActivityStore
 from sagewai.work.events import WorkEvent, WorkEventType
 from sagewai.work.store import WorkStore
 from sagewai.work.tasks.events import TaskEventType
@@ -55,7 +56,12 @@ from sagewai.work.tasks.store import StaleTaskError, TaskStore
 from sagewai.work.tasks.telemetry import derive_task_telemetry
 from sagewai.work.tasks.templates import CATALOGUE, RESERVED_TEMPLATE_IDS
 from sagewai.work.tasks.transitions import IllegalTransitionError
-from sagewai.work.tasks.views import actions_from_events, referenced_artifacts, thread_from_events
+from sagewai.work.tasks.views import (
+    actions_from_events,
+    referenced_artifacts,
+    task_work_ids,
+    thread_from_events,
+)
 
 router = APIRouter(prefix="/api/v1/tasks")
 work_router = APIRouter(prefix="/api/v1/work")
@@ -550,6 +556,38 @@ async def patch_task(task_id: str, request: Request, body: _PatchTaskBody) -> di
     return {"task": task.model_dump(mode="json"), "record": record.model_dump(mode="json")}
 
 
+@router.get("/{task_id}/activity")
+async def task_activity(
+    request: Request,
+    task_id: str,
+    work_id: str | None = None,
+    run_id: str | None = None,
+    source: str | None = None,
+    cursor: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+) -> dict:
+    """Activity across the Works this Task started, ordered by (work, run, sequence)."""
+    project_id = _task_project_scope(request)
+    store: TaskStore = request.app.state.task_store
+    if await store.load_record(task_id, project_id=project_id) is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    events = await store.read_events(task_id, project_id=project_id)
+    work_ids = task_work_ids(events)
+    if work_id is not None:
+        if work_id not in work_ids:
+            raise HTTPException(status_code=404, detail="Not found")
+        work_ids = (work_id,)
+    return await _activity_page(
+        request,
+        project_id=project_id,
+        work_ids=work_ids,
+        run_id=run_id,
+        source=source,
+        cursor=cursor,
+        limit=limit,
+    )
+
+
 @router.get("/{task_id}/events")
 async def task_events(task_id: str, request: Request) -> EventSourceResponse:
     project_id = _task_project_scope(request)
@@ -622,6 +660,31 @@ async def task_telemetry(task_id: str, request: Request) -> dict:
         project_selections=project_selections,
         now=datetime.now(timezone.utc),
     ).model_dump(mode="json")
+
+
+@work_router.get("/{work_id}/activity")
+async def work_activity(
+    request: Request,
+    work_id: str,
+    run_id: str | None = None,
+    source: str | None = None,
+    cursor: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+) -> dict:
+    """This Work read uses ``_work_project_scope`` because Work reads allow global scope."""
+    project_id = _work_project_scope(request)
+    store: WorkStore = request.app.state.work_store
+    if await store.load_work(work_id, project_id=project_id) is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return await _activity_page(
+        request,
+        project_id=project_id,
+        work_ids=(work_id,),
+        run_id=run_id,
+        source=source,
+        cursor=cursor,
+        limit=limit,
+    )
 
 
 @work_router.post("/{work_id}/gates/{gate_id}", dependencies=[Depends(_require_project_admin)])
@@ -748,6 +811,34 @@ async def read_artifact(storage_ref: str, request: Request, task_id: str) -> Res
         else _ARTIFACT_MEDIA_TYPE
     )
     return Response(content=content, media_type=media_type)
+
+
+async def _activity_page(
+    request: Request,
+    *,
+    project_id: str | None,
+    work_ids: tuple[str, ...],
+    run_id: str | None,
+    source: str | None,
+    cursor: str | None,
+    limit: int,
+) -> dict:
+    activity: WorkActivityStore = request.app.state.activity_store
+    try:
+        page = await activity.read_activity(
+            project_id=project_id,
+            work_ids=work_ids,
+            run_id=run_id,
+            source=source,
+            after=cursor,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "items": [item.model_dump(mode="json") for item in page.items],
+        "next_cursor": page.next_cursor,
+    }
 
 
 async def _task_event_stream(

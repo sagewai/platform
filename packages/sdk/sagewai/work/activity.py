@@ -11,13 +11,15 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import sqlite3
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -65,6 +67,19 @@ class OperatorActivity(BaseModel):
     @classmethod
     def _bound_detail(cls, value: str | None) -> str | None:
         return None if value is None else value[:DETAIL_MAX]
+
+
+class ActivityPage(BaseModel):
+    """One page of operator activity, with the cursor that continues it.
+
+    ``next_cursor`` is the last row **scanned**, not the last item returned, so a page thinned
+    by the ``source`` filter still advances correctly.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    items: tuple[OperatorActivity, ...]
+    next_cursor: str | None = None
 
 
 class ActivitySink(Protocol):
@@ -184,6 +199,18 @@ def archive_activity_log(
     )
 
 
+def _encode(work_id: str, run_id: str, sequence: int) -> str:
+    return base64.urlsafe_b64encode(json.dumps([work_id, run_id, sequence]).encode()).decode()
+
+
+def _decode(cursor: str) -> tuple[str, str, int]:
+    try:
+        work_id, run_id, sequence = json.loads(base64.urlsafe_b64decode(cursor.encode()))
+        return str(work_id), str(run_id), int(sequence)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("cursor is not an activity cursor") from exc
+
+
 class WorkActivityStore:
     """Durable per-run activity, capped at ``ACTIVITY_ROW_CAP`` rows with a final truncation marker."""
 
@@ -263,6 +290,47 @@ class WorkActivityStore:
             rows = (await conn.execute(query)).all()
         return [OperatorActivity.model_validate(row[0]) for row in rows]
 
+    async def read_activity(
+        self,
+        *,
+        project_id: str | None,
+        work_ids: Sequence[str],
+        run_id: str | None = None,
+        source: str | None = None,
+        after: str | None = None,
+        limit: int = 500,
+    ) -> ActivityPage:
+        """Activity across several Works and all their runs, ordered and paged.
+
+        ``read`` stays the per-run ingestion read; this is the console's and the CLI's read.
+        """
+        if not work_ids:
+            return ActivityPage(items=())
+        table = self._table
+        filters = [
+            table.c.project_scope_key == project_scope_key(project_id),
+            table.c.work_id.in_(tuple(work_ids)),
+        ]
+        if run_id is not None:
+            filters.append(table.c.run_id == run_id)
+        if after is not None:
+            filters.append(
+                tuple_(table.c.work_id, table.c.run_id, table.c.sequence) > _decode(after)
+            )
+        query = (
+            select(table.c.work_id, table.c.run_id, table.c.sequence, table.c.event_json)
+            .where(*filters)
+            .order_by(table.c.work_id, table.c.run_id, table.c.sequence)
+            .limit(limit)
+        )
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(query)).all()
+        items = [OperatorActivity.model_validate(row[3]) for row in rows]
+        if source is not None:
+            items = [item for item in items if item.source == source]
+        cursor = None if len(rows) < limit else _encode(rows[-1][0], rows[-1][1], rows[-1][2])
+        return ActivityPage(items=tuple(items), next_cursor=cursor)
+
     async def prune(self, *, project_id: str, completed_work_ids: Iterable[str], older_than: datetime) -> int:
         table = self._table
         ids = tuple(completed_work_ids)
@@ -295,6 +363,7 @@ __all__ = [
     "ACTIVITY_LOG_MAX_BYTES",
     "FLEET_ACTIVITY_LOG_MAX_BYTES",
     "ActivityKind",
+    "ActivityPage",
     "ActivitySink",
     "ActivitySource",
     "ListActivitySink",
