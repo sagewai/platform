@@ -15,8 +15,9 @@ import asyncio
 import os
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from sse_starlette.sse import EventSourceResponse
 
 from sagewai.admin.serve import _work_project_scope
@@ -24,10 +25,15 @@ from sagewai.work.events import WorkEvent, WorkEventType
 from sagewai.work.store import WorkStore
 from sagewai.work.tasks.events import TaskEventType
 from sagewai.work.tasks.feed import FeedEntry
+from sagewai.work.tasks.models import BoardColumn, TaskKind, TaskOrigin, TaskRecord, TaskStatus
 from sagewai.work.tasks.store import TaskStore
 from sagewai.work.tasks.telemetry import derive_task_telemetry
 
 router = APIRouter(prefix="/api/v1/tasks")
+_CURSOR_SEPARATOR = "|"
+_CURSOR_ORDER_SEPARATOR = ":"
+_CURSOR_PREFIX_BY_ORDER = {"created_at": "c", "updated_at": "u"}
+_CURSOR_ORDER_BY_PREFIX = {"c": "created_at", "u": "updated_at"}
 
 
 def _task_project_scope(request: Request) -> str:
@@ -45,6 +51,77 @@ def _task_project_scope(request: Request) -> str:
             detail="Tasks require an explicit project; there is no global Task scope",
         )
     return project_id
+
+
+def _encode_cursor(record: TaskRecord, order_by: Literal["created_at", "updated_at"]) -> str:
+    moment = record.created_at if order_by == "created_at" else record.updated_at
+    return (
+        f"{_CURSOR_PREFIX_BY_ORDER[order_by]}{_CURSOR_ORDER_SEPARATOR}"
+        f"{moment.isoformat()}{_CURSOR_SEPARATOR}{record.task_id}"
+    )
+
+
+def _decode_cursor(
+    cursor: str, order_by: Literal["created_at", "updated_at"]
+) -> tuple[datetime, str]:
+    raw_ordered, separator, task_id = cursor.partition(_CURSOR_SEPARATOR)
+    if separator == "" or not task_id:
+        raise HTTPException(status_code=400, detail="cursor is not a list cursor")
+    prefix, order_separator, raw_moment = raw_ordered.partition(_CURSOR_ORDER_SEPARATOR)
+    if order_separator == "" or prefix not in _CURSOR_ORDER_BY_PREFIX:
+        raise HTTPException(status_code=400, detail="cursor is not a list cursor")
+    if _CURSOR_ORDER_BY_PREFIX[prefix] != order_by:
+        raise HTTPException(status_code=400, detail="cursor does not match order_by")
+    try:
+        return datetime.fromisoformat(raw_moment), task_id
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="cursor is not a list cursor") from exc
+
+
+@router.get("")
+async def list_tasks(
+    request: Request,
+    status: Annotated[list[TaskStatus] | None, Query()] = None,
+    kind: Annotated[list[TaskKind] | None, Query()] = None,
+    origin: Annotated[list[TaskOrigin] | None, Query()] = None,
+    column: Annotated[list[BoardColumn] | None, Query()] = None,
+    order_by: Literal["created_at", "updated_at"] = "created_at",
+    cursor: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> dict:
+    project_id = _task_project_scope(request)
+    store: TaskStore = request.app.state.task_store
+    records = await store.list_records(
+        project_id=project_id,
+        statuses=status,
+        kinds=kind,
+        origins=origin,
+        board_columns=column,
+        order_by=order_by,
+        after=None if cursor is None else _decode_cursor(cursor, order_by),
+        limit=limit,
+    )
+    return {
+        "tasks": [record.model_dump(mode="json") for record in records],
+        "next_cursor": _encode_cursor(records[-1], order_by) if len(records) == limit else None,
+    }
+
+
+@router.get("/board")
+async def task_board(
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+) -> dict:
+    """The five section 5.2 columns, newest-touched first, every one present even when empty."""
+    project_id = _task_project_scope(request)
+    store: TaskStore = request.app.state.task_store
+    records = await store.list_records(
+        project_id=project_id, order_by="updated_at", descending=True, limit=limit
+    )
+    columns: dict[str, list[dict]] = {column.value: [] for column in BoardColumn}
+    for record in records:
+        columns[record.board_column.value].append(record.model_dump(mode="json"))
+    return {"columns": columns}
 
 
 @router.get("/{task_id}/events")

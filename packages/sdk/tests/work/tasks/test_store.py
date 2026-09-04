@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -24,6 +24,7 @@ from sagewai.work.tasks.events import TaskEvent, TaskEventType, fold_record
 from sagewai.work.tasks.feed import FeedBus, FeedEntry
 from sagewai.work.tasks.models import (
     Authority,
+    BoardColumn,
     ExecutionRoute,
     SoftwareTarget,
     Task,
@@ -440,3 +441,117 @@ async def test_append_feed_retries_a_stale_sequence(store: TaskStore, monkeypatc
     monkeypatch.setattr(AsyncConnection, "scalar", scalar_always_stale)
     with pytest.raises(StaleTaskError):
         await store.append_feed((entry.model_copy(update={"source_id": "work:implement:1:2"}),))
+
+
+async def _create_at(
+    store: TaskStore,
+    task_id: str,
+    *,
+    created_at: datetime,
+    status: TaskStatus = TaskStatus.PLANNING,
+    kind: TaskKind = TaskKind.BATCH,
+    origin: TaskOrigin = TaskOrigin.HUMAN,
+    board_column: BoardColumn = BoardColumn.INBOX,
+) -> TaskRecord:
+    task = _task(task_id).model_copy(
+        update={"kind": kind, "origin": origin, "created_at": created_at}
+    )
+    record = _record(task).model_copy(
+        update={
+            "kind": kind,
+            "origin": origin,
+            "status": status,
+            "board_column": board_column,
+            "created_at": created_at,
+            "updated_at": created_at,
+        }
+    )
+    events = (_event(task, 1, TaskEventType.TASK_CREATED, {"title": task.title}),)
+    return await store.create(task, events=events, record=record)
+
+
+@pytest.mark.asyncio
+async def test_list_records_filters_by_kind_origin_and_board_column(store: TaskStore) -> None:
+    await _create_at(store, "t-batch", created_at=NOW, kind=TaskKind.BATCH)
+    await _create_at(
+        store,
+        "t-scheduled",
+        created_at=NOW,
+        kind=TaskKind.SCHEDULED,
+        origin=TaskOrigin.SCHEDULE,
+        board_column=BoardColumn.PLANNED,
+    )
+
+    by_kind = await store.list_records(project_id="project-a", kinds=(TaskKind.SCHEDULED,))
+    by_origin = await store.list_records(project_id="project-a", origins=(TaskOrigin.HUMAN,))
+    by_column = await store.list_records(
+        project_id="project-a", board_columns=(BoardColumn.PLANNED,)
+    )
+
+    assert [record.task_id for record in by_kind] == ["t-scheduled"]
+    assert [record.task_id for record in by_origin] == ["t-batch"]
+    assert [record.task_id for record in by_column] == ["t-scheduled"]
+
+
+@pytest.mark.asyncio
+async def test_list_records_pages_by_cursor_in_the_chosen_order(store: TaskStore) -> None:
+    first = await _create_at(store, "t-1", created_at=NOW)
+    second = await _create_at(store, "t-2", created_at=NOW + timedelta(minutes=1))
+    third = await _create_at(store, "t-3", created_at=NOW + timedelta(minutes=2))
+
+    page_one = await store.list_records(project_id="project-a", limit=2)
+    page_two = await store.list_records(
+        project_id="project-a",
+        limit=2,
+        after=(page_one[-1].created_at, page_one[-1].task_id),
+    )
+
+    assert [record.task_id for record in page_one] == [first.task_id, second.task_id]
+    assert [record.task_id for record in page_two] == [third.task_id]
+
+
+@pytest.mark.asyncio
+async def test_list_records_orders_by_updated_at_when_asked(store: TaskStore) -> None:
+    await _create_at(store, "t-old", created_at=NOW)
+    recent = await _create_at(store, "t-new", created_at=NOW + timedelta(minutes=5))
+    touched = await store.append(
+        task_id="t-old",
+        project_id="project-a",
+        events=(
+            _event(
+                _task("t-old"),
+                2,
+                TaskEventType.TASK_MESSAGE,
+                {"author": "human", "text": "hi", "refs": []},
+            ),
+        ),
+        expected_sequence=2,
+        record=(await store.load_record("t-old", project_id="project-a")).model_copy(
+            update={"last_event_sequence": 2, "updated_at": NOW + timedelta(minutes=9)}
+        ),
+    )
+
+    ordered = await store.list_records(project_id="project-a", order_by="updated_at")
+
+    assert [record.task_id for record in ordered] == [recent.task_id, touched.task_id]
+
+
+@pytest.mark.asyncio
+async def test_list_records_pages_descending_by_cursor(store: TaskStore) -> None:
+    oldest = await _create_at(store, "t-old", created_at=NOW)
+    middle = await _create_at(store, "t-middle", created_at=NOW + timedelta(minutes=1))
+    newest = await _create_at(store, "t-new", created_at=NOW + timedelta(minutes=2))
+
+    page_one = await store.list_records(
+        project_id="project-a", order_by="updated_at", descending=True, limit=2
+    )
+    page_two = await store.list_records(
+        project_id="project-a",
+        order_by="updated_at",
+        descending=True,
+        limit=2,
+        after=(page_one[-1].updated_at, page_one[-1].task_id),
+    )
+
+    assert [record.task_id for record in page_one] == [newest.task_id, middle.task_id]
+    assert [record.task_id for record in page_two] == [oldest.task_id]

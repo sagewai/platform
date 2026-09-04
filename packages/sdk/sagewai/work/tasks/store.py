@@ -14,10 +14,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, insert, select, update
+from sqlalchemy import func, insert, select, tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
@@ -38,9 +38,12 @@ from sagewai.work.tasks.events import TaskEvent
 from sagewai.work.tasks.feed import FeedBus, FeedEntry
 from sagewai.work.tasks.models import (
     TERMINAL_STATUSES,
+    BoardColumn,
     SpendTotals,
     Task,
     TaskDefaults,
+    TaskKind,
+    TaskOrigin,
     TaskRecord,
     TaskStatus,
     TaskTriggerSpec,
@@ -303,12 +306,44 @@ class TaskStore:
         *,
         project_id: str,
         statuses: Sequence[TaskStatus] | None = None,
+        kinds: Sequence[TaskKind] | None = None,
+        origins: Sequence[TaskOrigin] | None = None,
+        board_columns: Sequence[BoardColumn] | None = None,
+        order_by: Literal["created_at", "updated_at"] = "created_at",
+        descending: bool = False,
+        after: tuple[datetime, str] | None = None,
+        limit: int | None = None,
     ) -> list[TaskRecord]:
+        """Board and list reads: filtered, ordered, and paged by a keyset cursor.
+
+        The cursor is ``(order column, task_id)`` of the last row of the previous page. A
+        Task created between two ``created_at`` pages is never skipped or repeated; ordering
+        by ``updated_at`` can repeat a row touched between pages.
+        """
         scope = project_scope_key(project_id)
+        order_column = (
+            self._tasks.c.created_at if order_by == "created_at" else self._tasks.c.updated_at
+        )
         query = select(self._tasks).where(self._tasks.c.project_scope_key == scope)
         if statuses is not None:
             query = query.where(self._tasks.c.status.in_([status.value for status in statuses]))
-        query = query.order_by(self._tasks.c.created_at, self._tasks.c.task_id)
+        if kinds is not None:
+            query = query.where(self._tasks.c.kind.in_([kind.value for kind in kinds]))
+        if origins is not None:
+            query = query.where(self._tasks.c.origin.in_([origin.value for origin in origins]))
+        if board_columns is not None:
+            query = query.where(
+                self._tasks.c.board_column.in_([column.value for column in board_columns])
+            )
+        order_key = tuple_(order_column, self._tasks.c.task_id)
+        if after is not None:
+            query = query.where(order_key < after if descending else order_key > after)
+        if descending:
+            query = query.order_by(order_column.desc(), self._tasks.c.task_id.desc())
+        else:
+            query = query.order_by(order_column, self._tasks.c.task_id)
+        if limit is not None:
+            query = query.limit(limit)
         async with self._engine.connect() as conn:
             rows = (await conn.execute(query)).all()
         return [self._record_from_row(row._mapping) for row in rows]
