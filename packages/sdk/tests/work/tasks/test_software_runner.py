@@ -350,7 +350,7 @@ async def test_concurrent_software_tasks_meter_into_their_own_ledgers(
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,
-        profile_runner=profile,
+        profile_runners=lambda _task: profile,
         artifact_store=artifacts,
     )
     runner = TaskCoordinatorRunner(

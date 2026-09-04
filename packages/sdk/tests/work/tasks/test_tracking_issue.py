@@ -99,10 +99,11 @@ async def _seed_report(
     )
     task = Task.model_validate(values)
     record = await _store_task(task_store, task)
+    runner = FakeProfileRunner(work_store)
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,
-        profile_runner=FakeProfileRunner(work_store),
+        profile_runners=lambda _task: runner,
         decision_channels=(ConsoleDecisionChannel(),),
     )
     return task, record, coordinator
@@ -117,10 +118,11 @@ async def _seed_task_with_override(
         {**base.model_dump(mode="python"), "tracking_issue_url": tracking_issue_url}
     )
     record = await _store_task(task_store, task)
+    runner = FakeProfileRunner(work_store)
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,
-        profile_runner=FakeProfileRunner(work_store),
+        profile_runners=lambda _task: runner,
         decision_channels=(ConsoleDecisionChannel(),),
     )
     return task, record, coordinator
@@ -151,7 +153,7 @@ async def test_the_first_item_creates_the_tracking_issue_and_the_rest_comment(
     task, record, _runner, coordinator = await _seed(stores, tmp_path)
     github = RecordingGitHub()
     channel = GitHubIssueDecisionChannel(store=task_store, github_factory=lambda _s: github)
-    coordinator._channels = (channel,)
+    coordinator._static_channels = (channel,)
 
     first = await coordinator._present(
         task, record, attention_id="a1", summary="Plan proposed", urgency="today"
@@ -195,7 +197,7 @@ async def test_an_existing_unrecorded_tracking_issue_is_reused(stores, tmp_path)
     github = LabelRecordingGitHub()
     existing = _issue(99)
     github.labeled_issues = (existing,)
-    coordinator._channels = (
+    coordinator._static_channels = (
         GitHubIssueDecisionChannel(store=task_store, github_factory=lambda _s: github),
     )
 
@@ -222,7 +224,7 @@ async def test_a_failed_tracking_comment_does_not_leak_the_established_issue(
     second_issue = _issue(88)
     github.labeled_issues = (first_issue,)
     github.fail_comment_once = True
-    coordinator._channels = (
+    coordinator._static_channels = (
         GitHubIssueDecisionChannel(store=task_store, github_factory=lambda _s: github),
     )
 
@@ -253,7 +255,7 @@ async def test_tracking_channel_is_not_limited_by_non_now_channel_position(
     slack = RecordingDecisionChannel("slack_webhook")
     github = RecordingGitHub()
     tracking = GitHubIssueDecisionChannel(store=task_store, github_factory=lambda _s: github)
-    coordinator._channels = (console, tracking, slack)
+    coordinator._static_channels = (console, tracking, slack)
 
     entries = await coordinator._present(
         task, record, attention_id="a1", summary="Plan proposed", urgency="today"
@@ -288,7 +290,7 @@ async def test_a_report_task_without_an_issue_sink_presents_nothing(stores) -> N
         built += 1
         return github
 
-    coordinator._channels = (
+    coordinator._static_channels = (
         GitHubIssueDecisionChannel(store=task_store, github_factory=github_factory),
     )
 
@@ -315,7 +317,7 @@ async def test_a_task_tracking_issue_override_is_used_without_projection(stores)
         stores, tracking_issue_url=override_url
     )
     github = RecordingGitHub()
-    coordinator._channels = (
+    coordinator._static_channels = (
         GitHubIssueDecisionChannel(store=task_store, github_factory=lambda _s: github),
     )
 
@@ -340,7 +342,7 @@ async def test_a_report_issue_sink_selects_the_tracking_issue_repository(stores)
         ),
     )
     github = RecordingGitHub()
-    coordinator._channels = (
+    coordinator._static_channels = (
         GitHubIssueDecisionChannel(store=task_store, github_factory=lambda _s: github),
     )
 
@@ -358,7 +360,7 @@ async def test_a_plan_gate_is_presented_to_the_tracking_issue_once(stores, tmp_p
     task_store, _work_store = stores
     task, record, _runner, coordinator = await _seed(stores, tmp_path, plan_auto=False)
     github = RecordingGitHub()
-    coordinator._channels = (
+    coordinator._static_channels = (
         GitHubIssueDecisionChannel(store=task_store, github_factory=lambda _s: github),
     )
 
@@ -384,7 +386,7 @@ async def test_a_replan_gate_is_presented_to_the_tracking_issue_once(
     monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
     runner.assessor_verdict = "replan"
     github = RecordingGitHub()
-    coordinator._channels = (
+    coordinator._static_channels = (
         GitHubIssueDecisionChannel(store=task_store, github_factory=lambda _s: github),
     )
 
@@ -404,7 +406,7 @@ async def test_cycle_start_tracks_the_accepted_plan_once(stores, tmp_path, monke
     task, record, runner, coordinator = await _seed(stores, tmp_path)
     monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
     github = RecordingGitHub()
-    coordinator._channels = (
+    coordinator._static_channels = (
         GitHubIssueDecisionChannel(store=task_store, github_factory=lambda _s: github),
     )
 
@@ -475,7 +477,7 @@ async def test_cycle_start_tracks_a_replanned_v2_once(stores, tmp_path, monkeypa
         ],
     )
     github = RecordingGitHub()
-    coordinator._channels = (
+    coordinator._static_channels = (
         GitHubIssueDecisionChannel(store=task_store, github_factory=lambda _s: github),
     )
 
@@ -496,7 +498,7 @@ async def test_start_step_tracks_the_work_issue_once(stores, tmp_path, monkeypat
     task, record, _runner, coordinator = await _seed(stores, tmp_path)
     monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
     github = RecordingGitHub()
-    coordinator._channels = (
+    coordinator._static_channels = (
         GitHubIssueDecisionChannel(store=task_store, github_factory=lambda _s: github),
     )
 
@@ -517,7 +519,7 @@ async def test_record_outcome_tracks_the_pull_request_once(stores, tmp_path, mon
     task, record, runner, coordinator = await _seed(stores, tmp_path)
     monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
     github = RecordingGitHub()
-    coordinator._channels = (
+    coordinator._static_channels = (
         GitHubIssueDecisionChannel(store=task_store, github_factory=lambda _s: github),
     )
     coordinator._MAX_COMMANDS = 3
@@ -551,7 +553,7 @@ async def test_assessment_tracks_verdict_and_gaps_once(stores, tmp_path, monkeyp
         ),
     )
     github = RecordingGitHub()
-    coordinator._channels = (
+    coordinator._static_channels = (
         GitHubIssueDecisionChannel(store=task_store, github_factory=lambda _s: github),
     )
 

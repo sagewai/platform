@@ -403,7 +403,7 @@ async def _seed(stores, tmp_path, *, plan_auto: bool = True, origin: TaskOrigin 
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,
-        profile_runner=runner,
+        profile_runners=lambda _task: runner,
         artifact_store=artifacts,
         decision_channels=(ConsoleDecisionChannel(),),
     )
@@ -896,7 +896,7 @@ async def test_work_gate_mirror_copies_the_action_and_notifies_today(
     task_store, work_store = stores
     task, record, runner, coordinator = await _seed(stores, tmp_path)
     channel = RecordingDecisionChannel()
-    monkeypatch.setattr(coordinator, "_channels", (channel,))
+    monkeypatch.setattr(coordinator, "_static_channels", (channel,))
 
     async def no_progress(task_, *, cycle, work_id):
         runner.resumed.append(work_id)
@@ -992,7 +992,7 @@ async def test_a_lost_mirror_batch_notifies_the_channel_once(stores, tmp_path, m
     task_store, work_store = stores
     task, record, runner, coordinator = await _seed(stores, tmp_path)
     channel = RecordingDecisionChannel()
-    monkeypatch.setattr(coordinator, "_channels", (channel,))
+    monkeypatch.setattr(coordinator, "_static_channels", (channel,))
     runner.statuses["s1"] = "WORK_BLOCKED"
     monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
     epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
@@ -1023,7 +1023,7 @@ async def test_a_failing_channel_retries_on_the_next_tick(stores, tmp_path) -> N
     task_store, _work_store = stores
     task, record, runner, coordinator = await _seed(stores, tmp_path)
     angry = _AngryChannel()
-    coordinator._channels = (angry, ConsoleDecisionChannel())
+    coordinator._static_channels = (angry, ConsoleDecisionChannel())
     runner.plan_error = PlanningFailedError("planner unavailable")
 
     epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
@@ -1052,7 +1052,7 @@ async def test_a_failing_channel_retries_on_the_next_tick(stores, tmp_path) -> N
 async def test_needs_you_items_carry_a_due_time(stores, tmp_path) -> None:
     task, record, _runner, coordinator = await _seed(stores, tmp_path)
     channel = RecordingDecisionChannel()
-    coordinator._channels = (channel,)
+    coordinator._static_channels = (channel,)
 
     entries = await coordinator._present(
         task, record, attention_id="gate:1", summary="Approve merge", urgency="today"
@@ -1068,7 +1068,7 @@ async def test_today_needs_you_items_present_to_the_first_channel_only(stores, t
     task, record, _runner, coordinator = await _seed(stores, tmp_path)
     first = RecordingDecisionChannel("first")
     second = RecordingDecisionChannel("second")
-    coordinator._channels = (first, second)
+    coordinator._static_channels = (first, second)
 
     entries = await coordinator._present(
         task, record, attention_id="gate:1", summary="Approve merge", urgency="today"
@@ -1084,7 +1084,7 @@ async def test_needs_you_uses_an_open_clarification_deadline(stores, tmp_path, m
     task_store, _ = stores
     task, record, runner, coordinator = await _seed(stores, tmp_path)
     channel = RecordingDecisionChannel()
-    coordinator._channels = (channel,)
+    coordinator._static_channels = (channel,)
     runner.plan_result = TaskPlanResult(
         attempt_id="plan",
         clarifications=(
@@ -1125,7 +1125,7 @@ async def test_a_block_hands_the_assessment_gaps_to_the_channel(
     task_store, _work_store = stores
     task, record, runner, coordinator = await _seed(stores, tmp_path)
     channel = RecordingDecisionChannel()
-    coordinator._channels = (channel,)
+    coordinator._static_channels = (channel,)
     task = task.model_copy(update={"budget": Budget(max_replans=0)})
     monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
     runner.assessor_verdict = "replan"
@@ -1505,7 +1505,7 @@ async def test_pruning_activity_includes_superseded_step_works(stores, tmp_path)
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,
-        profile_runner=runner,
+        profile_runners=lambda _task: runner,
         activity_store=Activity(),
     )
     state = CycleState(
@@ -1576,7 +1576,7 @@ async def test_budget_exhaustion_records_ledger_usage_and_notifies_now(
     task_store, _ = stores
     task, record, _runner, coordinator = await _seed(stores, tmp_path)
     channel = RecordingDecisionChannel()
-    monkeypatch.setattr(coordinator, "_channels", (channel,))
+    monkeypatch.setattr(coordinator, "_static_channels", (channel,))
     task = task.model_copy(update={"budget": Budget(max_cycle_usd=Decimal("0"))})
     monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
     await task_store.reserve_spend(
@@ -1712,7 +1712,7 @@ async def test_spent_replan_budget_blocks_with_gap_text_and_notifies_now(
     task_store, _ = stores
     task, record, runner, coordinator = await _seed(stores, tmp_path)
     channel = RecordingDecisionChannel()
-    monkeypatch.setattr(coordinator, "_channels", (channel,))
+    monkeypatch.setattr(coordinator, "_static_channels", (channel,))
     task = task.model_copy(update={"budget": task.budget.model_copy(update={"max_replans": 0})})
     monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
     runner.assessor_verdict = "replan"

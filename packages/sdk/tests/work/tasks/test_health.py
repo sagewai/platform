@@ -271,10 +271,11 @@ async def test_a_cost_spike_on_a_scheduled_task_holds_needs_you(
 
     monkeypatch.setattr(task_store, "spend_totals", capture_spend_totals)
     channel = RecordingDecisionChannel()
+    profile = FakeProfileRunner(work_store, plan_result=plan)
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,
-        profile_runner=FakeProfileRunner(work_store, plan_result=plan),
+        profile_runners=lambda _task: profile,
         decision_channels=(channel,),
     )
     monkeypatch.setattr(coordinator, "_now", lambda: NOW)

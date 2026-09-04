@@ -266,15 +266,22 @@ async def build_decision_channels(
     if config_store is not None:
         configs = await config_store.list_channel_configs(defaults.project_id)
     channels: list[DecisionChannel] = []
+    has_console = False
     for name in defaults.decision_channels:
         if name == "console":
-            channels.append(ConsoleDecisionChannel())
+            if not has_console:
+                channels.append(ConsoleDecisionChannel())
+                has_console = True
         elif name == "github_issue":
             if tracking_channel is None:
                 raise ChannelNotConfiguredError("github_issue needs a GitHub client")
             channels.append(tracking_channel)
         elif name in _CONFIG_TYPES:
-            url = _webhook_url(configs, _CONFIG_TYPES[name], name)
+            try:
+                url = _webhook_url(configs, _CONFIG_TYPES[name], name)
+            except ChannelNotConfiguredError:
+                _log_unconfigured_channel(name)
+                continue
             builder = (
                 SlackWebhookDecisionChannel
                 if name == "slack_webhook"
@@ -282,8 +289,18 @@ async def build_decision_channels(
             )
             channels.append(builder(webhook_url=url, console_base_url=console_base_url))
         else:
-            raise ChannelNotConfiguredError(f"unknown decision channel: {name}")
+            _log_unconfigured_channel(name)
+    if not has_console:
+        channels.insert(0, ConsoleDecisionChannel())
     return tuple(channels)
+
+
+def _log_unconfigured_channel(name: str) -> None:
+    logger.warning(
+        "decision channel not configured: %s",
+        name,
+        extra={"event": "task.channel.unconfigured", "channel": name},
+    )
 
 
 def _webhook_url(configs: Sequence[dict[str, Any]], channel_type: str, name: str) -> str:

@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
@@ -242,19 +242,21 @@ class TaskCoordinator:
         *,
         task_store: TaskStore,
         work_store: WorkStore,
-        profile_runner: ProfileRunner,
+        profile_runners: Callable[[Task], ProfileRunner],
         artifact_store: LocalArtifactStore | None = None,
         activity_store: WorkActivityStore | None = None,
         decision_channels: Sequence[DecisionChannel] = (),
+        channel_factory: Callable[[str], Awaitable[Sequence[DecisionChannel]]] | None = None,
         rollbacks: RollbackExecutor | None = None,
         actor_ref: str = "coordinator",
     ) -> None:
         self._task_store = task_store
         self._work_store = work_store
-        self._profile = profile_runner
+        self._profile_runners = profile_runners
         self._artifacts = artifact_store or LocalArtifactStore()
         self._activity_store = activity_store
-        self._channels = tuple(decision_channels) or (ConsoleDecisionChannel(),)
+        self._static_channels = tuple(decision_channels) or (ConsoleDecisionChannel(),)
+        self._channel_factory = channel_factory
         self._rollbacks = rollbacks
         self._writer = TaskWriter(task_store, actor_ref=actor_ref)
 
@@ -262,8 +264,13 @@ class TaskCoordinator:
         return datetime.now(timezone.utc)
 
     def _profile_for(self, task: Task) -> ProfileRunner:
-        """One runner today; task 10 makes this the per-profile selector."""
-        return self._profile
+        return self._profile_runners(task)
+
+    async def _channels(self, task: Task) -> Sequence[DecisionChannel]:
+        """Per project, so a configuration change takes effect on the next tick."""
+        if self._channel_factory is None:
+            return self._static_channels
+        return await self._channel_factory(task.project_id)
 
     @staticmethod
     def _cycle(record: TaskRecord) -> int:
@@ -285,7 +292,7 @@ class TaskCoordinator:
             cycle=self._cycle(record),
             budget=task.budget,
         )
-        self._profile.use_ledger(ledger)
+        self._profile_for(task).use_ledger(ledger)
         return ledger
 
     async def drive(self, record: TaskRecord, *, lease_epoch: int) -> TaskRecord:
@@ -347,7 +354,9 @@ class TaskCoordinator:
                 attention = None
                 events = await self._work_store.read_events(work_id, project_id=task.project_id)
                 phase = self._base_moved_phase(events)
-                if phase == "merge" and await self._profile.is_merged(task, work_id=work_id):
+                if phase == "merge" and await self._profile_for(task).is_merged(
+                    task, work_id=work_id
+                ):
                     phase = None
             github = work.profile_context.get("github") or {}
             report = work.profile_context.get("report") or {}
@@ -530,7 +539,7 @@ class TaskCoordinator:
         if isinstance(command, ResumeStep):
             before = await self._work_store.load_work(command.work_id, project_id=task.project_id)
             ledger = self._meter(task, record)
-            resumed = await self._profile.resume(
+            resumed = await self._profile_for(task).resume(
                 task, cycle=record.current_cycle, work_id=command.work_id
             )
             if resumed.status == before.status:
@@ -879,7 +888,8 @@ class TaskCoordinator:
     async def _run_planning(
         self, task: Task, record: TaskRecord, command: RunPlanning, lease_epoch: int
     ) -> TaskRecord:
-        base_sha = await self._profile.base_sha(task)
+        profile = self._profile_for(task)
+        base_sha = await profile.base_sha(task)
         brief = self._artifacts.read(task.brief_ref.storage_ref, project_id=task.project_id).decode(
             "utf-8"
         )
@@ -891,7 +901,7 @@ class TaskCoordinator:
         )
         ledger = self._meter(task, record)
         try:
-            result = await self._profile.plan(
+            result = await profile.plan(
                 task,
                 cycle=record.current_cycle,
                 plan_version=command.plan_version,
@@ -1269,12 +1279,13 @@ class TaskCoordinator:
             evidence_refs=tuple(evidence_refs),
         )
         entries: list[Entry] = []
+        all_channels = await self._channels(task)
         channels = (
-            self._channels
+            all_channels
             if urgency == "now"
             else tuple(
                 channel
-                for index, channel in enumerate(self._channels)
+                for index, channel in enumerate(all_channels)
                 if index == 0 or isinstance(channel, TrackingDecisionChannel)
             )
         )
@@ -1334,7 +1345,7 @@ class TaskCoordinator:
         channel = next(
             (
                 candidate
-                for candidate in self._channels
+                for candidate in await self._channels(task)
                 if isinstance(candidate, TrackingDecisionChannel)
             ),
             None,
@@ -1404,23 +1415,22 @@ class TaskCoordinator:
                 )
                 return record
         issue_url = state.issue_urls.get(step.id)
+        profile = self._profile_for(task)
         if issue_url is None and replay:
-            issue_url = await self._profile.find_issue(task, cycle=record.current_cycle, step=step)
+            issue_url = await profile.find_issue(task, cycle=record.current_cycle, step=step)
         if issue_url is None:
-            issue_url = await self._profile.create_issue(
-                task, cycle=record.current_cycle, step=step
-            )
+            issue_url = await profile.create_issue(task, cycle=record.current_cycle, step=step)
             await self._task_store.record_command(
                 task_id=task.id,
                 project_id=task.project_id,
                 command_id=f"issue:{record.current_cycle}:{step.id}",
                 payload={"issue_url": issue_url},
             )
-        base_sha = await self._profile.base_sha(task)
-        work = await self._profile.find_work(task, issue_url=issue_url) if replay else None
+        base_sha = await profile.base_sha(task)
+        work = await profile.find_work(task, issue_url=issue_url) if replay else None
         if work is None:
             ledger = self._meter(task, record)
-            work = await self._profile.start(
+            work = await profile.start(
                 task,
                 cycle=record.current_cycle,
                 step=step,
@@ -1527,12 +1537,11 @@ class TaskCoordinator:
         step = next(step for step in state.plan.steps if step.id == command.step_id)
         issue_url = state.issue_urls[step.id]
         evidence = await self._supersede_evidence(task, command.work_id)
-        base_sha = await self._profile.base_sha(task)
-        replacement = await self._profile.find_work(
-            task, issue_url=issue_url, exclude=command.work_id
-        )
+        profile = self._profile_for(task)
+        base_sha = await profile.base_sha(task)
+        replacement = await profile.find_work(task, issue_url=issue_url, exclude=command.work_id)
         if replacement is None:
-            replacement = await self._profile.start(
+            replacement = await profile.start(
                 task,
                 cycle=record.current_cycle,
                 step=step,

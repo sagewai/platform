@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import click
@@ -18,11 +19,20 @@ import click
 import sagewai.cli as _cli
 from sagewai.artifacts import LocalArtifactStore
 from sagewai.db import factory
+from sagewai.notifications.postgres_store import PostgresNotificationStore
 from sagewai.work.activity import WorkActivityStore
 from sagewai.work.profiles.software.assembly import github_client_for
 from sagewai.work.store import WorkStore
+from sagewai.work.tasks.actions import RollbackExecutor
+from sagewai.work.tasks.channels import (
+    DecisionEscalation,
+    GitHubIssueDecisionChannel,
+    build_decision_channels,
+)
 from sagewai.work.tasks.coordinator import TaskCoordinator
+from sagewai.work.tasks.decisions import DecisionChannel
 from sagewai.work.tasks.models import TaskOrigin
+from sagewai.work.tasks.report import ReportProfileRunner
 from sagewai.work.tasks.runner import TaskCoordinatorRunner, interval_from_env, max_tasks_from_env
 from sagewai.work.tasks.service import ClarificationDeadlines, TaskService
 from sagewai.work.tasks.software import SoftwareProfileRunner
@@ -83,16 +93,38 @@ async def _create(brief: str, *, project_id: str) -> str:
 async def _tick(project_id: str) -> int:
     task_store, work_store, activity_store = await _stores()
     service = TaskService(store=task_store, artifact_store=LocalArtifactStore())
-    profile_runner = SoftwareProfileRunner(
+    software = SoftwareProfileRunner(
         work_store=work_store,
         github_factory=github_client_for,
         stack_cache_limit=max(8, max_tasks_from_env()),
     )
+    report = ReportProfileRunner(
+        work_store=work_store,
+        github_factory=github_client_for,
+        stack_cache_limit=max(8, max_tasks_from_env()),
+    )
+    notification_store = PostgresNotificationStore(engine=factory.get_engine())
+    defaults = await task_store.get_defaults(project_id=project_id)
+    channels = await build_decision_channels(
+        defaults=defaults,
+        config_store=notification_store,
+        tracking_channel=GitHubIssueDecisionChannel(
+            store=task_store, github_factory=github_client_for
+        ),
+        console_base_url=os.environ.get("SAGEWAI_CONSOLE_BASE_URL"),
+    )
+
+    async def _ready_channels(_project_id: str) -> tuple[DecisionChannel, ...]:
+        """The CLI serves one project; resolver order keeps console first unless defaults differ."""
+        return channels
+
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,
-        profile_runner=profile_runner,
+        profile_runners=lambda task: report if task.profile == "report" else software,
         activity_store=activity_store,
+        channel_factory=_ready_channels,
+        rollbacks=RollbackExecutor(github_factory=github_client_for),
     )
     runner = TaskCoordinatorRunner(
         task_store=task_store,
@@ -106,6 +138,7 @@ async def _tick(project_id: str) -> int:
                 github_factory=github_client_for,
             ),
             ClarificationDeadlines(store=task_store, service=service),
+            DecisionEscalation(store=task_store, channels=_ready_channels),
         ),
         interval_seconds=interval_from_env(),
         max_tasks=max_tasks_from_env(),
@@ -113,7 +146,8 @@ async def _tick(project_id: str) -> int:
     try:
         return await runner.tick()
     finally:
-        await profile_runner.aclose()
+        await software.aclose()
+        await report.aclose()
 
 
 async def _one(project_id: str) -> list[str]:

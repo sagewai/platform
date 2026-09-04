@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -521,18 +522,41 @@ async def test_the_resolver_builds_the_named_channels_in_order() -> None:
 
 
 @pytest.mark.asyncio
-async def test_an_unconfigured_channel_fails_closed() -> None:
+async def test_an_unconfigured_channel_fails_closed_to_console(caplog) -> None:
     class _Empty:
         async def list_channel_configs(self, project_id=None):
             return []
 
     defaults = TaskDefaults(project_id="project-a", decision_channels=("console", "slack_webhook"))
-    with pytest.raises(ChannelNotConfiguredError):
-        await build_decision_channels(defaults=defaults, config_store=_Empty())
+    with caplog.at_level(logging.WARNING, logger="sagewai.work.tasks"):
+        channels = await build_decision_channels(defaults=defaults, config_store=_Empty())
+
+    assert [channel.name for channel in channels] == ["console"]
+    assert [
+        getattr(record, "channel", None)
+        for record in caplog.records
+        if getattr(record, "event", None) == "task.channel.unconfigured"
+    ] == ["slack_webhook"]
+    assert "slack_webhook" in caplog.text
+    assert "hooks.slack" not in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_an_unknown_channel_name_fails_closed() -> None:
+async def test_an_unknown_channel_name_fails_closed_to_console(caplog) -> None:
     defaults = TaskDefaults(project_id="project-a", decision_channels=("console", "teams_webhook"))
-    with pytest.raises(ChannelNotConfiguredError, match="unknown decision channel: teams_webhook"):
+    with caplog.at_level(logging.WARNING, logger="sagewai.work.tasks"):
+        channels = await build_decision_channels(defaults=defaults)
+
+    assert [channel.name for channel in channels] == ["console"]
+    assert [
+        getattr(record, "channel", None)
+        for record in caplog.records
+        if getattr(record, "event", None) == "task.channel.unconfigured"
+    ] == ["teams_webhook"]
+
+
+@pytest.mark.asyncio
+async def test_tracking_channel_still_requires_the_tracking_channel() -> None:
+    defaults = TaskDefaults(project_id="project-a", decision_channels=("console", "github_issue"))
+    with pytest.raises(ChannelNotConfiguredError, match="github_issue needs a GitHub client"):
         await build_decision_channels(defaults=defaults)
