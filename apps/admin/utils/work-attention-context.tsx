@@ -13,19 +13,36 @@ import {
 import { useToast } from '@/components/ui/legacy';
 import { adminApi } from '@/utils/api';
 import { useProject } from '@/utils/project-context';
-import type { PendingAttention } from '@/utils/types';
+import { getCurrentProjectId } from '@/utils/project-state';
+import type { PendingAttention, TaskDecisionItem } from '@/utils/types';
 
 interface WorkAttentionContextValue {
   pending: PendingAttention[];
+  /**
+   * What the nav badge counts: Work attention plus the Task half of the project's `Needs you`
+   * inbox. The inbox's own `work` items are the same `pending_attention` rows already in
+   * `pending`. A mirrored Work gate appears in `pending` and the inbox's Task half, so the
+   * pending row is skipped when its `attention_id` matches the mirrored gate.
+   * The client does not request the inbox without a selected project because Tasks are never
+   * organization-global.
+   */
+  attentionItems: Array<PendingAttention | TaskDecisionItem>;
+  /** The whole `Needs you` inbox, Work half included; what `/decisions` renders. */
+  decisions: TaskDecisionItem[];
   loading: boolean;
   error: string | null;
+  /** The inbox's own failure. It never becomes `error`: the Work page renders that one. */
+  decisionsError: string | null;
   refresh: () => Promise<void>;
 }
 
 const WorkAttentionContext = createContext<WorkAttentionContextValue>({
   pending: [],
+  attentionItems: [],
+  decisions: [],
   loading: true,
   error: null,
+  decisionsError: null,
   refresh: async () => {},
 });
 
@@ -49,56 +66,52 @@ export function WorkAttentionProvider({ children }: { children: ReactNode }) {
   const { currentSlug, ready } = useProject();
   const { toast } = useToast();
   const [pending, setPending] = useState<PendingAttention[]>([]);
+  const [decisions, setDecisions] = useState<TaskDecisionItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const scope = currentSlug ?? 'global';
-  const scopeRef = useRef(scope);
+  const [decisionsError, setDecisionsError] = useState<string | null>(null);
   const requestGeneration = useRef(0);
   const notifiedIds = useRef(new Set<string>());
-  scopeRef.current = scope;
 
   const refresh = useCallback(async () => {
     if (!ready) return;
     const generation = ++requestGeneration.current;
-    const requestedScope = scope;
-    try {
-      const items = await adminApi.listPendingWorkAttention();
-      if (
-        requestGeneration.current !== generation
-        || scopeRef.current !== requestedScope
-      ) return;
+    const requestedProjectId = getCurrentProjectId();
+    const [work, inbox] = await Promise.allSettled([
+      adminApi.listPendingWorkAttention(),
+      requestedProjectId === null
+        ? Promise.resolve({ items: [] as TaskDecisionItem[] })
+        : adminApi.listTaskDecisions(),
+    ]);
+    if (requestGeneration.current !== generation || getCurrentProjectId() !== requestedProjectId) return;
 
-      for (const item of items) {
+    if (work.status === 'fulfilled') {
+      for (const item of work.value) {
         if (notifiedIds.current.has(item.attention_id)) continue;
-        toast(
-          item.kind === 'GATE_REQUESTED' ? 'info' : 'error',
-          attentionMessage(item),
-        );
+        toast(item.kind === 'GATE_REQUESTED' ? 'info' : 'error', attentionMessage(item));
         notifiedIds.current.add(item.attention_id);
       }
-      setPending(items);
+      setPending(work.value);
       setError(null);
-    } catch {
-      if (
-        requestGeneration.current === generation
-        && scopeRef.current === requestedScope
-      ) {
-        setError('Failed to load pending Work attention.');
-      }
-    } finally {
-      if (
-        requestGeneration.current === generation
-        && scopeRef.current === requestedScope
-      ) {
-        setLoading(false);
-      }
+    } else {
+      setError('Failed to load pending Work attention.');
     }
-  }, [ready, scope, toast]);
+
+    setDecisions(inbox.status === 'fulfilled' ? inbox.value.items : []);
+    setDecisionsError(
+      inbox.status === 'fulfilled'
+        ? null
+        : inbox.reason instanceof Error ? inbox.reason.message : String(inbox.reason),
+    );
+    setLoading(false);
+  }, [ready, toast]);
 
   useEffect(() => {
     requestGeneration.current += 1;
     setPending([]);
+    setDecisions([]);
     setError(null);
+    setDecisionsError(null);
     if (!ready) {
       setLoading(true);
       return;
@@ -126,10 +139,28 @@ export function WorkAttentionProvider({ children }: { children: ReactNode }) {
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [ready, refresh]);
+  }, [ready, currentSlug, refresh]);
+
+  const taskDecisions = decisions.filter((item) => item.kind === 'task');
+  const mirroredGateIds = new Set(
+    taskDecisions
+      .filter((item) => item.decided_by === 'work')
+      .map((item) => item.attention_id),
+  );
+  const badgePending = pending.filter((item) => !mirroredGateIds.has(item.attention_id));
 
   return (
-    <WorkAttentionContext.Provider value={{ pending, loading, error, refresh }}>
+    <WorkAttentionContext.Provider
+      value={{
+        pending,
+        attentionItems: [...badgePending, ...taskDecisions],
+        decisions,
+        loading,
+        error,
+        decisionsError,
+        refresh,
+      }}
+    >
       {children}
     </WorkAttentionContext.Provider>
   );
