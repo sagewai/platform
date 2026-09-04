@@ -50,8 +50,9 @@ class ChannelNotConfiguredError(ValueError):
     """A project named a decision channel its configuration does not supply."""
 
 
+@runtime_checkable
 class ChannelConfigStore(Protocol):
-    """The notification channel store the encrypted webhook URLs live in.
+    """The notification channel store for webhook URLs the resolver reads, already decrypted.
 
     ``list_channel_configs`` is awaited by the resolver.
     """
@@ -260,7 +261,8 @@ async def build_decision_channels(
 ) -> tuple[DecisionChannel, ...]:
     """Resolve TaskDefaults.decision_channels into instances, in the order named.
 
-    A system-wide config row is outside the scoped project query and therefore fails closed.
+    The store returns exactly the rows this project may read: its own, plus the
+    deployment's shared ones, which a project inherits.
     """
     configs: list[dict[str, Any]] = []
     if config_store is not None:
