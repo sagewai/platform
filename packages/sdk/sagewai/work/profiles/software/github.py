@@ -1690,20 +1690,14 @@ class GitHubIssueLifecycle:
         payload: dict[str, Any],
         actor_ref: str | None,
     ) -> WorkEvent:
-        events = await self._events(work_id, project_id)
-        event = WorkEvent(
-            id=str(uuid.uuid4()),
-            project_id=project_id,
+        return await self._work_store.append_next(
             work_id=work_id,
-            sequence=events[-1].sequence + 1 if events else 1,
+            project_id=project_id,
             event_type=event_type,
+            payload=payload,
             actor_type="github_lifecycle",
             actor_ref=actor_ref,
-            payload_json=payload,
-            created_at=datetime.now(timezone.utc),
         )
-        await self._work_store.append_event(event)
-        return event
 
     async def _set_record(
         self,

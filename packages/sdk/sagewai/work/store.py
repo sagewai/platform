@@ -11,7 +11,9 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -97,6 +99,38 @@ class WorkStore:
                     )
         if finding_errors:
             raise finding_errors[0]
+
+    async def append_next(
+        self,
+        *,
+        work_id: str,
+        project_id: str | None,
+        event_type: WorkEventType,
+        payload: dict[str, Any],
+        actor_type: str,
+        actor_ref: str | None,
+    ) -> WorkEvent:
+        """Append one event at the stream's next sequence and return it.
+
+        The one sequence derivation a route can reach; the profile lifecycles still inline the
+        same expression. Two writers racing the same stream collide on
+        ``uq_work_events_work_sequence``, so the loser's ``IntegrityError`` surfaces rather than
+        silently overwriting.
+        """
+        events = await self.read_events(work_id, project_id=project_id)
+        event = WorkEvent(
+            id=str(uuid.uuid4()),
+            project_id=project_id,
+            work_id=work_id,
+            sequence=events[-1].sequence + 1 if events else 1,
+            event_type=event_type,
+            actor_type=actor_type,
+            actor_ref=actor_ref,
+            payload_json=payload,
+            created_at=datetime.now(timezone.utc),
+        )
+        await self.append_event(event)
+        return event
 
     async def read_events(
         self,

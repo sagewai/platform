@@ -252,3 +252,54 @@ async def test_pending_attention_skips_task_plan_works(store: WorkStore) -> None
     pending = await store.pending_attention(project_id="project-a")
     assert [item.work_id for item in pending] == ["w-code"]
 
+
+@pytest.mark.asyncio
+async def test_append_next_numbers_from_the_stream(store: WorkStore) -> None:
+    first = await store.append_next(
+        work_id="w1",
+        project_id="p",
+        event_type=WorkEventType.WORK_CREATED,
+        payload={"work_id": "w1"},
+        actor_type="cli",
+        actor_ref="test",
+    )
+    second = await store.append_next(
+        work_id="w1",
+        project_id="p",
+        event_type=WorkEventType.GATE_REQUESTED,
+        payload={"gate_id": "merge:w1:3", "question": "Approve."},
+        actor_type="human",
+        actor_ref="arda",
+    )
+
+    assert (first.sequence, second.sequence) == (1, 2)
+    assert second.actor_type == "human"
+    stored = await store.read_events("w1", project_id="p")
+    assert [event.id for event in stored] == [first.id, second.id]
+    assert (stored[1].event_type, stored[1].payload_json) == (
+        WorkEventType.GATE_REQUESTED,
+        {"gate_id": "merge:w1:3", "question": "Approve."},
+    )
+
+
+@pytest.mark.asyncio
+async def test_append_next_is_project_scoped(store: WorkStore) -> None:
+    await store.append_next(
+        work_id="w1",
+        project_id="p",
+        event_type=WorkEventType.WORK_CREATED,
+        payload={"work_id": "w1"},
+        actor_type="cli",
+        actor_ref="test",
+    )
+
+    other = await store.append_next(
+        work_id="w1",
+        project_id="q",
+        event_type=WorkEventType.WORK_CREATED,
+        payload={"work_id": "w1"},
+        actor_type="cli",
+        actor_ref="test",
+    )
+
+    assert other.sequence == 1
