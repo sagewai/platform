@@ -14,9 +14,12 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from sagewai.sandbox.backend import SandboxBackend
+from sagewai.sandbox.secret_provider import SecretProvider
 from sagewai.work.contract import WorkContract
 from sagewai.work.models import SUPERSEDED, WorkItem, WorkRecord
 from sagewai.work.profiles.software.assembly import (
@@ -71,11 +74,19 @@ class SoftwareProfileRunner:
         work_store: WorkStore,
         github_factory: GitHubFactory,
         engine: AsyncEngine | None = None,
+        sandbox: SandboxBackend | None = None,
+        connection_store: Any = None,
+        credentials: Any = None,
+        secret_provider: SecretProvider | None = None,
         stack_cache_limit: int = _STACK_CACHE_LIMIT,
     ) -> None:
         self._work_store = work_store
         self._github_factory = github_factory
         self._engine = engine
+        self._sandbox = sandbox
+        self._connection_store = connection_store
+        self._credentials = credentials
+        self._secret_provider = secret_provider
         self._stacks: OrderedDict[_StackKey, SoftwareStack] = OrderedDict()
         self._stack_cache_limit = stack_cache_limit
         self._ledgers: dict[str, BudgetLedger] = {}
@@ -365,6 +376,10 @@ class SoftwareProfileRunner:
             max_attempts_per_stage=task.budget.max_attempts_per_stage,
             controller_factory=self._controller_factory(task.id),
             engine=self._engine,
+            sandbox=self._sandbox,
+            connection_store=self._connection_store,
+            credentials=self._credentials,
+            secret_provider=self._secret_provider,
         )
         self._stacks[key] = stack
         if len(self._stacks) > self._stack_cache_limit:

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -277,6 +278,41 @@ async def test_report_base_sha_and_is_merged_are_repository_neutral(stores) -> N
 
     assert await runner.base_sha(task) is None
     assert await runner.is_merged(task, work_id="w-live") is False
+
+
+@pytest.mark.asyncio
+async def test_report_runner_threads_harness_backends_to_the_stack_builder(
+    stores,
+    dialect_engine,  # noqa: F811
+    monkeypatch,
+) -> None:
+    _task_store, work_store = stores
+    calls = []
+
+    async def fake_stack(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(activity_sink=object())
+
+    monkeypatch.setattr("sagewai.work.tasks.report.build_report_stack", fake_stack)
+    sandbox = object()
+    connection_store = object()
+    credentials = object()
+    secret_provider = object()
+    runner = ReportProfileRunner(
+        work_store=work_store,
+        engine=dialect_engine,
+        sandbox=sandbox,
+        connection_store=connection_store,
+        credentials=credentials,
+        secret_provider=secret_provider,
+    )
+
+    await runner._stack(_report_task())
+
+    assert calls[0]["sandbox"] is sandbox
+    assert calls[0]["connection_store"] is connection_store
+    assert calls[0]["credentials"] is credentials
+    assert calls[0]["secret_provider"] is secret_provider
 
 
 @pytest.mark.asyncio

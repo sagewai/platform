@@ -12,10 +12,11 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -25,11 +26,14 @@ from sagewai.fleet.registry import PostgresFleetRegistry
 from sagewai.fleet.task_store import PostgresTaskStore
 from sagewai.harness.discovery import discover_local_backends, openai_base_url
 from sagewai.safety.permissions import PermissionPolicy
+from sagewai.sandbox.backend import SandboxBackend
+from sagewai.sandbox.secret_provider import SecretProvider
 from sagewai.tools import factory as tool_factory
 from sagewai.work.activity import WorkActivityStore
 from sagewai.work.activity_ingestion import ActivityIngestion, BatchingActivitySink
 from sagewai.work.capsule import TaskCapsuleCompiler
 from sagewai.work.control import OperatorController
+from sagewai.work.harness_mcp import mcp_connection_resolver
 from sagewai.work.knowledge import KnowledgeStore
 from sagewai.work.profiles.software.fleet_workspace import (
     SoftwareFleetWorkspaceTransport,
@@ -89,6 +93,33 @@ def github_client_for(scope: GitHubScope) -> CatalogGitHubClient:
     return CatalogGitHubClient(project_id=scope.project_id, github_callable=callables["github"])
 
 
+async def resolve_credential_values(
+    *,
+    project_id: str | None,
+    grants: Sequence[CapabilityGrant],
+    secret_provider: SecretProvider | None,
+    credential_values: Mapping[str, str] | None,
+) -> dict[str, str]:
+    """The values the harness redacts out of its archive, resolved once per stack."""
+    resolved = dict(credential_values or {})
+    refs = tuple(
+        dict.fromkeys(
+            grant.credential_ref for grant in grants if grant.credential_ref is not None
+        )
+    )
+    if secret_provider is None or not refs:
+        return resolved
+    resolved.update(
+        await secret_provider.env_for(
+            project_id=project_id,
+            run_id=f"stack:{project_id}",
+            agent_id=None,
+            declared_scopes=list(refs),
+        )
+    )
+    return resolved
+
+
 @dataclass(frozen=True)
 class SoftwareStack:
     """Everything one software drive needs, built from one engine and one repository."""
@@ -116,6 +147,11 @@ async def build_software_stack(
     max_attempts_per_stage: int = 3,
     controller_factory: ControllerFactory = OperatorController,
     engine: AsyncEngine | None = None,
+    sandbox: SandboxBackend | None = None,
+    connection_store: Any = None,
+    credentials: Any = None,
+    secret_provider: SecretProvider | None = None,
+    credential_values: Mapping[str, str] | None = None,
 ) -> SoftwareStack:
     """Build the ladders, controllers, verifier, and lifecycle for one repository."""
     if engine is None:
@@ -284,6 +320,12 @@ async def build_software_stack(
             defaults = await task_store.get_defaults(project_id=project_id)
             if "complex" not in defaults.harness_tiers:
                 raise ValueError("configure harness tiers in task defaults")
+            resolved = await resolve_credential_values(
+                project_id=project_id,
+                grants=(*write_capabilities.grants, *read_capabilities.grants),
+                secret_provider=secret_provider,
+                credential_values=credential_values,
+            )
             backends = {
                 name: openai_base_url(discovered.openai_compat_url)
                 for name, discovered in (await discover_local_backends()).items()
@@ -295,6 +337,17 @@ async def build_software_stack(
                         tier="complex",
                         tiers=dict(defaults.harness_tiers),
                         backends=backends,
+                        sandbox=sandbox,
+                        mcp_connections=(
+                            mcp_connection_resolver(
+                                project_id=project_id,
+                                connection_store=connection_store,
+                                credentials=credentials,
+                            )
+                            if connection_store is not None
+                            else None
+                        ),
+                        credential_values=resolved,
                         activity_sink=activity_sink,
                         artifact_store=artifact_store,
                     ),

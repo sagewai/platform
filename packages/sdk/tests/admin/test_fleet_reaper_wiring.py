@@ -40,6 +40,19 @@ def test_reaper_wired_in_lifespan(tmp_path):
         assert app.state.fleet_reaper is not None
 
 
+def test_task_report_runner_uses_repointed_connection_store(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAGEWAI_TENANCY_MODE", "multi")
+    from sagewai.admin.serve import create_admin_serve_app
+    from sagewai.admin.state_file import AdminStateFile
+
+    sf = AdminStateFile(path=tmp_path / "state.json")
+    sf.complete_setup(org_name="Acme", admin_email="a@b.com", admin_password="pw123456")
+    app = create_admin_serve_app(sf)
+
+    with TestClient(app):
+        assert app.state.task_report_runner._connection_store is app.state.connections_context.store
+
+
 @pytest.mark.asyncio
 async def test_heartbeat_renews_lease(tmp_path):
     """The /heartbeat route calls renew_worker_leases: force the in-flight lease

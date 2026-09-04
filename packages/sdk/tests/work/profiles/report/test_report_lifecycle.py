@@ -200,6 +200,16 @@ def _source_grant() -> CapabilityGrant:
     )
 
 
+class _FakeSecrets:
+    def __init__(self, values: dict[str, str]) -> None:
+        self._values = values
+        self.calls: list[list[str]] = []
+
+    async def env_for(self, *, project_id, run_id, agent_id, declared_scopes, **_kwargs):
+        self.calls.append(list(declared_scopes))
+        return dict(self._values)
+
+
 def _report_task(*, issue_sink: bool = False) -> Task:
     sinks = (
         (
@@ -403,6 +413,42 @@ async def test_the_assembled_stack_uses_harness_medium_before_claude(
         "runtime:harness:medium",
         "runtime:claude:analysis",
     ]
+
+
+@pytest.mark.asyncio
+async def test_the_report_stack_resolves_source_grant_credentials_for_harness(
+    dialect_engine,  # noqa: F811
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SAGEWAI_HOME", str(tmp_path / "home"))
+
+    async def _discover_local_backends():
+        return {
+            "ollama": DiscoveredServer(
+                name="ollama",
+                base_url="http://localhost:11434",
+                openai_compat_url="http://localhost:11434",
+                models=["llama3"],
+            )
+        }
+
+    source = _source_grant().model_copy(update={"credential_ref": "GITHUB_TOKEN"})
+    secrets = _FakeSecrets({"GITHUB_TOKEN": "ghp_x"})
+    monkeypatch.setattr(assembly, "discover_local_backends", _discover_local_backends)
+    stack = await build_report_stack(
+        project_id=PROJECT,
+        target=_report_task().target.model_copy(update={"sources": (source,)}),
+        harness_tiers={"medium": HarnessTier(backend="ollama", model="llama3")},
+        engine=dialect_engine,
+        controller_factory=lambda **kwargs: _FakeController(work_store=kwargs["work_store"]),
+        secret_provider=secrets,
+    )
+
+    harness = stack.lifecycle._composer[0].runtime
+    assert secrets.calls == [["GITHUB_TOKEN"]]
+    assert harness._credential_values == {"GITHUB_TOKEN": "ghp_x"}
+    assert stack.lifecycle._credential_values == {"GITHUB_TOKEN": "ghp_x"}
 
 
 @pytest.mark.asyncio

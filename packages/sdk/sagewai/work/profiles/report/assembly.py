@@ -22,6 +22,7 @@ from sagewai.db import factory
 from sagewai.harness.discovery import discover_local_backends, openai_base_url
 from sagewai.safety.permissions import PermissionPolicy
 from sagewai.sandbox.backend import SandboxBackend
+from sagewai.sandbox.secret_provider import SecretProvider
 from sagewai.work.activity import WorkActivityStore
 from sagewai.work.activity_ingestion import ActivityIngestion, BatchingActivitySink
 from sagewai.work.capsule import TaskCapsuleCompiler
@@ -31,7 +32,10 @@ from sagewai.work.knowledge import KnowledgeStore
 from sagewai.work.profiles.report.lifecycle import ReportLifecycle, ReportOperator
 from sagewai.work.profiles.report.profile import ReportProfile
 from sagewai.work.profiles.report.sinks import ConsoleSink, GitHubIssueSink
-from sagewai.work.profiles.software.assembly import ControllerFactory
+from sagewai.work.profiles.software.assembly import (
+    ControllerFactory,
+    resolve_credential_values,
+)
 from sagewai.work.profiles.software.github import GitHubClient
 from sagewai.work.runtime import (
     CapabilityGrant,
@@ -69,6 +73,7 @@ async def build_report_stack(
     sandbox: SandboxBackend | None = None,
     connection_store: Any = None,
     credentials: Any = None,
+    secret_provider: SecretProvider | None = None,
     credential_values: Mapping[str, str] | None = None,
 ) -> ReportStack:
     """Every controller in this stack validates against a scratch workspace."""
@@ -125,7 +130,12 @@ async def build_report_stack(
             ),
         ),
     )
-    resolved = dict(credential_values or {})
+    resolved = await resolve_credential_values(
+        project_id=project_id,
+        grants=(*compose_capabilities.grants, *read_capabilities.grants),
+        secret_provider=secret_provider,
+        credential_values=credential_values,
+    )
     analysis_runtime = ClaudeRuntime(activity_sink=activity_sink, artifact_store=artifact_store)
     composers: list[ReportOperator] = []
     medium = harness_tiers.get("medium")

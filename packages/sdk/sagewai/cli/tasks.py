@@ -17,7 +17,9 @@ from pathlib import Path
 import click
 
 import sagewai.cli as _cli
+from sagewai.admin.state_file import AdminStateFile, default_admin_state_path
 from sagewai.artifacts import LocalArtifactStore
+from sagewai.connections.bootstrap import build_connections_context
 from sagewai.db import factory
 from sagewai.notifications.postgres_store import PostgresNotificationStore
 from sagewai.work.activity import WorkActivityStore
@@ -93,14 +95,19 @@ async def _create(brief: str, *, project_id: str) -> str:
 async def _tick(project_id: str) -> int:
     task_store, work_store, activity_store = await _stores()
     service = TaskService(store=task_store, artifact_store=LocalArtifactStore())
+    connections = build_connections_context(AdminStateFile(default_admin_state_path()))
     software = SoftwareProfileRunner(
         work_store=work_store,
         github_factory=github_client_for,
+        connection_store=connections.store,
+        credentials=connections.router,
         stack_cache_limit=max(8, max_tasks_from_env()),
     )
     report = ReportProfileRunner(
         work_store=work_store,
         github_factory=github_client_for,
+        connection_store=connections.store,
+        credentials=connections.router,
         stack_cache_limit=max(8, max_tasks_from_env()),
     )
     notification_store = PostgresNotificationStore(engine=factory.get_engine())

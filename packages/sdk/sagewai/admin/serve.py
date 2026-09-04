@@ -945,17 +945,68 @@ def create_admin_serve_app(
 
             return [project["id"] for project in await asyncio.to_thread(sf.list_projects)]
 
+        # Eager fail-closed startup: build the SQLite schema, or (on Postgres)
+        # verify the DB is reachable and migrated. Raises here rather than on the
+        # first route call if Postgres is unreachable/unmigrated.
+        await app.state.fleet_registry.init()
+        await app.state.fleet_task_store.init()
+        # (B2) Start the lease reaper ONLY after the fail-closed store init above, so the
+        # background loop never touches an unmigrated/uninited fleet_tasks table.
+        from sagewai.fleet.reaper import FleetReaper
+
+        fleet_reaper = FleetReaper(app.state.fleet_task_store)
+        fleet_reaper.start()
+        app.state.fleet_reaper = fleet_reaper
+
+        # Build missing tenant resource stores from the process engine (multi-
+        # tenant only; None in single-org). Partial DI is allowed, but every
+        # missing tenant store must be filled here so routes never drift back to
+        # the legacy file-store path in multi mode.
+        from sagewai.admin.resource_stores import build_resource_stores
+        _rs = app.state.resource_stores
+        if _is_multi_tenant() and (
+            _rs.provider is None
+            or _rs.agent is None
+            or _rs.connection is None
+            or _rs.run is None
+            or _rs.prompt_log is None
+            or _rs.admin_resource is None
+            or _rs.api_token is None
+        ):
+            _built = await build_resource_stores(identity_store)
+            if _built is not None:
+                app.state.resource_stores = type(_rs)(
+                    provider=_rs.provider or _built.provider,
+                    agent=_rs.agent or _built.agent,
+                    connection=_rs.connection or _built.connection,
+                    run=_rs.run or _built.run,
+                    prompt_log=_rs.prompt_log or _built.prompt_log,
+                    admin_resource=_rs.admin_resource or _built.admin_resource,
+                    api_token=_rs.api_token or _built.api_token,
+                )
+                conn_ctx = app.state.connections_context
+                active_connection_store = app.state.resource_stores.connection
+                if active_connection_store is not None:
+                    conn_ctx.store = active_connection_store
+                    conn_ctx.tenant_safe = True
+
         _task_service = TaskService(
             store=app.state.task_store, artifact_store=_TaskArtifactStore()
         )
+        _task_connection_store = app.state.connections_context.store
+        _task_credentials = app.state.connections_context.router
         app.state.task_profile_runner = SoftwareProfileRunner(
             work_store=app.state.work_store,
             github_factory=github_client_for,
+            connection_store=_task_connection_store,
+            credentials=_task_credentials,
             stack_cache_limit=max(8, max_tasks_from_env()),
         )
         app.state.task_report_runner = ReportProfileRunner(
             work_store=app.state.work_store,
             github_factory=github_client_for,
+            connection_store=_task_connection_store,
+            credentials=_task_credentials,
             stack_cache_limit=max(8, max_tasks_from_env()),
         )
 
@@ -1000,51 +1051,6 @@ def create_admin_serve_app(
             max_tasks=max_tasks_from_env(),
         )
         app.state.task_coordinator_runner.start()
-
-        # Eager fail-closed startup: build the SQLite schema, or (on Postgres)
-        # verify the DB is reachable and migrated. Raises here rather than on the
-        # first route call if Postgres is unreachable/unmigrated.
-        await app.state.fleet_registry.init()
-        await app.state.fleet_task_store.init()
-        # (B2) Start the lease reaper ONLY after the fail-closed store init above, so the
-        # background loop never touches an unmigrated/uninited fleet_tasks table.
-        from sagewai.fleet.reaper import FleetReaper
-
-        fleet_reaper = FleetReaper(app.state.fleet_task_store)
-        fleet_reaper.start()
-        app.state.fleet_reaper = fleet_reaper
-
-        # Build missing tenant resource stores from the process engine (multi-
-        # tenant only; None in single-org). Partial DI is allowed, but every
-        # missing tenant store must be filled here so routes never drift back to
-        # the legacy file-store path in multi mode.
-        from sagewai.admin.resource_stores import build_resource_stores
-        _rs = app.state.resource_stores
-        if _is_multi_tenant() and (
-            _rs.provider is None
-            or _rs.agent is None
-            or _rs.connection is None
-            or _rs.run is None
-            or _rs.prompt_log is None
-            or _rs.admin_resource is None
-            or _rs.api_token is None
-        ):
-            _built = await build_resource_stores(identity_store)
-            if _built is not None:
-                app.state.resource_stores = type(_rs)(
-                    provider=_rs.provider or _built.provider,
-                    agent=_rs.agent or _built.agent,
-                    connection=_rs.connection or _built.connection,
-                    run=_rs.run or _built.run,
-                    prompt_log=_rs.prompt_log or _built.prompt_log,
-                    admin_resource=_rs.admin_resource or _built.admin_resource,
-                    api_token=_rs.api_token or _built.api_token,
-                )
-                conn_ctx = getattr(app.state, "connections_context", None)
-                active_connection_store = app.state.resource_stores.connection
-                if conn_ctx is not None and active_connection_store is not None:
-                    conn_ctx.store = active_connection_store
-                    conn_ctx.tenant_safe = True
 
         # Fail closed (multi-tenant): mirror sf.require_secret_key_if_encrypted()
         # for the tenant provider table — if encrypted provider secrets exist but

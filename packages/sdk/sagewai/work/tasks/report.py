@@ -13,9 +13,12 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from collections.abc import Mapping
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from sagewai.sandbox.backend import SandboxBackend
+from sagewai.sandbox.secret_provider import SecretProvider
 from sagewai.work.models import SUPERSEDED, WorkRecord
 from sagewai.work.profiles.report.assembly import (
     ControllerFactory,
@@ -53,11 +56,19 @@ class ReportProfileRunner:
         work_store: WorkStore,
         github_factory: GitHubFactory | None = None,
         engine: AsyncEngine | None = None,
+        sandbox: SandboxBackend | None = None,
+        connection_store: Any = None,
+        credentials: Any = None,
+        secret_provider: SecretProvider | None = None,
         stack_cache_limit: int = _STACK_CACHE_LIMIT,
     ) -> None:
         self._work_store = work_store
         self._github_factory = github_factory
         self._engine = engine
+        self._sandbox = sandbox
+        self._connection_store = connection_store
+        self._credentials = credentials
+        self._secret_provider = secret_provider
         self._stacks: OrderedDict[_StackKey, ReportStack] = OrderedDict()
         self._stack_cache_limit = stack_cache_limit
         self._ledgers: dict[str, BudgetLedger] = {}
@@ -224,6 +235,10 @@ class ReportProfileRunner:
             ),
             controller_factory=self._controller_factory(task.id),
             engine=self._engine,
+            sandbox=self._sandbox,
+            connection_store=self._connection_store,
+            credentials=self._credentials,
+            secret_provider=self._secret_provider,
         )
         self._stacks[key] = stack
         if len(self._stacks) > self._stack_cache_limit:
