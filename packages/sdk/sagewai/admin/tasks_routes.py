@@ -7,7 +7,7 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""Task API routes for feed replay and live events."""
+"""Task API, Work gate/activity, and artifact routes for the coordinator."""
 
 from __future__ import annotations
 
@@ -744,8 +744,8 @@ async def work_activity(
     cursor: str | None = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 200,
 ) -> dict:
-    """This Work read uses ``_work_project_scope`` because Work reads allow global scope."""
-    project_id = _work_project_scope(request)
+    """This Task API read uses ``_task_project_scope`` and refuses global scope."""
+    project_id = _task_project_scope(request)
     store: WorkStore = request.app.state.work_store
     if await store.load_work(work_id, project_id=project_id) is None:
         raise HTTPException(status_code=404, detail="Not found")
@@ -778,8 +778,7 @@ async def decide_work_gate(
     The scope helper is the **Task** one even though the path is under ``/api/v1/work``: a gate
     belongs to a Work that belongs to a project, and ``_work_project_scope`` would map
     ``X-Project-ID: global`` to ``None`` and append the decision under the null scope, where the
-    Work it names does not live. The activity read keeps the Work helper; a decision needs a
-    project, so this write uses the Task scope.
+    Work it names does not live. The activity read uses the same Task scope for the same reason.
     """
     project_id = _task_project_scope(request)
     store: WorkStore = request.app.state.work_store
@@ -974,4 +973,4 @@ def _sse(entry: FeedEntry) -> dict[str, str]:
     }
 
 
-__all__ = ["router"]
+__all__ = ["PROJECT_ADMIN_ROUTES", "artifacts_router", "router", "work_router"]

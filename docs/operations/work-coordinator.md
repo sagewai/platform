@@ -440,7 +440,8 @@ Reading commands cover the project-local views the console uses: `list` accepts 
 there is no cursor); `board` groups the most recently touched Tasks into the five board
 columns; `status` prints one Task's projection; `thread` prints the brief, messages,
 questions, gates, plans, and outputs; `decisions` lists open human attention items; and
-`templates` prints the intake templates.
+`templates` prints the intake templates. `create` and `intake` also accept `--file PATH` to
+read the brief from disk instead of an inline argument.
 
 Answering and deciding stay on the same service path as the API. `say TASK_ID TEXT` appends a
 human message. `answer TASK_ID QUESTION_ID ANSWER [--attention-version N]` answers a
@@ -525,7 +526,9 @@ own project key, and the state file's `notification_channels` in single-org mode
 configured in the console works from the backend and from `sagewai task tick`; no out-of-band
 row is needed. A row that cannot be read is skipped with a warning naming the channel, never
 its URL, and the item falls back to the console instead of stalling the tick. An
-organization-shared channel is inherited by every project.
+organization-shared channel is inherited by every project and, because `admin_resources`
+carries no organization column, such a row is deployment-wide in the current
+one-org-per-deployment model.
 
 `Needs you` due times are derived from urgency:
 

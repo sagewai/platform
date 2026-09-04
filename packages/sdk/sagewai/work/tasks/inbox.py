@@ -19,13 +19,13 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Literal, cast
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
 from sagewai.work.store import WorkStore
 from sagewai.work.tasks.channels import open_item
-from sagewai.work.tasks.decisions import DUE_IN, TASK_GATES, URGENCY_BY_KIND
+from sagewai.work.tasks.decisions import DUE_IN, URGENCY_BY_KIND, gate_decided_by
 from sagewai.work.tasks.events import TaskEvent, TaskEventType
 from sagewai.work.tasks.models import AttentionOwner, TaskRecord, TaskStatus
 from sagewai.work.tasks.service import _open_questions
@@ -73,13 +73,9 @@ def _gate_decision_target(
         None,
     )
     if request is None:
-        return ("task" if gate_id.startswith(TASK_GATES) else "work"), None
+        return gate_decided_by(gate_id, {}), None
     payload = request.payload_json
-    decided_by = (
-        cast(Literal["task", "work"], str(payload["decided_by"]))
-        if "decided_by" in payload
-        else ("task" if gate_id.startswith(TASK_GATES) else "work")
-    )
+    decided_by = gate_decided_by(gate_id, payload)
     return decided_by, str(payload["work_id"]) if decided_by == "work" else None
 
 

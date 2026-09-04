@@ -17,7 +17,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from sagewai.work.tasks.decisions import TASK_GATES
+from sagewai.work.tasks.decisions import gate_decided_by
 from sagewai.work.tasks.events import TaskEvent, TaskEventType
 from sagewai.work.tasks.models import TERMINAL_STATUSES, TaskStatus
 
@@ -152,11 +152,7 @@ def thread_from_events(events: Sequence[TaskEvent]) -> ThreadView:
             )
         elif event.event_type is TaskEventType.GATE_REQUESTED:
             gate_id = str(payload["gate_id"])
-            decided_by = (
-                str(payload["decided_by"])
-                if "decided_by" in payload
-                else ("task" if gate_id.startswith(TASK_GATES) else "work")
-            )
+            decided_by = gate_decided_by(gate_id, payload)
             entry = {
                 **base,
                 "kind": "gate",
@@ -179,12 +175,13 @@ def thread_from_events(events: Sequence[TaskEvent]) -> ThreadView:
                 None,
             )
             if gate is None:
+                decided_by = gate_decided_by(gate_id, payload)
                 gate = {
                     **base,
                     "kind": "gate",
                     "text": gate_id,
                     "gate_id": gate_id,
-                    "decided_by": "task" if gate_id.startswith(TASK_GATES) else "work",
+                    "decided_by": decided_by,
                     "work_id": payload.get("work_id"),
                 }
                 gates.setdefault(gate_id, []).append(gate)

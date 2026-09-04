@@ -47,22 +47,32 @@ from sagewai.work import (
 )
 from sagewai.work.tasks import TaskService, TaskStore
 from sagewai.work.tasks.events import TaskEventType, fold_record
-from sagewai.work.tasks.models import Budget
+from sagewai.work.tasks.models import Budget, TaskDefaults, TaskTriggerSpec
 from tests.work.tasks.test_store import NOW, _event, _record, _task
 
 _EXPECTED_ROUTE_COUNT = 29
 _ROUTE_ENUMERATION_CONTRACT = "a new Task route must be enumerated by this isolation suite"
-_EXPECTED_MEMBER_TASK_BOUND_ROUTE_COUNT = 13
+_EXPECTED_MEMBER_TASK_BOUND_ROUTE_COUNT = 14
 _EXPECTED_TOKEN_READ_TASK_BOUND_ROUTE_COUNT = 8
 _WORK_ACTIVITY_ROUTE = ("GET", "/api/v1/work/{work_id}/activity")
 _WORK_WRITE_ROUTE = ("POST", "/api/v1/work/{work_id}/gates/{gate_id}")
 _TASK_COLLECTION_ASSERTIONS = (
     ("GET", "/api/v1/tasks"),
     ("GET", "/api/v1/tasks/board"),
+    ("GET", "/api/v1/tasks/defaults"),
     ("GET", "/api/v1/tasks/decisions"),
     ("GET", "/api/v1/tasks/portfolio"),
+    ("GET", "/api/v1/tasks/triggers"),
+)
+_CONFIG_SCOPE_ROUTES = (
+    ("GET", "/api/v1/tasks/defaults"),
+    ("PUT", "/api/v1/tasks/defaults"),
+    ("GET", "/api/v1/tasks/triggers"),
+    ("POST", "/api/v1/tasks/triggers"),
+    ("DELETE", "/api/v1/tasks/triggers/{trigger_id}"),
 )
 _PROJECT_ADMIN_B_RESOURCE_ROUTES = (
+    ("DELETE", "/api/v1/tasks/triggers/{trigger_id}"),
     ("POST", "/api/v1/tasks/{task_id}/actions/{action_id}/rollback"),
     ("PATCH", "/api/v1/tasks/{task_id}"),
     _WORK_WRITE_ROUTE,
@@ -86,6 +96,8 @@ class ProjectBSeed:
     gate_id: str
     work_gate_id: str
     action_id: str
+    trigger_id: str
+    defaults_revision: int
 
 
 def _defaults_body(project_id: str) -> dict:
@@ -106,10 +118,10 @@ def _defaults_body(project_id: str) -> dict:
     }
 
 
-def _trigger_body(project_id: str) -> dict:
+def _trigger_body(project_id: str, *, trigger_id: str = "tr-1") -> dict:
     return {
         "trigger": {
-            "trigger_id": "tr-1",
+            "trigger_id": trigger_id,
             "project_id": project_id,
             "source": "github_label",
             "filter": {"owner": "o", "repo": "r", "label": "sagewai"},
@@ -166,6 +178,16 @@ async def _seed_project_b(app, project_id: str) -> ProjectBSeed:
         gate_id="plan:task-b:1",
         work_gate_id="merge:work-b:3",
         action_id="deliver:work-b:2",
+        trigger_id="trigger-b",
+        defaults_revision=1,
+    )
+    await app.state.task_store.put_defaults(
+        TaskDefaults.model_validate(_defaults_body(project_id)), expected_revision=0
+    )
+    await app.state.task_store.put_trigger(
+        TaskTriggerSpec.model_validate(
+            _trigger_body(project_id, trigger_id=seed.trigger_id)["trigger"]
+        )
     )
     task = _task(seed.task_id, project_id=project_id).model_copy(
         update={"brief_ref": brief, "brief_summary": PROJECT_B_BRIEF}
@@ -378,7 +400,7 @@ def _url_for_route(path: str, seed: ProjectBSeed | None) -> str:
         .replace("{storage_ref}", seed.storage_ref)
         .replace("{gate_id}", gate_id)
         .replace("{action_id}", seed.action_id)
-        .replace("{trigger_id}", "x")
+        .replace("{trigger_id}", seed.trigger_id)
     )
 
 
@@ -398,9 +420,11 @@ def _body_for_route(
     if (method, path) == ("POST", "/api/v1/tasks/intake"):
         return {"brief": BRIEF}
     if (method, path) == ("PUT", "/api/v1/tasks/defaults"):
-        return {"defaults": _defaults_body(project_id), "expected_revision": 0}
+        expected_revision = seed.defaults_revision if seed is not None else 0
+        return {"defaults": _defaults_body(project_id), "expected_revision": expected_revision}
     if (method, path) == ("POST", "/api/v1/tasks/triggers"):
-        return _trigger_body(project_id)
+        trigger_id = seed.trigger_id if seed is not None else "tr-1"
+        return _trigger_body(project_id, trigger_id=trigger_id)
     if path.endswith("/messages"):
         return {"text": "hi"}
     if path.endswith("/answers"):
@@ -459,11 +483,7 @@ def _task_bound_routes(routes: list[tuple[str, str]]) -> list[tuple[str, str]]:
 
 
 def _member_task_bound_routes(routes: list[tuple[str, str]]) -> list[tuple[str, str]]:
-    return [
-        route
-        for route in _task_bound_routes(routes)
-        if route not in PROJECT_ADMIN_ROUTES and route != _WORK_ACTIVITY_ROUTE
-    ]
+    return [route for route in _task_bound_routes(routes) if route not in PROJECT_ADMIN_ROUTES]
 
 
 async def _assert_collections_hide_project_b(
@@ -471,23 +491,30 @@ async def _assert_collections_hide_project_b(
 ) -> None:
     tasks = await _hit(app, "GET", "/api/v1/tasks", token=token, project=project_id)
     board = await _hit(app, "GET", "/api/v1/tasks/board", token=token, project=project_id)
+    defaults = await _hit(app, "GET", "/api/v1/tasks/defaults", token=token, project=project_id)
     decisions = await _hit(app, "GET", "/api/v1/tasks/decisions", token=token, project=project_id)
     portfolio = await _hit(app, "GET", "/api/v1/tasks/portfolio", token=token, project=project_id)
+    triggers = await _hit(app, "GET", "/api/v1/tasks/triggers", token=token, project=project_id)
 
     assert tasks.status_code == 200
     assert board.status_code == 200
+    assert defaults.status_code == 200
     assert decisions.status_code == 200
     assert portfolio.status_code == 200
+    assert triggers.status_code == 200
     assert seed.task_id not in {task["task_id"] for task in tasks.json()["tasks"]}
     assert seed.task_id not in {
         task["task_id"] for column in board.json()["columns"].values() for task in column
     }
+    assert defaults.json()["project_id"] == project_id
+    assert defaults.json()["revision"] == 0
     assert seed.task_id not in {item.get("task_id") for item in decisions.json()["items"]}
     assert seed.work_id not in {item.get("work_id") for item in decisions.json()["items"]}
     assert all(
         seed.task_id not in {task["task_id"] for task in project["tasks"]}
         for project in portfolio.json()["projects"]
     )
+    assert seed.trigger_id not in {trigger["trigger_id"] for trigger in triggers.json()["triggers"]}
 
 
 @pytest.mark.asyncio
@@ -507,26 +534,23 @@ async def test_every_task_route_hides_a_foreign_project(app_ctx):
 async def test_the_global_scope_never_reaches_a_task_route(app_ctx):
     """In multi-tenant mode the middleware answers 404 before any Task handler runs.
 
-    ``_project_hint`` strips ``global`` only for the Work read paths
-    (`auth_middleware.py:249-266`); for everything else it hands ``"global"`` to
-    ``build_context``, which raises ``TenantAccessError("unknown project")``
-    (`identity_store.py:692`) and is mapped to 404 (`auth_middleware.py:425-427`). So the
-    handler's own 400 is unreachable here, and this asserts the outcome that matters: the
-    global scope never reaches a Task. The 400 itself is proved by the per-router tests, which
-    run without the middleware, and is what a single-org deployment answers.
+    ``_project_hint`` hands ``"global"`` to ``build_context`` for these paths. That raises
+    ``TenantAccessError("unknown project")`` (`identity_store.py:692`), which is mapped to
+    404 (`auth_middleware.py:425-427`). So the handler's own 400 is unreachable here, and
+    this asserts the outcome that matters: the global scope never reaches a Task API route.
+    The 400 itself is proved by the per-router tests, which run without the middleware, and is
+    what a single-org deployment answers.
     """
     app, token = app_ctx["app"], app_ctx["member"]
     routes = _task_routes(app)
     wrong = []
     checked = 0
     for method, path in routes:
-        if (method, path) == _WORK_ACTIVITY_ROUTE:
-            continue
         checked += 1
         response = await _hit(app, method, path, token=token, project="global")
         if response.status_code != 404:
             wrong.append(f"{method} {path} -> {response.status_code}")
-    assert checked == _EXPECTED_ROUTE_COUNT - 1
+    assert checked == _EXPECTED_ROUTE_COUNT
     assert not wrong, "the global scope was not refused:\n" + "\n".join(wrong)
 
 
@@ -566,14 +590,6 @@ async def test_project_a_collections_hide_project_b_rows(app_ctx):
     await _assert_collections_hide_project_b(
         app, token=app_ctx["member"], project_id=app_ctx["pa"], seed=app_ctx["seed_b"]
     )
-    work_activity = await _hit(
-        app,
-        "GET",
-        "/api/v1/work/{work_id}/activity",
-        token=app_ctx["member"],
-        project=app_ctx["pa"],
-        seed=app_ctx["seed_b"],
-    )
     work_gate = await _hit(
         app,
         "POST",
@@ -582,8 +598,57 @@ async def test_project_a_collections_hide_project_b_rows(app_ctx):
         project=app_ctx["pa"],
         seed=app_ctx["seed_b"],
     )
-    assert work_activity.status_code == 404
     assert work_gate.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_project_a_config_routes_hide_project_b_rows(app_ctx):
+    app, pa, seed = app_ctx["app"], app_ctx["pa"], app_ctx["seed_b"]
+    token = app_ctx["project_admin"]
+    routes = _task_routes(app)
+    assert all(route in routes for route in _CONFIG_SCOPE_ROUTES)
+    assert len(_CONFIG_SCOPE_ROUTES) == 5
+
+    defaults = await _hit(app, "GET", "/api/v1/tasks/defaults", token=token, project=pa)
+    put_with_b_revision = await _hit(
+        app,
+        "PUT",
+        "/api/v1/tasks/defaults",
+        token=token,
+        project=pa,
+        seed=seed,
+    )
+    put_a_defaults = await _hit(app, "PUT", "/api/v1/tasks/defaults", token=token, project=pa)
+    triggers = await _hit(app, "GET", "/api/v1/tasks/triggers", token=token, project=pa)
+    delete_b_trigger = await _hit(
+        app,
+        "DELETE",
+        "/api/v1/tasks/triggers/{trigger_id}",
+        token=token,
+        project=pa,
+        seed=seed,
+    )
+    create_a_trigger = await _hit(
+        app,
+        "POST",
+        "/api/v1/tasks/triggers",
+        token=token,
+        project=pa,
+        seed=seed,
+    )
+
+    assert defaults.status_code == 200
+    assert defaults.json()["project_id"] == pa
+    assert defaults.json()["revision"] == 0
+    assert put_with_b_revision.status_code == 409
+    assert put_a_defaults.status_code == 200
+    assert put_a_defaults.json()["project_id"] == pa
+    assert triggers.status_code == 200
+    assert seed.trigger_id not in {trigger["trigger_id"] for trigger in triggers.json()["triggers"]}
+    assert delete_b_trigger.status_code == 404
+    assert create_a_trigger.status_code == 201
+    assert create_a_trigger.json()["project_id"] == pa
+    assert create_a_trigger.json()["trigger_id"] == seed.trigger_id
 
 
 @pytest.mark.asyncio

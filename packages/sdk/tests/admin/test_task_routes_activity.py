@@ -99,7 +99,6 @@ async def client(dialect_engine) -> AdminClient:  # noqa: F811
         foreign, events=foreign_events, record=fold_record(_record(foreign), foreign_events)
     )
     await work_store.save_work(_work_record("w1", project_id="p"))
-    await work_store.save_work(_work_record("w-global", project_id=None))
     await activity_store.append(
         [
             _activity("w1", "w1:implement:1", 1),
@@ -107,7 +106,6 @@ async def client(dialect_engine) -> AdminClient:  # noqa: F811
             _activity("w1", "w1:review:1", 1),
             _activity("w1", "w1:review:1", 2),
             _activity("w2", "w2:review:1", 1, source="claude"),
-            _activity("w-global", "w-global:implement:1", 1, project_id=None),
         ]
     )
 
@@ -206,15 +204,12 @@ async def test_work_activity_reads_one_work(client: AdminClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_work_activity_uses_the_work_scope_for_global_activity(
+async def test_work_activity_refuses_the_global_scope(
     client: AdminClient,
 ) -> None:
-    response = await client.http.get(
-        "/api/v1/work/w-global/activity", headers={"X-Project-ID": "global"}
-    )
+    response = await client.http.get("/api/v1/work/w1/activity", headers={"X-Project-ID": "global"})
 
-    assert response.status_code == 200
-    assert [item["work_id"] for item in response.json()["items"]] == ["w-global"]
+    assert response.status_code == 400
 
 
 @pytest.mark.asyncio

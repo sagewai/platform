@@ -122,7 +122,9 @@ def _status_before(
 
 
 class TaskService:
-    """The single writer of Task creation and of human answers and plan acceptance."""
+    """The single writer of Task creation, human answers, plan acceptance, messages, gates,
+    rollback requests, lifecycle controls, and budget rewrites.
+    """
 
     def __init__(self, *, store: TaskStore, artifact_store: LocalArtifactStore | None = None) -> None:
         self._store = store
@@ -494,7 +496,10 @@ class TaskService:
                 TaskEventType.GATE_REQUESTED,
                 {
                     "gate_id": gate_id,
-                    "question": f"Allow the recorded rollback ({action['rollback']}) of {action['scope']}?",
+                    "question": (
+                        f"Allow the recorded rollback ({action['rollback']}) "
+                        f"of {action['scope']}?"
+                    ),
                     "action": action,
                     "work_id": work_id,
                 },
@@ -649,4 +654,11 @@ class ClarificationDeadlines:
         return defaulted
 
 
-__all__ = ["ClarificationDeadlines", "TaskCreationError", "TaskDecisionError", "TaskService"]
+__all__ = [
+    "ActionNotFoundError",
+    "ClarificationDeadlines",
+    "TaskCreationError",
+    "TaskDecisionError",
+    "TaskNotFoundError",
+    "TaskService",
+]

@@ -11,9 +11,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
-from typing import Literal, Protocol
+from typing import Literal, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict
 
@@ -33,6 +33,13 @@ DUE_IN = {
     "today": timedelta(hours=24),
     "this_week": timedelta(days=7),
 }
+
+
+def gate_decided_by(gate_id: str, payload: Mapping[str, object]) -> Literal["task", "work"]:
+    """Where this gate is decided; payloads may override the prefix-derived owner."""
+    if "decided_by" in payload:
+        return cast(Literal["task", "work"], str(payload["decided_by"]))
+    return "task" if gate_id.startswith(TASK_GATES) else "work"
 
 
 def resolve_gate(mode: GateMode, action: ActionRequest) -> GateDecision:
@@ -143,6 +150,7 @@ __all__ = [
     "URGENCY_BY_KIND",
     "channel_error_detail",
     "coordinator_action",
+    "gate_decided_by",
     "merge_policy_for",
     "resolve_gate",
 ]
