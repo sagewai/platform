@@ -40,11 +40,13 @@ def test_catalogue_ships_software_delivery_and_research_report() -> None:
     assert software.authority_floor.plan is GateMode.REQUIRE
     report = get_template("scheduled_research_report")
     assert report.kind is TaskKind.SCHEDULED and report.profile == "report"
+    assert report.version == "2"
     assert report.default_cron == "0 8 * * *"
     assert report.roles[RoleAlias.COMPOSER] == (
         RuntimeRef.HARNESS_MEDIUM,
         RuntimeRef.CLAUDE_ANALYSIS,
     )
+    assert report.roles[RoleAlias.ASSESSOR] == (RuntimeRef.CLAUDE_ANALYSIS,)
     assert len(report.plan_skeleton) == 1
     assert report.grant_level == "read"
     with pytest.raises(KeyError):

@@ -16,8 +16,10 @@ from datetime import datetime, timezone
 
 import pytest
 
+import sagewai.work.profiles.report.assembly as assembly
 from sagewai.artifacts.models import ArtifactRef
 from sagewai.artifacts.object_store import LocalArtifactStore
+from sagewai.harness.discovery import DiscoveredServer
 from sagewai.work.capsule import TaskCapsuleCompiler
 from sagewai.work.events import WorkEvent, WorkEventType
 from sagewai.work.knowledge.store import KnowledgeStore
@@ -25,6 +27,7 @@ from sagewai.work.models import (
     ProposedAcceptanceCriterion,
     ReviewResult,
 )
+from sagewai.work.profiles.report.assembly import build_report_stack
 from sagewai.work.profiles.report.lifecycle import ReportLifecycle, ReportOperator
 from sagewai.work.profiles.report.models import ReportArchive
 from sagewai.work.profiles.report.profile import ReportProfile
@@ -40,6 +43,7 @@ from sagewai.work.store import WorkStore
 from sagewai.work.tasks.models import (
     Authority,
     ExecutionRoute,
+    HarnessTier,
     ReportTarget,
     RoutingPolicy,
     Sink,
@@ -318,6 +322,105 @@ async def _lifecycle(
         credential_values=credential_values,
     )
     return lifecycle, work_store, artifacts, github
+
+
+@pytest.mark.asyncio
+async def test_the_assembled_stack_drives_a_report_to_console_delivery(
+    dialect_engine,  # noqa: F811
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SAGEWAI_HOME", str(tmp_path / "home"))
+
+    async def _unexpected_discovery():
+        raise AssertionError("no medium tier should skip backend discovery")
+
+    monkeypatch.setattr(assembly, "discover_local_backends", _unexpected_discovery)
+    stack = await build_report_stack(
+        project_id=PROJECT,
+        target=_report_task().target,
+        harness_tiers={},
+        engine=dialect_engine,
+        controller_factory=lambda **kwargs: _FakeController(work_store=kwargs["work_store"]),
+    )
+
+    assert isinstance(stack.scratch_manager, ScratchWorkspaceManager)
+    assert [operator.actor_ref for operator in stack.lifecycle._composer] == [
+        "runtime:claude:analysis"
+    ]
+    record = await stack.lifecycle.start(**_start_kwargs())
+    assert record.status == "COMPOSING"
+
+    record = await stack.lifecycle.resume(WORK_ID, project_id=PROJECT)
+    assert record.status == "REVIEWING"
+
+    record = await stack.lifecycle.resume(WORK_ID, project_id=PROJECT)
+    assert record.status == "READY_TO_DELIVER"
+
+    record, receipts = await stack.lifecycle.deliver(WORK_ID, project_id=PROJECT, sink_version=1)
+    assert record.status == "COMPLETE"
+    assert receipts[0].result.status == "succeeded"
+    assert [
+        event.payload_json["sink"]
+        for event in await stack.work_store.read_events(WORK_ID, project_id=PROJECT)
+        if event.event_type is WorkEventType.EXECUTION_RECORDED
+    ] == ["console"]
+    assert stack.lifecycle._reviewer[0].capabilities == stack.read_capabilities
+
+
+@pytest.mark.asyncio
+async def test_the_assembled_stack_uses_harness_medium_before_claude(
+    dialect_engine,  # noqa: F811
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SAGEWAI_HOME", str(tmp_path / "home"))
+    calls = 0
+
+    async def _discover_local_backends():
+        nonlocal calls
+        calls += 1
+        return {
+            "ollama": DiscoveredServer(
+                name="ollama",
+                base_url="http://localhost:11434",
+                openai_compat_url="http://localhost:11434",
+                models=["llama3"],
+            )
+        }
+
+    monkeypatch.setattr(assembly, "discover_local_backends", _discover_local_backends)
+    stack = await build_report_stack(
+        project_id=PROJECT,
+        target=_report_task().target,
+        harness_tiers={"medium": HarnessTier(backend="ollama", model="llama3")},
+        engine=dialect_engine,
+        controller_factory=lambda **kwargs: _FakeController(work_store=kwargs["work_store"]),
+    )
+
+    assert calls == 1
+    assert [operator.actor_ref for operator in stack.lifecycle._composer] == [
+        "runtime:harness:medium",
+        "runtime:claude:analysis",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_github_issue_sink_needs_a_github_client(
+    dialect_engine,  # noqa: F811
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SAGEWAI_HOME", str(tmp_path / "home"))
+
+    with pytest.raises(ValueError, match="a github_issue sink needs a GitHub client"):
+        await build_report_stack(
+            project_id=PROJECT,
+            target=_report_task(issue_sink=True).target,
+            harness_tiers={},
+            engine=dialect_engine,
+            controller_factory=lambda **kwargs: _FakeController(work_store=kwargs["work_store"]),
+        )
 
 
 @pytest.mark.asyncio
