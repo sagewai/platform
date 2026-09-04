@@ -18,11 +18,11 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sse_starlette.sse import EventSourceResponse
 
-from sagewai.admin.serve import _emit_audit, _work_project_scope
+from sagewai.admin.serve import _emit_audit, _require_project_admin, _work_project_scope
 from sagewai.work.events import WorkEvent, WorkEventType
 from sagewai.work.store import WorkStore
 from sagewai.work.tasks.events import TaskEventType
@@ -32,11 +32,13 @@ from sagewai.work.tasks.models import (
     Authority,
     BoardColumn,
     ExecutionRoute,
+    TaskDefaults,
     TaskKind,
     TaskOrigin,
     TaskRecord,
     TaskStatus,
     TaskTarget,
+    TaskTriggerSpec,
 )
 from sagewai.work.tasks.service import (
     TaskCreationError,
@@ -234,6 +236,93 @@ async def list_templates(request: Request) -> dict:
         "templates": [template.model_dump(mode="json") for template in CATALOGUE.values()],
         "reserved": list(RESERVED_TEMPLATE_IDS),
     }
+
+
+PROJECT_ADMIN_ROUTES: tuple[tuple[str, str], ...] = (
+    ("PUT", "/api/v1/tasks/defaults"),
+    ("POST", "/api/v1/tasks/triggers"),
+    ("DELETE", "/api/v1/tasks/triggers/{trigger_id}"),
+)
+"""Every route the project-admin tier gates as a whole, enumerated by the coverage gate.
+
+The Task gate route is absent on purpose: it is gated per gate class, not per route (a
+``plan:`` gate is a member decision), and its tier is asserted in
+``tests/admin/test_task_routes_tenancy.py``.
+"""
+
+
+class _DefaultsBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    defaults: TaskDefaults
+    expected_revision: int = Field(ge=0)
+
+    @field_validator("defaults", mode="before")
+    @classmethod
+    def _reject_defaults_revision(cls, value: object) -> object:
+        if isinstance(value, dict) and "revision" in value:
+            raise ValueError("defaults.revision is not accepted; send expected_revision")
+        return value
+
+
+class _TriggerBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    trigger: TaskTriggerSpec
+
+
+@router.get("/defaults")
+async def get_task_defaults(request: Request) -> dict:
+    project_id = _task_project_scope(request)
+    store: TaskStore = request.app.state.task_store
+    return (await store.get_defaults(project_id=project_id)).model_dump(mode="json")
+
+
+@router.put("/defaults", dependencies=[Depends(_require_project_admin)])
+async def put_task_defaults(request: Request, body: _DefaultsBody) -> dict:
+    project_id = _task_project_scope(request)
+    if body.defaults.project_id != project_id:
+        raise HTTPException(status_code=400, detail="defaults belong to another project")
+    store: TaskStore = request.app.state.task_store
+    with _service_errors():
+        stored = await store.put_defaults(body.defaults, expected_revision=body.expected_revision)
+    await _emit_audit(
+        request, "task.defaults.put", target_type="task_defaults", target_id=project_id
+    )
+    return stored.model_dump(mode="json")
+
+
+@router.get("/triggers")
+async def list_task_triggers(request: Request) -> dict:
+    project_id = _task_project_scope(request)
+    store: TaskStore = request.app.state.task_store
+    triggers = await store.list_triggers(project_id=project_id, enabled_only=False)
+    return {"triggers": [trigger.model_dump(mode="json") for trigger in triggers]}
+
+
+@router.post("/triggers", status_code=201, dependencies=[Depends(_require_project_admin)])
+async def put_task_trigger(request: Request, body: _TriggerBody) -> dict:
+    project_id = _task_project_scope(request)
+    if body.trigger.project_id != project_id:
+        raise HTTPException(status_code=400, detail="trigger belongs to another project")
+    store: TaskStore = request.app.state.task_store
+    await store.put_trigger(body.trigger)
+    await _emit_audit(
+        request, "task.trigger.put", target_type="task_trigger", target_id=body.trigger.trigger_id
+    )
+    return body.trigger.model_dump(mode="json")
+
+
+@router.delete("/triggers/{trigger_id}", dependencies=[Depends(_require_project_admin)])
+async def delete_task_trigger(trigger_id: str, request: Request) -> dict:
+    project_id = _task_project_scope(request)
+    store: TaskStore = request.app.state.task_store
+    if not await store.delete_trigger(trigger_id, project_id=project_id):
+        raise HTTPException(status_code=404, detail="Not found")
+    await _emit_audit(
+        request, "task.trigger.delete", target_type="task_trigger", target_id=trigger_id
+    )
+    return {"status": "ok"}
 
 
 @router.get("/{task_id}/events")
