@@ -20,6 +20,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from sqlalchemy.exc import IntegrityError
 from sse_starlette.sse import EventSourceResponse
 
 from sagewai.admin.serve import _emit_audit, _require_project_admin, _work_project_scope
@@ -56,7 +57,9 @@ from sagewai.work.tasks.transitions import IllegalTransitionError
 from sagewai.work.tasks.views import actions_from_events, referenced_artifacts, thread_from_events
 
 router = APIRouter(prefix="/api/v1/tasks")
+work_router = APIRouter(prefix="/api/v1/work")
 artifacts_router = APIRouter(prefix="/api/v1/artifacts")
+_EXTERNAL_EFFECT_GATES = ("deliver:", "rollback:")
 _ARTIFACT_MEDIA_TYPE = "application/octet-stream"
 _CURSOR_SEPARATOR = "|"
 _CURSOR_ORDER_SEPARATOR = ":"
@@ -228,6 +231,19 @@ class _AnswerBody(BaseModel):
         return self
 
 
+class _GateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["allow", "deny"]
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class _WorkGateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["allow", "deny"]
+
+
 @router.post("", status_code=201)
 async def create_task(request: Request, body: _CreateTaskBody) -> dict:
     project_id = _task_project_scope(request)
@@ -273,6 +289,7 @@ PROJECT_ADMIN_ROUTES: tuple[tuple[str, str], ...] = (
     ("POST", "/api/v1/tasks/triggers"),
     ("DELETE", "/api/v1/tasks/triggers/{trigger_id}"),
     ("POST", "/api/v1/tasks/{task_id}/actions/{action_id}/rollback"),
+    ("POST", "/api/v1/work/{work_id}/gates/{gate_id}"),
 )
 """Every route the project-admin tier gates as a whole, enumerated by the coverage gate.
 
@@ -445,6 +462,30 @@ async def post_task_answer(task_id: str, request: Request, body: _AnswerBody) ->
     return record.model_dump(mode="json")
 
 
+@router.post("/{task_id}/gates/{gate_id}")
+async def decide_task_gate(task_id: str, gate_id: str, request: Request, body: _GateBody) -> dict:
+    """Decide one Task gate.
+
+    ``deliver:`` and ``rollback:`` have external side effects, so section 17 puts them behind
+    a project admin; ``plan:`` and ``replan:`` are member decisions.
+    """
+    project_id = _task_project_scope(request)
+    if gate_id.startswith(_EXTERNAL_EFFECT_GATES):
+        _require_project_admin(request)
+    service: TaskService = request.app.state.task_service
+    with _service_errors():
+        record = await service.decide_gate(
+            task_id,
+            project_id=project_id,
+            gate_id=gate_id,
+            decision=body.decision,
+            actor_ref=_actor_ref(request),
+            note=body.note,
+        )
+    await _emit_audit(request, "task.gate.decide", target_type="task", target_id=task_id)
+    return record.model_dump(mode="json")
+
+
 @router.get("/{task_id}/events")
 async def task_events(task_id: str, request: Request) -> EventSourceResponse:
     project_id = _task_project_scope(request)
@@ -517,6 +558,98 @@ async def task_telemetry(task_id: str, request: Request) -> dict:
         project_selections=project_selections,
         now=datetime.now(timezone.utc),
     ).model_dump(mode="json")
+
+
+@work_router.post("/{work_id}/gates/{gate_id}", dependencies=[Depends(_require_project_admin)])
+async def decide_work_gate(
+    work_id: str, gate_id: str, request: Request, body: _WorkGateBody
+) -> dict:
+    """Record the decision on a Work's own gate; the coordinator or ``sagewai work resume``
+    advances it.
+
+    This writes the durable half of ``GitHubIssueLifecycle.approve`` - the ``GATE_DECIDED``
+    event and the projection move - and executes nothing: the merge stage re-reads the
+    recorded decision and handles ``allow`` and ``deny`` itself (`github.py:1212-1240`).
+    ``pending_gate`` must be cleared here, or the Task never mirrors the decision back
+    (`coordinator.py:413-420`). Deciding twice is a no-op, exactly as ``approve`` treats an
+    already-decided gate (`github.py:866-868`), so a retried POST cannot append a second
+    decision.
+
+    The scope helper is the **Task** one even though the path is under ``/api/v1/work``: a gate
+    belongs to a Work that belongs to a project, and ``_work_project_scope`` would map
+    ``X-Project-ID: global`` to ``None`` and append the decision under the null scope, where the
+    Work it names does not live. The activity read keeps the Work helper; a decision needs a
+    project, so this write uses the Task scope.
+    """
+    project_id = _task_project_scope(request)
+    store: WorkStore = request.app.state.work_store
+    record = await store.load_work(work_id, project_id=project_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not gate_id.startswith("merge:"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"gate {gate_id} is not a merge gate: Task gates are decided at "
+                "POST /api/v1/tasks/{task_id}/gates/{gate_id}, delivery gates with "
+                "sagewai work approve"
+            ),
+        )
+    events = await store.read_events(work_id, project_id=project_id)
+    decided = next(
+        (
+            event
+            for event in reversed(events)
+            if event.event_type is WorkEventType.GATE_DECIDED
+            and event.payload_json["gate_id"] == gate_id
+        ),
+        None,
+    )
+    if decided is not None:
+        return {
+            "work_id": work_id,
+            "gate_id": gate_id,
+            "decision": str(decided.payload_json["decision"]),
+        }
+    if record.pending_gate != gate_id:
+        raise HTTPException(status_code=409, detail=f"gate is not pending: {gate_id}")
+    requested = next(
+        (
+            event
+            for event in reversed(events)
+            if event.event_type is WorkEventType.GATE_REQUESTED
+            and event.payload_json["gate_id"] == gate_id
+        ),
+        None,
+    )
+    if requested is None:
+        raise HTTPException(status_code=409, detail=f"gate request is missing: {gate_id}")
+    try:
+        await store.append_next(
+            work_id=work_id,
+            project_id=project_id,
+            event_type=WorkEventType.GATE_DECIDED,
+            payload={
+                "gate_id": gate_id,
+                "decision": body.decision,
+                "action": requested.payload_json["action"],
+            },
+            actor_type="human",
+            actor_ref=_actor_ref(request),
+        )
+    except IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="concurrent append won the sequence") from exc
+    await store.save_work(
+        record.model_copy(
+            update={
+                "status": "MERGING" if body.decision == "allow" else record.status,
+                "pending_gate": None,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+    )
+    await _emit_audit(request, "work.gate.decide", target_type="work", target_id=work_id)
+    return {"work_id": work_id, "gate_id": gate_id, "decision": body.decision}
 
 
 @artifacts_router.get("/{storage_ref}")

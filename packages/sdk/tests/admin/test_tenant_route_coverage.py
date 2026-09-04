@@ -39,7 +39,7 @@ from sagewai.admin.auth_middleware import _MULTI_ORG_PREFIXES, required_scope
 from sagewai.admin.identity_store import IdentityStore
 from sagewai.admin.serve import _require_project_admin, create_admin_serve_app
 from sagewai.admin.state_file import AdminStateFile
-from sagewai.admin.tasks_routes import PROJECT_ADMIN_ROUTES
+from sagewai.admin.tasks_routes import PROJECT_ADMIN_ROUTES, work_router
 from sagewai.admin.tasks_routes import router as task_router
 from sagewai.admin.tenant_audit import TenantAuditStore
 from sagewai.db.engine import create_engine
@@ -126,14 +126,15 @@ def _mutating_routes(app) -> list[tuple[str, str]]:
 
 def _project_admin_dependency_routes() -> set[tuple[str, str]]:
     out = set()
-    for route in task_router.routes:
-        dependant = getattr(route, "dependant", None)
-        if dependant is None:
-            continue
-        if not any(dep.call is _require_project_admin for dep in dependant.dependencies):
-            continue
-        for method in getattr(route, "methods", ()) or ():
-            out.add((method, route.path))
+    for router in (task_router, work_router):
+        for route in router.routes:
+            dependant = getattr(route, "dependant", None)
+            if dependant is None:
+                continue
+            if not any(dep.call is _require_project_admin for dep in dependant.dependencies):
+                continue
+            for method in getattr(route, "methods", ()) or ():
+                out.add((method, route.path))
     return out
 
 

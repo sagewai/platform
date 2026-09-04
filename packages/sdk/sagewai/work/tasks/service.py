@@ -368,12 +368,14 @@ class TaskService:
         gate_id: str,
         decision: Literal["allow", "deny"],
         actor_ref: str,
+        note: str | None = None,
         now: datetime | None = None,
     ) -> TaskRecord:
         """Decide one gate the Task itself opened; a refusal blocks the Task for a human."""
         if not gate_id.startswith(TASK_GATES):
             raise TaskDecisionError(
-                f"gate {gate_id} belongs to a Work; approve it there (sagewai work approve)"
+                f"gate {gate_id} belongs to a Work; decide it at "
+                "POST /api/v1/work/{work_id}/gates/{gate_id} (or sagewai work approve)"
             )
         _task, record = await self._load(task_id, project_id=project_id)
         if record.pending_gate != gate_id:
@@ -393,7 +395,11 @@ class TaskService:
             entries.append(
                 (
                     TaskEventType.TASK_MESSAGE,
-                    {"author": "human", "text": f"gate {gate_id} decided {decision}", "refs": []},
+                    {
+                        "author": "human",
+                        "text": note or f"gate {gate_id} decided {decision}",
+                        "refs": [],
+                    },
                 )
             )
             entries.append(status_entry(record, TaskStatus.BLOCKED))

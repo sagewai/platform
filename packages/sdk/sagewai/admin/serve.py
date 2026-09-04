@@ -1662,10 +1662,11 @@ def create_admin_serve_app(
         prefix="/api/v1/harness",
     )
 
-    from sagewai.admin.tasks_routes import artifacts_router
+    from sagewai.admin.tasks_routes import artifacts_router, work_router
     from sagewai.admin.tasks_routes import router as tasks_router
 
     app.include_router(tasks_router)
+    app.include_router(work_router)
     app.include_router(artifacts_router)
 
     # ── Setup ────────────────────────────────────────────────────
