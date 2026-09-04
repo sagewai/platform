@@ -13,21 +13,41 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sse_starlette.sse import EventSourceResponse
 
-from sagewai.admin.serve import _work_project_scope
+from sagewai.admin.serve import _emit_audit, _work_project_scope
 from sagewai.work.events import WorkEvent, WorkEventType
 from sagewai.work.store import WorkStore
 from sagewai.work.tasks.events import TaskEventType
 from sagewai.work.tasks.feed import FeedEntry
-from sagewai.work.tasks.models import BoardColumn, TaskKind, TaskOrigin, TaskRecord, TaskStatus
-from sagewai.work.tasks.store import TaskStore
+from sagewai.work.tasks.intake import route as intake_route
+from sagewai.work.tasks.models import (
+    Authority,
+    BoardColumn,
+    ExecutionRoute,
+    TaskKind,
+    TaskOrigin,
+    TaskRecord,
+    TaskStatus,
+    TaskTarget,
+)
+from sagewai.work.tasks.service import (
+    TaskCreationError,
+    TaskDecisionError,
+    TaskNotFoundError,
+    TaskService,
+)
+from sagewai.work.tasks.store import StaleTaskError, TaskStore
 from sagewai.work.tasks.telemetry import derive_task_telemetry
+from sagewai.work.tasks.templates import CATALOGUE, RESERVED_TEMPLATE_IDS
+from sagewai.work.tasks.transitions import IllegalTransitionError
 
 router = APIRouter(prefix="/api/v1/tasks")
 _CURSOR_SEPARATOR = "|"
@@ -51,6 +71,29 @@ def _task_project_scope(request: Request) -> str:
             detail="Tasks require an explicit project; there is no global Task scope",
         )
     return project_id
+
+
+def _actor_ref(request: Request) -> str:
+    """Who a mutation is attributed to: middleware actor, or admin without middleware."""
+    context = getattr(request.state, "context", None)
+    return "admin" if context is None else context.actor.label
+
+
+@contextmanager
+def _service_errors() -> Iterator[None]:
+    """Map an unknown Task to 404 and the Task layer's write refusals to 409."""
+    try:
+        yield
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Not found") from exc
+    except (TaskDecisionError, IllegalTransitionError, StaleTaskError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+def _strip_brief(value: object) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("brief must be non-empty text")
+    return value.strip()
 
 
 def _encode_cursor(record: TaskRecord, order_by: Literal["created_at", "updated_at"]) -> str:
@@ -122,6 +165,75 @@ async def task_board(
     for record in records:
         columns[record.board_column.value].append(record.model_dump(mode="json"))
     return {"columns": columns}
+
+
+class _CreateTaskBody(BaseModel):
+    """What a console or CLI create carries; ``brief_ref`` and ``issue_url`` are deferred."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    brief: str = Field(min_length=1, max_length=64_000)
+    target: TaskTarget | None = None
+    execution: ExecutionRoute | None = None
+    authority_floor: Authority | None = None
+    origin_ref: str | None = None
+    source_ref: str | None = None
+
+    @field_validator("brief", mode="before")
+    @classmethod
+    def _validate_brief(cls, value: object) -> str:
+        return _strip_brief(value)
+
+
+class _BriefBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    brief: str = Field(min_length=1, max_length=64_000)
+
+    @field_validator("brief", mode="before")
+    @classmethod
+    def _validate_brief(cls, value: object) -> str:
+        return _strip_brief(value)
+
+
+@router.post("", status_code=201)
+async def create_task(request: Request, body: _CreateTaskBody) -> dict:
+    project_id = _task_project_scope(request)
+    service: TaskService = request.app.state.task_service
+    try:
+        task, record = await service.create(
+            body.brief,
+            project_id=project_id,
+            origin=TaskOrigin.HUMAN,
+            created_by=_actor_ref(request),
+            target=body.target,
+            execution=body.execution,
+            authority_floor=body.authority_floor,
+            origin_ref=body.origin_ref,
+            source_ref=body.source_ref,
+        )
+    except TaskCreationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await _emit_audit(request, "task.create", target_type="task", target_id=task.id)
+    return {"task": task.model_dump(mode="json"), "record": record.model_dump(mode="json")}
+
+
+@router.post("/intake")
+async def preview_intake(request: Request, body: _BriefBody) -> dict:
+    """Deterministic preview: the template, band, cron and questions creation would use."""
+    project_id = _task_project_scope(request)
+    store: TaskStore = request.app.state.task_store
+    defaults = await store.get_defaults(project_id=project_id)
+    return intake_route(body.brief, defaults).model_dump(mode="json")
+
+
+@router.get("/templates")
+async def list_templates(request: Request) -> dict:
+    _task_project_scope(request)
+    return {
+        "templates": [template.model_dump(mode="json") for template in CATALOGUE.values()],
+        "reserved": list(RESERVED_TEMPLATE_IDS),
+    }
 
 
 @router.get("/{task_id}/events")

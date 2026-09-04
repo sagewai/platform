@@ -49,6 +49,10 @@ class TaskCreationError(ValueError):
     """The brief cannot become a Task under the project's defaults."""
 
 
+class TaskNotFoundError(KeyError):
+    """No Task with that id in the project."""
+
+
 class TaskDecisionError(ValueError):
     """The decision does not match an open gate or an existing plan version."""
 
@@ -91,7 +95,7 @@ class TaskService:
     async def _load(self, task_id: str, *, project_id: str) -> tuple[Task, TaskRecord]:
         loaded = await self._store.load(task_id, project_id=project_id)
         if loaded is None:
-            raise KeyError(task_id)
+            raise TaskNotFoundError(task_id)
         return loaded
 
     async def create(

@@ -990,9 +990,10 @@ def create_admin_serve_app(
                     conn_ctx.store = active_connection_store
                     conn_ctx.tenant_safe = True
 
-        _task_service = TaskService(
+        app.state.task_service = TaskService(
             store=app.state.task_store, artifact_store=_TaskArtifactStore()
         )
+        _task_service = app.state.task_service
         _task_connection_store = app.state.connections_context.store
         _task_credentials = app.state.connections_context.router
         app.state.task_profile_runner = SoftwareProfileRunner(
