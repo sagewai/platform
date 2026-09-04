@@ -148,15 +148,23 @@ class TaskStore:
         record: TaskRecord,
         lease_epoch: int | None = None,
         expected_revision: int | None = None,
+        task: Task | None = None,
     ) -> TaskRecord:
         """Append events at ``expected_sequence`` and replace the projection in one transaction.
 
         Lease columns are never written here; the returned record carries the lease
         fields as read at the start of the transaction.
+
+        ``task`` rewrites the immutable definition under the same revision fence, so a budget
+        change and the event that records it are one durable step or neither.
         """
         self._validate_events(task_id, project_id, events, expected_sequence=expected_sequence)
-        if record.task_id != task_id or record.project_id != project_id:
-            raise ValueError("record belongs to a different task")
+        if (
+            record.task_id != task_id
+            or record.project_id != project_id
+            or (task is not None and (task.id != task_id or task.project_id != project_id))
+        ):
+            raise ValueError("record or task belongs to a different task")
         expected_last_sequence = expected_sequence + len(events) - 1
         if record.last_event_sequence != expected_last_sequence:
             raise ValueError(
@@ -204,6 +212,8 @@ class TaskStore:
                 values = self._projection_values(stored)
                 for key in ("lease_owner", "lease_epoch", "lease_expires_at"):
                     values.pop(key)
+                if task is not None:
+                    values["task_json"] = task.model_dump(mode="json")
                 result = await conn.execute(
                     update(self._tasks)
                     .where(

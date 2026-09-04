@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sagewai.work.tasks.events import TaskEvent, TaskEventType, fold_record
-from sagewai.work.tasks.models import TaskRecord, TaskStatus
+from sagewai.work.tasks.models import Task, TaskRecord, TaskStatus
 from sagewai.work.tasks.store import TaskStore
 from sagewai.work.tasks.transitions import assert_transition
 
@@ -77,7 +77,9 @@ class TaskWriter:
         record: TaskRecord,
         entries: Sequence[Entry],
         *,
+        task: Task | None = None,
         lease_epoch: int | None = None,
+        expected_revision: int | None = None,
         now: datetime | None = None,
     ) -> TaskRecord:
         events = build_events(
@@ -94,6 +96,8 @@ class TaskWriter:
             expected_sequence=record.last_event_sequence + 1,
             record=fold_record(record, events),
             lease_epoch=lease_epoch,
+            expected_revision=expected_revision,
+            task=task,
         )
 
 

@@ -20,6 +20,8 @@ from sagewai.work.tasks.events import TaskEventType
 from sagewai.work.tasks.models import (
     AttentionOwner,
     Authority,
+    BoardColumn,
+    Budget,
     ExecutionRoute,
     GateMode,
     ReportTarget,
@@ -798,6 +800,184 @@ async def test_denying_the_plan_gate_blocks_the_task(service: TaskService, store
     assert record.status is TaskStatus.BLOCKED
     assert record.pending_gate is None
     assert record.attention_owner is AttentionOwner.USER
+
+
+@pytest.mark.asyncio
+async def test_budget_raise_revives_an_exhausted_executing_task(
+    service_and_record,
+) -> None:
+    service, record = service_and_record
+    running = await TaskWriter(service._store).append(
+        record, [status_entry(record, TaskStatus.EXECUTING)], now=NOW
+    )
+    exhausted = await TaskWriter(service._store).append(
+        running, [status_entry(running, TaskStatus.BUDGET_EXHAUSTED)], now=NOW
+    )
+
+    _task, revived = await service.update_budget(
+        exhausted.task_id,
+        project_id=exhausted.project_id,
+        budget=Budget(max_cycle_usd="25.00"),
+        expected_revision=exhausted.revision,
+        actor_ref="arda",
+        now=NOW,
+    )
+
+    assert revived.status is TaskStatus.EXECUTING
+    assert revived.attention_owner is AttentionOwner.SYSTEM
+    assert revived.waiting_reason == "working"
+    assert revived.board_column is BoardColumn.IN_PROGRESS
+
+
+@pytest.mark.asyncio
+async def test_budget_raise_revives_a_paused_exhausted_task_to_its_budgeted_status(
+    service_and_record,
+) -> None:
+    service, record = service_and_record
+    running = await TaskWriter(service._store).append(
+        record, [status_entry(record, TaskStatus.EXECUTING)], now=NOW
+    )
+    exhausted = await TaskWriter(service._store).append(
+        running, [status_entry(running, TaskStatus.BUDGET_EXHAUSTED)], now=NOW
+    )
+    paused = await service.pause(
+        exhausted.task_id,
+        project_id=exhausted.project_id,
+        actor_ref="arda",
+        now=NOW,
+    )
+    resumed = await service.resume(
+        paused.task_id,
+        project_id=paused.project_id,
+        actor_ref="arda",
+        now=NOW,
+    )
+
+    _task, revived = await service.update_budget(
+        resumed.task_id,
+        project_id=resumed.project_id,
+        budget=Budget(max_cycle_usd="25.00"),
+        expected_revision=resumed.revision,
+        actor_ref="arda",
+        now=NOW,
+    )
+
+    assert resumed.status is TaskStatus.BUDGET_EXHAUSTED
+    assert revived.status is TaskStatus.EXECUTING
+    assert revived.attention_owner is AttentionOwner.SYSTEM
+    assert revived.waiting_reason == "working"
+    assert revived.board_column is BoardColumn.IN_PROGRESS
+
+
+@pytest.mark.asyncio
+async def test_budget_raise_revives_an_exhausted_assessing_task_as_executing(
+    service_and_record,
+) -> None:
+    service, record = service_and_record
+    running = await TaskWriter(service._store).append(
+        record, [status_entry(record, TaskStatus.EXECUTING)], now=NOW
+    )
+    assessing = await TaskWriter(service._store).append(
+        running, [status_entry(running, TaskStatus.ASSESSING)], now=NOW
+    )
+    exhausted = await TaskWriter(service._store).append(
+        assessing, [status_entry(assessing, TaskStatus.BUDGET_EXHAUSTED)], now=NOW
+    )
+
+    _task, revived = await service.update_budget(
+        exhausted.task_id,
+        project_id=exhausted.project_id,
+        budget=Budget(max_cycle_usd="25.00"),
+        expected_revision=exhausted.revision,
+        actor_ref="arda",
+        now=NOW,
+    )
+
+    assert revived.status is TaskStatus.EXECUTING
+    assert revived.attention_owner is AttentionOwner.SYSTEM
+    assert revived.waiting_reason == "working"
+    assert revived.board_column is BoardColumn.IN_PROGRESS
+
+
+@pytest.mark.asyncio
+async def test_budget_raise_uses_the_last_budgeted_status_before_the_final_exhaustion(
+    service_and_record,
+) -> None:
+    service, record = service_and_record
+    running = await TaskWriter(service._store).append(
+        record, [status_entry(record, TaskStatus.EXECUTING)], now=NOW
+    )
+    exhausted = await TaskWriter(service._store).append(
+        running, [status_entry(running, TaskStatus.BUDGET_EXHAUSTED)], now=NOW
+    )
+    _task, revived = await service.update_budget(
+        exhausted.task_id,
+        project_id=exhausted.project_id,
+        budget=Budget(max_cycle_usd="25.00"),
+        expected_revision=exhausted.revision,
+        actor_ref="arda",
+        now=NOW,
+    )
+    assessing = await TaskWriter(service._store).append(
+        revived, [status_entry(revived, TaskStatus.ASSESSING)], now=NOW
+    )
+    exhausted_again = await TaskWriter(service._store).append(
+        assessing, [status_entry(assessing, TaskStatus.BUDGET_EXHAUSTED)], now=NOW
+    )
+
+    _task, revived_again = await service.update_budget(
+        exhausted_again.task_id,
+        project_id=exhausted_again.project_id,
+        budget=Budget(max_cycle_usd="35.00"),
+        expected_revision=exhausted_again.revision,
+        actor_ref="arda",
+        now=NOW,
+    )
+
+    assert revived_again.status is TaskStatus.EXECUTING
+    assert revived_again.attention_owner is AttentionOwner.SYSTEM
+    assert revived_again.waiting_reason == "working"
+    assert revived_again.board_column is BoardColumn.IN_PROGRESS
+
+
+@pytest.mark.asyncio
+async def test_budget_raise_revives_an_exhausted_planning_task(
+    service_and_record,
+) -> None:
+    service, record = service_and_record
+    exhausted = await TaskWriter(service._store).append(
+        record, [status_entry(record, TaskStatus.BUDGET_EXHAUSTED)], now=NOW
+    )
+
+    _task, revived = await service.update_budget(
+        exhausted.task_id,
+        project_id=exhausted.project_id,
+        budget=Budget(max_cycle_usd="25.00"),
+        expected_revision=exhausted.revision,
+        actor_ref="arda",
+        now=NOW,
+    )
+
+    assert revived.status is TaskStatus.PLANNING
+    assert revived.attention_owner is AttentionOwner.SYSTEM
+    assert revived.waiting_reason == "working"
+    assert revived.board_column is BoardColumn.INBOX
+
+
+@pytest.mark.asyncio
+async def test_budget_update_keeps_a_non_exhausted_status(service_and_record) -> None:
+    service, record = service_and_record
+
+    _task, updated = await service.update_budget(
+        record.task_id,
+        project_id=record.project_id,
+        budget=Budget(max_cycle_usd="25.00"),
+        expected_revision=record.revision,
+        actor_ref="arda",
+        now=NOW,
+    )
+
+    assert updated.status is TaskStatus.PLANNING
 
 
 async def _replan_gate(service: TaskService, store: TaskStore):

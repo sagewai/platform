@@ -18,11 +18,13 @@ from typing import Any, Literal
 
 from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.work.tasks import intake as intake_module
-from sagewai.work.tasks.decide import fold_cycle
+from sagewai.work.tasks.decide import _BUDGETED, fold_cycle
 from sagewai.work.tasks.decisions import TASK_GATES
 from sagewai.work.tasks.events import TaskEvent, TaskEventType, fold_record
 from sagewai.work.tasks.models import (
+    TERMINAL_STATUSES,
     Authority,
+    Budget,
     ExecutionRoute,
     GateMode,
     RoutingPolicy,
@@ -95,6 +97,28 @@ def _default_clarification_entry(question: dict[str, Any]) -> Entry:
         TaskEventType.CLARIFICATION_DEFAULTED,
         {"question_id": str(question["id"]), "answer": question.get("default")},
     )
+
+
+def _status_before(
+    events: Sequence[TaskEvent],
+    marker: TaskStatus,
+    allowed: frozenset[TaskStatus] | None = None,
+) -> TaskStatus:
+    """The last status in ``allowed`` (any status when None) entered before the final ``marker``.
+
+    PLANNING when no such status was entered.
+    """
+    last = TaskStatus.PLANNING
+    previous = TaskStatus.PLANNING
+    for event in events:
+        if event.event_type is not TaskEventType.TASK_STATUS_CHANGED:
+            continue
+        moved_to = TaskStatus(str(event.payload_json["status"]))
+        if moved_to is marker:
+            previous = last
+        elif allowed is None or moved_to in allowed:
+            last = moved_to
+    return previous
 
 
 class TaskService:
@@ -506,15 +530,7 @@ class TaskService:
         if record.status is not TaskStatus.PAUSED:
             raise TaskDecisionError(f"task {task_id} is {record.status.value}, not PAUSED")
         events = await self._store.read_events(task_id, project_id=project_id)
-        current = TaskStatus.PLANNING
-        previous = TaskStatus.PLANNING
-        for event in events:
-            if event.event_type is not TaskEventType.TASK_STATUS_CHANGED:
-                continue
-            moved_to = TaskStatus(str(event.payload_json["status"]))
-            if moved_to is TaskStatus.PAUSED:
-                previous = current
-            current = moved_to
+        previous = _status_before(events, TaskStatus.PAUSED)
         writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
         return await writer.append(record, [status_entry(record, previous)], now=now)
 
@@ -539,6 +555,48 @@ class TaskService:
         entries.append(status_entry(record, TaskStatus.CANCELLED))
         writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
         return await writer.append(record, entries, now=now)
+
+    async def update_budget(
+        self,
+        task_id: str,
+        *,
+        project_id: str,
+        budget: Budget,
+        expected_revision: int,
+        actor_ref: str,
+        now: datetime | None = None,
+    ) -> tuple[Task, TaskRecord]:
+        """Replace the Task's budget under the projection's revision fence.
+
+        A raise revives an exhausted Task to the status the exhaustion interrupted.
+        Authority, routing, schedule and sinks stay read-only: each changes what the
+        coordinator may do inside a running cycle and needs its own event and gate.
+        """
+        task, record = await self._load(task_id, project_id=project_id)
+        if record.status in TERMINAL_STATUSES:
+            raise TaskDecisionError(f"task {task_id} is {record.status.value}")
+        updated = task.model_copy(update={"budget": budget})
+        entries: list[Entry] = [
+            (
+                TaskEventType.BUDGET_UPDATED,
+                {"budget": budget.model_dump(mode="json"), "revision": expected_revision},
+            )
+        ]
+        if record.status is TaskStatus.BUDGET_EXHAUSTED:
+            events = await self._store.read_events(task_id, project_id=project_id)
+            revived = _status_before(events, TaskStatus.BUDGET_EXHAUSTED, allowed=_BUDGETED)
+            if revived is TaskStatus.ASSESSING:
+                revived = TaskStatus.EXECUTING
+            entries.append(status_entry(record, revived))
+        writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
+        stored = await writer.append(
+            record,
+            entries,
+            task=updated,
+            expected_revision=expected_revision,
+            now=now,
+        )
+        return updated, stored
 
     async def default_expired_clarifications(
         self, task_id: str, *, project_id: str, now: datetime | None = None

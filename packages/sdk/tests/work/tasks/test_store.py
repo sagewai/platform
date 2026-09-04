@@ -370,6 +370,60 @@ async def test_append_never_rewrites_lease_and_detects_projection_change(store: 
 
 
 @pytest.mark.asyncio
+async def test_append_rewrites_the_definition_in_the_same_transaction(store: TaskStore) -> None:
+    task = _task()
+    record = await _create(store, task)
+    updated = task.model_copy(update={"budget": task.budget.model_copy(update={"max_replans": 5})})
+    event = _event(
+        task,
+        2,
+        TaskEventType.BUDGET_UPDATED,
+        {"budget": updated.budget.model_dump(mode="json"), "revision": record.revision},
+    )
+
+    stored = await store.append(
+        task_id=task.id,
+        project_id=task.project_id,
+        events=(event,),
+        expected_sequence=2,
+        record=record.model_copy(update={"last_event_sequence": 2}),
+        expected_revision=record.revision,
+        task=updated,
+    )
+
+    loaded = await store.load(task.id, project_id=task.project_id)
+    assert loaded is not None
+    assert loaded[0].budget.max_replans == 5
+    assert loaded[1].revision == stored.revision == record.revision + 1
+
+
+@pytest.mark.asyncio
+async def test_a_definition_rewrite_at_a_stale_revision_is_refused(store: TaskStore) -> None:
+    task = _task()
+    record = await _create(store, task)
+    updated = task.model_copy(update={"budget": task.budget.model_copy(update={"max_replans": 5})})
+    event = _event(
+        task,
+        2,
+        TaskEventType.BUDGET_UPDATED,
+        {"budget": updated.budget.model_dump(mode="json"), "revision": 99},
+    )
+
+    with pytest.raises(StaleTaskError):
+        await store.append(
+            task_id=task.id,
+            project_id=task.project_id,
+            events=(event,),
+            expected_sequence=2,
+            record=record.model_copy(update={"last_event_sequence": 2}),
+            expected_revision=99,
+            task=updated,
+        )
+    loaded = await store.load(task.id, project_id=task.project_id)
+    assert loaded[0].budget.max_replans == task.budget.max_replans
+
+
+@pytest.mark.asyncio
 async def test_append_rejects_projection_sequence_mismatch(store: TaskStore) -> None:
     task = _task()
     record = await _create(store, task)

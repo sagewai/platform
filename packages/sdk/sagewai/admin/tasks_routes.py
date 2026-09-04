@@ -33,6 +33,7 @@ from sagewai.work.tasks.intake import route as intake_route
 from sagewai.work.tasks.models import (
     Authority,
     BoardColumn,
+    Budget,
     ExecutionRoute,
     Sensitivity,
     TaskDefaults,
@@ -250,6 +251,13 @@ class _CancelBody(BaseModel):
     note: str | None = Field(default=None, max_length=2000)
 
 
+class _PatchTaskBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    budget: Budget
+    revision: int = Field(ge=0)
+
+
 @router.post("", status_code=201)
 async def create_task(request: Request, body: _CreateTaskBody) -> dict:
     project_id = _task_project_scope(request)
@@ -295,6 +303,7 @@ PROJECT_ADMIN_ROUTES: tuple[tuple[str, str], ...] = (
     ("POST", "/api/v1/tasks/triggers"),
     ("DELETE", "/api/v1/tasks/triggers/{trigger_id}"),
     ("POST", "/api/v1/tasks/{task_id}/actions/{action_id}/rollback"),
+    ("PATCH", "/api/v1/tasks/{task_id}"),
     ("POST", "/api/v1/work/{work_id}/gates/{gate_id}"),
 )
 """Every route the project-admin tier gates as a whole, enumerated by the coverage gate.
@@ -522,6 +531,23 @@ async def cancel_task(task_id: str, request: Request, body: _CancelBody) -> dict
         )
     await _emit_audit(request, "task.cancel", target_type="task", target_id=task_id)
     return record.model_dump(mode="json")
+
+
+@router.patch("/{task_id}", dependencies=[Depends(_require_project_admin)])
+async def patch_task(task_id: str, request: Request, body: _PatchTaskBody) -> dict:
+    """Budget only (decision 7); raising a budget is spending authority, so it is admin-tier."""
+    project_id = _task_project_scope(request)
+    service: TaskService = request.app.state.task_service
+    with _service_errors():
+        task, record = await service.update_budget(
+            task_id,
+            project_id=project_id,
+            budget=body.budget,
+            expected_revision=body.revision,
+            actor_ref=_actor_ref(request),
+        )
+    await _emit_audit(request, "task.budget.update", target_type="task", target_id=task_id)
+    return {"task": task.model_dump(mode="json"), "record": record.model_dump(mode="json")}
 
 
 @router.get("/{task_id}/events")

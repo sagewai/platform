@@ -36,7 +36,7 @@ _WAITING = frozenset(
         TaskStatus.CANCELLED,
     }
 )
-# The only statuses the transition table lets reach BUDGET_EXHAUSTED (transitions.py:18-32).
+# The statuses a Task runs and spends in; a budget raise revives it to the last of these.
 _BUDGETED = frozenset({TaskStatus.PLANNING, TaskStatus.EXECUTING, TaskStatus.ASSESSING})
 _DELIVER_ACTION_PREFIX = "deliver:"
 _ROLLBACK_ACTION_PREFIXES = ("revert:", "delete_comment:")
