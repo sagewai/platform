@@ -10,7 +10,7 @@
 
 The Work control plane is the primary operating path. It persists project-scoped lifecycle state and evidence independently of model sessions, runs locally by default, and can dispatch credential-free stages to compatible Fleet workers.
 
-The Task coordinator builds on that path: from `sagewai task` or the backend, it plans a brief into steps, opens one GitHub issue per step, drives each Work to a merge, and assesses the cycle.
+The Task coordinator builds on that path: from `sagewai task` or the backend, it plans a brief into software or report steps, drives each Work through assessment and delivery, routes decisions through configured channels, and executes recorded rollback recipes.
 
 > **Sagewai is early software.** The sections below are explicit about what ships today, what is experimental, and what is on the v1.1 roadmap — so you know what to rely on.
 
