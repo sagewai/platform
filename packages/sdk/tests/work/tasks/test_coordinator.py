@@ -635,7 +635,7 @@ async def test_a_completed_task_projects_telemetry_without_raising(
             1: await task_store.spend_totals(task_id=task.id, project_id=PROJECT, cycle=1),
         },
         budget=task.budget,
-        project_selections=(),
+        project_selections={},
         now=datetime.now(timezone.utc),
     )
     assert [cycle.cycle for cycle in telemetry.cycles] == [1]

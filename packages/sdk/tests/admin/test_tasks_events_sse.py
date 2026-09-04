@@ -112,6 +112,48 @@ async def test_events_replays_from_last_event_id_then_streams_live(
 
 
 @pytest.mark.asyncio
+async def test_a_gap_in_the_live_stream_is_re_read_from_the_feed(
+    client: AdminClient,
+    seeded_task,
+) -> None:
+    store: TaskStore = client.app.state.task_store
+    await store.append_feed((_entry("activity-2"), _entry("activity-3"), _entry("activity-4")))
+    queue = store.feed_bus.subscribe("p", "t1")
+    stream = _task_event_stream(
+        store=store,
+        project_id="p",
+        task_id="t1",
+        queue=queue,
+        after=2,
+        heartbeat_seconds=0.05,
+    )
+    try:
+        replayed = [
+            await asyncio.wait_for(anext(stream), timeout=0.5),
+            await asyncio.wait_for(anext(stream), timeout=0.5),
+        ]
+        heartbeat = await asyncio.wait_for(anext(stream), timeout=0.5)
+        dropped = await store.append_feed((_entry("activity-5"), _entry("activity-6")))
+        queue.get_nowait()
+        queue.get_nowait()
+        await store.append_feed((_entry("activity-7"),))
+        recovered = [
+            await asyncio.wait_for(anext(stream), timeout=0.5),
+            await asyncio.wait_for(anext(stream), timeout=0.5),
+            await asyncio.wait_for(anext(stream), timeout=0.5),
+            await asyncio.wait_for(anext(stream), timeout=0.5),
+        ]
+    finally:
+        await stream.aclose()
+
+    assert [chunk["id"] for chunk in replayed] == ["3", "4"]
+    assert heartbeat == {"event": "heartbeat", "data": "{}"}
+    assert [entry.feed_sequence for entry in dropped] == [5, 6]
+    assert [chunk["id"] for chunk in recovered[:3]] == ["5", "6", "7"]
+    assert recovered[3] == {"event": "heartbeat", "data": "{}"}
+
+
+@pytest.mark.asyncio
 async def test_events_404_for_unknown_task_and_refuses_missing_or_global_scope(
     client: AdminClient,
     seeded_task,

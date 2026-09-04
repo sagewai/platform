@@ -160,9 +160,15 @@ async def test_telemetry_route_projects_only_work_linked_to_the_task(
                 TaskEventType.STEP_WORK_STARTED,
                 {"step_id": "step-1", "work_id": "w1"},
             ),
-            _event(task, 4, TaskEventType.CYCLE_COMPLETED, {"outcome": "succeeded"}),
-            _event(task, 5, TaskEventType.CYCLE_STARTED, {"cycle": 2}),
-            _event(task, 6, TaskEventType.CYCLE_COMPLETED, {"outcome": "failed"}),
+            _event(
+                task,
+                4,
+                TaskEventType.STEP_WORK_STARTED,
+                {"step_id": "step-2", "work_id": "w2"},
+            ),
+            _event(task, 5, TaskEventType.CYCLE_COMPLETED, {"outcome": "succeeded"}),
+            _event(task, 6, TaskEventType.CYCLE_STARTED, {"cycle": 2}),
+            _event(task, 7, TaskEventType.CYCLE_COMPLETED, {"outcome": "failed"}),
         ),
     )
     await client.app.state.work_store.save_work(
@@ -183,6 +189,7 @@ async def test_telemetry_route_projects_only_work_linked_to_the_task(
             _execution("w1", sequence=4, run_id="w1:implement:2"),
             _selection("w2", sequence=1, run_id="w2:implement:1", runtime="codex"),
             _execution("w2", sequence=2, run_id="w2:implement:1"),
+            _selection("w3", sequence=1, run_id="w3:implement:1", runtime="harness"),
         )
     )
 
@@ -190,13 +197,13 @@ async def test_telemetry_route_projects_only_work_linked_to_the_task(
 
     assert response.status_code == 200
     body = response.json()
-    assert [work["work_id"] for work in body["works"]] == ["w1"]
+    assert [work["work_id"] for work in body["works"]] == ["w1", "w2"]
     assert body["works"][0]["stage_attempts"][0]["runtime"] == "harness"
     assert body["works"][0]["stage_attempts"][0]["selection_note"] == "selected model"
     assert [cycle["cycle"] for cycle in body["cycles"]] == [1, 2]
     assert [cycle["usd_actual"] for cycle in body["cycles"]] == ["0", "0"]
     assert body["scheduled"]["cycles"][0]["usd_actual"] == "0"
-    assert body["project"]["escalation_rate_per_role"]["implementer"] == 1 / 3
+    assert body["project"]["escalation_rate_per_role"]["implementer"] == 1 / 4
 
 
 @pytest.mark.asyncio

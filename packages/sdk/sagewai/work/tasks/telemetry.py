@@ -20,6 +20,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from sagewai.work.events import WorkEvent, WorkEventType
+from sagewai.work.models import RoleSelectionCounts
 from sagewai.work.tasks.events import TaskEvent, TaskEventType
 from sagewai.work.tasks.models import (
     Budget,
@@ -155,7 +156,7 @@ def derive_task_telemetry(
     work_events: Mapping[str, Sequence[WorkEvent]],
     spend: Mapping[int, SpendTotals],
     budget: Budget,
-    project_selections: Sequence[WorkEvent],
+    project_selections: Mapping[str, RoleSelectionCounts],
     now: datetime,
 ) -> TaskTelemetry:
     """STEP_WORK_STARTED and BUDGET_RECORDED follow their cycle's CYCLE_STARTED; violations raise."""
@@ -558,18 +559,13 @@ def _scheduled_cycle_telemetry(
     )
 
 
-def _project_telemetry(project_selections: Sequence[WorkEvent]) -> ProjectTelemetry:
-    totals: Counter[str] = Counter()
-    escalated: Counter[str] = Counter()
-    for event in project_selections:
-        role = str(event.payload_json["role"])
-        totals[role] += 1
-        if event.payload_json["reason"] == "escalated":
-            escalated[role] += 1
+def _project_telemetry(
+    project_selections: Mapping[str, RoleSelectionCounts],
+) -> ProjectTelemetry:
     return ProjectTelemetry(
         escalation_rate_per_role={
-            role: escalated[role] / total
-            for role, total in totals.items()
+            role: counts.escalations / counts.selections
+            for role, counts in project_selections.items()
         }
     )
 

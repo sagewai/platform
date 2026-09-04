@@ -628,16 +628,11 @@ async def task_telemetry(task_id: str, request: Request) -> dict:
     task, record = loaded
     task_events = await task_store.read_events(task_id, project_id=project_id)
     work_store: WorkStore = request.app.state.work_store
-    work_records = await work_store.list_work(project_id=project_id, active_only=False)
-    work_events: dict[str, list[WorkEvent]] = {}
-    project_selections: list[WorkEvent] = []
-    for work_record in work_records:
-        events = await work_store.read_events(work_record.work_id, project_id=project_id)
-        project_selections.extend(
-            event for event in events if event.event_type is WorkEventType.RUNTIME_SELECTED
-        )
-        if work_record.profile_context.get("task_id") == task_id:
-            work_events[work_record.work_id] = events
+    work_events: dict[str, list[WorkEvent]] = {
+        work_id: await work_store.read_events(work_id, project_id=project_id)
+        for work_id in task_work_ids(task_events)
+    }
+    project_selections = await work_store.runtime_selection_counts(project_id=project_id)
     cycles = {
         int(event.payload_json["cycle"])
         for event in task_events
@@ -852,25 +847,45 @@ async def _task_event_stream(
 ) -> AsyncIterator[dict[str, str]]:
     seen = after
     try:
-        while True:
-            page = await store.read_feed(task_id, project_id=project_id, after=seen, limit=500)
-            if not page:
-                break
-            for entry in page:
-                seen = entry.feed_sequence
-                yield _sse(entry)
+        async for entry in _replay(store=store, project_id=project_id, task_id=task_id, after=seen):
+            seen = entry.feed_sequence
+            yield _sse(entry)
         while True:
             try:
-                entry = await asyncio.wait_for(queue.get(), timeout=heartbeat_seconds)
+                live = await asyncio.wait_for(queue.get(), timeout=heartbeat_seconds)
             except asyncio.TimeoutError:
                 yield {"event": "heartbeat", "data": "{}"}
                 continue
-            if entry.feed_sequence <= seen:
+            if live.feed_sequence <= seen:
                 continue
-            seen = entry.feed_sequence
-            yield _sse(entry)
+            if live.feed_sequence > seen + 1:
+                # FeedBus drops entries when a subscriber queue is full; the durable replay
+                # recovers the skipped rows before the stream continues live.
+                async for entry in _replay(
+                    store=store, project_id=project_id, task_id=task_id, after=seen
+                ):
+                    seen = entry.feed_sequence
+                    yield _sse(entry)
+                if live.feed_sequence <= seen:
+                    continue
+            seen = live.feed_sequence
+            yield _sse(live)
     finally:
         store.feed_bus.unsubscribe(project_id, task_id, queue)
+
+
+async def _replay(
+    *, store: TaskStore, project_id: str, task_id: str, after: int
+) -> AsyncIterator[FeedEntry]:
+    """Durable feed rows after ``after``, paged at 500 until an empty page."""
+    seen = after
+    while True:
+        page = await store.read_feed(task_id, project_id=project_id, after=seen, limit=500)
+        if not page:
+            return
+        for entry in page:
+            seen = entry.feed_sequence
+            yield entry
 
 
 def _sse(entry: FeedEntry) -> dict[str, str]:

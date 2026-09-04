@@ -177,6 +177,15 @@ class PendingAttention(BaseModel):
     created_at: datetime
 
 
+class RoleSelectionCounts(BaseModel):
+    """How often a role's ladder was entered, and how often it escalated."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    selections: int = Field(ge=1)
+    escalations: int = Field(ge=0)
+
+
 class WorkItem(BaseModel):
     """Why a unit of work exists."""
 

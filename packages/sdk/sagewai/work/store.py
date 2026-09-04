@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import uuid
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
@@ -36,6 +37,7 @@ from sagewai.work.models import (
     ExternalOutcomeIncident,
     PendingAttention,
     PendingAttentionKind,
+    RoleSelectionCounts,
     WorkRecord,
 )
 
@@ -176,6 +178,33 @@ class WorkStore:
             profile=profile,
             runtime=runtime,
         )
+
+    async def runtime_selection_counts(
+        self, *, project_id: str | None
+    ) -> dict[str, RoleSelectionCounts]:
+        """Per-role runtime selections and escalations for one project, in one query.
+
+        The telemetry route previously read every Work's whole stream to compute this; only
+        ``RUNTIME_SELECTED`` rows are read now, and only their counts leave the store.
+        """
+        table = self._work_events
+        query = select(table.c.payload_json).where(
+            table.c.project_scope_key == project_scope_key(project_id),
+            table.c.event_type == WorkEventType.RUNTIME_SELECTED.value,
+        )
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(query)).all()
+        selections: Counter[str] = Counter()
+        escalations: Counter[str] = Counter()
+        for (payload,) in rows:
+            role = str(payload["role"])
+            selections[role] += 1
+            if payload["reason"] == "escalated":
+                escalations[role] += 1
+        return {
+            role: RoleSelectionCounts(selections=total, escalations=escalations[role])
+            for role, total in selections.items()
+        }
 
     async def save_work(self, record: WorkRecord) -> None:
         """Insert or replace the current projection for one WorkItem."""
