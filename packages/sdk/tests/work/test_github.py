@@ -724,6 +724,27 @@ async def test_a_transient_failed_merge_read_back_is_absorbed(
 
 
 @pytest.mark.asyncio
+async def test_a_transient_failed_merge_read_back_is_absorbed_on_resume(
+    store: WorkStore,
+) -> None:
+    flow, _, github, _ = _flow(store, decision=GateDecision.ALLOW)
+    delivered = await flow.start(
+        issue_url=ISSUE_URL,
+        project_id=PROJECT_ID,
+        base_sha="a" * 40,
+    )
+    await store.save_work(delivered.model_copy(update={"status": "MERGING"}))
+    github.readback_merged_once = False
+
+    resumed = await flow.resume(delivered.work_id, project_id=PROJECT_ID)
+
+    assert resumed.status == "COMPLETE"
+    assert resumed.profile_context["github"]["merged_sha"] == "c" * 40
+    assert len(github.merges) == 1
+    assert len(github.pull_request_reads) >= 3
+
+
+@pytest.mark.asyncio
 async def test_a_failed_merge_read_back_blocks_for_a_human(
     store: WorkStore,
     monkeypatch,

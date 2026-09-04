@@ -656,12 +656,12 @@ async def test_a_replayed_delivery_posts_no_second_comment(
     await lifecycle.start(**_start_kwargs(issue_sink=True))
     await lifecycle.resume(WORK_ID, project_id=PROJECT)
     await lifecycle.resume(WORK_ID, project_id=PROJECT)
-    record, first = await lifecycle.deliver(WORK_ID, project_id=PROJECT, sink_version=1)
+    record, first = await lifecycle.deliver(WORK_ID, project_id=PROJECT, sink_version=3)
     assert record.status == "READY_TO_DELIVER"
     assert record.profile_context["report"]["pending_sink_version"] == 2
     assert record.profile_context["report"]["deliver_action"]["rollback"] == "delete_comment"
     assert record.profile_context["report"]["deliver_action"]["scope"] == ISSUE_URL
-    _record, replay_first = await lifecycle.deliver(WORK_ID, project_id=PROJECT, sink_version=1)
+    _record, replay_first = await lifecycle.deliver(WORK_ID, project_id=PROJECT, sink_version=3)
     assert replay_first[0].action.rollback is None
     assert replay_first[0].action.scope == first[0].action.scope
     assert not github.comments

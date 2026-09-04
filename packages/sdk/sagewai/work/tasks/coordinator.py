@@ -125,7 +125,7 @@ def _lost_rollback(project_id: str, action_id: str) -> tuple[ActionResult, dict[
         {
             "action_id": action_id,
             "check": "rollback_receipt",
-            "passed": False,
+            "passed": None,
             "detail": "the rollback may have run before a crash; confirm the outcome on GitHub",
             "evidence_refs": [],
         },
@@ -155,6 +155,55 @@ def _lost_delivery(
             "evidence_refs": list(action.evidence_refs),
         },
     )
+
+
+def _failed_rollback(
+    project_id: str,
+    action_id: str,
+    detail: str,
+    now: datetime,
+) -> tuple[ActionResult, dict[str, object]]:
+    return (
+        ActionResult(
+            project_id=project_id,
+            action_id=action_id,
+            status="failed",
+            external_ref=None,
+            evidence_refs=(),
+            started_at=now,
+            completed_at=now,
+        ),
+        {
+            "action_id": action_id,
+            "check": "rollback_refused",
+            "passed": False,
+            "detail": detail,
+            "evidence_refs": [],
+        },
+    )
+
+
+def _refused_rollback_action_id(work_id: str, action: ActionRequest) -> str:
+    if action.rollback == "delete_comment":
+        return f"delete_comment:{work_id}:refused"
+    if action.rollback == "revert_pull_request":
+        return f"revert:{work_id}:refused"
+    return f"rollback:{work_id}:refused"
+
+
+def _rollback_refusal_entries(
+    work_id: str, result: ActionResult, observation: dict[str, object]
+) -> list[Entry]:
+    return [
+        (
+            TaskEventType.ACTION_RESULT_RECORDED,
+            {"work_id": work_id, **result.model_dump(mode="json")},
+        ),
+        (
+            TaskEventType.OBSERVATION_RECORDED,
+            {"work_id": work_id, **observation},
+        ),
+    ]
 
 
 def _accepted_plan_text(plan: AcceptedPlan) -> str:
@@ -1153,17 +1202,36 @@ class TaskCoordinator:
         try:
             intent = rollback_action(action)
             if intent.reversibility is Reversibility.IRREVERSIBLE:
+                detail = f"the recorded rollback for {action.scope} is irreversible and was not run"
+                result, observation = _failed_rollback(
+                    task.project_id,
+                    _refused_rollback_action_id(command.work_id, action),
+                    detail,
+                    self._now(),
+                )
                 return await self._block(
                     task,
                     record,
-                    f"the recorded rollback for {action.scope} is irreversible and was not run",
+                    detail,
                     lease_epoch,
                     command,
+                    prefix=_rollback_refusal_entries(command.work_id, result, observation),
                 )
             action_id = rollback_action_id(action)
         except RollbackRefusedError as exc:
+            result, observation = _failed_rollback(
+                task.project_id,
+                _refused_rollback_action_id(command.work_id, action),
+                str(exc),
+                self._now(),
+            )
             return await self._block(
-                task, record, f"the recorded rollback cannot run: {exc}", lease_epoch, command
+                task,
+                record,
+                f"the recorded rollback cannot run: {exc}",
+                lease_epoch,
+                command,
+                prefix=_rollback_refusal_entries(command.work_id, result, observation),
             )
         entries: list[Entry] = [
             (
@@ -1192,23 +1260,9 @@ class TaskCoordinator:
                     issue_url=requested.payload_json.get("issue_url"),
                 )
             except RollbackRefusedError as exc:
-                now = self._now()
-                result = ActionResult(
-                    project_id=task.project_id,
-                    action_id=action_id,
-                    status="failed",
-                    external_ref=None,
-                    evidence_refs=(),
-                    started_at=now,
-                    completed_at=now,
+                result, observation = _failed_rollback(
+                    task.project_id, action_id, str(exc), self._now()
                 )
-                observation = {
-                    "action_id": action_id,
-                    "check": "rollback_refused",
-                    "passed": False,
-                    "detail": str(exc),
-                    "evidence_refs": [],
-                }
         else:
             result, observation = _lost_rollback(task.project_id, action_id)
         message = f"{intent.action} on {action.scope}: {result.status}"
@@ -1289,7 +1343,9 @@ class TaskCoordinator:
                 if index == 0 or isinstance(channel, TrackingDecisionChannel)
             )
         )
-        for channel in channels:
+        selected_ids = {id(channel) for channel in channels}
+
+        async def notify_channel(channel: DecisionChannel) -> bool | None:
             command_id = f"notify:{channel.name}:{attention_id}"
             recorded = await self._task_store.record_command(
                 task_id=task.id,
@@ -1298,7 +1354,7 @@ class TaskCoordinator:
                 payload={"decision": decision.model_dump(mode="json")},
             )
             if not recorded:
-                continue
+                return None
             try:
                 reference = await channel.notify(decision)
             except Exception as exc:
@@ -1315,12 +1371,12 @@ class TaskCoordinator:
                 await self._task_store.delete_command(
                     task_id=task.id, project_id=task.project_id, command_id=command_id
                 )
-                continue
+                return False
             if reference is None:
                 await self._task_store.delete_command(
                     task_id=task.id, project_id=task.project_id, command_id=command_id
                 )
-                continue
+                return False
             if isinstance(channel, TrackingDecisionChannel):
                 established = channel.established(task.id)
                 if established is not None:
@@ -1339,6 +1395,21 @@ class TaskCoordinator:
                     },
                 )
             )
+            return True
+
+        presented = False
+        skipped = False
+        for channel in channels:
+            result = await notify_channel(channel)
+            skipped = result is None or skipped
+            presented = bool(result) or presented
+        if presented or skipped:
+            return entries
+        for channel in all_channels:
+            if id(channel) in selected_ids:
+                continue
+            if await notify_channel(channel):
+                break
         return entries
 
     async def _track(self, task: Task, record: TaskRecord, *, key: str, text: str) -> list[Entry]:
@@ -1626,7 +1697,7 @@ class TaskCoordinator:
             await self._track(
                 task,
                 record,
-                key=f"assess:{command.cycle}",
+                key=f"assess:{command.cycle}:{record.plan_version}",
                 text=_assessment_tracking_text(command.cycle, result),
             )
         )

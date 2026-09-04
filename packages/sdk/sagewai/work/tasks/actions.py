@@ -21,7 +21,6 @@ from sagewai.fleet.execution import run_worker_subprocess
 from sagewai.work.models import ActionRequest, ActionResult, Reversibility
 from sagewai.work.profiles.software.github import (
     GitHubFactory,
-    GitHubScope,
     is_github_comment_url,
     parse_comment_url,
     parse_pull_request_url,
@@ -30,6 +29,7 @@ from sagewai.work.profiles.software.scm import (
     SoftwareWorktreeManager,
     fetch_default_branch_head,
 )
+from sagewai.work.tasks.models import SoftwareTarget, Task
 
 _POST_CHECKS = {
     "revert_pull_request": "merged_sha_read_back",
@@ -99,7 +99,10 @@ def rollback_action(action: ActionRequest) -> ActionRequest:
 def rollback_action_id(action: ActionRequest) -> str:
     """A stable key derived from the target the recipe acts on."""
     if action.rollback == "revert_pull_request":
-        _owner, _repo, number = parse_pull_request_url(action.scope)
+        try:
+            _owner, _repo, number = parse_pull_request_url(action.scope)
+        except ValueError as exc:
+            raise RollbackRefusedError(str(exc)) from exc
         return f"revert:{action.work_id}:{number}"
     if action.rollback == "delete_comment" and is_github_comment_url(action.scope):
         _owner, _repo, comment_id = parse_comment_url(action.scope)
@@ -128,7 +131,7 @@ class RollbackExecutor:
 
     async def run(
         self,
-        scope: GitHubScope,
+        scope: Task,
         *,
         action: ActionRequest,
         action_id: str,
@@ -160,7 +163,7 @@ class RollbackExecutor:
 
     async def _revert_merge(
         self,
-        scope: GitHubScope,
+        scope: Task,
         action: ActionRequest,
         merged_sha: str | None,
         issue_url: str | None,
@@ -170,10 +173,10 @@ class RollbackExecutor:
             raise RollbackRefusedError("the merge recorded no merged commit; nothing to revert")
         if issue_url is None:
             raise RollbackRefusedError("the revert pull request needs the Work's issue")
-        target = getattr(scope, "target", None)
-        repository_path = getattr(target, "repository_path", None)
-        if repository_path is None:
-            raise RollbackRefusedError("a Git revert needs a software target with a repository")
+        target = scope.target
+        if not isinstance(target, SoftwareTarget):
+            raise RollbackRefusedError("the merge rollback needs a software repository")
+        repository_path = target.repository_path
         _owner, _repo, number = parse_pull_request_url(action.scope)
         repository = Path(repository_path)
         try:
@@ -237,7 +240,7 @@ class RollbackExecutor:
 
     async def _delete_comment(
         self,
-        scope: GitHubScope,
+        scope: Task,
         action: ActionRequest,
     ) -> tuple[str, tuple[str, ...], dict[str, Any]]:
         if not is_github_comment_url(action.scope):

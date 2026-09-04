@@ -433,8 +433,8 @@ never prefers the free implementation.
 
 A scheduled report Task uses a `ReportTarget` instead of a software target. It needs source
 grants, each with scoped `allowed_hosts`, plus `required_sections`, `max_bytes`, and at least
-one sink. The console sink is added when no sink is named; a GitHub issue sink also needs the
-issue URL it will comment on.
+one sink. The console sink is added whenever no console sink is declared, at the next free
+sink version; a GitHub issue sink also needs the issue URL it will comment on.
 
 Report verification is deterministic and containerless. The compose stage snapshots every
 source with its URL, fetch timestamp, and content hash, then verification checks size,
@@ -487,9 +487,11 @@ An open clarification deadline overrides those values when it is sooner. `now` n
 configured channel at once; `today` and `this_week` start with the first channel and escalate
 to the next one after half the remaining time. A `github_issue` channel is presented to
 regardless of urgency and position, because the tracking issue is the durable log. A channel
-failure deletes that channel's present-once receipt, so the item can be presented again when
-the escalation sweeper re-issues it. A project naming a channel that cannot be resolved falls
-back to the console; the log names the channel, never a URL.
+failure deletes that channel's present-once receipt; when every selected channel fails, the
+item falls through to the next channel in the same tick, ultimately the console, so a `today`
+item still reaches someone immediately. A project naming an unresolvable webhook channel falls
+back to the console; `github_issue` requires the tracking channel supplied by the coordinator
+wiring, and the log names the channel, never a URL.
 
 ## 7. Operate it as your middleman
 

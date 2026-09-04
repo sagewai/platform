@@ -308,7 +308,7 @@ def _webhook_url(configs: Sequence[dict[str, Any]], channel_type: str, name: str
         if config.get("channel_type") != channel_type or not config.get("enabled", True):
             continue
         url = config.get("webhook_url")
-        if url:
+        if isinstance(url, str) and url.startswith("https://"):
             return str(url)
     raise ChannelNotConfiguredError(f"{name} has no enabled webhook_url for this project")
 
@@ -351,10 +351,13 @@ class DecisionEscalation:
             if channels is None:
                 channels = await self._channels(project_id)
             carried = {name for name, _at in item.presented}
-            nxt = next((channel for channel in channels if channel.name not in carried), None)
-            if nxt is None:
-                continue
-            escalated += await self._present(record, item, nxt, now)
+            for channel in channels:
+                if channel.name in carried:
+                    continue
+                result = await self._present(record, item, channel, now)
+                if result:
+                    escalated += result
+                    break
         return escalated
 
     async def _present(

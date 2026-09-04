@@ -567,3 +567,35 @@ async def test_assessment_tracks_verdict_and_gaps_once(stores, tmp_path, monkeyp
     assert len(assessment_comments) == 1
     assert "deterministic check failed (suggested step: repair-step)" in assessment_comments[0]
     assert len(github.comments) == before
+
+
+@pytest.mark.asyncio
+async def test_replanned_assessment_tracks_the_second_plan_version(
+    stores, tmp_path, monkeypatch
+) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    task = task.model_copy(update={"budget": task.budget.model_copy(update={"max_replans": 2})})
+    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
+    runner.assessor_verdict = "replan"
+    runner.assessor_gaps = (
+        AssessmentGap(
+            statement="deterministic check failed",
+            severity="high",
+            suggested_step="repair-step",
+        ),
+    )
+    github = RecordingGitHub()
+    coordinator._static_channels = (
+        GitHubIssueDecisionChannel(store=task_store, github_factory=lambda _s: github),
+    )
+
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    assert record.status is TaskStatus.BLOCKED
+    assert [(cycle, version) for cycle, version, _sha in runner.assessed][:2] == [
+        (1, 1),
+        (1, 2),
+    ]
+    assert len(_comment_bodies(github, "Assessment cycle 1: replan")) == len(runner.assessed)

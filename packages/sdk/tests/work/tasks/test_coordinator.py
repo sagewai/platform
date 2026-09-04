@@ -54,7 +54,7 @@ from sagewai.work.tasks.plan import ClarificationQuestion, MatrixItem, PlanStep,
 from sagewai.work.tasks.planner import PlanningFailedError
 from sagewai.work.tasks.service import TaskService
 from sagewai.work.tasks.store import SpendReservation, TaskStore
-from sagewai.work.tasks.writer import TaskWriter
+from sagewai.work.tasks.writer import TaskWriter, status_entry
 from tests.db.conftest import dialect_engine  # noqa: F401
 from tests.work.tasks.test_actions import merged_repository  # noqa: F401
 from tests.work.tasks.test_decide import MATRIX, NOW, STEPS
@@ -1080,6 +1080,22 @@ async def test_today_needs_you_items_present_to_the_first_channel_only(stores, t
 
 
 @pytest.mark.asyncio
+async def test_today_needs_you_falls_through_when_the_first_channel_fails(stores, tmp_path) -> None:
+    task, record, _runner, coordinator = await _seed(stores, tmp_path)
+    first = _AngryChannel()
+    second = RecordingDecisionChannel("slack_webhook")
+    coordinator._static_channels = (first, second, ConsoleDecisionChannel())
+
+    entries = await coordinator._present(
+        task, record, attention_id="gate:1", summary="Approve merge", urgency="today"
+    )
+
+    assert first.calls == 1
+    assert [call.attention_id for call in second.calls] == ["gate:1"]
+    assert [entry[1]["channel"] for entry in entries] == ["slack_webhook"]
+
+
+@pytest.mark.asyncio
 async def test_needs_you_uses_an_open_clarification_deadline(stores, tmp_path, monkeypatch) -> None:
     task_store, _ = stores
     task, record, runner, coordinator = await _seed(stores, tmp_path)
@@ -1224,6 +1240,7 @@ async def test_a_rollback_whose_batch_is_lost_asks_instead_of_reverting_twice(
     )
     assert result.payload_json["status"] == "blocked"
     assert observation.payload_json["check"] == "rollback_receipt"
+    assert observation.payload_json["passed"] is None
     assert (
         observation.payload_json["detail"]
         == "the rollback may have run before a crash; confirm the outcome on GitHub"
@@ -1327,6 +1344,75 @@ async def test_a_refused_rollback_records_failed_action_and_blocks(
 
 
 @pytest.mark.asyncio
+async def test_a_pre_receipt_rollback_refusal_records_result_and_does_not_repeat(
+    stores,
+    tmp_path,
+    monkeypatch,
+    merged_repository,  # noqa: F811
+) -> None:
+    task_store, _work_store = stores
+
+    def malformed_merge(work_id: str) -> ActionRequest:
+        return ActionRequest(
+            project_id=PROJECT,
+            action="merge",
+            work_id=work_id,
+            risk="medium",
+            reversibility=Reversibility.COMPENSATABLE,
+            scope="merge:not-a-github-pull-request",
+            evidence_refs=("work://w1",),
+            rollback="revert_pull_request",
+            post_check="merged_sha_read_back",
+        )
+
+    record, coordinator, _github, work_id, service = await _rollback_ready(
+        stores,
+        tmp_path,
+        monkeypatch,
+        merged_repository,
+        action_factory=malformed_merge,
+    )
+    task, _stored = await task_store.load(record.task_id, project_id=PROJECT)
+    record = await service.decide_gate(
+        task.id,
+        project_id=PROJECT,
+        gate_id=f"rollback:{work_id}",
+        decision="allow",
+        actor_ref="arda",
+    )
+    record = await _drive_to_rest(coordinator, record, record.lease_epoch)
+
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    result = next(
+        event for event in events if event.event_type is TaskEventType.ACTION_RESULT_RECORDED
+    )
+    observation = next(
+        event for event in events if event.event_type is TaskEventType.OBSERVATION_RECORDED
+    )
+    assert result.payload_json["work_id"] == work_id
+    assert result.payload_json["action_id"].startswith(f"revert:{work_id}:")
+    assert result.payload_json["status"] == "failed"
+    assert observation.payload_json["check"] == "rollback_refused"
+    assert "not a GitHub pull request URL" in observation.payload_json["detail"]
+
+    result_count = sum(event.event_type is TaskEventType.ACTION_RESULT_RECORDED for event in events)
+    record = await TaskWriter(task_store).append(
+        record,
+        [status_entry(record, TaskStatus.EXECUTING)],
+        lease_epoch=record.lease_epoch,
+        now=NOW,
+    )
+    record = await coordinator.drive(record, lease_epoch=record.lease_epoch)
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+
+    assert record.status is TaskStatus.EXECUTING
+    assert (
+        sum(event.event_type is TaskEventType.ACTION_RESULT_RECORDED for event in events)
+        == result_count
+    )
+
+
+@pytest.mark.asyncio
 async def test_an_irreversible_rollback_blocks_without_running_the_executor(
     stores,
     tmp_path,
@@ -1377,12 +1463,18 @@ async def test_an_irreversible_rollback_blocks_without_running_the_executor(
 
     events = await task_store.read_events(task.id, project_id=PROJECT)
     message = [event for event in events if event.event_type is TaskEventType.TASK_MESSAGE][-1]
-    assert "irreversible and was not run" in message.payload_json["text"]
-    assert not any(
-        event.event_type
-        in {TaskEventType.ACTION_INTENT_RECORDED, TaskEventType.ACTION_RESULT_RECORDED}
-        for event in events
+    result = next(
+        event for event in events if event.event_type is TaskEventType.ACTION_RESULT_RECORDED
     )
+    observation = next(
+        event for event in events if event.event_type is TaskEventType.OBSERVATION_RECORDED
+    )
+    assert "irreversible and was not run" in message.payload_json["text"]
+    assert result.payload_json["work_id"] == work_id
+    assert result.payload_json["action_id"].startswith(f"delete_comment:{work_id}:")
+    assert result.payload_json["status"] == "failed"
+    assert observation.payload_json["work_id"] == work_id
+    assert observation.payload_json["check"] == "rollback_refused"
     assert executor.calls == 0
     assert record.status is TaskStatus.BLOCKED
 

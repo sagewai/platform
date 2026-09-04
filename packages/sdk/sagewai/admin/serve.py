@@ -903,11 +903,11 @@ def create_admin_serve_app(
         await _db_factory.ensure_schema()
 
         from sagewai.work import ActivityIngestion, WorkActivityStore, WorkStore
-        app.state.engine = _db_factory.get_engine()
-        app.state.work_store = WorkStore(engine=app.state.engine)
-        app.state.activity_store = WorkActivityStore(engine=app.state.engine)
+        engine = _db_factory.get_engine()
+        app.state.work_store = WorkStore(engine=engine)
+        app.state.activity_store = WorkActivityStore(engine=engine)
         from sagewai.work.tasks import TaskStore
-        app.state.task_store = TaskStore(engine=app.state.engine)
+        app.state.task_store = TaskStore(engine=engine)
         app.state.activity_ingestion = ActivityIngestion(
             work_store=app.state.work_store,
             task_store=app.state.task_store,
@@ -932,7 +932,7 @@ def create_admin_serve_app(
         from sagewai.work.tasks.service import ClarificationDeadlines, TaskService
         from sagewai.work.tasks.software import SoftwareProfileRunner
         from sagewai.work.tasks.triggers import TriggerIntake
-        app.state.notification_store = PostgresNotificationStore(engine=app.state.engine)
+        app.state.notification_store = PostgresNotificationStore(engine=engine)
 
         async def _coordinator_projects() -> list[str]:
             if _is_multi_tenant():
@@ -1106,9 +1106,11 @@ def create_admin_serve_app(
                     finally:
                         await app.state.task_report_runner.aclose()
             elif getattr(app.state, "task_profile_runner", None) is not None:
-                await app.state.task_profile_runner.aclose()
-                if getattr(app.state, "task_report_runner", None) is not None:
-                    await app.state.task_report_runner.aclose()
+                try:
+                    await app.state.task_profile_runner.aclose()
+                finally:
+                    if getattr(app.state, "task_report_runner", None) is not None:
+                        await app.state.task_report_runner.aclose()
             await runner.stop()
             # Clear the process-wide workflow store default on shutdown so
             # that in-process test runners (TestClient) don't leak the

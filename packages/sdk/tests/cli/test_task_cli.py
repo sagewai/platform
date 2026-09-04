@@ -91,3 +91,40 @@ def test_tick_wires_runners_to_connections_context_store(wired, monkeypatch) -> 
 
     assert result.exit_code == 0, result.output
     assert all(store is connection_store for store in captured["connection_stores"])
+
+
+def test_tick_closes_report_runner_when_software_close_fails(wired, monkeypatch) -> None:
+    from sagewai.cli import tasks as tasks_module
+
+    captured = {}
+
+    class _Runner:
+        def __init__(self, *, fail: bool = False, **_kwargs) -> None:
+            self.fail = fail
+            self.closed = False
+
+        async def aclose(self) -> None:
+            self.closed = True
+            if self.fail:
+                raise RuntimeError("software close failed")
+
+    def _software(**kwargs):
+        captured["software"] = _Runner(fail=True, **kwargs)
+        return captured["software"]
+
+    def _report(**kwargs):
+        captured["report"] = _Runner(**kwargs)
+        return captured["report"]
+
+    async def _tick(self):
+        return 0
+
+    monkeypatch.setattr(tasks_module, "SoftwareProfileRunner", _software)
+    monkeypatch.setattr(tasks_module, "ReportProfileRunner", _report)
+    monkeypatch.setattr(tasks_module.TaskCoordinatorRunner, "tick", _tick)
+
+    result = wired.invoke(task_group, ["--project", "project-a", "tick"])
+
+    assert result.exit_code != 0
+    assert captured["software"].closed is True
+    assert captured["report"].closed is True

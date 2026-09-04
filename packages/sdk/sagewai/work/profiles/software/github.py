@@ -1255,7 +1255,9 @@ class GitHubIssueLifecycle:
         )
         state = await self._read_pull_request_state(work_item, pull_request)
         if merge_event is not None and not state.merged:
-            raise RuntimeError("canonical merge event conflicts with GitHub state")
+            state = await self._read_pull_request_state(work_item, pull_request)
+            if not state.merged:
+                raise RuntimeError("canonical merge event conflicts with GitHub state")
 
         merge_result: GitHubMergeResult | None = None
         if not state.merged:

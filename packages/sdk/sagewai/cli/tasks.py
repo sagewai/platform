@@ -153,8 +153,10 @@ async def _tick(project_id: str) -> int:
     try:
         return await runner.tick()
     finally:
-        await software.aclose()
-        await report.aclose()
+        try:
+            await software.aclose()
+        finally:
+            await report.aclose()
 
 
 async def _one(project_id: str) -> list[str]:

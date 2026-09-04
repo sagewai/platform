@@ -441,6 +441,27 @@ async def test_escalation_run_recovers_a_failed_channel_receipt(store: TaskStore
 
 
 @pytest.mark.asyncio
+async def test_escalation_run_continues_after_a_broken_channel(store: TaskStore) -> None:
+    escalated_at = NOW + timedelta(hours=12, seconds=1)
+    await _seed_open_item(store, task_id="task-next", project_id="project-next")
+    broken = _FlakyChannel("slack_webhook", failures=99)
+    healthy = _RecordingChannel("google_chat_webhook")
+    escalation = DecisionEscalation(
+        store=store, channels=_channels(_RecordingChannel("console"), broken, healthy)
+    )
+
+    assert await escalation.run(project_id="project-next", now=escalated_at) == 1
+    assert len(broken.calls) == 1
+    assert len(healthy.calls) == 1
+    events = await store.read_events("task-next", project_id="project-next")
+    assert [
+        event.payload_json["channel"]
+        for event in events
+        if event.event_type is TaskEventType.NOTIFICATION_PRESENTED
+    ] == ["console", "google_chat_webhook"]
+
+
+@pytest.mark.asyncio
 async def test_escalation_run_recovers_a_none_reference_receipt(store: TaskStore) -> None:
     await _seed_open_item(store, task_id="task-none", project_id="project-none")
     missing = _NullChannel("github_issue")
@@ -539,6 +560,32 @@ async def test_an_unconfigured_channel_fails_closed_to_console(caplog) -> None:
     ] == ["slack_webhook"]
     assert "slack_webhook" in caplog.text
     assert "hooks.slack" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_non_https_webhook_value_fails_closed_to_console(caplog) -> None:
+    class _Configs:
+        async def list_channel_configs(self, project_id=None):
+            return [
+                {
+                    "channel_type": "slack",
+                    "enabled": True,
+                    "project_id": project_id,
+                    "webhook_url": "gAAAAABciphertext",
+                }
+            ]
+
+    defaults = TaskDefaults(project_id="project-a", decision_channels=("slack_webhook",))
+    with caplog.at_level(logging.WARNING, logger="sagewai.work.tasks"):
+        channels = await build_decision_channels(defaults=defaults, config_store=_Configs())
+
+    assert [channel.name for channel in channels] == ["console"]
+    assert [
+        getattr(record, "channel", None)
+        for record in caplog.records
+        if getattr(record, "event", None) == "task.channel.unconfigured"
+    ] == ["slack_webhook"]
+    assert "gAAAAABciphertext" not in caplog.text
 
 
 @pytest.mark.asyncio

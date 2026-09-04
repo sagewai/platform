@@ -137,12 +137,29 @@ def test_report_target_requires_console_sink_and_source_scope() -> None:
 
 
 def test_report_target_requires_distinct_sink_versions() -> None:
+    target = ReportTarget(
+        sinks=(
+            Sink(
+                kind="github_issue",
+                issue_url="https://github.com/o/r/issues/1",
+            ),
+        )
+    )
+    assert [(sink.kind, sink.version) for sink in target.sinks] == [
+        ("console", 2),
+        ("github_issue", 1),
+    ]
+
     with pytest.raises(ValidationError, match="each report sink needs its own version"):
         ReportTarget(
             sinks=(
                 Sink(
                     kind="github_issue",
                     issue_url="https://github.com/o/r/issues/1",
+                ),
+                Sink(
+                    kind="github_issue",
+                    issue_url="https://github.com/o/r/issues/2",
                 ),
             )
         )
@@ -156,7 +173,7 @@ def test_report_target_requires_distinct_sink_versions() -> None:
         )
     )
     assert [(sink.kind, sink.version) for sink in target.sinks] == [
-        ("console", 1),
+        ("console", 3),
         ("github_issue", 2),
     ]
 

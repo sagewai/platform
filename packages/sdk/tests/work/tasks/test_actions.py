@@ -27,7 +27,7 @@ from sagewai.work.tasks.actions import (
     rollback_action_id,
 )
 from sagewai.work.tasks.decisions import resolve_gate
-from sagewai.work.tasks.models import GateMode
+from sagewai.work.tasks.models import GateMode, ReportTarget, SoftwareTarget
 from tests.work.tasks.test_software_kernel import RecordingGitHub
 
 PROJECT = "project-a"
@@ -68,14 +68,14 @@ def merged_repository(tmp_path: Path) -> tuple[Path, str]:
     return repository, _git(repository, "rev-parse", "HEAD")
 
 
-class _Target:
-    kind = "software"
-
-    def __init__(self, repository: Path) -> None:
-        self.repository_path = str(repository)
-        self.owner = "octocat"
-        self.repo = "hello-world"
-        self.default_branch = "main"
+def _target(repository: Path) -> SoftwareTarget:
+    return SoftwareTarget(
+        repository_path=str(repository),
+        owner="octocat",
+        repo="hello-world",
+        default_branch="main",
+        verification_image="sha256:" + "a" * 64,
+    )
 
 
 class _Task:
@@ -172,7 +172,7 @@ async def test_revert_reverts_the_merge_opens_merges_and_reads_it_back(
     executor = RollbackExecutor(github_factory=lambda _scope: github, worktrees=worktrees)
 
     result, observation = await executor.run(
-        _Task(_Target(repository)),
+        _Task(_target(repository)),
         action=_merge_action(),
         action_id="revert:w1:7",
         merged_sha=merged_sha,
@@ -206,7 +206,7 @@ async def test_revert_readback_mismatch_fails_the_post_check(
     )
 
     result, observation = await executor.run(
-        _Task(_Target(repository)),
+        _Task(_target(repository)),
         action=_merge_action(),
         action_id="revert:w1:7",
         merged_sha=merged_sha,
@@ -231,10 +231,31 @@ async def test_a_revert_without_a_merged_sha_is_refused(
 
     with pytest.raises(RollbackRefusedError, match="no merged commit"):
         await executor.run(
-            _Task(_Target(repository)),
+            _Task(_target(repository)),
             action=_merge_action(),
             action_id="revert:w1:7",
             merged_sha=None,
+            issue_url=ISSUE_URL,
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_revert_for_a_report_task_is_refused(
+    merged_repository: tuple[Path, str],
+    tmp_path: Path,
+) -> None:
+    _repository, merged_sha = merged_repository
+    executor = RollbackExecutor(
+        github_factory=lambda _scope: RecordingGitHub(),
+        worktrees=SoftwareWorktreeManager(root=tmp_path / "worktrees"),
+    )
+
+    with pytest.raises(RollbackRefusedError, match="needs a software repository"):
+        await executor.run(
+            _Task(ReportTarget(required_sections=("Summary",))),
+            action=_merge_action(),
+            action_id="revert:w1:7",
+            merged_sha=merged_sha,
             issue_url=ISSUE_URL,
         )
 

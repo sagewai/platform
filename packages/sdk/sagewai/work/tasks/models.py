@@ -248,7 +248,17 @@ class ReportTarget(BaseModel):
     @model_validator(mode="after")
     def _ensure_console_sink(self) -> ReportTarget:
         if not any(sink.kind == "console" for sink in self.sinks):
-            object.__setattr__(self, "sinks", (Sink(kind="console"), *self.sinks))
+            object.__setattr__(
+                self,
+                "sinks",
+                (
+                    Sink(
+                        kind="console",
+                        version=max((sink.version for sink in self.sinks), default=0) + 1,
+                    ),
+                    *self.sinks,
+                ),
+            )
         return self
 
     @model_validator(mode="after")
