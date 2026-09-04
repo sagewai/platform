@@ -411,9 +411,14 @@ async def _resume_work(
         "PRODUCTION_ROLLOUT",
         "SOAKING",
         "ROLLING_BACK",
-        SUPERSEDED,
     }:
         return record
+    if record.status == SUPERSEDED:
+        raise ValueError(
+            _superseded_message(
+                work_id, await _superseded_by(work_id, project_id=project_id)
+            )
+        )
     expected_execution, expected_fleet_org = await _stored_work_execution_route(
         work_id,
         project_id=project_id,
@@ -468,6 +473,12 @@ async def _approve_work(
         raise ValueError("cannot approve a stale gate from TRIAGING")
     if record.status == "BASE_MOVED":
         raise ValueError("Work is held: the default branch moved; supersede and rerun")
+    if record.status == SUPERSEDED:
+        raise ValueError(
+            _superseded_message(
+                work_id, await _superseded_by(work_id, project_id=project_id)
+            )
+        )
     if record.source_ref is None or not is_github_issue_url(record.source_ref):
         raise ValueError("merge approval requires GitHub-sourced Work")
     await factory.ensure_schema()
@@ -507,6 +518,28 @@ async def _approve_work(
         )
     finally:
         await activity_sink.close()
+
+
+async def _superseded_by(work_id: str, *, project_id: str | None) -> str | None:
+    """The Work that replaced this one, from its own WORK_SUPERSEDED event."""
+    await factory.ensure_schema()
+    store = WorkStore(engine=factory.get_engine())
+    await store.init()
+    events = await store.read_events(work_id, project_id=project_id)
+    return next(
+        (
+            str(event.payload_json["superseded_by"])
+            for event in reversed(events)
+            if event.event_type is WorkEventType.WORK_SUPERSEDED
+        ),
+        None,
+    )
+
+
+def _superseded_message(work_id: str, superseded_by: str | None) -> str:
+    if superseded_by is None:
+        return f"Work {work_id} was superseded; its replacement owns the step"
+    return f"Work {work_id} was superseded by {superseded_by}; act on that Work instead"
 
 
 async def _pending_work(
