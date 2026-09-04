@@ -74,6 +74,32 @@ def service(store: TaskStore, tmp_path) -> TaskService:
     return TaskService(store=store, artifact_store=LocalArtifactStore(root=tmp_path / "objects"))
 
 
+@pytest.fixture
+async def service_and_record(service: TaskService, store: TaskStore):
+    """A Task past intake, with no open question — the plain write target."""
+    _task, record = await service.create(
+        SOFTWARE_BRIEF, project_id="project-a", origin=TaskOrigin.HUMAN, created_by="arda", now=NOW
+    )
+    return service, record
+
+
+@pytest.fixture
+async def clarifying(service: TaskService, store: TaskStore):
+    """A Task intake could not route, so it asked; returns the first open question.
+
+    ``"tidy up"`` tokenizes to fewer than four scoring tokens, so ``intake.route`` lands in the
+    ``synthesis`` band and emits ``CLARIFICATION_REQUESTED`` as event 4. Every question the
+    template mints carries ``attention_version`` 1.
+    """
+    task, record = await service.create(
+        "tidy up", project_id="project-a", origin=TaskOrigin.HUMAN, created_by="arda", now=NOW
+    )
+    events = await store.read_events(task.id, project_id="project-a")
+    questions = events[3].payload_json["questions"]
+    assert questions and questions[0]["attention_version"] == 1
+    return service, record, str(questions[0]["id"])
+
+
 @pytest.mark.asyncio
 async def test_create_records_the_first_three_events_and_the_template_binding(
     service: TaskService, store: TaskStore
@@ -231,6 +257,7 @@ async def test_answering_the_last_question_returns_to_planning(service: TaskServ
             task.id,
             project_id="project-a",
             question_id=question["id"],
+            attention_version=1,
             answer="the payments service",
             actor_ref="arda",
             now=NOW,
@@ -276,6 +303,7 @@ async def test_answering_questions_uses_the_open_set_and_materiality(
         task.id,
         project_id="project-a",
         question_id=defaultable_id,
+        attention_version=1,
         answer="ship the retry queue",
         actor_ref="arda",
         now=NOW,
@@ -287,6 +315,7 @@ async def test_answering_questions_uses_the_open_set_and_materiality(
             task.id,
             project_id="project-a",
             question_id=defaultable_id,
+            attention_version=1,
             answer="again",
             actor_ref="arda",
             now=NOW,
@@ -298,6 +327,7 @@ async def test_answering_questions_uses_the_open_set_and_materiality(
         task.id,
         project_id="project-a",
         question_id="hard",
+        attention_version=1,
         answer="/tmp/repo",
         actor_ref="arda",
         now=NOW,
@@ -420,6 +450,238 @@ async def test_a_non_defaultable_question_is_never_defaulted(
     assert after.status is TaskStatus.CLARIFYING
     assert after.pending_material_questions == 1
     assert after.attention_owner is AttentionOwner.USER
+
+
+@pytest.mark.asyncio
+async def test_add_message_appends_one_human_message(service_and_record) -> None:
+    service, record = service_and_record
+
+    updated = await service.add_message(
+        record.task_id, project_id=record.project_id, text="use the redis queue", actor_ref="arda"
+    )
+
+    assert updated.last_event_sequence == record.last_event_sequence + 1
+    events = await service._store.read_events(record.task_id, project_id=record.project_id)
+    assert events[-1].event_type is TaskEventType.TASK_MESSAGE
+    assert events[-1].payload_json == {"author": "human", "text": "use the redis queue", "refs": []}
+    assert events[-1].actor_ref == "arda"
+
+
+@pytest.mark.asyncio
+async def test_a_keyed_message_is_written_once(service_and_record) -> None:
+    service, record = service_and_record
+
+    first = await service.add_message(
+        record.task_id,
+        project_id=record.project_id,
+        text="use the redis queue",
+        actor_ref="arda",
+        idempotency_key="k1",
+    )
+    again = await service.add_message(
+        record.task_id,
+        project_id=record.project_id,
+        text="use the redis queue",
+        actor_ref="arda",
+        idempotency_key="k1",
+    )
+
+    assert again.revision == first.revision
+    events = await service._store.read_events(record.task_id, project_id=record.project_id)
+    assert sum(1 for event in events if event.event_type is TaskEventType.TASK_MESSAGE) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_keyed_message_that_loses_the_append_keeps_its_key_usable_after_any_failure(
+    service_and_record, monkeypatch
+) -> None:
+    """A spent receipt would turn the client's retry into a silent no-op."""
+    service, record = service_and_record
+    real_append = service._store.append
+
+    async def _fail(*_args, **_kwargs):
+        raise RuntimeError("append crashed after recording the receipt")
+
+    monkeypatch.setattr(service._store, "append", _fail)
+    with pytest.raises(RuntimeError, match="append crashed"):
+        await service.add_message(
+            record.task_id,
+            project_id=record.project_id,
+            text="use the redis queue",
+            actor_ref="arda",
+            idempotency_key="k1",
+        )
+    monkeypatch.setattr(service._store, "append", real_append)
+
+    retried = await service.add_message(
+        record.task_id,
+        project_id=record.project_id,
+        text="use the redis queue",
+        actor_ref="arda",
+        idempotency_key="k1",
+    )
+
+    assert retried.last_event_sequence == record.last_event_sequence + 1
+    events = await service._store.read_events(record.task_id, project_id=record.project_id)
+    assert sum(1 for event in events if event.event_type is TaskEventType.TASK_MESSAGE) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_unkeyed_message_repeats(service_and_record) -> None:
+    service, record = service_and_record
+
+    await service.add_message(
+        record.task_id, project_id=record.project_id, text="again", actor_ref="arda"
+    )
+    await service.add_message(
+        record.task_id, project_id=record.project_id, text="again", actor_ref="arda"
+    )
+
+    events = await service._store.read_events(record.task_id, project_id=record.project_id)
+    assert sum(1 for event in events if event.event_type is TaskEventType.TASK_MESSAGE) == 2
+
+
+@pytest.mark.asyncio
+async def test_answering_with_a_stale_attention_version_is_refused(clarifying) -> None:
+    service, record, question_id = clarifying
+
+    with pytest.raises(TaskDecisionError, match="attention version"):
+        await service.answer_clarification(
+            record.task_id,
+            project_id=record.project_id,
+            question_id=question_id,
+            attention_version=2,
+            answer="redis",
+            actor_ref="arda",
+        )
+    unchanged = await service._store.load_record(record.task_id, project_id=record.project_id)
+    assert unchanged.pending_questions == record.pending_questions
+
+
+@pytest.mark.asyncio
+async def test_answering_with_the_current_attention_version_records_the_answer(clarifying) -> None:
+    service, record, question_id = clarifying
+
+    updated = await service.answer_clarification(
+        record.task_id,
+        project_id=record.project_id,
+        question_id=question_id,
+        attention_version=1,
+        answer="redis",
+        actor_ref="arda",
+    )
+
+    assert updated.pending_questions == record.pending_questions - 1
+
+
+@pytest.mark.asyncio
+async def test_defaulting_with_the_current_attention_version_records_the_default(
+    clarifying,
+) -> None:
+    service, record, question_id = clarifying
+
+    updated = await service.answer_clarification(
+        record.task_id,
+        project_id=record.project_id,
+        question_id=question_id,
+        attention_version=1,
+        answer=None,
+        actor_ref="arda",
+    )
+
+    assert updated.pending_questions == record.pending_questions - 1
+    events = await service._store.read_events(record.task_id, project_id=record.project_id)
+    assert events[-2].event_type is TaskEventType.CLARIFICATION_DEFAULTED
+
+
+@pytest.mark.asyncio
+async def test_defaulting_a_non_defaultable_question_is_refused(
+    service: TaskService, store: TaskStore
+) -> None:
+    task, record = await service.create(
+        "tidy up", project_id="project-a", origin=TaskOrigin.HUMAN, created_by="arda", now=NOW
+    )
+    record = await TaskWriter(store).append(
+        record,
+        [
+            (
+                TaskEventType.CLARIFICATION_REQUESTED,
+                {
+                    "questions": [
+                        {
+                            "id": "hard",
+                            "text": "Which repository?",
+                            "kind": "text",
+                            "options": [],
+                            "default": "no",
+                            "defaultable": False,
+                            "rationale": "",
+                            "attention_version": 1,
+                        }
+                    ],
+                    "deadline_at": NOW.isoformat(),
+                },
+            )
+        ],
+        now=NOW,
+    )
+
+    with pytest.raises(TaskDecisionError, match="not defaultable"):
+        await service.answer_clarification(
+            task.id,
+            project_id="project-a",
+            question_id="hard",
+            attention_version=1,
+            answer=None,
+            actor_ref="arda",
+        )
+    unchanged = await store.load_record(task.id, project_id="project-a")
+    assert unchanged == record
+
+
+@pytest.mark.asyncio
+async def test_defaulting_a_question_without_a_default_is_refused(
+    service: TaskService, store: TaskStore
+) -> None:
+    task, record = await service.create(
+        "tidy up", project_id="project-a", origin=TaskOrigin.HUMAN, created_by="arda", now=NOW
+    )
+    record = await TaskWriter(store).append(
+        record,
+        [
+            (
+                TaskEventType.CLARIFICATION_REQUESTED,
+                {
+                    "questions": [
+                        {
+                            "id": "hard",
+                            "text": "Which repository?",
+                            "kind": "text",
+                            "options": [],
+                            "default": None,
+                            "defaultable": True,
+                            "rationale": "",
+                            "attention_version": 1,
+                        }
+                    ],
+                    "deadline_at": NOW.isoformat(),
+                },
+            )
+        ],
+        now=NOW,
+    )
+
+    with pytest.raises(TaskDecisionError, match="no default"):
+        await service.answer_clarification(
+            task.id,
+            project_id="project-a",
+            question_id="hard",
+            attention_version=1,
+            answer=None,
+            actor_ref="arda",
+        )
+    unchanged = await store.load_record(task.id, project_id="project-a")
+    assert unchanged == record
 
 
 STEP = {

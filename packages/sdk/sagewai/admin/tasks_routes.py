@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sse_starlette.sse import EventSourceResponse
 
 from sagewai.admin.serve import _emit_audit, _require_project_admin, _work_project_scope
@@ -204,6 +204,30 @@ class _BriefBody(BaseModel):
         return _strip_brief(value)
 
 
+class _MessageBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, max_length=8000)
+
+
+class _AnswerBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    attention_id: str = Field(min_length=1)
+    attention_version: int = Field(ge=1)
+    answer: str | None = Field(default=None, min_length=1, max_length=8000)
+    use_default: bool = False
+
+    @model_validator(mode="after")
+    def _validate_shape(self) -> _AnswerBody:
+        if self.use_default:
+            if self.answer is not None:
+                raise ValueError("defaulted answers do not carry answer")
+        elif self.answer is None:
+            raise ValueError("answer is required")
+        return self
+
+
 @router.post("", status_code=201)
 async def create_task(request: Request, body: _CreateTaskBody) -> dict:
     project_id = _task_project_scope(request)
@@ -384,6 +408,40 @@ async def rollback_task_action(task_id: str, action_id: str, request: Request) -
             task_id, project_id=project_id, action_id=action_id, actor_ref=_actor_ref(request)
         )
     await _emit_audit(request, "task.action.rollback", target_type="task", target_id=task_id)
+    return record.model_dump(mode="json")
+
+
+@router.post("/{task_id}/messages", status_code=201)
+async def post_task_message(task_id: str, request: Request, body: _MessageBody) -> dict:
+    """``Idempotency-Key`` makes a retried POST safe; without it a retry duplicates."""
+    project_id = _task_project_scope(request)
+    service: TaskService = request.app.state.task_service
+    with _service_errors():
+        record = await service.add_message(
+            task_id,
+            project_id=project_id,
+            text=body.text,
+            actor_ref=_actor_ref(request),
+            idempotency_key=request.headers.get("idempotency-key"),
+        )
+    await _emit_audit(request, "task.message", target_type="task", target_id=task_id)
+    return record.model_dump(mode="json")
+
+
+@router.post("/{task_id}/answers")
+async def post_task_answer(task_id: str, request: Request, body: _AnswerBody) -> dict:
+    project_id = _task_project_scope(request)
+    service: TaskService = request.app.state.task_service
+    with _service_errors():
+        record = await service.answer_clarification(
+            task_id,
+            project_id=project_id,
+            question_id=body.attention_id,
+            attention_version=body.attention_version,
+            answer=body.answer,
+            actor_ref=_actor_ref(request),
+        )
+    await _emit_audit(request, "task.answer", target_type="task", target_id=task_id)
     return record.model_dump(mode="json")
 
 

@@ -90,6 +90,13 @@ def _open_questions(
     return list(pending.values())
 
 
+def _default_clarification_entry(question: dict[str, Any]) -> Entry:
+    return (
+        TaskEventType.CLARIFICATION_DEFAULTED,
+        {"question_id": str(question["id"]), "answer": question.get("default")},
+    )
+
+
 class TaskService:
     """The single writer of Task creation and of human answers and plan acceptance."""
 
@@ -239,11 +246,18 @@ class TaskService:
         *,
         project_id: str,
         question_id: str,
-        answer: str,
+        attention_version: int,
+        answer: str | None,
         actor_ref: str,
         now: datetime | None = None,
     ) -> TaskRecord:
-        """Record one answer; the last one returns the Task to planning."""
+        """Record one answer; the last one returns the Task to planning.
+
+        ``answer=None`` applies the question's declared default through
+        ``_default_clarification_entry``.
+        ``attention_version`` binds the answer to the question as it was presented: a question
+        re-asked at a higher version rejects an answer composed against the old text.
+        """
         _task, record = await self._load(task_id, project_id=project_id)
         open_questions = _open_questions(await self._store.read_events(task_id, project_id=project_id))
         questions = {str(question["id"]): question for question, _deadline in open_questions}
@@ -251,17 +265,68 @@ class TaskService:
             question = questions.pop(question_id)
         except KeyError as exc:
             raise TaskDecisionError(f"no open clarification question {question_id}") from exc
-        material = not bool(question["defaultable"])
-        entries: list[Entry] = [
-            (
-                TaskEventType.CLARIFICATION_ANSWERED,
-                {"question_id": question_id, "answer": answer, "material": material},
+        if int(question["attention_version"]) != attention_version:
+            raise TaskDecisionError(
+                f"question {question_id} is at attention version {question['attention_version']}"
             )
-        ]
+        if answer is None:
+            if not bool(question["defaultable"]):
+                raise TaskDecisionError(f"question {question_id} is not defaultable")
+            if question.get("default") is None:
+                raise TaskDecisionError(f"question {question_id} has no default")
+            entries: list[Entry] = [_default_clarification_entry(question)]
+        else:
+            material = not bool(question["defaultable"])
+            entries = [
+                (
+                    TaskEventType.CLARIFICATION_ANSWERED,
+                    {"question_id": question_id, "answer": answer, "material": material},
+                )
+            ]
         if record.status is TaskStatus.CLARIFYING and not questions:
             entries.append(status_entry(record, TaskStatus.PLANNING))
         writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
         return await writer.append(record, entries, now=now)
+
+    async def add_message(
+        self,
+        task_id: str,
+        *,
+        project_id: str,
+        text: str,
+        actor_ref: str,
+        idempotency_key: str | None = None,
+        now: datetime | None = None,
+    ) -> TaskRecord:
+        """Append one human message to the thread; it changes no status and opens no gate.
+
+        With an ``idempotency_key`` the message is written at most once: the key becomes a
+        ``task_commands`` receipt, so a retried POST returns the current projection instead
+        of a second copy of the same sentence. Without one a retry duplicates, which is why
+        the route forwards the ``Idempotency-Key`` header.
+        """
+        _task, record = await self._load(task_id, project_id=project_id)
+        command_id = None if idempotency_key is None else f"message:{idempotency_key}"
+        if command_id is not None and not await self._store.record_command(
+            task_id=task_id,
+            project_id=project_id,
+            command_id=command_id,
+            payload={"text": text},
+        ):
+            return record
+        writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
+        try:
+            return await writer.append(
+                record,
+                [(TaskEventType.TASK_MESSAGE, {"author": "human", "text": text, "refs": []})],
+                now=now,
+            )
+        except Exception:
+            if command_id is not None:
+                await self._store.delete_command(
+                    task_id=task_id, project_id=project_id, command_id=command_id
+                )
+            raise
 
     async def accept_plan(
         self,
@@ -432,13 +497,7 @@ class TaskService:
         ]
         if not expired:
             return record
-        entries: list[Entry] = [
-            (
-                TaskEventType.CLARIFICATION_DEFAULTED,
-                {"question_id": str(question["id"]), "answer": question.get("default")},
-            )
-            for question in expired
-        ]
+        entries: list[Entry] = [_default_clarification_entry(question) for question in expired]
         if len(expired) == len(open_questions):
             entries.append(status_entry(record, TaskStatus.PLANNING))
         writer = TaskWriter(self._store)
