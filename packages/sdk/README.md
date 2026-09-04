@@ -12,6 +12,8 @@ The Work control plane is the primary operating path. It persists project-scoped
 
 The Task coordinator builds on that path: from `sagewai task` or the backend, it plans a brief into software or report steps, drives each Work through assessment and delivery, routes decisions through configured channels, and executes recorded rollback recipes.
 
+The Task API and the `sagewai task` command family drive the same coordinator from a backend or a terminal: create, read, answer, decide, pause, resume, cancel, and manage triggers, with the API adding the project-admin writes (defaults, budget raises, rollback requests) and the cross-project portfolio.
+
 > **Sagewai is early software.** The sections below are explicit about what ships today, what is experimental, and what is on the v1.1 roadmap — so you know what to rely on.
 
 ## Quick start
