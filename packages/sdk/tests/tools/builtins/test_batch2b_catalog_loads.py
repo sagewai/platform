@@ -33,12 +33,13 @@ def test_github_has_new_write_ops():
     registry._reset()
     registry.load()
     entry = registry.lookup("github")
-    assert entry.version == "0.3.1"
+    assert entry.version == "0.3.2"
     assert "merge pull requests" in entry.description.lower()
     ops = set(entry.exec_["http"]["operations"].keys())
     expected_new = {
         "create_issue",
         "create_comment",
+        "delete_comment",
         "create_pull_request",
         "find_pull_requests",
         "get_issue",
@@ -48,6 +49,10 @@ def test_github_has_new_write_ops():
     }
     missing = expected_new - ops
     assert not missing, f"github missing extended ops: {missing}"
+    ops_cfg = entry.exec_["http"]["operations"]
+    assert ops_cfg["delete_comment"]["method"] == "DELETE"
+    assert ops_cfg["delete_comment"]["path"] == "/repos/{owner}/{repo}/issues/comments/{comment_id}"
+    assert ops_cfg["create_comment"]["output_schema"]["required"] == ["id", "html_url", "body"]
 
 
 def test_github_has_git_write_scope():

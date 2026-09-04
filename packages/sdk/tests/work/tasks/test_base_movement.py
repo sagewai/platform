@@ -19,7 +19,7 @@ from sagewai.work.events import WorkEvent, WorkEventType
 from sagewai.work.models import SUPERSEDED, WorkRecord
 from sagewai.work.store import WorkStore
 from sagewai.work.supersede import supersede_work
-from sagewai.work.tasks.assessment import AssessmentGap, TaskAssessmentResult
+from sagewai.work.tasks.assessment import AssessmentGap
 from sagewai.work.tasks.events import TaskEventType
 from sagewai.work.tasks.models import Authority, GateMode, TaskDefaults, TaskStatus
 from sagewai.work.tasks.planner import PlanningFailedError
@@ -300,25 +300,16 @@ async def test_an_already_superseded_base_move_uses_the_existing_replacement_wor
 async def test_planning_failure_after_replan_does_not_reuse_previous_assessment_gaps(
     stores, tmp_path, monkeypatch
 ) -> None:
-    import sagewai.work.tasks.coordinator as module
-
     task_store, _work_store = stores
     task, record, runner, coordinator = await _seed(stores, tmp_path)
     task = task.model_copy(update={"authority": Authority(plan=GateMode.AUTO, replan=GateMode.AUTO)})
     monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
-    monkeypatch.setattr(
-        module,
-        "assess_cycle",
-        lambda *args, **kwargs: TaskAssessmentResult(
-            attempt_id="a1",
-            gaps=(
-                AssessmentGap(
-                    statement="stale assessment gap",
-                    severity="high",
-                    suggested_step="repair-step",
-                ),
-            ),
-            verdict="replan",
+    runner.assessor_verdict = "replan"
+    runner.assessor_gaps = (
+        AssessmentGap(
+            statement="stale assessment gap",
+            severity="high",
+            suggested_step="repair-step",
         ),
     )
     original_plan = runner.plan

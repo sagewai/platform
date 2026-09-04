@@ -50,6 +50,11 @@ _ISSUE_PATH = re.compile(
     r"^/(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+)/"
     r"issues/(?P<number>[1-9][0-9]*)/?$"
 )
+_PULL_PATH = re.compile(
+    r"^/(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+)/"
+    r"pull/(?P<number>[1-9][0-9]*)/?$"
+)
+_COMMENT_FRAGMENT = re.compile(r"^issuecomment-(?P<comment_id>[1-9][0-9]*)$")
 
 
 class GitHubMergeRejectedError(RuntimeError):
@@ -96,6 +101,17 @@ class GitHubPullRequest(BaseModel):
     head: str
     head_sha: str
     base: str
+
+
+class GitHubComment(BaseModel):
+    """One issue comment, identified so it can be deleted again."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    project_id: str
+    id: int
+    url: str
+    body: str
 
 
 class GitHubPullRequestState(BaseModel):
@@ -180,7 +196,9 @@ class GitHubClient(Protocol):
         expected_head_sha: str,
     ) -> GitHubMergeResult: ...
 
-    async def comment_issue(self, issue_url: str, body: str) -> None: ...
+    async def comment_issue(self, issue_url: str, body: str) -> GitHubComment: ...
+
+    async def delete_comment(self, comment_url: str) -> None: ...
 
     async def create_issue(
         self,
@@ -461,15 +479,32 @@ class CatalogGitHubClient:
             merged_sha=str(result["sha"]),
         )
 
-    async def comment_issue(self, issue_url: str, body: str) -> None:
+    async def comment_issue(self, issue_url: str, body: str) -> GitHubComment:
         owner, repo, number = _parse_issue_url(issue_url)
-        await self._call(
+        comment = await self._call(
             {
                 "_operation": "create_comment",
                 "owner": owner,
                 "repo": repo,
                 "number": number,
                 "body": body,
+            }
+        )
+        return GitHubComment(
+            project_id=self._project_id,
+            id=int(comment["id"]),
+            url=str(comment["html_url"]),
+            body=str(comment["body"]),
+        )
+
+    async def delete_comment(self, comment_url: str) -> None:
+        owner, repo, comment_id = parse_comment_url(comment_url)
+        await self._call(
+            {
+                "_operation": "delete_comment",
+                "owner": owner,
+                "repo": repo,
+                "comment_id": comment_id,
             }
         )
 
@@ -566,6 +601,26 @@ def require_merge_approval(_request: ActionRequest) -> GateDecision:
     """Default merge policy: an operator must explicitly approve."""
 
     return GateDecision.REQUIRE_APPROVAL
+
+
+def _merge_post_check_detail(
+    state: GitHubPullRequestState,
+    merge_result: GitHubMergeResult | None,
+    merge_event: WorkEvent | None,
+) -> str | None:
+    """The reason merged_sha_read_back failed, or None when the merge is confirmed."""
+    if not state.merged:
+        return "GitHub did not report the pull request as merged"
+    if state.merge_commit_sha is None:
+        return "GitHub did not report the merged commit SHA"
+    if merge_result is not None and merge_result.merged_sha != state.merge_commit_sha:
+        return "merge response SHA conflicts with GitHub read-back"
+    if (
+        merge_event is not None
+        and str(merge_event.payload_json["merged_sha"]) != state.merge_commit_sha
+    ):
+        return "canonical merged SHA conflicts with GitHub state"
+    return None
 
 
 class GitHubIssueLifecycle:
@@ -1198,14 +1253,11 @@ class GitHubIssueLifecycle:
             pull_request.number,
             after_sequence=cycle_start,
         )
-        state = await self._github.get_pull_request(pull_request)
-        if (
-            state.project_id != work_item.project_id
-            or state.pull_request_number != pull_request.number
-        ):
-            raise ValueError("pull request state belongs to a different WorkItem")
+        state = await self._read_pull_request_state(work_item, pull_request)
         if merge_event is not None and not state.merged:
-            raise RuntimeError("canonical merge event conflicts with GitHub state")
+            state = await self._read_pull_request_state(work_item, pull_request)
+            if not state.merged:
+                raise RuntimeError("canonical merge event conflicts with GitHub state")
 
         merge_result: GitHubMergeResult | None = None
         if not state.merged:
@@ -1256,27 +1308,74 @@ class GitHubIssueLifecycle:
                 or merge_result.pull_request_number != pull_request.number
             ):
                 raise ValueError("merge result belongs to a different WorkItem")
-            state = await self._github.get_pull_request(pull_request)
-            if (
-                state.project_id != work_item.project_id
-                or state.pull_request_number != pull_request.number
-            ):
-                raise ValueError("pull request state belongs to a different WorkItem")
+            state = await self._read_pull_request_state(work_item, pull_request)
 
-        if not state.merged:
-            raise RuntimeError("GitHub did not report the pull request as merged")
-        if state.merge_commit_sha is None:
-            raise RuntimeError("GitHub did not report the merged commit SHA")
+        if not state.merged or state.merge_commit_sha is None:
+            # GitHub can report merged=False briefly after a successful merge; read once
+            # more before asking for operator attention.
+            state = await self._read_pull_request_state(work_item, pull_request)
+        detail = _merge_post_check_detail(state, merge_result, merge_event)
+        action_id = f"merge:{work_item.id}:{pull_request.number}"
+        observed_merged_sha = state.merge_commit_sha if state.merged else None
+        observation_payload = {
+            "check": "merged_sha_read_back",
+            "action_id": action_id,
+            "passed": detail is None,
+            "detail": detail,
+            "merged_sha": observed_merged_sha,
+            "evidence_refs": [pull_request.url],
+        }
+        previous_observation = next(
+            (
+                event
+                for event in reversed(events)
+                if event.event_type is WorkEventType.OBSERVATION_RECORDED
+                and event.sequence > cycle_start
+                and event.payload_json.get("check") == "merged_sha_read_back"
+                and event.payload_json.get("action_id") == action_id
+            ),
+            None,
+        )
         if (
-            merge_result is not None
-            and merge_result.merged_sha != state.merge_commit_sha
+            previous_observation is None
+            or previous_observation.payload_json != observation_payload
         ):
-            raise RuntimeError("merge response SHA conflicts with GitHub read-back")
-        if merge_event is not None:
-            recorded_sha = str(merge_event.payload_json["merged_sha"])
-            if recorded_sha != state.merge_commit_sha:
-                raise RuntimeError("canonical merged SHA conflicts with GitHub state")
-        else:
+            await self._append(
+                work_id=work_item.id,
+                project_id=work_item.project_id,
+                event_type=WorkEventType.OBSERVATION_RECORDED,
+                payload=observation_payload,
+                actor_ref="github",
+            )
+        if detail is not None:
+            await self._append(
+                work_id=work_item.id,
+                project_id=work_item.project_id,
+                event_type=WorkEventType.WORK_BLOCKED,
+                payload={
+                    "reason": "merge_post_check_failed",
+                    "decision_request": (
+                        (
+                            f"{detail}. Allow the recorded rollback ({action.rollback}) "
+                            "or resolve the pull request on GitHub."
+                        )
+                        if observed_merged_sha is not None
+                        else f"{detail}. Resolve the pull request on GitHub."
+                    ),
+                    "merged_sha": observed_merged_sha,
+                    "issue_url": issue.url,
+                    "evidence_refs": list(action.evidence_refs),
+                },
+                actor_ref="github",
+            )
+            record = await self._set_record(
+                record,
+                status="WORK_BLOCKED",
+                pending_gate=None,
+            )
+            await self.present_pending(work_item.id, project_id=issue.project_id)
+            return record
+        if merge_event is None:
             await self._append(
                 work_id=work_item.id,
                 project_id=work_item.project_id,
@@ -1308,6 +1407,19 @@ class GitHubIssueLifecycle:
             pull_request=pull_request,
             result_sha=state.merge_commit_sha,
         )
+
+    async def _read_pull_request_state(
+        self,
+        work_item: WorkItem,
+        pull_request: GitHubPullRequest,
+    ) -> GitHubPullRequestState:
+        state = await self._github.get_pull_request(pull_request)
+        if (
+            state.project_id != work_item.project_id
+            or state.pull_request_number != pull_request.number
+        ):
+            raise ValueError("pull request state belongs to a different WorkItem")
+        return state
 
     async def _finish_repository_outcome(
         self,
@@ -1790,6 +1902,37 @@ def github_remote_repository(value: str) -> tuple[str, str]:
     return parts[0], parts[1]
 
 
+def parse_pull_request_url(value: str) -> tuple[str, str, int]:
+    """Split one canonical github.com pull request URL into owner, repo, and number."""
+    from urllib.parse import urlsplit
+
+    parsed = urlsplit(value)
+    match = _PULL_PATH.fullmatch(parsed.path)
+    if parsed.scheme != "https" or parsed.netloc != "github.com" or match is None:
+        raise ValueError(f"not a GitHub pull request URL: {value}")
+    return match.group("owner"), match.group("repo"), int(match.group("number"))
+
+
+def parse_comment_url(value: str) -> tuple[str, str, int]:
+    """Split one issue-comment permalink into owner, repo, and comment id."""
+    from urllib.parse import urlsplit
+
+    owner, repo, _number = _parse_issue_url(value)
+    match = _COMMENT_FRAGMENT.fullmatch(urlsplit(value).fragment)
+    if match is None:
+        raise ValueError(f"not a GitHub issue comment URL: {value}")
+    return owner, repo, int(match.group("comment_id"))
+
+
+def is_github_comment_url(value: str) -> bool:
+    """Return whether VALUE is one canonical github.com issue-comment permalink."""
+    try:
+        parse_comment_url(value)
+    except ValueError:
+        return False
+    return True
+
+
 def _parse_issue_url(value: str) -> tuple[str, str, int]:
     from urllib.parse import urlsplit
 
@@ -1837,6 +1980,7 @@ __all__ = [
     "CatalogGitHubClient",
     "GitBranchPublisher",
     "GitHubClient",
+    "GitHubComment",
     "GitHubFactory",
     "GitHubIssue",
     "GitHubIssueLifecycle",
@@ -1848,6 +1992,9 @@ __all__ = [
     "GitHubWorkContext",
     "WorktreeBranchPublisher",
     "github_remote_repository",
+    "is_github_comment_url",
     "is_github_issue_url",
+    "parse_comment_url",
+    "parse_pull_request_url",
     "require_merge_approval",
 ]

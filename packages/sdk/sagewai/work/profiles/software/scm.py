@@ -350,6 +350,21 @@ class SoftwareWorktreeManager:
             raise WorkspaceStaleError(pushed.stderr)
         return result_sha
 
+    async def release(self, workspace: SoftwareWorkspace) -> None:
+        """Best-effort remove one prepared worktree without masking the caller's error."""
+        await _git(workspace.repository, "worktree", "remove", "--force", str(workspace.path))
+
+
+async def fetch_default_branch_head(repository: Path, default_branch: str) -> str:
+    """Fetch origin and return the default-branch head."""
+    fetched = await _git(repository, "fetch", "origin", default_branch)
+    if fetched.returncode != 0:
+        raise ValueError(f"git fetch failed: {fetched.stderr.strip()}")
+    head = await _git(repository, "rev-parse", f"origin/{default_branch}")
+    if head.returncode != 0:
+        raise ValueError(f"no head for origin/{default_branch}: {head.stderr.strip()}")
+    return head.stdout.strip()
+
 
 async def workspace_diff(
     workspace: SoftwareWorkspace,

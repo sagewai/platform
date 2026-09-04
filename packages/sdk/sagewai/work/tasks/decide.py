@@ -18,6 +18,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from sagewai.work.tasks.budget import budget_breach
+from sagewai.work.tasks.decisions import TASK_GATES
 from sagewai.work.tasks.events import TaskEvent, TaskEventType
 from sagewai.work.tasks.models import BudgetUsed, Task, TaskKind, TaskRecord, TaskStatus
 from sagewai.work.tasks.plan import AcceptedPlan, PlanStep, plan_from_events
@@ -37,6 +38,8 @@ _WAITING = frozenset(
 )
 # The only statuses the transition table lets reach BUDGET_EXHAUSTED (transitions.py:18-32).
 _BUDGETED = frozenset({TaskStatus.PLANNING, TaskStatus.EXECUTING, TaskStatus.ASSESSING})
+_DELIVER_ACTION_PREFIX = "deliver:"
+_ROLLBACK_ACTION_PREFIXES = ("revert:", "delete_comment:")
 
 
 class StepWorkState(BaseModel):
@@ -54,6 +57,8 @@ class StepWorkState(BaseModel):
     evidence_refs: tuple[str, ...] = ()
     base_moved_phase: str | None = None
     merged_sha: str | None = None
+    deliver_sink_version: int | None = None
+    decided_gate: str | None = None
 
 
 class _Command(BaseModel):
@@ -99,11 +104,37 @@ class MirrorAttention(_Command):
     evidence_refs: tuple[str, ...] = ()
 
 
+class MirrorGateDecision(_Command):
+    kind: Literal["mirror_gate_decision"] = "mirror_gate_decision"
+    work_id: str
+    gate_id: str
+    decision: str
+
+
 class SupersedeStep(_Command):
     kind: Literal["supersede_step"] = "supersede_step"
     step_id: str
     work_id: str
     phase: str
+
+
+class RollbackWork(_Command):
+    kind: Literal["rollback_work"] = "rollback_work"
+    work_id: str
+
+
+class RequestDeliverGate(_Command):
+    kind: Literal["request_deliver_gate"] = "request_deliver_gate"
+    step_id: str
+    work_id: str
+    sink_version: int
+
+
+class DeliverReport(_Command):
+    kind: Literal["deliver_report"] = "deliver_report"
+    step_id: str
+    work_id: str
+    sink_version: int
 
 
 class StartStep(_Command):
@@ -146,7 +177,11 @@ Command = (
     | ExhaustBudget
     | RecordStepOutcome
     | MirrorAttention
+    | MirrorGateDecision
     | SupersedeStep
+    | RollbackWork
+    | RequestDeliverGate
+    | DeliverReport
     | StartStep
     | ResumeStep
     | AssessCycle
@@ -170,6 +205,9 @@ class CycleState(BaseModel):
     superseded_works: frozenset[str] = frozenset()
     mirrored: frozenset[str] = frozenset()
     assessment: str | None = None
+    decided_gates: dict[str, str] = {}
+    delivered: frozenset[str] = frozenset()
+    rolled_back: frozenset[str] = frozenset()
 
 
 def fold_cycle(events: Sequence[TaskEvent], *, plan_version: int) -> CycleState:
@@ -182,6 +220,9 @@ def fold_cycle(events: Sequence[TaskEvent], *, plan_version: int) -> CycleState:
     superseded: set[str] = set()
     mirrored: set[str] = set()
     assessment: str | None = None
+    decided_gates: dict[str, str] = {}
+    delivered: set[str] = set()
+    rolled_back: set[str] = set()
     for event in sorted(events, key=lambda item: item.sequence):
         payload = event.payload_json
         if event.event_type is TaskEventType.CYCLE_STARTED:
@@ -190,6 +231,9 @@ def fold_cycle(events: Sequence[TaskEvent], *, plan_version: int) -> CycleState:
             step_works, issue_urls, step_outcomes, assessment = {}, {}, {}, None
             superseded = set()
             mirrored = set()
+            decided_gates = {}
+            delivered = set()
+            rolled_back = set()
         elif event.event_type is TaskEventType.PLAN_ACCEPTED:
             assessment = None
         elif event.event_type is TaskEventType.STEP_WORK_STARTED:
@@ -205,6 +249,14 @@ def fold_cycle(events: Sequence[TaskEvent], *, plan_version: int) -> CycleState:
             attention_id = payload.get("attention_id")
             if attention_id is not None:
                 mirrored.add(str(attention_id))
+        elif event.event_type is TaskEventType.GATE_DECIDED:
+            decided_gates[str(payload["gate_id"])] = str(payload["decision"])
+        elif event.event_type is TaskEventType.ACTION_RESULT_RECORDED:
+            action_id = str(payload["action_id"])
+            if action_id.startswith(_DELIVER_ACTION_PREFIX):
+                delivered.add(action_id)
+            elif action_id.startswith(_ROLLBACK_ACTION_PREFIXES):
+                rolled_back.add(str(payload["work_id"]))
     return CycleState(
         cycle=cycle,
         started_at=started_at,
@@ -215,6 +267,9 @@ def fold_cycle(events: Sequence[TaskEvent], *, plan_version: int) -> CycleState:
         superseded_works=frozenset(superseded),
         mirrored=frozenset(mirrored),
         assessment=assessment,
+        decided_gates=decided_gates,
+        delivered=frozenset(delivered),
+        rolled_back=frozenset(rolled_back),
     )
 
 
@@ -225,6 +280,30 @@ def _active(state: CycleState, works: Mapping[str, StepWorkState]) -> StepWorkSt
         work = works.get(step.id)
         if work is not None:
             return work
+    return None
+
+
+def _pending_rollback(state: CycleState) -> str | None:
+    for work_id in state.step_works.values():
+        if work_id in state.rolled_back:
+            continue
+        if state.decided_gates.get(f"rollback:{work_id}") == "allow":
+            return work_id
+    return None
+
+
+def _pending_delivery(state: CycleState, work: StepWorkState) -> tuple[int, str | None] | None:
+    if work.deliver_sink_version is not None:
+        gate_id = f"deliver:{work.work_id}:{work.deliver_sink_version}"
+        if gate_id in state.delivered:
+            return None
+        return work.deliver_sink_version, state.decided_gates.get(gate_id)
+    prefix = f"deliver:{work.work_id}:"
+    for gate_id, decision in state.decided_gates.items():
+        if gate_id.startswith(prefix):
+            if gate_id in state.delivered:
+                continue
+            return int(gate_id[len(prefix) :]), decision
     return None
 
 
@@ -263,7 +342,17 @@ def decide(
     now: datetime,
 ) -> Command | None:
     """The first applicable command, or None while the Task waits on a human or a runtime."""
-    if record.status in _WAITING or record.pending_gate is not None:
+    if record.status in _WAITING:
+        return None
+    if record.pending_gate is not None:
+        if not record.pending_gate.startswith(TASK_GATES):
+            for work in works.values():
+                if work.decided_gate is not None:
+                    return MirrorGateDecision(
+                        work_id=work.work_id,
+                        gate_id=record.pending_gate,
+                        decision=work.decided_gate,
+                    )
         return None
     if record.current_cycle >= 1 and record.status in _BUDGETED:
         breach = budget_breach(budget_used, task.budget)
@@ -282,8 +371,28 @@ def decide(
         return None
     if record.current_cycle == 0:
         return StartCycle(cycle=record.current_cycle + 1)
+    rollback = _pending_rollback(state)
+    if rollback is not None:
+        return RollbackWork(work_id=rollback)
     active = _active(state, works)
     if active is not None:
+        delivery = _pending_delivery(state, active)
+        if delivery is not None:
+            sink_version, decision = delivery
+            gate_id = f"deliver:{active.work_id}:{sink_version}"
+            if decision is None:
+                return RequestDeliverGate(
+                    step_id=active.step_id,
+                    work_id=active.work_id,
+                    sink_version=sink_version,
+                )
+            if decision == "allow":
+                return DeliverReport(
+                    step_id=active.step_id,
+                    work_id=active.work_id,
+                    sink_version=sink_version,
+                )
+            return BlockCycle(reason=f"delivery gate {gate_id} was denied")
         if active.status == "COMPLETE":
             return RecordStepOutcome(
                 step_id=active.step_id,
@@ -330,11 +439,15 @@ __all__ = [
     "Command",
     "CompleteCycle",
     "CycleState",
+    "DeliverReport",
     "ExhaustBudget",
     "MirrorAttention",
+    "MirrorGateDecision",
     "RecordStepOutcome",
     "Replan",
+    "RequestDeliverGate",
     "ResumeStep",
+    "RollbackWork",
     "RunPlanning",
     "StartCycle",
     "StartStep",

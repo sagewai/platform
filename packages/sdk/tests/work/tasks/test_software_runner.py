@@ -19,14 +19,29 @@ from types import SimpleNamespace
 
 import pytest
 
+import sagewai.work.profiles.software.assembly as software_assembly
 from sagewai.artifacts.object_store import LocalArtifactStore
-from sagewai.work.models import ProposedAcceptanceCriterion, WorkRecord
+from sagewai.harness.discovery import DiscoveredServer
+from sagewai.work.models import (
+    CriterionVerification,
+    ProposedAcceptanceCriterion,
+    VerificationResult,
+    WorkRecord,
+)
+from sagewai.work.profiles.software.assembly import (
+    build_software_stack,
+    resolve_credential_values,
+)
 from sagewai.work.profiles.software.github import BaseMovedError
+from sagewai.work.profiles.software.models import SoftwareWorkspace
+from sagewai.work.runtime import CapabilityGrant, CapabilitySet, OperatorResult
+from sagewai.work.runtime_harness import HarnessRuntime
 from sagewai.work.store import WorkStore
+from sagewai.work.tasks.assessor import AssessmentFailedError, TaskAssessor
 from sagewai.work.tasks.coordinator import TaskCoordinator
 from sagewai.work.tasks.events import TaskEventType
-from sagewai.work.tasks.models import ExecutionRoute, TaskDefaults, TaskOrigin
-from sagewai.work.tasks.plan import MatrixItem, PlanStep, TaskPlanResult
+from sagewai.work.tasks.models import ExecutionRoute, HarnessTier, TaskDefaults, TaskOrigin
+from sagewai.work.tasks.plan import AcceptedPlan, MatrixItem, PlanStep, TaskPlanResult
 from sagewai.work.tasks.runner import TaskCoordinatorRunner
 from sagewai.work.tasks.service import TaskService
 from sagewai.work.tasks.software import (
@@ -39,6 +54,8 @@ from tests.db.conftest import dialect_engine  # noqa: F401
 from tests.work.tasks.test_software_kernel import RecordingGitHub
 from tests.work.tasks.test_store import _task
 
+PROJECT = "project-a"
+IMAGE = "sha256:" + "b" * 64
 STEP = PlanStep(
     id="s1",
     title="Add the retry queue",
@@ -92,17 +109,172 @@ def _stack_object(
     *,
     lifecycle: object,
     sink: _RecordingSink | None = None,
+    worktree_manager: object | None = None,
+    capsule_compiler: object | None = None,
+    read_controller: object | None = None,
+    read_capabilities: object | None = None,
+    analysis_runtime: object | None = None,
+    verifier: object | None = None,
 ):
     return SimpleNamespace(
         lifecycle=lifecycle,
         work_store=work_store,
-        worktree_manager=object(),
+        worktree_manager=worktree_manager or object(),
         activity_sink=sink or _RecordingSink(),
-        capsule_compiler=object(),
-        read_controller=object(),
-        read_capabilities=object(),
-        analysis_runtime=object(),
+        capsule_compiler=capsule_compiler or object(),
+        read_controller=read_controller or object(),
+        read_capabilities=read_capabilities or object(),
+        analysis_runtime=analysis_runtime or object(),
+        verifier=verifier or object(),
     )
+
+
+class _RecordingVerifier:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def verify(
+        self,
+        *,
+        work_item,
+        contract,
+        criterion_ids,
+        attempt_id,
+        run_id,
+        workspace,
+        commands,
+    ) -> VerificationResult:
+        self.calls.append(
+            {
+                "work_id": work_item.id,
+                "contract_id": contract.id,
+                "criterion_ids": criterion_ids,
+                "attempt_id": attempt_id,
+                "run_id": run_id,
+                "workspace": workspace,
+                "commands": commands,
+            }
+        )
+        return VerificationResult(
+            project_id=work_item.project_id,
+            contract_id=contract.id,
+            attempt_id=attempt_id,
+            stage="verification",
+            passed=True,
+            criterion_results=tuple(
+                CriterionVerification(
+                    project_id=work_item.project_id,
+                    contract_id=contract.id,
+                    criterion_id=criterion_id,
+                    passed=True,
+                    evidence_refs=(f"verify://{criterion_id}",),
+                )
+                for criterion_id in criterion_ids
+            ),
+            evidence_refs=("verify://aggregate",),
+        )
+
+
+class _RecordingWorktreeManager:
+    def __init__(self, root) -> None:
+        self.root = root
+        self.prepared = []
+        self.released = []
+
+    async def prepare(
+        self,
+        *,
+        repository,
+        project_id,
+        work_id,
+        attempt_id,
+        base_sha,
+    ) -> SoftwareWorkspace:
+        self.prepared.append(
+            {
+                "repository": repository,
+                "project_id": project_id,
+                "work_id": work_id,
+                "attempt_id": attempt_id,
+                "base_sha": base_sha,
+            }
+        )
+        path = self.root / work_id / attempt_id
+        path.mkdir(parents=True)
+        return SoftwareWorkspace(
+            ref=f"software://{work_id}/{attempt_id}",
+            project_id=project_id,
+            work_id=work_id,
+            attempt_id=attempt_id,
+            repository=repository,
+            path=path,
+            base_sha=base_sha,
+            initial_sha=base_sha,
+        )
+
+    async def release(self, workspace) -> None:
+        self.released.append(workspace)
+
+
+class _RecordingCompiler:
+    async def compile(self, **kwargs):
+        return SimpleNamespace(profile_context=kwargs["profile_context"])
+
+
+class _FailingAssessorController:
+    async def run(self, *, runtime, request, capsule, capabilities, workspace) -> OperatorResult:
+        return OperatorResult(
+            project_id=request.project_id,
+            work_id=request.work_id,
+            run_id=request.run_id,
+            status="failed",
+            summary="assessor stopped",
+            evidence_refs=(),
+            artifact_refs=(),
+            changes=(),
+            verification=(),
+            risks=(),
+            action_results=(),
+        )
+
+
+class _FakeSandbox:
+    """Enough of SandboxBackend for HarnessRuntime's grant validation to pass."""
+
+    name = "fake"
+
+    async def run(self, **_kwargs):
+        raise AssertionError("the stack builder must not execute anything")
+
+
+class _FakeConnections:
+    """The connection store mcp_connection_resolver closes over."""
+
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def list(self, project_id: str | None, *, protocol: str):
+        self.calls.append((project_id, protocol))
+        return ()
+
+
+class _FakeCredentials:
+    """The credentials router mcp_connection_resolver closes over; never called here."""
+
+    async def resolve(self, *, project_id: str, credential_ref: str):
+        raise AssertionError("the stack builder must not resolve a connection secret")
+
+
+class _FakeSecrets:
+    """A SecretProvider that answers env_for once, at stack build."""
+
+    def __init__(self, values: dict[str, str]) -> None:
+        self._values = values
+        self.calls: list[list[str]] = []
+
+    async def env_for(self, *, project_id, run_id, agent_id, declared_scopes, **_kwargs):
+        self.calls.append(list(declared_scopes))
+        return dict(self._values)
 
 
 async def _project_a() -> tuple[str, ...]:
@@ -226,7 +398,7 @@ async def test_concurrent_software_tasks_meter_into_their_own_ledgers(
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,
-        profile_runner=profile,
+        profile_runners=lambda _task: profile,
         artifact_store=artifacts,
     )
     runner = TaskCoordinatorRunner(
@@ -570,6 +742,105 @@ async def test_plan_wires_task_planner_from_the_stack(
     ]
 
 
+@pytest.mark.asyncio
+async def test_assess_verifies_deterministic_items_at_the_supplied_merged_head_and_releases(
+    dialect_engine,  # noqa: F811
+    tmp_path,
+    monkeypatch,
+) -> None:
+    work_store = WorkStore(engine=dialect_engine)
+    await work_store.init()
+    verifier = _RecordingVerifier()
+    worktrees = _RecordingWorktreeManager(tmp_path / "worktrees")
+    controller = _FailingAssessorController()
+    stack = _stack_object(
+        work_store,
+        lifecycle=object(),
+        worktree_manager=worktrees,
+        capsule_compiler=_RecordingCompiler(),
+        read_controller=controller,
+        read_capabilities=CapabilitySet(project_id="project-a", grants=()),
+        analysis_runtime=SimpleNamespace(name="claude"),
+        verifier=verifier,
+    )
+    task = _task(project_id="project-a")
+    brief = LocalArtifactStore(root=tmp_path / "objects").put_bytes(
+        b"# Brief\n\nBuild the thing.\n",
+        project_id=task.project_id,
+        media_type="text/markdown",
+        created_by="test",
+    )
+    repository = tmp_path / "repo"
+    task = task.model_copy(
+        update={
+            "brief_ref": brief,
+            "target": task.target.model_copy(update={"repository_path": str(repository)}),
+        }
+    )
+    plan = AcceptedPlan(
+        version=1,
+        steps=(STEP,),
+        acceptance_matrix=(
+            MatrixItem(
+                id="smoke",
+                statement="smoke passes",
+                verification_kind="deterministic",
+                command="just smoke",
+            ),
+            MatrixItem(
+                id="lint",
+                statement="lint passes",
+                verification_kind="deterministic",
+                command="just lint",
+            ),
+            MatrixItem(
+                id="readback",
+                statement="readback is correct",
+                verification_kind="assessment",
+            ),
+        ),
+    )
+
+    async def fake_stack(**_kwargs):
+        return stack
+
+    async def fail_base_sha(_task):
+        raise AssertionError("base_sha should not run when merged_sha is known")
+
+    monkeypatch.setattr("sagewai.work.tasks.software.build_software_stack", fake_stack)
+    runner = _runner(work_store, RecordingGitHub(), engine=dialect_engine)
+    monkeypatch.setattr(runner, "base_sha", fail_base_sha)
+    work_id = TaskAssessor.work_id(task, cycle=1, plan_version=2)
+
+    with pytest.raises(AssessmentFailedError, match="assessor stopped"):
+        await runner.assess(
+            task,
+            cycle=1,
+            plan_version=2,
+            plan=plan,
+            outcomes={"s1": "accepted"},
+            merged_sha="c" * 40,
+            evidence=("git://" + "c" * 40,),
+        )
+
+    assert worktrees.prepared == [
+        {
+            "repository": repository,
+            "project_id": "project-a",
+            "work_id": work_id,
+            "attempt_id": "assess-2",
+            "base_sha": "c" * 40,
+        }
+    ]
+    assert [workspace.base_sha for workspace in worktrees.released] == ["c" * 40]
+    assert verifier.calls[0]["criterion_ids"] == (
+        TaskAssessor.matrix_criterion_id(work_id, "smoke"),
+        TaskAssessor.matrix_criterion_id(work_id, "lint"),
+    )
+    assert verifier.calls[0]["commands"] == ("just smoke", "just lint")
+    assert verifier.calls[0]["run_id"] == f"{work_id}:verify:1"
+
+
 def test_target_rejects_a_task_whose_profile_is_not_software() -> None:
     task = _task().model_copy(update={"profile": "report"})
     with pytest.raises(ValueError):
@@ -603,6 +874,173 @@ async def test_task_routing_and_attempt_budget_reach_the_software_stack_builder(
 
     assert calls[0]["prefer_free_implementation"] is True
     assert calls[0]["max_attempts_per_stage"] == 5
+
+
+@pytest.mark.asyncio
+async def test_software_runner_threads_harness_backends_to_the_stack_builder(
+    dialect_engine,  # noqa: F811
+    monkeypatch,
+) -> None:
+    work_store = WorkStore(engine=dialect_engine)
+    await work_store.init()
+    calls = []
+
+    async def fake_stack(**kwargs):
+        calls.append(kwargs)
+        return _stack_object(work_store, lifecycle=object())
+
+    monkeypatch.setattr("sagewai.work.tasks.software.build_software_stack", fake_stack)
+    sandbox = _FakeSandbox()
+    connection_store = _FakeConnections()
+    credentials = _FakeCredentials()
+    secret_provider = _FakeSecrets({"GITHUB_TOKEN": "ghp_x"})
+    runner = _runner(
+        work_store,
+        RecordingGitHub(),
+        engine=dialect_engine,
+        sandbox=sandbox,
+        connection_store=connection_store,
+        credentials=credentials,
+        secret_provider=secret_provider,
+    )
+
+    await runner._stack(_task(project_id=PROJECT))
+
+    assert calls[0]["sandbox"] is sandbox
+    assert calls[0]["connection_store"] is connection_store
+    assert calls[0]["credentials"] is credentials
+    assert calls[0]["secret_provider"] is secret_provider
+
+
+@pytest.mark.asyncio
+async def test_the_harness_runtime_gets_its_sandbox_resolver_and_secrets(
+    dialect_engine,  # noqa: F811
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SAGEWAI_HOME", str(tmp_path / "home"))
+    from tests.work.test_lifecycle import _repository
+
+    repo, _base = _repository(tmp_path)
+    store = TaskStore(engine=dialect_engine)
+    await store.init()
+    await store.put_defaults(
+        TaskDefaults(
+            project_id=PROJECT,
+            target=_task(project_id=PROJECT).target,
+            harness_tiers={"complex": HarnessTier(backend="localai", model="qwen")},
+        ),
+        expected_revision=0,
+    )
+
+    async def _discover_local_backends():
+        return {
+            "localai": DiscoveredServer(
+                name="localai",
+                base_url="http://127.0.0.1:8080",
+                openai_compat_url="http://127.0.0.1:8080/v1",
+                models=["qwen"],
+            )
+        }
+
+    monkeypatch.setattr(software_assembly, "discover_local_backends", _discover_local_backends)
+    connection_store = _FakeConnections()
+    stack = await build_software_stack(
+        project_id=PROJECT,
+        repository=repo,
+        verification_image=IMAGE,
+        prefer_free_implementation=True,
+        sandbox=_FakeSandbox(),
+        connection_store=connection_store,
+        credentials=_FakeCredentials(),
+        credential_values={"GITHUB_TOKEN": "ghp_x"},
+        engine=dialect_engine,
+    )
+
+    harness = stack.lifecycle._implementer.for_position(1).runtime
+    assert harness._sandbox is not None
+    assert harness._mcp_connections is not None
+    with pytest.raises(KeyError):
+        await harness._mcp_connections("github")
+    assert connection_store.calls == [(PROJECT, "mcp")]
+    assert harness._credential_values == {"GITHUB_TOKEN": "ghp_x"}
+
+
+@pytest.mark.asyncio
+async def test_credential_values_resolve_once_from_declared_refs() -> None:
+    secrets = _FakeSecrets({"GITHUB_TOKEN": "ghp_x"})
+    values = await resolve_credential_values(
+        project_id=PROJECT,
+        grants=(
+            CapabilityGrant(
+                project_id=PROJECT,
+                name="github",
+                kind="api",
+                scope={},
+                permissions=("request",),
+                credential_ref="GITHUB_TOKEN",
+            ),
+            CapabilityGrant(
+                project_id=PROJECT,
+                name="github-again",
+                kind="api",
+                scope={},
+                permissions=("request",),
+                credential_ref="GITHUB_TOKEN",
+            ),
+        ),
+        secret_provider=secrets,
+        credential_values={"STATIC_TOKEN": "static"},
+    )
+
+    assert secrets.calls == [["GITHUB_TOKEN"]]
+    assert values == {"STATIC_TOKEN": "static", "GITHUB_TOKEN": "ghp_x"}
+
+
+@pytest.mark.asyncio
+async def test_credential_values_skip_provider_without_declared_refs() -> None:
+    secrets = _FakeSecrets({"GITHUB_TOKEN": "ghp_x"})
+    values = await resolve_credential_values(
+        project_id=PROJECT,
+        grants=(
+            CapabilityGrant(
+                project_id=PROJECT,
+                name="github",
+                kind="api",
+                scope={},
+                permissions=("request",),
+            ),
+        ),
+        secret_provider=secrets,
+        credential_values={"STATIC_TOKEN": "static"},
+    )
+
+    assert secrets.calls == []
+    assert values == {"STATIC_TOKEN": "static"}
+
+
+@pytest.mark.asyncio
+async def test_a_cli_grant_without_a_sandbox_still_fails_loudly() -> None:
+    runtime = HarnessRuntime(
+        tier="medium",
+        tiers={"medium": HarnessTier(backend="localai", model="qwen")},
+        backends={"localai": "http://127.0.0.1:8080/v1"},
+    )
+    grants = CapabilitySet(
+        project_id=PROJECT,
+        grants=(
+            CapabilityGrant(
+                project_id=PROJECT,
+                name="cli.just",
+                kind="cli",
+                scope={"executable": "just"},
+                permissions=("command.run",),
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="cli grants require a sandbox backend"):
+        runtime._validate_grants_for_runtime(grants)
 
 
 @pytest.mark.asyncio

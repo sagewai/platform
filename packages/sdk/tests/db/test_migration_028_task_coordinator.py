@@ -118,6 +118,7 @@ def _schema_signature(bind, table_names: tuple[str, ...]) -> dict[str, dict[str,
 def _migration_signature(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str, list[tuple]]]:
     mod = importlib.import_module("sagewai.db.migrations.versions.028_task_coordinator")
     due_index = importlib.import_module("sagewai.db.migrations.versions.029_task_due_index")
+    tracking = importlib.import_module("sagewai.db.migrations.versions.030_task_tracking_issue")
     engine = create_engine("sqlite:///:memory:")
     try:
         with engine.begin() as conn:
@@ -125,8 +126,10 @@ def _migration_signature(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str,
             operations = Operations(context)
             monkeypatch.setattr(mod, "op", operations)
             monkeypatch.setattr(due_index, "op", operations)
+            monkeypatch.setattr(tracking, "op", operations)
             mod.upgrade()
             due_index.upgrade()
+            tracking.upgrade()
             return _schema_signature(conn, mod.TABLES)
     finally:
         engine.dispose()

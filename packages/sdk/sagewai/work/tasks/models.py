@@ -248,7 +248,24 @@ class ReportTarget(BaseModel):
     @model_validator(mode="after")
     def _ensure_console_sink(self) -> ReportTarget:
         if not any(sink.kind == "console" for sink in self.sinks):
-            object.__setattr__(self, "sinks", (Sink(kind="console"), *self.sinks))
+            object.__setattr__(
+                self,
+                "sinks",
+                (
+                    Sink(
+                        kind="console",
+                        version=max((sink.version for sink in self.sinks), default=0) + 1,
+                    ),
+                    *self.sinks,
+                ),
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _sink_versions_are_distinct(self) -> ReportTarget:
+        versions = [sink.version for sink in self.sinks]
+        if len(set(versions)) != len(versions):
+            raise ValueError("each report sink needs its own version")
         return self
 
 
@@ -403,6 +420,7 @@ class TaskRecord(BaseModel):
     current_cycle: int = 0
     plan_version: int = 0
     pending_gate: str | None = None
+    tracking_issue_url: str | None = None
     pending_questions: int = 0
     pending_material_questions: int = 0
     next_run_at: datetime | None = None

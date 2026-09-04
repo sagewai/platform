@@ -33,6 +33,7 @@ from sagewai.work.activity_parsers import (
     parse_claude_stream_line,
     parse_codex_json_line,
 )
+from sagewai.work.hosts import idna_allowed_host
 from sagewai.work.models import (
     ActionIntent,
     ActionResult,
@@ -634,6 +635,19 @@ def _claude_tool_scope(
         elif grant.kind == "mcp":
             server = _capability_suffix(grant.name, "mcp", r"[A-Za-z0-9_-]+")
             allowed_tools.add(f"mcp__{server}__*")
+        elif grant.kind == "browser":
+            hosts = grant.scope.get("allowed_hosts")
+            if not isinstance(hosts, list | tuple) or not hosts:
+                raise ValueError("browser grant requires scoped allowed_hosts")
+            try:
+                scoped_hosts = tuple(
+                    idna_allowed_host(str(host)).lstrip(".") for host in hosts
+                )
+            except (UnicodeError, ValueError) as exc:
+                raise ValueError("invalid hostname") from exc
+            builtin_tools.update(("WebFetch", "WebSearch"))
+            allowed_tools.update(f"WebFetch(domain:{host})" for host in scoped_hosts)
+            allowed_tools.add("WebSearch")
         elif grant.kind == "filesystem":
             permissions = set(grant.permissions)
             can_write = "workspace.write" in permissions

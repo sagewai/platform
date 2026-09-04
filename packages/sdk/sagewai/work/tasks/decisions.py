@@ -21,6 +21,7 @@ from sagewai.work.models import ActionRequest, GateDecision, Reversibility
 from sagewai.work.tasks.models import Authority, GateMode
 
 _NEVER_GATES = frozenset({Reversibility.PURE, Reversibility.SNAPSHOT_REVERSIBLE})
+TASK_GATES = ("plan:", "replan:", "deliver:", "rollback:")
 
 
 def resolve_gate(mode: GateMode, action: ActionRequest) -> GateDecision:
@@ -76,8 +77,28 @@ class DecisionRequest(BaseModel):
     evidence_refs: tuple[str, ...] = ()
 
 
+class ChannelDeliveryError(RuntimeError):
+    """A decision channel refused the notification.
+
+    Carries the channel name and the transport's status code and **never** the endpoint: an
+    incoming-webhook URL is itself the credential, encrypted at rest by
+    ``PostgresNotificationStore``, and ``httpx.HTTPStatusError`` puts the full request URL in
+    its message.
+    """
+
+
+def channel_error_detail(exc: BaseException) -> str:
+    """What a presenter may log about a channel failure: our message, or only a type name."""
+    return str(exc) if isinstance(exc, ChannelDeliveryError) else type(exc).__name__
+
+
 class DecisionChannel(Protocol):
-    """PR4b adds github_issue, slack_webhook, and google_chat_webhook behind this."""
+    """One outbound Needs-you transport.
+
+    ``notify`` may raise: ``TaskCoordinator._present`` logs the failure through
+    ``channel_error_detail`` and drops the present-once receipt so the item can be
+    presented again; a transport error never fails the command that raised the item.
+    """
 
     @property
     def name(self) -> str: ...
@@ -102,10 +123,13 @@ class NullDecisionScheduler:
 
 
 __all__ = [
+    "ChannelDeliveryError",
     "ConsoleDecisionChannel",
     "DecisionChannel",
     "DecisionRequest",
     "NullDecisionScheduler",
+    "TASK_GATES",
+    "channel_error_detail",
     "coordinator_action",
     "merge_policy_for",
     "resolve_gate",

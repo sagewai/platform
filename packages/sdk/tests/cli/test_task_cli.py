@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from click.testing import CliRunner
 
@@ -60,3 +62,69 @@ def test_tick_on_an_empty_project_drives_nothing(wired) -> None:
     result = wired.invoke(task_group, ["--project", "project-a", "tick"])
     assert result.exit_code == 0, result.output
     assert "0" in result.output
+
+
+def test_tick_wires_runners_to_connections_context_store(wired, monkeypatch) -> None:
+    from sagewai.cli import tasks as tasks_module
+
+    connection_store = object()
+    credentials = object()
+    captured: dict[str, tuple[object, object]] = {}
+    monkeypatch.setattr(
+        tasks_module,
+        "build_connections_context",
+        lambda _sf: SimpleNamespace(store=connection_store, router=credentials),
+    )
+
+    async def _tick(self):
+        software = self._driver._profile_runners(SimpleNamespace(profile="software"))
+        report = self._driver._profile_runners(SimpleNamespace(profile="report"))
+        captured["connection_stores"] = (
+            software._connection_store,
+            report._connection_store,
+        )
+        return 0
+
+    monkeypatch.setattr(tasks_module.TaskCoordinatorRunner, "tick", _tick)
+
+    result = wired.invoke(task_group, ["--project", "project-a", "tick"])
+
+    assert result.exit_code == 0, result.output
+    assert all(store is connection_store for store in captured["connection_stores"])
+
+
+def test_tick_closes_report_runner_when_software_close_fails(wired, monkeypatch) -> None:
+    from sagewai.cli import tasks as tasks_module
+
+    captured = {}
+
+    class _Runner:
+        def __init__(self, *, fail: bool = False, **_kwargs) -> None:
+            self.fail = fail
+            self.closed = False
+
+        async def aclose(self) -> None:
+            self.closed = True
+            if self.fail:
+                raise RuntimeError("software close failed")
+
+    def _software(**kwargs):
+        captured["software"] = _Runner(fail=True, **kwargs)
+        return captured["software"]
+
+    def _report(**kwargs):
+        captured["report"] = _Runner(**kwargs)
+        return captured["report"]
+
+    async def _tick(self):
+        return 0
+
+    monkeypatch.setattr(tasks_module, "SoftwareProfileRunner", _software)
+    monkeypatch.setattr(tasks_module, "ReportProfileRunner", _report)
+    monkeypatch.setattr(tasks_module.TaskCoordinatorRunner, "tick", _tick)
+
+    result = wired.invoke(task_group, ["--project", "project-a", "tick"])
+
+    assert result.exit_code != 0
+    assert captured["software"].closed is True
+    assert captured["report"].closed is True

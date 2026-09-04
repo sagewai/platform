@@ -7,7 +7,7 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""Deterministic assessment of one cycle (spec section 11, deterministic half)."""
+"""Cycle assessment result models and merge policy."""
 
 from __future__ import annotations
 
@@ -46,30 +46,29 @@ class TaskAssessmentResult(BaseModel):
     verdict: Literal["accept", "replan", "blocked"]
 
 
-def assess_cycle(
+def merge_assessment(
     plan: AcceptedPlan,
     *,
     attempt_id: str,
     outcomes: Mapping[str, str],
-    evidence: Sequence[str],
+    deterministic: Sequence[MatrixResult],
+    assessor: TaskAssessmentResult,
 ) -> TaskAssessmentResult:
-    """Judge the cycle from its step outcomes alone.
+    """Section 11: the verifier judges deterministic items, the assessor judges the rest.
 
-    Every matrix item is satisfied by the step Works: a deterministic item's command is the
-    target's locked verification command, which each step Work already ran before its
-    repository outcome was accepted. Judging an assessment item on its own evidence needs
-    the read-only assessor stage at the merged head, which is not in this increment.
+    A failing item or an unmet step forces ``replan`` however confident the assessor is; only
+    the assessor can say ``blocked``, and only unanimous success can say ``accept``.
     """
+    judged = {result.item_id: result for result in assessor.matrix_results}
+    judged.update({result.item_id: result for result in deterministic})
+    results = tuple(
+        judged.get(item.id, MatrixResult(item_id=item.id, passed=False))
+        for item in plan.acceptance_matrix
+    )
     unmet = tuple(step for step in plan.steps if outcomes.get(step.id) != "accepted")
-    passed = not unmet
-    refs = tuple(evidence)
-    return TaskAssessmentResult(
-        attempt_id=attempt_id,
-        matrix_results=tuple(
-            MatrixResult(item_id=item.id, passed=passed, evidence_refs=refs)
-            for item in plan.acceptance_matrix
-        ),
-        gaps=tuple(
+    gaps = (
+        *assessor.gaps,
+        *(
             AssessmentGap(
                 statement=f"step {step.id} did not reach an accepted outcome",
                 severity="high",
@@ -77,8 +76,19 @@ def assess_cycle(
             )
             for step in unmet
         ),
-        verdict="accept" if passed else "replan",
+    )
+    if assessor.verdict == "blocked":
+        verdict: Literal["accept", "replan", "blocked"] = "blocked"
+    elif unmet or any(not result.passed for result in results):
+        verdict = "replan"
+    else:
+        verdict = assessor.verdict
+    return TaskAssessmentResult(
+        attempt_id=attempt_id,
+        matrix_results=results,
+        gaps=gaps,
+        verdict=verdict,
     )
 
 
-__all__ = ["AssessmentGap", "MatrixResult", "TaskAssessmentResult", "assess_cycle"]
+__all__ = ["AssessmentGap", "MatrixResult", "TaskAssessmentResult", "merge_assessment"]

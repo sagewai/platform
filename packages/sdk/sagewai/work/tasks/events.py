@@ -60,6 +60,10 @@ class TaskEventType(str, Enum):
     DECISION_RECORDED = "DECISION_RECORDED"
     DECISION_SCHEDULED = "DECISION_SCHEDULED"
     NOTIFICATION_PRESENTED = "NOTIFICATION_PRESENTED"
+    ACTION_INTENT_RECORDED = "ACTION_INTENT_RECORDED"
+    ACTION_RESULT_RECORDED = "ACTION_RESULT_RECORDED"
+    OBSERVATION_RECORDED = "OBSERVATION_RECORDED"
+    TRACKING_ISSUE_RECORDED = "TRACKING_ISSUE_RECORDED"
     ATTENTION_CHANGED = "ATTENTION_CHANGED"
     CYCLE_COMPLETED = "CYCLE_COMPLETED"
     TASK_STATUS_CHANGED = "TASK_STATUS_CHANGED"
@@ -151,6 +155,7 @@ def fold_record(previous: TaskRecord, events: Iterable[TaskEvent]) -> TaskRecord
     CYCLE_COMPLETED: next_run_at
     ATTENTION_CHANGED: owner, reason
     BUDGET_RECORDED: budget_used
+    TRACKING_ISSUE_RECORDED: url
     """
     values = previous.model_dump()
     explicit: tuple[AttentionOwner, str] | None = None
@@ -210,6 +215,8 @@ def fold_record(previous: TaskRecord, events: Iterable[TaskEvent]) -> TaskRecord
             )
         elif event_type is TaskEventType.BUDGET_RECORDED:
             values["budget_used"] = BudgetUsed.model_validate(payload["budget_used"])
+        elif event_type is TaskEventType.TRACKING_ISSUE_RECORDED:
+            values["tracking_issue_url"] = str(payload["url"])
         updated_at = max(updated_at, event.created_at)
         values["last_event_sequence"] = event.sequence
     owner, reason = derive_attention(

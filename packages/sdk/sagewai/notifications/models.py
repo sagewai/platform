@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 class NotificationChannelConfig(BaseModel):
     """Configuration for a notification channel."""
 
-    channel_type: Literal["email", "slack", "in_app"]
+    channel_type: Literal["email", "slack", "google_chat", "in_app"]
     enabled: bool = True
 
     # Email (SMTP) settings

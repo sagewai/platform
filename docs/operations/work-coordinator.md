@@ -429,6 +429,70 @@ non-human origin never merges automatically**: plan, merge, and deliver are forc
 `require` for every origin that is not a human, whatever the trigger says, and such a Task
 never prefers the free implementation.
 
+### Reports on a schedule
+
+A scheduled report Task uses a `ReportTarget` instead of a software target. It needs source
+grants, each with scoped `allowed_hosts`, plus `required_sections`, `max_bytes`, and at least
+one sink. The console sink is added whenever no console sink is declared, at the next free
+sink version; a GitHub issue sink also needs the issue URL it will comment on.
+
+Report verification is deterministic and containerless. The compose stage snapshots every
+source with its URL, fetch timestamp, and content hash, then verification checks size,
+required sections, citations, allowed hosts, and forbidden secret patterns. The report and
+its source snapshots are redacted before they are stored.
+
+### Who approves what
+
+The default action policy is by reversibility:
+
+| Reversibility | Default decision |
+| --- | --- |
+| `pure` | Never gates. |
+| `snapshot_reversible` | Never gates. |
+| `compensatable` | Runs automatically only when the action already declares a rollback recipe and post-check the coordinator can execute. This covers merges with `revert_pull_request` and GitHub issue comments with `delete_comment`. |
+| `irreversible` | Always asks a project admin. |
+
+A project may tighten authority to `require`. A non-human origin is tighter still: plan,
+merge, and deliver are forced to `require` whatever the approved trigger says.
+
+### When something has to be undone
+
+Every coordinator side effect records four durable facts in order:
+`ACTION_INTENT_RECORDED`, the `task_commands` receipt before the call,
+`ACTION_RESULT_RECORDED`, and `OBSERVATION_RECORDED`. Rollback is another coordinator action
+with the same record sequence; no model chooses or runs a rollback recipe.
+
+A failed post-check that can be undone opens a Task gate named `rollback:<work_id>`. PR5 adds
+the user-facing `sagewai task ... approve` route for that gate; today the same decision is
+written through `TaskService.decide_gate`. A rollback runs at most once. If the receipt exists
+but the result is unknown, the coordinator blocks and asks a human instead of retrying the
+side effect.
+
+### Decision channels
+
+Projects choose the ordered channel list in `task_defaults.decision_channels`. `console` is
+always available; `github_issue` uses the Task tracking issue or report sink issue. Slack and
+Google Chat use incoming-webhook URLs from the notification channel store, where the webhook
+URL is encrypted at rest.
+
+`Needs you` due times are derived from urgency:
+
+| Urgency | `due_at` |
+| --- | --- |
+| `now` | Immediately. |
+| `today` | 24 hours from presentation. |
+| `this_week` | Seven days from presentation. |
+
+An open clarification deadline overrides those values when it is sooner. `now` notifies every
+configured channel at once; `today` and `this_week` start with the first channel and escalate
+to the next one after half the remaining time. A `github_issue` channel is presented to
+regardless of urgency and position, because the tracking issue is the durable log. A channel
+failure deletes that channel's present-once receipt; when every selected channel fails, the
+item falls through to the next channel in the same tick, ultimately the console, so a `today`
+item still reaches someone immediately. A project naming an unresolvable webhook channel falls
+back to the console; `github_issue` requires the tracking channel supplied by the coordinator
+wiring, and the log names the channel, never a URL.
+
 ## 7. Operate it as your middleman
 
 A practical rollout is:

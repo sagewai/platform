@@ -22,6 +22,8 @@ from sagewai.work.knowledge.models import KnowledgeItem
 
 SUPERSEDED = "SUPERSEDED"
 TASK_PLAN_PROFILE = "task_plan"
+TASK_ASSESS_PROFILE = "task_assess"
+INTERNAL_PROFILES = frozenset({TASK_PLAN_PROFILE, TASK_ASSESS_PROFILE})
 
 
 class ClaimClassification(str, Enum):
@@ -211,7 +213,15 @@ class Action(BaseModel):
 
 
 class ActionResult(BaseModel):
-    """Receipt produced by execution of an action."""
+    """Receipt produced by execution of an action.
+
+    ``action_id`` is a stable key derived from durable facts —
+    ``revert:<work_id>:<pull_request_number>``, ``delete_comment:<work_id>:<comment_id>``,
+    ``deliver:<work_id>:<sink_version>`` on the Task stream and
+    ``merge:<work_id>:<pull_request_number>`` on the Work stream; ``:refused`` marks a refusal
+    recorded before the action's own id could be minted. It is not a foreign key into an
+    ``Action`` row.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

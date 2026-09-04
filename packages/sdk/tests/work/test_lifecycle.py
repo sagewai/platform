@@ -80,6 +80,7 @@ from sagewai.work.profiles.software import (
     VerificationIsolationError,
     WorkspaceStaleError,
 )
+from sagewai.work.profiles.software.github import GitHubComment
 from sagewai.work.profiles.software.lifecycle import _store_diff_context
 from tests.db.conftest import dialect_engine  # noqa: F401
 from tests.work.fakes_verification import LocalVerificationRunner
@@ -3390,6 +3391,9 @@ async def test_github_flow_uses_real_software_lifecycle_events(
             )
 
         async def comment_issue(self, issue_url, body):
+            return GitHubComment(project_id="p", id=1, url=f"{issue_url}#issuecomment-1", body=body)
+
+        async def delete_comment(self, comment_url):
             return None
 
     class PublisherFixture:

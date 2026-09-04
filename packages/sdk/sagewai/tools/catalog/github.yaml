@@ -1,7 +1,7 @@
 # Copyright 2026 Ali Arda Diri, Berlin, Germany
 # Licensed under AGPL-3.0-or-later. See LICENSE.
 id: github
-version: 0.3.1
+version: 0.3.2
 title: GitHub — Repository read + write
 description: |
   Read repositories, search code, create issues / comments / pull requests,
@@ -112,10 +112,23 @@ exec:
             body:   { type: string }
         output_schema:
           type: object
+          required: [id, html_url, body]
           properties:
             id:       { type: integer }
             html_url: { type: string }
             body:     { type: string }
+      delete_comment:
+        method: DELETE
+        path: /repos/{owner}/{repo}/issues/comments/{comment_id}
+        input_schema:
+          type: object
+          required: [owner, repo, comment_id]
+          properties:
+            owner:      { type: string }
+            repo:       { type: string }
+            comment_id: { type: integer }
+        output_schema:
+          type: object
       find_pull_requests:
         method: GET
         path: /repos/{owner}/{repo}/pulls
@@ -240,7 +253,7 @@ setup:
     3. Grant these repository permissions:
        - `Contents: Write` (for repository reads and `merge_pull_request`)
        - `Metadata: Read` (for `get_repo`)
-       - `Issues: Write` (for `get_issue`, `list_issues`, `create_issue`, and `create_comment`)
+       - `Issues: Write` (for `get_issue`, `list_issues`, `create_issue`, `create_comment`, and `delete_comment`)
        - `Pull requests: Write` (for `create_pull_request`)
     4. Copy the `github_pat_...` token.
     5. Paste into Sagewai → Connections → Tools → Add GitHub.

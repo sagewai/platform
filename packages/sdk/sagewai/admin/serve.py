@@ -903,18 +903,27 @@ def create_admin_serve_app(
         await _db_factory.ensure_schema()
 
         from sagewai.work import ActivityIngestion, WorkActivityStore, WorkStore
-        app.state.work_store = WorkStore(engine=_db_factory.get_engine())
-        app.state.activity_store = WorkActivityStore(engine=_db_factory.get_engine())
+        engine = _db_factory.get_engine()
+        app.state.work_store = WorkStore(engine=engine)
+        app.state.activity_store = WorkActivityStore(engine=engine)
         from sagewai.work.tasks import TaskStore
-        app.state.task_store = TaskStore(engine=_db_factory.get_engine())
+        app.state.task_store = TaskStore(engine=engine)
         app.state.activity_ingestion = ActivityIngestion(
             work_store=app.state.work_store,
             task_store=app.state.task_store,
             activity_store=app.state.activity_store,
         )
         from sagewai.artifacts import LocalArtifactStore as _TaskArtifactStore
+        from sagewai.notifications.postgres_store import PostgresNotificationStore
         from sagewai.work.profiles.software.assembly import github_client_for
+        from sagewai.work.tasks.actions import RollbackExecutor
+        from sagewai.work.tasks.channels import (
+            DecisionEscalation,
+            GitHubIssueDecisionChannel,
+            build_decision_channels,
+        )
         from sagewai.work.tasks.coordinator import TaskCoordinator
+        from sagewai.work.tasks.report import ReportProfileRunner
         from sagewai.work.tasks.runner import (
             TaskCoordinatorRunner,
             interval_from_env,
@@ -923,6 +932,7 @@ def create_admin_serve_app(
         from sagewai.work.tasks.service import ClarificationDeadlines, TaskService
         from sagewai.work.tasks.software import SoftwareProfileRunner
         from sagewai.work.tasks.triggers import TriggerIntake
+        app.state.notification_store = PostgresNotificationStore(engine=engine)
 
         async def _coordinator_projects() -> list[str]:
             if _is_multi_tenant():
@@ -934,37 +944,6 @@ def create_admin_serve_app(
             import asyncio
 
             return [project["id"] for project in await asyncio.to_thread(sf.list_projects)]
-
-        _task_service = TaskService(
-            store=app.state.task_store, artifact_store=_TaskArtifactStore()
-        )
-        app.state.task_profile_runner = SoftwareProfileRunner(
-            work_store=app.state.work_store,
-            github_factory=github_client_for,
-            stack_cache_limit=max(8, max_tasks_from_env()),
-        )
-        app.state.task_coordinator_runner = TaskCoordinatorRunner(
-            task_store=app.state.task_store,
-            driver=TaskCoordinator(
-                task_store=app.state.task_store,
-                work_store=app.state.work_store,
-                profile_runner=app.state.task_profile_runner,
-                activity_store=app.state.activity_store,
-            ),
-            list_project_ids=_coordinator_projects,
-            sweepers=(
-                TriggerIntake(
-                    task_store=app.state.task_store,
-                    work_store=app.state.work_store,
-                    service=_task_service,
-                    github_factory=github_client_for,
-                ),
-                ClarificationDeadlines(store=app.state.task_store, service=_task_service),
-            ),
-            interval_seconds=interval_from_env(),
-            max_tasks=max_tasks_from_env(),
-        )
-        app.state.task_coordinator_runner.start()
 
         # Eager fail-closed startup: build the SQLite schema, or (on Postgres)
         # verify the DB is reachable and migrated. Raises here rather than on the
@@ -1005,11 +984,73 @@ def create_admin_serve_app(
                     admin_resource=_rs.admin_resource or _built.admin_resource,
                     api_token=_rs.api_token or _built.api_token,
                 )
-                conn_ctx = getattr(app.state, "connections_context", None)
+                conn_ctx = app.state.connections_context
                 active_connection_store = app.state.resource_stores.connection
-                if conn_ctx is not None and active_connection_store is not None:
+                if active_connection_store is not None:
                     conn_ctx.store = active_connection_store
                     conn_ctx.tenant_safe = True
+
+        _task_service = TaskService(
+            store=app.state.task_store, artifact_store=_TaskArtifactStore()
+        )
+        _task_connection_store = app.state.connections_context.store
+        _task_credentials = app.state.connections_context.router
+        app.state.task_profile_runner = SoftwareProfileRunner(
+            work_store=app.state.work_store,
+            github_factory=github_client_for,
+            connection_store=_task_connection_store,
+            credentials=_task_credentials,
+            stack_cache_limit=max(8, max_tasks_from_env()),
+        )
+        app.state.task_report_runner = ReportProfileRunner(
+            work_store=app.state.work_store,
+            github_factory=github_client_for,
+            connection_store=_task_connection_store,
+            credentials=_task_credentials,
+            stack_cache_limit=max(8, max_tasks_from_env()),
+        )
+
+        async def _channels_for(project_id: str):
+            """Resolve per project; resolver order keeps console first unless defaults differ."""
+            defaults = await app.state.task_store.get_defaults(project_id=project_id)
+            return await build_decision_channels(
+                defaults=defaults,
+                config_store=app.state.notification_store,
+                tracking_channel=GitHubIssueDecisionChannel(
+                    store=app.state.task_store, github_factory=github_client_for
+                ),
+                console_base_url=os.environ.get("SAGEWAI_CONSOLE_BASE_URL"),
+            )
+
+        app.state.task_coordinator_runner = TaskCoordinatorRunner(
+            task_store=app.state.task_store,
+            driver=TaskCoordinator(
+                task_store=app.state.task_store,
+                work_store=app.state.work_store,
+                profile_runners=lambda task: (
+                    app.state.task_report_runner
+                    if task.profile == "report"
+                    else app.state.task_profile_runner
+                ),
+                activity_store=app.state.activity_store,
+                channel_factory=_channels_for,
+                rollbacks=RollbackExecutor(github_factory=github_client_for),
+            ),
+            list_project_ids=_coordinator_projects,
+            sweepers=(
+                TriggerIntake(
+                    task_store=app.state.task_store,
+                    work_store=app.state.work_store,
+                    service=_task_service,
+                    github_factory=github_client_for,
+                ),
+                ClarificationDeadlines(store=app.state.task_store, service=_task_service),
+                DecisionEscalation(store=app.state.task_store, channels=_channels_for),
+            ),
+            interval_seconds=interval_from_env(),
+            max_tasks=max_tasks_from_env(),
+        )
+        app.state.task_coordinator_runner.start()
 
         # Fail closed (multi-tenant): mirror sf.require_secret_key_if_encrypted()
         # for the tenant provider table — if encrypted provider secrets exist but
@@ -1060,10 +1101,16 @@ def create_admin_serve_app(
                 try:
                     await app.state.task_coordinator_runner.aclose()
                 finally:
-                    if getattr(app.state, "task_profile_runner", None) is not None:
+                    try:
                         await app.state.task_profile_runner.aclose()
+                    finally:
+                        await app.state.task_report_runner.aclose()
             elif getattr(app.state, "task_profile_runner", None) is not None:
-                await app.state.task_profile_runner.aclose()
+                try:
+                    await app.state.task_profile_runner.aclose()
+                finally:
+                    if getattr(app.state, "task_report_runner", None) is not None:
+                        await app.state.task_report_runner.aclose()
             await runner.stop()
             # Clear the process-wide workflow store default on shutdown so
             # that in-process test runners (TestClient) don't leak the

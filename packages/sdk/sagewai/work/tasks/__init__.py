@@ -9,7 +9,8 @@
 # See COMMERCIAL-LICENSE.md for details.
 """Task aggregate: durable coordination above the Work kernel."""
 
-from sagewai.work.tasks.assessment import TaskAssessmentResult, assess_cycle
+from sagewai.work.tasks.assessment import TaskAssessmentResult, merge_assessment
+from sagewai.work.tasks.assessor import TaskAssessor
 from sagewai.work.tasks.budget import (
     BudgetLedger,
     MeteredOperatorController,
@@ -26,6 +27,7 @@ from sagewai.work.tasks.decide import (
     RecordStepOutcome,
     Replan,
     ResumeStep,
+    RollbackWork,
     RunPlanning,
     StartCycle,
     StartStep,
@@ -125,18 +127,19 @@ __all__ = [
     "IllegalTransitionError", "IntakeResult", "MatrixItem", "MeteredOperatorController",
     "MirrorAttention", "PlanRejectedError", "PlanStep", "PlanningFailedError",
     "ProjectTelemetry", "RecordStepOutcome", "Replan", "ReportTarget", "ResumeStep",
-    "RoleAlias", "RoutingPolicy", "RunPlanning", "RuntimeRef", "Schedule",
+    "RoleAlias", "RollbackWork", "RoutingPolicy", "RunPlanning", "RuntimeRef", "Schedule",
     "ScheduledCycleTelemetry", "ScheduledTelemetry", "ScratchResultValidator",
     "ScratchWorkspace", "ScratchWorkspaceManager", "Sensitivity", "Sink", "SlotSpec",
     "SlotValidationError", "SoftwareTarget", "SpendReservation", "SpendTotals",
     "StageAttemptTelemetry", "StageTimelineEntry", "StaleTaskError", "StartCycle", "StartStep",
-    "StepWorkState", "SupersedeStep", "Task", "TaskAssessmentResult", "TaskCoordinator",
+    "StepWorkState", "SupersedeStep", "Task", "TaskAssessmentResult", "TaskAssessor", "TaskCoordinator",
     "TaskCoordinatorRunner", "TaskCreationError", "TaskDecisionError", "TaskDefaults",
     "TaskEvent", "TaskEventType", "TaskKind", "TaskOrigin", "TaskPlanResult", "TaskPlanner",
     "TaskRecord", "TaskService", "TaskStatus", "TaskStore", "TaskTelemetry", "TaskTemplate",
     "TaskTriggerSpec", "TaskWriter", "VerificationRunTelemetry", "WorkTelemetry", "accept_plan",
-    "assert_transition", "assess_cycle", "board_column", "budget_breach", "budget_used_from",
+    "assert_transition", "board_column", "budget_breach", "budget_used_from",
     "decide", "derive_attention", "derive_task_telemetry", "evaluate_health", "fold_cycle",
-    "fold_record", "get_template", "next_fire", "plan_from_events", "preset_to_cron", "route",
-    "status_entry", "validate_cron", "validate_slots", "validate_timezone",
+    "fold_record", "get_template", "merge_assessment", "next_fire", "plan_from_events",
+    "preset_to_cron", "route", "status_entry", "validate_cron", "validate_slots",
+    "validate_timezone",
 ]

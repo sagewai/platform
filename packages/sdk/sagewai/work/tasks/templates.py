@@ -264,7 +264,7 @@ SOFTWARE_DELIVERY = TaskTemplate(
 
 SCHEDULED_RESEARCH_REPORT = TaskTemplate(
     id="scheduled_research_report",
-    version="1",
+    version="2",
     title="Scheduled research report",
     description="Read declared sources on a schedule and deliver a grounded report.",
     category="research",
@@ -318,6 +318,7 @@ SCHEDULED_RESEARCH_REPORT = TaskTemplate(
         RoleAlias.PLANNER: (RuntimeRef.CLAUDE_ANALYSIS,),
         RoleAlias.COMPOSER: (RuntimeRef.HARNESS_MEDIUM, RuntimeRef.CLAUDE_ANALYSIS),
         RoleAlias.REVIEWER: (RuntimeRef.CLAUDE_REVIEW,),
+        RoleAlias.ASSESSOR: (RuntimeRef.CLAUDE_ANALYSIS,),
     },
     authority_floor=Authority(plan=GateMode.AUTO),
 )

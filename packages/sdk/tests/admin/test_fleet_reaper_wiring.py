@@ -38,6 +38,40 @@ def test_reaper_wired_in_lifespan(tmp_path):
     app, token = _app(tmp_path)
     with TestClient(app):  # lifespan runs
         assert app.state.fleet_reaper is not None
+        assert not hasattr(app.state, "engine")
+
+
+def test_task_report_runner_uses_repointed_connection_store(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAGEWAI_TENANCY_MODE", "multi")
+    from sagewai.admin.serve import create_admin_serve_app
+    from sagewai.admin.state_file import AdminStateFile
+
+    sf = AdminStateFile(path=tmp_path / "state.json")
+    sf.complete_setup(org_name="Acme", admin_email="a@b.com", admin_password="pw123456")
+    app = create_admin_serve_app(sf)
+
+    with TestClient(app):
+        assert app.state.task_report_runner._connection_store is app.state.connections_context.store
+
+
+def test_task_runner_fallback_shutdown_closes_report_when_software_close_fails(tmp_path):
+    app, _token = _app(tmp_path)
+    closed = []
+
+    async def close_software():
+        closed.append("software")
+        raise RuntimeError("software close failed")
+
+    async def close_report():
+        closed.append("report")
+
+    with pytest.raises(RuntimeError, match="software close failed"):
+        with TestClient(app):
+            app.state.task_coordinator_runner = None
+            app.state.task_profile_runner.aclose = close_software
+            app.state.task_report_runner.aclose = close_report
+
+    assert closed == ["software", "report"]
 
 
 @pytest.mark.asyncio

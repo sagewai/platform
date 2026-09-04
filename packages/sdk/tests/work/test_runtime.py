@@ -624,6 +624,89 @@ async def test_claude_scopes_cli_and_mcp_tools_from_grants(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+async def test_claude_scopes_browser_tools_from_grants(tmp_path: Path) -> None:
+    runtime = ClaudeRuntime(
+        executable=str(_fake_runtime_executable(tmp_path)),
+        timeout=5,
+    )
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    capabilities = CapabilitySet(
+        project_id="project-a",
+        grants=(
+            CapabilityGrant(
+                project_id="project-a",
+                name="browser:research",
+                kind="browser",
+                scope={"allowed_hosts": [".a.example", "news.a.example"]},
+                permissions=("read",),
+            ),
+        ),
+    )
+
+    result = await runtime.run(
+        _request(),
+        _capsule(),
+        capabilities,
+        _workspace(workspace_path),
+    )
+
+    observation = json.loads((workspace_path / "runtime-observation.json").read_text())
+    argv = observation["argv"]
+    tools = argv[argv.index("--tools") + 1].split(",")
+    allowed_tools = argv[argv.index("--allowedTools") + 1].split(",")
+    assert result.status == "passed"
+    assert tools == ["WebFetch", "WebSearch"]
+    assert allowed_tools == [
+        "WebFetch(domain:a.example)",
+        "WebFetch(domain:news.a.example)",
+        "WebSearch",
+    ]
+
+    scopeless = CapabilitySet(
+        project_id="project-a",
+        grants=(
+            CapabilityGrant(
+                project_id="project-a",
+                name="browser:research",
+                kind="browser",
+                scope={},
+                permissions=("read",),
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="browser grant requires scoped allowed_hosts"):
+        await runtime.run(
+            _request(),
+            _capsule(),
+            scopeless,
+            _workspace(workspace_path),
+        )
+
+    injected = CapabilitySet(
+        project_id="project-a",
+        grants=(
+            CapabilityGrant(
+                project_id="project-a",
+                name="browser:research",
+                kind="browser",
+                scope={"allowed_hosts": ["a.example),Bash(*"]},
+                permissions=("read",),
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="invalid hostname"):
+        await runtime.run(
+            _request(),
+            _capsule(),
+            injected,
+            _workspace(workspace_path),
+        )
+
+
+@pytest.mark.asyncio
 async def test_claude_accepts_schema_bounded_output_larger_than_preview_limit(
     tmp_path: Path,
 ) -> None:

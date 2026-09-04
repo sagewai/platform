@@ -484,6 +484,19 @@ async def test_accept_plan_refuses_mirrored_work_gates_and_writes_nothing(
 
 
 @pytest.mark.asyncio
+async def test_accept_plan_refuses_a_rollback_gate_and_writes_nothing(
+    service: TaskService, store: TaskStore
+) -> None:
+    task, record = await _proposed(service, store, gate_id="rollback:w-s1-1")
+    before = await store.read_events(task.id, project_id="project-a")
+    with pytest.raises(TaskDecisionError, match="not the plan gate"):
+        await service.accept_plan(task.id, project_id="project-a", version=1, actor_ref="arda", now=NOW)
+    after = await store.read_events(task.id, project_id="project-a")
+    assert [event.event_type for event in after] == [event.event_type for event in before]
+    assert record.pending_gate == "rollback:w-s1-1"
+
+
+@pytest.mark.asyncio
 async def test_accept_plan_refuses_a_never_proposed_version_and_writes_nothing(
     service: TaskService, store: TaskStore
 ) -> None:

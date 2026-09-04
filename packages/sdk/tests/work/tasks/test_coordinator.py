@@ -13,13 +13,29 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
+from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.work.events import WorkEvent, WorkEventType
-from sagewai.work.models import SUPERSEDED, ActionRequest, GateDecision, Reversibility, WorkRecord
+from sagewai.work.models import (
+    SUPERSEDED,
+    ActionRequest,
+    ActionResult,
+    GateDecision,
+    Reversibility,
+    WorkRecord,
+)
+from sagewai.work.profiles.software.scm import SoftwareWorktreeManager
 from sagewai.work.store import WorkStore
-from sagewai.work.tasks.assessment import AssessmentGap, TaskAssessmentResult
+from sagewai.work.tasks.actions import DeliveryReceipt, RollbackExecutor, RollbackRefusedError
+from sagewai.work.tasks.assessment import (
+    AssessmentGap,
+    MatrixResult,
+    TaskAssessmentResult,
+    merge_assessment,
+)
 from sagewai.work.tasks.coordinator import TaskCoordinator
 from sagewai.work.tasks.decisions import ConsoleDecisionChannel, merge_policy_for, resolve_gate
 from sagewai.work.tasks.events import TaskEventType
@@ -28,17 +44,21 @@ from sagewai.work.tasks.models import (
     Budget,
     GateMode,
     Schedule,
+    SoftwareTarget,
     TaskDefaults,
     TaskKind,
     TaskOrigin,
     TaskStatus,
 )
 from sagewai.work.tasks.plan import ClarificationQuestion, MatrixItem, PlanStep, TaskPlanResult
+from sagewai.work.tasks.planner import PlanningFailedError
 from sagewai.work.tasks.service import TaskService
 from sagewai.work.tasks.store import SpendReservation, TaskStore
-from sagewai.work.tasks.writer import TaskWriter
+from sagewai.work.tasks.writer import TaskWriter, status_entry
 from tests.db.conftest import dialect_engine  # noqa: F401
+from tests.work.tasks.test_actions import merged_repository  # noqa: F401
 from tests.work.tasks.test_decide import MATRIX, NOW, STEPS
+from tests.work.tasks.test_software_kernel import RecordingGitHub
 from tests.work.tasks.test_store import _task
 
 PROJECT = "project-a"
@@ -56,11 +76,25 @@ class FakeProfileRunner:
         self.evidence: list[tuple[str, ...]] = []
         self.merged = False
         self.plan_result = plan_result
+        self.plan_error: Exception | None = None
         self.statuses: dict[str, str] = {}
+        self.gates: dict[str, str] = {}
+        self.delivered: list[tuple[str, int]] = []
+        self.deliver_sink_versions: dict[str, int] = {}
+        self.deliver_next_sink_versions: dict[tuple[str, int], int] = {}
+        self.deliver_actions: dict[tuple[str, int], dict] = {}
+        self.deliver_action: dict | None = None
+        self.delivery_action_id: str | None = None
+        self.delivery_external_ref: str | None = None
+        self.delivery_passed = True
+        self.clear_report_on_deliver = False
         self.merged_shas: dict[str, str] = {}
         self.pull_request_urls: dict[str, str] = {}
         self.created_issues: list[tuple[str, str]] = []
         self.ledgers: list = []
+        self.assessed: list = []
+        self.assessor_verdict = "accept"
+        self.assessor_gaps = ()
 
     def use_ledger(self, ledger) -> None:
         self.ledgers.append(ledger)
@@ -70,6 +104,8 @@ class FakeProfileRunner:
 
     async def plan(self, task, *, cycle, plan_version, base_sha, brief_text, amendments):
         assert base_sha == self.head
+        if self.plan_error is not None:
+            raise self.plan_error
         return self.plan_result
 
     async def find_issue(self, task, *, cycle, step):
@@ -95,13 +131,17 @@ class FakeProfileRunner:
         work_id = f"w-{step.id}-{len(self.started) + 1}"
         self.started.append(work_id)
         self.evidence.append(tuple(evidence_refs))
-        return await self._save(
+        record = await self._save(
             task,
             work_id,
             issue_url,
             self.statuses.pop(step.id, "COMPLETE"),
             base_sha=base_sha,
         )
+        gate_id = self.gates.get(step.id)
+        if gate_id is not None:
+            record = await self._open_gate(task, record, gate_id)
+        return record
 
     async def resume(self, task, *, cycle, work_id):
         self.resumed.append(work_id)
@@ -121,6 +161,94 @@ class FakeProfileRunner:
     async def is_merged(self, task, *, work_id):
         return self.merged
 
+    async def assess(self, task, *, cycle, plan_version, plan, outcomes, merged_sha, evidence):
+        self.assessed.append((cycle, plan_version, merged_sha))
+        attempt_id = f"{task.id}:assess:{cycle}:{plan_version}"
+        return merge_assessment(
+            plan,
+            attempt_id=attempt_id,
+            outcomes=outcomes,
+            deterministic=tuple(
+                MatrixResult(item_id=item.id, passed=True, evidence_refs=evidence)
+                for item in plan.acceptance_matrix
+                if item.verification_kind == "deterministic"
+            ),
+            assessor=TaskAssessmentResult(
+                attempt_id=attempt_id,
+                matrix_results=tuple(
+                    MatrixResult(item_id=item.id, passed=True)
+                    for item in plan.acceptance_matrix
+                    if item.verification_kind == "assessment"
+                ),
+                gaps=self.assessor_gaps,
+                verdict=self.assessor_verdict,
+            ),
+        )
+
+    async def deliver(self, task, *, work_id: str, sink_version: int):
+        self.delivered.append((work_id, sink_version))
+        record = await self._work_store.load_work(work_id, project_id=task.project_id)
+        action = ActionRequest.model_validate(record.profile_context["report"]["deliver_action"])
+        next_version = self.deliver_next_sink_versions.get((work_id, sink_version))
+        if next_version is None:
+            update = {"status": "COMPLETE"}
+        else:
+            self.deliver_sink_versions[work_id] = next_version
+            profile_context = dict(record.profile_context)
+            profile_context["report"] = {
+                "pending_sink_version": next_version,
+                "deliver_action": self.deliver_actions[(work_id, next_version)],
+            }
+            update = {"status": "READY_TO_DELIVER", "profile_context": profile_context}
+        if self.clear_report_on_deliver:
+            profile_context = dict(record.profile_context)
+            profile_context.pop("report", None)
+            update["profile_context"] = profile_context
+        record = record.model_copy(update=update)
+        await self._work_store.save_work(record)
+        now = datetime.now(timezone.utc)
+        action_id = self.delivery_action_id or f"deliver:{work_id}:{sink_version}"
+        receipt = DeliveryReceipt(
+            action=action,
+            result=ActionResult(
+                project_id=task.project_id,
+                action_id=action_id,
+                status="succeeded",
+                external_ref=self.delivery_external_ref or action.scope,
+                evidence_refs=action.evidence_refs,
+                started_at=now,
+                completed_at=now,
+            ),
+            observation={
+                "action_id": action_id,
+                "check": action.post_check,
+                "passed": self.delivery_passed,
+                "detail": f"delivered {self.delivery_external_ref or action.scope}",
+                "evidence_refs": list(action.evidence_refs),
+            },
+        )
+        return record, (receipt,)
+
+    async def approve(self, work_id: str, *, gate_id: str, decision: str) -> WorkRecord:
+        record = await self._work_store.load_work(work_id, project_id=PROJECT)
+        record = record.model_copy(update={"pending_gate": None})
+        await self._work_store.save_work(record)
+        events = await self._work_store.read_events(work_id, project_id=PROJECT)
+        await self._work_store.append_event(
+            WorkEvent(
+                id=f"{work_id}:gate-decided:{len(events) + 1}",
+                project_id=PROJECT,
+                work_id=work_id,
+                sequence=len(events) + 1,
+                event_type=WorkEventType.GATE_DECIDED,
+                actor_type="human",
+                actor_ref="arda",
+                payload_json={"gate_id": gate_id, "decision": decision},
+                created_at=NOW,
+            )
+        )
+        return record
+
     async def _save(self, task, work_id, issue_url, status, *, base_sha=None):
         now = datetime.now(timezone.utc)
         github: dict[str, str] = {}
@@ -131,6 +259,11 @@ class FakeProfileRunner:
         profile_context = {"task_id": task.id, "github": github}
         if base_sha is not None:
             profile_context["base_sha"] = base_sha
+        if work_id in self.deliver_sink_versions:
+            profile_context["report"] = {
+                "pending_sink_version": self.deliver_sink_versions[work_id],
+                "deliver_action": self.deliver_action,
+            }
         record = WorkRecord(
             work_id=work_id,
             project_id=task.project_id,
@@ -167,6 +300,41 @@ class FakeProfileRunner:
             self.head = new_head
         return record
 
+    async def _open_gate(self, task, record: WorkRecord, gate_id: str) -> WorkRecord:
+        record = record.model_copy(update={"pending_gate": gate_id})
+        await self._work_store.save_work(record)
+        events = await self._work_store.read_events(record.work_id, project_id=task.project_id)
+        action = ActionRequest(
+            project_id=task.project_id,
+            action="merge",
+            work_id=record.work_id,
+            risk="medium",
+            reversibility=Reversibility.COMPENSATABLE,
+            scope="https://github.com/o/r/pull/7",
+            evidence_refs=("pr://7",),
+            rollback="revert_pull_request",
+            post_check="merged_sha_read_back",
+        )
+        await self._work_store.append_event(
+            WorkEvent(
+                id=f"{record.work_id}:gate-requested:{len(events) + 1}",
+                project_id=task.project_id,
+                work_id=record.work_id,
+                sequence=len(events) + 1,
+                event_type=WorkEventType.GATE_REQUESTED,
+                actor_type="system",
+                actor_ref="test",
+                payload_json={
+                    "gate_id": gate_id,
+                    "question": "Approve merge of PR #7.",
+                    "action": action.model_dump(mode="json"),
+                    "evidence_refs": ("pr://7",),
+                },
+                created_at=NOW,
+            )
+        )
+        return record
+
 
 def _plan_result(attempt_id: str = "plan") -> TaskPlanResult:
     return TaskPlanResult(
@@ -179,12 +347,26 @@ def _plan_result(attempt_id: str = "plan") -> TaskPlanResult:
 class RecordingDecisionChannel:
     name = "recording"
 
-    def __init__(self) -> None:
+    def __init__(self, name: str = "recording") -> None:
+        self.name = name
         self.calls = []
 
     async def notify(self, decision):
         self.calls.append(decision)
         return f"recording:{decision.task_id}:{decision.attention_id}:{len(self.calls)}"
+
+
+class _AngryChannel:
+    name = "angry"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def notify(self, decision):
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("webhook 503")
+        return f"angry:{decision.attention_id}"
 
 
 @pytest.fixture
@@ -199,7 +381,7 @@ async def stores(dialect_engine):  # noqa: F811
     return task_store, work_store
 
 
-async def _seed(stores, tmp_path, *, plan_auto: bool = True):
+async def _seed(stores, tmp_path, *, plan_auto: bool = True, origin: TaskOrigin = TaskOrigin.HUMAN):
     from sagewai.artifacts.object_store import LocalArtifactStore
 
     task_store, work_store = stores
@@ -209,17 +391,19 @@ async def _seed(stores, tmp_path, *, plan_auto: bool = True):
         "Implement the retry queue in the payments service repository with a failing test first "
         "and open a pull request when the deterministic verification command passes.",
         project_id=PROJECT,
-        origin=TaskOrigin.HUMAN,
+        origin=origin,
         created_by="arda",
         now=NOW,
     )
     if plan_auto:
-        task = task.model_copy(update={"authority": Authority(plan=GateMode.AUTO)})
+        task = task.model_copy(
+            update={"authority": task.authority.model_copy(update={"plan": GateMode.AUTO})}
+        )
     runner = FakeProfileRunner(work_store, plan_result=_plan_result())
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,
-        profile_runner=runner,
+        profile_runners=lambda _task: runner,
         artifact_store=artifacts,
         decision_channels=(ConsoleDecisionChannel(),),
     )
@@ -254,6 +438,118 @@ def _lose_the_batch(monkeypatch, *, kind: str):
     return state
 
 
+def _work_event(work_id: str, sequence: int, event_type, payload) -> WorkEvent:
+    return WorkEvent(
+        id=f"{work_id}:{sequence}",
+        project_id=PROJECT,
+        work_id=work_id,
+        sequence=sequence,
+        event_type=event_type,
+        actor_type="system",
+        actor_ref="test",
+        payload_json=payload,
+        created_at=NOW,
+    )
+
+
+def _software_target(repository: Path) -> SoftwareTarget:
+    return SoftwareTarget(
+        owner="octocat",
+        repo="hello-world",
+        repository_path=str(repository),
+        default_branch="main",
+        verification_image="sha256:" + "b" * 64,
+    )
+
+
+def _merge_action_payload(work_id: str) -> dict:
+    return ActionRequest(
+        project_id=PROJECT,
+        action="merge",
+        work_id=work_id,
+        risk="medium",
+        reversibility=Reversibility.COMPENSATABLE,
+        scope="https://github.com/octocat/hello-world/pull/7",
+        evidence_refs=("https://github.com/octocat/hello-world/issues/42",),
+        rollback="revert_pull_request",
+        post_check="merged_sha_read_back",
+    ).model_dump(mode="json")
+
+
+def _blocked_merge(
+    work_id: str,
+    merged_sha: str | None,
+    *,
+    action: ActionRequest | None = None,
+    issue_url: str | None = "https://github.com/octocat/hello-world/issues/42",
+) -> tuple[WorkEvent, ...]:
+    return (
+        _work_event(
+            work_id,
+            1,
+            WorkEventType.GATE_REQUESTED,
+            {
+                "gate_id": f"merge:{work_id}:7",
+                "question": "Approve merge of PR #7.",
+                "action": (
+                    action.model_dump(mode="json")
+                    if action is not None
+                    else _merge_action_payload(work_id)
+                ),
+                "evidence_refs": [],
+            },
+        ),
+        _work_event(
+            work_id,
+            2,
+            WorkEventType.WORK_BLOCKED,
+            {
+                "reason": "merge_post_check_failed",
+                "decision_request": "merge response SHA conflicts with GitHub read-back",
+                "merged_sha": merged_sha,
+                "issue_url": issue_url,
+                "evidence_refs": ["https://github.com/octocat/hello-world/pull/7"],
+            },
+        ),
+    )
+
+
+async def _rollback_ready(
+    stores,
+    tmp_path,
+    monkeypatch,
+    merged_repository,  # noqa: F811
+    *,
+    action_factory=None,
+    issue_url: str | None = "https://github.com/octocat/hello-world/issues/42",
+):
+    task_store, work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    repository, merged_sha = merged_repository
+    github = RecordingGitHub()
+    github.labeled_issues = (github.issue,)
+    coordinator._rollbacks = RollbackExecutor(
+        github_factory=lambda _scope: github,
+        worktrees=SoftwareWorktreeManager(root=tmp_path / "worktrees"),
+    )
+    monkeypatch.setattr(
+        coordinator,
+        "_load",
+        _fixed_task(task_store, task.model_copy(update={"target": _software_target(repository)})),
+    )
+    runner.statuses["s1"] = "WORK_BLOCKED"
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+    work_id = runner.started[0]
+    action = action_factory(work_id) if action_factory is not None else None
+    await work_store.append_events(
+        _blocked_merge(work_id, merged_sha, action=action, issue_url=issue_url)
+    )
+    record = await _drive_to_rest(coordinator, record, epoch)
+    service = TaskService(store=task_store, artifact_store=LocalArtifactStore(root=tmp_path))
+    return record, coordinator, github, work_id, service
+
+
 @pytest.mark.asyncio
 async def test_plan_to_two_steps_to_assess_to_complete(stores, tmp_path, monkeypatch) -> None:
     task_store, _work_store = stores
@@ -272,13 +568,13 @@ async def test_plan_to_two_steps_to_assess_to_complete(stores, tmp_path, monkeyp
     assert types.count(TaskEventType.STEP_WORK_OUTCOME) == 2
     assert TaskEventType.PLAN_ACCEPTED in types
     assert TaskEventType.CYCLE_STARTED in types
-    assert TaskEventType.BASE_ADVANCED in types
     assert TaskEventType.ASSESSMENT_RECORDED in types
+    assert TaskEventType.BASE_ADVANCED in types
     assert TaskEventType.BUDGET_RECORDED in types
     assert types[-1] is TaskEventType.TASK_STATUS_CHANGED
     assert types.index(TaskEventType.CYCLE_STARTED) < types.index(TaskEventType.STEP_WORK_STARTED)
     assert types.index(TaskEventType.BUDGET_RECORDED) < types.index(TaskEventType.CYCLE_COMPLETED)
-    assert len(runner.ledgers) == 3
+    assert len(runner.ledgers) == 4
     receipts = [event for event in events if event.event_type is TaskEventType.COMMAND_RECEIPT]
     assert [receipt.payload_json["kind"] for receipt in receipts] == [
         "run_planning",
@@ -293,6 +589,24 @@ async def test_plan_to_two_steps_to_assess_to_complete(stores, tmp_path, monkeyp
     assert set(receipts[0].payload_json) == {"command_id", "kind", "payload"}
     for receipt in receipts:
         assert events[events.index(receipt) + 1].event_type is not TaskEventType.COMMAND_RECEIPT
+    assert runner.assessed == [(1, 1, "c" * 40)]
+
+
+@pytest.mark.asyncio
+async def test_assessment_receives_the_latest_base_advanced_sha(
+    stores, tmp_path, monkeypatch
+) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    runner.merged_shas["w-s1-1"] = "b" * 40
+    runner.merged_shas["w-s2-2"] = "d" * 40
+    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
+
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    assert record.status is TaskStatus.COMPLETE
+    assert runner.assessed == [(1, 1, "d" * 40)]
 
 
 @pytest.mark.asyncio
@@ -389,7 +703,15 @@ async def test_a_blocked_step_work_blocks_the_task_and_presents_the_decision(
         event for event in events if event.event_type is TaskEventType.NOTIFICATION_PRESENTED
     )
     assert presented.payload_json["urgency"] == "now"
-    assert set(presented.payload_json) == {"channel", "ref", "attention_id", "urgency", "due_at"}
+    assert set(presented.payload_json) == {
+        "channel",
+        "ref",
+        "attention_id",
+        "urgency",
+        "due_at",
+        "summary",
+        "evidence_refs",
+    }
 
 
 @pytest.mark.asyncio
@@ -574,7 +896,7 @@ async def test_work_gate_mirror_copies_the_action_and_notifies_today(
     task_store, work_store = stores
     task, record, runner, coordinator = await _seed(stores, tmp_path)
     channel = RecordingDecisionChannel()
-    monkeypatch.setattr(coordinator, "_channels", (channel,))
+    monkeypatch.setattr(coordinator, "_static_channels", (channel,))
 
     async def no_progress(task_, *, cycle, work_id):
         runner.resumed.append(work_id)
@@ -627,7 +949,15 @@ async def test_work_gate_mirror_copies_the_action_and_notifies_today(
     assert record.attention_owner.value == "user"
     assert set(gate.payload_json) == {"gate_id", "question", "action", "work_id", "attention_id"}
     assert gate.payload_json["action"] == action.model_dump(mode="json")
-    assert set(presented.payload_json) == {"channel", "ref", "attention_id", "urgency", "due_at"}
+    assert set(presented.payload_json) == {
+        "channel",
+        "ref",
+        "attention_id",
+        "urgency",
+        "due_at",
+        "summary",
+        "evidence_refs",
+    }
     assert presented.payload_json["urgency"] == "today"
     assert channel.calls[0].evidence_refs == ("pr://7", work_id)
 
@@ -662,7 +992,7 @@ async def test_a_lost_mirror_batch_notifies_the_channel_once(stores, tmp_path, m
     task_store, work_store = stores
     task, record, runner, coordinator = await _seed(stores, tmp_path)
     channel = RecordingDecisionChannel()
-    monkeypatch.setattr(coordinator, "_channels", (channel,))
+    monkeypatch.setattr(coordinator, "_static_channels", (channel,))
     runner.statuses["s1"] = "WORK_BLOCKED"
     monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
     epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
@@ -689,6 +1019,569 @@ async def test_a_lost_mirror_batch_notifies_the_channel_once(stores, tmp_path, m
 
 
 @pytest.mark.asyncio
+async def test_a_failing_channel_retries_on_the_next_tick(stores, tmp_path) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    angry = _AngryChannel()
+    coordinator._static_channels = (angry, ConsoleDecisionChannel())
+    runner.plan_error = PlanningFailedError("planner unavailable")
+
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+    presented = [
+        event
+        for event in await task_store.read_events(task.id, project_id=PROJECT)
+        if event.event_type is TaskEventType.NOTIFICATION_PRESENTED
+    ]
+    assert [event.payload_json["channel"] for event in presented] == ["console"]
+    attention_id = presented[0].payload_json["attention_id"]
+    assert record.status is TaskStatus.BLOCKED
+
+    entries = await coordinator._present(
+        task,
+        record,
+        attention_id=attention_id,
+        summary="retry",
+        urgency="now",
+    )
+    assert angry.calls == 2
+    assert [entry[1]["channel"] for entry in entries] == ["angry"]
+
+
+@pytest.mark.asyncio
+async def test_needs_you_items_carry_a_due_time(stores, tmp_path) -> None:
+    task, record, _runner, coordinator = await _seed(stores, tmp_path)
+    channel = RecordingDecisionChannel()
+    coordinator._static_channels = (channel,)
+
+    entries = await coordinator._present(
+        task, record, attention_id="gate:1", summary="Approve merge", urgency="today"
+    )
+
+    due = datetime.fromisoformat(entries[0][1]["due_at"])
+    assert timedelta(hours=23) < due - coordinator._now() <= timedelta(hours=24)
+    assert channel.calls[0].due_at == due
+
+
+@pytest.mark.asyncio
+async def test_today_needs_you_items_present_to_the_first_channel_only(stores, tmp_path) -> None:
+    task, record, _runner, coordinator = await _seed(stores, tmp_path)
+    first = RecordingDecisionChannel("first")
+    second = RecordingDecisionChannel("second")
+    coordinator._static_channels = (first, second)
+
+    entries = await coordinator._present(
+        task, record, attention_id="gate:1", summary="Approve merge", urgency="today"
+    )
+
+    assert [entry[1]["channel"] for entry in entries] == ["first"]
+    assert [call.attention_id for call in first.calls] == ["gate:1"]
+    assert second.calls == []
+
+
+@pytest.mark.asyncio
+async def test_today_needs_you_falls_through_when_the_first_channel_fails(stores, tmp_path) -> None:
+    task, record, _runner, coordinator = await _seed(stores, tmp_path)
+    first = _AngryChannel()
+    second = RecordingDecisionChannel("slack_webhook")
+    coordinator._static_channels = (first, second, ConsoleDecisionChannel())
+
+    entries = await coordinator._present(
+        task, record, attention_id="gate:1", summary="Approve merge", urgency="today"
+    )
+
+    assert first.calls == 1
+    assert [call.attention_id for call in second.calls] == ["gate:1"]
+    assert [entry[1]["channel"] for entry in entries] == ["slack_webhook"]
+
+
+@pytest.mark.asyncio
+async def test_needs_you_uses_an_open_clarification_deadline(stores, tmp_path, monkeypatch) -> None:
+    task_store, _ = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    channel = RecordingDecisionChannel()
+    coordinator._static_channels = (channel,)
+    runner.plan_result = TaskPlanResult(
+        attempt_id="plan",
+        clarifications=(
+            ClarificationQuestion(
+                id="q1",
+                text="Which queue?",
+                kind="choice",
+                options=("redis", "sqs"),
+                defaultable=False,
+            ),
+        ),
+    )
+    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
+    monkeypatch.setattr(coordinator, "_now", lambda: NOW)
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    asked = [
+        event for event in events if event.event_type is TaskEventType.CLARIFICATION_REQUESTED
+    ][-1]
+    deadline = datetime.fromisoformat(asked.payload_json["deadline_at"])
+
+    entries = await coordinator._present(
+        task, record, attention_id="clarify:1", summary="Need an answer", urgency="today"
+    )
+
+    due = datetime.fromisoformat(entries[0][1]["due_at"])
+    assert record.status is TaskStatus.CLARIFYING
+    assert due == deadline
+    assert channel.calls[0].due_at == deadline
+    assert deadline - NOW == timedelta(hours=4)
+
+
+@pytest.mark.asyncio
+async def test_a_block_hands_the_assessment_gaps_to_the_channel(
+    stores, tmp_path, monkeypatch
+) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    channel = RecordingDecisionChannel()
+    coordinator._static_channels = (channel,)
+    task = task.model_copy(update={"budget": Budget(max_replans=0)})
+    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
+    runner.assessor_verdict = "replan"
+    runner.assessor_gaps = (
+        AssessmentGap(
+            statement="step s1 did not reach an accepted outcome",
+            severity="high",
+            suggested_step="s1",
+        ),
+    )
+
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    assert record.status is TaskStatus.BLOCKED
+    assert channel.calls[-1].evidence_refs == (
+        "step s1 did not reach an accepted outcome (suggested step: s1)",
+    )
+    assert "did not reach an accepted outcome" in channel.calls[-1].summary
+
+
+@pytest.mark.asyncio
+async def test_a_failed_merge_post_check_offers_a_rollback_a_human_allows(
+    stores,
+    tmp_path,
+    monkeypatch,
+    merged_repository,  # noqa: F811
+) -> None:
+    task_store, _work_store = stores
+    record, coordinator, github, work_id, service = await _rollback_ready(
+        stores, tmp_path, monkeypatch, merged_repository
+    )
+    assert record.pending_gate == f"rollback:{work_id}"
+
+    task, _stored = await task_store.load(record.task_id, project_id=PROJECT)
+    record = await service.decide_gate(
+        task.id,
+        project_id=PROJECT,
+        gate_id=f"rollback:{work_id}",
+        decision="allow",
+        actor_ref="arda",
+    )
+    record = await _drive_to_rest(coordinator, record, record.lease_epoch)
+
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    kinds = [event.event_type for event in events]
+    assert (
+        kinds.index(TaskEventType.ACTION_INTENT_RECORDED)
+        < kinds.index(TaskEventType.ACTION_RESULT_RECORDED)
+        < kinds.index(TaskEventType.OBSERVATION_RECORDED)
+    )
+    result = next(
+        event for event in events if event.event_type is TaskEventType.ACTION_RESULT_RECORDED
+    )
+    assert result.payload_json["action_id"] == f"revert:{work_id}:7"
+    assert result.payload_json["status"] == "succeeded"
+    merged_sha = merged_repository[1]
+    assert github.pull_requests[0]["head"] == f"sagewai/revert-7-{merged_sha[:12]}"
+    assert len(github.merges) == 1
+    assert record.status is TaskStatus.BLOCKED
+
+
+@pytest.mark.asyncio
+async def test_a_rollback_whose_batch_is_lost_asks_instead_of_reverting_twice(
+    stores,
+    tmp_path,
+    monkeypatch,
+    merged_repository,  # noqa: F811
+) -> None:
+    task_store, _work_store = stores
+    record, coordinator, github, work_id, service = await _rollback_ready(
+        stores, tmp_path, monkeypatch, merged_repository
+    )
+    task, _stored = await task_store.load(record.task_id, project_id=PROJECT)
+    record = await service.decide_gate(
+        task.id,
+        project_id=PROJECT,
+        gate_id=f"rollback:{work_id}",
+        decision="allow",
+        actor_ref="arda",
+    )
+
+    _lose_the_batch(monkeypatch, kind="rollback_work")
+    with pytest.raises(RuntimeError):
+        await coordinator.drive(record, lease_epoch=record.lease_epoch)
+    record = (await task_store.load(task.id, project_id=PROJECT))[1]
+    record = await _drive_to_rest(coordinator, record, record.lease_epoch)
+
+    assert len(github.merges) == 1
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    result = next(
+        event for event in events if event.event_type is TaskEventType.ACTION_RESULT_RECORDED
+    )
+    observation = next(
+        event for event in events if event.event_type is TaskEventType.OBSERVATION_RECORDED
+    )
+    assert result.payload_json["status"] == "blocked"
+    assert observation.payload_json["check"] == "rollback_receipt"
+    assert observation.payload_json["passed"] is None
+    assert (
+        observation.payload_json["detail"]
+        == "the rollback may have run before a crash; confirm the outcome on GitHub"
+    )
+
+
+@pytest.mark.asyncio
+async def test_denying_a_rollback_gate_blocks_without_running_actions(
+    stores,
+    tmp_path,
+    monkeypatch,
+    merged_repository,  # noqa: F811
+) -> None:
+    task_store, _work_store = stores
+    record, coordinator, github, work_id, service = await _rollback_ready(
+        stores, tmp_path, monkeypatch, merged_repository
+    )
+    task, _stored = await task_store.load(record.task_id, project_id=PROJECT)
+
+    record = await service.decide_gate(
+        task.id,
+        project_id=PROJECT,
+        gate_id=f"rollback:{work_id}",
+        decision="deny",
+        actor_ref="arda",
+    )
+    record = await _drive_to_rest(coordinator, record, record.lease_epoch)
+
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    assert record.status is TaskStatus.BLOCKED
+    assert record.pending_gate is None
+    assert not any(
+        event.event_type
+        in {TaskEventType.ACTION_INTENT_RECORDED, TaskEventType.ACTION_RESULT_RECORDED}
+        for event in events
+    )
+    assert github.merges == []
+
+
+@pytest.mark.asyncio
+async def test_a_refused_rollback_records_failed_action_and_blocks(
+    stores,
+    tmp_path,
+    monkeypatch,
+    merged_repository,  # noqa: F811
+) -> None:
+    task_store, _work_store = stores
+    record, coordinator, _github, work_id, service = await _rollback_ready(
+        stores, tmp_path, monkeypatch, merged_repository
+    )
+
+    class RefusingRollbackExecutor(RollbackExecutor):
+        async def run(self, *args, **kwargs):
+            raise RollbackRefusedError("revert conflicts")
+
+    coordinator._rollbacks = RefusingRollbackExecutor(
+        github_factory=lambda _scope: RecordingGitHub()
+    )
+    task, _stored = await task_store.load(record.task_id, project_id=PROJECT)
+    record = await service.decide_gate(
+        task.id,
+        project_id=PROJECT,
+        gate_id=f"rollback:{work_id}",
+        decision="allow",
+        actor_ref="arda",
+    )
+    record = await _drive_to_rest(coordinator, record, record.lease_epoch)
+
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    receipt = next(
+        event
+        for event in events
+        if event.event_type is TaskEventType.COMMAND_RECEIPT
+        and event.payload_json["kind"] == "rollback_work"
+    )
+    intent = next(
+        event for event in events if event.event_type is TaskEventType.ACTION_INTENT_RECORDED
+    )
+    result = next(
+        event for event in events if event.event_type is TaskEventType.ACTION_RESULT_RECORDED
+    )
+    observation = next(
+        event for event in events if event.event_type is TaskEventType.OBSERVATION_RECORDED
+    )
+    message = [event for event in events if event.event_type is TaskEventType.TASK_MESSAGE][-1]
+    assert receipt.sequence < intent.sequence < result.sequence < observation.sequence
+    assert receipt.payload_json["payload"] == {"kind": "rollback_work", "work_id": work_id}
+    assert intent.payload_json["action_id"] == f"revert:{work_id}:7"
+    assert result.payload_json["action_id"] == f"revert:{work_id}:7"
+    assert result.payload_json["status"] == "failed"
+    assert observation.payload_json == {
+        "work_id": work_id,
+        "action_id": f"revert:{work_id}:7",
+        "check": "rollback_refused",
+        "passed": False,
+        "detail": "revert conflicts",
+        "evidence_refs": [],
+    }
+    assert "revert conflicts" in message.payload_json["text"]
+    assert record.status is TaskStatus.BLOCKED
+
+
+@pytest.mark.asyncio
+async def test_a_pre_receipt_rollback_refusal_records_result_and_does_not_repeat(
+    stores,
+    tmp_path,
+    monkeypatch,
+    merged_repository,  # noqa: F811
+) -> None:
+    task_store, _work_store = stores
+
+    def malformed_merge(work_id: str) -> ActionRequest:
+        return ActionRequest(
+            project_id=PROJECT,
+            action="merge",
+            work_id=work_id,
+            risk="medium",
+            reversibility=Reversibility.COMPENSATABLE,
+            scope="merge:not-a-github-pull-request",
+            evidence_refs=("work://w1",),
+            rollback="revert_pull_request",
+            post_check="merged_sha_read_back",
+        )
+
+    record, coordinator, _github, work_id, service = await _rollback_ready(
+        stores,
+        tmp_path,
+        monkeypatch,
+        merged_repository,
+        action_factory=malformed_merge,
+    )
+    task, _stored = await task_store.load(record.task_id, project_id=PROJECT)
+    record = await service.decide_gate(
+        task.id,
+        project_id=PROJECT,
+        gate_id=f"rollback:{work_id}",
+        decision="allow",
+        actor_ref="arda",
+    )
+    record = await _drive_to_rest(coordinator, record, record.lease_epoch)
+
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    result = next(
+        event for event in events if event.event_type is TaskEventType.ACTION_RESULT_RECORDED
+    )
+    observation = next(
+        event for event in events if event.event_type is TaskEventType.OBSERVATION_RECORDED
+    )
+    assert result.payload_json["work_id"] == work_id
+    assert result.payload_json["action_id"].startswith(f"revert:{work_id}:")
+    assert result.payload_json["status"] == "failed"
+    assert observation.payload_json["check"] == "rollback_refused"
+    assert "not a GitHub pull request URL" in observation.payload_json["detail"]
+
+    result_count = sum(event.event_type is TaskEventType.ACTION_RESULT_RECORDED for event in events)
+    record = await TaskWriter(task_store).append(
+        record,
+        [status_entry(record, TaskStatus.EXECUTING)],
+        lease_epoch=record.lease_epoch,
+        now=NOW,
+    )
+    record = await coordinator.drive(record, lease_epoch=record.lease_epoch)
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+
+    assert record.status is TaskStatus.EXECUTING
+    assert (
+        sum(event.event_type is TaskEventType.ACTION_RESULT_RECORDED for event in events)
+        == result_count
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_irreversible_rollback_blocks_without_running_the_executor(
+    stores,
+    tmp_path,
+    monkeypatch,
+    merged_repository,  # noqa: F811
+) -> None:
+    task_store, _work_store = stores
+
+    def irreversible(work_id: str) -> ActionRequest:
+        return ActionRequest(
+            project_id=PROJECT,
+            action="deliver",
+            work_id=work_id,
+            risk="medium",
+            reversibility=Reversibility.COMPENSATABLE,
+            scope="https://github.com/octocat/hello-world/issues/42",
+            evidence_refs=("artifact://report",),
+            rollback="delete_comment",
+            post_check="comment_read_back",
+        )
+
+    record, coordinator, _github, work_id, service = await _rollback_ready(
+        stores,
+        tmp_path,
+        monkeypatch,
+        merged_repository,
+        action_factory=irreversible,
+    )
+    task, _stored = await task_store.load(record.task_id, project_id=PROJECT)
+
+    class CountingRollbackExecutor(RollbackExecutor):
+        calls = 0
+
+        async def run(self, *args, **kwargs):
+            self.calls += 1
+            raise AssertionError("executor should not run")
+
+    executor = CountingRollbackExecutor(github_factory=lambda _scope: RecordingGitHub())
+    coordinator._rollbacks = executor
+    record = await service.decide_gate(
+        task.id,
+        project_id=PROJECT,
+        gate_id=f"rollback:{work_id}",
+        decision="allow",
+        actor_ref="arda",
+    )
+    record = await _drive_to_rest(coordinator, record, record.lease_epoch)
+
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    message = [event for event in events if event.event_type is TaskEventType.TASK_MESSAGE][-1]
+    result = next(
+        event for event in events if event.event_type is TaskEventType.ACTION_RESULT_RECORDED
+    )
+    observation = next(
+        event for event in events if event.event_type is TaskEventType.OBSERVATION_RECORDED
+    )
+    assert "irreversible and was not run" in message.payload_json["text"]
+    assert result.payload_json["work_id"] == work_id
+    assert result.payload_json["action_id"].startswith(f"delete_comment:{work_id}:")
+    assert result.payload_json["status"] == "failed"
+    assert observation.payload_json["work_id"] == work_id
+    assert observation.payload_json["check"] == "rollback_refused"
+    assert executor.calls == 0
+    assert record.status is TaskStatus.BLOCKED
+
+
+@pytest.mark.asyncio
+async def test_allowing_a_rollback_gate_from_blocked_appends_executing_status(
+    stores,
+    tmp_path,
+    monkeypatch,
+    merged_repository,  # noqa: F811
+) -> None:
+    task_store, _work_store = stores
+    record, _coordinator, _github, work_id, service = await _rollback_ready(
+        stores, tmp_path, monkeypatch, merged_repository
+    )
+    task, _stored = await task_store.load(record.task_id, project_id=PROJECT)
+    record = await TaskWriter(task_store).append(
+        record,
+        [(TaskEventType.TASK_STATUS_CHANGED, {"status": TaskStatus.BLOCKED.value})],
+        lease_epoch=record.lease_epoch,
+        now=NOW,
+    )
+    blocked_sequence = record.last_event_sequence
+
+    record = await service.decide_gate(
+        task.id,
+        project_id=PROJECT,
+        gate_id=f"rollback:{work_id}",
+        decision="allow",
+        actor_ref="arda",
+    )
+
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    new_events = [event for event in events if event.sequence > blocked_sequence]
+    assert record.status is TaskStatus.EXECUTING
+    assert [event.event_type for event in new_events] == [
+        TaskEventType.GATE_DECIDED,
+        TaskEventType.TASK_STATUS_CHANGED,
+    ]
+    assert new_events[-1].payload_json["status"] == TaskStatus.EXECUTING.value
+
+
+@pytest.mark.asyncio
+async def test_a_failed_merge_post_check_without_a_merge_sha_blocks_without_rollback_gate(
+    stores,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    task_store, work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    monkeypatch.setattr(
+        coordinator,
+        "_load",
+        _fixed_task(task_store, task.model_copy(update={"target": _software_target(tmp_path)})),
+    )
+    runner.statuses["s1"] = "WORK_BLOCKED"
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+    work_id = runner.started[0]
+
+    await work_store.append_events(_blocked_merge(work_id, None))
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    gates = [
+        event.payload_json["gate_id"]
+        for event in events
+        if event.event_type is TaskEventType.GATE_REQUESTED
+    ]
+    assert f"rollback:{work_id}" not in gates
+    assert record.pending_gate is None
+    assert record.status is TaskStatus.BLOCKED
+
+
+@pytest.mark.asyncio
+async def test_a_failed_merge_post_check_without_an_issue_url_blocks_without_rollback_gate(
+    stores,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    task_store, work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    monkeypatch.setattr(
+        coordinator,
+        "_load",
+        _fixed_task(task_store, task.model_copy(update={"target": _software_target(tmp_path)})),
+    )
+    runner.statuses["s1"] = "WORK_BLOCKED"
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+    work_id = runner.started[0]
+
+    await work_store.append_events(_blocked_merge(work_id, "c" * 40, issue_url=None))
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    gates = [
+        event.payload_json["gate_id"]
+        for event in events
+        if event.event_type is TaskEventType.GATE_REQUESTED
+    ]
+    assert f"rollback:{work_id}" not in gates
+    assert record.pending_gate is None
+    assert record.status is TaskStatus.BLOCKED
+
+
+@pytest.mark.asyncio
 async def test_pruning_activity_includes_superseded_step_works(stores, tmp_path) -> None:
     from sagewai.work.tasks.decide import CycleState
 
@@ -704,7 +1597,7 @@ async def test_pruning_activity_includes_superseded_step_works(stores, tmp_path)
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,
-        profile_runner=runner,
+        profile_runners=lambda _task: runner,
         activity_store=Activity(),
     )
     state = CycleState(
@@ -775,7 +1668,7 @@ async def test_budget_exhaustion_records_ledger_usage_and_notifies_now(
     task_store, _ = stores
     task, record, _runner, coordinator = await _seed(stores, tmp_path)
     channel = RecordingDecisionChannel()
-    monkeypatch.setattr(coordinator, "_channels", (channel,))
+    monkeypatch.setattr(coordinator, "_static_channels", (channel,))
     task = task.model_copy(update={"budget": Budget(max_cycle_usd=Decimal("0"))})
     monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
     await task_store.reserve_spend(
@@ -807,8 +1700,6 @@ async def test_budget_exhaustion_records_ledger_usage_and_notifies_now(
 async def test_ungated_replan_reenters_planning_and_runs_the_planner_again(
     stores, tmp_path, monkeypatch
 ) -> None:
-    import sagewai.work.tasks.coordinator as module
-
     task_store, _ = stores
     task, record, runner, coordinator = await _seed(stores, tmp_path)
     task = task.model_copy(
@@ -825,7 +1716,11 @@ async def test_ungated_replan_reenters_planning_and_runs_the_planner_again(
             TaskAssessmentResult(attempt_id="a2", verdict="accept"),
         )
     )
-    monkeypatch.setattr(module, "assess_cycle", lambda *args, **kwargs: next(verdicts))
+
+    async def assess(*args, **kwargs):
+        return next(verdicts)
+
+    runner.assess = assess
     plan_calls = {"n": 0}
     original_plan = runner.plan
 
@@ -844,8 +1739,6 @@ async def test_ungated_replan_reenters_planning_and_runs_the_planner_again(
 async def test_gated_replan_allow_returns_to_planning_and_runs_the_planner(
     stores, tmp_path, monkeypatch
 ) -> None:
-    import sagewai.work.tasks.coordinator as module
-
     task_store, _ = stores
     task, record, runner, coordinator = await _seed(stores, tmp_path)
     task = task.model_copy(
@@ -860,15 +1753,8 @@ async def test_gated_replan_allow_returns_to_planning_and_runs_the_planner(
         return await original_plan(task_, **kwargs)
 
     runner.plan = counted_plan
-    monkeypatch.setattr(
-        module,
-        "assess_cycle",
-        lambda *args, **kwargs: TaskAssessmentResult(
-            attempt_id="a1",
-            gaps=(AssessmentGap(statement="gap", severity="high", suggested_step="s1"),),
-            verdict="replan",
-        ),
-    )
+    runner.assessor_verdict = "replan"
+    runner.assessor_gaps = (AssessmentGap(statement="gap", severity="high", suggested_step="s1"),)
     epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
     record = await _drive_to_rest(coordinator, record, epoch)
     assert record.pending_gate == f"replan:{task.id}:2"
@@ -889,19 +1775,13 @@ async def test_gated_replan_allow_returns_to_planning_and_runs_the_planner(
 
 @pytest.mark.asyncio
 async def test_gated_replan_deny_blocks_for_the_user(stores, tmp_path, monkeypatch) -> None:
-    import sagewai.work.tasks.coordinator as module
-
     task_store, _ = stores
-    task, record, _runner, coordinator = await _seed(stores, tmp_path)
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
     task = task.model_copy(
         update={"authority": Authority(plan=GateMode.AUTO, replan=GateMode.REQUIRE)}
     )
     monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
-    monkeypatch.setattr(
-        module,
-        "assess_cycle",
-        lambda *args, **kwargs: TaskAssessmentResult(attempt_id="a1", verdict="replan"),
-    )
+    runner.assessor_verdict = "replan"
     epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
     record = await _drive_to_rest(coordinator, record, epoch)
     service = TaskService(store=task_store)
@@ -921,27 +1801,18 @@ async def test_gated_replan_deny_blocks_for_the_user(stores, tmp_path, monkeypat
 async def test_spent_replan_budget_blocks_with_gap_text_and_notifies_now(
     stores, tmp_path, monkeypatch
 ) -> None:
-    import sagewai.work.tasks.coordinator as module
-
     task_store, _ = stores
-    task, record, _runner, coordinator = await _seed(stores, tmp_path)
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
     channel = RecordingDecisionChannel()
-    monkeypatch.setattr(coordinator, "_channels", (channel,))
+    monkeypatch.setattr(coordinator, "_static_channels", (channel,))
     task = task.model_copy(update={"budget": task.budget.model_copy(update={"max_replans": 0})})
     monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
-    monkeypatch.setattr(
-        module,
-        "assess_cycle",
-        lambda *args, **kwargs: TaskAssessmentResult(
-            attempt_id="a1",
-            gaps=(
-                AssessmentGap(
-                    statement="deterministic check failed",
-                    severity="high",
-                    suggested_step="repair-step",
-                ),
-            ),
-            verdict="replan",
+    runner.assessor_verdict = "replan"
+    runner.assessor_gaps = (
+        AssessmentGap(
+            statement="deterministic check failed",
+            severity="high",
+            suggested_step="repair-step",
         ),
     )
     epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
