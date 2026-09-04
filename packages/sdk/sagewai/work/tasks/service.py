@@ -18,6 +18,7 @@ from typing import Any, Literal
 
 from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.work.tasks import intake as intake_module
+from sagewai.work.tasks.decide import fold_cycle
 from sagewai.work.tasks.decisions import TASK_GATES
 from sagewai.work.tasks.events import TaskEvent, TaskEventType, fold_record
 from sagewai.work.tasks.models import (
@@ -51,6 +52,10 @@ class TaskCreationError(ValueError):
 
 class TaskNotFoundError(KeyError):
     """No Task with that id in the project."""
+
+
+class ActionNotFoundError(TaskNotFoundError):
+    """No recorded action with that id exists on the Task."""
 
 
 class TaskDecisionError(ValueError):
@@ -327,6 +332,82 @@ class TaskService:
                 )
             )
             entries.append(status_entry(record, TaskStatus.BLOCKED))
+        writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
+        return await writer.append(record, entries, now=now)
+
+    async def request_rollback(
+        self,
+        task_id: str,
+        *,
+        project_id: str,
+        action_id: str,
+        actor_ref: str,
+        now: datetime | None = None,
+    ) -> TaskRecord:
+        """Open and allow the rollback gate for one recorded action.
+
+        Section 19 keeps rollback execution in the coordinator, so this writes the durable
+        request the coordinator reads — ``GATE_REQUESTED`` carrying the recorded
+        ``ActionRequest`` plus an allowed ``GATE_DECIDED`` — and ``decide`` turns it into
+        ``RollbackWork`` on the next tick.
+        """
+        _task, record = await self._load(task_id, project_id=project_id)
+        events = await self._store.read_events(task_id, project_id=project_id)
+        intent = next(
+            (
+                event
+                for event in reversed(events)
+                if event.event_type is TaskEventType.ACTION_INTENT_RECORDED
+                and event.payload_json["action_id"] == action_id
+            ),
+            None,
+        )
+        if intent is None:
+            raise ActionNotFoundError(f"no recorded action {action_id}")
+        action = dict(intent.payload_json["action"])
+        if action["rollback"] is None:
+            raise TaskDecisionError(f"action {action_id} declares no rollback recipe")
+        work_id = str(intent.payload_json["work_id"])
+        gate_id = f"rollback:{work_id}"
+        if any(
+            event.event_type
+            in {TaskEventType.GATE_REQUESTED, TaskEventType.GATE_DECIDED}
+            and event.payload_json["gate_id"] == gate_id
+            for event in events
+        ):
+            return record
+        state = fold_cycle(events, plan_version=record.plan_version)
+        if work_id not in state.step_works.values():
+            raise TaskDecisionError(f"work {work_id} is not in the current cycle")
+        if work_id in state.rolled_back:
+            raise TaskDecisionError(f"work {work_id} was already rolled back")
+        if record.pending_gate is not None:
+            raise TaskDecisionError(f"gate {record.pending_gate} is still open")
+        external_ref = next(
+            (
+                event.payload_json["external_ref"]
+                for event in reversed(events)
+                if event.event_type is TaskEventType.ACTION_RESULT_RECORDED
+                and event.payload_json["action_id"] == action_id
+            ),
+            None,
+        )
+        if external_ref is not None:
+            action["scope"] = str(external_ref)
+        entries: list[Entry] = [
+            (
+                TaskEventType.GATE_REQUESTED,
+                {
+                    "gate_id": gate_id,
+                    "question": f"Allow the recorded rollback ({action['rollback']}) of {action['scope']}?",
+                    "action": action,
+                    "work_id": work_id,
+                },
+            ),
+            (TaskEventType.GATE_DECIDED, {"gate_id": gate_id, "decision": "allow"}),
+        ]
+        if record.status not in {TaskStatus.EXECUTING, TaskStatus.ASSESSING}:
+            entries.append(status_entry(record, TaskStatus.EXECUTING))
         writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
         return await writer.append(record, entries, now=now)
 

@@ -43,7 +43,7 @@ from sagewai.admin.tasks_routes import PROJECT_ADMIN_ROUTES
 from sagewai.admin.tasks_routes import router as task_router
 from sagewai.admin.tenant_audit import TenantAuditStore
 from sagewai.db.engine import create_engine
-from sagewai.work.tasks import TaskStore
+from sagewai.work.tasks import TaskService, TaskStore
 
 _MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -89,9 +89,11 @@ async def app_ctx(tmp_path, monkeypatch):
     await res.init()
     task_store = TaskStore(engine=engine)
     await task_store.init()
+    task_service = TaskService(store=task_store)
 
     app = create_admin_serve_app(sf, identity_store=store, admin_resource_store=res)
     app.state.task_store = task_store
+    app.state.task_service = task_service
     audit = TenantAuditStore(engine=engine)
     await audit.init()
     app.state.tenant_audit = audit

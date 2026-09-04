@@ -18,11 +18,12 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sse_starlette.sse import EventSourceResponse
 
 from sagewai.admin.serve import _emit_audit, _require_project_admin, _work_project_scope
+from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.work.events import WorkEvent, WorkEventType
 from sagewai.work.store import WorkStore
 from sagewai.work.tasks.events import TaskEventType
@@ -32,6 +33,7 @@ from sagewai.work.tasks.models import (
     Authority,
     BoardColumn,
     ExecutionRoute,
+    Sensitivity,
     TaskDefaults,
     TaskKind,
     TaskOrigin,
@@ -51,9 +53,11 @@ from sagewai.work.tasks.store import StaleTaskError, TaskStore
 from sagewai.work.tasks.telemetry import derive_task_telemetry
 from sagewai.work.tasks.templates import CATALOGUE, RESERVED_TEMPLATE_IDS
 from sagewai.work.tasks.transitions import IllegalTransitionError
-from sagewai.work.tasks.views import thread_from_events
+from sagewai.work.tasks.views import actions_from_events, referenced_artifacts, thread_from_events
 
 router = APIRouter(prefix="/api/v1/tasks")
+artifacts_router = APIRouter(prefix="/api/v1/artifacts")
+_ARTIFACT_MEDIA_TYPE = "application/octet-stream"
 _CURSOR_SEPARATOR = "|"
 _CURSOR_ORDER_SEPARATOR = ":"
 _CURSOR_PREFIX_BY_ORDER = {"created_at": "c", "updated_at": "u"}
@@ -244,6 +248,7 @@ PROJECT_ADMIN_ROUTES: tuple[tuple[str, str], ...] = (
     ("PUT", "/api/v1/tasks/defaults"),
     ("POST", "/api/v1/tasks/triggers"),
     ("DELETE", "/api/v1/tasks/triggers/{trigger_id}"),
+    ("POST", "/api/v1/tasks/{task_id}/actions/{action_id}/rollback"),
 )
 """Every route the project-admin tier gates as a whole, enumerated by the coverage gate.
 
@@ -356,6 +361,32 @@ async def get_task_thread(task_id: str, request: Request) -> dict:
     return thread_from_events(events).model_dump(mode="json")
 
 
+@router.get("/{task_id}/actions")
+async def list_task_actions(task_id: str, request: Request) -> dict:
+    project_id = _task_project_scope(request)
+    store: TaskStore = request.app.state.task_store
+    if await store.load_record(task_id, project_id=project_id) is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    events = await store.read_events(task_id, project_id=project_id)
+    return {"actions": [action.model_dump(mode="json") for action in actions_from_events(events)]}
+
+
+@router.post(
+    "/{task_id}/actions/{action_id}/rollback",
+    dependencies=[Depends(_require_project_admin)],
+)
+async def rollback_task_action(task_id: str, action_id: str, request: Request) -> dict:
+    """Request the recorded rollback; the coordinator executes it (section 19)."""
+    project_id = _task_project_scope(request)
+    service: TaskService = request.app.state.task_service
+    with _service_errors():
+        record = await service.request_rollback(
+            task_id, project_id=project_id, action_id=action_id, actor_ref=_actor_ref(request)
+        )
+    await _emit_audit(request, "task.action.rollback", target_type="task", target_id=task_id)
+    return record.model_dump(mode="json")
+
+
 @router.get("/{task_id}/events")
 async def task_events(task_id: str, request: Request) -> EventSourceResponse:
     project_id = _task_project_scope(request)
@@ -428,6 +459,40 @@ async def task_telemetry(task_id: str, request: Request) -> dict:
         project_selections=project_selections,
         now=datetime.now(timezone.utc),
     ).model_dump(mode="json")
+
+
+@artifacts_router.get("/{storage_ref}")
+async def read_artifact(storage_ref: str, request: Request, task_id: str) -> Response:
+    """Serve one artifact the named Task references, unless the Task is ``restricted``.
+
+    ``storage_ref`` is the digest form ``sha256:<64 hex>`` from ``ArtifactRef.digest``; the
+    full ``artifact://`` reference carries a ``//`` no path parameter can hold.
+    """
+    project_id = _task_project_scope(request)
+    store: TaskStore = request.app.state.task_store
+    loaded = await store.load(task_id, project_id=project_id)
+    if loaded is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    task, _record = loaded
+    if task.sensitivity is Sensitivity.RESTRICTED:
+        raise HTTPException(
+            status_code=403, detail="restricted content never leaves the console sink"
+        )
+    reference = f"artifact://{storage_ref}"
+    events = await store.read_events(task_id, project_id=project_id)
+    if reference not in referenced_artifacts(events):
+        raise HTTPException(status_code=404, detail="Not found")
+    artifacts: LocalArtifactStore = request.app.state.artifact_store
+    try:
+        content = artifacts.read(reference, project_id=project_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="Not found") from exc
+    media_type = (
+        task.brief_ref.media_type
+        if task.brief_ref.storage_ref == reference
+        else _ARTIFACT_MEDIA_TYPE
+    )
+    return Response(content=content, media_type=media_type)
 
 
 async def _task_event_stream(

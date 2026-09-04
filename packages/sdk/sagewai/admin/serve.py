@@ -990,8 +990,9 @@ def create_admin_serve_app(
                     conn_ctx.store = active_connection_store
                     conn_ctx.tenant_safe = True
 
+        app.state.artifact_store = _TaskArtifactStore()
         app.state.task_service = TaskService(
-            store=app.state.task_store, artifact_store=_TaskArtifactStore()
+            store=app.state.task_store, artifact_store=app.state.artifact_store
         )
         _task_service = app.state.task_service
         _task_connection_store = app.state.connections_context.store
@@ -1661,9 +1662,11 @@ def create_admin_serve_app(
         prefix="/api/v1/harness",
     )
 
+    from sagewai.admin.tasks_routes import artifacts_router
     from sagewai.admin.tasks_routes import router as tasks_router
 
     app.include_router(tasks_router)
+    app.include_router(artifacts_router)
 
     # ── Setup ────────────────────────────────────────────────────
 

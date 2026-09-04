@@ -34,9 +34,11 @@ from sagewai.work.tasks.models import (
 )
 from sagewai.work.tasks.plan import plan_from_events
 from sagewai.work.tasks.service import (
+    ActionNotFoundError,
     ClarificationDeadlines,
     TaskCreationError,
     TaskDecisionError,
+    TaskNotFoundError,
     TaskService,
 )
 from sagewai.work.tasks.store import StaleTaskError, TaskStore
@@ -625,6 +627,28 @@ async def test_a_work_gate_mirrored_onto_the_task_is_not_decidable_here(
             project_id="project-a",
             gate_id="merge:w1:7",
             decision="allow",
+            actor_ref="arda",
+            now=NOW,
+        )
+
+
+def test_action_not_found_is_a_task_not_found_error() -> None:
+    assert issubclass(ActionNotFoundError, TaskNotFoundError)
+
+
+@pytest.mark.asyncio
+async def test_request_rollback_raises_action_not_found_for_missing_action(
+    service: TaskService, store: TaskStore
+) -> None:
+    task, _record = await service.create(
+        SOFTWARE_BRIEF, project_id="project-a", origin=TaskOrigin.HUMAN, created_by="arda", now=NOW
+    )
+
+    with pytest.raises(ActionNotFoundError, match="no recorded action deliver:w1:2"):
+        await service.request_rollback(
+            task.id,
+            project_id="project-a",
+            action_id="deliver:w1:2",
             actor_ref="arda",
             now=NOW,
         )
