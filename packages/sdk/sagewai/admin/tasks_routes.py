@@ -23,7 +23,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sqlalchemy.exc import IntegrityError
 from sse_starlette.sse import EventSourceResponse
 
-from sagewai.admin.serve import _emit_audit, _require_project_admin, _work_project_scope
+from sagewai.admin.serve import (
+    _emit_audit,
+    _multi_ctx,
+    _require_project_admin,
+    _work_project_scope,
+)
 from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.work.activity import WorkActivityStore
 from sagewai.work.events import WorkEvent, WorkEventType
@@ -405,6 +410,66 @@ async def task_decisions(request: Request) -> dict:
         now=datetime.now(timezone.utc),
     )
     return {"items": [item.model_dump(mode="json") for item in items]}
+
+
+@router.get("/portfolio")
+async def task_portfolio(
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> dict:
+    """The caller's Tasks across every project they may read, selected project first.
+
+    The scope is the caller's own memberships, never a project list from the client: a client
+    that could name the projects could name someone else's. The selected project is still
+    required — the Task surface has no global scope (section 19) — and it leads the result so
+    the console can render the current board without a second request.
+    """
+    selected = _task_project_scope(request)
+    store: TaskStore = request.app.state.task_store
+    projects = await _caller_projects(request, selected)
+    entries = []
+    for project_id in projects:
+        records = await store.list_records(project_id=project_id, limit=limit)
+        entries.append(
+            {
+                "project_id": project_id,
+                "tasks": [record.model_dump(mode="json") for record in records],
+                "needs_you": sum(
+                    1 for record in records if record.board_column is BoardColumn.NEEDS_YOU
+                ),
+            }
+        )
+    return {"projects": entries}
+
+
+async def _caller_projects(request: Request, selected: str) -> tuple[str, ...]:
+    """Every project whose Tasks this caller may read, ``selected`` first.
+
+    Multi-tenant: the caller's project memberships, or — for an org owner or admin, who holds
+    no per-project row — every project in the organization. Single-org: the state file's
+    projects, the same set the coordinator's runner iterates.
+    """
+    context = _multi_ctx(request)
+    if context is None:
+        state_file = request.app.state.admin_state_file
+        found = [project["id"] for project in await asyncio.to_thread(state_file.list_projects)]
+    else:
+        if request.state.principal.type == "api_token":
+            return (selected,)
+        identity_store = request.app.state.identity_store
+        if context.is_org_admin:
+            found = [
+                project["id"] for project in await identity_store.list_projects(context.org_id)
+            ]
+        else:
+            found = sorted(
+                row["project_id"]
+                for row in await identity_store.list_memberships(context.org_id, context.actor.id)
+                if row["project_id"] is not None
+            )
+    ordered = [selected] if selected in found else []
+    ordered.extend(project_id for project_id in found if project_id != selected)
+    return tuple(ordered)
 
 
 @router.get("/{task_id}")
