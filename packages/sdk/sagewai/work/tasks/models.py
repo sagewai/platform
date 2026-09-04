@@ -251,6 +251,13 @@ class ReportTarget(BaseModel):
             object.__setattr__(self, "sinks", (Sink(kind="console"), *self.sinks))
         return self
 
+    @model_validator(mode="after")
+    def _sink_versions_are_distinct(self) -> ReportTarget:
+        versions = [sink.version for sink in self.sinks]
+        if len(set(versions)) != len(versions):
+            raise ValueError("each report sink needs its own version")
+        return self
+
 
 TaskTarget = Annotated[SoftwareTarget | ReportTarget, Field(discriminator="kind")]
 

@@ -81,6 +81,8 @@ class FakeProfileRunner:
         self.gates: dict[str, str] = {}
         self.delivered: list[tuple[str, int]] = []
         self.deliver_sink_versions: dict[str, int] = {}
+        self.deliver_next_sink_versions: dict[tuple[str, int], int] = {}
+        self.deliver_actions: dict[tuple[str, int], dict] = {}
         self.deliver_action: dict | None = None
         self.delivery_action_id: str | None = None
         self.delivery_external_ref: str | None = None
@@ -187,7 +189,17 @@ class FakeProfileRunner:
         self.delivered.append((work_id, sink_version))
         record = await self._work_store.load_work(work_id, project_id=task.project_id)
         action = ActionRequest.model_validate(record.profile_context["report"]["deliver_action"])
-        update = {"status": "COMPLETE"}
+        next_version = self.deliver_next_sink_versions.get((work_id, sink_version))
+        if next_version is None:
+            update = {"status": "COMPLETE"}
+        else:
+            self.deliver_sink_versions[work_id] = next_version
+            profile_context = dict(record.profile_context)
+            profile_context["report"] = {
+                "pending_sink_version": next_version,
+                "deliver_action": self.deliver_actions[(work_id, next_version)],
+            }
+            update = {"status": "READY_TO_DELIVER", "profile_context": profile_context}
         if self.clear_report_on_deliver:
             profile_context = dict(record.profile_context)
             profile_context.pop("report", None)

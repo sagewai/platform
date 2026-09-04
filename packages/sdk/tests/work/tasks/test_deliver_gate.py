@@ -163,6 +163,36 @@ async def test_a_delivery_receipt_with_a_foreign_action_id_still_terminates(
 
 
 @pytest.mark.asyncio
+async def test_a_two_sink_report_work_delivers_both_sinks_before_completion(
+    stores,  # noqa: F811
+    tmp_path,
+    monkeypatch,
+) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
+    runner.statuses["s1"] = "READY_TO_DELIVER"
+    runner.deliver_sink_versions["w-s1-1"] = 1
+    runner.deliver_action = _deliver_action_payload("w-s1-1", rollback=None)
+    runner.deliver_next_sink_versions[("w-s1-1", 1)] = 2
+    runner.deliver_actions[("w-s1-1", 2)] = _deliver_action_payload(
+        "w-s1-1", rollback="delete_comment"
+    )
+
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    assert runner.delivered == [("w-s1-1", 1), ("w-s1-1", 2)]
+    assert record.status is TaskStatus.COMPLETE
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    assert [
+        event.payload_json["action_id"]
+        for event in events
+        if event.event_type is TaskEventType.ACTION_RESULT_RECORDED
+    ] == ["deliver:w-s1-1:1", "deliver:w-s1-1:2"]
+
+
+@pytest.mark.asyncio
 async def test_a_lost_delivery_batch_uses_the_task_action_when_work_context_was_cleared(
     stores,  # noqa: F811
     tmp_path,

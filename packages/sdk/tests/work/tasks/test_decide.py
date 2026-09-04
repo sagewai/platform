@@ -23,10 +23,12 @@ from sagewai.work.tasks.decide import (
     AssessCycle,
     BlockCycle,
     CompleteCycle,
+    DeliverReport,
     ExhaustBudget,
     MirrorAttention,
     RecordStepOutcome,
     Replan,
+    RequestDeliverGate,
     ResumeStep,
     RollbackWork,
     RunPlanning,
@@ -472,6 +474,7 @@ def test_allowed_rollback_runs_once_and_delivery_results_do_not_count() -> None:
 
     state = fold_cycle(events, plan_version=record.plan_version)
     assert state.decided_gates == {"rollback:w1": "allow"}
+    assert state.delivered == frozenset({"deliver:w1:1"})
     assert state.rolled_back == frozenset()
     assert decide(task, record, events, {}, budget_used=BudgetUsed(), now=NOW) == RollbackWork(
         work_id="w1"
@@ -491,10 +494,48 @@ def test_allowed_rollback_runs_once_and_delivery_results_do_not_count() -> None:
         )
 
         state = fold_cycle(events, plan_version=record.plan_version)
+        assert state.delivered == frozenset({"deliver:w1:1"})
         assert state.rolled_back == frozenset({"w1"})
         assert decide(
             task, record, events, {}, budget_used=BudgetUsed(), now=NOW
         ) != RollbackWork(work_id="w1")
+
+
+def test_delivery_uses_the_pending_sink_version_after_an_earlier_sink_delivered() -> None:
+    task = _task()
+    record, events = _planned(task)
+    record, events = _extend(
+        record,
+        events,
+        [
+            (
+                TaskEventType.STEP_WORK_STARTED,
+                {"step_id": "s1", "work_id": "w1", "issue_url": "u", "base_sha": "a" * 40},
+            ),
+            (TaskEventType.GATE_DECIDED, {"gate_id": "deliver:w1:1", "decision": "allow"}),
+            (
+                TaskEventType.ACTION_RESULT_RECORDED,
+                {"action_id": "deliver:w1:1", "work_id": "w1", "status": "succeeded"},
+            ),
+        ],
+    )
+    work = StepWorkState(
+        step_id="s1",
+        work_id="w1",
+        status="READY_TO_DELIVER",
+        deliver_sink_version=2,
+    )
+    assert decide(task, record, events, {"s1": work}, budget_used=BudgetUsed(), now=NOW) == (
+        RequestDeliverGate(step_id="s1", work_id="w1", sink_version=2)
+    )
+    record, events = _extend(
+        record,
+        events,
+        [(TaskEventType.GATE_DECIDED, {"gate_id": "deliver:w1:2", "decision": "allow"})],
+    )
+    assert decide(task, record, events, {"s1": work}, budget_used=BudgetUsed(), now=NOW) == (
+        DeliverReport(step_id="s1", work_id="w1", sink_version=2)
+    )
 
 
 def test_a_denied_rollback_gate_is_not_executed() -> None:

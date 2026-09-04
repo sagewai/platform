@@ -121,7 +121,7 @@ def test_report_target_requires_console_sink_and_source_scope() -> None:
     )
     target = ReportTarget(
         sources=(grant,),
-        sinks=(Sink(kind="github_issue", issue_url="https://github.com/o/r/issues/1"),),
+        sinks=(Sink(kind="github_issue", issue_url="https://github.com/o/r/issues/1", version=2),),
         required_sections=("Summary",),
     )
     assert [sink.kind for sink in target.sinks] == ["console", "github_issue"]
@@ -134,6 +134,31 @@ def test_report_target_requires_console_sink_and_source_scope() -> None:
     )
     with pytest.raises(ValidationError):
         _task(profile="report", target=ReportTarget(sources=(foreign,), required_sections=("Summary",)))
+
+
+def test_report_target_requires_distinct_sink_versions() -> None:
+    with pytest.raises(ValidationError, match="each report sink needs its own version"):
+        ReportTarget(
+            sinks=(
+                Sink(
+                    kind="github_issue",
+                    issue_url="https://github.com/o/r/issues/1",
+                ),
+            )
+        )
+    target = ReportTarget(
+        sinks=(
+            Sink(
+                kind="github_issue",
+                issue_url="https://github.com/o/r/issues/1",
+                version=2,
+            ),
+        )
+    )
+    assert [(sink.kind, sink.version) for sink in target.sinks] == [
+        ("console", 1),
+        ("github_issue", 2),
+    ]
 
 
 def test_budget_defaults_and_bounds() -> None:

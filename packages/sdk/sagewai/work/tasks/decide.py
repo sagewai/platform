@@ -254,7 +254,7 @@ def fold_cycle(events: Sequence[TaskEvent], *, plan_version: int) -> CycleState:
         elif event.event_type is TaskEventType.ACTION_RESULT_RECORDED:
             action_id = str(payload["action_id"])
             if action_id.startswith(_DELIVER_ACTION_PREFIX):
-                delivered.add(str(payload["work_id"]))
+                delivered.add(action_id)
             elif action_id.startswith(_ROLLBACK_ACTION_PREFIXES):
                 rolled_back.add(str(payload["work_id"]))
     return CycleState(
@@ -293,14 +293,16 @@ def _pending_rollback(state: CycleState) -> str | None:
 
 
 def _pending_delivery(state: CycleState, work: StepWorkState) -> tuple[int, str | None] | None:
-    if work.work_id in state.delivered:
-        return None
     if work.deliver_sink_version is not None:
         gate_id = f"deliver:{work.work_id}:{work.deliver_sink_version}"
+        if gate_id in state.delivered:
+            return None
         return work.deliver_sink_version, state.decided_gates.get(gate_id)
     prefix = f"deliver:{work.work_id}:"
     for gate_id, decision in state.decided_gates.items():
         if gate_id.startswith(prefix):
+            if gate_id in state.delivered:
+                continue
             return int(gate_id[len(prefix) :]), decision
     return None
 

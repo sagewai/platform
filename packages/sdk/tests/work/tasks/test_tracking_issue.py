@@ -333,7 +333,11 @@ async def test_a_report_issue_sink_selects_the_tracking_issue_repository(stores)
     task_store, _work_store = stores
     task, record, coordinator = await _seed_report(
         stores,
-        sinks=(Sink(kind="github_issue", issue_url="https://github.com/acme/reports/issues/5"),),
+        sinks=(
+            Sink(
+                kind="github_issue", issue_url="https://github.com/acme/reports/issues/5", version=2
+            ),
+        ),
     )
     github = RecordingGitHub()
     coordinator._channels = (
