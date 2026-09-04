@@ -918,8 +918,12 @@ def create_admin_serve_app(
             task_store=app.state.task_store,
             activity_store=app.state.activity_store,
         )
+        from sagewai.admin.channel_config_store import (
+            AdminResourceChannelConfigStore,
+            StateFileChannelConfigStore,
+            org_for_project,
+        )
         from sagewai.artifacts import LocalArtifactStore as _TaskArtifactStore
-        from sagewai.notifications.postgres_store import PostgresNotificationStore
         from sagewai.work.profiles.software.assembly import github_client_for
         from sagewai.work.tasks.actions import RollbackExecutor
         from sagewai.work.tasks.channels import (
@@ -937,13 +941,15 @@ def create_admin_serve_app(
         from sagewai.work.tasks.service import ClarificationDeadlines, TaskService
         from sagewai.work.tasks.software import SoftwareProfileRunner
         from sagewai.work.tasks.triggers import TriggerIntake
-        app.state.notification_store = PostgresNotificationStore(engine=engine)
+
+        _project_orgs: dict[str, str] = {}
 
         async def _coordinator_projects() -> list[str]:
             if _is_multi_tenant():
                 projects: list[str] = []
                 for org in await identity_store.list_orgs():
                     for project in await identity_store.list_projects(org["id"]):
+                        _project_orgs[project["id"]] = org["id"]
                         projects.append(project["id"])
                 return projects
             import asyncio
@@ -1016,13 +1022,37 @@ def create_admin_serve_app(
             credentials=_task_credentials,
             stack_cache_limit=max(8, max_tasks_from_env()),
         )
+        _state_file_channels = StateFileChannelConfigStore(state_file=sf)
+        _channel_config_stores: dict[str, AdminResourceChannelConfigStore] = {}
+
+        async def _config_store_for(project_id: str):
+            """The tenant-keyed rows in multi-tenant mode; the state file's rows in single-org.
+
+            Both are places the admin's channel CRUD actually writes, which is the whole point:
+            before this, the resolver read a table no route wrote.
+            """
+            resources = app.state.resource_stores.admin_resource
+            if resources is None:
+                return _state_file_channels
+            org_id = _project_orgs.get(project_id) or await org_for_project(
+                identity_store, project_id
+            )
+            if org_id is None:
+                return _state_file_channels
+            store = _channel_config_stores.get(org_id)
+            if store is None:
+                store = AdminResourceChannelConfigStore(
+                    resource_store=resources, identity_store=identity_store, org_id=org_id
+                )
+                _channel_config_stores[org_id] = store
+            return store
 
         async def _channels_for(project_id: str):
             """Resolve per project; resolver order keeps console first unless defaults differ."""
             defaults = await app.state.task_store.get_defaults(project_id=project_id)
             return await build_decision_channels(
                 defaults=defaults,
-                config_store=app.state.notification_store,
+                config_store=await _config_store_for(project_id),
                 tracking_channel=GitHubIssueDecisionChannel(
                     store=app.state.task_store, github_factory=github_client_for
                 ),

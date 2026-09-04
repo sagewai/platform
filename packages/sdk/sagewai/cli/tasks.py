@@ -17,11 +17,17 @@ from pathlib import Path
 import click
 
 import sagewai.cli as _cli
+from sagewai.admin.channel_config_store import (
+    AdminResourceChannelConfigStore,
+    StateFileChannelConfigStore,
+    org_for_project,
+)
+from sagewai.admin.identity_store import IdentityStore
+from sagewai.admin.resource_stores import build_resource_stores
 from sagewai.admin.state_file import AdminStateFile, default_admin_state_path
 from sagewai.artifacts import LocalArtifactStore
 from sagewai.connections.bootstrap import build_connections_context
 from sagewai.db import factory
-from sagewai.notifications.postgres_store import PostgresNotificationStore
 from sagewai.work.activity import WorkActivityStore
 from sagewai.work.profiles.software.assembly import github_client_for
 from sagewai.work.store import WorkStore
@@ -92,10 +98,31 @@ async def _create(brief: str, *, project_id: str) -> str:
     return task.id
 
 
+async def _config_store(project_id: str, state_file: AdminStateFile):
+    """Where the coordinator reads chat webhook URLs for this project.
+
+    A multi-tenant home keeps them in ``admin_resources``, tenant-key encrypted, written by the
+    admin's channel routes; a single-org home keeps them in the same state file the admin's
+    channel routes write. Both are read here, so a channel configured in the console works
+    from the CLI too.
+    """
+    stores = await build_resource_stores(None)
+    if stores is None:
+        return StateFileChannelConfigStore(state_file=state_file)
+    identity_store = IdentityStore(engine=factory.get_engine())
+    org_id = await org_for_project(identity_store, project_id)
+    if org_id is None:
+        return StateFileChannelConfigStore(state_file=state_file)
+    return AdminResourceChannelConfigStore(
+        resource_store=stores.admin_resource, identity_store=identity_store, org_id=org_id
+    )
+
+
 async def _tick(project_id: str) -> int:
     task_store, work_store, activity_store = await _stores()
     service = TaskService(store=task_store, artifact_store=LocalArtifactStore())
-    connections = build_connections_context(AdminStateFile(default_admin_state_path()))
+    state_file = AdminStateFile(default_admin_state_path())
+    connections = build_connections_context(state_file)
     software = SoftwareProfileRunner(
         work_store=work_store,
         github_factory=github_client_for,
@@ -110,11 +137,10 @@ async def _tick(project_id: str) -> int:
         credentials=connections.router,
         stack_cache_limit=max(8, max_tasks_from_env()),
     )
-    notification_store = PostgresNotificationStore(engine=factory.get_engine())
     defaults = await task_store.get_defaults(project_id=project_id)
     channels = await build_decision_channels(
         defaults=defaults,
-        config_store=notification_store,
+        config_store=await _config_store(project_id, state_file),
         tracking_channel=GitHubIssueDecisionChannel(
             store=task_store, github_factory=github_client_for
         ),

@@ -92,9 +92,8 @@ class ChannelDeliveryError(RuntimeError):
     """A decision channel refused the notification.
 
     Carries the channel name and the transport's status code and **never** the endpoint: an
-    incoming-webhook URL is itself the credential, encrypted at rest by
-    ``PostgresNotificationStore``, and ``httpx.HTTPStatusError`` puts the full request URL in
-    its message.
+    incoming-webhook URL is itself the credential, stored encrypted by the admin's channel routes,
+    and ``httpx.HTTPStatusError`` puts the full request URL in its message.
     """
 
 
