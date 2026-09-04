@@ -7,12 +7,14 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""Headless Task commands: create one Task, run one coordinator tick."""
+"""Headless Task commands for reading, creating, and driving Tasks."""
 
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 import click
 
@@ -39,13 +41,22 @@ from sagewai.work.tasks.channels import (
 )
 from sagewai.work.tasks.coordinator import TaskCoordinator
 from sagewai.work.tasks.decisions import DecisionChannel
-from sagewai.work.tasks.models import TaskOrigin
+from sagewai.work.tasks.inbox import DecisionItem, decision_inbox
+from sagewai.work.tasks.models import (
+    BoardColumn,
+    TaskKind,
+    TaskOrigin,
+    TaskRecord,
+    TaskStatus,
+)
 from sagewai.work.tasks.report import ReportProfileRunner
 from sagewai.work.tasks.runner import TaskCoordinatorRunner, interval_from_env, max_tasks_from_env
 from sagewai.work.tasks.service import ClarificationDeadlines, TaskService
 from sagewai.work.tasks.software import SoftwareProfileRunner
 from sagewai.work.tasks.store import TaskStore
+from sagewai.work.tasks.templates import CATALOGUE
 from sagewai.work.tasks.triggers import TriggerIntake
+from sagewai.work.tasks.views import ThreadView, thread_from_events
 
 
 @click.group("task")
@@ -83,10 +94,155 @@ def task_tick(project_id: str) -> None:
     click.echo(_cli._run_async(_tick(project_id)))
 
 
+@task_group.command("list")
+@click.option(
+    "--status", "statuses", multiple=True, type=click.Choice([s.value for s in TaskStatus])
+)
+@click.option("--kind", "kinds", multiple=True, type=click.Choice([k.value for k in TaskKind]))
+@click.option(
+    "--origin", "origins", multiple=True, type=click.Choice([o.value for o in TaskOrigin])
+)
+@click.option(
+    "--column", "columns", multiple=True, type=click.Choice([c.value for c in BoardColumn])
+)
+@click.option("--limit", default=50, show_default=True, type=click.IntRange(1, 200))
+@click.pass_obj
+def task_list(
+    project_id: str,
+    statuses: tuple[str, ...],
+    kinds: tuple[str, ...],
+    origins: tuple[str, ...],
+    columns: tuple[str, ...],
+    limit: int,
+) -> None:
+    """List this project's Tasks, oldest first."""
+    records = _cli._run_async(
+        _list(
+            project_id,
+            statuses=tuple(TaskStatus(value) for value in statuses) or None,
+            kinds=tuple(TaskKind(value) for value in kinds) or None,
+            origins=tuple(TaskOrigin(value) for value in origins) or None,
+            board_columns=tuple(BoardColumn(value) for value in columns) or None,
+            limit=limit,
+        )
+    )
+    for record in records:
+        click.echo(
+            f"{record.task_id} {record.status.value} {record.board_column.value}: {record.title}"
+        )
+
+
+@task_group.command("board")
+@click.pass_obj
+def task_board(project_id: str) -> None:
+    """Group this project's Tasks into the five board columns, newest-touched first."""
+    records = _cli._run_async(_list(project_id, limit=200, order_by="updated_at", descending=True))
+    grouped: dict[str, list[TaskRecord]] = {column.value: [] for column in BoardColumn}
+    for record in records:
+        grouped[record.board_column.value].append(record)
+    for column, column_records in grouped.items():
+        click.echo(f"{column}:")
+        for record in column_records:
+            click.echo(f"  {record.task_id} {record.status.value}: {record.title}")
+
+
+@task_group.command("status")
+@click.argument("task_id")
+@click.pass_obj
+def task_status(project_id: str, task_id: str) -> None:
+    """Show the current state of TASK_ID."""
+    record = _cli._run_async(_load_record(task_id, project_id=project_id))
+    if record is None:
+        raise click.ClickException(f"Task {task_id} not found")
+    _echo_record(record)
+
+
+@task_group.command("thread")
+@click.argument("task_id")
+@click.pass_obj
+def task_thread(project_id: str, task_id: str) -> None:
+    """Print the Task thread: brief, questions, messages, gates, plans, outputs."""
+    view = _cli._run_async(_thread(task_id, project_id=project_id))
+    if view is None:
+        raise click.ClickException(f"Task {task_id} not found")
+    for entry in view.entries:
+        click.echo(f"#{entry.sequence} {entry.kind} {entry.author}: {entry.text}")
+
+
+@task_group.command("decisions")
+@click.pass_obj
+def task_decisions(project_id: str) -> None:
+    """List everything in this project that is waiting on a human, soonest due first."""
+    items = _cli._run_async(_decisions(project_id))
+    if not items:
+        click.echo("No open decisions.")
+        return
+    for item in items:
+        click.echo(f"{item.urgency} {item.kind} {item.attention_id}: {item.summary}")
+
+
+@task_group.command("templates")
+@click.pass_obj
+def task_templates(_project_id: str) -> None:
+    """List the Task templates intake can route to."""
+    for template in CATALOGUE.values():
+        click.echo(f"{template.id} {template.version}: {template.title}")
+
+
+def _echo_record(record: TaskRecord) -> None:
+    click.echo(f"Task {record.task_id}: {record.status.value}")
+
+
 async def _stores() -> tuple[TaskStore, WorkStore, WorkActivityStore]:
     await factory.ensure_schema()
     engine = factory.get_engine()
     return TaskStore(engine=engine), WorkStore(engine=engine), WorkActivityStore(engine=engine)
+
+
+async def _list(
+    project_id: str,
+    *,
+    statuses: tuple[TaskStatus, ...] | None = None,
+    kinds: tuple[TaskKind, ...] | None = None,
+    origins: tuple[TaskOrigin, ...] | None = None,
+    board_columns: tuple[BoardColumn, ...] | None = None,
+    limit: int | None = None,
+    order_by: Literal["created_at", "updated_at"] = "created_at",
+    descending: bool = False,
+) -> list[TaskRecord]:
+    task_store, _work_store, _activity = await _stores()
+    return await task_store.list_records(
+        project_id=project_id,
+        statuses=statuses,
+        kinds=kinds,
+        origins=origins,
+        board_columns=board_columns,
+        limit=limit,
+        order_by=order_by,
+        descending=descending,
+    )
+
+
+async def _load_record(task_id: str, *, project_id: str) -> TaskRecord | None:
+    task_store, _work_store, _activity = await _stores()
+    return await task_store.load_record(task_id, project_id=project_id)
+
+
+async def _thread(task_id: str, *, project_id: str) -> ThreadView | None:
+    task_store, _work_store, _activity = await _stores()
+    if await task_store.load_record(task_id, project_id=project_id) is None:
+        return None
+    return thread_from_events(await task_store.read_events(task_id, project_id=project_id))
+
+
+async def _decisions(project_id: str) -> tuple[DecisionItem, ...]:
+    task_store, work_store, _activity = await _stores()
+    return await decision_inbox(
+        task_store=task_store,
+        work_store=work_store,
+        project_id=project_id,
+        now=datetime.now(timezone.utc),
+    )
 
 
 async def _create(brief: str, *, project_id: str) -> str:
