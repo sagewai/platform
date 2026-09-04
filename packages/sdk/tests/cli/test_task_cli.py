@@ -64,6 +64,38 @@ def test_tick_on_an_empty_project_drives_nothing(wired) -> None:
     assert "0" in result.output
 
 
+@pytest.mark.asyncio
+async def test_a_single_org_home_reads_channels_from_the_state_file(wired, tmp_path) -> None:
+    from sagewai.admin.channel_config_store import StateFileChannelConfigStore
+    from sagewai.admin.state_file import AdminStateFile
+    from sagewai.cli import tasks as tasks_module
+
+    store = await tasks_module._config_store(
+        "project-a", AdminStateFile(path=tmp_path / "state.json")
+    )
+
+    assert isinstance(store, StateFileChannelConfigStore)
+
+
+def test_the_tick_hands_its_config_store_to_the_resolver(wired, monkeypatch) -> None:
+    from sagewai.admin.channel_config_store import StateFileChannelConfigStore
+    from sagewai.cli import tasks as tasks_module
+
+    seen = {}
+
+    async def _capture(
+        *, defaults, config_store=None, tracking_channel=None, console_base_url=None
+    ):
+        seen["config_store"] = config_store
+        return ()
+
+    monkeypatch.setattr(tasks_module, "build_decision_channels", _capture)
+    result = wired.invoke(task_group, ["--project", "project-a", "tick"])
+
+    assert result.exit_code == 0, result.output
+    assert isinstance(seen["config_store"], StateFileChannelConfigStore)
+
+
 def test_tick_wires_runners_to_connections_context_store(wired, monkeypatch) -> None:
     from sagewai.cli import tasks as tasks_module
 

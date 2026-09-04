@@ -421,13 +421,58 @@ Nothing creates a monitoring Task on its own.
 Questions and gates: an unanswered question that carries a default is defaulted once its
 deadline passes and the Task returns to planning; a question that cannot be defaulted stays
 open and keeps the Task in `Needs you`. The plan and re-plan gates are decided on the Task; a
-merge gate belongs to the Work, so approve it with `sagewai work approve`.
+merge gate belongs to the Work, so approve it with `sagewai work approve` or
+`POST /api/v1/work/{work_id}/gates/{gate_id}`.
 
 Triggers: an approved `github_label` trigger turns each newly labelled issue into one Task of
 origin `trigger`, bounded by the trigger's authority, which a Task may only tighten. **A
 non-human origin never merges automatically**: plan, merge, and deliver are forced to
 `require` for every origin that is not a human, whatever the trigger says, and such a Task
 never prefers the free implementation.
+
+### The sagewai task command family
+
+Every `sagewai task` command requires `--project <slug>`. `global` is refused because Tasks
+have no organization-global scope.
+
+Reading commands cover the project-local views the console uses: `list` accepts `--status`,
+`--kind`, `--origin`, and `--column` filters plus `--limit` (a filtered page, oldest first;
+there is no cursor); `board` groups the most recently touched Tasks into the five board
+columns; `status` prints one Task's projection; `thread` prints the brief, messages,
+questions, gates, plans, and outputs; `decisions` lists open human attention items; and
+`templates` prints the intake templates. `create` and `intake` also accept `--file PATH` to
+read the brief from disk instead of an inline argument.
+
+Answering and deciding stay on the same service path as the API. `say TASK_ID TEXT` appends a
+human message. `answer TASK_ID QUESTION_ID ANSWER [--attention-version N]` answers a
+clarification, and `--use-default` applies the question's declared default instead of
+passing text. The attention version fences the exact question text: if the coordinator asks a
+new version of the question, an answer written against the old version is refused. `approve
+TASK_ID GATE_ID [--deny --note ...]` decides Task gates. A `merge:` gate belongs to the Work,
+so decide it with `sagewai work approve` or `POST /api/v1/work/{work_id}/gates/{gate_id}`.
+
+Holding and stopping are explicit. `pause TASK_ID` holds the Task; `resume TASK_ID` returns it
+to the status it was paused from; `cancel TASK_ID --note "..."` stops future coordinator
+drives and records the optional note on the thread; a step Work a worker already claimed runs
+to completion and a presented attention item is not retracted.
+
+Previewing is deterministic. `intake BRIEF` shows the template, schedule band,
+cron, and questions that `create` would use, without writing. `triggers list`, `triggers add`,
+and `triggers remove` manage approved intake triggers. A trigger is admin-approved, and a
+Task created by a trigger can never merge automatically.
+
+The API adds authority-bearing writes over the CLI. Project members may create Tasks, post
+messages, answer questions, decide `plan:` and `replan:` gates, pause, resume, and cancel.
+Project admins also decide `deliver:` and `rollback:` gates, edit defaults and triggers, raise a budget, and request a rollback.
+Organization admins can do all of those across the organization. `GET /api/v1/tasks/portfolio`
+spans the projects the caller belongs to; that project set comes from memberships, never from
+the request.
+
+### When a Work is superseded
+
+A superseded Work is not resumable or approvable. `sagewai work resume` and
+`sagewai work approve` fail, naming the replacement Work id when the stream records one, so
+continue from the Work that replaced it.
 
 ### Reports on a schedule
 
@@ -462,9 +507,9 @@ Every coordinator side effect records four durable facts in order:
 `ACTION_RESULT_RECORDED`, and `OBSERVATION_RECORDED`. Rollback is another coordinator action
 with the same record sequence; no model chooses or runs a rollback recipe.
 
-A failed post-check that can be undone opens a Task gate named `rollback:<work_id>`. PR5 adds
-the user-facing `sagewai task ... approve` route for that gate; today the same decision is
-written through `TaskService.decide_gate`. A rollback runs at most once. If the receipt exists
+A failed post-check that can be undone opens a Task gate named `rollback:<work_id>`; decide it
+with `sagewai task --project P approve TASK_ID rollback:<work_id>` or
+`POST /api/v1/tasks/{task_id}/gates/{gate_id}` (project admin). A rollback runs at most once. If the receipt exists
 but the result is unknown, the coordinator blocks and asks a human instead of retrying the
 side effect.
 
@@ -474,6 +519,16 @@ Projects choose the ordered channel list in `task_defaults.decision_channels`. `
 always available; `github_issue` uses the Task tracking issue or report sink issue. Slack and
 Google Chat use incoming-webhook URLs from the notification channel store, where the webhook
 URL is encrypted at rest.
+
+The coordinator reads the rows the admin channel routes write in both deployment modes:
+tenant-key-encrypted `admin_resources` rows in multi-tenant mode, decrypted under the row's
+own project key, and the state file's `notification_channels` in single-org mode. A channel
+configured in the console works from the backend and from `sagewai task tick`; no out-of-band
+row is needed. A row that cannot be read is skipped with a warning naming the channel, never
+its URL, and the item falls back to the console instead of stalling the tick. An
+organization-shared channel is inherited by every project and, because `admin_resources`
+carries no organization column, such a row is deployment-wide in the current
+one-org-per-deployment model.
 
 `Needs you` due times are derived from urgency:
 

@@ -68,6 +68,7 @@ jobs:
       - run: >-
           uv run --package sagewai pytest
           packages/sdk/tests/work/test_store.py
+          packages/sdk/tests/work/test_activity.py
           packages/sdk/tests/work/knowledge/test_store.py
           packages/sdk/tests/work/tasks/test_store.py
           packages/sdk/tests/work/tasks/test_store_concurrency.py

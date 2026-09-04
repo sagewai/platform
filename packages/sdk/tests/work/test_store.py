@@ -252,3 +252,116 @@ async def test_pending_attention_skips_task_plan_works(store: WorkStore) -> None
     pending = await store.pending_attention(project_id="project-a")
     assert [item.work_id for item in pending] == ["w-code"]
 
+
+@pytest.mark.asyncio
+async def test_append_next_numbers_from_the_stream(store: WorkStore) -> None:
+    first = await store.append_next(
+        work_id="w1",
+        project_id="p",
+        event_type=WorkEventType.WORK_CREATED,
+        payload={"work_id": "w1"},
+        actor_type="cli",
+        actor_ref="test",
+    )
+    second = await store.append_next(
+        work_id="w1",
+        project_id="p",
+        event_type=WorkEventType.GATE_REQUESTED,
+        payload={"gate_id": "merge:w1:3", "question": "Approve."},
+        actor_type="human",
+        actor_ref="arda",
+    )
+
+    assert (first.sequence, second.sequence) == (1, 2)
+    assert second.actor_type == "human"
+    stored = await store.read_events("w1", project_id="p")
+    assert [event.id for event in stored] == [first.id, second.id]
+    assert (stored[1].event_type, stored[1].payload_json) == (
+        WorkEventType.GATE_REQUESTED,
+        {"gate_id": "merge:w1:3", "question": "Approve."},
+    )
+
+
+@pytest.mark.asyncio
+async def test_append_next_is_project_scoped(store: WorkStore) -> None:
+    await store.append_next(
+        work_id="w1",
+        project_id="p",
+        event_type=WorkEventType.WORK_CREATED,
+        payload={"work_id": "w1"},
+        actor_type="cli",
+        actor_ref="test",
+    )
+
+    other = await store.append_next(
+        work_id="w1",
+        project_id="q",
+        event_type=WorkEventType.WORK_CREATED,
+        payload={"work_id": "w1"},
+        actor_type="cli",
+        actor_ref="test",
+    )
+
+    assert other.sequence == 1
+
+
+async def _seed_selection(
+    store: WorkStore,
+    work_id: str,
+    sequence: int,
+    *,
+    role: str,
+    reason: str,
+    project_id: str = "p",
+) -> None:
+    """One RUNTIME_SELECTED event in the section 24 revision 5 payload shape."""
+    await store.append_event(
+        WorkEvent(
+            id=f"{work_id}-{sequence}",
+            project_id=project_id,
+            work_id=work_id,
+            sequence=sequence,
+            event_type=WorkEventType.RUNTIME_SELECTED,
+            actor_type="kernel",
+            actor_ref="ladder",
+            payload_json={
+                "role": role,
+                "stage": "implement",
+                "run_id": f"{work_id}:implement:{sequence}",
+                "attempt": sequence,
+                "position": 0,
+                "runtime": "codex",
+                "reason": reason,
+            },
+            created_at=NOW,
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_runtime_selection_counts_aggregate_one_project(store: WorkStore) -> None:
+    await _seed_selection(store, "w1", 1, role="implementer", reason="ladder")
+    await _seed_selection(store, "w1", 2, role="implementer", reason="escalated")
+    await store.append_event(
+        WorkEvent(
+            id="w1-not-selection",
+            project_id="p",
+            work_id="w1",
+            sequence=3,
+            event_type=WorkEventType.STAGE_STARTED,
+            actor_type="kernel",
+            actor_ref="ladder",
+            payload_json={"stage": "implement", "role": "implementer", "reason": "escalated"},
+            created_at=NOW,
+        )
+    )
+    await _seed_selection(store, "w2", 1, role="reviewer", reason="ladder")
+    await _seed_selection(store, "w3", 1, role="implementer", reason="ladder", project_id="q")
+
+    counts = await store.runtime_selection_counts(project_id="p")
+
+    assert counts["implementer"].selections == 2
+    assert counts["implementer"].escalations == 1
+    assert counts["reviewer"].selections == 1
+    assert counts["reviewer"].escalations == 0
+    assert set(counts) == {"implementer", "reviewer"}

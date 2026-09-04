@@ -36,6 +36,11 @@ from starlette.responses import Response, StreamingResponse
 
 from sagewai import __version__ as _SDK_VERSION
 from sagewai.admin.authz import require_in_project_scope, require_org_admin
+from sagewai.admin.notification_secrets import (
+    NOTIFICATION_SECRET_KEYS,
+    NotificationSecretDecryptionError,
+    decrypt_notification_secrets,
+)
 from sagewai.admin.state_file import SHARED_ONLY, AdminStateFile, _slugify
 from sagewai.fleet.dispatcher import NotTaskOwnerError
 from sagewai.fleet.models import WorkerApprovalStatus
@@ -913,8 +918,12 @@ def create_admin_serve_app(
             task_store=app.state.task_store,
             activity_store=app.state.activity_store,
         )
+        from sagewai.admin.channel_config_store import (
+            AdminResourceChannelConfigStore,
+            StateFileChannelConfigStore,
+            org_for_project,
+        )
         from sagewai.artifacts import LocalArtifactStore as _TaskArtifactStore
-        from sagewai.notifications.postgres_store import PostgresNotificationStore
         from sagewai.work.profiles.software.assembly import github_client_for
         from sagewai.work.tasks.actions import RollbackExecutor
         from sagewai.work.tasks.channels import (
@@ -932,13 +941,15 @@ def create_admin_serve_app(
         from sagewai.work.tasks.service import ClarificationDeadlines, TaskService
         from sagewai.work.tasks.software import SoftwareProfileRunner
         from sagewai.work.tasks.triggers import TriggerIntake
-        app.state.notification_store = PostgresNotificationStore(engine=engine)
+
+        _project_orgs: dict[str, str] = {}
 
         async def _coordinator_projects() -> list[str]:
             if _is_multi_tenant():
                 projects: list[str] = []
                 for org in await identity_store.list_orgs():
                     for project in await identity_store.list_projects(org["id"]):
+                        _project_orgs[project["id"]] = org["id"]
                         projects.append(project["id"])
                 return projects
             import asyncio
@@ -990,9 +1001,11 @@ def create_admin_serve_app(
                     conn_ctx.store = active_connection_store
                     conn_ctx.tenant_safe = True
 
-        _task_service = TaskService(
-            store=app.state.task_store, artifact_store=_TaskArtifactStore()
+        app.state.artifact_store = _TaskArtifactStore()
+        app.state.task_service = TaskService(
+            store=app.state.task_store, artifact_store=app.state.artifact_store
         )
+        _task_service = app.state.task_service
         _task_connection_store = app.state.connections_context.store
         _task_credentials = app.state.connections_context.router
         app.state.task_profile_runner = SoftwareProfileRunner(
@@ -1009,13 +1022,37 @@ def create_admin_serve_app(
             credentials=_task_credentials,
             stack_cache_limit=max(8, max_tasks_from_env()),
         )
+        _state_file_channels = StateFileChannelConfigStore(state_file=sf)
+        _channel_config_stores: dict[str, AdminResourceChannelConfigStore] = {}
+
+        async def _config_store_for(project_id: str):
+            """The tenant-keyed rows in multi-tenant mode; the state file's rows in single-org.
+
+            Both are places the admin's channel CRUD actually writes, which is the whole point:
+            before this, the resolver read a table no route wrote.
+            """
+            resources = app.state.resource_stores.admin_resource
+            if resources is None:
+                return _state_file_channels
+            org_id = _project_orgs.get(project_id) or await org_for_project(
+                identity_store, project_id
+            )
+            if org_id is None:
+                return _state_file_channels
+            store = _channel_config_stores.get(org_id)
+            if store is None:
+                store = AdminResourceChannelConfigStore(
+                    resource_store=resources, identity_store=identity_store, org_id=org_id
+                )
+                _channel_config_stores[org_id] = store
+            return store
 
         async def _channels_for(project_id: str):
             """Resolve per project; resolver order keeps console first unless defaults differ."""
             defaults = await app.state.task_store.get_defaults(project_id=project_id)
             return await build_decision_channels(
                 defaults=defaults,
-                config_store=app.state.notification_store,
+                config_store=await _config_store_for(project_id),
                 tracking_channel=GitHubIssueDecisionChannel(
                     store=app.state.task_store, github_factory=github_client_for
                 ),
@@ -1660,9 +1697,12 @@ def create_admin_serve_app(
         prefix="/api/v1/harness",
     )
 
+    from sagewai.admin.tasks_routes import artifacts_router, work_router
     from sagewai.admin.tasks_routes import router as tasks_router
 
     app.include_router(tasks_router)
+    app.include_router(work_router)
+    app.include_router(artifacts_router)
 
     # ── Setup ────────────────────────────────────────────────────
 
@@ -4905,15 +4945,7 @@ def create_admin_serve_app(
 
     # ── Notifications ────────────────────────────────────────────
 
-    _NOTIFICATION_SECRET_KEYS = {
-        "webhook_url",
-        "email_api_key",
-        "smtp_password",
-        "api_key",
-        "token",
-        "secret",
-        "password",
-    }
+    _NOTIFICATION_SECRET_KEYS = NOTIFICATION_SECRET_KEYS
     _REDACTED_MARKERS = {"***", "********", "***configured***"}
 
     def _notification_public(record: dict[str, Any]) -> dict[str, Any]:
@@ -4969,29 +5001,6 @@ def create_admin_serve_app(
                     identity_store, ctx.org_id, ctx.project_id, v
                 )
 
-    async def _decrypt_notification_secret(
-        value: str, row_project_id: str | None, ctx
-    ) -> str:
-        """Decrypt one stored notification secret for USE — FAIL CLOSED.
-
-        Decrypts under the data key of the row's own ``project_id`` (org master
-        key for org-shared rows). A value that cannot be decrypted (corrupt or
-        missing key) raises :class:`NotificationSecretDecryptionError` so the
-        send/test path can never fall back to the stored ciphertext or to a
-        plaintext passthrough.
-        """
-        from sagewai.admin import tenant_keys
-        from sagewai.sealed.crypto import SecretCorrupted
-
-        try:
-            return await tenant_keys.decrypt_for_project(
-                identity_store, ctx.org_id, row_project_id, value
-            )
-        except SecretCorrupted as exc:
-            raise NotificationSecretDecryptionError(
-                "notification secret could not be decrypted"
-            ) from exc
-
     async def _notification_channel_for_type_decrypted(
         request: Request, channel_type: str
     ) -> dict[str, Any] | None:
@@ -5020,13 +5029,9 @@ def create_admin_serve_app(
         )
         if channel is None:
             return None
-        row_project_id = channel.get("project_id") or None
-        out = dict(channel)
-        for key in _NOTIFICATION_SECRET_KEYS:
-            v = out.get(key)
-            if isinstance(v, str) and v:
-                out[key] = await _decrypt_notification_secret(v, row_project_id, ctx)
-        return out
+        return await decrypt_notification_secrets(
+            channel, identity_store=identity_store, org_id=ctx.org_id
+        )
 
     @app.get("/api/v1/notifications/channels")
     async def list_notification_channels(request: Request) -> JSONResponse:
@@ -6780,11 +6785,6 @@ def _in_write_scope(item_project_id: str | None, request: Request) -> bool:
 # enrollment-key create/revoke; connector save/delete. Remaining durable-audit
 # gap (tracked in a parallel PR, NOT a single-org-launch blocker): memory/context
 # ingest.
-class NotificationSecretDecryptionError(RuntimeError):
-    """A stored notification secret could not be decrypted; the send/test path
-    fails closed (never emits the stored ciphertext or a plaintext fallback)."""
-
-
 class _AuditUnavailableError(Exception):
     """Durable audit could not be recorded — the write fails closed (HTTP 503)."""
 
@@ -6949,6 +6949,22 @@ def _require_resource_write(request: Request) -> None:
     from sagewai.admin.authz import Resource, require
 
     require("resource:write", ctx, on=Resource(ctx.org_id, ctx.project_id))
+
+
+def _require_project_admin(request: Request) -> None:
+    """Enforce the project-admin tier on a project-scoped route (multi-tenant only).
+
+    Project admins and org owners/admins pass; members and viewers are refused. Mounted as a
+    router ``dependencies=[Depends(...)]`` entry so it runs before request-body validation and
+    a denial is a 403 rather than a 422. No-op in single-org mode, where one admin holds every
+    role.
+    """
+    ctx = _multi_ctx(request)
+    if ctx is None:
+        return
+    from sagewai.admin.authz import Resource, require
+
+    require("project:admin", ctx, on=Resource(ctx.org_id, ctx.project_id))
 
 
 def _multi_ctx(request: Request):

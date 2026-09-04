@@ -35,11 +35,15 @@ import pytest_asyncio
 from httpx import ASGITransport
 
 from sagewai.admin.admin_resource_store import AdminResourceStore
-from sagewai.admin.auth_middleware import _MULTI_ORG_PREFIXES
+from sagewai.admin.auth_middleware import _MULTI_ORG_PREFIXES, required_scope
 from sagewai.admin.identity_store import IdentityStore
+from sagewai.admin.serve import _require_project_admin, create_admin_serve_app
 from sagewai.admin.state_file import AdminStateFile
+from sagewai.admin.tasks_routes import PROJECT_ADMIN_ROUTES, work_router
+from sagewai.admin.tasks_routes import router as task_router
 from sagewai.admin.tenant_audit import TenantAuditStore
 from sagewai.db.engine import create_engine
+from sagewai.work.tasks import TaskService, TaskStore
 
 _MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -71,6 +75,10 @@ async def app_ctx(tmp_path, monkeypatch):
     await store.add_membership(oid, viewer["id"], "project:viewer", project_id=pa)
     member = await store.create_user(oid, "m@acme.io", password="pw0000", role="org:member")
     await store.add_membership(oid, member["id"], "project:member", project_id=pa)
+    project_admin = await store.create_user(
+        oid, "pa@acme.io", password="pw0000", role="org:member"
+    )
+    await store.add_membership(oid, project_admin["id"], "project:admin", project_id=pa)
     sf = AdminStateFile(path=tmp_path / "state.json")
     sf.complete_setup(org_name="Acme", admin_email="a@acme.io", admin_password="pw123456")
     # Inject the durable resource store (and audit on the SAME engine) so the
@@ -79,9 +87,13 @@ async def app_ctx(tmp_path, monkeypatch):
     # without it a multi-tenant resource read would fail closed (503).
     res = AdminResourceStore(engine=engine)
     await res.init()
-    from sagewai.admin.serve import create_admin_serve_app
+    task_store = TaskStore(engine=engine)
+    await task_store.init()
+    task_service = TaskService(store=task_store)
 
     app = create_admin_serve_app(sf, identity_store=store, admin_resource_store=res)
+    app.state.task_store = task_store
+    app.state.task_service = task_service
     audit = TenantAuditStore(engine=engine)
     await audit.init()
     app.state.tenant_audit = audit
@@ -90,6 +102,7 @@ async def app_ctx(tmp_path, monkeypatch):
         "pa": pa,
         "viewer": await store.issue_session(oid, viewer["id"]),
         "member": await store.issue_session(oid, member["id"]),
+        "project_admin": await store.issue_session(oid, project_admin["id"]),
     }
     await engine.dispose()
 
@@ -109,6 +122,20 @@ def _routes(app, methods: set[str] | None = None) -> list[tuple[str, str]]:
 
 def _mutating_routes(app) -> list[tuple[str, str]]:
     return _routes(app, _MUTATING)
+
+
+def _project_admin_dependency_routes() -> set[tuple[str, str]]:
+    out = set()
+    for router in (task_router, work_router):
+        for route in router.routes:
+            dependant = getattr(route, "dependant", None)
+            if dependant is None:
+                continue
+            if not any(dep.call is _require_project_admin for dep in dependant.dependencies):
+                continue
+            for method in getattr(route, "methods", ()) or ():
+                out.add((method, route.path))
+    return out
 
 
 def _is_public(path: str) -> bool:
@@ -160,6 +187,37 @@ async def test_member_denied_on_org_admin_routes_all_methods(app_ctx):
     assert not leaked, "member reached an org-admin route (missing org-admin gate):\n" + "\n".join(
         leaked
     )
+
+
+@pytest.mark.asyncio
+async def test_member_denied_on_project_admin_routes(app_ctx):
+    """A project member must be denied on every route the project-admin tier gates.
+
+    The list is imported from the router, so a new project-admin route is enumerated here the
+    moment it is declared; a route in the list that is not mounted fails the assertion below.
+    """
+    app = app_ctx["app"]
+    token, admin_token, pa = app_ctx["member"], app_ctx["project_admin"], app_ctx["pa"]
+    mounted = set(_routes(app))
+    dependency_routes = _project_admin_dependency_routes()
+    expected = set(PROJECT_ADMIN_ROUTES)
+    assert dependency_routes == expected, (
+        "PROJECT_ADMIN_ROUTES does not match Depends(_require_project_admin): "
+        f"{sorted(dependency_routes ^ expected)}"
+    )
+    observed = []
+    admin_observed = []
+    for method, path in PROJECT_ADMIN_ROUTES:
+        assert (method, path) in mounted, f"{method} {path} is not mounted"
+        assert required_scope(method, path, multi=True) == "write", (
+            f"{method} {path} is denied by the middleware perimeter, not by the tier"
+        )
+        response = await _hit(app, method, path, token=token, project=pa)
+        observed.append((f"{method} {path}", response.status_code))
+        admin_response = await _hit(app, method, path, token=admin_token, project=pa)
+        admin_observed.append((f"{method} {path}", admin_response.status_code))
+    assert all(status == 403 for _route, status in observed), observed
+    assert all(status != 403 for _route, status in admin_observed), admin_observed
 
 
 @pytest.mark.asyncio

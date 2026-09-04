@@ -18,10 +18,13 @@ from typing import Any, Literal
 
 from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.work.tasks import intake as intake_module
+from sagewai.work.tasks.decide import _BUDGETED, fold_cycle
 from sagewai.work.tasks.decisions import TASK_GATES
 from sagewai.work.tasks.events import TaskEvent, TaskEventType, fold_record
 from sagewai.work.tasks.models import (
+    TERMINAL_STATUSES,
     Authority,
+    Budget,
     ExecutionRoute,
     GateMode,
     RoutingPolicy,
@@ -47,6 +50,14 @@ _NON_HUMAN_FLOOR = Authority(
 
 class TaskCreationError(ValueError):
     """The brief cannot become a Task under the project's defaults."""
+
+
+class TaskNotFoundError(KeyError):
+    """No Task with that id in the project."""
+
+
+class ActionNotFoundError(TaskNotFoundError):
+    """No recorded action with that id exists on the Task."""
 
 
 class TaskDecisionError(ValueError):
@@ -81,8 +92,39 @@ def _open_questions(
     return list(pending.values())
 
 
+def _default_clarification_entry(question: dict[str, Any]) -> Entry:
+    return (
+        TaskEventType.CLARIFICATION_DEFAULTED,
+        {"question_id": str(question["id"]), "answer": question.get("default")},
+    )
+
+
+def _status_before(
+    events: Sequence[TaskEvent],
+    marker: TaskStatus,
+    allowed: frozenset[TaskStatus] | None = None,
+) -> TaskStatus:
+    """The last status in ``allowed`` (any status when None) entered before the final ``marker``.
+
+    PLANNING when no such status was entered.
+    """
+    last = TaskStatus.PLANNING
+    previous = TaskStatus.PLANNING
+    for event in events:
+        if event.event_type is not TaskEventType.TASK_STATUS_CHANGED:
+            continue
+        moved_to = TaskStatus(str(event.payload_json["status"]))
+        if moved_to is marker:
+            previous = last
+        elif allowed is None or moved_to in allowed:
+            last = moved_to
+    return previous
+
+
 class TaskService:
-    """The single writer of Task creation and of human answers and plan acceptance."""
+    """The single writer of Task creation, human answers, plan acceptance, messages, gates,
+    rollback requests, lifecycle controls, and budget rewrites.
+    """
 
     def __init__(self, *, store: TaskStore, artifact_store: LocalArtifactStore | None = None) -> None:
         self._store = store
@@ -91,7 +133,7 @@ class TaskService:
     async def _load(self, task_id: str, *, project_id: str) -> tuple[Task, TaskRecord]:
         loaded = await self._store.load(task_id, project_id=project_id)
         if loaded is None:
-            raise KeyError(task_id)
+            raise TaskNotFoundError(task_id)
         return loaded
 
     async def create(
@@ -230,11 +272,18 @@ class TaskService:
         *,
         project_id: str,
         question_id: str,
-        answer: str,
+        attention_version: int,
+        answer: str | None,
         actor_ref: str,
         now: datetime | None = None,
     ) -> TaskRecord:
-        """Record one answer; the last one returns the Task to planning."""
+        """Record one answer; the last one returns the Task to planning.
+
+        ``answer=None`` applies the question's declared default through
+        ``_default_clarification_entry``.
+        ``attention_version`` binds the answer to the question as it was presented: a question
+        re-asked at a higher version rejects an answer composed against the old text.
+        """
         _task, record = await self._load(task_id, project_id=project_id)
         open_questions = _open_questions(await self._store.read_events(task_id, project_id=project_id))
         questions = {str(question["id"]): question for question, _deadline in open_questions}
@@ -242,17 +291,68 @@ class TaskService:
             question = questions.pop(question_id)
         except KeyError as exc:
             raise TaskDecisionError(f"no open clarification question {question_id}") from exc
-        material = not bool(question["defaultable"])
-        entries: list[Entry] = [
-            (
-                TaskEventType.CLARIFICATION_ANSWERED,
-                {"question_id": question_id, "answer": answer, "material": material},
+        if int(question["attention_version"]) != attention_version:
+            raise TaskDecisionError(
+                f"question {question_id} is at attention version {question['attention_version']}"
             )
-        ]
+        if answer is None:
+            if not bool(question["defaultable"]):
+                raise TaskDecisionError(f"question {question_id} is not defaultable")
+            if question.get("default") is None:
+                raise TaskDecisionError(f"question {question_id} has no default")
+            entries: list[Entry] = [_default_clarification_entry(question)]
+        else:
+            material = not bool(question["defaultable"])
+            entries = [
+                (
+                    TaskEventType.CLARIFICATION_ANSWERED,
+                    {"question_id": question_id, "answer": answer, "material": material},
+                )
+            ]
         if record.status is TaskStatus.CLARIFYING and not questions:
             entries.append(status_entry(record, TaskStatus.PLANNING))
         writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
         return await writer.append(record, entries, now=now)
+
+    async def add_message(
+        self,
+        task_id: str,
+        *,
+        project_id: str,
+        text: str,
+        actor_ref: str,
+        idempotency_key: str | None = None,
+        now: datetime | None = None,
+    ) -> TaskRecord:
+        """Append one human message to the thread; it changes no status and opens no gate.
+
+        With an ``idempotency_key`` the message is written at most once: the key becomes a
+        ``task_commands`` receipt, so a retried POST returns the current projection instead
+        of a second copy of the same sentence. Without one a retry duplicates, which is why
+        the route forwards the ``Idempotency-Key`` header.
+        """
+        _task, record = await self._load(task_id, project_id=project_id)
+        command_id = None if idempotency_key is None else f"message:{idempotency_key}"
+        if command_id is not None and not await self._store.record_command(
+            task_id=task_id,
+            project_id=project_id,
+            command_id=command_id,
+            payload={"text": text},
+        ):
+            return record
+        writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
+        try:
+            return await writer.append(
+                record,
+                [(TaskEventType.TASK_MESSAGE, {"author": "human", "text": text, "refs": []})],
+                now=now,
+            )
+        except Exception:
+            if command_id is not None:
+                await self._store.delete_command(
+                    task_id=task_id, project_id=project_id, command_id=command_id
+                )
+            raise
 
     async def accept_plan(
         self,
@@ -294,12 +394,14 @@ class TaskService:
         gate_id: str,
         decision: Literal["allow", "deny"],
         actor_ref: str,
+        note: str | None = None,
         now: datetime | None = None,
     ) -> TaskRecord:
         """Decide one gate the Task itself opened; a refusal blocks the Task for a human."""
         if not gate_id.startswith(TASK_GATES):
             raise TaskDecisionError(
-                f"gate {gate_id} belongs to a Work; approve it there (sagewai work approve)"
+                f"gate {gate_id} belongs to a Work; decide it at "
+                "POST /api/v1/work/{work_id}/gates/{gate_id} (or sagewai work approve)"
             )
         _task, record = await self._load(task_id, project_id=project_id)
         if record.pending_gate != gate_id:
@@ -319,12 +421,187 @@ class TaskService:
             entries.append(
                 (
                     TaskEventType.TASK_MESSAGE,
-                    {"author": "human", "text": f"gate {gate_id} decided {decision}", "refs": []},
+                    {
+                        "author": "human",
+                        "text": note or f"gate {gate_id} decided {decision}",
+                        "refs": [],
+                    },
                 )
             )
             entries.append(status_entry(record, TaskStatus.BLOCKED))
         writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
         return await writer.append(record, entries, now=now)
+
+    async def request_rollback(
+        self,
+        task_id: str,
+        *,
+        project_id: str,
+        action_id: str,
+        actor_ref: str,
+        now: datetime | None = None,
+    ) -> TaskRecord:
+        """Open and allow the rollback gate for one recorded action.
+
+        Section 19 keeps rollback execution in the coordinator, so this writes the durable
+        request the coordinator reads — ``GATE_REQUESTED`` carrying the recorded
+        ``ActionRequest`` plus an allowed ``GATE_DECIDED`` — and ``decide`` turns it into
+        ``RollbackWork`` on the next tick.
+        """
+        _task, record = await self._load(task_id, project_id=project_id)
+        events = await self._store.read_events(task_id, project_id=project_id)
+        intent = next(
+            (
+                event
+                for event in reversed(events)
+                if event.event_type is TaskEventType.ACTION_INTENT_RECORDED
+                and event.payload_json["action_id"] == action_id
+            ),
+            None,
+        )
+        if intent is None:
+            raise ActionNotFoundError(f"no recorded action {action_id}")
+        action = dict(intent.payload_json["action"])
+        if action["rollback"] is None:
+            raise TaskDecisionError(f"action {action_id} declares no rollback recipe")
+        work_id = str(intent.payload_json["work_id"])
+        gate_id = f"rollback:{work_id}"
+        if any(
+            event.event_type
+            in {TaskEventType.GATE_REQUESTED, TaskEventType.GATE_DECIDED}
+            and event.payload_json["gate_id"] == gate_id
+            for event in events
+        ):
+            return record
+        state = fold_cycle(events, plan_version=record.plan_version)
+        if work_id not in state.step_works.values():
+            raise TaskDecisionError(f"work {work_id} is not in the current cycle")
+        if work_id in state.rolled_back:
+            raise TaskDecisionError(f"work {work_id} was already rolled back")
+        if record.pending_gate is not None:
+            raise TaskDecisionError(f"gate {record.pending_gate} is still open")
+        external_ref = next(
+            (
+                event.payload_json["external_ref"]
+                for event in reversed(events)
+                if event.event_type is TaskEventType.ACTION_RESULT_RECORDED
+                and event.payload_json["action_id"] == action_id
+            ),
+            None,
+        )
+        if external_ref is not None:
+            action["scope"] = str(external_ref)
+        entries: list[Entry] = [
+            (
+                TaskEventType.GATE_REQUESTED,
+                {
+                    "gate_id": gate_id,
+                    "question": (
+                        f"Allow the recorded rollback ({action['rollback']}) "
+                        f"of {action['scope']}?"
+                    ),
+                    "action": action,
+                    "work_id": work_id,
+                },
+            ),
+            (TaskEventType.GATE_DECIDED, {"gate_id": gate_id, "decision": "allow"}),
+        ]
+        if record.status not in {TaskStatus.EXECUTING, TaskStatus.ASSESSING}:
+            entries.append(status_entry(record, TaskStatus.EXECUTING))
+        writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
+        return await writer.append(record, entries, now=now)
+
+    async def pause(
+        self, task_id: str, *, project_id: str, actor_ref: str, now: datetime | None = None
+    ) -> TaskRecord:
+        """Hold the Task where it stands; ``decide`` returns nothing while it is paused."""
+        _task, record = await self._load(task_id, project_id=project_id)
+        if record.status is TaskStatus.PAUSED:
+            return record
+        writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
+        return await writer.append(record, [status_entry(record, TaskStatus.PAUSED)], now=now)
+
+    async def resume(
+        self, task_id: str, *, project_id: str, actor_ref: str, now: datetime | None = None
+    ) -> TaskRecord:
+        """Return a paused Task to the status the pause interrupted (section 24 revision 4).
+
+        Derived by replaying the stream's status entries from the creation status, not read out
+        of the ``PAUSED`` payload: ``TaskService.pause`` and the coordinator's health pause
+        (`coordinator.py:743-744`) write the same plain entry, and a Task either of them paused
+        must resume on the same rule.
+        """
+        _task, record = await self._load(task_id, project_id=project_id)
+        if record.status is not TaskStatus.PAUSED:
+            raise TaskDecisionError(f"task {task_id} is {record.status.value}, not PAUSED")
+        events = await self._store.read_events(task_id, project_id=project_id)
+        previous = _status_before(events, TaskStatus.PAUSED)
+        writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
+        return await writer.append(record, [status_entry(record, previous)], now=now)
+
+    async def cancel(
+        self,
+        task_id: str,
+        *,
+        project_id: str,
+        actor_ref: str,
+        note: str | None = None,
+        now: datetime | None = None,
+    ) -> TaskRecord:
+        """Stop the Task for good; the coordinator never drives a cancelled Task again."""
+        _task, record = await self._load(task_id, project_id=project_id)
+        if record.status is TaskStatus.CANCELLED:
+            return record
+        entries: list[Entry] = []
+        if note:
+            entries.append(
+                (TaskEventType.TASK_MESSAGE, {"author": "human", "text": note, "refs": []})
+            )
+        entries.append(status_entry(record, TaskStatus.CANCELLED))
+        writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
+        return await writer.append(record, entries, now=now)
+
+    async def update_budget(
+        self,
+        task_id: str,
+        *,
+        project_id: str,
+        budget: Budget,
+        expected_revision: int,
+        actor_ref: str,
+        now: datetime | None = None,
+    ) -> tuple[Task, TaskRecord]:
+        """Replace the Task's budget under the projection's revision fence.
+
+        A raise revives an exhausted Task to the status the exhaustion interrupted.
+        Authority, routing, schedule and sinks stay read-only: each changes what the
+        coordinator may do inside a running cycle and needs its own event and gate.
+        """
+        task, record = await self._load(task_id, project_id=project_id)
+        if record.status in TERMINAL_STATUSES:
+            raise TaskDecisionError(f"task {task_id} is {record.status.value}")
+        updated = task.model_copy(update={"budget": budget})
+        entries: list[Entry] = [
+            (
+                TaskEventType.BUDGET_UPDATED,
+                {"budget": budget.model_dump(mode="json"), "revision": expected_revision},
+            )
+        ]
+        if record.status is TaskStatus.BUDGET_EXHAUSTED:
+            events = await self._store.read_events(task_id, project_id=project_id)
+            revived = _status_before(events, TaskStatus.BUDGET_EXHAUSTED, allowed=_BUDGETED)
+            if revived is TaskStatus.ASSESSING:
+                revived = TaskStatus.EXECUTING
+            entries.append(status_entry(record, revived))
+        writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
+        stored = await writer.append(
+            record,
+            entries,
+            task=updated,
+            expected_revision=expected_revision,
+            now=now,
+        )
+        return updated, stored
 
     async def default_expired_clarifications(
         self, task_id: str, *, project_id: str, now: datetime | None = None
@@ -347,13 +624,7 @@ class TaskService:
         ]
         if not expired:
             return record
-        entries: list[Entry] = [
-            (
-                TaskEventType.CLARIFICATION_DEFAULTED,
-                {"question_id": str(question["id"]), "answer": question.get("default")},
-            )
-            for question in expired
-        ]
+        entries: list[Entry] = [_default_clarification_entry(question) for question in expired]
         if len(expired) == len(open_questions):
             entries.append(status_entry(record, TaskStatus.PLANNING))
         writer = TaskWriter(self._store)
@@ -383,4 +654,11 @@ class ClarificationDeadlines:
         return defaulted
 
 
-__all__ = ["ClarificationDeadlines", "TaskCreationError", "TaskDecisionError", "TaskService"]
+__all__ = [
+    "ActionNotFoundError",
+    "ClarificationDeadlines",
+    "TaskCreationError",
+    "TaskDecisionError",
+    "TaskNotFoundError",
+    "TaskService",
+]

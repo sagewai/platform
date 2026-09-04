@@ -413,6 +413,7 @@ sdk-smoke:
         packages/sdk/tests/work/test_lifecycle.py::test_github_flow_uses_real_software_lifecycle_events \
         packages/sdk/tests/work/tasks/test_coordinator.py::test_plan_to_two_steps_to_assess_to_complete \
         packages/sdk/tests/work/profiles/report/test_report_lifecycle.py::test_a_report_composes_verifies_reviews_and_delivers \
+        packages/sdk/tests/admin/test_task_routes_create.py::test_create_returns_the_task_and_its_record \
         -q -o "addopts="
 
 # Dependency-free applications used as safe Work coordinator targets

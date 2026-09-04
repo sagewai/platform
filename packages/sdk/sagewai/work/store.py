@@ -11,7 +11,10 @@
 
 from __future__ import annotations
 
+import uuid
+from collections import Counter
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -34,6 +37,7 @@ from sagewai.work.models import (
     ExternalOutcomeIncident,
     PendingAttention,
     PendingAttentionKind,
+    RoleSelectionCounts,
     WorkRecord,
 )
 
@@ -98,6 +102,38 @@ class WorkStore:
         if finding_errors:
             raise finding_errors[0]
 
+    async def append_next(
+        self,
+        *,
+        work_id: str,
+        project_id: str | None,
+        event_type: WorkEventType,
+        payload: dict[str, Any],
+        actor_type: str,
+        actor_ref: str | None,
+    ) -> WorkEvent:
+        """Append one event at the stream's next sequence and return it.
+
+        The one sequence derivation a route can reach; the profile lifecycles still inline the
+        same expression. Two writers racing the same stream collide on
+        ``uq_work_events_work_sequence``, so the loser's ``IntegrityError`` surfaces rather than
+        silently overwriting.
+        """
+        events = await self.read_events(work_id, project_id=project_id)
+        event = WorkEvent(
+            id=str(uuid.uuid4()),
+            project_id=project_id,
+            work_id=work_id,
+            sequence=events[-1].sequence + 1 if events else 1,
+            event_type=event_type,
+            actor_type=actor_type,
+            actor_ref=actor_ref,
+            payload_json=payload,
+            created_at=datetime.now(timezone.utc),
+        )
+        await self.append_event(event)
+        return event
+
     async def read_events(
         self,
         work_id: str,
@@ -142,6 +178,33 @@ class WorkStore:
             profile=profile,
             runtime=runtime,
         )
+
+    async def runtime_selection_counts(
+        self, *, project_id: str | None
+    ) -> dict[str, RoleSelectionCounts]:
+        """Per-role runtime selections and escalations for one project, in one query.
+
+        The telemetry route previously read every Work's whole stream to compute this; only
+        ``RUNTIME_SELECTED`` rows are read now, and only their counts leave the store.
+        """
+        table = self._work_events
+        query = select(table.c.payload_json).where(
+            table.c.project_scope_key == project_scope_key(project_id),
+            table.c.event_type == WorkEventType.RUNTIME_SELECTED.value,
+        )
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(query)).all()
+        selections: Counter[str] = Counter()
+        escalations: Counter[str] = Counter()
+        for (payload,) in rows:
+            role = str(payload["role"])
+            selections[role] += 1
+            if payload["reason"] == "escalated":
+                escalations[role] += 1
+        return {
+            role: RoleSelectionCounts(selections=total, escalations=escalations[role])
+            for role, total in selections.items()
+        }
 
     async def save_work(self, record: WorkRecord) -> None:
         """Insert or replace the current projection for one WorkItem."""

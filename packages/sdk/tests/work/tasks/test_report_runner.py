@@ -212,6 +212,7 @@ async def _seed_report(stores, tmp_path):
                     task.id,
                     project_id=PROJECT,
                     question_id=question["id"],
+                    attention_version=1,
                     answer="https://example.com/news",
                     actor_ref="arda",
                     now=datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc),

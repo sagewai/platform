@@ -24,7 +24,7 @@ from sagewai.cli.fleet import fleet_group
 from sagewai.cli.work import work as work_cli
 from sagewai.core.state import InMemoryStore
 from sagewai.harness.discovery import DiscoveredServer
-from sagewai.work import SUPERSEDED, WorkEventType, WorkMetrics
+from sagewai.work import WorkEventType, WorkMetrics
 from sagewai.work.profiles.software import SoftwareContractContext, SoftwareStageOperator
 from sagewai.work.runtime_capabilities import (
     RuntimeCapabilitySnapshot,
@@ -33,6 +33,7 @@ from sagewai.work.runtime_capabilities import (
 from sagewai.work.tasks.models import HarnessTier, TaskDefaults
 from sagewai.work.tasks.store import TaskStore as CoordinatorTaskStore
 from tests.db.conftest import dialect_engine  # noqa: F401
+from tests.work.tasks.test_store import NOW
 
 work_module = import_module("sagewai.cli.work")
 assembly_module = import_module("sagewai.work.profiles.software.assembly")
@@ -957,17 +958,14 @@ async def test_delivery_phase_resume_does_not_infer_provider(
     assert result is record
 
 
-
-@pytest.mark.parametrize("status", ("COMPLETE", SUPERSEDED))
 @pytest.mark.asyncio
 async def test_terminal_resume_returns_without_repository_or_remote_work(
     monkeypatch,
-    status: str,
 ) -> None:
     record = SimpleNamespace(
         work_id="work-1",
         project_id="project-a",
-        status=status,
+        status="COMPLETE",
         source_ref="https://github.com/octocat/repo/issues/7",
     )
 
@@ -984,6 +982,109 @@ async def test_terminal_resume_returns_without_repository_or_remote_work(
     result = await work_module._resume_work("work-1", project_id="project-a")
 
     assert result is record
+
+
+async def _seed_superseded(engine, *, superseded_by: str | None = "w-new") -> None:
+    """A superseded Work, optionally without its WORK_SUPERSEDED event."""
+    from sagewai.work import WorkEvent, WorkRecord, WorkStore
+    from sagewai.work.supersede import supersede_work
+
+    store = WorkStore(engine=engine)
+    await store.init()
+    await store.save_work(
+        WorkRecord(
+            work_id="w-old",
+            project_id="project-a",
+            source_ref="https://github.com/o/r/issues/1",
+            profile="software",
+            status="SUPERSEDED" if superseded_by is None else "IMPLEMENTING",
+            active_run_id=None,
+            pending_gate=None,
+            created_at=NOW,
+            updated_at=NOW,
+        )
+    )
+    await store.append_event(
+        WorkEvent(
+            id="w-old-1",
+            project_id="project-a",
+            work_id="w-old",
+            sequence=1,
+            event_type=WorkEventType.WORK_CREATED,
+            actor_type="cli",
+            actor_ref="test",
+            payload_json={"work_id": "w-old"},
+            created_at=NOW,
+        )
+    )
+    if superseded_by is not None:
+        await supersede_work(
+            store,
+            work_id="w-old",
+            project_id="project-a",
+            superseded_by=superseded_by,
+            reason="base moved",
+            actor_ref="test",
+        )
+
+
+def _wire(
+    monkeypatch,
+    dialect_engine,  # noqa: F811
+    *,
+    superseded_by: str | None = "w-new",
+) -> CliRunner:
+    seeded = False
+
+    async def _ensure_schema() -> None:
+        nonlocal seeded
+        if seeded:
+            return
+        seeded = True
+        await _seed_superseded(dialect_engine, superseded_by=superseded_by)
+
+    monkeypatch.setattr(work_module.factory, "ensure_schema", _ensure_schema)
+    monkeypatch.setattr(work_module.factory, "get_engine", lambda: dialect_engine)
+    return CliRunner()
+
+
+def test_resuming_a_superseded_work_names_its_replacement(
+    monkeypatch, dialect_engine  # noqa: F811
+) -> None:
+    runner = _wire(monkeypatch, dialect_engine)
+
+    result = runner.invoke(work_cli, ["--project", "project-a", "resume", "w-old"])
+
+    assert result.exit_code == 1
+    assert result.output.strip() == (
+        "Error: Work w-old was superseded by w-new; act on that Work instead"
+    )
+
+
+def test_resuming_a_superseded_work_without_replacement_names_the_owner(
+    monkeypatch, dialect_engine  # noqa: F811
+) -> None:
+    runner = _wire(monkeypatch, dialect_engine, superseded_by=None)
+
+    result = runner.invoke(work_cli, ["--project", "project-a", "resume", "w-old"])
+
+    assert result.exit_code == 1
+    assert result.output.strip() == (
+        "Error: Work w-old was superseded; its replacement owns the step"
+    )
+
+
+def test_approving_a_superseded_work_names_its_replacement(
+    monkeypatch, dialect_engine  # noqa: F811
+) -> None:
+    runner = _wire(monkeypatch, dialect_engine)
+
+    result = runner.invoke(
+        work_cli, ["--project", "project-a", "approve", "w-old", "merge:w-old:1"]
+    )
+
+    assert result.exit_code == 1
+    assert "superseded by w-new" in result.output
 
 
 @pytest.mark.asyncio

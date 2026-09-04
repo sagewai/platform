@@ -11,9 +11,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from datetime import datetime
-from typing import Literal, Protocol
+from collections.abc import Callable, Mapping
+from datetime import datetime, timedelta
+from typing import Literal, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict
 
@@ -22,6 +22,24 @@ from sagewai.work.tasks.models import Authority, GateMode
 
 _NEVER_GATES = frozenset({Reversibility.PURE, Reversibility.SNAPSHOT_REVERSIBLE})
 TASK_GATES = ("plan:", "replan:", "deliver:", "rollback:")
+URGENCY_BY_KIND = {
+    "WORK_BLOCKED": "now",
+    "CONTROL_DEGRADED": "now",
+    "EXTERNAL_OUTCOME_INCIDENT": "now",
+    "GATE_REQUESTED": "today",
+}
+DUE_IN = {
+    "now": timedelta(0),
+    "today": timedelta(hours=24),
+    "this_week": timedelta(days=7),
+}
+
+
+def gate_decided_by(gate_id: str, payload: Mapping[str, object]) -> Literal["task", "work"]:
+    """Where this gate is decided; payloads may override the prefix-derived owner."""
+    if "decided_by" in payload:
+        return cast(Literal["task", "work"], str(payload["decided_by"]))
+    return "task" if gate_id.startswith(TASK_GATES) else "work"
 
 
 def resolve_gate(mode: GateMode, action: ActionRequest) -> GateDecision:
@@ -81,9 +99,8 @@ class ChannelDeliveryError(RuntimeError):
     """A decision channel refused the notification.
 
     Carries the channel name and the transport's status code and **never** the endpoint: an
-    incoming-webhook URL is itself the credential, encrypted at rest by
-    ``PostgresNotificationStore``, and ``httpx.HTTPStatusError`` puts the full request URL in
-    its message.
+    incoming-webhook URL is itself the credential, stored encrypted by the admin's channel routes,
+    and ``httpx.HTTPStatusError`` puts the full request URL in its message.
     """
 
 
@@ -125,12 +142,15 @@ class NullDecisionScheduler:
 __all__ = [
     "ChannelDeliveryError",
     "ConsoleDecisionChannel",
+    "DUE_IN",
     "DecisionChannel",
     "DecisionRequest",
     "NullDecisionScheduler",
     "TASK_GATES",
+    "URGENCY_BY_KIND",
     "channel_error_detail",
     "coordinator_action",
+    "gate_decided_by",
     "merge_policy_for",
     "resolve_gate",
 ]

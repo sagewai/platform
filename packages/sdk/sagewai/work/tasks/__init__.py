@@ -45,6 +45,7 @@ from sagewai.work.tasks.events import (
 )
 from sagewai.work.tasks.feed import FeedBus, FeedEntry
 from sagewai.work.tasks.health import evaluate_health
+from sagewai.work.tasks.inbox import DecisionItem, decision_inbox
 from sagewai.work.tasks.intake import ClarificationQuestion, IntakeResult, route
 from sagewai.work.tasks.models import (
     Authority,
@@ -91,6 +92,7 @@ from sagewai.work.tasks.service import (
     ClarificationDeadlines,
     TaskCreationError,
     TaskDecisionError,
+    TaskNotFoundError,
     TaskService,
 )
 from sagewai.work.tasks.store import SpendReservation, StaleTaskError, TaskStore
@@ -117,29 +119,39 @@ from sagewai.work.tasks.templates import (
     validate_slots,
 )
 from sagewai.work.tasks.transitions import IllegalTransitionError, assert_transition
+from sagewai.work.tasks.views import (
+    ActionRecordView,
+    ThreadEntry,
+    ThreadView,
+    actions_from_events,
+    referenced_artifacts,
+    task_work_ids,
+    thread_from_events,
+)
 from sagewai.work.tasks.writer import TaskWriter, status_entry
 
 __all__ = [
-    "AcceptedPlan", "AssessCycle", "AttentionHistoryEntry", "Authority", "BlockCycle", "Budget",
-    "BudgetLedger", "BudgetUsed", "BurnSeriesPoint", "CATALOGUE", "ClarificationDeadlines",
-    "ClarificationQuestion", "CompleteCycle", "CycleTelemetry", "ExecutionRoute",
-    "ExhaustBudget", "FeedBus", "FeedEntry", "GateMode", "HarnessTier",
-    "IllegalTransitionError", "IntakeResult", "MatrixItem", "MeteredOperatorController",
-    "MirrorAttention", "PlanRejectedError", "PlanStep", "PlanningFailedError",
-    "ProjectTelemetry", "RecordStepOutcome", "Replan", "ReportTarget", "ResumeStep",
-    "RoleAlias", "RollbackWork", "RoutingPolicy", "RunPlanning", "RuntimeRef", "Schedule",
-    "ScheduledCycleTelemetry", "ScheduledTelemetry", "ScratchResultValidator",
-    "ScratchWorkspace", "ScratchWorkspaceManager", "Sensitivity", "Sink", "SlotSpec",
-    "SlotValidationError", "SoftwareTarget", "SpendReservation", "SpendTotals",
-    "StageAttemptTelemetry", "StageTimelineEntry", "StaleTaskError", "StartCycle", "StartStep",
-    "StepWorkState", "SupersedeStep", "Task", "TaskAssessmentResult", "TaskAssessor", "TaskCoordinator",
-    "TaskCoordinatorRunner", "TaskCreationError", "TaskDecisionError", "TaskDefaults",
-    "TaskEvent", "TaskEventType", "TaskKind", "TaskOrigin", "TaskPlanResult", "TaskPlanner",
-    "TaskRecord", "TaskService", "TaskStatus", "TaskStore", "TaskTelemetry", "TaskTemplate",
-    "TaskTriggerSpec", "TaskWriter", "VerificationRunTelemetry", "WorkTelemetry", "accept_plan",
-    "assert_transition", "board_column", "budget_breach", "budget_used_from",
-    "decide", "derive_attention", "derive_task_telemetry", "evaluate_health", "fold_cycle",
-    "fold_record", "get_template", "merge_assessment", "next_fire", "plan_from_events",
-    "preset_to_cron", "route", "status_entry", "validate_cron", "validate_slots",
-    "validate_timezone",
+    "AcceptedPlan", "ActionRecordView", "AssessCycle", "AttentionHistoryEntry", "Authority",
+    "BlockCycle", "Budget", "BudgetLedger", "BudgetUsed", "BurnSeriesPoint", "CATALOGUE",
+    "ClarificationDeadlines", "ClarificationQuestion", "CompleteCycle", "CycleTelemetry",
+    "DecisionItem", "ExecutionRoute", "ExhaustBudget", "FeedBus", "FeedEntry", "GateMode",
+    "HarnessTier", "IllegalTransitionError", "IntakeResult", "MatrixItem",
+    "MeteredOperatorController", "MirrorAttention", "PlanRejectedError", "PlanStep",
+    "PlanningFailedError", "ProjectTelemetry",
+    "RecordStepOutcome", "Replan", "ReportTarget", "ResumeStep", "RoleAlias", "RollbackWork",
+    "RoutingPolicy", "RunPlanning", "RuntimeRef", "Schedule", "ScheduledCycleTelemetry",
+    "ScheduledTelemetry", "ScratchResultValidator", "ScratchWorkspace", "ScratchWorkspaceManager",
+    "Sensitivity", "Sink", "SlotSpec", "SlotValidationError", "SoftwareTarget", "SpendReservation",
+    "SpendTotals", "StageAttemptTelemetry", "StageTimelineEntry", "StaleTaskError", "StartCycle",
+    "StartStep", "StepWorkState", "SupersedeStep", "Task", "TaskAssessmentResult", "TaskAssessor",
+    "TaskCoordinator", "TaskCoordinatorRunner", "TaskCreationError", "TaskDecisionError",
+    "TaskDefaults", "TaskEvent", "TaskEventType", "TaskKind", "TaskNotFoundError", "TaskOrigin",
+    "TaskPlanResult", "TaskPlanner", "TaskRecord", "TaskService", "TaskStatus", "TaskStore",
+    "TaskTelemetry", "TaskTemplate", "TaskTriggerSpec", "TaskWriter", "ThreadEntry", "ThreadView",
+    "VerificationRunTelemetry", "WorkTelemetry", "accept_plan", "actions_from_events",
+    "assert_transition", "board_column", "budget_breach", "budget_used_from", "decide",
+    "decision_inbox", "derive_attention", "derive_task_telemetry", "evaluate_health",
+    "fold_cycle", "fold_record", "get_template", "merge_assessment", "next_fire",
+    "plan_from_events", "preset_to_cron", "referenced_artifacts", "route", "status_entry",
+    "task_work_ids", "thread_from_events", "validate_cron", "validate_slots", "validate_timezone",
 ]

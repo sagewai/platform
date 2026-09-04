@@ -192,3 +192,149 @@ async def test_store_refuses_sqlite_before_multi_row_returning_floor(
             WorkActivityStore(engine=dialect_engine)
     else:
         WorkActivityStore(engine=dialect_engine)
+
+
+def _task_activity(
+    work_id: str,
+    run_id: str,
+    sequence: int,
+    *,
+    source: str = "codex",
+) -> OperatorActivity:
+    return OperatorActivity(
+        project_id="p",
+        work_id=work_id,
+        run_id=run_id,
+        sequence=sequence,
+        at=NOW,
+        source=source,
+        kind="message",
+        summary=f"{work_id}/{run_id}/{sequence}",
+    )
+
+
+@pytest.mark.asyncio
+async def test_read_activity_spans_runs_in_work_run_sequence_order(
+    dialect_engine,  # noqa: F811
+) -> None:
+    store = WorkActivityStore(engine=dialect_engine)
+    await store.init()
+    await store.append(
+        [
+            _task_activity("w1", "w1:implement:2", 1),
+            _task_activity("w1", "w1:implement:1", 2),
+            _task_activity("w1", "w1:implement:1", 1),
+            _task_activity("w2", "w2:review:1", 1),
+        ]
+    )
+
+    page = await store.read_activity(project_id="p", work_ids=("w1", "w2"))
+
+    assert [item.summary for item in page.items] == [
+        "w1/w1:implement:1/1",
+        "w1/w1:implement:1/2",
+        "w1/w1:implement:2/1",
+        "w2/w2:review:1/1",
+    ]
+    assert page.next_cursor is None
+
+
+@pytest.mark.asyncio
+async def test_read_activity_pages_by_cursor(dialect_engine) -> None:  # noqa: F811
+    store = WorkActivityStore(engine=dialect_engine)
+    await store.init()
+    await store.append(
+        [
+            _task_activity("w1", "w1:implement:1", 1),
+            _task_activity("w1", "w1:implement:1", 2),
+            _task_activity("w1", "w1:review:1", 1),
+            _task_activity("w1", "w1:review:1", 2),
+        ]
+    )
+
+    first = await store.read_activity(project_id="p", work_ids=("w1",), limit=2)
+    second = await store.read_activity(
+        project_id="p", work_ids=("w1",), limit=2, after=first.next_cursor
+    )
+
+    assert [(item.run_id, item.sequence) for item in first.items] == [
+        ("w1:implement:1", 1),
+        ("w1:implement:1", 2),
+    ]
+    assert first.next_cursor is not None
+    assert [(item.run_id, item.sequence) for item in second.items] == [
+        ("w1:review:1", 1),
+        ("w1:review:1", 2),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_read_activity_source_filter_advances_from_scanned_rows(
+    dialect_engine,  # noqa: F811
+) -> None:
+    store = WorkActivityStore(engine=dialect_engine)
+    await store.init()
+    await store.append(
+        [
+            _task_activity("w1", "w1:implement:1", 1),
+            _task_activity("w1", "w1:implement:1", 2),
+            _task_activity("w1", "w1:implement:1", 3),
+            _task_activity("w1", "w1:implement:1", 4),
+            _task_activity("w1", "w1:implement:1", 5, source="verifier"),
+        ]
+    )
+
+    pages = []
+    cursor = None
+    while True:
+        page = await store.read_activity(
+            project_id="p", work_ids=("w1",), source="verifier", after=cursor, limit=2
+        )
+        pages.append(page)
+        cursor = page.next_cursor
+        if cursor is None:
+            break
+
+    assert len(pages) == 3
+    assert [item.sequence for page in pages for item in page.items] == [5]
+
+
+@pytest.mark.asyncio
+async def test_read_activity_filters_by_run_and_source(dialect_engine) -> None:  # noqa: F811
+    store = WorkActivityStore(engine=dialect_engine)
+    await store.init()
+    await store.append(
+        [
+            _task_activity("w1", "w1:implement:1", 1, source="codex"),
+            _task_activity("w1", "w1:implement:1", 2, source="verifier"),
+            _task_activity("w1", "w1:review:1", 1, source="claude"),
+        ]
+    )
+
+    by_run = await store.read_activity(project_id="p", work_ids=("w1",), run_id="w1:review:1")
+    by_source = await store.read_activity(project_id="p", work_ids=("w1",), source="verifier")
+
+    assert [item.summary for item in by_run.items] == ["w1/w1:review:1/1"]
+    assert [item.source for item in by_source.items] == ["verifier"]
+
+
+@pytest.mark.asyncio
+async def test_read_activity_with_no_works_is_empty(dialect_engine) -> None:  # noqa: F811
+    store = WorkActivityStore(engine=dialect_engine)
+    await store.init()
+
+    page = await store.read_activity(project_id="p", work_ids=())
+
+    assert page.items == ()
+    assert page.next_cursor is None
+
+
+@pytest.mark.asyncio
+async def test_read_activity_is_project_scoped(dialect_engine) -> None:  # noqa: F811
+    store = WorkActivityStore(engine=dialect_engine)
+    await store.init()
+    await store.append([_task_activity("w1", "w1:implement:1", 1)])
+
+    page = await store.read_activity(project_id="q", work_ids=("w1",))
+
+    assert page.items == ()

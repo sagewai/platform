@@ -21,6 +21,7 @@ from sagewai.work.models import (
     OperatorDisciplineReport,
     ReviewFinding,
     ReviewResult,
+    RoleSelectionCounts,
     VerificationResult,
 )
 from sagewai.work.runtime import OperatorResult
@@ -445,11 +446,9 @@ def test_task_telemetry_projects_attempts_work_cycles_and_project_rates() -> Non
             ),
         ),
     }
-    project_selections = (
-        work_events["work-1"][0],
-        work_events["work-1"][7],
-        work_events["work-2"][0],
-    )
+    project_selections = {
+        "implementer": RoleSelectionCounts(selections=3, escalations=1)
+    }
 
     telemetry = derive_task_telemetry(
         record=_record(),
@@ -608,7 +607,7 @@ def test_scheduled_telemetry_projects_cycle_health_and_overdue_state() -> None:
             ),
         },
         budget=Budget(),
-        project_selections=(),
+        project_selections={},
         now=_at(40),
     )
 
@@ -711,7 +710,7 @@ def test_cycle_telemetry_keys_burn_and_spend_by_started_cycle() -> None:
             ),
         },
         budget=Budget(),
-        project_selections=(),
+        project_selections={},
         now=_at(13),
     )
 
@@ -770,7 +769,7 @@ def test_worst_case_next_attempt_follows_latest_runtime_kind() -> None:
         },
         spend=spend,
         budget=budget,
-        project_selections=(),
+        project_selections={},
         now=_at(10),
     )
 
@@ -830,7 +829,7 @@ def test_escalation_reason_uses_next_selection_only() -> None:
             )
         },
         budget=Budget(),
-        project_selections=(),
+        project_selections={},
         now=_at(10),
     )
 
@@ -859,7 +858,7 @@ def test_in_flight_attempt_projects_unknown_execution_fields() -> None:
             )
         },
         budget=Budget(),
-        project_selections=(),
+        project_selections={},
         now=_at(10),
     )
 
@@ -890,7 +889,7 @@ def test_scheduled_overdue_false_when_future_or_not_scheduled_status() -> None:
         work_events={},
         spend=spend,
         budget=Budget(),
-        project_selections=(),
+        project_selections={},
         now=_at(10),
     )
     executing = derive_task_telemetry(
@@ -903,7 +902,7 @@ def test_scheduled_overdue_false_when_future_or_not_scheduled_status() -> None:
         work_events={},
         spend=spend,
         budget=Budget(),
-        project_selections=(),
+        project_selections={},
         now=_at(10),
     )
 
