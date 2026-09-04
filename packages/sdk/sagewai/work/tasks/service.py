@@ -482,6 +482,64 @@ class TaskService:
         writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
         return await writer.append(record, entries, now=now)
 
+    async def pause(
+        self, task_id: str, *, project_id: str, actor_ref: str, now: datetime | None = None
+    ) -> TaskRecord:
+        """Hold the Task where it stands; ``decide`` returns nothing while it is paused."""
+        _task, record = await self._load(task_id, project_id=project_id)
+        if record.status is TaskStatus.PAUSED:
+            return record
+        writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
+        return await writer.append(record, [status_entry(record, TaskStatus.PAUSED)], now=now)
+
+    async def resume(
+        self, task_id: str, *, project_id: str, actor_ref: str, now: datetime | None = None
+    ) -> TaskRecord:
+        """Return a paused Task to the status the pause interrupted (section 24 revision 4).
+
+        Derived by replaying the stream's status entries from the creation status, not read out
+        of the ``PAUSED`` payload: ``TaskService.pause`` and the coordinator's health pause
+        (`coordinator.py:743-744`) write the same plain entry, and a Task either of them paused
+        must resume on the same rule.
+        """
+        _task, record = await self._load(task_id, project_id=project_id)
+        if record.status is not TaskStatus.PAUSED:
+            raise TaskDecisionError(f"task {task_id} is {record.status.value}, not PAUSED")
+        events = await self._store.read_events(task_id, project_id=project_id)
+        current = TaskStatus.PLANNING
+        previous = TaskStatus.PLANNING
+        for event in events:
+            if event.event_type is not TaskEventType.TASK_STATUS_CHANGED:
+                continue
+            moved_to = TaskStatus(str(event.payload_json["status"]))
+            if moved_to is TaskStatus.PAUSED:
+                previous = current
+            current = moved_to
+        writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
+        return await writer.append(record, [status_entry(record, previous)], now=now)
+
+    async def cancel(
+        self,
+        task_id: str,
+        *,
+        project_id: str,
+        actor_ref: str,
+        note: str | None = None,
+        now: datetime | None = None,
+    ) -> TaskRecord:
+        """Stop the Task for good; the coordinator never drives a cancelled Task again."""
+        _task, record = await self._load(task_id, project_id=project_id)
+        if record.status is TaskStatus.CANCELLED:
+            return record
+        entries: list[Entry] = []
+        if note:
+            entries.append(
+                (TaskEventType.TASK_MESSAGE, {"author": "human", "text": note, "refs": []})
+            )
+        entries.append(status_entry(record, TaskStatus.CANCELLED))
+        writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
+        return await writer.append(record, entries, now=now)
+
     async def default_expired_clarifications(
         self, task_id: str, *, project_id: str, now: datetime | None = None
     ) -> TaskRecord:
