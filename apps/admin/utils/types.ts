@@ -751,6 +751,7 @@ export interface Project {
 
 export type WorkStatus =
   | 'ANALYZING'
+  | 'DESIGNING'
   | 'READY_TO_IMPLEMENT'
   | 'IMPLEMENTING'
   | 'VERIFYING'
@@ -768,6 +769,9 @@ export type WorkStatus =
   | 'TRIAGING'
   | 'WORK_BLOCKED'
   | 'CONTROL_DEGRADED'
+  | 'BASE_MOVED'
+  | 'SUPERSEDED'
+  | 'COMPLETING'
   | 'COMPLETE';
 
 export interface WorkRecord {
@@ -817,7 +821,11 @@ export type WorkEventType =
   | 'RELEASE_CREATED'
   | 'DEPLOYMENT_RECORDED'
   | 'OBSERVATION_RECORDED'
+  | 'EXTERNAL_OUTCOME_RECORDED'
   | 'OPERATOR_DISCIPLINE_RECORDED'
+  | 'WORK_SUPERSEDED'
+  | 'RUNTIME_SELECTED'
+  | 'BASE_MOVED'
   | 'CONTROL_DEGRADED'
   | 'CONTROL_RESTORED'
   | 'ROLLBACK_RECORDED'
@@ -840,6 +848,244 @@ export interface WorkEvent {
 export interface WorkDetail {
   work: WorkRecord;
   events: WorkEvent[];
+}
+
+// ─── Coordinator (Task) types ───
+// Hand-mirrored from packages/sdk/sagewai/work/tasks/models.py, views.py, inbox.py,
+// telemetry.py, feed.py and intake.py. Decimals arrive as JSON strings; a null
+// worst_case_next_attempt means "counted, not priced", never zero.
+
+export type TaskKind = 'batch' | 'scheduled' | 'event_driven';
+
+export type TaskOrigin = 'human' | 'schedule' | 'trigger' | 'monitor' | 'ai_decision';
+
+export type TaskStatus =
+  | 'PLANNING'
+  | 'CLARIFYING'
+  | 'PLAN_PROPOSED'
+  | 'EXECUTING'
+  | 'ASSESSING'
+  | 'SCHEDULED'
+  | 'PAUSED'
+  | 'BLOCKED'
+  | 'BUDGET_EXHAUSTED'
+  | 'CONTROL_DEGRADED'
+  | 'COMPLETE'
+  | 'CANCELLED';
+
+export type BoardColumn = 'inbox' | 'needs_you' | 'planned' | 'in_progress' | 'done';
+
+export type AttentionOwner = 'user' | 'system' | 'external';
+
+export type TaskProfile = 'software' | 'report';
+
+export type TaskSensitivity = 'public' | 'internal' | 'confidential' | 'restricted';
+
+export type GateMode = 'require' | 'auto' | 'by_reversibility';
+
+export type DecisionUrgency = 'now' | 'today' | 'this_week';
+
+export interface TaskBudgetUsed {
+  works: number;
+  attempts: number;
+  replans: number;
+  seconds: number;
+  usd_actual: string;
+  usd_reserved: string;
+  usd_unknown: number;
+}
+
+export interface TaskRecord {
+  task_id: string;
+  project_id: string;
+  kind: TaskKind;
+  origin: TaskOrigin;
+  title: string;
+  profile: TaskProfile;
+  status: TaskStatus;
+  last_event_sequence: number;
+  board_column: BoardColumn;
+  attention_owner: AttentionOwner | null;
+  waiting_reason: string | null;
+  current_cycle: number;
+  plan_version: number;
+  pending_gate: string | null;
+  tracking_issue_url: string | null;
+  pending_questions: number;
+  pending_material_questions: number;
+  next_run_at: string | null;
+  lease_owner: string | null;
+  lease_epoch: number;
+  lease_expires_at: string | null;
+  revision: number;
+  budget_used: TaskBudgetUsed;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskBudget {
+  max_works_per_cycle: number;
+  max_stage_attempts_per_cycle: number;
+  max_attempts_per_stage: number;
+  max_replans: number;
+  max_cycle_duration_seconds: number;
+  max_cycle_usd: string;
+  claude_max_budget_usd_per_attempt: string;
+  harness_max_tokens_per_attempt: number;
+  harness_max_tool_calls_per_attempt: number;
+  max_concurrent_works: 1;
+}
+
+export interface TaskAuthority {
+  plan: GateMode;
+  merge: GateMode;
+  replan: GateMode;
+  deliver: GateMode;
+}
+
+export interface TaskRoutingPolicy {
+  roles: Record<string, string[]>;
+  prefer_free_implementation: boolean;
+}
+
+export interface TaskSchedule {
+  cron: string;
+  timezone: string;
+  active: boolean;
+}
+
+export interface TaskExecutionRoute {
+  route: 'local' | 'fleet';
+  fleet_org_id: string | null;
+}
+
+export interface TaskSink {
+  kind: 'console' | 'github_issue';
+  issue_url: string | null;
+  version: number;
+}
+
+export interface SoftwareTaskTarget {
+  kind: 'software';
+  repository_path: string;
+  owner: string;
+  repo: string;
+  default_branch: string;
+  verification_image: string;
+  verification_commands: string[];
+}
+
+export interface ReportTaskTarget {
+  kind: 'report';
+  sources: Record<string, unknown>[];
+  sinks: TaskSink[];
+  required_sections: string[];
+  max_bytes: number;
+}
+
+export type TaskTarget = SoftwareTaskTarget | ReportTaskTarget;
+
+export interface ArtifactRef {
+  project_id: string | null;
+  digest: string;
+  media_type: string;
+  size_bytes: number;
+  storage_ref: string;
+  created_at: string;
+  created_by: string;
+}
+
+export interface Task {
+  id: string;
+  project_id: string;
+  kind: TaskKind;
+  origin: TaskOrigin;
+  origin_ref: string | null;
+  title: string;
+  brief_ref: ArtifactRef;
+  brief_summary: string;
+  source_ref: string | null;
+  template_id: string;
+  template_version: string;
+  slots: Record<string, unknown>;
+  profile: TaskProfile;
+  target: TaskTarget;
+  schedule: TaskSchedule | null;
+  budget: TaskBudget;
+  authority: TaskAuthority;
+  routing: TaskRoutingPolicy;
+  routing_version: number;
+  execution: TaskExecutionRoute;
+  sensitivity: TaskSensitivity;
+  retention_days: number | null;
+  tracking_issue_url: string | null;
+  created_by: string;
+  created_at: string;
+}
+
+export interface TaskAcceptanceCriterion {
+  statement: string;
+  verification_kind: 'deterministic' | 'profile' | 'policy';
+}
+
+export interface TaskPlanStep {
+  id: string;
+  title: string;
+  goal: string;
+  allowed_scope: string[];
+  acceptance_criteria: TaskAcceptanceCriterion[];
+  constraints: string[];
+  non_goals: string[];
+  risk: 'low' | 'medium' | 'high';
+  design_required: boolean;
+  depends_on: string[];
+  domain: 'ui' | 'backend' | 'data' | 'docs' | 'report';
+  size: 's' | 'm' | 'l';
+}
+
+export interface TaskMatrixItem {
+  id: string;
+  statement: string;
+  verification_kind: 'deterministic' | 'assessment';
+  command: string | null;
+}
+
+/** The accepted plan `GET /api/v1/tasks/{task_id}` carries; `null` before one is accepted. */
+export interface TaskPlan {
+  version: number;
+  steps: TaskPlanStep[];
+  acceptance_matrix: TaskMatrixItem[];
+}
+
+export interface TaskDetail {
+  task: Task;
+  record: TaskRecord;
+  plan: TaskPlan | null;
+}
+
+/** What a create and a budget patch return: the definition and its projection, no plan. */
+export interface TaskWriteResult {
+  task: Task;
+  record: TaskRecord;
+}
+
+export interface TaskListPage {
+  tasks: TaskRecord[];
+  next_cursor: string | null;
+}
+
+export interface TaskBoard {
+  columns: Record<BoardColumn, TaskRecord[]>;
+}
+
+export interface TaskPortfolioEntry {
+  project_id: string;
+  tasks: TaskRecord[];
+  needs_you: number;
+}
+
+export interface TaskPortfolio {
+  projects: TaskPortfolioEntry[];
 }
 
 /* ─── Agent Template types ─── */
