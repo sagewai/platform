@@ -314,7 +314,7 @@ def _webhook_url(configs: Sequence[dict[str, Any]], channel_type: str, name: str
 
 
 @dataclass(frozen=True)
-class _OpenItem:
+class OpenItem:
     """The one Needs-you item a Task is still waiting on, rebuilt from its own events."""
 
     attention_id: str
@@ -343,7 +343,7 @@ class DecisionEscalation:
         for record in await self._store.list_records(project_id=project_id):
             if record.attention_owner is not AttentionOwner.USER:
                 continue
-            item = _open_item(await self._store.read_events(record.task_id, project_id=project_id))
+            item = open_item(await self._store.read_events(record.task_id, project_id=project_id))
             if item is None or item.urgency == "now":
                 continue
             if now - item.presented[-1][1] < (item.due_at - item.presented[-1][1]) / 2:
@@ -361,7 +361,7 @@ class DecisionEscalation:
         return escalated
 
     async def _present(
-        self, record: TaskRecord, item: _OpenItem, channel: DecisionChannel, now: datetime
+        self, record: TaskRecord, item: OpenItem, channel: DecisionChannel, now: datetime
     ) -> int:
         decision = DecisionRequest(
             project_id=record.project_id,
@@ -429,7 +429,7 @@ class DecisionEscalation:
         return 1
 
 
-def _open_item(events: Sequence[TaskEvent]) -> _OpenItem | None:
+def open_item(events: Sequence[TaskEvent]) -> OpenItem | None:
     """The item the Task still owes an answer on, or None.
 
     A Task has at most one open Needs-you item at a time: ``decide`` returns ``None`` while
@@ -462,7 +462,7 @@ def _open_item(events: Sequence[TaskEvent]) -> _OpenItem | None:
         if event.event_type is TaskEventType.NOTIFICATION_PRESENTED
         and str(event.payload_json["attention_id"]) == attention_id
     )
-    return _OpenItem(
+    return OpenItem(
         attention_id=attention_id,
         summary=str(latest.payload_json["summary"]),
         urgency=str(latest.payload_json["urgency"]),
@@ -478,7 +478,9 @@ __all__ = [
     "DecisionEscalation",
     "GitHubIssueDecisionChannel",
     "GoogleChatWebhookDecisionChannel",
+    "OpenItem",
     "SlackWebhookDecisionChannel",
     "TrackingDecisionChannel",
     "build_decision_channels",
+    "open_item",
 ]

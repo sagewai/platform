@@ -66,7 +66,9 @@ from sagewai.work.tasks.decide import (
     fold_cycle,
 )
 from sagewai.work.tasks.decisions import (
+    DUE_IN,
     TASK_GATES,
+    URGENCY_BY_KIND,
     ConsoleDecisionChannel,
     DecisionChannel,
     DecisionRequest,
@@ -95,18 +97,6 @@ from sagewai.work.tasks.store import StaleTaskError, TaskStore
 from sagewai.work.tasks.writer import Entry, TaskWriter, status_entry
 
 logger = logging.getLogger("sagewai.work.tasks")
-
-_URGENCY = {
-    "WORK_BLOCKED": "now",
-    "CONTROL_DEGRADED": "now",
-    "EXTERNAL_OUTCOME_INCIDENT": "now",
-    "GATE_REQUESTED": "today",
-}
-_DUE_IN = {
-    "now": timedelta(0),
-    "today": timedelta(hours=24),
-    "this_week": timedelta(days=7),
-}
 
 
 def _lost_rollback(project_id: str, action_id: str) -> tuple[ActionResult, dict[str, object]]:
@@ -1181,7 +1171,7 @@ class TaskCoordinator:
                 record,
                 attention_id=command.attention_id,
                 summary=command.summary,
-                urgency=_URGENCY.get(command.attention_kind, "today"),
+                urgency=URGENCY_BY_KIND.get(command.attention_kind, "today"),
                 evidence_refs=(*command.evidence_refs, command.work_id),
             )
         )
@@ -1295,7 +1285,7 @@ class TaskCoordinator:
         return await self._append(record, entries, lease_epoch, command=command)
 
     async def _due_at(self, task: Task, record: TaskRecord, urgency: str) -> datetime:
-        derived = self._now() + _DUE_IN[urgency]
+        derived = self._now() + DUE_IN[urgency]
         if record.pending_questions == 0:
             return derived
         events = await self._task_store.read_events(task.id, project_id=task.project_id)

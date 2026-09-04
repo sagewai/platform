@@ -23,8 +23,8 @@ from sagewai.work.tasks.channels import (
     DecisionEscalation,
     GoogleChatWebhookDecisionChannel,
     SlackWebhookDecisionChannel,
-    _open_item,
     build_decision_channels,
+    open_item,
 )
 from sagewai.work.tasks.decisions import (
     ChannelDeliveryError,
@@ -302,10 +302,10 @@ def test_the_open_item_is_the_latest_unanswered_one() -> None:
         presented(1, "plan:t1:1", "console"),
         _event(2, TaskEventType.GATE_DECIDED, {"gate_id": "plan:t1:1", "decision": "allow"}),
     ]
-    assert _open_item(answered) is None
+    assert open_item(answered) is None
 
     open_now = [*answered, presented(3, "deliver:w1:1", "console")]
-    item = _open_item(open_now)
+    item = open_item(open_now)
     assert item.attention_id == "deliver:w1:1"
     assert item.summary == "Approve deliver:w1:1"
     assert [name for name, _at in item.presented] == ["console"]
@@ -329,8 +329,37 @@ def test_the_open_item_preserves_presented_channels() -> None:
         for index, channel in enumerate(("console", "slack_webhook"), start=1)
     ]
 
-    item = _open_item(events)
+    item = open_item(events)
     assert {name for name, _at in item.presented} == {"console", "slack_webhook"}
+
+
+def test_the_open_item_carries_the_urgency_due_time_and_evidence_the_inbox_renders() -> None:
+    item = open_item(
+        [
+            _event(
+                1,
+                TaskEventType.NOTIFICATION_PRESENTED,
+                {
+                    "channel": "console",
+                    "ref": "console:gate:1",
+                    "attention_id": "gate:1",
+                    "urgency": "this_week",
+                    "due_at": (NOW + timedelta(days=7)).isoformat(),
+                    "summary": "Approve merge",
+                    "evidence_refs": ["https://github.com/o/r/pull/3"],
+                },
+            )
+        ]
+    )
+
+    assert item is not None
+    assert item.urgency == "this_week"
+    assert item.due_at == NOW + timedelta(days=7)
+    assert item.evidence_refs == ("https://github.com/o/r/pull/3",)
+
+
+def test_a_task_that_was_never_presented_has_no_open_item() -> None:
+    assert open_item(()) is None
 
 
 @pytest.mark.asyncio

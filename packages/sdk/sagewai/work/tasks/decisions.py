@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict
@@ -22,6 +22,17 @@ from sagewai.work.tasks.models import Authority, GateMode
 
 _NEVER_GATES = frozenset({Reversibility.PURE, Reversibility.SNAPSHOT_REVERSIBLE})
 TASK_GATES = ("plan:", "replan:", "deliver:", "rollback:")
+URGENCY_BY_KIND = {
+    "WORK_BLOCKED": "now",
+    "CONTROL_DEGRADED": "now",
+    "EXTERNAL_OUTCOME_INCIDENT": "now",
+    "GATE_REQUESTED": "today",
+}
+DUE_IN = {
+    "now": timedelta(0),
+    "today": timedelta(hours=24),
+    "this_week": timedelta(days=7),
+}
 
 
 def resolve_gate(mode: GateMode, action: ActionRequest) -> GateDecision:
@@ -125,10 +136,12 @@ class NullDecisionScheduler:
 __all__ = [
     "ChannelDeliveryError",
     "ConsoleDecisionChannel",
+    "DUE_IN",
     "DecisionChannel",
     "DecisionRequest",
     "NullDecisionScheduler",
     "TASK_GATES",
+    "URGENCY_BY_KIND",
     "channel_error_detail",
     "coordinator_action",
     "merge_policy_for",
