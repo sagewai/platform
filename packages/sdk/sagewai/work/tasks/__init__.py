@@ -45,6 +45,7 @@ from sagewai.work.tasks.events import (
 )
 from sagewai.work.tasks.feed import FeedBus, FeedEntry
 from sagewai.work.tasks.health import evaluate_health
+from sagewai.work.tasks.inbox import DecisionItem, decision_inbox
 from sagewai.work.tasks.intake import ClarificationQuestion, IntakeResult, route
 from sagewai.work.tasks.models import (
     Authority,
@@ -133,9 +134,10 @@ __all__ = [
     "AcceptedPlan", "ActionRecordView", "AssessCycle", "AttentionHistoryEntry", "Authority",
     "BlockCycle", "Budget", "BudgetLedger", "BudgetUsed", "BurnSeriesPoint", "CATALOGUE",
     "ClarificationDeadlines", "ClarificationQuestion", "CompleteCycle", "CycleTelemetry",
-    "ExecutionRoute", "ExhaustBudget", "FeedBus", "FeedEntry", "GateMode", "HarnessTier",
-    "IllegalTransitionError", "IntakeResult", "MatrixItem", "MeteredOperatorController",
-    "MirrorAttention", "PlanRejectedError", "PlanStep", "PlanningFailedError", "ProjectTelemetry",
+    "DecisionItem", "ExecutionRoute", "ExhaustBudget", "FeedBus", "FeedEntry", "GateMode",
+    "HarnessTier", "IllegalTransitionError", "IntakeResult", "MatrixItem",
+    "MeteredOperatorController", "MirrorAttention", "PlanRejectedError", "PlanStep",
+    "PlanningFailedError", "ProjectTelemetry",
     "RecordStepOutcome", "Replan", "ReportTarget", "ResumeStep", "RoleAlias", "RollbackWork",
     "RoutingPolicy", "RunPlanning", "RuntimeRef", "Schedule", "ScheduledCycleTelemetry",
     "ScheduledTelemetry", "ScratchResultValidator", "ScratchWorkspace", "ScratchWorkspaceManager",
@@ -148,8 +150,8 @@ __all__ = [
     "TaskTelemetry", "TaskTemplate", "TaskTriggerSpec", "TaskWriter", "ThreadEntry", "ThreadView",
     "VerificationRunTelemetry", "WorkTelemetry", "accept_plan", "actions_from_events",
     "assert_transition", "board_column", "budget_breach", "budget_used_from", "decide",
-    "derive_attention", "derive_task_telemetry", "evaluate_health", "fold_cycle", "fold_record",
-    "get_template", "merge_assessment", "next_fire", "plan_from_events", "preset_to_cron",
-    "referenced_artifacts", "route", "status_entry", "task_work_ids", "thread_from_events",
-    "validate_cron", "validate_slots", "validate_timezone",
+    "decision_inbox", "derive_attention", "derive_task_telemetry", "evaluate_health",
+    "fold_cycle", "fold_record", "get_template", "merge_assessment", "next_fire",
+    "plan_from_events", "preset_to_cron", "referenced_artifacts", "route", "status_entry",
+    "task_work_ids", "thread_from_events", "validate_cron", "validate_slots", "validate_timezone",
 ]

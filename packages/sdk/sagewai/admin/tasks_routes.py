@@ -30,6 +30,7 @@ from sagewai.work.events import WorkEvent, WorkEventType
 from sagewai.work.store import WorkStore
 from sagewai.work.tasks.events import TaskEventType
 from sagewai.work.tasks.feed import FeedEntry
+from sagewai.work.tasks.inbox import decision_inbox
 from sagewai.work.tasks.intake import route as intake_route
 from sagewai.work.tasks.models import (
     Authority,
@@ -392,6 +393,18 @@ async def delete_task_trigger(trigger_id: str, request: Request) -> dict:
         request, "task.trigger.delete", target_type="task_trigger", target_id=trigger_id
     )
     return {"status": "ok"}
+
+
+@router.get("/decisions")
+async def task_decisions(request: Request) -> dict:
+    project_id = _task_project_scope(request)
+    items = await decision_inbox(
+        task_store=request.app.state.task_store,
+        work_store=request.app.state.work_store,
+        project_id=project_id,
+        now=datetime.now(timezone.utc),
+    )
+    return {"items": [item.model_dump(mode="json") for item in items]}
 
 
 @router.get("/{task_id}")
