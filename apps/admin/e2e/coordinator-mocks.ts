@@ -4,6 +4,7 @@ import type {
   PendingAttention,
   Project,
   Task,
+  TaskActionRecord,
   TaskBoard,
   TaskBudgetUsed,
   TaskDecisionItem,
@@ -719,11 +720,66 @@ export const gateHandlers: Handlers = {
   }),
 };
 
+export const mergeAction = {
+  action_id: 'merge:work-9:3',
+  work_id: 'work-9',
+  action: 'merge_pull_request',
+  reversibility: 'compensatable',
+  risk: 'medium',
+  scope: 'https://github.com/sagewai/platform/pull/3',
+  rollback: 'revert_pull_request',
+  post_check: 'merged_sha_read_back',
+  gate_id: 'merge:work-9:3',
+  requested_at: '2026-09-01T10:00:00Z',
+  status: 'succeeded',
+  external_ref: 'https://github.com/sagewai/platform/pull/3',
+  completed_at: '2026-09-01T10:01:00Z',
+  check: 'merged_sha_read_back',
+  passed: true,
+  detail: null,
+  evidence_refs: ['evidence://merge/3'],
+} satisfies TaskActionRecord;
+
+export const deliverAction = {
+  ...mergeAction,
+  action_id: 'deliver:work-10:1',
+  work_id: 'work-10',
+  action: 'deliver_report',
+  reversibility: 'irreversible',
+  rollback: null,
+  post_check: 'comment_read_back',
+  gate_id: null,
+  status: 'failed',
+  external_ref: null,
+  passed: false,
+  detail: 'the sink refused the comment',
+  evidence_refs: [],
+} satisfies TaskActionRecord;
+
+export const failedMergeAction = {
+  ...mergeAction,
+  action_id: 'merge:work-9:4',
+  gate_id: 'merge:work-9:4',
+  status: 'failed',
+  external_ref: null,
+  passed: false,
+  detail: 'the merge was rejected',
+} satisfies TaskActionRecord;
+
+export const actionHandlers: Handlers = {
+  [`/api/v1/tasks/${taskDetailTask.id}/actions`]: () => ({
+    actions: [mergeAction, deliverAction, failedMergeAction],
+  }),
+  [`/api/v1/tasks/${taskDetailTask.id}/actions/${mergeAction.action_id}/rollback`]: () =>
+    acceptedPlanDetail.record,
+};
+
 export const baseHandlers: Handlers = {
   ...composerHandlers,
   ...taskHandlers,
   ...answerHandlers,
   ...gateHandlers,
+  ...actionHandlers,
   '/api/v1/tasks/board': () => board,
   '/api/v1/tasks': (url, method) => {
     if (method === 'POST') {

@@ -4,6 +4,9 @@ import {
   acceptedPlanDetail,
   answeredThread,
   briefBody,
+  deliverAction,
+  failedMergeAction,
+  mergeAction,
   mirroredGateTask,
   mirroredGateThread,
   mockCoordinatorApi,
@@ -812,5 +815,322 @@ test.describe('Coordinator Task page', () => {
     const steps = page.locator('[data-testid^="plan-step-"]');
     await expect(steps.first()).toContainText('Wire the decisions inbox');
     await expect(steps.last()).toContainText('Add the coordinator board');
+  });
+
+  test('lists the action records with their reversibility and post-check', async ({ page }) => {
+    const actionScopes: Array<string | undefined> = [];
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail });
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (request.method() === 'GET' && url.pathname === `/api/v1/tasks/${task.id}/actions`) {
+        actionScopes.push(request.headers()['x-project-id']);
+      }
+    });
+
+    await page.goto(`/tasks/${task.id}/actions`);
+
+    const merge = page.getByTestId('action-row-merge:work-9:3');
+    await expect(merge).toContainText('merge_pull_request');
+    await expect(merge).toContainText('compensatable');
+    await expect(merge).toContainText('merged_sha_read_back');
+    await expect(merge).toContainText('passed');
+    const deliver = page.getByTestId('action-row-deliver:work-10:1');
+    await expect(deliver).toContainText('irreversible');
+    await expect(deliver).toContainText('the sink refused the comment');
+    await expect(deliver.getByRole('button', { name: 'Request rollback' })).toHaveCount(0);
+    await expect(
+      page
+        .getByTestId('action-row-merge:work-9:4')
+        .getByRole('button', { name: 'Request rollback' }),
+    ).toHaveCount(0);
+    expect(actionScopes).toContain(project.id);
+  });
+
+  test('says so when there are no recorded actions yet', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail,
+      [`/api/v1/tasks/${task.id}/actions`]: () => ({ actions: [] }),
+    });
+
+    await page.goto(`/tasks/${task.id}/actions`);
+
+    await expect(page.getByRole('heading', { name: 'No actions yet' })).toBeVisible();
+  });
+
+  test('shows the actions refusal the API stated', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail });
+
+    await page.goto(`/tasks/${task.id}`);
+    await expect(page.getByRole('heading', { name: needsYouTask.title })).toBeVisible();
+
+    await page.route(`**/api/v1/tasks/${task.id}/actions`, async (route) => {
+      await route.fulfill({ status: 503, json: { detail: 'actions projection unavailable' } });
+    });
+    await page.getByRole('link', { name: 'Actions' }).click();
+
+    await expect(page.getByTestId('task-actions-error')).toHaveText(
+      'actions projection unavailable',
+    );
+  });
+
+  test('re-reads the actions when the feed advances', async ({ page }) => {
+    let releaseStream = () => {};
+    let actionRequests = 0;
+    const streamReady = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail,
+      [`/api/v1/tasks/${task.id}/actions`]: () => {
+        actionRequests += 1;
+        return { actions: [mergeAction, deliverAction, failedMergeAction] };
+      },
+    });
+    await page.route(`**/api/v1/tasks/${task.id}/events`, async (route) => {
+      await streamReady;
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: `id: 5\nevent: task.updated\ndata: ${JSON.stringify({
+          source: 'task_event',
+          project_id: project.id,
+          task_id: task.id,
+          feed_sequence: 5,
+          source_id: 'event-5',
+          event_type: 'ACTION_RESULT_RECORDED',
+          payload_json: {},
+          created_at: '2026-09-01T11:35:00Z',
+        })}\n\n`,
+      });
+    });
+
+    await page.goto(`/tasks/${task.id}/actions`);
+    await expect(page.getByTestId('action-row-merge:work-9:3')).toBeVisible();
+    const before = actionRequests;
+    releaseStream();
+
+    await expect.poll(() => actionRequests).toBeGreaterThan(before);
+  });
+
+  test('keeps the actions and states the refusal when a refetch fails', async ({ page }) => {
+    let releaseStream = () => {};
+    const streamReady = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail });
+    await page.route(`**/api/v1/tasks/${task.id}/events`, async (route) => {
+      await streamReady;
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: `id: 5\nevent: task.updated\ndata: ${JSON.stringify({
+          source: 'task_event',
+          project_id: project.id,
+          task_id: task.id,
+          feed_sequence: 5,
+          source_id: 'event-5',
+          event_type: 'ACTION_RESULT_RECORDED',
+          payload_json: {},
+          created_at: '2026-09-01T11:35:00Z',
+        })}\n\n`,
+      });
+    });
+
+    await page.goto(`/tasks/${task.id}/actions`);
+    await expect(page.getByTestId('action-row-merge:work-9:3')).toBeVisible();
+
+    await page.route(`**/api/v1/tasks/${task.id}/actions`, async (route) => {
+      await route.fulfill({ status: 503, json: { detail: 'actions projection unavailable' } });
+    });
+    releaseStream();
+
+    await expect(page.getByTestId('task-actions-error')).toHaveText(
+      'actions projection unavailable',
+    );
+    await expect(page.getByTestId('action-row-merge:work-9:3')).toBeVisible();
+  });
+
+  test('keeps the API order of the action records', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail,
+      [`/api/v1/tasks/${task.id}/actions`]: () => ({
+        actions: [failedMergeAction, deliverAction, mergeAction],
+      }),
+    });
+
+    await page.goto(`/tasks/${task.id}/actions`);
+
+    const rows = page.locator('[data-testid^="action-row-"]');
+    await expect(rows.first()).toContainText('the merge was rejected');
+    await expect(rows.last()).toContainText('https://github.com/sagewai/platform/pull/3');
+  });
+
+  test('requests the recorded rollback for a compensatable action', async ({ page }) => {
+    const writes: string[] = [];
+    const bodies: Array<string | null> = [];
+    const scopes: Array<string | undefined> = [];
+    let actionReads = 0;
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail,
+      [`/api/v1/tasks/${task.id}/actions`]: () => {
+        actionReads += 1;
+        return { actions: [mergeAction, deliverAction, failedMergeAction] };
+      },
+    });
+    recordWrites(page, writes);
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (
+        request.method() === 'POST' &&
+        decodeURIComponent(url.pathname) ===
+          `/api/v1/tasks/${task.id}/actions/${mergeAction.action_id}/rollback`
+      ) {
+        bodies.push(request.postData());
+        scopes.push(request.headers()['x-project-id']);
+      }
+    });
+
+    await page.goto(`/tasks/${task.id}/actions`);
+    await expect(page.getByTestId('action-row-merge:work-9:3')).toBeVisible();
+    const before = actionReads;
+    await page
+      .getByTestId('action-row-merge:work-9:3')
+      .getByRole('button', { name: 'Request rollback' })
+      .click();
+
+    await expect(
+      page.locator('[data-sonner-toast]').filter({ hasText: 'Rollback requested' }),
+    ).toBeVisible();
+    await expect.poll(() => writes).toEqual([
+      `/api/v1/tasks/${task.id}/actions/${mergeAction.action_id}/rollback`,
+    ]);
+    expect(bodies).toEqual(['{}']);
+    expect(scopes).toEqual([project.id]);
+    await expect.poll(() => actionReads).toBeGreaterThan(before);
+  });
+
+  test('shows the rollback in flight and sends it once', async ({ page }) => {
+    const writes: string[] = [];
+    let releaseRollback = () => {};
+    const rollbackReady = new Promise<void>((resolve) => {
+      releaseRollback = resolve;
+    });
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail });
+    recordWrites(page, writes);
+    await page.route(
+      (url) =>
+        decodeURIComponent(url.pathname) ===
+        `/api/v1/tasks/${task.id}/actions/${mergeAction.action_id}/rollback`,
+      async (route) => {
+        await rollbackReady;
+        await route.fulfill({ json: acceptedPlanDetail.record });
+      },
+    );
+
+    await page.goto(`/tasks/${task.id}/actions`);
+    await page
+      .getByTestId('action-row-merge:work-9:3')
+      .getByRole('button', { name: 'Request rollback' })
+      .evaluate((button) => {
+        button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+
+    const button = page
+      .getByTestId('action-row-merge:work-9:3')
+      .getByRole('button', { name: 'Requesting rollback' });
+    await expect(button).toHaveAttribute('aria-busy', 'true');
+    await expect(button).toBeDisabled();
+    releaseRollback();
+    await expect.poll(() => writes).toEqual([
+      `/api/v1/tasks/${task.id}/actions/${mergeAction.action_id}/rollback`,
+    ]);
+  });
+
+  test('shows the tier refusal when a member requests a rollback', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail });
+    await page.route(
+      (url) => url.pathname.endsWith('/rollback'),
+      async (route) => {
+        await route.fulfill({ status: 403, json: { detail: 'project admin required' } });
+      },
+    );
+
+    await page.goto(`/tasks/${task.id}/actions`);
+    await page
+      .getByTestId('action-row-merge:work-9:3')
+      .getByRole('button', { name: 'Request rollback' })
+      .click();
+
+    await expect(page.getByTestId('task-actions-rollback-error')).toHaveText(
+      'project admin required',
+    );
+    await expect(page.getByTestId('action-row-merge:work-9:3')).toBeVisible();
+  });
+
+  test('keeps the rollback refusal when the feed advances', async ({ page }) => {
+    let releaseStream = () => {};
+    let actionReads = 0;
+    const streamReady = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail,
+      [`/api/v1/tasks/${task.id}/actions`]: () => {
+        actionReads += 1;
+        return { actions: [mergeAction, deliverAction, failedMergeAction] };
+      },
+    });
+    await page.route(`**/api/v1/tasks/${task.id}/events`, async (route) => {
+      await streamReady;
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: `id: 5\nevent: task.updated\ndata: ${JSON.stringify({
+          source: 'task_event',
+          project_id: project.id,
+          task_id: task.id,
+          feed_sequence: 5,
+          source_id: 'event-5',
+          event_type: 'ACTION_RESULT_RECORDED',
+          payload_json: {},
+          created_at: '2026-09-01T11:35:00Z',
+        })}\n\n`,
+      });
+    });
+    await page.route(
+      (url) => url.pathname.endsWith('/rollback'),
+      async (route) => {
+        await route.fulfill({ status: 403, json: { detail: 'project admin required' } });
+      },
+    );
+
+    await page.goto(`/tasks/${task.id}/actions`);
+    await expect(page.getByTestId('action-row-merge:work-9:3')).toBeVisible();
+    const before = actionReads;
+    await page
+      .getByTestId('action-row-merge:work-9:3')
+      .getByRole('button', { name: 'Request rollback' })
+      .click();
+
+    await expect(page.getByTestId('task-actions-rollback-error')).toHaveText(
+      'project admin required',
+    );
+    releaseStream();
+    await expect.poll(() => actionReads).toBeGreaterThan(before);
+    await expect(page.getByTestId('task-actions-rollback-error')).toHaveText(
+      'project admin required',
+    );
+    await expect(page.getByTestId('action-row-merge:work-9:3')).toBeVisible();
   });
 });
