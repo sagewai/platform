@@ -11,7 +11,9 @@ import type {
   TaskDetail,
   TaskPortfolio,
   TaskRecord,
+  TaskThread,
   TaskTemplateCatalogue,
+  ThreadEntry,
 } from '../utils/types';
 
 export const project: Project = {
@@ -389,6 +391,154 @@ export const taskDetailTask = {
 } satisfies Task;
 
 export const taskDetail = { task: taskDetailTask, record: needsYouTask, plan: null } satisfies TaskDetail;
+
+function threadEntry(overrides: Partial<ThreadEntry>): ThreadEntry {
+  return {
+    id: '1',
+    sequence: 1,
+    at: '2026-09-01T09:00:00Z',
+    author: 'human',
+    actor_ref: 'admin',
+    kind: 'message',
+    text: '',
+    attention_id: null,
+    attention_version: null,
+    answer: null,
+    answered_by: null,
+    defaultable: null,
+    deadline_at: null,
+    gate_id: null,
+    decided_by: null,
+    work_id: null,
+    decision: null,
+    plan_version: null,
+    refs: [],
+    closed: false,
+    ...overrides,
+  };
+}
+
+export const thread = {
+  task_id: taskDetailTask.id,
+  project_id: project.id,
+  brief_ref: `artifact://${briefDigest}`,
+  entries: [
+    threadEntry({
+      id: '2',
+      sequence: 2,
+      kind: 'brief',
+      text: 'Approve the weekly report delivery',
+      refs: [`artifact://${briefDigest}`],
+    }),
+    threadEntry({
+      id: '3',
+      sequence: 3,
+      author: 'system',
+      actor_ref: 'coordinator',
+      kind: 'message',
+      text: 'Planning the change.',
+    }),
+    threadEntry({
+      id: '4:q-scope',
+      sequence: 4,
+      author: 'system',
+      actor_ref: 'coordinator',
+      kind: 'question',
+      text: 'Which branch should the change land on?',
+      attention_id: 'q-scope',
+      attention_version: 2,
+      defaultable: true,
+      deadline_at: '2026-09-01T13:00:00Z',
+    }),
+    threadEntry({
+      id: '5',
+      sequence: 5,
+      author: 'system',
+      actor_ref: 'coordinator',
+      kind: 'gate',
+      text: 'Approve the plan at version 1?',
+      gate_id: 'plan:task-2:1',
+      decided_by: 'task',
+    }),
+    threadEntry({
+      id: '6',
+      sequence: 6,
+      author: 'system',
+      actor_ref: 'coordinator',
+      kind: 'status',
+      text: 'PLAN_PROPOSED',
+    }),
+  ],
+  open_question_ids: ['q-scope'],
+  pending_gate: 'plan:task-2:1',
+} satisfies TaskThread;
+
+export const briefBody = '# Weekly report\n\nDeliver the weekly report to the console sink.\n';
+
+/** One replay of the durable feed: the frames the Task page needs, in sequence order. */
+export const feedFrames = [
+  {
+    id: 1,
+    event: 'TASK_CREATED',
+    data: {
+      project_id: project.id,
+      task_id: taskDetailTask.id,
+      feed_sequence: 1,
+      source: 'task_event',
+      source_id: 'event-1',
+      event_type: 'TASK_CREATED',
+      payload_json: { title: taskDetailTask.title },
+      created_at: '2026-09-01T09:00:00Z',
+    },
+  },
+  {
+    id: 4,
+    event: 'CLARIFICATION_REQUESTED',
+    data: {
+      project_id: project.id,
+      task_id: taskDetailTask.id,
+      feed_sequence: 4,
+      source: 'task_event',
+      source_id: 'event-4',
+      event_type: 'CLARIFICATION_REQUESTED',
+      payload_json: {
+        deadline_at: '2026-09-01T13:00:00Z',
+        questions: [
+          {
+            id: 'q-scope',
+            text: 'Which branch should the change land on?',
+            kind: 'text',
+            options: [],
+            default: 'main',
+            defaultable: true,
+            rationale: 'The default branch is assumed when nobody answers.',
+            attention_version: 2,
+          },
+        ],
+      },
+      created_at: '2026-09-01T09:30:00Z',
+    },
+  },
+];
+
+export function sseBody(frames = feedFrames): string {
+  return frames
+    .map(
+      (frame) =>
+        `id: ${frame.id}\nevent: ${frame.event}\ndata: ${JSON.stringify(frame.data)}\n\n`,
+    )
+    .join('');
+}
+
+/** The feed and the artifact are not JSON routes, so they get their own installer. */
+export async function mockTaskStream(page: Page, body: string = sseBody()): Promise<void> {
+  await page.route(`**/api/v1/tasks/${taskDetailTask.id}/events`, async (route) => {
+    await route.fulfill({ status: 200, contentType: 'text/event-stream', body });
+  });
+  await page.route('**/api/v1/artifacts/**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'text/markdown', body: briefBody });
+  });
+}
 
 export const taskHandlers: Handlers = {
   [`/api/v1/tasks/${taskDetailTask.id}`]: () => taskDetail,
