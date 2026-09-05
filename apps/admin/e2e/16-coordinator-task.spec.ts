@@ -85,6 +85,18 @@ test.describe('Coordinator Task page', () => {
     const writes: string[] = [];
     const cancelBodies: Array<string | null> = [];
     const pauseScopes: Array<string | undefined> = [];
+    let releasePause = () => {};
+    let releaseResume = () => {};
+    let releaseCancel = () => {};
+    const pauseReady = new Promise<void>((resolve) => {
+      releasePause = resolve;
+    });
+    const resumeReady = new Promise<void>((resolve) => {
+      releaseResume = resolve;
+    });
+    const cancelReady = new Promise<void>((resolve) => {
+      releaseCancel = resolve;
+    });
     await selectProject(page);
     await mockCoordinatorApi(page, {
       [`/api/v1/tasks/${task.id}/thread`]: () => ({
@@ -95,15 +107,26 @@ test.describe('Coordinator Task page', () => {
         open_question_ids: [],
         pending_gate: null,
       }),
-      [`/api/v1/tasks/${task.id}/pause`]: () => ({ ...needsYouTask, status: 'PAUSED' }),
-      [`/api/v1/tasks/${task.id}/resume`]: () => ({ ...needsYouTask, status: 'PLAN_PROPOSED' }),
-      [`/api/v1/tasks/${task.id}/cancel`]: () => ({
-        ...needsYouTask,
-        status: 'CANCELLED',
-        board_column: 'done',
-      }),
     });
     recordWrites(page, writes);
+    await page.route(`**/api/v1/tasks/${task.id}/pause`, async (route) => {
+      await pauseReady;
+      await route.fulfill({ json: { ...needsYouTask, status: 'PAUSED' } });
+    });
+    await page.route(`**/api/v1/tasks/${task.id}/resume`, async (route) => {
+      await resumeReady;
+      await route.fulfill({ json: { ...needsYouTask, status: 'PLAN_PROPOSED' } });
+    });
+    await page.route(`**/api/v1/tasks/${task.id}/cancel`, async (route) => {
+      await cancelReady;
+      await route.fulfill({
+        json: {
+          ...needsYouTask,
+          status: 'CANCELLED',
+          board_column: 'done',
+        },
+      });
+    });
     page.on('request', (request) => {
       const url = new URL(request.url());
       if (request.method() === 'POST' && url.pathname === `/api/v1/tasks/${task.id}/pause`) {
@@ -120,12 +143,24 @@ test.describe('Coordinator Task page', () => {
       button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
+    const pauseButton = page.getByRole('button', { name: 'Pausing' });
+    await expect(pauseButton).toHaveAttribute('aria-busy', 'true');
+    await expect(pauseButton).toBeDisabled();
+    releasePause();
     await expect(page.getByTestId('task-status')).toHaveText('PAUSED');
 
     await page.getByRole('button', { name: 'Resume' }).click();
+    const resumeButton = page.getByRole('button', { name: 'Resuming' });
+    await expect(resumeButton).toHaveAttribute('aria-busy', 'true');
+    await expect(resumeButton).toBeDisabled();
+    releaseResume();
     await expect(page.getByTestId('task-status')).toHaveText('PLAN PROPOSED');
 
     await page.getByRole('button', { name: 'Cancel' }).click();
+    const cancelButton = page.getByRole('button', { name: 'Cancelling' });
+    await expect(cancelButton).toHaveAttribute('aria-busy', 'true');
+    await expect(cancelButton).toBeDisabled();
+    releaseCancel();
     await expect(page.getByTestId('task-status')).toHaveText('CANCELLED');
     expect(writes).toEqual([
       `/api/v1/tasks/${task.id}/pause`,
@@ -209,9 +244,41 @@ test.describe('Coordinator Task page', () => {
     await page.goto(`/tasks/${task.id}`);
     await page.getByRole('button', { name: 'Pause' }).click();
 
-    await expect(page.getByTestId('task-error')).toHaveText(
+    await expect(page.getByTestId('task-lifecycle-error')).toHaveText(
       'projection changed under the append',
     );
+  });
+
+  test('keeps the cancel refusal when the feed advances', async ({ page }) => {
+    let detailReads = 0;
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}`]: () => {
+        detailReads += 1;
+        return taskDetail;
+      },
+      [`/api/v1/tasks/${task.id}/thread`]: () => ({
+        task_id: task.id,
+        project_id: task.project_id,
+        brief_ref: null,
+        entries: [],
+        open_question_ids: [],
+        pending_gate: null,
+      }),
+    });
+    await mockTaskStream(page);
+    await page.route(`**/api/v1/tasks/${task.id}/cancel`, async (route) => {
+      await route.fulfill({ status: 409, json: { detail: 'task revision moved' } });
+    });
+
+    await page.goto(`/tasks/${task.id}`);
+    await expect(page.getByRole('heading', { name: needsYouTask.title })).toBeVisible();
+    await page.getByRole('button', { name: 'Cancel' }).click();
+
+    await expect(page.getByTestId('task-lifecycle-error')).toHaveText('task revision moved');
+    const before = detailReads;
+    await expect.poll(() => detailReads, { timeout: 15_000 }).toBeGreaterThan(before);
+    await expect(page.getByTestId('task-lifecycle-error')).toHaveText('task revision moved');
   });
 
   test('renders the not-found state for an unknown Task', async ({ page }) => {
@@ -489,6 +556,7 @@ test.describe('Coordinator Task page', () => {
     });
 
     await page.goto(`/tasks/${mirroredGateTask.task_id}`);
+    await expect(page.getByLabel('Note for merge:work-9:3')).toHaveCount(0);
     await page
       .getByTestId('gate-controls-merge:work-9:3')
       .getByRole('button', { name: 'Allow' })
@@ -526,6 +594,49 @@ test.describe('Coordinator Task page', () => {
     expect(requests[0].key).toMatch(/^[0-9a-f]{32}$/);
     expect(requests[0].scope).toBe(project.id);
     await expect(page.getByLabel('Message')).toHaveValue('');
+  });
+
+  test('sends the message once under a double click', async ({ page }) => {
+    const writes: string[] = [];
+    const requests: Array<{
+      body: unknown;
+      key: string | undefined;
+      scope: string | undefined;
+    }> = [];
+    let releaseMessage = () => {};
+    const messageReady = new Promise<void>((resolve) => {
+      releaseMessage = resolve;
+    });
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}/thread`]: () => thread });
+    await mockTaskStream(page);
+    recordWrites(page, writes);
+    await page.route(`**/api/v1/tasks/${task.id}/messages`, async (route) => {
+      requests.push({
+        body: JSON.parse(route.request().postData() ?? '{}'),
+        key: route.request().headers()['idempotency-key'],
+        scope: route.request().headers()['x-project-id'],
+      });
+      await messageReady;
+      await route.fulfill({ json: needsYouTask });
+    });
+
+    await page.goto(`/tasks/${task.id}`);
+    await page.getByLabel('Message').fill('Deploying after the gate.');
+    await page.getByRole('button', { name: 'Send message' }).evaluate((button) => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const button = page.getByRole('button', { name: 'Sending message' });
+    await expect(button).toHaveAttribute('aria-busy', 'true');
+    await expect(button).toBeDisabled();
+    releaseMessage();
+    await expect.poll(() => writes).toEqual([`/api/v1/tasks/${task.id}/messages`]);
+    expect(requests).toHaveLength(1);
+    expect(requests[0].body).toEqual({ text: 'Deploying after the gate.' });
+    expect(requests[0].key).toMatch(/^[0-9a-f]{32}$/);
+    expect(requests[0].scope).toBe(project.id);
   });
 
   test('reuses the Idempotency-Key when the first send fails', async ({ page }) => {
@@ -2309,6 +2420,36 @@ test.describe('Coordinator Task page', () => {
     releaseGate();
     await expect.poll(() => writes).toEqual([`/api/v1/tasks/${task.id}/gates/plan:${task.id}:1`]);
   });
+
+  for (const theme of ['light', 'dark'] as const) {
+    test(`a11y: ${theme} Task error states — zero WCAG AA violations`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' });
+      await selectProject(page);
+      await mockCoordinatorApi(page);
+      await page.route(`**/api/v1/tasks/${task.id}/thread`, async (route) => {
+        await route.fulfill({ status: 503, json: { detail: 'thread projection unavailable' } });
+      });
+      await page.route(`**/api/v1/tasks/${task.id}/cancel`, async (route) => {
+        await route.fulfill({ status: 409, json: { detail: 'task revision moved' } });
+      });
+
+      await page.goto(`/tasks/${task.id}`);
+      await expect(page.getByTestId('task-thread-error')).toHaveText(
+        'thread projection unavailable',
+      );
+      await page.getByRole('button', { name: 'Cancel' }).click();
+      await expect(page.getByTestId('task-lifecycle-error')).toHaveText('task revision moved');
+
+      const results = await new AxeBuilder({ page })
+        .include('main')
+        .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
+        .analyze();
+      expect(
+        results.violations,
+        `${theme} Task error violations:\n${JSON.stringify(results.violations, null, 2)}`,
+      ).toEqual([]);
+    });
+  }
 
   for (const theme of ['light', 'dark'] as const) {
     test(`a11y: ${theme} Task thread and plan — zero WCAG AA violations`, async ({ page }) => {

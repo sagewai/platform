@@ -394,7 +394,7 @@ test.describe('Work Control Console', () => {
     await expect(page.getByText('Approve production delivery?', { exact: true }).filter({ visible: true })).toBeVisible();
     const incidentBadge = page.getByText('EXTERNAL OUTCOME INCIDENT', { exact: true }).filter({ visible: true });
     await expect(incidentBadge).toBeVisible();
-    await expect(incidentBadge).toHaveClass(/text-destructive/);
+    await expect(incidentBadge).toHaveClass(/text-destructive-foreground/);
     await expect(page.getByText('Configured outcome regressed after completion.', { exact: true }).filter({ visible: true })).toBeVisible();
     await expect(
       page.getByRole('button', { name: 'Coordinator, 2 items need attention' }),

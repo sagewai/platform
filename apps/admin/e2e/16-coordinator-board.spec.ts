@@ -1,7 +1,9 @@
 import { test, expect } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 
 import {
   board,
+  clarifyingTask,
   doneTask,
   inboxTask,
   mockCoordinatorApi,
@@ -119,6 +121,43 @@ test.describe('Coordinator board', () => {
         (search) => search.includes('order_by=updated_at') && search.includes('descending=true'),
       ),
     ).toBe(true);
+  });
+
+  test('shows Load more in flight', async ({ page }) => {
+    let releasePage = () => {};
+    const pageReady = new Promise<void>((resolve) => {
+      releasePage = resolve;
+    });
+    await selectProject(page);
+    await mockCoordinatorApi(page);
+    await page.route(
+      (url) => url.pathname === '/api/v1/tasks',
+      async (route) => {
+        const url = new URL(route.request().url());
+        if (url.searchParams.get('cursor') === 'page-2') {
+          await pageReady;
+          await route.fulfill({ json: { tasks: [doneTask], next_cursor: null } });
+          return;
+        }
+        await route.fulfill({
+          json: {
+            tasks: [clarifyingTask, needsYouTask, inboxTask],
+            next_cursor: 'page-2',
+          },
+        });
+      },
+    );
+
+    await page.goto('/board');
+    await page.getByLabel('Kind').selectOption('batch');
+    await page.getByRole('button', { name: 'All', exact: true }).click();
+    await page.getByRole('button', { name: 'Load more' }).click();
+
+    const button = page.getByRole('button', { name: 'Loading more Tasks' });
+    await expect(button).toHaveAttribute('aria-busy', 'true');
+    await expect(button).toBeDisabled();
+    releasePage();
+    await expect(page.getByTestId(`task-card-${doneTask.task_id}`)).toBeVisible();
   });
 
   test('shows the API refusal when the board route fails', async ({ page }) => {
@@ -301,6 +340,41 @@ test.describe('Coordinator board', () => {
       'target does not match the template',
     );
   });
+
+  for (const theme of ['light', 'dark'] as const) {
+    test(`a11y: ${theme} board error states — zero WCAG AA violations`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' });
+      await selectProject(page);
+      await mockCoordinatorApi(page);
+      await page.route(
+        (url) => url.pathname === '/api/v1/tasks/board',
+        async (route) => {
+          await route.fulfill({ status: 503, json: { detail: 'project unavailable' } });
+        },
+      );
+
+      await page.goto('/board');
+      await expect(page.getByTestId('board-error')).toHaveText('project unavailable');
+      await page.route(
+        (url) => url.pathname === '/api/v1/tasks/intake',
+        async (route) => {
+          await route.fulfill({ status: 503, json: { detail: 'intake unavailable' } });
+        },
+      );
+      await page.getByLabel('Brief').fill('Ship the coordinator console');
+      await page.getByRole('button', { name: 'Preview' }).click();
+      await expect(page.getByTestId('composer-error')).toHaveText('intake unavailable');
+
+      const results = await new AxeBuilder({ page })
+        .include('main')
+        .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
+        .analyze();
+      expect(
+        results.violations,
+        `${theme} board error violations:\n${JSON.stringify(results.violations, null, 2)}`,
+      ).toEqual([]);
+    });
+  }
 });
 
 test.describe('Coordinator portfolio', () => {

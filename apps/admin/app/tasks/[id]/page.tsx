@@ -47,10 +47,13 @@ export default function TaskThreadPage({ params }: { params: Promise<{ id: strin
   const [message, setMessage] = useState('');
   const [messageError, setMessageError] = useState('');
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const messageKey = useRef<string | null>(null);
   const identityRef = useRef('');
 
   async function sendMessage() {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     setMessageError('');
     messageKey.current = messageKey.current ?? idempotencyKey();
@@ -62,6 +65,7 @@ export default function TaskThreadPage({ params }: { params: Promise<{ id: strin
     } catch (cause) {
       setMessageError((cause as Error).message);
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   }
@@ -100,7 +104,7 @@ export default function TaskThreadPage({ params }: { params: Promise<{ id: strin
       <div
         role="alert"
         data-testid="task-thread-error"
-        className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+        className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-foreground"
       >
         {error}
       </div>
@@ -147,7 +151,6 @@ export default function TaskThreadPage({ params }: { params: Promise<{ id: strin
                       {entry.answer ?? 'the recorded default'}
                     </p>
                   ) : (
-                    entry.decision === null &&
                     !entry.closed && (
                       <AnswerControls
                         taskId={id}

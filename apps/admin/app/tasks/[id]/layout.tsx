@@ -29,7 +29,8 @@ export default function TaskLayout({
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [lifecycleError, setLifecycleError] = useState('');
+  const [busy, setBusy] = useState<'pause' | 'resume' | 'cancel' | null>(null);
   const busyRef = useRef(false);
   const identityRef = useRef('');
   const needsProject = ready && currentSlug === null;
@@ -46,6 +47,7 @@ export default function TaskLayout({
     }
     if (identityChanged) {
       setDetail(null);
+      setLifecycleError('');
     }
     setError('');
     adminApi
@@ -67,8 +69,8 @@ export default function TaskLayout({
   async function run(action: 'pause' | 'resume' | 'cancel') {
     if (busyRef.current) return;
     busyRef.current = true;
-    setBusy(true);
-    setError('');
+    setBusy(action);
+    setLifecycleError('');
     try {
       const record =
         action === 'pause'
@@ -84,10 +86,10 @@ export default function TaskLayout({
       }[action];
       toast('success', `Task ${pastTense}: ${record.status}`);
     } catch (cause) {
-      setError((cause as Error).message);
+      setLifecycleError((cause as Error).message);
     } finally {
       busyRef.current = false;
-      setBusy(false);
+      setBusy(null);
     }
   }
 
@@ -148,19 +150,32 @@ export default function TaskLayout({
             <Badge data-testid="task-status" variant={statusVariant(detail.record.status)}>
               {displayLabel(detail.record.status).toUpperCase()}
             </Badge>
-            <Button size="sm" variant="outline" disabled={busy} onClick={() => void run('pause')}>
-              Pause
+            <Button
+              size="sm"
+              variant="outline"
+              aria-busy={busy === 'pause'}
+              disabled={busy !== null}
+              onClick={() => void run('pause')}
+            >
+              {busy === 'pause' ? 'Pausing' : 'Pause'}
             </Button>
-            <Button size="sm" variant="outline" disabled={busy} onClick={() => void run('resume')}>
-              Resume
+            <Button
+              size="sm"
+              variant="outline"
+              aria-busy={busy === 'resume'}
+              disabled={busy !== null}
+              onClick={() => void run('resume')}
+            >
+              {busy === 'resume' ? 'Resuming' : 'Resume'}
             </Button>
             <Button
               size="sm"
               variant="destructive"
-              disabled={busy}
+              aria-busy={busy === 'cancel'}
+              disabled={busy !== null}
               onClick={() => void run('cancel')}
             >
-              Cancel
+              {busy === 'cancel' ? 'Cancelling' : 'Cancel'}
             </Button>
             <Link
               href="/board"
@@ -176,9 +191,18 @@ export default function TaskLayout({
         <div
           role="alert"
           data-testid="task-error"
-          className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+          className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-foreground"
         >
           {error}
+        </div>
+      )}
+      {lifecycleError !== '' && (
+        <div
+          role="alert"
+          data-testid="task-lifecycle-error"
+          className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-foreground"
+        >
+          {lifecycleError}
         </div>
       )}
       {feed.error !== '' && <p className="m-0 text-sm text-muted-foreground">{feed.error}</p>}

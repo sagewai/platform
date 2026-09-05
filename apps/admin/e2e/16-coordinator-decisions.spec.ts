@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 
 import {
   clarifyingTask,
@@ -12,6 +13,13 @@ import {
   workDecision,
   workPending,
 } from './coordinator-mocks';
+import type { TaskDecisionItem } from '../utils/types';
+
+function decisionRowId(
+  item: Pick<TaskDecisionItem, 'attention_id' | 'task_id' | 'work_id'>,
+): string {
+  return `decision-row-${item.task_id ?? item.work_id}:${item.attention_id}`;
+}
 
 test.describe('Coordinator decisions inbox', () => {
   test('keeps the API order of the inbox', async ({ page }) => {
@@ -80,11 +88,11 @@ test.describe('Coordinator decisions inbox', () => {
 
     await page.goto('/decisions');
     await page
-      .getByTestId(`decision-row-${workDecision.attention_id}`)
+      .getByTestId(decisionRowId(workDecision))
       .getByRole('button', { name: 'Allow' })
       .click();
     await page
-      .getByTestId(`decision-row-${taskGateDecision.attention_id}`)
+      .getByTestId(decisionRowId(taskGateDecision))
       .getByRole('button', { name: 'Allow' })
       .click();
 
@@ -107,7 +115,7 @@ test.describe('Coordinator decisions inbox', () => {
     });
 
     await page.goto('/decisions');
-    const row = page.getByTestId(`decision-row-${taskQuestionDecision.attention_id}`);
+    const row = page.getByTestId(decisionRowId(taskQuestionDecision));
     await expect(row.getByRole('button', { name: 'Send answer' })).toBeVisible();
     await expect(row.getByRole('button', { name: 'Use default' })).toHaveCount(0);
     await row.getByLabel(`Answer to ${taskQuestionDecision.attention_id}`).fill('main');
@@ -165,12 +173,46 @@ test.describe('Coordinator decisions inbox', () => {
     await expect(page.locator('[data-testid^="decision-row-"]')).toHaveCount(3);
     const before = reads;
     await page
-      .getByTestId(`decision-row-${workDecision.attention_id}`)
+      .getByTestId(decisionRowId(workDecision))
       .getByRole('button', { name: 'Allow' })
       .click();
 
-    await expect(page.getByTestId(`decision-row-${workDecision.attention_id}`)).toHaveCount(0);
+    await expect(page.getByTestId(decisionRowId(workDecision))).toHaveCount(0);
     expect(reads).toBeGreaterThan(before);
+  });
+
+  test('renders clarification rows with the same attention id from different Tasks', async ({
+    page,
+  }) => {
+    const failures: string[] = [];
+    const secondQuestion = {
+      ...taskQuestionDecision,
+      task_id: 'task-8',
+      summary: 'Which branch should the second change land on?',
+    } satisfies TaskDecisionItem;
+    page.on('pageerror', (error) => failures.push(error.message));
+    page.on('console', (message) => {
+      if (message.type() === 'error') failures.push(message.text());
+    });
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      '/api/v1/tasks/decisions': () => ({
+        items: [taskQuestionDecision, secondQuestion],
+      }),
+    });
+
+    await page.goto('/decisions');
+
+    await expect(
+      page.locator('[data-testid^="decision-row-"][data-testid$=":q-scope"]'),
+    ).toHaveCount(2);
+    await expect(page.getByTestId(decisionRowId(taskQuestionDecision))).toContainText(
+      taskQuestionDecision.summary,
+    );
+    await expect(page.getByTestId(decisionRowId(secondQuestion))).toContainText(
+      secondQuestion.summary,
+    );
+    expect(failures).toEqual([]);
   });
 
   test('shows the empty state when nothing is owed', async ({ page }) => {
@@ -199,4 +241,30 @@ test.describe('Coordinator decisions inbox', () => {
     await expect(page.locator('[data-testid^="decision-row-"]')).toHaveCount(0);
     expect(decisionReads).toEqual([]);
   });
+
+  for (const theme of ['light', 'dark'] as const) {
+    test(`a11y: ${theme} decisions error state — zero WCAG AA violations`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' });
+      await selectProject(page);
+      await mockCoordinatorApi(page);
+      await page.route(
+        (url) => url.pathname === '/api/v1/tasks/decisions',
+        async (route) => {
+          await route.fulfill({ status: 503, json: { detail: 'inbox unavailable' } });
+        },
+      );
+
+      await page.goto('/decisions');
+
+      await expect(page.getByTestId('decisions-error')).toHaveText('inbox unavailable');
+      const results = await new AxeBuilder({ page })
+        .include('main')
+        .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
+        .analyze();
+      expect(
+        results.violations,
+        `${theme} decisions error violations:\n${JSON.stringify(results.violations, null, 2)}`,
+      ).toEqual([]);
+    });
+  }
 });

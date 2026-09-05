@@ -32,7 +32,7 @@ export function TaskComposer({ onCreated }: { onCreated: () => void }) {
   briefRef.current = brief;
 
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || currentSlug === null) return;
     let cancelled = false;
     Promise.all([adminApi.listTaskTemplates(), adminApi.getTaskDefaults()])
       .then(([catalogue, projectDefaults]) => {
@@ -186,7 +186,7 @@ export function TaskComposer({ onCreated }: { onCreated: () => void }) {
         )}
 
         {error !== '' && (
-          <p data-testid="composer-error" role="alert" className="m-0 text-sm text-destructive">
+          <p data-testid="composer-error" role="alert" className="m-0 text-sm text-foreground">
             {error}
           </p>
         )}

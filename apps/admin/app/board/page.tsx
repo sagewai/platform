@@ -184,7 +184,7 @@ export default function CoordinatorBoardPage() {
         <div
           role="alert"
           data-testid="board-error"
-          className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+          className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-foreground"
         >
           {error}
         </div>
@@ -291,8 +291,13 @@ export default function CoordinatorBoardPage() {
       )}
 
       {!needsProject && cursor !== null && (
-        <Button variant="outline" onClick={() => void loadMore()} disabled={loadingMore}>
-          Load more
+        <Button
+          variant="outline"
+          aria-busy={loadingMore}
+          onClick={() => void loadMore()}
+          disabled={loadingMore}
+        >
+          {loadingMore ? 'Loading more Tasks' : 'Load more'}
         </Button>
       )}
     </div>

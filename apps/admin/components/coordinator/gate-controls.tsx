@@ -6,6 +6,23 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { adminApi } from '@/utils/api';
 
+type GateDecisionArgs =
+  | {
+      taskId: string | null;
+      workId: string | null;
+      gateId: string;
+      decidedBy: 'task';
+      decision: 'allow' | 'deny';
+      note: string | null;
+    }
+  | {
+      taskId: string | null;
+      workId: string | null;
+      gateId: string;
+      decidedBy: 'work';
+      decision: 'allow' | 'deny';
+    };
+
 /**
  * Decide one gate, on the route its `decided_by` names.
  *
@@ -14,26 +31,21 @@ import { adminApi } from '@/utils/api';
  * something to read out of a gate id. The Work route decides `merge:` gates only, so the control
  * points every other Work gate at `sagewai work approve` instead of rendering buttons.
  */
-export async function decideGate(args: {
-  taskId: string | null;
-  workId: string | null;
-  gateId: string;
-  decidedBy: 'task' | 'work';
-  decision: 'allow' | 'deny';
-  note: string | null;
-}): Promise<void> {
-  const body = { decision: args.decision, note: args.note };
+export async function decideGate(args: GateDecisionArgs): Promise<void> {
   if (args.decidedBy === 'work') {
     if (args.workId === null) {
       throw new Error(`gate ${args.gateId} is decided on its Work, which this view does not name`);
     }
-    await adminApi.decideWorkGate(args.workId, args.gateId, body);
+    await adminApi.decideWorkGate(args.workId, args.gateId, { decision: args.decision });
     return;
   }
   if (args.taskId === null) {
     throw new Error(`gate ${args.gateId} is decided on its Task, which this view does not name`);
   }
-  await adminApi.decideTaskGate(args.taskId, args.gateId, body);
+  await adminApi.decideTaskGate(args.taskId, args.gateId, {
+    decision: args.decision,
+    note: args.note,
+  });
 }
 
 export function GateControls({
@@ -65,14 +77,18 @@ export function GateControls({
     setBusy(decision);
     onError('');
     try {
-      await decideGate({
-        taskId,
-        workId,
-        gateId,
-        decidedBy,
-        decision,
-        note: note === '' ? null : note,
-      });
+      if (decidedBy === 'work') {
+        await decideGate({ taskId, workId, gateId, decidedBy, decision });
+      } else {
+        await decideGate({
+          taskId,
+          workId,
+          gateId,
+          decidedBy,
+          decision,
+          note: note === '' ? null : note,
+        });
+      }
       setNote('');
       onDecided();
     } catch (cause) {
@@ -85,15 +101,17 @@ export function GateControls({
 
   return (
     <div className="mt-2 space-y-2" data-testid={`gate-controls-${gateId}`}>
-      <label className="flex flex-col gap-1 text-xs text-foreground">
-        {`Note for ${gateId}`}
-        <Input
-          className="max-w-md"
-          value={note}
-          placeholder="Optional note recorded on the thread"
-          onChange={(event) => setNote(event.target.value)}
-        />
-      </label>
+      {decidedBy === 'task' && (
+        <label className="flex flex-col gap-1 text-xs text-foreground">
+          {`Note for ${gateId}`}
+          <Input
+            className="max-w-md"
+            value={note}
+            placeholder="Optional note recorded on the thread"
+            onChange={(event) => setNote(event.target.value)}
+          />
+        </label>
+      )}
       <div className="flex gap-2">
         <Button
           size="sm"

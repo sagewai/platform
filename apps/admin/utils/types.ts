@@ -750,6 +750,8 @@ export interface Project {
 // ─── Work Control Plane types ───
 
 export type WorkStatus =
+  | 'COMPOSING'
+  | 'PLANNING'
   | 'ANALYZING'
   | 'DESIGNING'
   | 'READY_TO_IMPLEMENT'

@@ -336,7 +336,7 @@ export const adminApi = {
   decideWorkGate: (
     workId: string,
     gateId: string,
-    body: { decision: 'allow' | 'deny'; note: string | null },
+    body: { decision: 'allow' | 'deny' },
   ) =>
     taskWrite<{ work_id: string; gate_id: string; decision: 'allow' | 'deny' }>(
       `/api/v1/work/${encodeURIComponent(workId)}/gates/${encodeURIComponent(gateId)}`,

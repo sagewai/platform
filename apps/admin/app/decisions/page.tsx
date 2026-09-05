@@ -35,6 +35,10 @@ function isWorkItem(
   return item.task_id === null && item.work_id !== null;
 }
 
+function rowId(item: TaskDecisionItem): string {
+  return `${item.task_id ?? item.work_id}:${item.attention_id}`;
+}
+
 export default function DecisionsPage() {
   const { currentSlug, ready } = useProject();
   const { decisions, decisionsError, loading, refresh } = useWorkAttention();
@@ -88,7 +92,7 @@ export default function DecisionsPage() {
       ) : (
         <div className="space-y-3">
           {decisions.map((item) => (
-            <Card key={item.attention_id} data-testid={`decision-row-${item.attention_id}`}>
+            <Card key={rowId(item)} data-testid={`decision-row-${rowId(item)}`}>
               <CardHeader className="border-b">
                 <CardTitle className="flex flex-wrap items-center justify-between gap-2">
                   <h2 className="m-0 text-base font-medium">{item.summary}</h2>

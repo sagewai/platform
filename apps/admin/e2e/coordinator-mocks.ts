@@ -25,7 +25,7 @@ import type {
 } from '../utils/types';
 
 export const PAGES = ['/board', '/tasks', '/decisions', '/work'] as const;
-export type CoordinatorPagePath = (typeof PAGES)[number];
+type CoordinatorPagePath = (typeof PAGES)[number];
 
 export const project: Project = {
   id: 'project-console',
@@ -262,7 +262,7 @@ export async function waitForPageReady(page: Page, path: CoordinatorPagePath): P
     return;
   }
   if (path === '/decisions') {
-    await expect(page.getByTestId('decision-row-merge:work-9:3')).toBeVisible();
+    await expect(page.getByTestId('decision-row-task-3:merge:work-9:3')).toBeVisible();
     return;
   }
   await expect(page.getByText(workPending.summary).filter({ visible: true }).first()).toBeVisible();
@@ -271,7 +271,7 @@ export async function waitForPageReady(page: Page, path: CoordinatorPagePath): P
   ).toBeVisible();
 }
 
-export const templates: TaskTemplateCatalogue = {
+const templates: TaskTemplateCatalogue = {
   templates: [
     {
       id: 'software_delivery',
@@ -295,7 +295,7 @@ export const templates: TaskTemplateCatalogue = {
   reserved: ['event_triage', 'batch_extract'],
 };
 
-export const intakePreview: IntakePreview = {
+const intakePreview: IntakePreview = {
   template_id: 'software_delivery',
   template_version: '1',
   band: 'auto_route',
@@ -319,7 +319,7 @@ export const intakePreview: IntakePreview = {
   preview: 'Reads the repository, opens one pull request, spends at most $10, asks before merging.',
 };
 
-export const softwareTarget = {
+const softwareTarget = {
   kind: 'software',
   repository_path: '/srv/checkouts/platform',
   owner: 'sagewai',
@@ -342,9 +342,9 @@ export const taskBudget = {
   max_concurrent_works: 1,
 } satisfies Task['budget'];
 
-export const briefDigest = `sha256:${'a'.repeat(64)}`;
+const briefDigest = `sha256:${'a'.repeat(64)}`;
 
-export const taskDefaults: TaskDefaults = {
+const taskDefaults: TaskDefaults = {
   project_id: project.id,
   target: softwareTarget,
   execution: { route: 'local', fleet_org_id: null },
@@ -409,7 +409,7 @@ export function task(taskRecord: TaskRecord): Task {
   };
 }
 
-export const composerHandlers: Handlers = {
+const composerHandlers: Handlers = {
   '/api/v1/tasks/templates': () => templates,
   '/api/v1/tasks/defaults': () => taskDefaults,
   '/api/v1/tasks/intake': () => intakePreview,
@@ -611,7 +611,7 @@ export const thread = {
 export const briefBody = '# Weekly report\n\nDeliver the weekly report to the console sink.\n';
 
 /** One replay of the durable feed: the frames the Task page needs, in sequence order. */
-export const feedFrames = [
+const feedFrames = [
   {
     id: 1,
     event: 'TASK_CREATED',
@@ -675,7 +675,7 @@ export async function mockTaskStream(page: Page, body: string = sseBody()): Prom
   });
 }
 
-export const taskHandlers: Handlers = {
+const taskHandlers: Handlers = {
   [`/api/v1/tasks/${taskDetailTask.id}`]: () => taskDetail,
   [`/api/v1/tasks/${taskDetailTask.id}/events`]: () => '',
 };
@@ -702,7 +702,7 @@ export const answeredThread = {
   pending_gate: null,
 } satisfies TaskThread;
 
-export const answerHandlers: Handlers = {
+const answerHandlers: Handlers = {
   [`/api/v1/tasks/${taskDetailTask.id}/answers`]: () => needsYouTask,
 };
 
@@ -769,7 +769,7 @@ export const settledGateThread = {
   pending_gate: 'deploy_production:work-9:1',
 } satisfies TaskThread;
 
-export const gateHandlers: Handlers = {
+const gateHandlers: Handlers = {
   [`/api/v1/tasks/${taskDetailTask.id}/messages`]: () => needsYouTask,
   [`/api/v1/tasks/${taskDetailTask.id}/gates/plan:${taskDetailTask.id}:1`]: () => ({
     ...needsYouTask,
@@ -828,7 +828,7 @@ export const failedMergeAction = {
   detail: 'the merge was rejected',
 } satisfies TaskActionRecord;
 
-export const actionHandlers: Handlers = {
+const actionHandlers: Handlers = {
   [`/api/v1/tasks/${taskDetailTask.id}/actions`]: () => ({
     actions: [mergeAction, deliverAction, failedMergeAction],
   }),
@@ -874,7 +874,7 @@ export const activitySecondPage = {
   next_cursor: null,
 } satisfies TaskActivityPage;
 
-export const activityHandlers: Handlers = {
+const activityHandlers: Handlers = {
   [`/api/v1/tasks/${taskDetailTask.id}/activity`]: (url) =>
     url.searchParams.get('cursor') === 'activity-page-2'
       ? activitySecondPage
@@ -1023,7 +1023,7 @@ export const scheduledTelemetry = {
   scheduled: scheduledHealth,
 } satisfies TaskTelemetry;
 
-export const telemetryHandlers: Handlers = {
+const telemetryHandlers: Handlers = {
   [`/api/v1/tasks/${taskDetailTask.id}/telemetry`]: () => telemetry,
 };
 
@@ -1039,11 +1039,11 @@ export const trigger = {
   enabled: true,
 } satisfies TaskTriggerSpec;
 
-export const settingsHandlers: Handlers = {
+const settingsHandlers: Handlers = {
   '/api/v1/tasks/triggers': () => ({ triggers: [trigger] }),
 };
 
-export const baseHandlers: Handlers = {
+const baseHandlers: Handlers = {
   ...composerHandlers,
   ...taskHandlers,
   ...answerHandlers,
