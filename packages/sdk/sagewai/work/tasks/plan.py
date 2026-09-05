@@ -45,15 +45,15 @@ class MatrixItem(BaseModel):
 
     id: str = Field(min_length=1)
     statement: str = Field(min_length=1)
-    verification_kind: Literal["deterministic", "assessment"]
+    verification_kind: Literal["deterministic", "policy"]
     command: str | None = None
 
     @model_validator(mode="after")
     def _command_only_for_deterministic(self) -> MatrixItem:
         if self.verification_kind == "deterministic" and not self.command:
             raise ValueError("deterministic matrix items name a command")
-        if self.verification_kind == "assessment" and self.command is not None:
-            raise ValueError("assessment matrix items carry no command")
+        if self.verification_kind == "policy" and self.command is not None:
+            raise ValueError("judged matrix items carry no command")
         return self
 
 
@@ -160,7 +160,9 @@ def accept_plan(
                     f"matrix item {item.id!r} names {item.command!r}, not one of the locked verification commands"
                 )
     elif deterministic:
-        raise PlanRejectedError("report targets verify through the profile; matrix items must be assessments")
+        raise PlanRejectedError(
+            "report targets verify through the profile; matrix items are judged, not run"
+        )
     return AcceptedPlan(version=version, steps=ordered, acceptance_matrix=result.acceptance_matrix)
 
 

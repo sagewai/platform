@@ -178,7 +178,7 @@ class FakeProfileRunner:
                 matrix_results=tuple(
                     MatrixResult(item_id=item.id, passed=True)
                     for item in plan.acceptance_matrix
-                    if item.verification_kind == "assessment"
+                    if item.verification_kind != "deterministic"
                 ),
                 gaps=self.assessor_gaps,
                 verdict=self.assessor_verdict,

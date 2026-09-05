@@ -164,7 +164,7 @@ def _software_task(tmp_path: Path) -> Task:
 def _plan_with(
     *,
     deterministic: tuple[str, ...],
-    assessment: tuple[str, ...],
+    policy: tuple[str, ...],
 ) -> AcceptedPlan:
     criterion = ProposedAcceptanceCriterion(
         statement="the report exists",
@@ -197,9 +197,9 @@ def _plan_with(
                 MatrixItem(
                     id=item_id,
                     statement=f"{item_id} passes",
-                    verification_kind="assessment",
+                    verification_kind="policy",
                 )
-                for item_id in assessment
+                for item_id in policy
             ),
         ),
     )
@@ -218,7 +218,7 @@ async def test_the_assessor_merges_the_verifier_and_its_own_verdict(dialect_engi
     work_store = WorkStore(engine=dialect_engine)
     await work_store.init()
     task = _software_task(tmp_path)
-    plan = _plan_with(deterministic=("smoke",), assessment=("grounded",))
+    plan = _plan_with(deterministic=("smoke",), policy=("grounded",))
     run_id = f"{TaskAssessor.work_id(task, cycle=1, plan_version=1)}:assess:1"
     controller = _FakeController(
         {
@@ -276,7 +276,7 @@ async def test_a_failing_deterministic_item_forces_a_replan(dialect_engine, tmp_
     work_store = WorkStore(engine=dialect_engine)
     await work_store.init()
     task = _software_task(tmp_path)
-    plan = _plan_with(deterministic=("smoke",), assessment=("grounded",))
+    plan = _plan_with(deterministic=("smoke",), policy=("grounded",))
     run_id = f"{TaskAssessor.work_id(task, cycle=1, plan_version=1)}:assess:1"
     assessor = TaskAssessor(
         work_store=work_store,
@@ -343,7 +343,7 @@ async def test_deterministic_failure_blocks_the_assessor_work(dialect_engine, tm
             task,
             cycle=1,
             plan_version=1,
-            plan=_plan_with(deterministic=("smoke",), assessment=()),
+            plan=_plan_with(deterministic=("smoke",), policy=()),
             outcomes={"s1": "accepted"},
             workspace=await _scratch(tmp_path, task, cycle=1, plan_version=1),
             evidence=("git://abc",),
@@ -368,7 +368,7 @@ async def test_the_full_matrix_reaches_the_assessor_capsule(dialect_engine, tmp_
     await work_store.init()
     task = _report_task(tmp_path)
     matrix_ids = tuple(f"m{index}" for index in range(201))
-    plan = _plan_with(deterministic=(), assessment=matrix_ids)
+    plan = _plan_with(deterministic=(), policy=matrix_ids)
     run_id = f"{TaskAssessor.work_id(task, cycle=1, plan_version=1)}:assess:1"
     controller = _FakeController(
         {
@@ -422,7 +422,7 @@ async def test_a_missing_result_blocks_the_assessor_work(dialect_engine, tmp_pat
             task,
             cycle=1,
             plan_version=1,
-            plan=_plan_with(deterministic=(), assessment=("grounded",)),
+            plan=_plan_with(deterministic=(), policy=("grounded",)),
             outcomes={"s1": "accepted"},
             workspace=await _scratch(tmp_path, task, cycle=1, plan_version=1),
             evidence=(),
@@ -441,7 +441,7 @@ async def test_a_replan_assesses_the_same_cycle_as_a_new_work(dialect_engine, tm
     work_store = WorkStore(engine=dialect_engine)
     await work_store.init()
     task = _report_task(tmp_path)
-    plan = _plan_with(deterministic=(), assessment=("grounded",))
+    plan = _plan_with(deterministic=(), policy=("grounded",))
     assessed = []
     for plan_version in (1, 2):
         run_id = f"{TaskAssessor.work_id(task, cycle=1, plan_version=plan_version)}:assess:1"

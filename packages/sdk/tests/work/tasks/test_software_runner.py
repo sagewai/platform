@@ -796,7 +796,7 @@ async def test_assess_verifies_deterministic_items_at_the_supplied_merged_head_a
             MatrixItem(
                 id="readback",
                 statement="readback is correct",
-                verification_kind="assessment",
+                verification_kind="policy",
             ),
         ),
     )
