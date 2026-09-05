@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
 
 import {
   acceptedPlanDetail,
+  activityFirstPage,
+  activitySecondPage,
   answeredThread,
   briefBody,
   deliverAction,
@@ -1132,5 +1135,374 @@ test.describe('Coordinator Task page', () => {
       'project admin required',
     );
     await expect(page.getByTestId('action-row-merge:work-9:3')).toBeVisible();
+  });
+
+  test('lists operator activity and follows its cursor', async ({ page }) => {
+    const activityScopes: Array<string | undefined> = [];
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail });
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (request.method() === 'GET' && url.pathname === `/api/v1/tasks/${task.id}/activity`) {
+        activityScopes.push(request.headers()['x-project-id']);
+      }
+    });
+
+    await page.goto(`/tasks/${task.id}/activity`);
+
+    await expect(page.getByTestId('activity-row-work-9-work-9:implement:1-1')).toContainText(
+      'apply_patch',
+    );
+    await expect(page.getByTestId('activity-row-work-9-work-9:implement:1-1')).toContainText(
+      'codex',
+    );
+    await page.getByRole('button', { name: 'Load more' }).click();
+    await expect(page.getByTestId('activity-row-work-9-work-9:implement:1-3')).toContainText(
+      'Review found no blockers.',
+    );
+    await expect(page.getByRole('button', { name: 'Load more' })).toHaveCount(0);
+    expect(activityScopes).toContain(project.id);
+  });
+
+  test('sends the source and Work filters to the activity route', async ({ page }) => {
+    const queries: string[] = [];
+    const activityScopes: Array<string | undefined> = [];
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail,
+      [`/api/v1/tasks/${task.id}/activity`]: (url) => {
+        queries.push(url.search);
+        return activityFirstPage;
+      },
+    });
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (request.method() === 'GET' && url.pathname === `/api/v1/tasks/${task.id}/activity`) {
+        activityScopes.push(request.headers()['x-project-id']);
+      }
+    });
+
+    await page.goto(`/tasks/${task.id}/activity`);
+    await expect(page.getByTestId('activity-row-work-9-work-9:implement:1-1')).toBeVisible();
+    expect(new Set(queries)).toEqual(new Set(['?limit=200']));
+    await page.getByLabel('Source').selectOption('verifier');
+    await page.getByLabel('Work id').fill('work-9');
+    await page.getByRole('button', { name: 'Apply filters' }).click();
+
+    await expect.poll(() => queries.some((query) => query.includes('source=verifier'))).toBe(true);
+    await expect.poll(() => queries.some((query) => query.includes('work_id=work-9'))).toBe(true);
+    expect(activityScopes).toContain(project.id);
+  });
+
+  test('pages with the applied filters, not the half-typed ones', async ({ page }) => {
+    const queries: string[] = [];
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail,
+      [`/api/v1/tasks/${task.id}/activity`]: (url) => {
+        queries.push(url.search);
+        return url.searchParams.get('cursor') === 'activity-page-2'
+          ? activitySecondPage
+          : activityFirstPage;
+      },
+    });
+
+    await page.goto(`/tasks/${task.id}/activity`);
+    await page.getByLabel('Source').selectOption('verifier');
+    await page.getByRole('button', { name: 'Apply filters' }).click();
+    await expect.poll(() => queries.some((query) => query.includes('source=verifier'))).toBe(true);
+
+    await page.getByLabel('Work id').fill('work-9');
+    await page.getByRole('button', { name: 'Load more' }).click();
+
+    await expect
+      .poll(() => queries.filter((query) => query.includes('cursor=')))
+      .toEqual(['?source=verifier&cursor=activity-page-2&limit=200']);
+  });
+
+  test('drops an activity page that lands after the filters changed', async ({ page }) => {
+    let releasePage2 = () => {};
+    let page2Done = false;
+    const page2Held = new Promise<void>((resolve) => {
+      releasePage2 = resolve;
+    });
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail });
+    await page.route(
+      (url) => url.pathname === `/api/v1/tasks/${task.id}/activity`,
+      async (route) => {
+        const url = new URL(route.request().url());
+        if (url.searchParams.get('cursor') === 'activity-page-2') {
+          await page2Held;
+          await route.fulfill({ json: activitySecondPage });
+          page2Done = true;
+          return;
+        }
+        if (url.searchParams.get('source') === 'verifier') {
+          await route.fulfill({
+            json: {
+              items: [{ ...activityFirstPage.items[1], sequence: 7, summary: 'filtered line' }],
+              next_cursor: null,
+            },
+          });
+          return;
+        }
+        await route.fulfill({ json: activityFirstPage });
+      },
+    );
+
+    await page.goto(`/tasks/${task.id}/activity`);
+    await expect(page.getByTestId('activity-row-work-9-work-9:implement:1-1')).toBeVisible();
+    await page.getByRole('button', { name: 'Load more' }).click();
+    await page.getByLabel('Source').selectOption('verifier');
+    await page.getByRole('button', { name: 'Apply filters' }).click();
+    await expect(page.getByTestId('activity-row-work-9-work-9:implement:1-7')).toBeVisible();
+    releasePage2();
+
+    await expect.poll(() => page2Done).toBe(true);
+    await page.waitForTimeout(300);
+    await expect(page.getByTestId('activity-row-work-9-work-9:implement:1-3')).toHaveCount(0);
+    await expect(page.getByTestId('activity-row-work-9-work-9:implement:1-1')).toHaveCount(0);
+  });
+
+  test('says so when there is no operator activity yet', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail,
+      [`/api/v1/tasks/${task.id}/activity`]: () => ({ items: [], next_cursor: null }),
+    });
+
+    await page.goto(`/tasks/${task.id}/activity`);
+
+    await expect(page.getByRole('heading', { name: 'No activity' })).toBeVisible();
+  });
+
+  test('offers the next activity page when the first page is empty', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail });
+    await page.route(
+      (url) => url.pathname === `/api/v1/tasks/${task.id}/activity`,
+      async (route) => {
+        const url = new URL(route.request().url());
+        await route.fulfill({
+          json:
+            url.searchParams.get('cursor') === 'activity-page-2'
+              ? activitySecondPage
+              : { items: [], next_cursor: 'activity-page-2' },
+        });
+      },
+    );
+
+    await page.goto(`/tasks/${task.id}/activity`);
+
+    await expect(page.getByRole('heading', { name: 'No activity' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Load more' })).toBeVisible();
+    await page.getByRole('button', { name: 'Load more' }).click();
+    await expect(page.getByTestId('activity-row-work-9-work-9:implement:1-3')).toBeVisible();
+  });
+
+  test('shows the next activity page in flight', async ({ page }) => {
+    let releasePage2 = () => {};
+    const page2Held = new Promise<void>((resolve) => {
+      releasePage2 = resolve;
+    });
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail });
+    await page.route(
+      (url) => url.pathname === `/api/v1/tasks/${task.id}/activity`,
+      async (route) => {
+        const url = new URL(route.request().url());
+        if (url.searchParams.get('cursor') === 'activity-page-2') {
+          await page2Held;
+          await route.fulfill({ json: activitySecondPage });
+          return;
+        }
+        await route.fulfill({ json: activityFirstPage });
+      },
+    );
+
+    await page.goto(`/tasks/${task.id}/activity`);
+    await expect(page.getByTestId('activity-row-work-9-work-9:implement:1-1')).toBeVisible();
+    await page.getByRole('button', { name: 'Load more' }).click();
+
+    const button = page.getByRole('button', { name: 'Loading more activity' });
+    await expect(button).toHaveAttribute('aria-busy', 'true');
+    await expect(button).toBeDisabled();
+    releasePage2();
+    await expect(page.getByTestId('activity-row-work-9-work-9:implement:1-3')).toBeVisible();
+  });
+
+  test('downloads the loaded activity', async ({ page }) => {
+    let empty = true;
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail,
+      [`/api/v1/tasks/${task.id}/activity`]: () =>
+        empty ? { items: [], next_cursor: null } : activityFirstPage,
+    });
+
+    await page.goto(`/tasks/${task.id}/activity`);
+
+    const button = page.getByRole('button', { name: 'Download loaded activity' });
+    await expect(page.getByRole('heading', { name: 'No activity' })).toBeVisible();
+    await expect(button).toBeDisabled();
+    empty = false;
+    await page.getByRole('button', { name: 'Apply filters' }).click();
+    await expect(page.getByTestId('activity-row-work-9-work-9:implement:1-1')).toBeVisible();
+
+    const [download] = await Promise.all([page.waitForEvent('download'), button.click()]);
+    expect(download.suggestedFilename()).toBe(`${task.id}-activity.json`);
+    const path = await download.path();
+    expect(path).not.toBeNull();
+    const text = readFileSync(path as string, 'utf8');
+    expect(text).toContain(activityFirstPage.items[0].summary);
+  });
+
+  test('shows the activity refusal the API stated', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail });
+
+    await page.goto(`/tasks/${task.id}`);
+    await expect(page.getByRole('heading', { name: needsYouTask.title })).toBeVisible();
+
+    await page.route(
+      (url) => url.pathname === `/api/v1/tasks/${task.id}/activity`,
+      async (route) => {
+        await route.fulfill({
+          status: 503,
+          json: { detail: 'activity projection unavailable' },
+        });
+      },
+    );
+    await page.getByRole('link', { name: 'Activity' }).click();
+
+    await expect(page.getByTestId('task-activity-error')).toHaveText(
+      'activity projection unavailable',
+    );
+  });
+
+  test('re-reads the activity when the feed advances', async ({ page }) => {
+    let releaseStream = () => {};
+    let releaseActivityRead = () => {};
+    let activityRequests = 0;
+    const streamReady = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    const activityReadReady = new Promise<void>((resolve) => {
+      releaseActivityRead = resolve;
+    });
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail });
+    await page.route(
+      (url) => url.pathname === `/api/v1/tasks/${task.id}/activity`,
+      async (route) => {
+        activityRequests += 1;
+        if (activityRequests === 2) {
+          await activityReadReady;
+          await route.fulfill({ json: activitySecondPage });
+          return;
+        }
+        await route.fulfill({ json: activityFirstPage });
+      },
+    );
+    await page.route(`**/api/v1/tasks/${task.id}/events`, async (route) => {
+      await streamReady;
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: `id: 5\nevent: task.updated\ndata: ${JSON.stringify({
+          source: 'task_event',
+          project_id: project.id,
+          task_id: task.id,
+          feed_sequence: 5,
+          source_id: 'event-5',
+          event_type: 'TASK_STATUS_CHANGED',
+          payload_json: {},
+          created_at: '2026-09-01T11:35:00Z',
+        })}\n\n`,
+      });
+    });
+
+    await page.goto(`/tasks/${task.id}/activity`);
+    await expect(page.getByTestId('activity-row-work-9-work-9:implement:1-1')).toBeVisible();
+    const before = activityRequests;
+    releaseStream();
+
+    await expect.poll(() => activityRequests).toBeGreaterThan(before);
+    await expect(page.getByTestId('activity-row-work-9-work-9:implement:1-1')).toBeVisible();
+    releaseActivityRead();
+    await expect(page.getByTestId('activity-row-work-9-work-9:implement:1-3')).toBeVisible();
+  });
+
+  test('keeps the activity and states the refusal when a refetch fails', async ({ page }) => {
+    let releaseStream = () => {};
+    let activityRequests = 0;
+    const streamReady = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail,
+      [`/api/v1/tasks/${task.id}/activity`]: () => {
+        activityRequests += 1;
+        return activityFirstPage;
+      },
+    });
+    await page.route(`**/api/v1/tasks/${task.id}/events`, async (route) => {
+      await streamReady;
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: `id: 5\nevent: task.updated\ndata: ${JSON.stringify({
+          source: 'task_event',
+          project_id: project.id,
+          task_id: task.id,
+          feed_sequence: 5,
+          source_id: 'event-5',
+          event_type: 'TASK_STATUS_CHANGED',
+          payload_json: {},
+          created_at: '2026-09-01T11:35:00Z',
+        })}\n\n`,
+      });
+    });
+
+    await page.goto(`/tasks/${task.id}/activity`);
+    await expect(page.getByTestId('activity-row-work-9-work-9:implement:1-1')).toBeVisible();
+    const before = activityRequests;
+
+    await page.route(
+      (url) => url.pathname === `/api/v1/tasks/${task.id}/activity`,
+      async (route) => {
+        activityRequests += 1;
+        await route.fulfill({
+          status: 503,
+          json: { detail: 'activity projection unavailable' },
+        });
+      },
+    );
+    releaseStream();
+
+    await expect.poll(() => activityRequests).toBeGreaterThan(before);
+    await expect(page.getByTestId('task-activity-error')).toHaveText(
+      'activity projection unavailable',
+    );
+    await expect(page.getByTestId('activity-row-work-9-work-9:implement:1-1')).toBeVisible();
+  });
+
+  test('keeps the API order of the activity rows', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail,
+      [`/api/v1/tasks/${task.id}/activity`]: () => ({
+        items: [...activityFirstPage.items].reverse(),
+        next_cursor: null,
+      }),
+    });
+
+    await page.goto(`/tasks/${task.id}/activity`);
+
+    const rows = page.locator('[data-testid^="activity-row-"]');
+    await expect(rows.first()).toContainText('just smoke');
+    await expect(rows.last()).toContainText('apply_patch');
   });
 });

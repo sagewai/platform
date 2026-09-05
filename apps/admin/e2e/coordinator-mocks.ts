@@ -5,6 +5,7 @@ import type {
   Project,
   Task,
   TaskActionRecord,
+  TaskActivityPage,
   TaskBoard,
   TaskBudgetUsed,
   TaskDecisionItem,
@@ -16,6 +17,7 @@ import type {
   TaskThread,
   TaskTemplateCatalogue,
   ThreadEntry,
+  OperatorActivity,
 } from '../utils/types';
 
 export const project: Project = {
@@ -774,12 +776,58 @@ export const actionHandlers: Handlers = {
     acceptedPlanDetail.record,
 };
 
+function activity(overrides: Partial<OperatorActivity> = {}): OperatorActivity {
+  return {
+    project_id: project.id,
+    work_id: 'work-9',
+    run_id: 'work-9:implement:1',
+    sequence: 1,
+    at: '2026-09-01T10:00:00Z',
+    source: 'codex',
+    kind: 'tool_call',
+    summary: 'apply_patch packages/sdk/sagewai/work/tasks/views.py',
+    detail: null,
+    input_tokens: 1200,
+    output_tokens: 340,
+    cost_usd: null,
+    ...overrides,
+  };
+}
+
+export const activityFirstPage = {
+  items: [
+    activity({}),
+    activity({ sequence: 2, source: 'verifier', kind: 'command', summary: 'just smoke' }),
+  ],
+  next_cursor: 'activity-page-2',
+} satisfies TaskActivityPage;
+
+export const activitySecondPage = {
+  items: [
+    activity({
+      sequence: 3,
+      source: 'claude',
+      kind: 'message',
+      summary: 'Review found no blockers.',
+    }),
+  ],
+  next_cursor: null,
+} satisfies TaskActivityPage;
+
+export const activityHandlers: Handlers = {
+  [`/api/v1/tasks/${taskDetailTask.id}/activity`]: (url) =>
+    url.searchParams.get('cursor') === 'activity-page-2'
+      ? activitySecondPage
+      : activityFirstPage,
+};
+
 export const baseHandlers: Handlers = {
   ...composerHandlers,
   ...taskHandlers,
   ...answerHandlers,
   ...gateHandlers,
   ...actionHandlers,
+  ...activityHandlers,
   '/api/v1/tasks/board': () => board,
   '/api/v1/tasks': (url, method) => {
     if (method === 'POST') {
