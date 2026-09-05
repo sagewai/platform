@@ -150,7 +150,7 @@ export default function TaskPlanPage({ params }: { params: Promise<{ id: string 
           </CardTitle>
           <CardDescription className="text-foreground">
             What the assessor checks at the merged head. A deterministic item names the command
-            that decides it; an assessment item is read by the assessor.
+            that decides it; a judged item is read by the assessor.
           </CardDescription>
         </CardHeader>
         <CardContent>

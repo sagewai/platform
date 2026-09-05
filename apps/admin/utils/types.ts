@@ -1048,7 +1048,7 @@ export interface TaskPlanStep {
 export interface TaskMatrixItem {
   id: string;
   statement: string;
-  verification_kind: 'deterministic' | 'assessment';
+  verification_kind: 'deterministic' | 'policy';
   command: string | null;
 }
 
