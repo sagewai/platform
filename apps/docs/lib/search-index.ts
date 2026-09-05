@@ -43,7 +43,8 @@ export const SEARCH_INDEX: SearchEntry[] = [
     href: '/docs/get-started/quickstart',
     section: 'Get Started',
     description: 'End-to-end setup with sandbox, tools, and the admin panel.',
-    keywords: 'getting started setup sandbox claude code admin panel full quickstart',
+    keywords:
+      'getting started setup sandbox claude code admin panel full quickstart work coordinator task board decisions inbox sagewai task',
   },
   {
     title: 'Minimal setup — no sandbox',

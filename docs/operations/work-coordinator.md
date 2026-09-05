@@ -165,9 +165,10 @@ coordinator pages:
   Markdown file; press `Preview` to see the template, kind, schedule, questions
   intake would ask, and the plain-language summary before creating the Task.
   Target and execution come from the project's `task_defaults`.
-- **`/tasks`** — the same Tasks across every project the caller belongs to,
-  with a needs-you count per project. The fan-out is server-side from the
-  caller's memberships.
+- **`/tasks`** — the same Tasks across every project the caller can see (an
+  owner or admin sees every project of the organization; other members their
+  memberships), up to 20 Tasks per project with no paging, and a needs-you
+  count per project. The fan-out is server-side.
 - **`/tasks/{id}`** — one Task with six tabs: Thread shows the brief, each
   open question with its answer control and deadline line, with `Use default`
   only when the question is defaultable, the coordinator messages, gates with
@@ -187,16 +188,19 @@ coordinator pages:
   `attention_version` the item carries. The inbox never offers `Use default`:
   it lists only the questions that have no default, so a defaultable one is
   answered — or left to its default — on the Task's Thread tab.
-- **`/work`** — the project's active Work with its pending attention, the
-  surface this guide already described. It is the `Active Work` item in the
-  same `Coordinator` nav group, and `/decisions` links a Work item straight
-  to it; the Task pages name a Work id but do not link to it.
+- **`/work`** — the project's active Work with its pending attention: active
+  Work, events, approvals, blocked questions, degraded control, Evidence Board
+  references, workers, and delivery observations, read from the same backend
+  state as `status` and `pending`. It is the `Active Work` item in the same
+  `Coordinator` nav group; `/decisions` links a Work item that carries no gate
+  to its `/work/{work_id}` page; the Task pages name a Work id but do not link
+  to it.
 
 The header's `Pause`, `Resume`, and `Cancel` buttons call the same service
 methods as `sagewai task pause|resume|cancel`. A `merge:` gate belongs to the
 Work, so the console posts it to
 `POST /api/v1/work/{work_id}/gates/{gate_id}` exactly as `sagewai work approve`
-does; other Work gate classes are decided with `sagewai work approve`.
+does.
 
 The console does not yet have snooze or archive, server-side search, or the
 plan's `Advanced` view. The board search box filters only the pages already

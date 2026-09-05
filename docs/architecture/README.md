@@ -14,7 +14,7 @@ Every implementation plan and spec is checked against these five docs. If someth
 
 ## User-facing render
 
-The docs site at <https://docs.sagewai.ai> mirrors these five documents in user-facing tone under the **Architecture** section (6 pages: overview + the five chapters). Internal jargon (`Sealed-iii.A`, `Plan 1.5`, …) is replaced with descriptive prose; the conceptual model is identical. Sources:
+The docs site at <https://docs.sagewai.ai> mirrors these five documents in user-facing tone under the **Architecture** section (6 pages: overview + the five chapters). The evolution record is the exception: it is a decision record, so its page carries the table verbatim. Internal jargon (`Sealed-iii.A`, `Plan 1.5`, …) is replaced with descriptive prose; the conceptual model is identical. Sources:
 
 - `apps/docs/app/docs/architecture/page.mdx` — section index
 - `apps/docs/app/docs/architecture/runtime-topology/page.mdx`

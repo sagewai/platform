@@ -262,7 +262,7 @@ Sagewai is early software. Here is what is real today, what is experimental, and
 
 **Shipped**
 - **SDK** — agents, `@tool` calling, 100+ models via LiteLLM, typed memory, guardrails, and multi-stage workflows.
-- **Task coordinator** — one durable Task per goal: intake and clarification, a planned cycle
+- **Work coordinator** — one durable Task per goal: intake and clarification, a planned cycle
   of Work, gates a human decides, a spend ledger, schedules, and the console at `/board`.
 - **Fleet** — capability-based dispatch with project isolation; **Docker** (default) and **Kubernetes** sandbox backends.
 - **Observatory** — OpenTelemetry traces, metrics, and per-model / per-team cost tracking.
