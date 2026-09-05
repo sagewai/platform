@@ -1,8 +1,10 @@
 import type { Page } from '@playwright/test';
 import type {
   IntakePreview,
+  OperatorActivity,
   PendingAttention,
   Project,
+  StageAttemptTelemetry,
   Task,
   TaskActionRecord,
   TaskActivityPage,
@@ -16,8 +18,8 @@ import type {
   TaskRecord,
   TaskThread,
   TaskTemplateCatalogue,
+  TaskTelemetry,
   ThreadEntry,
-  OperatorActivity,
 } from '../utils/types';
 
 export const project: Project = {
@@ -467,6 +469,12 @@ export const acceptedPlanDetail = {
   plan: taskPlan,
 } satisfies TaskDetail;
 
+export const scheduledTaskDetail = {
+  task: task(scheduledTask),
+  record: { ...scheduledTask, plan_version: 1 },
+  plan: taskPlan,
+} satisfies TaskDetail;
+
 function threadEntry(overrides: Partial<ThreadEntry>): ThreadEntry {
   return {
     id: '1',
@@ -821,6 +829,152 @@ export const activityHandlers: Handlers = {
       : activityFirstPage,
 };
 
+const stageAttempts: StageAttemptTelemetry[] = [
+  {
+    role: 'implementer',
+    runtime: 'codex',
+    position: 1,
+    selection_note: null,
+    started_at: '2026-09-01T10:00:00Z',
+    duration_seconds: 92.5,
+    status: 'failed',
+    input_tokens: 1200,
+    output_tokens: 340,
+    cost_usd: null,
+    cost_known: false,
+    changed_files: 3,
+    diff_lines: 84,
+    verification_checks: [],
+    review_verdict: null,
+    finding_counts: {},
+    escalation_reason: 'escalated',
+  },
+  {
+    role: 'implementer',
+    runtime: 'claude',
+    position: 2,
+    selection_note: null,
+    started_at: '2026-09-01T10:05:00Z',
+    duration_seconds: 41,
+    status: 'succeeded',
+    input_tokens: 900,
+    output_tokens: 210,
+    cost_usd: 0.42,
+    cost_known: true,
+    changed_files: null,
+    diff_lines: null,
+    verification_checks: [],
+    review_verdict: null,
+    finding_counts: {},
+    escalation_reason: null,
+  },
+  {
+    role: 'reviewer',
+    runtime: 'codex',
+    position: 1,
+    selection_note: null,
+    started_at: '2026-09-01T10:12:00Z',
+    duration_seconds: 38,
+    status: 'succeeded',
+    input_tokens: 700,
+    output_tokens: 160,
+    cost_usd: null,
+    cost_known: false,
+    changed_files: null,
+    diff_lines: null,
+    verification_checks: [],
+    review_verdict: 'repair',
+    finding_counts: { major: 1 },
+    escalation_reason: null,
+  },
+  {
+    role: 'repairer',
+    runtime: 'codex',
+    position: 1,
+    selection_note: null,
+    started_at: '2026-09-01T10:18:00Z',
+    duration_seconds: null,
+    status: null,
+    input_tokens: null,
+    output_tokens: null,
+    cost_usd: null,
+    cost_known: false,
+    changed_files: null,
+    diff_lines: null,
+    verification_checks: [],
+    review_verdict: null,
+    finding_counts: {},
+    escalation_reason: null,
+  },
+];
+
+const scheduledHealth = {
+  cycles: [
+    {
+      cycle: 1,
+      status: 'succeeded',
+      completed_at: '2026-09-01T10:20:00Z',
+      duration_seconds: 1200,
+      usd_actual: '0.42',
+    },
+  ],
+  success_rate: 1,
+  consecutive_failures: 0,
+  last_success_at: '2026-09-01T10:20:00Z',
+  overdue: false,
+} satisfies NonNullable<TaskTelemetry['scheduled']>;
+
+export const telemetry = {
+  task_id: taskDetailTask.id,
+  project_id: project.id,
+  works: [
+    {
+      work_id: 'work-9',
+      stage_attempts: stageAttempts,
+      verification_runs: [
+        { attempt_id: 'work-9:verify:1', at: '2026-09-01T10:10:00Z', passed: true, checks: [] },
+      ],
+      stage_timeline: [{ stage: 'implement', status: 'completed', at: '2026-09-01T10:02:00Z' }],
+      attention_history: [],
+    },
+    {
+      work_id: 'work-10',
+      stage_attempts: [],
+      verification_runs: [],
+      stage_timeline: [],
+      attention_history: [],
+    },
+  ],
+  cycles: [
+    {
+      cycle: 1,
+      outcome: 'succeeded',
+      usd_actual: '0.42',
+      usd_reserved: '0',
+      usd_unknown: 2,
+      limits: taskBudget,
+      worst_case_next_attempt: null,
+      free_attempts: 0,
+      paid_attempts: 4,
+      by_device: { local: 4 },
+      burn_series: [{ at: '2026-09-01T10:05:00Z', usd_actual: '0.42' }],
+    },
+  ],
+  scheduled: null,
+  project: { escalation_rate_per_role: { implementer: 0.25 } },
+} satisfies TaskTelemetry;
+
+export const scheduledTelemetry = {
+  ...telemetry,
+  task_id: scheduledTask.task_id,
+  cycles: [{ ...telemetry.cycles[0], limits: scheduledTaskDetail.task.budget }],
+  scheduled: scheduledHealth,
+} satisfies TaskTelemetry;
+
+export const telemetryHandlers: Handlers = {
+  [`/api/v1/tasks/${taskDetailTask.id}/telemetry`]: () => telemetry,
+};
+
 export const baseHandlers: Handlers = {
   ...composerHandlers,
   ...taskHandlers,
@@ -828,6 +982,7 @@ export const baseHandlers: Handlers = {
   ...gateHandlers,
   ...actionHandlers,
   ...activityHandlers,
+  ...telemetryHandlers,
   '/api/v1/tasks/board': () => board,
   '/api/v1/tasks': (url, method) => {
     if (method === 'POST') {

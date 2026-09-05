@@ -17,6 +17,9 @@ import {
   needsYouTask,
   project,
   recordWrites,
+  scheduledTask,
+  scheduledTaskDetail,
+  scheduledTelemetry,
   selectProject,
   settledGateThread,
   sseBody,
@@ -24,9 +27,10 @@ import {
   taskDetail,
   taskDetailTask as task,
   taskPlan,
+  telemetry,
   thread,
 } from './coordinator-mocks';
-import type { TaskDetail } from '../utils/types';
+import type { TaskDetail, TaskTelemetry } from '../utils/types';
 
 test.describe('Coordinator Task page', () => {
   test('shows the header, the status and the six tabs', async ({ page }) => {
@@ -1504,5 +1508,300 @@ test.describe('Coordinator Task page', () => {
     const rows = page.locator('[data-testid^="activity-row-"]');
     await expect(rows.first()).toContainText('just smoke');
     await expect(rows.last()).toContainText('apply_patch');
+  });
+
+  test('renders spend and stage attempts', async ({ page }) => {
+    const telemetryRequests: Array<{ scope: string | undefined; search: string }> = [];
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail });
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (request.method() === 'GET' && url.pathname === `/api/v1/tasks/${task.id}/telemetry`) {
+        telemetryRequests.push({ scope: request.headers()['x-project-id'], search: url.search });
+      }
+    });
+
+    await page.goto(`/tasks/${task.id}/telemetry`);
+
+    const cycle = page.getByTestId('cycle-row-1');
+    await expect(cycle).toContainText('Actual$0.42');
+    await expect(cycle).toContainText('Reserved$0');
+    await expect(cycle).toContainText('unknown');
+    await expect(cycle).toContainText('0 free / 4 paid / 2 unpriced');
+    await expect(cycle).toContainText('By device');
+    await expect(cycle).toContainText('local x4');
+    const attempts = page.getByTestId('work-telemetry-work-9');
+    await expect(attempts).toContainText('implementer');
+    await expect(attempts).not.toContainText('rung 0');
+    await expect(attempts).toContainText('not priced');
+    await expect(attempts).toContainText('$0.42');
+    await expect(attempts).toContainText('escalated');
+    await expect(attempts.locator('tbody tr').nth(3)).toContainText('repairer');
+    await expect(attempts.locator('tbody tr').nth(3)).toContainText('running');
+    await expect(attempts.locator('tbody tr').nth(3)).toContainText('unknown/unknown');
+    await expect(attempts).toContainText('Verification: 1 of 1 runs passed.');
+    await expect(page.getByTestId('work-telemetry-work-10')).toContainText(
+      'No stage attempt has been recorded for this Work.',
+    );
+    await expect(page.getByTestId('schedule-health')).toHaveCount(0);
+    await expect(page.getByTestId('project-escalation')).toContainText('implementer 25%');
+    expect(telemetryRequests).toContainEqual({ scope: project.id, search: '' });
+  });
+
+  test('shows schedule health for a scheduled Task', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${scheduledTask.task_id}`]: () => scheduledTaskDetail,
+      [`/api/v1/tasks/${scheduledTask.task_id}/telemetry`]: () => scheduledTelemetry,
+      [`/api/v1/tasks/${scheduledTask.task_id}/events`]: () => '',
+    });
+
+    await page.goto(`/tasks/${scheduledTask.task_id}/telemetry`);
+
+    await expect(page.getByTestId('schedule-health')).toContainText('100%');
+    await expect(page.getByTestId('schedule-health')).toContainText('Consecutive failures');
+    await expect(page.getByTestId('schedule-health')).toContainText('0');
+    await expect(page.getByTestId('schedule-health')).toContainText('Overdue');
+    await expect(page.getByTestId('schedule-health')).toContainText('no');
+  });
+
+  test('says so when no telemetry is available yet', async ({ page }) => {
+    const emptyTelemetry = {
+      ...telemetry,
+      works: [],
+      cycles: [],
+      scheduled: null,
+      project: { escalation_rate_per_role: {} },
+    } satisfies TaskTelemetry;
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail,
+      [`/api/v1/tasks/${task.id}/telemetry`]: () => emptyTelemetry,
+    });
+
+    await page.goto(`/tasks/${task.id}/telemetry`);
+
+    await expect(page.getByRole('heading', { name: 'No telemetry yet' })).toBeVisible();
+  });
+
+  test('shows the telemetry refusal the API stated', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail });
+
+    await page.goto(`/tasks/${task.id}`);
+    await expect(page.getByRole('heading', { name: needsYouTask.title })).toBeVisible();
+
+    await page.route(
+      (url) => url.pathname === `/api/v1/tasks/${task.id}/telemetry`,
+      async (route) => {
+        await route.fulfill({
+          status: 503,
+          json: { detail: 'telemetry projection unavailable' },
+        });
+      },
+    );
+    await page.getByRole('link', { name: 'Telemetry' }).click();
+
+    await expect(page.getByTestId('task-telemetry-error')).toHaveText(
+      'telemetry projection unavailable',
+    );
+  });
+
+  test('does not show the empty state beside a refusal', async ({ page }) => {
+    const emptyTelemetry = {
+      ...telemetry,
+      works: [],
+      cycles: [],
+      scheduled: null,
+      project: { escalation_rate_per_role: {} },
+    } satisfies TaskTelemetry;
+    let releaseStream = () => {};
+    let telemetryRequests = 0;
+    const streamReady = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail,
+      [`/api/v1/tasks/${task.id}/telemetry`]: () => {
+        telemetryRequests += 1;
+        return emptyTelemetry;
+      },
+    });
+    await page.route(`**/api/v1/tasks/${task.id}/events`, async (route) => {
+      await streamReady;
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: `id: 5\nevent: task.updated\ndata: ${JSON.stringify({
+          source: 'task_event',
+          project_id: project.id,
+          task_id: task.id,
+          feed_sequence: 5,
+          source_id: 'event-5',
+          event_type: 'TASK_STATUS_CHANGED',
+          payload_json: {},
+          created_at: '2026-09-01T11:35:00Z',
+        })}\n\n`,
+      });
+    });
+
+    await page.goto(`/tasks/${task.id}/telemetry`);
+    await expect(page.getByRole('heading', { name: 'No telemetry yet' })).toBeVisible();
+    const before = telemetryRequests;
+
+    await page.route(
+      (url) => url.pathname === `/api/v1/tasks/${task.id}/telemetry`,
+      async (route) => {
+        telemetryRequests += 1;
+        await route.fulfill({
+          status: 503,
+          json: { detail: 'telemetry projection unavailable' },
+        });
+      },
+    );
+    releaseStream();
+
+    await expect.poll(() => telemetryRequests).toBeGreaterThan(before);
+    await expect(page.getByTestId('task-telemetry-error')).toHaveText(
+      'telemetry projection unavailable',
+    );
+    await expect(page.getByRole('heading', { name: 'No telemetry yet' })).toHaveCount(0);
+  });
+
+  test('re-reads the telemetry when the feed advances', async ({ page }) => {
+    let releaseStream = () => {};
+    let releaseTelemetryRead = () => {};
+    let telemetryRequests = 0;
+    const streamReady = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    const telemetryReadReady = new Promise<void>((resolve) => {
+      releaseTelemetryRead = resolve;
+    });
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail });
+    await page.route(
+      (url) => url.pathname === `/api/v1/tasks/${task.id}/telemetry`,
+      async (route) => {
+        telemetryRequests += 1;
+        if (telemetryRequests === 2) {
+          await telemetryReadReady;
+          await route.fulfill({
+            json: {
+              ...telemetry,
+              cycles: [{ ...telemetry.cycles[0], usd_actual: '0.84' }],
+            } satisfies TaskTelemetry,
+          });
+          return;
+        }
+        await route.fulfill({ json: telemetry });
+      },
+    );
+    await page.route(`**/api/v1/tasks/${task.id}/events`, async (route) => {
+      await streamReady;
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: `id: 5\nevent: task.updated\ndata: ${JSON.stringify({
+          source: 'task_event',
+          project_id: project.id,
+          task_id: task.id,
+          feed_sequence: 5,
+          source_id: 'event-5',
+          event_type: 'TASK_STATUS_CHANGED',
+          payload_json: {},
+          created_at: '2026-09-01T11:35:00Z',
+        })}\n\n`,
+      });
+    });
+
+    await page.goto(`/tasks/${task.id}/telemetry`);
+    await expect(page.getByTestId('cycle-row-1')).toContainText('$0.42');
+    const before = telemetryRequests;
+    releaseStream();
+
+    await expect.poll(() => telemetryRequests).toBeGreaterThan(before);
+    await expect(page.getByTestId('cycle-row-1')).toContainText('$0.42');
+    releaseTelemetryRead();
+    await expect(page.getByTestId('cycle-row-1')).toContainText('$0.84');
+  });
+
+  test('keeps the telemetry and states the refusal when a refetch fails', async ({ page }) => {
+    let releaseStream = () => {};
+    let failTelemetry = false;
+    let telemetryRequests = 0;
+    const streamReady = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail });
+    await page.route(
+      (url) => url.pathname === `/api/v1/tasks/${task.id}/telemetry`,
+      async (route) => {
+        telemetryRequests += 1;
+        if (failTelemetry) {
+          await route.fulfill({
+            status: 503,
+            json: { detail: 'telemetry projection unavailable' },
+          });
+          return;
+        }
+        await route.fulfill({ json: telemetry });
+      },
+    );
+    await page.route(`**/api/v1/tasks/${task.id}/events`, async (route) => {
+      await streamReady;
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: `id: 5\nevent: task.updated\ndata: ${JSON.stringify({
+          source: 'task_event',
+          project_id: project.id,
+          task_id: task.id,
+          feed_sequence: 5,
+          source_id: 'event-5',
+          event_type: 'TASK_STATUS_CHANGED',
+          payload_json: {},
+          created_at: '2026-09-01T11:35:00Z',
+        })}\n\n`,
+      });
+    });
+
+    await page.goto(`/tasks/${task.id}/telemetry`);
+    await expect(page.getByTestId('cycle-row-1')).toBeVisible();
+    const before = telemetryRequests;
+
+    failTelemetry = true;
+    releaseStream();
+
+    await expect.poll(() => telemetryRequests).toBeGreaterThan(before);
+    await expect(page.getByTestId('task-telemetry-error')).toHaveText(
+      'telemetry projection unavailable',
+    );
+    await expect(page.getByTestId('cycle-row-1')).toBeVisible();
+  });
+
+  test('keeps the API order of the stage attempts', async ({ page }) => {
+    const reversedTelemetry = {
+      ...telemetry,
+      works: [
+        {
+          ...telemetry.works[0],
+          stage_attempts: [...telemetry.works[0].stage_attempts].reverse(),
+        },
+      ],
+    } satisfies TaskTelemetry;
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail,
+      [`/api/v1/tasks/${task.id}/telemetry`]: () => reversedTelemetry,
+    });
+
+    await page.goto(`/tasks/${task.id}/telemetry`);
+
+    const rows = page.getByTestId('work-telemetry-work-9').locator('tbody tr');
+    await expect(rows.first()).toContainText('repairer');
+    await expect(rows.last()).toContainText('implementer');
   });
 });
