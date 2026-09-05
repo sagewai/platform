@@ -24,7 +24,8 @@ export function TaskComposer({ onCreated }: { onCreated: () => void }) {
   const [preview, setPreview] = useState<IntakePreview | null>(null);
   const [templates, setTemplates] = useState<TaskTemplateSummary[]>([]);
   const [defaults, setDefaults] = useState<TaskDefaults | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<'preview' | 'create' | null>(null);
+  const busyRef = useRef(false);
   const [error, setError] = useState('');
   const briefRef = useRef(brief);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -54,9 +55,10 @@ export function TaskComposer({ onCreated }: { onCreated: () => void }) {
   }
 
   async function runPreview() {
-    if (busy) return;
+    if (busyRef.current) return;
+    busyRef.current = true;
     const issued = brief;
-    setBusy(true);
+    setPending('preview');
     setError('');
     try {
       const next = await adminApi.previewTaskIntake(issued);
@@ -64,13 +66,15 @@ export function TaskComposer({ onCreated }: { onCreated: () => void }) {
     } catch (cause) {
       if (issued === briefRef.current) setError((cause as Error).message);
     } finally {
-      setBusy(false);
+      busyRef.current = false;
+      setPending(null);
     }
   }
 
   async function create() {
-    if (busy) return;
-    setBusy(true);
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setPending('create');
     setError('');
     try {
       const created = await adminApi.createTask(brief);
@@ -83,7 +87,8 @@ export function TaskComposer({ onCreated }: { onCreated: () => void }) {
     } catch (cause) {
       setError((cause as Error).message);
     } finally {
-      setBusy(false);
+      busyRef.current = false;
+      setPending(null);
     }
   }
 
@@ -190,12 +195,17 @@ export function TaskComposer({ onCreated }: { onCreated: () => void }) {
           <Button
             variant="outline"
             disabled={brief.trim() === ''}
+            aria-busy={pending === 'preview'}
             onClick={() => void runPreview()}
           >
-            Preview
+            {pending === 'preview' ? 'Previewing…' : 'Preview'}
           </Button>
-          <Button disabled={preview === null} onClick={() => void create()}>
-            Create Task
+          <Button
+            disabled={preview === null}
+            aria-busy={pending === 'create'}
+            onClick={() => void create()}
+          >
+            {pending === 'create' ? 'Creating…' : 'Create Task'}
           </Button>
         </div>
       </CardContent>

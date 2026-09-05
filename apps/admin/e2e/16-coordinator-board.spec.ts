@@ -6,6 +6,7 @@ import {
   inboxTask,
   mockCoordinatorApi,
   needsYouTask,
+  portfolio,
   scheduledTask,
   selectProject,
   task,
@@ -299,5 +300,63 @@ test.describe('Coordinator board', () => {
     await expect(page.getByTestId('composer-error')).toHaveText(
       'target does not match the template',
     );
+  });
+});
+
+test.describe('Coordinator portfolio', () => {
+  test('lists every project in the order returned by the portfolio route', async ({ page }) => {
+    const portfolioRequests: Array<{ scope: string | undefined; search: string }> = [];
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      '/api/v1/tasks/portfolio': () => ({ projects: [...portfolio.projects].reverse() }),
+    });
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (url.pathname === '/api/v1/tasks/portfolio') {
+        portfolioRequests.push({ scope: request.headers()['x-project-id'], search: url.search });
+      }
+    });
+
+    await page.goto('/tasks');
+
+    await expect(page.getByRole('heading', { name: 'Tasks across your projects' })).toBeVisible();
+    await expect.poll(() => portfolioRequests.length).toBeGreaterThan(0);
+    expect(portfolioRequests[0]).toEqual({ scope: 'project-console', search: '?limit=20' });
+    const cards = page.locator('[data-testid^="portfolio-project-"]');
+    await expect(cards.first()).toContainText('project-other');
+    await expect(page.getByTestId('portfolio-project-project-console')).toContainText(
+      '3 need you',
+    );
+    await expect(page.getByTestId('portfolio-project-project-other')).toContainText(doneTask.title);
+    await expect(
+      page
+        .getByTestId('portfolio-project-project-console')
+        .getByRole('link', { name: inboxTask.title }),
+    ).toHaveAttribute('href', `/tasks/${inboxTask.task_id}`);
+  });
+
+  test('shows the API refusal when the portfolio route fails', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page);
+    await page.route(
+      (url) => url.pathname === '/api/v1/tasks/portfolio',
+      async (route) => {
+        await route.fulfill({ status: 503, json: { detail: 'portfolio unavailable' } });
+      },
+    );
+
+    await page.goto('/tasks');
+
+    await expect(page.getByTestId('portfolio-error')).toHaveText('portfolio unavailable');
+    await expect(page.getByRole('heading', { name: 'No Tasks yet' })).toHaveCount(0);
+  });
+
+  test('shows the empty state when no project has a Task', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page, { '/api/v1/tasks/portfolio': () => ({ projects: [] }) });
+
+    await page.goto('/tasks');
+
+    await expect(page.getByRole('heading', { name: 'No Tasks yet' })).toBeVisible();
   });
 });

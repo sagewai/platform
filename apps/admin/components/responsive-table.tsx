@@ -14,7 +14,7 @@ interface ResponsiveTableProps {
 
 export function ResponsiveTable({ columns, rows, emptyMessage }: ResponsiveTableProps) {
   if (rows.length === 0 && emptyMessage) {
-    return <p className="text-sm text-text-muted py-lg text-center">{emptyMessage}</p>;
+    return <p className="text-sm text-muted-foreground py-lg text-center">{emptyMessage}</p>;
   }
 
   return (
@@ -28,7 +28,7 @@ export function ResponsiveTable({ columns, rows, emptyMessage }: ResponsiveTable
                 <th
                   key={col.key}
                   scope="col"
-                  className={`text-left py-2.5 px-3 text-xs text-text-muted font-semibold uppercase tracking-wide ${col.className ?? ''}`}
+                  className={`text-left py-2.5 px-3 text-xs text-muted-foreground font-semibold uppercase tracking-wide ${col.className ?? ''}`}
                 >
                   {col.label}
                 </th>
@@ -37,7 +37,7 @@ export function ResponsiveTable({ columns, rows, emptyMessage }: ResponsiveTable
           </thead>
           <tbody>
             {rows.map((row, i) => (
-              <tr key={i} className="border-b border-border last:border-0 hover:bg-bg-subtle transition-colors">
+              <tr key={i} className="border-b border-border last:border-0 hover:bg-muted/50 transition-colors">
                 {columns.map((col) => (
                   <td key={col.key} className={`py-2.5 px-3 ${col.className ?? ''}`}>
                     {row[col.key]}
@@ -52,10 +52,10 @@ export function ResponsiveTable({ columns, rows, emptyMessage }: ResponsiveTable
       {/* Mobile card layout (< sm) */}
       <div className="sm:hidden flex flex-col gap-3">
         {rows.map((row, i) => (
-          <div key={i} className="bg-bg-surface border border-border rounded-lg p-3">
+          <div key={i} className="bg-card border border-border rounded-lg p-3">
             {columns.map((col) => (
               <div key={col.key} className="flex justify-between items-start py-1.5">
-                <span className="text-xs text-text-muted font-medium shrink-0 mr-3">{col.label}</span>
+                <span className="text-xs text-muted-foreground font-medium shrink-0 mr-3">{col.label}</span>
                 <span className="text-sm text-right">{row[col.key]}</span>
               </div>
             ))}
