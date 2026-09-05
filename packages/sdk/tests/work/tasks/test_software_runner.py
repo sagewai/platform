@@ -133,7 +133,7 @@ def _stack_object(
         read_controller=read_controller or object(),
         read_capabilities=read_capabilities or object(),
         analysis_runtime=analysis_runtime or object(),
-        planner_runtime=planner_runtime or object(),
+        planner_runtime=planner_runtime or SimpleNamespace(name="claude"),
         verifier=verifier or object(),
     )
 
