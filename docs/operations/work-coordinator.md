@@ -355,7 +355,12 @@ Fleet envelope.
 Local runtimes redact only credential values handed to the runtime through
 scoped credentials. Fleet runs redact nothing because worker-local CLI
 credentials are unknown to the platform and Fleet capabilities carry no
-credential refs. Operators must keep secrets out of worker CLI output.
+credential refs. Operators must keep secrets out of worker CLI output. When a native CLI exits non-zero, the Work result's summary is `exit <code>: <the last line the
+CLI wrote>` — its last stderr line, or, when the CLI reported the failure on stdout and wrote
+nothing to stderr, the last activity line. That sentence is what the Task thread shows, so an
+expired `claude` login reads as `exit 1: Failed to authenticate: OAuth session expired` instead
+of an empty reason. The full streams stay in the archived NDJSON activity log and in
+`work_activity`.
 
 When a Work record has `profile_context["task_id"]`, activity ingestion also
 mirrors entries into `task_feed`. `GET /api/v1/tasks/{id}/events` streams that
