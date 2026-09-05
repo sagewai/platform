@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 import {
+  acceptedPlanDetail,
   answeredThread,
   briefBody,
   mirroredGateTask,
@@ -16,6 +17,7 @@ import {
   task as makeTask,
   taskDetail,
   taskDetailTask as task,
+  taskPlan,
   thread,
 } from './coordinator-mocks';
 import type { TaskDetail } from '../utils/types';
@@ -652,5 +654,163 @@ test.describe('Coordinator Task page', () => {
     await expect.poll(() => reads, { timeout: 10_000 }).toBeGreaterThan(before);
 
     await expect(page.getByLabel('Message')).toHaveValue('Half-typed.');
+  });
+
+  test('renders the accepted plan as a checklist with its acceptance matrix', async ({ page }) => {
+    const detailScopes: Array<string | undefined> = [];
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail });
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (request.method() === 'GET' && url.pathname === `/api/v1/tasks/${task.id}`) {
+        detailScopes.push(request.headers()['x-project-id']);
+      }
+    });
+
+    await page.goto(`/tasks/${task.id}/plan`);
+
+    await expect(page.getByRole('heading', { name: 'Plan version 1' })).toBeVisible();
+    const first = page.getByTestId('plan-step-step-1');
+    await expect(first).toContainText('Add the coordinator board');
+    await expect(first).toContainText('Render the five columns from the board route.');
+    await expect(first).toContainText('The board renders five columns.');
+    await expect(first).toContainText('apps/admin/app/board');
+    await expect(first).toContainText('risk low');
+    const second = page.getByTestId('plan-step-step-2');
+    await expect(second).toContainText('after step-1');
+    const matrix = page.getByTestId('acceptance-matrix');
+    await expect(matrix).toContainText(
+      'pnpm --filter @sagewai/admin exec playwright test 16-coordinator',
+    );
+    await expect(matrix).toContainText('assessment');
+    expect(detailScopes).toContain(project.id);
+  });
+
+  test('says so when no plan is accepted yet', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page);
+
+    await page.goto(`/tasks/${task.id}/plan`);
+
+    await expect(page.getByRole('heading', { name: 'No accepted plan' })).toBeVisible();
+  });
+
+  test('shows the plan refusal the API stated', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page);
+
+    await page.goto(`/tasks/${task.id}`);
+    await expect(page.getByRole('heading', { name: needsYouTask.title })).toBeVisible();
+
+    await page.route(`**/api/v1/tasks/${task.id}`, async (route) => {
+      await route.fulfill({ status: 503, json: { detail: 'plan projection unavailable' } });
+    });
+    await page.getByRole('link', { name: 'Plan' }).click();
+
+    await expect(page.getByTestId('task-plan-error')).toHaveText('plan projection unavailable');
+  });
+
+  test('re-reads the accepted plan when the feed advances', async ({ page }) => {
+    let releaseStream = () => {};
+    let feedDelivered = false;
+    let detailResponses = 0;
+    const streamReady = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}`]: () => {
+        detailResponses += 1;
+        return feedDelivered
+          ? {
+              ...acceptedPlanDetail,
+              record: { ...acceptedPlanDetail.record, plan_version: 2 },
+              plan: { ...taskPlan, version: 2 },
+            }
+          : acceptedPlanDetail;
+      },
+    });
+    await page.route(`**/api/v1/tasks/${task.id}/events`, async (route) => {
+      await streamReady;
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: `id: 5\nevent: task.updated\ndata: ${JSON.stringify({
+          source: 'task_event',
+          project_id: project.id,
+          task_id: task.id,
+          feed_sequence: 5,
+          source_id: 'event-5',
+          event_type: 'TASK_PLAN_ACCEPTED',
+          payload_json: {},
+          created_at: '2026-09-01T11:35:00Z',
+        })}\n\n`,
+      });
+    });
+
+    await page.goto(`/tasks/${task.id}/plan`);
+    await expect(page.getByRole('heading', { name: 'Plan version 1' })).toBeVisible();
+    const before = detailResponses;
+    feedDelivered = true;
+    releaseStream();
+
+    await expect(page.getByRole('heading', { name: 'Plan version 2' })).toBeVisible();
+    expect(detailResponses).toBeGreaterThan(before);
+  });
+
+  test('keeps the plan and states the refusal when a refetch fails', async ({ page }) => {
+    let releaseStream = () => {};
+    const streamReady = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail,
+    });
+    await page.route(`**/api/v1/tasks/${task.id}/events`, async (route) => {
+      await streamReady;
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: `id: 5\nevent: task.updated\ndata: ${JSON.stringify({
+          source: 'task_event',
+          project_id: project.id,
+          task_id: task.id,
+          feed_sequence: 5,
+          source_id: 'event-5',
+          event_type: 'TASK_PLAN_ACCEPTED',
+          payload_json: {},
+          created_at: '2026-09-01T11:35:00Z',
+        })}\n\n`,
+      });
+    });
+
+    await page.goto(`/tasks/${task.id}/plan`);
+    await expect(page.getByTestId('plan-step-step-1')).toBeVisible();
+
+    await page.route(`**/api/v1/tasks/${task.id}`, async (route) => {
+      await route.fulfill({ status: 503, json: { detail: 'plan projection unavailable' } });
+    });
+    releaseStream();
+
+    await expect(page.getByTestId('task-plan-error')).toHaveText('plan projection unavailable');
+    await expect(page.getByTestId('plan-step-step-1')).toBeVisible();
+  });
+
+  test('keeps the API order of the plan steps', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}`]: () =>
+        ({
+          ...acceptedPlanDetail,
+          plan: { ...taskPlan, steps: [...taskPlan.steps].reverse() },
+        }) satisfies TaskDetail,
+    });
+
+    await page.goto(`/tasks/${task.id}/plan`);
+
+    const steps = page.locator('[data-testid^="plan-step-"]');
+    await expect(steps.first()).toContainText('Wire the decisions inbox');
+    await expect(steps.last()).toContainText('Add the coordinator board');
   });
 });

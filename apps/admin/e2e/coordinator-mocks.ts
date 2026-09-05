@@ -9,6 +9,7 @@ import type {
   TaskDecisionItem,
   TaskDefaults,
   TaskDetail,
+  TaskPlan,
   TaskPortfolio,
   TaskRecord,
   TaskThread,
@@ -390,7 +391,78 @@ export const taskDetailTask = {
   },
 } satisfies Task;
 
+export const taskPlan = {
+  version: 1,
+  steps: [
+    {
+      id: 'step-1',
+      title: 'Add the coordinator board',
+      goal: 'Render the five columns from the board route.',
+      allowed_scope: ['apps/admin/app/board'],
+      acceptance_criteria: [
+        { statement: 'The board renders five columns.', verification_kind: 'deterministic' },
+        { statement: 'The copy reads as one voice.', verification_kind: 'policy' },
+      ],
+      constraints: ['No new dependency.'],
+      non_goals: ['Snooze and archive.'],
+      risk: 'low',
+      design_required: false,
+      depends_on: [],
+      domain: 'ui',
+      size: 'm',
+    },
+    {
+      id: 'step-2',
+      title: 'Wire the decisions inbox',
+      goal: 'Decide gates and answer questions in place.',
+      allowed_scope: ['apps/admin/app/decisions'],
+      acceptance_criteria: [
+        {
+          statement: 'A gate is decided on the route its decided_by names.',
+          verification_kind: 'deterministic',
+        },
+      ],
+      constraints: [],
+      non_goals: [],
+      risk: 'medium',
+      design_required: false,
+      depends_on: ['step-1'],
+      domain: 'ui',
+      size: 's',
+    },
+  ],
+  acceptance_matrix: [
+    {
+      id: 'matrix-1',
+      statement: 'The console suite passes.',
+      verification_kind: 'deterministic',
+      command: 'pnpm --filter @sagewai/admin exec playwright test 16-coordinator',
+    },
+    {
+      id: 'matrix-2',
+      statement: 'The board reads as a calm surface.',
+      verification_kind: 'assessment',
+      command: null,
+    },
+  ],
+} satisfies TaskPlan;
+
 export const taskDetail = { task: taskDetailTask, record: needsYouTask, plan: null } satisfies TaskDetail;
+
+/** The same Task one gate later: version 1 accepted, so the detail route carries the plan. */
+export const acceptedPlanDetail = {
+  task: taskDetailTask,
+  record: {
+    ...needsYouTask,
+    status: 'EXECUTING',
+    board_column: 'in_progress',
+    attention_owner: 'system',
+    waiting_reason: 'working',
+    pending_gate: null,
+    plan_version: 1,
+  },
+  plan: taskPlan,
+} satisfies TaskDetail;
 
 function threadEntry(overrides: Partial<ThreadEntry>): ThreadEntry {
   return {
