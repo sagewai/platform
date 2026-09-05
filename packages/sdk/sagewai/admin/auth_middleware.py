@@ -84,8 +84,8 @@ def _hash_fleet_secret(raw: str) -> str:
 # all (reads would leak across projects) — gated org-admin as a documented interim
 # until they grow a project_id (then move them to the project-scoped path). This is
 # central + covers GETs, so it can't be missed per-handler. Project-scoped prefixes
-# (providers, admin/connections, playground, admin/runs, prompts, autopilot
-# missions, admin/projects sandbox-defaults, admin/workflows replay, admin/directives
+# (providers, admin/connections, playground, admin/runs, prompts, admin/projects
+# sandbox-defaults, admin/workflows replay, admin/directives
 # approvals|evaluations|runs) are deliberately NOT here — they enforce isolation at
 # the data layer and are member-writable.
 _MULTI_ORG_PREFIXES = (

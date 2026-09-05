@@ -193,7 +193,7 @@ def require_org_admin(ctx: RequestContext) -> None:
 
     The bounded set of org/system surfaces (org + project settings, API tokens,
     sealed/security config, credential revocation, directive policies, fleet
-    enrollment, autopilot enable/disable, …) must never be reachable by a plain
+    enrollment, …) must never be reachable by a plain
     project member. Raises :class:`PermissionDeniedError` (403) otherwise. Project
     *isolation* is the data layer's job; this is purely the org-authority gate.
     """
