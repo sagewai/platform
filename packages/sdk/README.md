@@ -91,7 +91,7 @@ The Work control plane is the primary product surface. Existing SDK subsystems a
 - **Work** — durable WorkItems and contracts, Evidence Board retrieval, disposable Codex/Claude operators, deterministic verification, independent review/repair, GitHub gates, pending attention, and restart recovery.
 - **Fleet** — capability-based, project-scoped execution for Work stages on machines whose Codex and Claude credentials stay local; standalone agent-task dispatch also remains available.
 - **Admin and backend** — the Work Control Console and canonical project-scoped API, alongside retained administration surfaces.
-- **Agent SDK, workflows, Autopilot, Sealed, Observatory, and Training Loop** — retained and tested capabilities, parked as the primary getting-started narrative while Work is the product center.
+- **Agent SDK, workflows, Sealed, Observatory, and Training Loop** — retained and tested capabilities, parked as the primary getting-started narrative while Work is the product center.
 
 ## Examples
 
