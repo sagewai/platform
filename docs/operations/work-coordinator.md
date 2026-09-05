@@ -692,8 +692,8 @@ control stops new side effects.
   send model credentials or harness backend configuration to the control plane.
 - **Control degraded:** restore the failed authority, observability, or reversibility
   precondition. A successful HTTP status with stale observations is still degraded. A Task also
-  reaches `CONTROL_DEGRADED` when its planning or assessment stage raises — a verifier image that
-  is not digest-pinned, an unreachable repository, a missing CLI: the thread carries the command
+  reaches `CONTROL_DEGRADED` when its planning or assessment stage raises — an expired CLI login,
+  an unreachable repository, an unreadable brief: the thread carries the command
   and the exception, the Task leaves the active set, and nothing drives it again until a human
   moves it (a Task pins its target at create, so a defaults fix needs a new Task). If such a Task
   was paused, `resume` returns it to `CONTROL_DEGRADED`; cancel and recreate is the way out. A step
