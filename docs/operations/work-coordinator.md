@@ -474,6 +474,11 @@ cost after it. Crossing any limit — works, attempts, re-plans, seconds, or dol
 the Task to `BUDGET_EXHAUSTED` and asks you. Codex attempts are counted, never priced.
 Telemetry Decimal fields, including spend, are JSON strings.
 
+A planner result the contract rejects is re-asked with the validator's error at most twice before
+the Task blocks. Each re-ask is a full stage attempt: it reserves and settles its own spend and
+counts against `max_stage_attempts_per_cycle`, so a plan that needs both repairs costs three
+Claude attempts and shows as three rows on the Telemetry tab.
+
 Schedules and health: a scheduled Task fires at its cron in its own timezone, once per fire
 even when the backend was down. Three consecutive failed cycles pause the schedule; a single
 failed cycle is retried, counted against the budget; a cost or duration spike, or a success
