@@ -8,6 +8,7 @@ import type {
   TaskBudgetUsed,
   TaskDecisionItem,
   TaskDefaults,
+  TaskDetail,
   TaskPortfolio,
   TaskRecord,
   TaskTemplateCatalogue,
@@ -76,6 +77,7 @@ export const needsYouTask = record({
   attention_owner: 'user',
   waiting_reason: 'gate:plan:task-2:1',
   pending_gate: 'plan:task-2:1',
+  tracking_issue_url: 'https://github.com/sagewai/platform/issues/42',
   plan_version: 0,
   updated_at: '2026-09-01T11:30:00Z',
 });
@@ -269,7 +271,7 @@ export const intakePreview: IntakePreview = {
   preview: 'Reads the repository, opens one pull request, spends at most $10, asks before merging.',
 };
 
-const softwareTarget = {
+export const softwareTarget = {
   kind: 'software',
   repository_path: '/srv/checkouts/platform',
   owner: 'sagewai',
@@ -278,6 +280,21 @@ const softwareTarget = {
   verification_image: 'ghcr.io/sagewai/verify:1',
   verification_commands: ['just smoke'],
 } satisfies Task['target'];
+
+export const taskBudget = {
+  max_works_per_cycle: 12,
+  max_stage_attempts_per_cycle: 60,
+  max_attempts_per_stage: 3,
+  max_replans: 2,
+  max_cycle_duration_seconds: 28800,
+  max_cycle_usd: '10.00',
+  claude_max_budget_usd_per_attempt: '5.00',
+  harness_max_tokens_per_attempt: 200000,
+  harness_max_tool_calls_per_attempt: 60,
+  max_concurrent_works: 1,
+} satisfies Task['budget'];
+
+export const briefDigest = `sha256:${'a'.repeat(64)}`;
 
 export const taskDefaults: TaskDefaults = {
   project_id: project.id,
@@ -350,8 +367,37 @@ export const composerHandlers: Handlers = {
   '/api/v1/tasks/intake': () => intakePreview,
 };
 
+export const taskDetailTask = {
+  ...task(needsYouTask),
+  brief_ref: {
+    project_id: project.id,
+    digest: briefDigest,
+    media_type: 'text/markdown',
+    size_bytes: 42,
+    storage_ref: `artifact://${briefDigest}`,
+    created_at: '2026-09-01T09:00:00Z',
+    created_by: 'admin',
+  },
+  slots: { repository: 'sagewai/platform' },
+  budget: taskBudget,
+  authority: {
+    plan: 'require',
+    merge: 'by_reversibility',
+    replan: 'by_reversibility',
+    deliver: 'by_reversibility',
+  },
+} satisfies Task;
+
+export const taskDetail = { task: taskDetailTask, record: needsYouTask, plan: null } satisfies TaskDetail;
+
+export const taskHandlers: Handlers = {
+  [`/api/v1/tasks/${taskDetailTask.id}`]: () => taskDetail,
+  [`/api/v1/tasks/${taskDetailTask.id}/events`]: () => '',
+};
+
 export const baseHandlers: Handlers = {
   ...composerHandlers,
+  ...taskHandlers,
   '/api/v1/tasks/board': () => board,
   '/api/v1/tasks': (url, method) => {
     if (method === 'POST') {
@@ -395,6 +441,14 @@ export async function mockCoordinatorApi(page: Page, handlers: Handlers = {}): P
     const handler = all[pathname];
     if (handler === undefined) {
       await route.fulfill({ status: 404, json: { detail: `unmocked ${pathname}` } });
+      return;
+    }
+    if (pathname.endsWith('/events')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: String(handler(url, route.request().method())),
+      });
       return;
     }
     await route.fulfill({ json: handler(url, route.request().method()) });
