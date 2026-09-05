@@ -190,6 +190,14 @@ class RoutingPolicy(BaseModel):
         return value
 
 
+HONOURED_ROLES = frozenset({RoleAlias.PLANNER})
+"""The roles the coordinator resolves from a project's policy today (section 9.1).
+
+The rest are wired in ``work/profiles/software/assembly.py``; a project that sets one would be
+told a lie, so ``TaskDefaults`` refuses it instead.
+"""
+
+
 class ExecutionRoute(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -364,6 +372,18 @@ class TaskDefaults(BaseModel):
     @classmethod
     def _validate_timezone(cls, value: str) -> str:
         return validate_timezone(value)
+
+    @field_validator("routing")
+    @classmethod
+    def _only_honoured_roles(cls, value: RoutingPolicy) -> RoutingPolicy:
+        unhonoured = sorted(role.value for role in value.roles if role not in HONOURED_ROLES)
+        if unhonoured:
+            honoured = ", ".join(sorted(role.value for role in HONOURED_ROLES))
+            raise ValueError(
+                f"routing roles {', '.join(unhonoured)} are not honoured yet; "
+                f"only {honoured} is read from project defaults"
+            )
+        return value
 
 
 class TaskTriggerSpec(BaseModel):

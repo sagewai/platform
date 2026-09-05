@@ -1269,3 +1269,28 @@ def test_decide_gate_accepts_only_allow_or_deny_by_type() -> None:
     hint = get_type_hints(TaskService.decide_gate)["decision"]
     assert get_origin(hint) is Literal
     assert set(get_args(hint)) == {"allow", "deny"}
+
+
+@pytest.mark.asyncio
+async def test_create_lets_the_project_override_the_planner_ladder(
+    service: TaskService, store: TaskStore
+) -> None:
+    defaults = await store.get_defaults(project_id="project-a")
+    await store.put_defaults(
+        defaults.model_copy(
+            update={
+                "routing": RoutingPolicy(
+                    roles={RoleAlias.PLANNER: (RuntimeRef.CODEX,)},
+                    prefer_free_implementation=True,
+                )
+            }
+        ),
+        expected_revision=defaults.revision,
+    )
+
+    task, _record = await service.create(
+        SOFTWARE_BRIEF, project_id="project-a", origin=TaskOrigin.HUMAN, created_by="arda", now=NOW
+    )
+
+    assert task.routing.roles[RoleAlias.PLANNER] == (RuntimeRef.CODEX,)
+    assert task.routing.roles[RoleAlias.REVIEWER] == (RuntimeRef.CLAUDE_REVIEW,)

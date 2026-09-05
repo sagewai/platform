@@ -193,7 +193,11 @@ class TaskService:
             ),
             authority=authority,
             routing=RoutingPolicy(
-                roles=dict(template.roles),
+                # Section 9.1: a project overrides a ladder the template declares, never adds one.
+                roles={
+                    role: defaults.routing.roles.get(role, ladder)
+                    for role, ladder in template.roles.items()
+                },
                 prefer_free_implementation=(
                     defaults.routing.prefer_free_implementation and origin is TaskOrigin.HUMAN
                 ),

@@ -453,6 +453,11 @@ What the coordinator needs before the first tick:
   console page and no CLI flag yet: set it with `PUT /api/v1/tasks/defaults` (project admin) or
   `TaskStore.put_defaults`, and note that it binds the **local** route only — a Fleet worker
   keeps its own `sagewai fleet run --codex-model`.
+- **Routing, for the planner only.** `task_defaults.routing.roles` accepts a `planner` ladder and
+  refuses every other role: the implementer, reviewer, assessor, analyst, designer, composer, and
+  repairer ladders come from the template and are wired into the software stack, so accepting an
+  override for them would report a choice that never runs. A Task's Settings tab still shows the
+  full contractual ladder it was created with.
 - **Harness tiers, if you set `prefer_free_implementation`.** The routing default is off. When
   it is on, the coordinator tries the local harness `complex` tier before Codex, and the
   project defaults must declare that tier — an empty `harness_tiers` raises

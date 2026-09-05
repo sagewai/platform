@@ -20,13 +20,16 @@ from pydantic import ValidationError
 from sagewai.artifacts.models import ArtifactRef
 from sagewai.work.runtime import CapabilityGrant
 from sagewai.work.tasks.models import (
+    HONOURED_ROLES,
     Authority,
     Budget,
     BudgetUsed,
     ExecutionRoute,
     GateMode,
     ReportTarget,
+    RoleAlias,
     RoutingPolicy,
+    RuntimeRef,
     Schedule,
     Sink,
     SoftwareTarget,
@@ -224,3 +227,27 @@ def test_defaults_and_record_round_trip() -> None:
     assert record.budget_used == BudgetUsed()
     assert record.last_event_sequence == 0
     assert record.revision == 0
+
+
+def test_only_the_planner_ladder_is_honoured() -> None:
+    assert HONOURED_ROLES == frozenset({RoleAlias.PLANNER})
+
+
+def test_task_defaults_refuse_a_ladder_nothing_honours() -> None:
+    honoured = TaskDefaults(
+        project_id="p",
+        routing=RoutingPolicy(roles={RoleAlias.PLANNER: (RuntimeRef.CODEX,)}),
+    )
+    assert honoured.routing.roles[RoleAlias.PLANNER] == (RuntimeRef.CODEX,)
+    with pytest.raises(ValidationError) as excinfo:
+        TaskDefaults(
+            project_id="p",
+            routing=RoutingPolicy(
+                roles={
+                    RoleAlias.PLANNER: (RuntimeRef.CODEX,),
+                    RoleAlias.IMPLEMENTER: (RuntimeRef.CODEX,),
+                    RoleAlias.REVIEWER: (RuntimeRef.CODEX,),
+                }
+            ),
+        )
+    assert "implementer, reviewer" in str(excinfo.value)

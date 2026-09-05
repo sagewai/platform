@@ -90,6 +90,21 @@ async def test_defaults_put_refuses_a_body_for_another_project(client: AdminClie
 
 
 @pytest.mark.asyncio
+async def test_defaults_put_refuses_a_ladder_nothing_honours(client: AdminClient) -> None:
+    response = await client.http.put(
+        "/api/v1/tasks/defaults",
+        headers=client.headers,
+        json={
+            "defaults": {"project_id": "p", "routing": {"roles": {"implementer": ["codex"]}}},
+            "expected_revision": 0,
+        },
+    )
+
+    assert response.status_code == 422
+    assert "routing roles implementer are not honoured yet" in response.json()["detail"][0]["msg"]
+
+
+@pytest.mark.asyncio
 async def test_defaults_put_rejects_defaults_revision(client: AdminClient) -> None:
     response = await client.http.put(
         "/api/v1/tasks/defaults",
