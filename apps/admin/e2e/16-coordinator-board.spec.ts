@@ -1,12 +1,14 @@
 import { test, expect } from '@playwright/test';
 
 import {
+  board,
   doneTask,
   inboxTask,
   mockCoordinatorApi,
   needsYouTask,
   scheduledTask,
   selectProject,
+  task,
 } from './coordinator-mocks';
 
 test.describe('Coordinator board', () => {
@@ -131,5 +133,171 @@ test.describe('Coordinator board', () => {
     await page.goto('/board');
 
     await expect(page.getByTestId('board-error')).toHaveText('project unavailable');
+  });
+
+  test('previews the intake before it will create anything', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page);
+
+    await page.goto('/board');
+    await expect(page.getByRole('button', { name: 'Create Task' })).toBeDisabled();
+
+    await page.getByLabel('Brief').fill('Ship the coordinator console');
+    await page.getByRole('button', { name: 'Preview' }).click();
+
+    const preview = page.getByTestId('intake-preview');
+    await expect(preview).toContainText('software_delivery');
+    await expect(preview).toContainText('batch');
+    await expect(preview).toContainText('runs once');
+    await expect(preview).toContainText('Which branch should the change land on?');
+    await expect(preview).toContainText('sagewai/platform');
+    await expect(preview).toContainText('opens one pull request');
+    await expect(page.getByRole('button', { name: 'Create Task' })).toBeEnabled();
+  });
+
+  test('editing the brief withdraws the preview', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page);
+
+    await page.goto('/board');
+    await page.getByLabel('Brief').fill('Ship the coordinator console');
+    await page.getByRole('button', { name: 'Preview' }).click();
+    await expect(page.getByTestId('intake-preview')).toBeVisible();
+
+    await page.getByLabel('Brief').fill('Ship something else');
+
+    await expect(page.getByTestId('intake-preview')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Create Task' })).toBeDisabled();
+  });
+
+  test('creates the Task and reloads the board', async ({ page }) => {
+    const createdRecord = { ...inboxTask, task_id: 'task-new', title: 'A new Task' };
+    const postBodies: string[] = [];
+    let created = false;
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      '/api/v1/tasks/board': () => ({
+        columns: {
+          inbox: created ? [createdRecord] : [inboxTask],
+          needs_you: [],
+          planned: [],
+          in_progress: [],
+          done: [],
+        },
+      }),
+      '/api/v1/tasks': (_url, method) => {
+        if (method !== 'POST') return { tasks: [inboxTask], next_cursor: null };
+        created = true;
+        return { task: task(createdRecord), record: createdRecord };
+      },
+    });
+    page.on('request', (request) => {
+      if (request.method() === 'POST' && request.url().endsWith('/api/v1/tasks')) {
+        postBodies.push(request.postData() ?? '');
+      }
+    });
+
+    await page.goto('/board');
+    await page.getByRole('button', { name: 'All', exact: true }).click();
+    await page.getByLabel('Brief').fill('Ship the coordinator console');
+    await page.getByRole('button', { name: 'Preview' }).click();
+    await page.getByRole('button', { name: 'Create Task' }).click();
+
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'task-new' })).toBeVisible();
+    expect(postBodies.map((body) => JSON.parse(body))).toEqual([
+      { brief: 'Ship the coordinator console' },
+    ]);
+    await expect(page.getByLabel('Brief')).toHaveValue('');
+    await expect(page.getByTestId(`task-card-${createdRecord.task_id}`)).toBeVisible();
+    await expect(page.getByTestId('board-column-inbox')).toContainText(createdRecord.title);
+  });
+
+  test('creates under the active kind filter and preserves the list query', async ({ page }) => {
+    const createdRecord = { ...inboxTask, task_id: 'task-filtered', title: 'Filtered Task' };
+    const listQueries: string[] = [];
+    let boardReadsAfterCreate = 0;
+    let created = false;
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      '/api/v1/tasks/board': () => {
+        if (created) boardReadsAfterCreate += 1;
+        return board;
+      },
+      '/api/v1/tasks': (url, method) => {
+        if (method === 'POST') {
+          created = true;
+          return { task: task(createdRecord), record: createdRecord };
+        }
+        listQueries.push(url.search);
+        return { tasks: created ? [createdRecord] : [inboxTask], next_cursor: null };
+      },
+    });
+
+    await page.goto('/board');
+    await page.getByRole('button', { name: 'All', exact: true }).click();
+    await page.getByLabel('Kind').selectOption('batch');
+    await expect.poll(() => listQueries.some((query) => query.includes('kind=batch'))).toBe(true);
+    const readsBeforeCreate = listQueries.length;
+    await page.getByLabel('Brief').fill('Ship the coordinator console');
+    await page.getByRole('button', { name: 'Preview' }).click();
+    await page.getByRole('button', { name: 'Create Task' }).click();
+
+    await expect(page.getByTestId(`task-card-${createdRecord.task_id}`)).toBeVisible();
+    await expect(page.getByTestId('board-column-inbox')).toContainText(createdRecord.title);
+    const reloadQueries = listQueries.slice(readsBeforeCreate);
+    expect(reloadQueries.length).toBeGreaterThan(0);
+    expect(
+      reloadQueries.every(
+        (query) =>
+          query.includes('kind=batch') &&
+          query.includes('order_by=updated_at') &&
+          query.includes('descending=true'),
+      ),
+    ).toBe(true);
+    expect(boardReadsAfterCreate).toBe(0);
+  });
+
+  test('fills the brief from a Markdown file', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page);
+
+    await page.goto('/board');
+    await page.getByLabel('Markdown file').setInputFiles({
+      name: 'brief.md',
+      mimeType: 'text/markdown',
+      buffer: Buffer.from('# Coordinator\n\nShip the coordinator console'),
+    });
+
+    await expect(page.getByLabel('Brief')).toHaveValue(
+      '# Coordinator\n\nShip the coordinator console',
+    );
+    await expect(page.getByRole('button', { name: 'Create Task' })).toBeDisabled();
+  });
+
+  test('shows the refusal when creation is rejected', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page);
+    await page.route(
+      (url) => url.pathname === '/api/v1/tasks',
+      async (route) => {
+        if (route.request().method() !== 'POST') {
+          await route.fulfill({ json: { tasks: [], next_cursor: null } });
+          return;
+        }
+        await route.fulfill({
+          status: 409,
+          json: { detail: 'target does not match the template' },
+        });
+      },
+    );
+
+    await page.goto('/board');
+    await page.getByLabel('Brief').fill('Ship the coordinator console');
+    await page.getByRole('button', { name: 'Preview' }).click();
+    await page.getByRole('button', { name: 'Create Task' }).click();
+
+    await expect(page.getByTestId('composer-error')).toHaveText(
+      'target does not match the template',
+    );
   });
 });

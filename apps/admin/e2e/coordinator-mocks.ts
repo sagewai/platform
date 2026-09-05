@@ -1,12 +1,16 @@
 import type { Page } from '@playwright/test';
 import type {
+  IntakePreview,
   PendingAttention,
   Project,
+  Task,
   TaskBoard,
   TaskBudgetUsed,
   TaskDecisionItem,
+  TaskDefaults,
   TaskPortfolio,
   TaskRecord,
+  TaskTemplateCatalogue,
 } from '../utils/types';
 
 export const project: Project = {
@@ -217,15 +221,151 @@ export const workPending: PendingAttention = {
 /** Route handlers keyed by decoded pathname; a spec passes extras or replaces one. */
 export type Handlers = Record<string, (url: URL, method: string) => unknown>;
 
+export const templates: TaskTemplateCatalogue = {
+  templates: [
+    {
+      id: 'software_delivery',
+      version: '1',
+      title: 'Software delivery',
+      description: 'Plan, implement, verify and merge a bounded change.',
+      category: 'software',
+      kind: 'batch',
+      profile: 'software',
+    },
+    {
+      id: 'scheduled_research_report',
+      version: '2',
+      title: 'Scheduled research report',
+      description: 'Compose, verify, review and deliver a recurring report.',
+      category: 'report',
+      kind: 'scheduled',
+      profile: 'report',
+    },
+  ],
+  reserved: ['event_triage', 'batch_extract'],
+};
+
+export const intakePreview: IntakePreview = {
+  template_id: 'software_delivery',
+  template_version: '1',
+  band: 'auto_route',
+  confidence: 0.92,
+  candidates: ['software_delivery'],
+  slots: { repository: 'sagewai/platform' },
+  cron: null,
+  timezone: 'UTC',
+  questions: [
+    {
+      id: 'q-scope',
+      text: 'Which branch should the change land on?',
+      kind: 'text',
+      options: [],
+      default: 'main',
+      defaultable: true,
+      rationale: 'The default branch is assumed when nobody answers.',
+      attention_version: 1,
+    },
+  ],
+  preview: 'Reads the repository, opens one pull request, spends at most $10, asks before merging.',
+};
+
+const softwareTarget = {
+  kind: 'software',
+  repository_path: '/srv/checkouts/platform',
+  owner: 'sagewai',
+  repo: 'platform',
+  default_branch: 'main',
+  verification_image: 'ghcr.io/sagewai/verify:1',
+  verification_commands: ['just smoke'],
+} satisfies Task['target'];
+
+export const taskDefaults: TaskDefaults = {
+  project_id: project.id,
+  target: softwareTarget,
+  execution: { route: 'local', fleet_org_id: null },
+  timezone: 'UTC',
+  clarification_deadline_seconds: 14400,
+  routing: { roles: {}, prefer_free_implementation: false },
+  harness_tiers: {},
+  decision_channels: ['console'],
+  revision: 0,
+};
+
+export function task(taskRecord: TaskRecord): Task {
+  return {
+    id: taskRecord.task_id,
+    project_id: taskRecord.project_id,
+    kind: taskRecord.kind,
+    origin: taskRecord.origin,
+    origin_ref: null,
+    title: taskRecord.title,
+    brief_ref: {
+      project_id: taskRecord.project_id,
+      digest: `sha256:${taskRecord.task_id}`,
+      media_type: 'text/markdown',
+      size_bytes: 128,
+      storage_ref: `artifact://${taskRecord.task_id}/brief.md`,
+      created_at: taskRecord.created_at,
+      created_by: 'user',
+    },
+    brief_summary: taskRecord.title,
+    source_ref: null,
+    template_id:
+      taskRecord.kind === 'scheduled' ? 'scheduled_research_report' : 'software_delivery',
+    template_version: taskRecord.kind === 'scheduled' ? '2' : '1',
+    slots: {},
+    profile: taskRecord.profile,
+    target: softwareTarget,
+    schedule:
+      taskRecord.kind === 'scheduled'
+        ? { cron: '0 2 * * *', timezone: 'UTC', active: true }
+        : null,
+    budget: {
+      max_works_per_cycle: 4,
+      max_stage_attempts_per_cycle: 2,
+      max_attempts_per_stage: 2,
+      max_replans: 1,
+      max_cycle_duration_seconds: 7200,
+      max_cycle_usd: '10.00',
+      claude_max_budget_usd_per_attempt: '5.00',
+      harness_max_tokens_per_attempt: 20000,
+      harness_max_tool_calls_per_attempt: 50,
+      max_concurrent_works: 1,
+    },
+    authority: { plan: 'require', merge: 'require', replan: 'require', deliver: 'require' },
+    routing: taskDefaults.routing,
+    routing_version: 0,
+    execution: taskDefaults.execution,
+    sensitivity: 'internal',
+    retention_days: null,
+    tracking_issue_url: taskRecord.tracking_issue_url,
+    created_by: 'user',
+    created_at: taskRecord.created_at,
+  };
+}
+
+export const composerHandlers: Handlers = {
+  '/api/v1/tasks/templates': () => templates,
+  '/api/v1/tasks/defaults': () => taskDefaults,
+  '/api/v1/tasks/intake': () => intakePreview,
+};
+
 export const baseHandlers: Handlers = {
+  ...composerHandlers,
   '/api/v1/tasks/board': () => board,
-  '/api/v1/tasks': (url) =>
-    url.searchParams.get('cursor') === 'page-2'
-      ? { tasks: [doneTask], next_cursor: null }
-      : {
-          tasks: [clarifyingTask, mirroredGateTask, needsYouTask, inboxTask, scheduledTask],
-          next_cursor: 'page-2',
-        },
+  '/api/v1/tasks': (url, method) => {
+    if (method === 'POST') {
+      const created = record({ task_id: 'task-new', title: 'A new Task' });
+      return { task: task(created), record: created };
+    }
+    if (url.searchParams.get('cursor') === 'page-2') {
+      return { tasks: [doneTask], next_cursor: null };
+    }
+    return {
+      tasks: [clarifyingTask, mirroredGateTask, needsYouTask, inboxTask, scheduledTask],
+      next_cursor: 'page-2',
+    };
+  },
   '/api/v1/tasks/decisions': () => ({
     items: [workDecision, taskGateDecision, taskQuestionDecision],
   }),

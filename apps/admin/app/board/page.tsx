@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Server } from 'lucide-react';
 
 import { TaskCard } from '@/components/coordinator/task-card';
+import { TaskComposer } from '@/components/coordinator/task-composer';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -156,6 +157,28 @@ export default function CoordinatorBoardPage() {
           Fleet workers
         </Link>
       </div>
+
+      {!needsProject && (
+        <TaskComposer
+          onCreated={() => {
+            const issuedFilterKey = filterKey;
+            setLoading(true);
+            setError('');
+            load(null)
+              .then((next) => {
+                if (filterKeyRef.current !== issuedFilterKey) return;
+                setTasks(next.tasks);
+                setCursor(next.cursor);
+              })
+              .catch((cause: Error) => {
+                if (filterKeyRef.current === issuedFilterKey) setError(cause.message);
+              })
+              .finally(() => {
+                if (filterKeyRef.current === issuedFilterKey) setLoading(false);
+              });
+          }}
+        />
+      )}
 
       {!needsProject && error !== '' && (
         <div
