@@ -43,6 +43,8 @@ from sagewai.work.tasks.transitions import IllegalTransitionError, assert_transi
         (TaskStatus.CONTROL_DEGRADED, TaskStatus.EXECUTING),
         (TaskStatus.CONTROL_DEGRADED, TaskStatus.PAUSED),
         (TaskStatus.PAUSED, TaskStatus.CONTROL_DEGRADED),
+        (TaskStatus.PLANNING, TaskStatus.CONTROL_DEGRADED),
+        (TaskStatus.ASSESSING, TaskStatus.CONTROL_DEGRADED),
         (TaskStatus.EXECUTING, TaskStatus.CANCELLED),
     ],
 )

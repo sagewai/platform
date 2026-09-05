@@ -659,8 +659,13 @@ control stops new side effects.
 - **No compatible Fleet worker:** verify project scope and advertised
   `runtime.codex`, `runtime.claude`, or `runtime.harness` capability. Do not
   send model credentials or harness backend configuration to the control plane.
-- **Control degraded:** restore the failed authority, observability, or
-  reversibility precondition. A successful HTTP status with stale observations is
-  still degraded.
+- **Control degraded:** restore the failed authority, observability, or reversibility
+  precondition. A successful HTTP status with stale observations is still degraded. A Task also
+  reaches `CONTROL_DEGRADED` when its planning or assessment stage raises — a verifier image that
+  is not digest-pinned, an unreachable repository, a missing CLI: the thread carries the command
+  and the exception, the Task leaves the active set, and nothing drives it again until a human
+  moves it (a Task pins its target at create, so a defaults fix needs a new Task). A step Work
+  that fails does not degrade the Task: its command is replayed on the next tick and reconciled
+  through its receipt, so watch `pending` and the Task thread instead.
 - **GitHub is unavailable:** retain the Work ID and resume after service recovers.
   Completed local implementation should not be repeated.

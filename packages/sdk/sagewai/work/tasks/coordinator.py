@@ -942,19 +942,19 @@ class TaskCoordinator:
         self, task: Task, record: TaskRecord, command: RunPlanning, lease_epoch: int
     ) -> TaskRecord:
         profile = self._profile_for(task)
-        base_sha = await profile.base_sha(task)
-        brief = self._artifacts.read(task.brief_ref.storage_ref, project_id=task.project_id).decode(
-            "utf-8"
-        )
-        events = await self._task_store.read_events(task.id, project_id=task.project_id)
-        amendments = tuple(
-            f"{event.payload_json['question_id']}: {event.payload_json['answer']}"
-            for event in events
-            if event.event_type
-            in (TaskEventType.CLARIFICATION_ANSWERED, TaskEventType.CLARIFICATION_DEFAULTED)
-        )
         ledger = self._meter(task, record)
         try:
+            base_sha = await profile.base_sha(task)
+            brief = self._artifacts.read(
+                task.brief_ref.storage_ref, project_id=task.project_id
+            ).decode("utf-8")
+            events = await self._task_store.read_events(task.id, project_id=task.project_id)
+            amendments = tuple(
+                f"{event.payload_json['question_id']}: {event.payload_json['answer']}"
+                for event in events
+                if event.event_type
+                in (TaskEventType.CLARIFICATION_ANSWERED, TaskEventType.CLARIFICATION_DEFAULTED)
+            )
             result = await profile.plan(
                 task,
                 cycle=record.current_cycle,
@@ -972,6 +972,8 @@ class TaskCoordinator:
                 command,
                 prefix=ledger.drain(),
             )
+        except Exception as exc:
+            return await self._degrade(task, record, command, exc, lease_epoch, ledger.drain())
         if result.asks_first:
             entries = ledger.drain()
             entries.append(await self._clarification_request(task, result.clarifications))
@@ -1090,6 +1092,47 @@ class TaskCoordinator:
             lease_epoch,
             command=command,
         )
+
+    async def _degrade(
+        self,
+        task: Task,
+        record: TaskRecord,
+        command: Command,
+        error: Exception,
+        lease_epoch: int,
+        prefix: Sequence[Entry] = (),
+    ) -> TaskRecord:
+        """A stage that raised is degraded control (spec:252-255), owned by a human.
+
+        Only planning and assessment reach here: they write nothing outside the Task, so no
+        receipt is left dangling. Every other command propagates for the section 8.1 replay.
+        """
+        detail = f"{command.kind} failed: {type(error).__name__}: {error}"[:2000]
+        logger.error(
+            "task command failed",
+            extra={
+                "event": "task.command.failed",
+                "task": task.id,
+                "command": command.kind,
+            },
+            exc_info=error,
+        )
+        entries: list[Entry] = [
+            *prefix,
+            (TaskEventType.CONTROL_DEGRADED, {"command": command.kind, "detail": detail}),
+            (TaskEventType.TASK_MESSAGE, {"author": "coordinator", "text": detail, "refs": []}),
+            status_entry(record, TaskStatus.CONTROL_DEGRADED),
+        ]
+        entries.extend(
+            await self._present(
+                task,
+                record,
+                attention_id=f"degraded:{record.current_cycle}:{record.revision}",
+                summary=detail,
+                urgency="now",
+            )
+        )
+        return await self._append(record, entries, lease_epoch, command=command)
 
     async def _mirror(
         self, task: Task, record: TaskRecord, command: MirrorAttention, lease_epoch: int
@@ -1678,6 +1721,8 @@ class TaskCoordinator:
                 command,
                 prefix=ledger.drain(),
             )
+        except Exception as exc:
+            return await self._degrade(task, record, command, exc, lease_epoch, ledger.drain())
         entries: list[Entry] = ledger.drain()
         entries.append(status_entry(record, TaskStatus.ASSESSING))
         entries.append(

@@ -40,6 +40,7 @@ from sagewai.work.tasks.coordinator import TaskCoordinator
 from sagewai.work.tasks.decisions import ConsoleDecisionChannel, merge_policy_for, resolve_gate
 from sagewai.work.tasks.events import TaskEventType
 from sagewai.work.tasks.models import (
+    AttentionOwner,
     Authority,
     Budget,
     GateMode,
@@ -77,6 +78,7 @@ class FakeProfileRunner:
         self.merged = False
         self.plan_result = plan_result
         self.plan_error: Exception | None = None
+        self.base_sha_error: Exception | None = None
         self.statuses: dict[str, str] = {}
         self.gates: dict[str, str] = {}
         self.delivered: list[tuple[str, int]] = []
@@ -100,6 +102,8 @@ class FakeProfileRunner:
         self.ledgers.append(ledger)
 
     async def base_sha(self, task):
+        if self.base_sha_error is not None:
+            raise self.base_sha_error
         return self.head
 
     async def plan(self, task, *, cycle, plan_version, base_sha, brief_text, amendments):
@@ -1668,6 +1672,75 @@ async def test_planning_clarification_uses_the_project_deadline(
         asked.payload_json["deadline_at"]
         == (NOW + timedelta(seconds=defaults.clarification_deadline_seconds)).isoformat()
     )
+
+
+@pytest.mark.asyncio
+async def test_a_planning_exception_degrades_control_on_the_task(stores, tmp_path) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    channel = RecordingDecisionChannel()
+    coordinator._static_channels = (channel,)
+    runner.plan_error = ValueError("verification sandbox image must be digest-pinned")
+
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await coordinator.drive(record, lease_epoch=epoch)
+
+    assert record.status is TaskStatus.CONTROL_DEGRADED
+    assert record.attention_owner is AttentionOwner.USER
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    degraded = next(
+        event for event in events if event.event_type is TaskEventType.CONTROL_DEGRADED
+    )
+    assert degraded.payload_json["command"] == "run_planning"
+    assert "digest-pinned" in degraded.payload_json["detail"]
+    message = next(
+        event
+        for event in reversed(events)
+        if event.event_type is TaskEventType.TASK_MESSAGE
+    )
+    assert "digest-pinned" in message.payload_json["text"]
+    assert [call.urgency for call in channel.calls] == ["now"]
+
+
+@pytest.mark.asyncio
+async def test_an_unreachable_base_degrades_control_before_planning(stores, tmp_path) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    runner.base_sha_error = RuntimeError("repository unreachable: connection refused")
+
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await coordinator.drive(record, lease_epoch=epoch)
+
+    assert record.status is TaskStatus.CONTROL_DEGRADED
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    degraded = next(
+        event for event in events if event.event_type is TaskEventType.CONTROL_DEGRADED
+    )
+    assert degraded.payload_json["command"] == "run_planning"
+    assert "connection refused" in degraded.payload_json["detail"]
+
+
+@pytest.mark.asyncio
+async def test_a_step_exception_still_propagates_for_crash_replay(
+    stores, tmp_path, monkeypatch
+) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
+    original = runner.create_issue
+
+    async def crash_after_issue(task_, **kwargs):
+        url = await original(task_, **kwargs)
+        raise RuntimeError(f"crashed after creating {url}")
+
+    runner.create_issue = crash_after_issue
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+
+    with pytest.raises(RuntimeError):
+        await coordinator.drive(record, lease_epoch=epoch)
+
+    record = (await task_store.load(task.id, project_id=PROJECT))[1]
+    assert record.status is not TaskStatus.CONTROL_DEGRADED
 
 
 @pytest.mark.asyncio
