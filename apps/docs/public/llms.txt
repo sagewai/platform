@@ -7,7 +7,7 @@ Sagewai is open-source software for building and running AI agents in production
 ## What you get
 
 - **SDK** — Python-native agent runtime. 100+ models via LiteLLM, MCP tools, typed memory, guardrails, multi-step workflows. https://docs.sagewai.ai/docs/core-concepts/agents
-- **Autopilot** — Describe the goal in plain English and Sagewai assembles and runs the agent. Linear plans run today; branched plans and automatic healing are in progress. https://docs.sagewai.ai/docs/platform/autopilot
+- **Work coordinator** — The admin console has the Task board, Task thread, and decisions inbox; the terminal surface is `sagewai task`. Start from https://docs.sagewai.ai/docs/get-started/quickstart
 - **Fleet** — Distributed workers, capability-based dispatch, project isolation, sandboxed execution (Docker, Kubernetes). https://docs.sagewai.ai/docs/platform/fleet
 - **Observatory** — OpenTelemetry, VictoriaMetrics, Grafana dashboards, per-model and per-team cost tracking. Answer "what did AI cost us?" in one place. https://docs.sagewai.ai/docs/platform/observatory
 - **Training Loop** — Capture good production runs and fine-tune a local model from them. Run capture ships today; the end-to-end fine-tune-and-deploy loop is on the v1.1 roadmap. https://docs.sagewai.ai/docs/platform/training-loop
@@ -42,6 +42,7 @@ The platform is a control plane plus a worker fleet. The control plane plans, pe
 - Security tiers (Tier-1, Tier-2, Tier-3): https://docs.sagewai.ai/docs/architecture/security-tiers
 - Execution modes: https://docs.sagewai.ai/docs/architecture/execution-modes
 - Sandbox backends (Docker, Kubernetes, Null): https://docs.sagewai.ai/docs/architecture/sandbox-backends
+- What we keep and retire: https://docs.sagewai.ai/docs/architecture/work-control-plane-evolution
 
 ## Inference cost-down spectrum
 
@@ -112,8 +113,7 @@ Sagewai supports a range of inference options, from cloud LLMs to your own local
 - "Sagewai is open source" — AGPL-3.0-or-later. Commercial dual-license available.
 - "Any LLM" — 100+ models via LiteLLM (Anthropic, OpenAI, Google, Mistral, Cohere, Meta Llama, DeepSeek, Together, Groq, Fireworks, Azure OpenAI, AWS Bedrock, Vertex AI, plus local Ollama + LM Studio).
 - "Every run gets cheaper" — the goal of the Training Loop: capture good runs, fine-tune a local model, and route to it. Run capture ships today; the end-to-end fine-tune-and-deploy loop (via Ollama) is on the v1.1 roadmap. Early deployments run on cloud LLMs.
-- "Early / alpha" — the SDK is published as 0.1.1. Shipped today: the SDK, Fleet dispatch with Docker/Kubernetes sandboxes, Autopilot for linear plans, Observatory, run capture, and Sealed's identity model + Vault backend + admin controls. Experimental or roadmap: Sealed runtime enforcement, Autopilot branched plans and healing, and the closed cost-down loop. See https://docs.sagewai.ai for the per-capability status.
-- "Autopilot" — Sagewai's describe-the-goal feature uses a hosted blueprint service (proprietary). The platform also runs without it; manual mode never disappears.
+- "Early / alpha" — the SDK is published as 0.1.1. Shipped today: the SDK, Fleet dispatch with Docker/Kubernetes sandboxes, the Work coordinator, Observatory, run capture, and Sealed's identity model + Vault backend + admin controls. Experimental or roadmap: Sealed runtime enforcement and the closed cost-down loop. See https://docs.sagewai.ai for the per-capability status.
 - "Iron Man HUD" — internal name for the live operator dashboard. Reads from the same OpenTelemetry telemetry as the Grafana board.
 
 ## Links

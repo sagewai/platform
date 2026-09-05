@@ -29,7 +29,6 @@ import {
   FileBarChart,
   Cog,
   Search,
-  Zap,
   ListChecks,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -46,6 +45,8 @@ const LS_KEY = 'nav-groups-collapsed';
 export interface NavItem {
   href: string;
   label: string;
+  /** Link appears in this group, but does not make this group active. */
+  crossLink?: boolean;
 }
 
 export interface NavGroup {
@@ -55,6 +56,8 @@ export interface NavGroup {
   /** Destination when icon is tapped in collapsed mode */
   defaultHref: string;
   items: NavItem[];
+  /** Render the pending-attention badge on this group. */
+  attention?: boolean;
   /** If true, render at the bottom of the sidebar (separated from main groups) */
   bottom?: boolean;
 }
@@ -78,14 +81,19 @@ export const ALL_GROUPS: NavGroup[] = [
     ],
   },
 
-  /* ── WORK CONTROL ── */
+  /* ── COORDINATOR ── */
   {
-    id: 'work',
-    label: 'Work Control',
+    id: 'coordinator',
+    label: 'Coordinator',
     icon: ListChecks,
-    defaultHref: '/work',
+    defaultHref: '/board',
+    attention: true,
     items: [
+      { href: '/board', label: 'Board' },
+      { href: '/tasks', label: 'Tasks' },
+      { href: '/decisions', label: 'Decisions' },
       { href: '/work', label: 'Active Work' },
+      { href: '/fleet', label: 'Fleet Workers', crossLink: true },
     ],
   },
 
@@ -102,17 +110,6 @@ export const ALL_GROUPS: NavGroup[] = [
       { href: '/workflows', label: 'Workflow Builder' },
       { href: '/workflows/registry', label: 'Workflow Registry' },
       { href: '/workflows/history', label: 'Workflow History' },
-    ],
-  },
-
-  /* ── AUTOPILOT ── */
-  {
-    id: 'autopilot',
-    label: 'Autopilot (beta)',
-    icon: Zap,
-    defaultHref: '/autopilot',
-    items: [
-      { href: '/autopilot', label: 'Autopilot (beta)' },
     ],
   },
 
@@ -386,7 +383,7 @@ function NavIconWithFlyout({
         ref={btnRef}
         type="button"
         aria-label={attentionCount > 0
-          ? `${group.label}, ${attentionCount} Work items need attention`
+          ? `${group.label}, ${attentionCount} items need attention`
           : group.label}
         aria-haspopup="true"
         aria-expanded={open}
@@ -486,6 +483,7 @@ function isItemActive(pathname: string, href: string, siblings?: string[]): bool
 function getActiveGroupId(pathname: string, groups: NavGroup[]): string | null {
   for (const group of groups) {
     for (const item of group.items) {
+      if (item.crossLink === true) continue;
       if (isItemActive(pathname, item.href)) return group.id;
     }
   }
@@ -496,7 +494,7 @@ export function NavSidebar() {
   const pathname = usePathname();
   const { expanded, setExpanded, mobile } = useSidebar();
   const { navGroups: allowedGroupIds } = useRole();
-  const { pending: pendingWorkAttention } = useWorkAttention();
+  const { attentionItems } = useWorkAttention();
 
   // Filter groups by role
   const roleGroups = ALL_GROUPS.filter((g) => allowedGroupIds.includes(g.id));
@@ -543,7 +541,7 @@ export function NavSidebar() {
     const Icon = group.icon;
     const isGroupActive = activeGroupId === group.id;
     const isCollapsed = collapsedGroups.has(group.id);
-    const attentionCount = group.id === 'work' ? pendingWorkAttention.length : 0;
+    const attentionCount = group.attention === true ? attentionItems.length : 0;
 
     /* ── Collapsed sidebar: icon with flyout (portalled to body) ── */
     if (!expanded) {
@@ -565,7 +563,7 @@ export function NavSidebar() {
           onClick={() => toggleGroup(group.id)}
           aria-expanded={!isCollapsed}
           aria-label={attentionCount > 0
-            ? `${group.label}, ${attentionCount} Work items need attention`
+            ? `${group.label}, ${attentionCount} items need attention`
             : group.label}
           className={`w-full flex items-center gap-2.5 px-5 py-2.5 text-[11px] font-semibold uppercase tracking-[0.08em] transition-colors cursor-pointer bg-transparent border-none min-h-[36px] ${
             isGroupActive

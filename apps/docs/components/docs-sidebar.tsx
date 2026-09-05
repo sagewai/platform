@@ -49,7 +49,6 @@ const SECTIONS: NavSection[] = [
     items: [
       { label: 'Overview', href: '/docs/platform' },
       { label: 'SDK', href: '/docs/platform/sdk' },
-      { label: 'Autopilot', href: '/docs/platform/autopilot' },
       { label: 'Fleet', href: '/docs/platform/fleet' },
       { label: 'Observatory', href: '/docs/platform/observatory' },
       { label: 'Training Loop', href: '/docs/platform/training-loop' },
@@ -119,6 +118,7 @@ const SECTIONS: NavSection[] = [
       { label: 'Security Tiers', href: '/docs/architecture/security-tiers' },
       { label: 'Execution Modes', href: '/docs/architecture/execution-modes' },
       { label: 'Sandbox Backends', href: '/docs/architecture/sandbox-backends' },
+      { label: 'What we keep and retire', href: '/docs/architecture/work-control-plane-evolution' },
     ],
   },
   {

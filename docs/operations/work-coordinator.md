@@ -144,7 +144,7 @@ sagewai work --project coordinator-demo intake --label sagewai-work
 Each invocation starts at most one unseen issue among the oldest 100 open issues
 with that label. Re-running intake does not start the same issue twice.
 
-## 5. Observe work in the console
+## 5. Drive the coordinator from the console
 
 For a first local or two-device Work test, run the backend, Admin UI, and Work
 CLI on the same coordinator machine with the same `SAGEWAI_HOME`. This keeps
@@ -155,11 +155,57 @@ export SAGEWAI_HOME="$PWD/.sagewai-dev"
 just dev-all
 ```
 
-Open <http://localhost:3008/setup> on a fresh installation, then
-<http://localhost:3008/work>. The Work Control Console reads the same backend
-state as `status` and `pending`; it does not maintain a browser-owned lifecycle.
-Use it to inspect active Work, events, approvals, blocked questions, degraded
-control, Evidence Board references, workers, and delivery observations.
+Open <http://localhost:3008/setup> on a fresh installation, then use these
+coordinator pages:
+
+- **`/board`** — the board's five columns: `inbox`, `needs_you`,
+  `planned`, `in_progress`, and `done`. The page has `Focus`, `Today`, and
+  `All` views, title search over the pages already loaded, and kind and status
+  filters that go to the API. The composer accepts a written brief or a dropped
+  Markdown file; press `Preview` to see the template, kind, schedule, questions
+  intake would ask, and the plain-language summary before creating the Task.
+  Target and execution come from the project's `task_defaults`.
+- **`/tasks`** — the same Tasks across every project the caller can see (an
+  owner or admin sees every project of the organization; other members their
+  memberships), up to 20 Tasks per project with no paging, and a needs-you
+  count per project. The fan-out is server-side.
+- **`/tasks/{id}`** — one Task with six tabs: Thread shows the brief, each
+  open question with its answer control and deadline line, with `Use default`
+  only when the question is defaultable, the coordinator messages, gates with
+  `Allow` and `Deny`, outputs, and a discussion composer; Plan shows the
+  accepted steps with their acceptance criteria, scope and dependencies, plus
+  the acceptance matrix the assessor checks; Actions shows every side effect
+  with its reversibility, rollback recipe and post-check, plus the button that
+  requests the recorded rollback; Activity is paged operator activity with
+  source, Work and run filters and a bounded download of the loaded rows;
+  Telemetry shows spend per cycle, stage attempts per Work and schedule health
+  for scheduled Tasks; Settings shows the definition read-only, an editable
+  budget fenced on the record revision, and the project's triggers.
+- **`/decisions`** — Task attention and Work attention merged, soonest due
+  first. Both are settled in place: a gate goes to the route its `decided_by`
+  field names (other Work gate classes show the `sagewai work approve` hint
+  instead of buttons), and a clarification is answered at the
+  `attention_version` the item carries. The inbox never offers `Use default`:
+  it lists only the questions that have no default, so a defaultable one is
+  answered — or left to its default — on the Task's Thread tab.
+- **`/work`** — the project's active Work with its pending attention: active
+  Work, events, approvals, blocked questions, degraded control, Evidence Board
+  references, workers, and delivery observations, read from the same backend
+  state as `status` and `pending`. It is the `Active Work` item in the same
+  `Coordinator` nav group; `/decisions` links a Work item that carries no gate
+  to its `/work/{work_id}` page; the Task pages name a Work id but do not link
+  to it.
+
+The header's `Pause`, `Resume`, and `Cancel` buttons call the same service
+methods as `sagewai task pause|resume|cancel`. A `merge:` gate belongs to the
+Work, so the console posts it to
+`POST /api/v1/work/{work_id}/gates/{gate_id}` exactly as `sagewai work approve`
+does.
+
+The console does not yet have snooze or archive, server-side search, or the
+plan's `Advanced` view. The board search box filters only the pages already
+loaded. The Plan checklist and matrix are there; the dependency graph and raw
+events are not.
 
 Do not use `just compose-up` for this first test: its backend database is inside
 the Compose network while the host Work CLI uses its own configured database.
@@ -316,6 +362,9 @@ mirrors entries into `task_feed`. `GET /api/v1/tasks/{id}/events` streams that
 feed as Server-Sent Events. The stream replays stored entries after
 `Last-Event-ID` and sends a heartbeat every 15 seconds, configurable with
 `TASK_SSE_HEARTBEAT`.
+
+The Task page's Activity and Telemetry tabs are the console views of the same
+activity rows, Task feed entries, Work events, and spend-ledger projection.
 
 `GET /api/v1/tasks/{id}/telemetry` returns
 `sagewai.work.tasks.telemetry.derive_task_telemetry`, a pure projection over
@@ -499,6 +548,7 @@ The default action policy is by reversibility:
 
 A project may tighten authority to `require`. A non-human origin is tighter still: plan,
 merge, and deliver are forced to `require` whatever the approved trigger says.
+The `/decisions` page is the inbox for those Task and Work approvals.
 
 ### When something has to be undone
 

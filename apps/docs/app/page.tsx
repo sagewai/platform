@@ -21,9 +21,9 @@ const FEATURES = [
   },
   {
     icon: <Database size={28} />,
-    title: 'Autopilot',
+    title: 'Work coordinator',
     description:
-      'State the goal in plain English. Autopilot designs the agent graph, extracts the slots, previews the plan, and runs the mission (linear plans today; branched plans in progress).',
+      'Describe the goal. One durable Task plans a cycle of Work, runs it through Codex, Claude and the harness, and stops at the gates you kept — with a spend ledger and a rollback recipe on every side effect.',
   },
   {
     icon: <Shield size={28} />,
@@ -182,8 +182,8 @@ export default function LandingPage() {
               </span>
             </h1>
             <p className="text-xl text-text-secondary leading-relaxed mb-10 max-w-[42rem] mx-auto">
-              Sagewai is an open-source agent platform: describe the goal, the Autopilot designs
-              the agent graph, workers run it in isolation, and the Training Loop fine-tunes local
+              Sagewai is an open-source agent platform: describe the goal, the coordinator plans
+              the Work, workers run it in isolation, and the Training Loop fine-tunes local
               models so every run gets cheaper.
             </p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
@@ -216,7 +216,7 @@ export default function LandingPage() {
         <div className="text-center mb-12">
           <h2 className="text-3xl font-bold text-text-primary mb-3">What you get</h2>
           <p className="text-text-secondary max-w-[42rem] mx-auto italic">
-            The platform is the SDK plus four capabilities — Autopilot, Fleet, Observatory, Training Loop — with Sealed security across all of them.
+            The platform is the SDK plus four capabilities — Work coordinator, Fleet, Observatory, Training Loop — with Sealed security across all of them.
           </p>
         </div>
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -301,8 +301,8 @@ export default function LandingPage() {
                 items: ['BaseAgent', 'Strategies', 'Workflows', 'Memory & RAG', 'Guardrails'],
               },
               {
-                label: 'Autopilot',
-                items: ['Goal Router', 'Mission Driver', 'Slot Extraction', 'Plan Preview', 'Healing (roadmap)'],
+                label: 'Coordinator',
+                items: ['Task intake', 'Plan gates', 'Spend ledger', 'Schedules', 'Action policy'],
               },
               {
                 label: 'Fleet',

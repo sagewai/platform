@@ -94,62 +94,6 @@ dev-all:
 admin-dev:
     pnpm --filter @sagewai/admin dev
 
-# ──────────────────────────────────────────────────────────────────────
-# Autopilot end-to-end demo (admin backend + admin UI + autopilot enabled)
-# ──────────────────────────────────────────────────────────────────────
-# Prereq: sagewai-llm must be running on :8100. From sister repo, run:
-#     cd ../sagewai-llm && just llm-up
-#
-# This recipe:
-#   1. Confirms sagewai-llm is reachable.
-#   2. Starts admin backend on :8000 with SAGEWAI_LLM_BASE_URL pointing at it.
-#   3. Starts admin Next.js dev server on :3008.
-#   4. After both come up, posts /api/v1/autopilot/enable so the goal route works.
-#   5. Prints the demo URL.
-autopilot-demo SAGEWAI_LLM_BASE_URL='http://localhost:8100':
-    #!/usr/bin/env bash
-    set -e
-    trap 'kill 0 2>/dev/null' EXIT
-    echo "→ checking sagewai-llm at {{SAGEWAI_LLM_BASE_URL}}..."
-    if ! curl -sf {{SAGEWAI_LLM_BASE_URL}}/health >/dev/null; then
-      echo "✗ sagewai-llm not reachable at {{SAGEWAI_LLM_BASE_URL}}"
-      echo "  run: cd ../sagewai-llm && just llm-up"
-      exit 1
-    fi
-    echo "✓ sagewai-llm healthy"
-    echo "→ bootstrapping admin (idempotent: user, token, autopilot config, env)..."
-    SAGEWAI_LLM_BASE_URL={{SAGEWAI_LLM_BASE_URL}} \
-      uv run --package sagewai python scripts/dev-bootstrap-admin.py
-    echo "→ starting admin backend on :8000..."
-    SAGEWAI_LLM_BASE_URL={{SAGEWAI_LLM_BASE_URL}} \
-    SAGEWAI_DEV_TRUST_LOCAL=1 \
-    SAGEWAI_ALLOW_HOST_EXEC=1 \
-      uv run --package sagewai sagewai admin serve --host 0.0.0.0 --port 8000 &
-    echo "→ starting admin UI on :3008..."
-    pnpm --filter @sagewai/admin dev &
-    echo "→ waiting for admin backend to come up..."
-    for i in $(seq 1 30); do
-      if curl -sf http://localhost:8000/openapi.json >/dev/null 2>&1; then
-        echo "✓ backend ready"
-        break
-      fi
-      sleep 1
-    done
-    echo ""
-    echo "─────────────────────────────────────────────────────"
-    echo " Open: http://localhost:3008/autopilot"
-    echo " Try goal: 'track competitor pricing daily'"
-    echo " Expected: auto_route → competitive-research-daily ~0.92"
-    echo "─────────────────────────────────────────────────────"
-    echo " (Ctrl-C to stop both processes.)"
-    wait
-
-# Stop the autopilot-demo backend + UI by killing the dev ports.
-autopilot-demo-down:
-    -lsof -ti :8000 | xargs -r kill 2>/dev/null
-    -lsof -ti :3008 | xargs -r kill 2>/dev/null
-    @echo "✓ stopped admin processes on :8000 and :3008"
-
 # ── Fleet workers ──────────────────────────────────────────────────────────
 # Create/run fleet workers against the gateway. Auth via env:
 #   SAGEWAI_ADMIN_URL (default http://localhost:8000), SAGEWAI_ADMIN_TOKEN.

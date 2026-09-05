@@ -199,7 +199,7 @@ HarnessRuntime backend configuration stay on each worker. If a worker
 disappears, lease recovery can reassign the unfinished stage without erasing
 Work state or rerunning completed stages.
 
-## 6. Work API and Control Console
+## 6. Work API, Tasks, and the Control Console
 
 `sagewai admin serve --port 8000` exposes the authenticated Work API. To run the
 backend together with the responsive Work Control Console from a source
@@ -213,6 +213,13 @@ The CLI, API, and console read the same project-scoped canonical Work store and
 pending-attention query. The console adds active Work, timeline, evidence,
 operator activity, gates, degraded control, and Fleet status without becoming a
 second lifecycle owner.
+
+The same stack serves the coordinator. `http://localhost:3008/board` is the Task board —
+composer, five columns, and the `Focus`/`Today`/`All` views; `/tasks/{id}` is one Task's
+thread, plan, actions, activity, telemetry and settings; `/decisions` is everything waiting on
+you, Task attention and Work attention merged, decided and answered in place. The CLI
+equivalents are `sagewai task board`, `sagewai task thread`, and `sagewai task decisions`, all
+under a required `--project` — there is no organization-global Task scope.
 
 ## What to read next
 

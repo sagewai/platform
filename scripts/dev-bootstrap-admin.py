@@ -5,7 +5,6 @@
 Run from anywhere; produces ``~/.sagewai/admin-state.json`` with:
   * an admin user (email/password)
   * an active token
-  * autopilot enabled and pointing at the local sagewai-llm
 
 The Next.js admin obtains its token automatically: the just recipe
 runs the backend with ``SAGEWAI_DEV_TRUST_LOCAL=1``, and the browser's
@@ -13,8 +12,8 @@ silent-refresh call to ``/api/v1/auth/refresh`` returns a token without
 needing a session cookie when the request comes from localhost. No env
 file edits, no operator action.
 
-Re-running is safe: existing user / token / autopilot config are
-preserved unless ``--reset`` is passed.
+Re-running is safe: existing user / token are preserved unless ``--reset`` is
+passed.
 
 Usage::
 
@@ -33,9 +32,6 @@ from pathlib import Path
 
 DEFAULT_EMAIL = os.environ.get("SAGEWAI_DEV_ADMIN_EMAIL", "dev@sagewai.local")
 DEFAULT_PASSWORD = os.environ.get("SAGEWAI_DEV_ADMIN_PASSWORD", "sagewai-dev")
-DEFAULT_LLM_BASE_URL = os.environ.get(
-    "SAGEWAI_LLM_BASE_URL", "http://localhost:8100"
-)
 
 STATE_PATH = Path.home() / ".sagewai" / "admin-state.json"
 
@@ -97,38 +93,18 @@ def _ensure_token(state: dict, *, reset: bool) -> tuple[str, bool]:
     return new_token, True
 
 
-def _ensure_autopilot(state: dict) -> bool:
-    """Ensure autopilot is enabled and points at the local server.
-    Returns True if anything changed."""
-    config = state.get("autopilot") or {}
-    desired = {
-        "enabled": True,
-        "tier": "anonymous",
-        "base_url": DEFAULT_LLM_BASE_URL,
-    }
-    changed = False
-    for k, v in desired.items():
-        if config.get(k) != v:
-            config[k] = v
-            changed = True
-    state["autopilot"] = config
-    return changed
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--reset",
         action="store_true",
-        help="Force a fresh admin user + token + autopilot config "
-        "(overwrites existing).",
+        help="Force a fresh admin user + token (overwrites existing).",
     )
     args = parser.parse_args(argv)
 
     state = _load_state()
     email, password, admin_new = _ensure_admin(state, reset=args.reset)
     _, token_new = _ensure_token(state, reset=args.reset)
-    autopilot_changed = _ensure_autopilot(state)
     _save_state(state)
 
     print("─── sagewai admin dev-bootstrap ───")
@@ -137,8 +113,6 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  admin pw:      {password}")
     print(f"  admin user:    {'NEW' if admin_new else 'unchanged'}")
     print(f"  active token:  {'NEW' if token_new else 'unchanged'}")
-    print(f"  autopilot:     {'updated' if autopilot_changed else 'unchanged'}"
-          f" (base_url={DEFAULT_LLM_BASE_URL})")
     print()
     print("  → The browser obtains its token via /api/v1/auth/refresh")
     print("    automatically when SAGEWAI_DEV_TRUST_LOCAL=1 is set on the")

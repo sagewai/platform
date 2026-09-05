@@ -8,7 +8,7 @@ End-to-end, the loop is achievable in a weekend for under $5 of compute. Once yo
 
 - **Capture every answer automatically.** The Curator instruments agent runs and writes successful responses to JSONL at `~/.sagewai/training/`. No manual capture code.
 - **Promote training-grade samples.** Filter, dedupe, and promote the captured corpus into a dataset ready for fine-tuning.
-- **Trigger fine-tunes on a threshold.** When the dataset crosses a configured size, Sagewai kicks off a fine-tune job — manually or via the autopilot loop.
+- **Trigger fine-tunes on a threshold.** When the dataset crosses a configured size, Sagewai kicks off a fine-tune job — manually or on a schedule.
 - **Fine-tune small models on cheap GPUs.** Unsloth integration runs real LoRA fine-tunes of 3-7B base models on a free Colab T4 or a $0.34/hr RunPod A10G.
 - **Deploy locally.** Ship the LoRA via Ollama on your laptop, `mlx_lm.server` on Apple Silicon, or any OpenAI-compatible endpoint.
 - **Measure cost-down end-to-end.** Each fine-tune example reports $/call before and after, against the cloud baseline.
@@ -26,7 +26,7 @@ End-to-end, the loop is achievable in a weekend for under $5 of compute. Once yo
 ### Pattern + foundation examples
 
 - [**Example 25 — `training_data_pipeline`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/25_training_data_pipeline.py) — the Curator capture surface.
-- [**Example 36 — `autopilot_training_loop`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/36_autopilot_training_loop.py) — the autopilot closes the loop automatically.
+- [**Example 36 — `autopilot_training_loop`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/36_autopilot_training_loop.py) — an offline walkthrough of the capture → fine-tune trigger.
 - [**Example 38 — `unsloth_finetune`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/38_unsloth_finetune.py) — real Unsloth LoRA fine-tune.
 - [**Example 38a — `mlx_lm_server_deploy`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/38a_mlx_lm_server_deploy.py) — Apple Silicon deploy.
 - [**Example 18 — `local_llm_routing`**](https://github.com/sagewai/platform/blob/main/packages/sdk/sagewai/examples/18_local_llm_routing.py) — Ollama / LM Studio swap.
@@ -43,6 +43,6 @@ End-to-end, the loop is achievable in a weekend for under $5 of compute. Once yo
 
 ## See also
 
-- **[Autopilot](/docs/platform/autopilot)** — the loop closes automatically when Autopilot triggers a fine-tune as the corpus crosses the threshold.
+- **[Work coordinator](/docs/get-started/quickstart)** — a scheduled Task can run the fine-tune the corpus threshold calls for.
 - **[Observatory](/docs/platform/observatory)** — the cost-down measurement surface.
 - **[All products](/docs/platform)** — the other components.

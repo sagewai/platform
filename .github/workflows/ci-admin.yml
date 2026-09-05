@@ -42,6 +42,7 @@ jobs:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile=false
+      - run: pnpm --filter @sagewai/admin exec tsc --noEmit
       - run: pnpm --filter @sagewai/admin build
       - name: Audit JS deps
         run: pnpm audit --audit-level=high
@@ -55,7 +56,9 @@ jobs:
     #   3. Inline workflow agents recorded as workflow_step rows
     #   4. /workflows/history/<id> renders Stats/Events/Cost Flow/
     #      Canvas/Replay without paywall.
-    # Scoped to the single regression spec intentionally — the wider
+    #   5. Coordinator console: board, Task tabs, decisions inbox
+    #      (apps/admin/e2e/16-coordinator-*.spec.ts)
+    # Scoped to the named regression specs intentionally — the wider
     # e2e suite has unrelated pre-existing failures that will be
     # cleaned up in a separate task.
     runs-on: ubuntu-latest
@@ -81,7 +84,7 @@ jobs:
       - name: Run regression spec
         env:
           CI: 'true'
-        run: pnpm --filter @sagewai/admin exec playwright test 13-regression-history --reporter=list
+        run: pnpm --filter @sagewai/admin exec playwright test 13-regression-history 16-coordinator --reporter=list
       - name: Upload playwright report on failure
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

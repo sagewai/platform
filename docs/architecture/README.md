@@ -8,20 +8,22 @@ Read in order:
 2. **[security-tiers.md](security-tiers.md)** — Tier-1 (orchestration, host-side) vs Tier-2 (user-task, sandbox-side) keys; what Sagewai sees vs doesn't see; trust assumption summary.
 3. **[execution-modes.md](execution-modes.md)** — the five modes (0, 1, 2, 3, 3b); cost/security trade-offs; per-step mode selection.
 4. **[execution-backends.md](execution-backends.md)** — pluggable Sandbox backends (Docker / K8s / Lambda / Null) and Identity backends (Builtin / Vault / 1Password / AWS SM / SOPS / Bitwarden); mode × backend compatibility matrix.
+5. **[work-control-plane-evolution.md](work-control-plane-evolution.md)** — the product-center boundary: which subsystems are kept, adapted, frozen, or retired as a product surface, with the repository evidence for each and the rule for revisiting a decision.
 
-Every implementation plan and spec is checked against these four docs. If something in a plan diverges from this architecture, fix the doc OR fix the plan — never both at once without explicit reconciliation.
+Every implementation plan and spec is checked against these five docs. If something in a plan diverges from this architecture, fix the doc OR fix the plan — never both at once without explicit reconciliation.
 
 ## User-facing render
 
-The docs site at <https://docs.sagewai.ai> mirrors these four documents in user-facing tone under the **Architecture** section (5 pages: overview + the four chapters). Internal jargon (`Sealed-iii.A`, `Plan 1.5`, …) is replaced with descriptive prose; the conceptual model is identical. Sources:
+The docs site at <https://docs.sagewai.ai> mirrors these five documents in user-facing tone under the **Architecture** section (6 pages: overview + the five chapters). The evolution record is the exception: it is a decision record, so its page carries the table verbatim. Internal jargon (`Sealed-iii.A`, `Plan 1.5`, …) is replaced with descriptive prose; the conceptual model is identical. Sources:
 
 - `apps/docs/app/docs/architecture/page.mdx` — section index
 - `apps/docs/app/docs/architecture/runtime-topology/page.mdx`
 - `apps/docs/app/docs/architecture/security-tiers/page.mdx`
 - `apps/docs/app/docs/architecture/execution-modes/page.mdx`
 - `apps/docs/app/docs/architecture/sandbox-backends/page.mdx` (URL slug differs from this filename — operators search "sandbox backends," not "execution backends")
+- `apps/docs/app/docs/architecture/work-control-plane-evolution/page.mdx`
 
-When you change one of the four canonical docs in this directory, update the corresponding page in `apps/docs/app/docs/architecture/` in the same PR. The `docs(architecture):` PR-title convention catches both.
+When you change one of the five canonical docs in this directory, update the corresponding page in `apps/docs/app/docs/architecture/` in the same PR. The `docs(architecture):` PR-title convention catches both.
 
 ## Change procedure
 

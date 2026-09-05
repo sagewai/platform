@@ -67,7 +67,7 @@ export function OrganizationJsonLd(): ReactElement {
     url: 'https://sagewai.ai',
     logo: 'https://docs.sagewai.ai/brand/sagewai_logo.webp',
     description:
-      'Sagewai is the autonomous agent platform for senior engineers shipping AI features under budget. Open-source SDK, hosted Autopilot, Fleet, Observatory, and Training Loop.',
+      'Sagewai is the autonomous agent platform for senior engineers shipping AI features under budget. Open-source SDK, the Work coordinator, Fleet, Observatory, and Training Loop.',
     sameAs: [
       'https://github.com/sagewai',
       'https://pypi.org/project/sagewai/',

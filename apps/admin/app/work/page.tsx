@@ -31,7 +31,7 @@ function formatTimestamp(value: string): string {
 
 function attentionClass(kind: PendingAttentionKind): string {
   if (kind === 'CONTROL_DEGRADED' || kind === 'EXTERNAL_OUTCOME_INCIDENT') {
-    return 'border-destructive/30 bg-destructive/10 text-destructive';
+    return 'border-destructive bg-destructive text-destructive-foreground';
   }
   if (kind === 'WORK_BLOCKED') {
     return 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300';
@@ -41,7 +41,7 @@ function attentionClass(kind: PendingAttentionKind): string {
 
 function statusClass(status: WorkRecord['status']): string {
   if (status === 'WORK_BLOCKED' || status === 'ROLLING_BACK' || status === 'TRIAGING') {
-    return 'border-destructive/30 bg-destructive/10 text-destructive';
+    return 'border-destructive bg-destructive text-destructive-foreground';
   }
   if (status === 'READY_TO_DELIVER' || status === 'SOAKING') {
     return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300';

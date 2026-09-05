@@ -2,7 +2,7 @@
 
 import confetti from 'canvas-confetti';
 import { useEffect, useRef } from 'react';
-import { consumeFirstMissionFlag } from '@/app/autopilot/missions/[id]/actions';
+import { consumeFirstMissionFlag } from '@/lib/autopilot/first-mission-flag';
 import { useReducedMotion } from '@/hooks/use-reduced-motion';
 
 // Brand palette — these are static decoration values, not theme tokens.

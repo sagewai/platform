@@ -131,6 +131,26 @@ import type {
   ToolConnectionMetadata,
   ToolTestResult,
   PendingAttention,
+  BoardColumn,
+  IntakePreview,
+  TaskActionRecord,
+  TaskActivityPage,
+  TaskBoard,
+  TaskBudget,
+  TaskDecisionItem,
+  TaskDefaults,
+  TaskDetail,
+  TaskKind,
+  TaskListPage,
+  TaskOrigin,
+  TaskPortfolio,
+  TaskRecord,
+  TaskStatus,
+  TaskTelemetry,
+  TaskTemplateCatalogue,
+  TaskThread,
+  TaskTriggerSpec,
+  TaskWriteResult,
   WorkDetail,
   WorkRecord,
 } from './types';
@@ -148,6 +168,64 @@ const analyticsClient = createFetchClient(ANALYTICS_URL, clientOpts);
 const workScopeHeaders = () => ({
   'X-Project-ID': getCurrentProjectId() ?? 'global',
 });
+
+/**
+ * The Task scope: one explicit project, never `global`.
+ *
+ * `_task_project_scope` refuses the organization-global scope with a 400 (spec section 19),
+ * so a Task call made before a project is selected is refused here rather than round-tripped.
+ */
+export const taskScopeHeaders = (): Record<string, string> => {
+  const projectId = getCurrentProjectId();
+  if (projectId === null) {
+    throw new Error('Select a project: Tasks are never organization-global.');
+  }
+  return { 'X-Project-ID': projectId };
+};
+
+/** `sha256:<64 hex>` — the artifact route's path parameter, from an `artifact://` reference. */
+export const artifactDigest = (reference: string): string =>
+  reference.replace(/^artifact:\/\//, '');
+
+interface TaskListQuery {
+  status?: TaskStatus[];
+  kind?: TaskKind[];
+  origin?: TaskOrigin[];
+  column?: BoardColumn[];
+  order_by?: 'created_at' | 'updated_at';
+  descending?: boolean;
+  cursor?: string;
+  limit?: number;
+}
+
+/**
+ * The list query, ordering included.
+ *
+ * A cursor encodes the ordering and direction it was minted under and the route 400s a cursor
+ * sent with a different pair, so `order_by` and `descending` are always sent — including on
+ * the page that follows a cursor, which passes back the same pair it paged with.
+ */
+function taskListQuery(query: TaskListQuery): string {
+  const search = new URLSearchParams();
+  for (const value of query.status ?? []) search.append('status', value);
+  for (const value of query.kind ?? []) search.append('kind', value);
+  for (const value of query.origin ?? []) search.append('origin', value);
+  for (const value of query.column ?? []) search.append('column', value);
+  if (query.order_by) search.set('order_by', query.order_by);
+  if (query.descending !== undefined) search.set('descending', String(query.descending));
+  if (query.cursor) search.set('cursor', query.cursor);
+  if (query.limit !== undefined) search.set('limit', String(query.limit));
+  const encoded = search.toString();
+  return encoded === '' ? '' : `?${encoded}`;
+}
+
+function taskWrite<T>(path: string, body: unknown, extraHeaders?: Record<string, string>) {
+  return analyticsClient.raw<T>(path, {
+    method: 'POST',
+    headers: { ...taskScopeHeaders(), ...extraHeaders },
+    body: JSON.stringify(body),
+  });
+}
 
 export const adminApi = {
   /* ─── Unified connections (PR5) — talks to /api/v1/admin/connections/... ─── */
@@ -168,6 +246,168 @@ export const adminApi = {
     analyticsClient.raw<WorkDetail>(`/api/v1/work/${encodeURIComponent(workId)}`, {
       headers: workScopeHeaders(),
     }),
+
+  /* ─── Coordinator (Tasks) ─── */
+  listTasks: (query: TaskListQuery = {}) =>
+    analyticsClient.raw<TaskListPage>(`/api/v1/tasks${taskListQuery(query)}`, {
+      headers: taskScopeHeaders(),
+    }),
+
+  getTaskBoard: () =>
+    analyticsClient.raw<TaskBoard>('/api/v1/tasks/board', { headers: taskScopeHeaders() }),
+
+  getTaskPortfolio: (limit = 20) =>
+    analyticsClient.raw<TaskPortfolio>(`/api/v1/tasks/portfolio?limit=${limit}`, {
+      headers: taskScopeHeaders(),
+    }),
+
+  createTask: (brief: string) =>
+    taskWrite<TaskWriteResult>('/api/v1/tasks', { brief }),
+
+  previewTaskIntake: (brief: string) =>
+    taskWrite<IntakePreview>('/api/v1/tasks/intake', { brief }),
+
+  listTaskTemplates: () =>
+    analyticsClient.raw<TaskTemplateCatalogue>('/api/v1/tasks/templates', {
+      headers: taskScopeHeaders(),
+    }),
+
+  listTaskDecisions: () =>
+    analyticsClient.raw<{ items: TaskDecisionItem[] }>('/api/v1/tasks/decisions', {
+      headers: taskScopeHeaders(),
+    }),
+
+  getTaskDefaults: () =>
+    analyticsClient.raw<TaskDefaults>('/api/v1/tasks/defaults', {
+      headers: taskScopeHeaders(),
+    }),
+
+  listTaskTriggers: () =>
+    analyticsClient.raw<{ triggers: TaskTriggerSpec[] }>('/api/v1/tasks/triggers', {
+      headers: taskScopeHeaders(),
+    }),
+
+  getTask: (taskId: string) =>
+    analyticsClient.raw<TaskDetail>(`/api/v1/tasks/${encodeURIComponent(taskId)}`, {
+      headers: taskScopeHeaders(),
+    }),
+
+  getTaskThread: (taskId: string) =>
+    analyticsClient.raw<TaskThread>(`/api/v1/tasks/${encodeURIComponent(taskId)}/thread`, {
+      headers: taskScopeHeaders(),
+    }),
+
+  listTaskActions: (taskId: string) =>
+    analyticsClient.raw<{ actions: TaskActionRecord[] }>(
+      `/api/v1/tasks/${encodeURIComponent(taskId)}/actions`,
+      { headers: taskScopeHeaders() },
+    ),
+
+  requestTaskRollback: (taskId: string, actionId: string) =>
+    taskWrite<TaskRecord>(
+      `/api/v1/tasks/${encodeURIComponent(taskId)}/actions/${encodeURIComponent(actionId)}/rollback`,
+      {},
+    ),
+
+  postTaskMessage: (taskId: string, text: string, idempotencyKey: string) =>
+    taskWrite<TaskRecord>(
+      `/api/v1/tasks/${encodeURIComponent(taskId)}/messages`,
+      { text },
+      { 'Idempotency-Key': idempotencyKey },
+    ),
+
+  answerTaskQuestion: (
+    taskId: string,
+    body:
+      | { attention_id: string; attention_version: number; answer: string }
+      | { attention_id: string; attention_version: number; use_default: true },
+  ) => taskWrite<TaskRecord>(`/api/v1/tasks/${encodeURIComponent(taskId)}/answers`, body),
+
+  decideTaskGate: (
+    taskId: string,
+    gateId: string,
+    body: { decision: 'allow' | 'deny'; note: string | null },
+  ) =>
+    taskWrite<TaskRecord>(
+      `/api/v1/tasks/${encodeURIComponent(taskId)}/gates/${encodeURIComponent(gateId)}`,
+      body,
+    ),
+
+  decideWorkGate: (
+    workId: string,
+    gateId: string,
+    body: { decision: 'allow' | 'deny' },
+  ) =>
+    taskWrite<{ work_id: string; gate_id: string; decision: 'allow' | 'deny' }>(
+      `/api/v1/work/${encodeURIComponent(workId)}/gates/${encodeURIComponent(gateId)}`,
+      { decision: body.decision },
+    ),
+
+  pauseTask: (taskId: string) =>
+    taskWrite<TaskRecord>(`/api/v1/tasks/${encodeURIComponent(taskId)}/pause`, {}),
+
+  resumeTask: (taskId: string) =>
+    taskWrite<TaskRecord>(`/api/v1/tasks/${encodeURIComponent(taskId)}/resume`, {}),
+
+  cancelTask: (taskId: string, note: string | null) =>
+    taskWrite<TaskRecord>(`/api/v1/tasks/${encodeURIComponent(taskId)}/cancel`, { note }),
+
+  patchTaskBudget: (taskId: string, budget: TaskBudget, revision: number) =>
+    analyticsClient.raw<TaskWriteResult>(`/api/v1/tasks/${encodeURIComponent(taskId)}`, {
+      method: 'PATCH',
+      headers: taskScopeHeaders(),
+      body: JSON.stringify({ budget, revision }),
+    }),
+
+  listTaskActivity: (
+    taskId: string,
+    query: {
+      work_id?: string;
+      run_id?: string;
+      source?: string;
+      cursor?: string;
+      limit?: number;
+    } = {},
+  ) => {
+    const search = new URLSearchParams();
+    if (query.work_id !== undefined) search.set('work_id', query.work_id);
+    if (query.run_id !== undefined) search.set('run_id', query.run_id);
+    if (query.source !== undefined) search.set('source', query.source);
+    if (query.cursor !== undefined) search.set('cursor', query.cursor);
+    if (query.limit !== undefined) search.set('limit', String(query.limit));
+    const encoded = search.toString();
+    return analyticsClient.raw<TaskActivityPage>(
+      `/api/v1/tasks/${encodeURIComponent(taskId)}/activity${
+        encoded === '' ? '' : `?${encoded}`
+      }`,
+      { headers: taskScopeHeaders() },
+    );
+  },
+
+  getTaskTelemetry: (taskId: string) =>
+    analyticsClient.raw<TaskTelemetry>(`/api/v1/tasks/${encodeURIComponent(taskId)}/telemetry`, {
+      headers: taskScopeHeaders(),
+    }),
+
+  taskEventsUrl: (taskId: string) =>
+    `${ANALYTICS_URL}/api/v1/tasks/${encodeURIComponent(taskId)}/events`,
+
+  /** One artifact the named Task references; a `restricted` Task is refused by the backend. */
+  getTaskArtifact: async (taskId: string, digest: string): Promise<string> => {
+    const url =
+      `${ANALYTICS_URL}/api/v1/artifacts/${encodeURIComponent(digest)}` +
+      `?task_id=${encodeURIComponent(taskId)}`;
+    const response = await authFetch(url, { headers: taskScopeHeaders() });
+    if (!response.ok) {
+      throw new Error(
+        response.status === 403
+          ? 'Restricted content never leaves the console sink.'
+          : `Artifact ${digest} is not readable (${response.status}).`,
+      );
+    }
+    return response.text();
+  },
+
   /* ─── Core admin endpoints ─── */
   listAgents: () => client.get<AgentSummary[]>('/agents'),
 

@@ -169,6 +169,12 @@ async function mockWorkApi(
 }
 
 test.describe('Work Control Console', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.route('**/api/v1/tasks/decisions', async (route) => {
+      await route.fulfill({ json: { items: [] } });
+    });
+  });
+
   test('sends the explicit global Work scope', async ({ page }) => {
     const scopes: Array<string | undefined> = [];
     await mockWorkApi(page);
@@ -224,7 +230,7 @@ test.describe('Work Control Console', () => {
       }),
     ).toBeVisible();
     await expect(
-      page.getByRole('button', { name: 'Work Control, 1 Work items need attention' }),
+      page.getByRole('button', { name: 'Coordinator, 1 items need attention' }),
     ).toBeVisible();
   });
 
@@ -281,7 +287,60 @@ test.describe('Work Control Console', () => {
       }),
     ).toHaveCount(0);
     await expect(
-      page.getByRole('button', { name: 'Work Control, 1 Work items need attention' }),
+      page.getByRole('button', { name: 'Coordinator, 1 items need attention' }),
+    ).toBeVisible();
+  });
+
+  test('deduplicates a mirrored Work gate on the Coordinator badge', async ({ page }) => {
+    const mirroredGateDecision = {
+      kind: 'task',
+      project_id: project.id,
+      task_id: 'task-console-1',
+      work_id: work.work_id,
+      attention_id: 'gate-production',
+      attention_version: null,
+      summary: 'Approve production delivery?',
+      urgency: 'now',
+      due_at: '2026-08-28T09:00:00Z',
+      gate_id: 'gate-production',
+      decided_by: 'work',
+      evidence_refs: ['evidence://review/accepted'],
+    };
+    // The mirrored gate counts once; a bare Work gate and a Task question count on their own.
+    const bareWorkGate = { ...pending, attention_id: 'gate-staging', summary: 'Approve staging?' };
+    const taskQuestion = {
+      ...mirroredGateDecision,
+      attention_id: 'question-1',
+      gate_id: null,
+      decided_by: null,
+    };
+    const bareGateItem = {
+      ...mirroredGateDecision,
+      kind: 'work',
+      task_id: null,
+      attention_id: 'gate-staging',
+      gate_id: 'gate-staging',
+    };
+
+    await page.route('**/api/v1/projects', async (route) => {
+      await route.fulfill({ json: [project] });
+    });
+    await page.route('**/api/v1/tasks/decisions', async (route) => {
+      await route.fulfill({
+        json: { items: [mirroredGateDecision, taskQuestion, bareGateItem] },
+      });
+    });
+    await page.route('**/api/v1/work**', async (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      await route.fulfill({
+        json: pathname === '/api/v1/work/pending' ? [pending, bareWorkGate] : [work],
+      });
+    });
+
+    await page.goto('/work');
+
+    await expect(
+      page.getByRole('button', { name: 'Coordinator, 3 items need attention' }),
     ).toBeVisible();
   });
 
@@ -308,7 +367,7 @@ test.describe('Work Control Console', () => {
     });
     await expect(alertToast).toBeVisible();
     await expect(
-      page.getByRole('button', { name: 'Work Control, 1 Work items need attention' }),
+      page.getByRole('button', { name: 'Coordinator, 1 items need attention' }),
     ).toBeVisible();
 
     await page.evaluate(() => window.dispatchEvent(new Event('focus')));
@@ -316,7 +375,7 @@ test.describe('Work Control Console', () => {
 
     await page.getByRole('button', { name: 'Collapse sidebar' }).click();
     await expect(
-      page.getByRole('button', { name: 'Work Control, 1 Work items need attention' }),
+      page.getByRole('button', { name: 'Coordinator, 1 items need attention' }),
     ).toBeVisible();
   });
 
@@ -335,10 +394,10 @@ test.describe('Work Control Console', () => {
     await expect(page.getByText('Approve production delivery?', { exact: true }).filter({ visible: true })).toBeVisible();
     const incidentBadge = page.getByText('EXTERNAL OUTCOME INCIDENT', { exact: true }).filter({ visible: true });
     await expect(incidentBadge).toBeVisible();
-    await expect(incidentBadge).toHaveClass(/text-destructive/);
+    await expect(incidentBadge).toHaveClass(/text-destructive-foreground/);
     await expect(page.getByText('Configured outcome regressed after completion.', { exact: true }).filter({ visible: true })).toBeVisible();
     await expect(
-      page.getByRole('button', { name: 'Work Control, 2 Work items need attention' }),
+      page.getByRole('button', { name: 'Coordinator, 2 items need attention' }),
     ).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Active Work' })).toBeVisible();
     await expect(page.getByText('READY TO DELIVER').filter({ visible: true })).toBeVisible();
@@ -390,5 +449,17 @@ test.describe('Work Control Console', () => {
     });
     await expect(evidenceBoard.getByText('evidence://observation/fail', { exact: true })).toBeVisible();
     await expect(evidenceBoard.getByText('evidence://rollback/safe', { exact: true })).toBeVisible();
+  });
+
+  test('puts Board, Tasks, Decisions and Active Work under Coordinator', async ({ page }) => {
+    await mockWorkApi(page);
+
+    await page.goto('/work');
+
+    await expect(page.getByRole('link', { name: 'Board', exact: true })).toHaveAttribute('href', '/board');
+    await expect(page.getByRole('link', { name: 'Tasks', exact: true })).toHaveAttribute('href', '/tasks');
+    await expect(page.getByRole('link', { name: 'Decisions', exact: true })).toHaveAttribute('href', '/decisions');
+    await expect(page.getByRole('link', { name: 'Active Work', exact: true })).toHaveAttribute('href', '/work');
+    await expect(page.getByText('Autopilot (beta)')).toHaveCount(0);
   });
 });

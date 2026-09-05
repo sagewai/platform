@@ -147,20 +147,29 @@ export function authFetch(
  * feed, monitor). When enabled, the stream auto-reconnects with exponential
  * backoff (1s → 2s → 4s … capped at 30s) on network errors or stream end,
  * matching the behaviour of the native EventSource API.
+ *
+ * The stream is resumable: every `id:` line is remembered and replayed as a
+ * `Last-Event-ID` request header on the next connect, so a reconnect continues
+ * from the last delivered event instead of from the beginning. `opts.headers`
+ * are sent on every connect — the Task feed carries its project scope there.
  */
 export function authSSE(
   url: string,
   onEvent: (event: string, data: Record<string, unknown>) => void,
-  opts?: { onError?: () => void; reconnect?: boolean },
+  opts?: { onError?: () => void; reconnect?: boolean; headers?: Record<string, string> },
 ): AbortController {
   const controller = new AbortController();
   let backoff = 1000;
+  let lastEventId: string | null = null;
   const MAX_BACKOFF = 30_000;
 
   function connect() {
     if (controller.signal.aborted) return;
 
-    authFetch(url, { signal: controller.signal })
+    const headers: Record<string, string> = { ...opts?.headers };
+    if (lastEventId !== null) headers['Last-Event-ID'] = lastEventId;
+
+    authFetch(url, { signal: controller.signal, headers })
       .then(async (resp) => {
         if (!resp.ok || !resp.body) {
           opts?.onError?.();
@@ -175,6 +184,7 @@ export function authSSE(
         const decoder = new TextDecoder();
         let buffer = '';
         let currentEvent = 'message';
+        let pendingEventId: string | null = null;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -188,6 +198,8 @@ export function authSSE(
             const line = rawLine.replace(/\r$/, '');
             if (line === '') {
               currentEvent = 'message';
+            } else if (line.startsWith('id:')) {
+              pendingEventId = line.slice(3).trim();
             } else if (line.startsWith('event: ')) {
               currentEvent = line.slice(7).trim();
             } else if (line.startsWith('data: ') || line.startsWith('data:')) {
@@ -197,6 +209,8 @@ export function authSSE(
               } catch {
                 onEvent(currentEvent, {});
               }
+              if (pendingEventId !== null) lastEventId = pendingEventId;
+              pendingEventId = null;
             }
           }
         }

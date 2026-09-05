@@ -10,9 +10,9 @@ If you're new to Sagewai, start with the [getting-started guide](/docs/get-start
 
 The Python library you `pip install`. Provider-agnostic agents, tools, MCP, memory, workflows, directives, sandboxing, model swap. Works without any other Sagewai surface — drop it into an existing service and call agents like any other API client.
 
-### [Autopilot](/docs/platform/autopilot)
+### Work coordinator
 
-State a goal in plain English; Sagewai designs the agent graph, instantiates a mission, and runs it. The Curator captures every successful answer along the way as training data. Closes the loop with the Training Loop when the dataset crosses a threshold.
+State a goal; the coordinator turns it into one durable Task, asks what it must, plans a cycle of Work, runs it through the operators, and stops at the gates you kept. The board, the thread and the decisions inbox are in the admin console; `sagewai task` is the same surface from a terminal. See the [quickstart](/docs/get-started/quickstart).
 
 ### [Fleet](/docs/platform/fleet)
 
