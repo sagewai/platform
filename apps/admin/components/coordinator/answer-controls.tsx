@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -32,11 +32,14 @@ export function AnswerControls({
 }) {
   const [answer, setAnswer] = useState('');
   const [busy, setBusy] = useState<'answer' | 'default' | null>(null);
+  const busyRef = useRef(false);
 
   async function send(
     kind: 'answer' | 'default',
     body: { answer: string } | { use_default: true },
   ) {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(kind);
     onError('');
     try {
@@ -50,6 +53,7 @@ export function AnswerControls({
     } catch (cause) {
       onError((cause as Error).message);
     } finally {
+      busyRef.current = false;
       setBusy(null);
     }
   }

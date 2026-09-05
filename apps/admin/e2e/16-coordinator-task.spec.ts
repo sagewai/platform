@@ -2239,4 +2239,73 @@ test.describe('Coordinator Task page', () => {
     ]);
     await expect.poll(() => taskReads).toBeGreaterThan(before);
   });
+
+  test('answers once under a double click', async ({ page }) => {
+    const writes: string[] = [];
+    let releaseAnswer = () => {};
+    const answerReady = new Promise<void>((resolve) => {
+      releaseAnswer = resolve;
+    });
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}/thread`]: () => thread });
+    await mockTaskStream(page);
+    recordWrites(page, writes);
+    await page.route(
+      (url) => url.pathname === `/api/v1/tasks/${task.id}/answers`,
+      async (route) => {
+        await answerReady;
+        await route.fulfill({ json: needsYouTask });
+      },
+    );
+
+    await page.goto(`/tasks/${task.id}`);
+    await page.getByLabel('Answer to q-scope').fill('main');
+    await page.getByRole('button', { name: 'Send answer' }).evaluate((button) => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const button = page.getByRole('button', { name: 'Sending answer' });
+    await expect(button).toHaveAttribute('aria-busy', 'true');
+    await expect(button).toBeDisabled();
+    releaseAnswer();
+    await expect.poll(() => writes).toEqual([`/api/v1/tasks/${task.id}/answers`]);
+  });
+
+  test('decides a gate once under a double click', async ({ page }) => {
+    const writes: string[] = [];
+    let releaseGate = () => {};
+    const gateReady = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}/thread`]: () => thread });
+    await mockTaskStream(page);
+    recordWrites(page, writes);
+    await page.route(
+      (url) =>
+        decodeURIComponent(url.pathname) === `/api/v1/tasks/${task.id}/gates/plan:${task.id}:1`,
+      async (route) => {
+        await gateReady;
+        await route.fulfill({ json: { ...needsYouTask, pending_gate: null } });
+      },
+    );
+
+    await page.goto(`/tasks/${task.id}`);
+    await page
+      .getByTestId(`gate-controls-plan:${task.id}:1`)
+      .getByRole('button', { name: 'Allow' })
+      .evaluate((button) => {
+        button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+
+    const button = page
+      .getByTestId(`gate-controls-plan:${task.id}:1`)
+      .getByRole('button', { name: 'Allowing' });
+    await expect(button).toHaveAttribute('aria-busy', 'true');
+    await expect(button).toBeDisabled();
+    releaseGate();
+    await expect.poll(() => writes).toEqual([`/api/v1/tasks/${task.id}/gates/plan:${task.id}:1`]);
+  });
 });

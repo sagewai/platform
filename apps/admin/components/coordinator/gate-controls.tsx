@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -53,12 +53,15 @@ export function GateControls({
 }) {
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState<'allow' | 'deny' | null>(null);
+  const busyRef = useRef(false);
 
   if (decidedBy === 'work' && !gateId.startsWith('merge:')) {
     return <p className="m-0 mt-2 text-sm">decide with sagewai work approve</p>;
   }
 
   async function decide(decision: 'allow' | 'deny') {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(decision);
     onError('');
     try {
@@ -75,6 +78,7 @@ export function GateControls({
     } catch (cause) {
       onError((cause as Error).message);
     } finally {
+      busyRef.current = false;
       setBusy(null);
     }
   }
