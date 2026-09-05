@@ -10,7 +10,6 @@
 /docs/pillars/sealed                   /docs/platform/security                301
 /docs/pillars/*                        /docs/platform/:splat                  301
 /docs/observatory                      /docs/platform/observatory             301
-/docs/autopilot                        /docs/platform/autopilot               301
 /docs/security                         /docs/platform/security                301
 /docs/guides/first-agent               /docs/get-started/first-agent          301
 /docs/guides/tutorials                 /docs/tutorials                        301

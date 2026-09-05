@@ -96,7 +96,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   height: 512,
                 },
                 description:
-                  'Sagewai is the autonomous agent platform for senior engineers shipping AI features under budget. Open-source SDK, hosted Autopilot, Fleet, Observatory, and Training Loop.',
+                  'Sagewai is the autonomous agent platform for senior engineers shipping AI features under budget. Open-source SDK, the Work coordinator, Fleet, Observatory, and Training Loop.',
                 foundingDate: '2026',
                 sameAs: [
                   'https://github.com/sagewai',
@@ -144,7 +144,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   'OpenTelemetry observability',
                   'Cost tracking and audit logs',
                   'Distributed Fleet with project isolation',
-                  'Autopilot — describe goal in plain English',
+                  'Work coordinator — describe the goal, gate what matters',
                   'Training Loop — capture, fine-tune, deploy local',
                 ],
               },

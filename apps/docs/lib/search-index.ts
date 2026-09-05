@@ -116,8 +116,8 @@ export const SEARCH_INDEX: SearchEntry[] = [
     title: 'Platform overview',
     href: '/docs/platform',
     section: 'Platform',
-    description: 'The Sagewai platform components: SDK, Autopilot, Fleet, Observatory, Training Loop, Sealed.',
-    keywords: 'platform overview sdk autopilot fleet observatory training loop sealed security',
+    description: 'The Sagewai platform components: SDK, Work coordinator, Fleet, Observatory, Training Loop, Sealed.',
+    keywords: 'platform overview sdk work coordinator fleet observatory training loop sealed security',
   },
   {
     title: 'SDK',
@@ -125,13 +125,6 @@ export const SEARCH_INDEX: SearchEntry[] = [
     section: 'Platform',
     description: 'Python-native agent runtime with 100+ LLM providers, MCP tools, and typed memory.',
     keywords: 'sdk python agent runtime llm providers mcp tools memory guardrails',
-  },
-  {
-    title: 'Autopilot',
-    href: '/docs/platform/autopilot',
-    section: 'Platform',
-    description: 'Goal-driven agent orchestration — state the goal, Autopilot runs the mission.',
-    keywords: 'autopilot goal mission orchestration blueprint slotspec agentgraph',
   },
   {
     title: 'Fleet',
@@ -446,8 +439,8 @@ export const SEARCH_INDEX: SearchEntry[] = [
     title: 'Execution Modes',
     href: '/docs/architecture/execution-modes',
     section: 'Architecture',
-    description: 'Direct, fleet, autopilot, and harness execution modes explained.',
-    keywords: 'execution modes direct fleet autopilot harness proxy',
+    description: 'Direct, fleet, and harness execution modes explained.',
+    keywords: 'execution modes direct fleet harness proxy',
   },
   {
     title: 'Sandbox Backends',

@@ -31,7 +31,7 @@ If you just want to ship your first agent, start with the [Quickstart](/docs/get
 
 Sagewai runs as two cooperating processes:
 
-- **The control plane** (the admin server, the CLI, autopilot) plans, persists, and dispatches work. It never runs a workflow step itself.
+- **The control plane** (the admin server, the CLI, the coordinator) plans, persists, and dispatches work. It never runs a workflow step itself.
 - **The worker fleet** claims work from the control plane and executes it. Workers don't allocate work to themselves — they pull what's available.
 
 You scale the two independently. Add workers when execution capacity is tight; the control plane keeps planning regardless of how busy the fleet is. A saturated fleet does not stall planning, and a slow planning step does not block other workers.
