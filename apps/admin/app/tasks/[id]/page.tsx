@@ -2,6 +2,7 @@
 
 import { use, useEffect, useRef, useState } from 'react';
 
+import { AnswerControls } from '@/components/coordinator/answer-controls';
 import { ArtifactPanel } from '@/components/coordinator/artifact-panel';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -30,6 +31,8 @@ export default function TaskThreadPage({ params }: { params: Promise<{ id: strin
   const feed = useTaskFeed(id, ready && currentSlug !== null);
   const [thread, setThread] = useState<TaskThread | null>(null);
   const [error, setError] = useState('');
+  const [reloads, setReloads] = useState(0);
+  const [answerError, setAnswerError] = useState('');
   const identityRef = useRef('');
 
   useEffect(() => {
@@ -39,6 +42,7 @@ export default function TaskThreadPage({ params }: { params: Promise<{ id: strin
     if (identityRef.current !== identity) {
       identityRef.current = identity;
       setThread(null);
+      setAnswerError('');
     }
     setError('');
     adminApi
@@ -52,7 +56,7 @@ export default function TaskThreadPage({ params }: { params: Promise<{ id: strin
     return () => {
       cancelled = true;
     };
-  }, [ready, currentSlug, id, feed.revision]);
+  }, [ready, currentSlug, id, feed.revision, reloads]);
 
   if (thread === null) {
     return error === '' ? (
@@ -99,6 +103,28 @@ export default function TaskThreadPage({ params }: { params: Promise<{ id: strin
                   <span>{new Date(entry.at).toLocaleString()}</span>
                 </div>
                 <p className="m-0 mt-1 whitespace-pre-wrap text-sm">{entry.text}</p>
+                {entry.kind === 'question' &&
+                  entry.attention_id !== null &&
+                  entry.attention_version !== null &&
+                  (entry.answer !== null || entry.answered_by !== null ? (
+                    <p className="m-0 mt-2 text-sm">
+                      {entry.answered_by === 'default' ? 'Defaulted: ' : 'Answered: '}
+                      {entry.answer ?? 'the recorded default'}
+                    </p>
+                  ) : (
+                    entry.decision === null &&
+                    !entry.closed && (
+                      <AnswerControls
+                        taskId={id}
+                        attentionId={entry.attention_id}
+                        attentionVersion={entry.attention_version}
+                        defaultable={entry.defaultable === true}
+                        deadlineAt={entry.deadline_at}
+                        onAnswered={() => setReloads((count) => count + 1)}
+                        onError={setAnswerError}
+                      />
+                    )
+                  ))}
                 {entry.refs.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {entry.refs.map((reference) => (
@@ -111,6 +137,11 @@ export default function TaskThreadPage({ params }: { params: Promise<{ id: strin
               </li>
             ))}
           </ol>
+          {answerError !== '' && (
+            <p role="alert" data-testid="answer-error" className="m-0 mt-3 text-sm text-foreground">
+              {answerError}
+            </p>
+          )}
         </CardContent>
       </Card>
     </div>

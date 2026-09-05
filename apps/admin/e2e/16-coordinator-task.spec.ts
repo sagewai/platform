@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 import {
+  answeredThread,
   mockCoordinatorApi,
   mockTaskStream,
   needsYouTask,
@@ -330,6 +331,86 @@ test.describe('Coordinator Task page', () => {
 
     await expect(page.getByTestId('artifact-error-brief')).toHaveText(
       'Restricted content never leaves the console sink.',
+    );
+  });
+
+  test('answers a question at the version the entry carries', async ({ page }) => {
+    const bodies: unknown[] = [];
+    const scopes: Array<string | undefined> = [];
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}/thread`]: () => thread });
+    await mockTaskStream(page);
+    page.on('request', (request) => {
+      if (request.url().endsWith('/answers')) {
+        bodies.push(JSON.parse(request.postData() ?? '{}'));
+        scopes.push(request.headers()['x-project-id']);
+      }
+    });
+
+    await page.goto(`/tasks/${task.id}`);
+    await page.getByLabel('Answer to q-scope').fill('main');
+    await page.getByRole('button', { name: 'Send answer' }).click();
+
+    await expect.poll(() => bodies).toEqual([
+      { attention_id: 'q-scope', attention_version: 2, answer: 'main' },
+    ]);
+    expect(scopes).toEqual([project.id]);
+  });
+
+  test('takes the default instead of typing one', async ({ page }) => {
+    const bodies: unknown[] = [];
+    const scopes: Array<string | undefined> = [];
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}/thread`]: () => thread });
+    await mockTaskStream(page);
+    page.on('request', (request) => {
+      if (request.url().endsWith('/answers')) {
+        bodies.push(JSON.parse(request.postData() ?? '{}'));
+        scopes.push(request.headers()['x-project-id']);
+      }
+    });
+
+    await page.goto(`/tasks/${task.id}`);
+    await page.getByRole('button', { name: 'Use default' }).click();
+
+    await expect.poll(() => bodies).toEqual([
+      { attention_id: 'q-scope', attention_version: 2, use_default: true },
+    ]);
+    expect(scopes).toEqual([project.id]);
+  });
+
+  test('renders a settled question as settled, with who settled it', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}/thread`]: () => answeredThread });
+    await mockTaskStream(page);
+
+    await page.goto(`/tasks/${task.id}`);
+
+    const entry = page.getByTestId('thread-entry-4:q-scope');
+    await expect(entry).toContainText('Defaulted: main');
+    await expect(entry.getByRole('button', { name: 'Send answer' })).toHaveCount(0);
+    await expect(entry.getByRole('button', { name: 'Use default' })).toHaveCount(0);
+  });
+
+  test('shows the refusal when the answer loses its version fence', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}/thread`]: () => thread });
+    await mockTaskStream(page);
+    await page.route(
+      (url) => url.pathname.endsWith('/answers'),
+      async (route) => {
+        await route.fulfill({
+          status: 409,
+          json: { detail: 'question q-scope is at attention version 3' },
+        });
+      },
+    );
+
+    await page.goto(`/tasks/${task.id}`);
+    await page.getByRole('button', { name: 'Use default' }).click();
+
+    await expect(page.getByTestId('answer-error')).toHaveText(
+      'question q-scope is at attention version 3',
     );
   });
 });

@@ -545,9 +545,36 @@ export const taskHandlers: Handlers = {
   [`/api/v1/tasks/${taskDetailTask.id}/events`]: () => '',
 };
 
+export const answeredThread = {
+  ...thread,
+  entries: [
+    threadEntry({
+      id: '4:q-scope',
+      sequence: 4,
+      author: 'system',
+      actor_ref: 'coordinator',
+      kind: 'question',
+      text: 'Which branch should the change land on?',
+      attention_id: 'q-scope',
+      attention_version: 2,
+      answer: 'main',
+      answered_by: 'default',
+      defaultable: true,
+      deadline_at: '2026-09-01T13:00:00Z',
+    }),
+  ],
+  open_question_ids: [],
+  pending_gate: null,
+} satisfies TaskThread;
+
+export const answerHandlers: Handlers = {
+  [`/api/v1/tasks/${taskDetailTask.id}/answers`]: () => needsYouTask,
+};
+
 export const baseHandlers: Handlers = {
   ...composerHandlers,
   ...taskHandlers,
+  ...answerHandlers,
   '/api/v1/tasks/board': () => board,
   '/api/v1/tasks': (url, method) => {
     if (method === 'POST') {
