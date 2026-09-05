@@ -262,14 +262,14 @@ Sagewai is early software. Here is what is real today, what is experimental, and
 
 **Shipped**
 - **SDK** — agents, `@tool` calling, 100+ models via LiteLLM, typed memory, guardrails, and multi-stage workflows.
-- **Autopilot** for **linear** plans — designs and runs the agent graph end-to-end.
+- **Task coordinator** — one durable Task per goal: intake and clarification, a planned cycle
+  of Work, gates a human decides, a spend ledger, schedules, and the console at `/board`.
 - **Fleet** — capability-based dispatch with project isolation; **Docker** (default) and **Kubernetes** sandbox backends.
 - **Observatory** — OpenTelemetry traces, metrics, and per-model / per-team cost tracking.
 - **Training Loop — capture** (the Curator) and run-level execution modes.
 - **Sealed** — the workload-identity model, an external secret backend (HashiCorp Vault), and admin profile/secret controls.
 
 **Experimental** — built and tested, not yet wired into the default run path
-- Autopilot **branched / conditional** plans (today the entry node runs; full routing is in progress).
 - Automatic **healing** — the engine surfaces recommended actions; it does not yet act on them.
 - Sealed **runtime enforcement** — live secret injection, redaction, per-key ACL, and mid-run revocation.
 

@@ -20,8 +20,9 @@ pnpm --filter @sagewai/admin test:e2e:ui
 
 ## Visual regression baselines
 
-Baseline screenshots live in `e2e/__screenshots__/`. They cover 8 autopilot pages ×
-3 viewports (sm/md/lg) × 2 themes (light/dark) = 48 snapshots.
+Baseline screenshots live in `e2e/__screenshots__/`. They cover the four
+console pages (`/board`, `/tasks`, `/decisions`, `/work`) × 3 viewports
+(sm/md/lg) × 2 themes (light/dark) = 24 snapshots.
 
 ### Updating baselines
 
@@ -43,8 +44,9 @@ Reviewers approve the visual diff during code review.
 
 ## Accessibility tests
 
-`a11y.spec.ts` runs `@axe-core/playwright` against every autopilot page in both
-themes and asserts zero WCAG 2.1 AA violations.
+`a11y.spec.ts` runs `@axe-core/playwright` against the four console pages
+(`/board`, `/tasks`, `/decisions`, `/work`) in both themes and asserts zero
+WCAG 2.1 AA violations.
 
 If a rule must be suppressed, document it in `a11y-exceptions.md` and use
 `.disableRules([...])` with a code comment.

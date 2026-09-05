@@ -864,31 +864,19 @@ def create_admin_serve_app(
     )
     from sagewai.admin.postgres_analytics import PostgresAnalyticsStore
     from sagewai.admin.state import AdminState
-    from sagewai.autopilot.controller.driver import MissionDriver
-    from sagewai.autopilot.controller.runner import SchedulerRunner
-    from sagewai.autopilot.controller.scheduler import MissionScheduler
     from sagewai.db import factory as _db_factory
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        """Start and stop the autopilot scheduler runner alongside the app."""
+        """Build and tear down the app's long-lived state.
+
+        Subscriptions, the connections executor, the Work and Task stores, and the Task
+        coordinator runner are started here and stopped in reverse on shutdown.
+        """
         # Fail fast on an unsafe production deployment BEFORE any state is built.
         # No-op unless SAGEWAI_ENV=production (dev/test/single-org local unaffected).
         from sagewai.admin.prod_check import validate_production_config
         validate_production_config()
-
-        scheduler = MissionScheduler()
-        driver = MissionDriver(scheduler=scheduler)
-        runner_interval = float(os.getenv("SAGEWAI_SCHEDULER_INTERVAL_SECONDS", "60"))
-        runner = SchedulerRunner(
-            scheduler=scheduler,
-            driver=driver,
-            interval_seconds=runner_interval,
-        )
-        app.state.scheduler = scheduler
-        app.state.scheduler_driver = driver
-        app.state.scheduler_runner = runner
-        await runner.start()
 
         # Subscription foundation (PR1) → MQTT (PR2). Construct the
         # process-wide manager, start its idle/dead-task reaper, and expose
@@ -1148,7 +1136,6 @@ def create_admin_serve_app(
                 finally:
                     if getattr(app.state, "task_report_runner", None) is not None:
                         await app.state.task_report_runner.aclose()
-            await runner.stop()
             # Clear the process-wide workflow store default on shutdown so
             # that in-process test runners (TestClient) don't leak the
             # SQLite engine into subsequent tests.
@@ -1580,17 +1567,6 @@ def create_admin_serve_app(
         create_analytics_router(analytics), prefix="/analytics"
     )
 
-    # Autopilot routes (Plan 7)
-    from sagewai.admin.autopilot_routes import create_autopilot_router
-
-    app.include_router(
-        create_autopilot_router(
-            sf,
-            provider_store_getter=lambda: getattr(app.state.resource_stores, "provider", None),
-        ),
-        prefix="/api/v1",
-    )
-
     # Sandbox config routes (Plan 3b-i)
     from sagewai.admin import sandbox_routes
 
@@ -1836,8 +1812,8 @@ def create_admin_serve_app(
         result = sf.refresh_token(cookie) if cookie else None
         if not result:
             # Dev-mode bootstrap: when running locally with
-            # SAGEWAI_DEV_TRUST_LOCAL=1 (set by the just autopilot-demo
-            # recipe) and an admin user is provisioned, mint a fresh
+            # SAGEWAI_DEV_TRUST_LOCAL=1 (set by the local dev recipes)
+            # and an admin user is provisioned, mint a fresh
             # session for the localhost browser. This removes the
             # manual login step from the local-dev demo flow. The env
             # var is never set in production, and the host check rejects
