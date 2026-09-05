@@ -1102,8 +1102,9 @@ async def test_verification_rejects_untracked_embedded_repository(tmp_path: Path
 
 
 def test_verification_requires_digest_pinned_image() -> None:
-    with pytest.raises(ValueError, match="digest-pinned"):
-        SandboxedVerificationRunner(image="example.invalid/verifier:latest")
+    for image in ("example.invalid/verifier:latest", "a" * 64):
+        with pytest.raises(ValueError, match="digest-pinned"):
+            SandboxedVerificationRunner(image=image)
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from sagewai.artifacts.models import ArtifactRef
+from sagewai.sandbox.models import DIGEST_PINNED_IMAGE
 from sagewai.work.runtime import CapabilityGrant
 from sagewai.work.tasks.schedule import validate_cron, validate_timezone
 
@@ -226,6 +227,16 @@ class SoftwareTarget(BaseModel):
 
     def lease_key(self, project_id: str) -> str:
         return f"{project_id}:{self.owner}/{self.repo}:{self.default_branch}"
+
+    @field_validator("verification_image")
+    @classmethod
+    def _digest_pinned(cls, value: str) -> str:
+        """The same rule the verification sandbox enforces before it runs a command."""
+        if not DIGEST_PINNED_IMAGE.fullmatch(value):
+            raise ValueError(
+                "verification_image must be digest-pinned as [name@]sha256:<64 hex>"
+            )
+        return value
 
 
 class Sink(BaseModel):

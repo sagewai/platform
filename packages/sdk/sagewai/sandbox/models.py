@@ -10,10 +10,18 @@
 """Sandbox data models — enums, resource limits, tool-call schemas."""
 from __future__ import annotations
 
+import re
 from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+DIGEST_PINNED_IMAGE = re.compile(r"^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$")
+"""A container image pinned by digest: ``sha256:<64 hex>`` or ``name@sha256:<64 hex>``.
+
+The verification sandbox refuses anything else, and the Task target that names the image is
+validated against the same rule before it is stored.
+"""
 
 
 class SandboxMode(str, Enum):

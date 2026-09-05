@@ -48,11 +48,13 @@ repository's pinned verifier image once on the coordinator machine:
 just work-verifier-build
 ```
 
-The command runs `just smoke` inside the image with the checkout mounted
-read-only and prints an exact `SAGEWAI_WORK_VERIFICATION_IMAGE=sha256:...`
-export. Copy that export into the terminal where you run `sagewai work`. The
-direct image ID is immutable and local to that machine. Do not place model
-credentials or unrelated host secrets in the image.
+The command runs `just smoke` inside the image with the checkout mounted read-only and prints an
+exact `SAGEWAI_WORK_VERIFICATION_IMAGE=sha256:...` export. Copy that export into the terminal
+where you run `sagewai work`, and use the same value for the project's
+`task_defaults.target.verification_image`. Sagewai accepts `sha256:<64 hex>` or
+`name@sha256:<64 hex>` and refuses a tag, in the defaults route and at the sandbox. The direct
+image digest is immutable and local to that machine. Do not place model credentials or unrelated
+host secrets in the image.
 
 From this repository, prove the deterministic contract before involving either
 model:
@@ -669,9 +671,11 @@ control stops new side effects.
 
 ## Troubleshooting
 
-- **Verification image rejected:** use an immutable digest, not a mutable tag, and
-  confirm the image contains `just`, `uv`, Python 3, Node.js 20 or newer, and the
-  repository's locked test environment.
+- **Verification image rejected:** use an immutable digest (`sha256:<64 hex>` or
+  `name@sha256:<64 hex>`), not a mutable tag, and confirm the image contains `just`, `uv`,
+  Python 3, Node.js 20 or newer, and the repository's locked test environment. `just
+  work-verifier-build` prints the accepted form; a bare Podman image id must be prefixed with
+  `sha256:`.
 - **Work needs attention:** run `pending`, act on the exact reported ID, then
   `resume`; do not restart the Work under a new ID.
 - **No compatible Fleet worker:** verify project scope and advertised

@@ -105,6 +105,31 @@ async def test_defaults_put_refuses_a_ladder_nothing_honours(client: AdminClient
 
 
 @pytest.mark.asyncio
+async def test_defaults_put_refuses_an_unpinned_verification_image(client: AdminClient) -> None:
+    response = await client.http.put(
+        "/api/v1/tasks/defaults",
+        headers=client.headers,
+        json={
+            "defaults": {
+                "project_id": "p",
+                "target": {
+                    "kind": "software",
+                    "repository_path": "/repo",
+                    "owner": "o",
+                    "repo": "r",
+                    "verification_image": "sagewai-verifier:dev",
+                    "verification_commands": ["just smoke"],
+                },
+            },
+            "expected_revision": 0,
+        },
+    )
+
+    assert response.status_code == 422
+    assert "digest-pinned" in response.text
+
+
+@pytest.mark.asyncio
 async def test_defaults_put_rejects_defaults_revision(client: AdminClient) -> None:
     response = await client.http.put(
         "/api/v1/tasks/defaults",

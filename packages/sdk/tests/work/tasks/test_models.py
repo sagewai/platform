@@ -251,3 +251,19 @@ def test_task_defaults_refuse_a_ladder_nothing_honours() -> None:
             ),
         )
     assert "implementer, reviewer" in str(excinfo.value)
+
+
+def test_software_target_requires_a_digest_pinned_image() -> None:
+    pinned = SoftwareTarget(
+        repository_path="/repo",
+        owner="o",
+        repo="r",
+        verification_image="ghcr.io/sagewai/verify@sha256:" + "c" * 64,
+    )
+    assert pinned.verification_image.endswith("c" * 64)
+    for image in ("ghcr.io/sagewai/verify:1", "b" * 64, "sha256:" + "z" * 64):
+        with pytest.raises(ValidationError) as excinfo:
+            SoftwareTarget(
+                repository_path="/repo", owner="o", repo="r", verification_image=image
+            )
+        assert "digest-pinned" in str(excinfo.value)
