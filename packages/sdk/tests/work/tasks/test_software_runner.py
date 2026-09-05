@@ -747,6 +747,7 @@ async def test_plan_wires_task_planner_from_the_stack(
             "capabilities": stack.read_capabilities,
             "worktree_manager": stack.worktree_manager,
             "scratch_manager": planner_kwargs[0]["scratch_manager"],
+            "actor_ref": "runtime:claude:planner",
         }
     ]
 
