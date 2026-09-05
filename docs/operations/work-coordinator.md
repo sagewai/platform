@@ -278,6 +278,14 @@ a pair. For example, the current catalog advertises `ultra` for GPT-5.6 Sol and
 Terra, `max` for Luna, and `xhigh` for GPT-5.5. Sagewai passes the selected native
 model and effort through without storing a central model matrix.
 
+The Task's routing ladder decides which runtime plans: the head of the `planner` ladder, from the
+template's contractual roles unless the project's `task_defaults.routing.roles` overrides it.
+Only `codex` and `claude:*` can plan; a `harness:*` planner ladder is refused when the stack is
+built. The other roles are not resolved from the policy yet — analysis and design run the analysis
+Claude, implementation and repair run Codex, review runs the review Claude (on the local route the
+same Claude as analysis), and assessment runs the analysis Claude — which is why the defaults route
+refuses a ladder for them.
+
 These native runtime settings are worker-local: Sagewai never sends them to the
 control plane, worker registration capabilities, Fleet task payloads, or Fleet
 result payloads.
@@ -453,7 +461,8 @@ What the coordinator needs before the first tick:
   console page and no CLI flag yet: set it with `PUT /api/v1/tasks/defaults` (project admin) or
   `TaskStore.put_defaults`, and note that it binds the **local** route only — a Fleet worker
   keeps its own `sagewai fleet run --codex-model`.
-- **Routing, for the planner only.** `task_defaults.routing.roles` accepts a `planner` ladder and
+- **Routing, for the planner only.** `task_defaults.routing.roles` accepts a `planner` ladder,
+  which the software profile honours (the report profile still plans with the analysis Claude), and
   refuses every other role: the implementer, reviewer, assessor, analyst, designer, composer, and
   repairer ladders come from the template and are wired into the software stack, so accepting an
   override for them would report a choice that never runs. A Task's Settings tab still shows the
