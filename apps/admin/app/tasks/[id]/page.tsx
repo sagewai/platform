@@ -4,7 +4,9 @@ import { use, useEffect, useRef, useState } from 'react';
 
 import { AnswerControls } from '@/components/coordinator/answer-controls';
 import { ArtifactPanel } from '@/components/coordinator/artifact-panel';
+import { GateControls } from '@/components/coordinator/gate-controls';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   Card,
   CardContent,
@@ -13,6 +15,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Textarea } from '@/components/ui/textarea';
 import { useTaskFeed } from '@/hooks/use-task-feed';
 import { adminApi } from '@/utils/api';
 import { useProject } from '@/utils/project-context';
@@ -25,6 +28,13 @@ function entryClass(entry: ThreadEntry): string {
   return 'border-l-4 border-l-transparent';
 }
 
+/** 128 random bits as hex. `crypto.randomUUID` is secure-context only; this is not. */
+function idempotencyKey(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 export default function TaskThreadPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { currentSlug, ready } = useProject();
@@ -33,7 +43,28 @@ export default function TaskThreadPage({ params }: { params: Promise<{ id: strin
   const [error, setError] = useState('');
   const [reloads, setReloads] = useState(0);
   const [answerError, setAnswerError] = useState('');
+  const [gateError, setGateError] = useState('');
+  const [message, setMessage] = useState('');
+  const [messageError, setMessageError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const messageKey = useRef<string | null>(null);
   const identityRef = useRef('');
+
+  async function sendMessage() {
+    setBusy(true);
+    setMessageError('');
+    messageKey.current = messageKey.current ?? idempotencyKey();
+    try {
+      await adminApi.postTaskMessage(id, message, messageKey.current);
+      messageKey.current = null;
+      setMessage('');
+      setReloads((count) => count + 1);
+    } catch (cause) {
+      setMessageError((cause as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!ready || currentSlug === null) return;
@@ -43,6 +74,10 @@ export default function TaskThreadPage({ params }: { params: Promise<{ id: strin
       identityRef.current = identity;
       setThread(null);
       setAnswerError('');
+      setGateError('');
+      setMessageError('');
+      setMessage('');
+      messageKey.current = null;
     }
     setError('');
     adminApi
@@ -125,6 +160,23 @@ export default function TaskThreadPage({ params }: { params: Promise<{ id: strin
                       />
                     )
                   ))}
+                {entry.kind === 'gate' &&
+                  entry.gate_id !== null &&
+                  (entry.decision !== null ? (
+                    <p className="m-0 mt-2 text-sm">Decided: {entry.decision}</p>
+                  ) : (
+                    !entry.closed &&
+                    entry.decided_by !== null && (
+                      <GateControls
+                        taskId={id}
+                        workId={entry.work_id}
+                        gateId={entry.gate_id}
+                        decidedBy={entry.decided_by}
+                        onDecided={() => setReloads((count) => count + 1)}
+                        onError={setGateError}
+                      />
+                    )
+                  ))}
                 {entry.refs.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {entry.refs.map((reference) => (
@@ -138,10 +190,50 @@ export default function TaskThreadPage({ params }: { params: Promise<{ id: strin
             ))}
           </ol>
           {answerError !== '' && (
-            <p role="alert" data-testid="answer-error" className="m-0 mt-3 text-sm text-foreground">
+            <p
+              role="alert"
+              data-testid="answer-error"
+              className="m-0 mt-3 text-sm text-foreground"
+            >
               {answerError}
             </p>
           )}
+          {gateError !== '' && (
+            <p
+              role="alert"
+              data-testid="gate-error"
+              className="m-0 mt-3 text-sm text-foreground"
+            >
+              {gateError}
+            </p>
+          )}
+          {messageError !== '' && (
+            <p
+              role="alert"
+              data-testid="message-error"
+              className="m-0 mt-3 text-sm text-foreground"
+            >
+              {messageError}
+            </p>
+          )}
+          <div className="mt-4 space-y-2 border-t border-border pt-4">
+            <label className="flex flex-col gap-1 text-xs text-foreground">
+              Message
+              <Textarea
+                rows={3}
+                value={message}
+                placeholder="Say something to the coordinator; it is recorded on the thread."
+                onChange={(event) => setMessage(event.target.value)}
+              />
+            </label>
+            <Button
+              aria-busy={busy}
+              disabled={busy || message.trim() === ''}
+              onClick={() => void sendMessage()}
+            >
+              {busy ? 'Sending message' : 'Send message'}
+            </Button>
+          </div>
         </CardContent>
       </Card>
     </div>

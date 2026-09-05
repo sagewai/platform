@@ -571,10 +571,87 @@ export const answerHandlers: Handlers = {
   [`/api/v1/tasks/${taskDetailTask.id}/answers`]: () => needsYouTask,
 };
 
+export const mirroredGateThread = {
+  ...thread,
+  task_id: mirroredGateTask.task_id,
+  entries: [
+    threadEntry({
+      id: '7',
+      sequence: 7,
+      author: 'system',
+      actor_ref: 'coordinator',
+      kind: 'gate',
+      text: 'Merge pull request 3?',
+      gate_id: 'merge:work-9:3',
+      decided_by: 'work',
+      work_id: 'work-9',
+    }),
+  ],
+  open_question_ids: [],
+  pending_gate: mirroredGateTask.pending_gate,
+} satisfies TaskThread;
+
+/** The three gate states the thread must render without controls. */
+export const settledGateThread = {
+  ...thread,
+  task_id: mirroredGateTask.task_id,
+  entries: [
+    threadEntry({
+      id: '7',
+      sequence: 7,
+      author: 'system',
+      actor_ref: 'coordinator',
+      kind: 'gate',
+      text: 'Deploy work-9 to production?',
+      gate_id: 'deploy_production:work-9:1',
+      decided_by: 'work',
+      work_id: 'work-9',
+    }),
+    threadEntry({
+      id: '8',
+      sequence: 8,
+      author: 'system',
+      actor_ref: 'coordinator',
+      kind: 'gate',
+      text: 'Deliver the weekly report?',
+      gate_id: `deliver:${mirroredGateTask.task_id}:1`,
+      decided_by: 'task',
+      decision: 'allow',
+    }),
+    threadEntry({
+      id: '9',
+      sequence: 9,
+      author: 'system',
+      actor_ref: 'coordinator',
+      kind: 'gate',
+      text: 'Approve the plan at version 1?',
+      gate_id: `plan:${mirroredGateTask.task_id}:1`,
+      decided_by: 'task',
+      closed: true,
+    }),
+  ],
+  open_question_ids: [],
+  pending_gate: 'deploy_production:work-9:1',
+} satisfies TaskThread;
+
+export const gateHandlers: Handlers = {
+  [`/api/v1/tasks/${taskDetailTask.id}/messages`]: () => needsYouTask,
+  [`/api/v1/tasks/${taskDetailTask.id}/gates/plan:${taskDetailTask.id}:1`]: () => ({
+    ...needsYouTask,
+    pending_gate: null,
+  }),
+  '/api/v1/work/work-9/gates/merge:work-9:3': () => ({
+    work_id: 'work-9',
+    gate_id: 'merge:work-9:3',
+    decision: 'allow',
+  }),
+};
+
 export const baseHandlers: Handlers = {
   ...composerHandlers,
   ...taskHandlers,
   ...answerHandlers,
+  ...gateHandlers,
   '/api/v1/tasks/board': () => board,
   '/api/v1/tasks': (url, method) => {
     if (method === 'POST') {

@@ -2,12 +2,18 @@ import { test, expect } from '@playwright/test';
 
 import {
   answeredThread,
+  briefBody,
+  mirroredGateTask,
+  mirroredGateThread,
   mockCoordinatorApi,
   mockTaskStream,
   needsYouTask,
   project,
   recordWrites,
   selectProject,
+  settledGateThread,
+  sseBody,
+  task as makeTask,
   taskDetail,
   taskDetailTask as task,
   thread,
@@ -412,5 +418,239 @@ test.describe('Coordinator Task page', () => {
     await expect(page.getByTestId('answer-error')).toHaveText(
       'question q-scope is at attention version 3',
     );
+  });
+
+  test('decides a decided_by task gate on the Task route', async ({ page }) => {
+    const bodies: unknown[] = [];
+    const scopes: Array<string | undefined> = [];
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}/thread`]: () => thread });
+    await mockTaskStream(page);
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (
+        request.method() === 'POST' &&
+        decodeURIComponent(url.pathname) === `/api/v1/tasks/${task.id}/gates/plan:${task.id}:1`
+      ) {
+        bodies.push(JSON.parse(request.postData() ?? '{}'));
+        scopes.push(request.headers()['x-project-id']);
+      }
+    });
+
+    await page.goto(`/tasks/${task.id}`);
+    await page.getByLabel('Note for plan:task-2:1').fill('looks right');
+    await page
+      .getByTestId('gate-controls-plan:task-2:1')
+      .getByRole('button', { name: 'Allow' })
+      .click();
+
+    await expect.poll(() => bodies).toEqual([{ decision: 'allow', note: 'looks right' }]);
+    expect(scopes).toEqual([project.id]);
+  });
+
+  test('decides a decided_by work gate on the Work route', async ({ page }) => {
+    const bodies: unknown[] = [];
+    const scopes: Array<string | undefined> = [];
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${mirroredGateTask.task_id}`]: () =>
+        ({
+          ...taskDetail,
+          task: makeTask(mirroredGateTask),
+          record: mirroredGateTask,
+        }) satisfies TaskDetail,
+      [`/api/v1/tasks/${mirroredGateTask.task_id}/thread`]: () => mirroredGateThread,
+      [`/api/v1/tasks/${mirroredGateTask.task_id}/events`]: () => '',
+    });
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (
+        request.method() === 'POST' &&
+        decodeURIComponent(url.pathname) === '/api/v1/work/work-9/gates/merge:work-9:3'
+      ) {
+        bodies.push(JSON.parse(request.postData() ?? '{}'));
+        scopes.push(request.headers()['x-project-id']);
+      }
+    });
+
+    await page.goto(`/tasks/${mirroredGateTask.task_id}`);
+    await page
+      .getByTestId('gate-controls-merge:work-9:3')
+      .getByRole('button', { name: 'Allow' })
+      .click();
+
+    await expect.poll(() => bodies).toEqual([{ decision: 'allow' }]);
+    expect(scopes).toEqual([project.id]);
+  });
+
+  test('sends a message once under an Idempotency-Key', async ({ page }) => {
+    const requests: Array<{
+      body: unknown;
+      key: string | undefined;
+      scope: string | undefined;
+    }> = [];
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}/thread`]: () => thread });
+    await mockTaskStream(page);
+    page.on('request', (request) => {
+      if (request.url().endsWith('/messages')) {
+        requests.push({
+          body: JSON.parse(request.postData() ?? '{}'),
+          key: request.headers()['idempotency-key'],
+          scope: request.headers()['x-project-id'],
+        });
+      }
+    });
+
+    await page.goto(`/tasks/${task.id}`);
+    await page.getByLabel('Message').fill('Deploying after the gate.');
+    await page.getByRole('button', { name: 'Send message' }).click();
+
+    await expect.poll(() => requests.length).toBe(1);
+    expect(requests[0].body).toEqual({ text: 'Deploying after the gate.' });
+    expect(requests[0].key).toMatch(/^[0-9a-f]{32}$/);
+    expect(requests[0].scope).toBe(project.id);
+    await expect(page.getByLabel('Message')).toHaveValue('');
+  });
+
+  test('reuses the Idempotency-Key when the first send fails', async ({ page }) => {
+    const requests: Array<{
+      body: unknown;
+      key: string | undefined;
+      scope: string | undefined;
+    }> = [];
+    let attempts = 0;
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}/thread`]: () => thread });
+    await mockTaskStream(page);
+    await page.route(`**/api/v1/tasks/${task.id}/messages`, async (route) => {
+      requests.push({
+        body: JSON.parse(route.request().postData() ?? '{}'),
+        key: route.request().headers()['idempotency-key'],
+        scope: route.request().headers()['x-project-id'],
+      });
+      attempts += 1;
+      if (attempts === 1) {
+        await route.fulfill({
+          status: 409,
+          json: { detail: 'projection changed under the append' },
+        });
+        return;
+      }
+      await route.fulfill({ json: needsYouTask });
+    });
+
+    await page.goto(`/tasks/${task.id}`);
+    await page.getByLabel('Message').fill('Deploying after the gate.');
+    await page.getByRole('button', { name: 'Send message' }).click();
+    await expect(page.getByTestId('message-error')).toHaveText(
+      'projection changed under the append',
+    );
+
+    await page.getByRole('button', { name: 'Send message' }).click();
+
+    await expect.poll(() => requests.length).toBe(2);
+    expect(requests.map((request) => request.body)).toEqual([
+      { text: 'Deploying after the gate.' },
+      { text: 'Deploying after the gate.' },
+    ]);
+    expect(requests[1].key).toMatch(/^[0-9a-f]{32}$/);
+    expect(requests[0].key).toBe(requests[1].key);
+    expect(requests.map((request) => request.scope)).toEqual([project.id, project.id]);
+  });
+
+  test('resumes the feed with Last-Event-ID after the stream ends', async ({ page }) => {
+    const resumeIds: Array<string | undefined> = [];
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}/thread`]: () => thread });
+    await page.route('**/api/v1/artifacts/**', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'text/markdown', body: briefBody });
+    });
+    await page.route(`**/api/v1/tasks/${task.id}/events`, async (route) => {
+      resumeIds.push(route.request().headers()['last-event-id']);
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: `${sseBody()}id: 9\n`,
+      });
+    });
+
+    await page.goto(`/tasks/${task.id}`);
+
+    await expect.poll(() => resumeIds.at(-1), { timeout: 15_000 }).toBe('4');
+    expect(resumeIds.length).toBeGreaterThan(1);
+    expect(resumeIds[0]).toBeUndefined();
+  });
+
+  test('offers no controls for a gate the console cannot decide', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${mirroredGateTask.task_id}`]: () =>
+        ({
+          ...taskDetail,
+          task: makeTask(mirroredGateTask),
+          record: mirroredGateTask,
+        }) satisfies TaskDetail,
+      [`/api/v1/tasks/${mirroredGateTask.task_id}/thread`]: () => settledGateThread,
+      [`/api/v1/tasks/${mirroredGateTask.task_id}/events`]: () => '',
+    });
+
+    await page.goto(`/tasks/${mirroredGateTask.task_id}`);
+
+    await expect(page.getByTestId('thread-entry-7')).toContainText(
+      'decide with sagewai work approve',
+    );
+    await expect(page.getByTestId('thread-entry-8')).toContainText('Decided: allow');
+    await expect(page.getByTestId('gate-controls-deploy_production:work-9:1')).toHaveCount(0);
+    await expect(
+      page.getByTestId(`gate-controls-deliver:${mirroredGateTask.task_id}:1`),
+    ).toHaveCount(0);
+    await expect(page.getByTestId(`gate-controls-plan:${mirroredGateTask.task_id}:1`)).toHaveCount(
+      0,
+    );
+  });
+
+  test('shows the gate refusal the API stated', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page, { [`/api/v1/tasks/${task.id}/thread`]: () => thread });
+    await mockTaskStream(page);
+    await page.route(
+      (url) => url.pathname.includes('/gates/'),
+      async (route) => {
+        await route.fulfill({
+          status: 409,
+          json: { detail: `gate is not pending: plan:${task.id}:1` },
+        });
+      },
+    );
+
+    await page.goto(`/tasks/${task.id}`);
+    await page
+      .getByTestId(`gate-controls-plan:${task.id}:1`)
+      .getByRole('button', { name: 'Allow' })
+      .click();
+
+    await expect(page.getByTestId('gate-error')).toHaveText(
+      `gate is not pending: plan:${task.id}:1`,
+    );
+  });
+
+  test('keeps the message draft when the feed advances', async ({ page }) => {
+    let reads = 0;
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}/thread`]: () => {
+        reads += 1;
+        return thread;
+      },
+    });
+    await mockTaskStream(page);
+
+    await page.goto(`/tasks/${task.id}`);
+    await page.getByLabel('Message').fill('Half-typed.');
+    const before = reads;
+    await expect.poll(() => reads, { timeout: 10_000 }).toBeGreaterThan(before);
+
+    await expect(page.getByLabel('Message')).toHaveValue('Half-typed.');
   });
 });
