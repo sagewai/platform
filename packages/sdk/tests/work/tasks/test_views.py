@@ -578,5 +578,15 @@ def test_referenced_artifacts_are_the_brief_and_every_artifact_evidence_ref() ->
     )
 
 
-def test_task_work_ids_are_unique_and_in_first_start_order() -> None:
-    assert task_work_ids(_shuffled_action_stream()) == ("w1", "w2")
+def test_task_work_ids_include_the_planning_works() -> None:
+    assert task_work_ids(_shuffled_action_stream()) == ("t1:plan:0:1", "w1", "w2")
+
+
+def test_task_work_ids_follow_the_cycle_of_each_replan() -> None:
+    events = (
+        _event(1, TaskEventType.TASK_CREATED, {"title": "t"}),
+        _event(2, TaskEventType.CYCLE_STARTED, {"cycle": 1}),
+        _event(3, TaskEventType.STEP_WORK_STARTED, {"step_id": "s1", "work_id": "w1"}),
+        _event(4, TaskEventType.REPLAN_PROPOSED, {"version": 2, "reason": "gap"}),
+    )
+    assert task_work_ids(events) == ("t1:plan:0:1", "t1:plan:1:2", "w1")

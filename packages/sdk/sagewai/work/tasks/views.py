@@ -321,15 +321,26 @@ def referenced_artifacts(events: Sequence[TaskEvent]) -> frozenset[str]:
 
 
 def task_work_ids(events: Sequence[TaskEvent]) -> tuple[str, ...]:
-    """The Works this Task started, in first-start order (section 24 revision 5's emitter)."""
-    work_ids: list[str] = []
-    for event in sorted(events, key=lambda item: item.sequence):
-        if event.event_type is not TaskEventType.STEP_WORK_STARTED:
-            continue
-        work_id = str(event.payload_json["work_id"])
-        if work_id not in work_ids:
-            work_ids.append(work_id)
-    return tuple(work_ids)
+    """Every Work of this Task: its planning Works, then the Works it started.
+
+    Planning Work ids are derived, never stored (section 14.3): ``TaskPlanner.work_id`` is
+    deterministic, version 1 always runs while ``current_cycle`` is 0 because the first
+    ``CYCLE_STARTED`` follows plan acceptance, and every later attempt follows a
+    ``REPLAN_PROPOSED`` in the cycle that proposed it.
+    """
+    ordered = sorted(events, key=lambda item: item.sequence)
+    task_id = ordered[0].task_id
+    planning = [f"{task_id}:plan:0:1"]
+    step_works: list[str] = []
+    cycle = 0
+    for event in ordered:
+        if event.event_type is TaskEventType.CYCLE_STARTED:
+            cycle = int(event.payload_json["cycle"])
+        elif event.event_type is TaskEventType.REPLAN_PROPOSED:
+            planning.append(f"{task_id}:plan:{cycle}:{int(event.payload_json['version'])}")
+        elif event.event_type is TaskEventType.STEP_WORK_STARTED:
+            step_works.append(str(event.payload_json["work_id"]))
+    return tuple(dict.fromkeys((*planning, *step_works)))
 
 
 __all__ = [

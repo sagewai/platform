@@ -376,8 +376,10 @@ feed as Server-Sent Events. The stream replays stored entries after
 `Last-Event-ID` and sends a heartbeat every 15 seconds, configurable with
 `TASK_SSE_HEARTBEAT`.
 
-The Task page's Activity and Telemetry tabs are the console views of the same
-activity rows, Task feed entries, Work events, and spend-ledger projection.
+The Task page's Activity and Telemetry tabs are the console views of the same activity rows, Task
+feed entries, Work events, and spend-ledger projection. Both cover the planning Work
+(`<task id>:plan:<cycle>:<plan version>`) as well as the step Works, so the planner's reading and
+its repair attempts are visible while the Task is still `PLANNING`.
 
 `GET /api/v1/tasks/{id}/telemetry` returns
 `sagewai.work.tasks.telemetry.derive_task_telemetry`, a pure projection over
@@ -444,7 +446,13 @@ What the coordinator needs before the first tick:
 
 - **Project defaults** with a software target: repository path, owner, repo, default branch,
   the digest-pinned verification image, and the locked verification commands. Set them
-  through the console or `TaskStore.put_defaults`.
+  through the console or `TaskStore.put_defaults`. Set `codex_model` too when the operator's
+  `~/.codex/config.toml` names a model the installed `codex` cannot run: the coordinator passes
+  `--model` only when the defaults name one, and otherwise the CLI's own configuration decides.
+  Run `codex debug models` on that machine to see what it will accept. `codex_model` has no
+  console page and no CLI flag yet: set it with `PUT /api/v1/tasks/defaults` (project admin) or
+  `TaskStore.put_defaults`, and note that it binds the **local** route only — a Fleet worker
+  keeps its own `sagewai fleet run --codex-model`.
 - **Harness tiers, if you set `prefer_free_implementation`.** The routing default is off. When
   it is on, the coordinator tries the local harness `complex` tier before Codex, and the
   project defaults must declare that tier — an empty `harness_tiers` raises

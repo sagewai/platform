@@ -131,6 +131,23 @@ async def test_task_activity_spans_every_work_the_task_started(client: AdminClie
 
 
 @pytest.mark.asyncio
+async def test_task_activity_covers_the_planning_work(client: AdminClient) -> None:
+    await client.app.state.work_store.save_work(
+        _work_record("t-1:plan:0:1", project_id="p")
+    )
+    await client.app.state.activity_store.append(
+        [_activity("t-1:plan:0:1", "t-1:plan:0:1:plan:1", 1, source="claude")]
+    )
+
+    response = await client.http.get(
+        "/api/v1/tasks/t-1/activity?work_id=t-1:plan:0:1", headers=client.headers
+    )
+
+    assert response.status_code == 200
+    assert [item["summary"] for item in response.json()["items"]] == ["t-1:plan:0:1/1"]
+
+
+@pytest.mark.asyncio
 async def test_task_activity_refuses_the_global_scope(client: AdminClient) -> None:
     response = await client.http.get(
         "/api/v1/tasks/t-1/activity", headers={"X-Project-ID": "global"}

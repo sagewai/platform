@@ -660,7 +660,7 @@ async def task_activity(
     cursor: str | None = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 200,
 ) -> dict:
-    """Activity across the Works this Task started, ordered by (work, run, sequence)."""
+    """Activity across this Task's planning and step Works, ordered by (work, run, sequence)."""
     project_id = _task_project_scope(request)
     store: TaskStore = request.app.state.task_store
     if await store.load_record(task_id, project_id=project_id) is None:
@@ -723,8 +723,9 @@ async def task_telemetry(task_id: str, request: Request) -> dict:
     task_events = await task_store.read_events(task_id, project_id=project_id)
     work_store: WorkStore = request.app.state.work_store
     work_events: dict[str, list[WorkEvent]] = {
-        work_id: await work_store.read_events(work_id, project_id=project_id)
+        work_id: events
         for work_id in task_work_ids(task_events)
+        if (events := await work_store.read_events(work_id, project_id=project_id))
     }
     project_selections = await work_store.runtime_selection_counts(project_id=project_id)
     cycles = {

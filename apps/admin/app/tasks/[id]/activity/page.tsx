@@ -130,7 +130,7 @@ export default function TaskActivityPage({ params }: { params: Promise<{ id: str
           <h2 className="m-0 text-base font-medium">Activity</h2>
         </CardTitle>
         <CardDescription className="text-foreground">
-          What the operators actually did, across every Work this Task started, ordered by Work,
+          What the operators actually did, across the planning and step Works of this Task, ordered by Work,
           run and sequence. The download carries exactly what is loaded here.
         </CardDescription>
       </CardHeader>
