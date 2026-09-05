@@ -163,7 +163,10 @@ export SAGEWAI_HOME="$PWD/.sagewai-dev"
 just dev-all
 ```
 
-Open <http://localhost:3008/setup> on a fresh installation, then use these
+Open <http://127.0.0.1:3008/setup> on a fresh installation. Use one host name for both the API and
+the console: the session cookie is scoped per host and not per port, so a console on
+`localhost:3008` never authenticates against an API on `127.0.0.1:8000`. `just dev-all` prints
+`localhost:3008`; open the `127.0.0.1` form when the backend listens on `127.0.0.1`. Then use these
 coordinator pages:
 
 - **`/board`** — the board's five columns: `inbox`, `needs_you`,
@@ -279,6 +282,10 @@ account, and CLI version: run `codex debug models` on that worker before choosin
 a pair. For example, the current catalog advertises `ultra` for GPT-5.6 Sol and
 Terra, `max` for Luna, and `xhigh` for GPT-5.5. Sagewai passes the selected native
 model and effort through without storing a central model matrix.
+The same applies on the coordinator machine's local route: `codex exec` uses the model in
+`~/.codex/config.toml` unless the project's `task_defaults.codex_model` names one, and a model the
+installed CLI cannot run fails every implementation attempt with `requires a newer version of
+Codex`. Check with `codex debug models` and `claude -p 'ok'` before the first Task.
 
 The Task's routing ladder decides which runtime plans: the head of the `planner` ladder, from the
 template's contractual roles unless the project's `task_defaults.routing.roles` overrides it.
@@ -461,8 +468,9 @@ What the coordinator needs before the first tick:
   `--model` only when the defaults name one, and otherwise the CLI's own configuration decides.
   Run `codex debug models` on that machine to see what it will accept. `codex_model` has no
   console page and no CLI flag yet: set it with `PUT /api/v1/tasks/defaults` (project admin) or
-  `TaskStore.put_defaults`, and note that it binds the **local** route only — a Fleet worker
-  keeps its own `sagewai fleet run --codex-model`.
+  `TaskStore.put_defaults`, and note that it binds the **local** route only and reaches the next
+  Task's stack, not a stack already cached for a running Task — a Fleet worker keeps its own
+  `sagewai fleet run --codex-model`.
 - **Routing, for the planner only.** `task_defaults.routing.roles` accepts a `planner` ladder,
   which the software profile honours (the report profile still plans with the analysis Claude), and
   refuses every other role: the implementer, reviewer, assessor, analyst, designer, composer, and
@@ -518,10 +526,11 @@ merge gate belongs to the Work, so approve it with `sagewai work approve` or
 
 A plan may arrive with a defaultable question attached: the coordinator proposes the plan and
 records the question with its deadline, so the assumption is visible and correctable while the
-cycle runs, and it is defaulted on that deadline like any other. Answering one after the plan is
-accepted records the answer and nothing else — the planner reads it at the next plan version, so
-use the re-plan gate when the answer should change the current plan. A question that cannot be
-defaulted still stops the plan and asks first.
+cycle runs. It is defaulted on that deadline like any other, including when the cycle has ended in
+a non-active status. Answering one after the plan is accepted records the answer and nothing
+else — the planner reads it at the next plan version, so use the re-plan gate when the answer
+should change the current plan. A question that cannot be defaulted still stops the plan and asks
+first.
 
 A planning failure blocks the Task and opens `replan:<task id>:<next version>` on the thread:
 fix the cause — an expired CLI login, a missing image, an unreachable repository — then allow the
@@ -686,8 +695,9 @@ control stops new side effects.
   reaches `CONTROL_DEGRADED` when its planning or assessment stage raises — a verifier image that
   is not digest-pinned, an unreachable repository, a missing CLI: the thread carries the command
   and the exception, the Task leaves the active set, and nothing drives it again until a human
-  moves it (a Task pins its target at create, so a defaults fix needs a new Task). A step Work
-  that fails does not degrade the Task: its command is replayed on the next tick and reconciled
-  through its receipt, so watch `pending` and the Task thread instead.
+  moves it (a Task pins its target at create, so a defaults fix needs a new Task). If such a Task
+  was paused, `resume` returns it to `CONTROL_DEGRADED`; cancel and recreate is the way out. A step
+  Work that fails does not degrade the Task: its command is replayed on the next tick and
+  reconciled through its receipt, so watch `pending` and the Task thread instead.
 - **GitHub is unavailable:** retain the Work ID and resume after service recovers.
   Completed local implementation should not be repeated.
