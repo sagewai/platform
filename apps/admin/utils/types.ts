@@ -1353,6 +1353,7 @@ export interface TaskDefaults {
   clarification_deadline_seconds: number;
   routing: TaskRoutingPolicy;
   harness_tiers: Record<string, { backend: string; model: string }>;
+  codex_model: string | null;
   decision_channels: string[];
   revision: number;
 }

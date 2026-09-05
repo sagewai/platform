@@ -967,6 +967,60 @@ async def test_the_harness_runtime_gets_its_sandbox_resolver_and_secrets(
 
 
 @pytest.mark.asyncio
+async def test_the_codex_runtime_takes_its_model_from_the_project_defaults(
+    dialect_engine,  # noqa: F811
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SAGEWAI_HOME", str(tmp_path / "home"))
+    from tests.work.test_lifecycle import _repository
+
+    repo, _base = _repository(tmp_path)
+    task_store = TaskStore(engine=dialect_engine)
+    await task_store.init()
+    await task_store.put_defaults(
+        TaskDefaults(
+            project_id=PROJECT,
+            target=_task(project_id=PROJECT).target,
+            codex_model="gpt-5.5",
+        ),
+        expected_revision=0,
+    )
+
+    stack = await build_software_stack(
+        project_id=PROJECT,
+        repository=repo,
+        verification_image=IMAGE,
+        engine=dialect_engine,
+    )
+
+    assert stack.lifecycle._implementer.for_position(1).runtime._model == "gpt-5.5"
+
+
+@pytest.mark.asyncio
+async def test_the_codex_runtime_takes_no_model_without_a_project_default(
+    dialect_engine,  # noqa: F811
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SAGEWAI_HOME", str(tmp_path / "home"))
+    from tests.work.test_lifecycle import _repository
+
+    repo, _base = _repository(tmp_path)
+    task_store = TaskStore(engine=dialect_engine)
+    await task_store.init()
+
+    stack = await build_software_stack(
+        project_id=PROJECT,
+        repository=repo,
+        verification_image=IMAGE,
+        engine=dialect_engine,
+    )
+
+    assert stack.lifecycle._implementer.for_position(1).runtime._model is None
+
+
+@pytest.mark.asyncio
 async def test_credential_values_resolve_once_from_declared_refs() -> None:
     secrets = _FakeSecrets({"GITHUB_TOKEN": "ghp_x"})
     values = await resolve_credential_values(

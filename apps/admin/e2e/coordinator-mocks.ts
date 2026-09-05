@@ -352,6 +352,7 @@ const taskDefaults: TaskDefaults = {
   clarification_deadline_seconds: 14400,
   routing: { roles: {}, prefer_free_implementation: false },
   harness_tiers: {},
+  codex_model: null,
   decision_channels: ['console'],
   revision: 0,
 };

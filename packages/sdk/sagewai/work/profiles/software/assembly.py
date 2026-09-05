@@ -286,7 +286,16 @@ async def build_software_stack(
             controller=implementation_controller,
         )
     else:
-        codex = CodexRuntime(activity_sink=activity_sink, artifact_store=artifact_store)
+        defaults = (
+            await task_store.get_defaults(project_id=project_id)
+            if project_id is not None
+            else None
+        )
+        codex = CodexRuntime(
+            model=None if defaults is None else defaults.codex_model,
+            activity_sink=activity_sink,
+            artifact_store=artifact_store,
+        )
         claude = ClaudeRuntime(activity_sink=activity_sink, artifact_store=artifact_store)
         analysis_runtime = claude
         analyst = SoftwareStageOperator(
@@ -315,9 +324,8 @@ async def build_software_stack(
         )
         implementers = (codex_implementer,)
         if prefer_free_implementation:
-            if project_id is None:
+            if project_id is None or defaults is None:
                 raise ValueError("--prefer-free-implementation requires a project")
-            defaults = await task_store.get_defaults(project_id=project_id)
             if "complex" not in defaults.harness_tiers:
                 raise ValueError("configure harness tiers in task defaults")
             resolved = await resolve_credential_values(

@@ -336,7 +336,14 @@ class HarnessTier(BaseModel):
 
 
 class TaskDefaults(BaseModel):
-    """Project-level defaults the composer prefills and the coordinator reads."""
+    """Project-level defaults the composer prefills and the coordinator reads.
+
+    ``codex_model`` pins the local Codex runtime the way ``harness_tiers`` pins harness
+    models: without it the CLI picks the model in the operator's ``~/.codex/config.toml``.
+    It is read on the local route only; a Fleet worker keeps naming its own model with
+    ``sagewai fleet run --codex-model`` (spec sections 4 and 9.3: the control plane sends
+    tiers, never models).
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -349,6 +356,7 @@ class TaskDefaults(BaseModel):
     harness_tiers: dict[Literal["simple", "medium", "complex"], HarnessTier] = Field(
         default_factory=dict
     )
+    codex_model: str | None = Field(default=None, min_length=1)
     decision_channels: tuple[str, ...] = ("console",)
     revision: int = Field(default=0, ge=0)
 
