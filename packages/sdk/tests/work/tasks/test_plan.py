@@ -130,15 +130,25 @@ def test_accept_plan_report_target_allows_policy_only_matrix() -> None:
         accept_plan(_result(steps=(_step("r"),), matrix=_matrix()), budget=Budget(), target=target, version=1)
 
 
-def test_result_with_clarifications_must_have_no_steps() -> None:
-    question = ClarificationQuestion(id="q", text="?", defaultable=True, default="x")
-    with pytest.raises(Exception):
-        _result(steps=(_step("a"),), clarifications=(question,))
-    asking = _result(clarifications=(question,))
+def test_a_plan_may_carry_defaultable_clarifications() -> None:
+    defaultable = ClarificationQuestion(id="q", text="?", defaultable=True, default="x")
+    material = ClarificationQuestion(id="m", text="?", defaultable=False)
+    attached = _result(steps=(_step("a"),), clarifications=(defaultable,))
+    assert not attached.asks_first
+    accepted = accept_plan(attached, budget=Budget(), target=TARGET, version=1)
+    assert [step.id for step in accepted.steps] == ["a"]
+    with pytest.raises(ValueError):
+        _result(steps=(_step("a"),), clarifications=(material,))
+    with pytest.raises(ValueError):
+        _result(
+            steps=(_step("a"),),
+            clarifications=(ClarificationQuestion(id="q", text="?", defaultable=True),),
+        )
+    asking = _result(clarifications=(material,))
+    assert asking.asks_first
     with pytest.raises(PlanRejectedError) as excinfo:
         accept_plan(asking, budget=Budget(), target=TARGET, version=1)
     assert "clarifications" in str(excinfo.value)
-    assert asking.asks_first
 
 
 def test_matrix_speaks_the_kernel_verification_vocabulary() -> None:

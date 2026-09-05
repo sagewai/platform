@@ -84,6 +84,7 @@ from sagewai.work.tasks.health import (
     cycle_history,
     evaluate_health,
 )
+from sagewai.work.tasks.intake import ClarificationQuestion
 from sagewai.work.tasks.models import BudgetUsed, Task, TaskKind, TaskRecord, TaskStatus
 from sagewai.work.tasks.plan import (
     AcceptedPlan,
@@ -924,6 +925,19 @@ class TaskCoordinator:
             )
         return await self._append(record, entries, lease_epoch, command=command)
 
+    async def _clarification_request(
+        self, task: Task, questions: tuple[ClarificationQuestion, ...]
+    ) -> Entry:
+        defaults = await self._task_store.get_defaults(project_id=task.project_id)
+        deadline = self._now() + timedelta(seconds=defaults.clarification_deadline_seconds)
+        return (
+            TaskEventType.CLARIFICATION_REQUESTED,
+            {
+                "questions": [question.model_dump(mode="json") for question in questions],
+                "deadline_at": deadline.isoformat(),
+            },
+        )
+
     async def _run_planning(
         self, task: Task, record: TaskRecord, command: RunPlanning, lease_epoch: int
     ) -> TaskRecord:
@@ -936,7 +950,8 @@ class TaskCoordinator:
         amendments = tuple(
             f"{event.payload_json['question_id']}: {event.payload_json['answer']}"
             for event in events
-            if event.event_type is TaskEventType.CLARIFICATION_ANSWERED
+            if event.event_type
+            in (TaskEventType.CLARIFICATION_ANSWERED, TaskEventType.CLARIFICATION_DEFAULTED)
         )
         ledger = self._meter(task, record)
         try:
@@ -958,24 +973,9 @@ class TaskCoordinator:
                 prefix=ledger.drain(),
             )
         if result.asks_first:
-            defaults = await self._task_store.get_defaults(project_id=task.project_id)
-            deadline = self._now() + timedelta(seconds=defaults.clarification_deadline_seconds)
             entries = ledger.drain()
-            entries.extend(
-                [
-                    (
-                        TaskEventType.CLARIFICATION_REQUESTED,
-                        {
-                            "questions": [
-                                question.model_dump(mode="json")
-                                for question in result.clarifications
-                            ],
-                            "deadline_at": deadline.isoformat(),
-                        },
-                    ),
-                    status_entry(record, TaskStatus.CLARIFYING),
-                ]
-            )
+            entries.append(await self._clarification_request(task, result.clarifications))
+            entries.append(status_entry(record, TaskStatus.CLARIFYING))
             return await self._append(record, entries, lease_epoch, command=command)
         try:
             plan = accept_plan(
@@ -1003,6 +1003,8 @@ class TaskCoordinator:
                 },
             )
         )
+        if result.clarifications:
+            entries.append(await self._clarification_request(task, result.clarifications))
         action = coordinator_action(task.project_id, action="plan", work_id=task.id, scope=task.id)
         if resolve_gate(task.authority.plan, action) is GateDecision.REQUIRE_APPROVAL:
             entries.append(

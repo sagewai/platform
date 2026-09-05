@@ -1706,6 +1706,53 @@ async def test_budget_exhaustion_records_ledger_usage_and_notifies_now(
 
 
 @pytest.mark.asyncio
+async def test_a_defaulted_answer_reaches_the_next_plan_version(stores, tmp_path) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    record = await TaskWriter(task_store).append(
+        record,
+        [
+            (
+                TaskEventType.CLARIFICATION_REQUESTED,
+                {
+                    "questions": [
+                        {
+                            "id": "difficulty",
+                            "text": "Which difficulty axis?",
+                            "kind": "text",
+                            "options": [],
+                            "default": "the plan above",
+                            "defaultable": True,
+                            "rationale": "",
+                            "attention_version": 1,
+                        }
+                    ],
+                    "deadline_at": (NOW + timedelta(hours=4)).isoformat(),
+                },
+            ),
+            (
+                TaskEventType.CLARIFICATION_DEFAULTED,
+                {"question_id": "difficulty", "answer": "the plan above"},
+            ),
+        ],
+        now=NOW + timedelta(hours=4),
+    )
+    assert record.status is TaskStatus.PLANNING and record.pending_questions == 0
+    amendments: list[tuple[str, ...]] = []
+    original_plan = runner.plan
+
+    async def capturing_plan(task_, **kwargs):
+        amendments.append(kwargs["amendments"])
+        return await original_plan(task_, **kwargs)
+
+    runner.plan = capturing_plan
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
+    await _drive_to_rest(coordinator, record, epoch)
+
+    assert amendments[0] == ("difficulty: the plan above",)
+
+
+@pytest.mark.asyncio
 async def test_ungated_replan_reenters_planning_and_runs_the_planner_again(
     stores, tmp_path, monkeypatch
 ) -> None:
@@ -2026,3 +2073,47 @@ async def test_a_task_without_retention_completes_without_pruning(
     else:
         pytest.fail("the Task never completed")
     assert len(pruned) == 1 and pruned[0]["project_id"] == PROJECT
+
+
+@pytest.mark.asyncio
+async def test_a_plan_with_a_defaultable_question_is_proposed_and_the_question_recorded(
+    stores, tmp_path, monkeypatch
+) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    monkeypatch.setattr(coordinator, "_now", lambda: NOW)
+    runner.plan_result = _plan_result().model_copy(
+        update={
+            "clarifications": (
+                ClarificationQuestion(
+                    id="difficulty",
+                    text="Which difficulty axis do you prefer?",
+                    defaultable=True,
+                    default="the plan above",
+                ),
+            )
+        }
+    )
+
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    kinds = [
+        event.event_type
+        for event in await task_store.read_events(task.id, project_id=PROJECT)
+    ]
+    assert TaskEventType.PLAN_PROPOSED in kinds
+    assert TaskEventType.CLARIFICATION_REQUESTED in kinds
+    assert record.status is TaskStatus.PLAN_PROPOSED
+    assert record.pending_questions == 1 and record.pending_material_questions == 0
+    asked = [
+        event
+        for event in await task_store.read_events(task.id, project_id=PROJECT)
+        if event.event_type is TaskEventType.CLARIFICATION_REQUESTED
+    ][-1]
+    defaults = await task_store.get_defaults(project_id=PROJECT)
+    assert [question["id"] for question in asked.payload_json["questions"]] == ["difficulty"]
+    assert (
+        asked.payload_json["deadline_at"]
+        == (NOW + timedelta(seconds=defaults.clarification_deadline_seconds)).isoformat()
+    )

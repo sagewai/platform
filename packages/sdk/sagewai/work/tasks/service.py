@@ -46,6 +46,7 @@ _MAX_SUMMARY = 2000
 _NON_HUMAN_FLOOR = Authority(
     plan=GateMode.REQUIRE, merge=GateMode.REQUIRE, deliver=GateMode.REQUIRE
 )
+_OPEN_QUESTION_STATUSES = tuple(status for status in TaskStatus if status not in TERMINAL_STATUSES)
 
 
 class TaskCreationError(ValueError):
@@ -613,7 +614,7 @@ class TaskService:
         """
         moment = now or datetime.now(timezone.utc)
         _task, record = await self._load(task_id, project_id=project_id)
-        if record.status is not TaskStatus.CLARIFYING:
+        if record.status not in _OPEN_QUESTION_STATUSES or record.pending_questions == 0:
             return record
         events = await self._store.read_events(task_id, project_id=project_id)
         open_questions = _open_questions(events)
@@ -625,7 +626,7 @@ class TaskService:
         if not expired:
             return record
         entries: list[Entry] = [_default_clarification_entry(question) for question in expired]
-        if len(expired) == len(open_questions):
+        if record.status is TaskStatus.CLARIFYING and len(expired) == len(open_questions):
             entries.append(status_entry(record, TaskStatus.PLANNING))
         writer = TaskWriter(self._store)
         return await writer.append(record, entries, now=moment)
@@ -642,7 +643,7 @@ class ClarificationDeadlines:
         """Default what is past its deadline; returns how many questions were defaulted."""
         defaulted = 0
         for record in await self._store.list_records(
-            project_id=project_id, statuses=(TaskStatus.CLARIFYING,)
+            project_id=project_id, statuses=_OPEN_QUESTION_STATUSES
         ):
             try:
                 after = await self._service.default_expired_clarifications(

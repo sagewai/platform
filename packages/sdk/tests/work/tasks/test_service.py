@@ -455,6 +455,61 @@ async def test_a_non_defaultable_question_is_never_defaulted(
 
 
 @pytest.mark.asyncio
+async def test_a_question_attached_to_a_plan_defaults_without_returning_to_planning(
+    service: TaskService, store: TaskStore
+) -> None:
+    task, record = await service.create(
+        "tidy up", project_id="project-a", origin=TaskOrigin.HUMAN, created_by="arda", now=NOW
+    )
+    record = await service.default_expired_clarifications(
+        task.id, project_id="project-a", now=NOW + timedelta(hours=5)
+    )
+    assert record.status is TaskStatus.PLANNING and record.pending_questions == 0
+    record = await TaskWriter(store).append(
+        record,
+        [
+            (
+                TaskEventType.CLARIFICATION_REQUESTED,
+                {
+                    "questions": [
+                        {
+                            "id": "difficulty",
+                            "text": "Which difficulty axis?",
+                            "kind": "text",
+                            "options": [],
+                            "default": "the plan above",
+                            "defaultable": True,
+                            "rationale": "",
+                            "attention_version": 1,
+                        }
+                    ],
+                    "deadline_at": (NOW + timedelta(hours=9)).isoformat(),
+                },
+            ),
+            status_entry(record, TaskStatus.PLAN_PROPOSED),
+        ],
+        now=NOW + timedelta(hours=5),
+    )
+    assert record.status is TaskStatus.PLAN_PROPOSED and record.pending_questions == 1
+
+    defaulted = await ClarificationDeadlines(store=store, service=service).run(
+        project_id="project-a", now=NOW + timedelta(hours=10)
+    )
+
+    assert defaulted == 1
+    after = await store.load_record(task.id, project_id="project-a")
+    assert after is not None
+    assert after.status is TaskStatus.PLAN_PROPOSED and after.pending_questions == 0
+    defaults = [
+        event.payload_json
+        for event in await store.read_events(task.id, project_id="project-a")
+        if event.event_type is TaskEventType.CLARIFICATION_DEFAULTED
+        and event.payload_json["question_id"] == "difficulty"
+    ]
+    assert defaults == [{"question_id": "difficulty", "answer": "the plan above"}]
+
+
+@pytest.mark.asyncio
 async def test_add_message_appends_one_human_message(service_and_record) -> None:
     service, record = service_and_record
 

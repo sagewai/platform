@@ -468,10 +468,18 @@ rate below 80 percent over the last five cycles, raises an alert with a cooldown
 Nothing creates a monitoring Task on its own.
 
 Questions and gates: an unanswered question that carries a default is defaulted once its
-deadline passes and the Task returns to planning; a question that cannot be defaulted stays
+deadline passes and, from `Clarifying`, the Task returns to planning; a question that cannot
+be defaulted stays
 open and keeps the Task in `Needs you`. The plan and re-plan gates are decided on the Task; a
 merge gate belongs to the Work, so approve it with `sagewai work approve` or
 `POST /api/v1/work/{work_id}/gates/{gate_id}`.
+
+A plan may arrive with a defaultable question attached: the coordinator proposes the plan and
+records the question with its deadline, so the assumption is visible and correctable while the
+cycle runs, and it is defaulted on that deadline like any other. Answering one after the plan is
+accepted records the answer and nothing else — the planner reads it at the next plan version, so
+use the re-plan gate when the answer should change the current plan. A question that cannot be
+defaulted still stops the plan and asks first.
 
 Triggers: an approved `github_label` trigger turns each newly labelled issue into one Task of
 origin `trigger`, bounded by the trigger's authority, which a Task may only tighten. **A

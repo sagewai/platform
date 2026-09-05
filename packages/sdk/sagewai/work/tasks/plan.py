@@ -69,16 +69,23 @@ class TaskPlanResult(BaseModel):
     claims: tuple[ClassifiedClaim, ...] = ()
 
     @model_validator(mode="after")
-    def _steps_xor_clarifications(self) -> TaskPlanResult:
-        if self.clarifications and self.steps:
-            raise ValueError("a plan result asks clarifications or proposes steps, not both")
+    def _material_questions_come_first(self) -> TaskPlanResult:
+        """Section 6.3: a defaultable question is an assumption a plan may carry; a material
+        one holds the Task and forbids steps."""
         if not self.clarifications and not self.steps:
             raise ValueError("a plan result needs steps or clarifications")
+        if self.steps and any(
+            not question.defaultable or question.default is None
+            for question in self.clarifications
+        ):
+            raise ValueError(
+                "clarifications attached to a plan must be defaultable and carry a default"
+            )
         return self
 
     @property
     def asks_first(self) -> bool:
-        return bool(self.clarifications)
+        return bool(self.clarifications) and not self.steps
 
 
 class AcceptedPlan(BaseModel):
@@ -134,7 +141,7 @@ def accept_plan(
     version: int,
 ) -> AcceptedPlan:
     """Apply the spec §7 acceptance rules; raise PlanRejectedError with the reason."""
-    if result.clarifications:
+    if not result.steps:
         raise PlanRejectedError("result asks clarifications instead of proposing steps")
     if len(result.steps) > budget.max_works_per_cycle:
         raise PlanRejectedError(
