@@ -112,6 +112,27 @@ async def test_create_without_a_matching_target_is_a_409(client: AdminClient) ->
 
 
 @pytest.mark.asyncio
+async def test_intake_and_create_agree_when_the_project_has_no_target(
+    client: AdminClient,
+) -> None:
+    await client.app.state.task_store.put_defaults(
+        TaskDefaults(project_id="p"), expected_revision=1
+    )
+
+    preview = await client.http.post(
+        "/api/v1/tasks/intake", headers=client.headers, json={"brief": BRIEF}
+    )
+    created = await client.http.post(
+        "/api/v1/tasks", headers=client.headers, json={"brief": BRIEF}
+    )
+
+    assert preview.status_code == 200
+    assert preview.json()["questions"] == []
+    assert created.status_code == 409
+    assert created.json()["detail"] in preview.json()["preview"]
+
+
+@pytest.mark.asyncio
 async def test_create_refuses_an_empty_brief(client: AdminClient) -> None:
     response = await client.http.post("/api/v1/tasks", headers=client.headers, json={"brief": ""})
     assert response.status_code == 422

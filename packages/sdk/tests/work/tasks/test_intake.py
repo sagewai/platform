@@ -76,7 +76,16 @@ def test_route_auto_routes_a_clear_software_brief() -> None:
     assert result.template_id == "software_delivery"
     assert result.band == "auto_route"
     assert result.cron is None
-    assert [question.id for question in result.questions] == ["repository"]
+    assert result.questions == ()
+
+
+def test_route_previews_the_refusal_create_raises_without_a_target() -> None:
+    result = route("make it better", DEFAULTS.model_copy(update={"target": None}))
+    assert "repository" not in [question.id for question in result.questions]
+    assert (
+        "project project-a has no software target for template software_delivery"
+        in result.preview
+    )
 
 
 def test_route_asks_for_the_schedule_when_the_phrase_is_not_understood() -> None:
@@ -102,7 +111,7 @@ def test_route_short_or_unmatched_brief_is_synthesis_with_outcome_question() -> 
         "the template must be confirmed before creation."
     )
     ids = [question.id for question in result.questions]
-    assert "outcome" in ids and "repository" in ids
+    assert ids == ["outcome"]
     outcome = next(question for question in result.questions if question.id == "outcome")
     assert outcome.defaultable and outcome.default
 
@@ -134,13 +143,20 @@ def test_score_template_is_symmetric_in_catalogue_order() -> None:
     assert scores["scheduled_research_report"] > scores["software_delivery"]
 
 
-def test_route_prefilled_repository_removes_the_repository_question() -> None:
+def test_route_prefills_the_repository_slot_from_the_project_target() -> None:
     from sagewai.work.tasks.models import SoftwareTarget
 
     defaults = DEFAULTS.model_copy(
-        update={"target": SoftwareTarget(repository_path="/repo", owner="o", repo="r", verification_image="sha256:" + "a" * 64)}
+        update={
+            "target": SoftwareTarget(
+                repository_path="/repo",
+                owner="o",
+                repo="r",
+                verification_image="sha256:" + "a" * 64,
+            )
+        }
     )
     result = route("Add a pause control to the browser game and cover it with tests", defaults)
     assert result.template_id == "software_delivery"
-    assert "repository" not in [question.id for question in result.questions]
     assert result.slots["repository"] == "/repo"
+    assert "has no software target" not in result.preview

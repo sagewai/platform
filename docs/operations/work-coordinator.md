@@ -170,7 +170,9 @@ coordinator pages:
   filters that go to the API. The composer accepts a written brief or a dropped
   Markdown file; press `Preview` to see the template, kind, schedule, questions
   intake would ask, and the plain-language summary before creating the Task.
-  Target and execution come from the project's `task_defaults`.
+  Target and execution come from the project's `task_defaults`. When the project has no target
+  for the routed template, the preview says so in the same words the create call refuses with:
+  configure the target first, because a Task pins it at creation.
 - **`/tasks`** — the same Tasks across every project the caller can see (an
   owner or admin sees every project of the organization; other members their
   memberships), up to 20 Tasks per project with no paging, and a needs-you
