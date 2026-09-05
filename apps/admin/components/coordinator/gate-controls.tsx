@@ -105,7 +105,7 @@ export function GateControls({
         </Button>
         <Button
           size="sm"
-          variant="outline"
+          variant="destructive"
           aria-busy={busy === 'deny'}
           disabled={busy !== null}
           onClick={() => void decide('deny')}

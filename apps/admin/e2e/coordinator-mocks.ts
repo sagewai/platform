@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 import type {
   IntakePreview,
   OperatorActivity,
@@ -21,7 +21,11 @@ import type {
   TaskTelemetry,
   TaskTriggerSpec,
   ThreadEntry,
+  WorkRecord,
 } from '../utils/types';
+
+export const PAGES = ['/board', '/tasks', '/decisions', '/work'] as const;
+export type CoordinatorPagePath = (typeof PAGES)[number];
 
 export const project: Project = {
   id: 'project-console',
@@ -229,8 +233,43 @@ export const workPending: PendingAttention = {
   created_at: '2026-09-01T08:00:00Z',
 };
 
+/** Mirrors `GET /api/v1/work`: the Work the mirrored gate belongs to. */
+export const workRecord = {
+  work_id: 'work-9',
+  project_id: project.id,
+  source_ref: 'https://github.com/sagewai/platform/pull/3',
+  profile: 'software',
+  status: 'WORK_BLOCKED',
+  contract_version: 1,
+  active_run_id: 'run-9',
+  pending_gate: workDecision.gate_id,
+  profile_context: {},
+  created_at: '2026-09-01T08:00:00Z',
+  updated_at: '2026-09-01T12:00:00Z',
+} satisfies WorkRecord;
+
 /** Route handlers keyed by decoded pathname; a spec passes extras or replaces one. */
 export type Handlers = Record<string, (url: URL, method: string) => unknown>;
+
+// These hard-coded testids are the shared coordinator mocks' render contract.
+export async function waitForPageReady(page: Page, path: CoordinatorPagePath): Promise<void> {
+  if (path === '/board') {
+    await expect(page.getByTestId('task-card-task-4')).toBeVisible();
+    return;
+  }
+  if (path === '/tasks') {
+    await expect(page.getByTestId('portfolio-project-project-console')).toBeVisible();
+    return;
+  }
+  if (path === '/decisions') {
+    await expect(page.getByTestId('decision-row-merge:work-9:3')).toBeVisible();
+    return;
+  }
+  await expect(page.getByText(workPending.summary).filter({ visible: true }).first()).toBeVisible();
+  await expect(
+    page.getByRole('link', { name: workRecord.work_id }).filter({ visible: true }).first(),
+  ).toBeVisible();
+}
 
 export const templates: TaskTemplateCatalogue = {
   templates: [

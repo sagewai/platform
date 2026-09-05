@@ -17,3 +17,13 @@
     transform: translateY(0);
   }
 }
+
+.page-enter {
+  animation: page-enter 150ms var(--ease-enter) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter {
+    animation: none;
+  }
+}

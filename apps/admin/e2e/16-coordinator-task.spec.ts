@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 
 import {
   acceptedPlanDetail,
@@ -2308,4 +2309,38 @@ test.describe('Coordinator Task page', () => {
     releaseGate();
     await expect.poll(() => writes).toEqual([`/api/v1/tasks/${task.id}/gates/plan:${task.id}:1`]);
   });
+
+  for (const theme of ['light', 'dark'] as const) {
+    test(`a11y: ${theme} Task thread and plan — zero WCAG AA violations`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' });
+      await selectProject(page);
+      await mockCoordinatorApi(page, {
+        [`/api/v1/tasks/${task.id}`]: () => acceptedPlanDetail,
+        [`/api/v1/tasks/${task.id}/thread`]: () => thread,
+      });
+      await mockTaskStream(page);
+
+      await page.goto(`/tasks/${task.id}`);
+      await expect(page.getByTestId('thread-entry-4:q-scope')).toBeVisible();
+      const threadResults = await new AxeBuilder({ page })
+        .include('main')
+        .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
+        .analyze();
+      expect(
+        threadResults.violations,
+        `${theme} Task thread violations:\n${JSON.stringify(threadResults.violations, null, 2)}`,
+      ).toEqual([]);
+
+      await page.goto(`/tasks/${task.id}/plan`);
+      await expect(page.getByTestId('plan-step-step-1')).toBeVisible();
+      const planResults = await new AxeBuilder({ page })
+        .include('main')
+        .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
+        .analyze();
+      expect(
+        planResults.violations,
+        `${theme} Task plan violations:\n${JSON.stringify(planResults.violations, null, 2)}`,
+      ).toEqual([]);
+    });
+  }
 });

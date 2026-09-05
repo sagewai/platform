@@ -156,7 +156,7 @@ export default function TaskLayout({
             </Button>
             <Button
               size="sm"
-              variant="outline"
+              variant="destructive"
               disabled={busy}
               onClick={() => void run('cancel')}
             >
