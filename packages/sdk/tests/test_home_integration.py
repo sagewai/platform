@@ -68,17 +68,6 @@ def test_sops_root_env_override_wins(tmp_path, monkeypatch):
     assert _sops_root() == (tmp_path / "s")
 
 
-def test_blueprint_cache_default_under_data(monkeypatch):
-    monkeypatch.delenv("SAGEWAI_CACHE_DIR", raising=False)
-    from sagewai import home
-    from sagewai.admin import autopilot_routes
-    assert autopilot_routes._blueprint_cache_dir() == home.data_dir() / "blueprint_cache"
-
-
-def test_blueprint_cache_env_override_wins(tmp_path, monkeypatch):
-    monkeypatch.setenv("SAGEWAI_CACHE_DIR", str(tmp_path / "bc"))
-    from sagewai.admin import autopilot_routes
-    assert autopilot_routes._blueprint_cache_dir() == tmp_path / "bc"
 
 
 def test_cli_admin_state_fallback_matches_helper(monkeypatch):
@@ -94,12 +83,6 @@ def test_cli_admin_state_alias_wins(tmp_path, monkeypatch):
     from sagewai.cli import sandbox as cli_sandbox
     assert cli_sandbox.resolve_admin_state_path() == tmp_path / "a.json"
 
-
-def test_blueprint_cache_empty_env_uses_default(monkeypatch):
-    monkeypatch.setenv("SAGEWAI_CACHE_DIR", "")
-    from sagewai import home
-    from sagewai.admin import autopilot_routes
-    assert autopilot_routes._blueprint_cache_dir() == home.data_dir() / "blueprint_cache"
 
 
 def test_cli_admin_state_file_env_honoured_through_helper(tmp_path, monkeypatch):

@@ -7,7 +7,7 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""Task status transition table in the style of admin.autopilot_lifecycle."""
+"""Task status transition table over the durable store."""
 
 from __future__ import annotations
 

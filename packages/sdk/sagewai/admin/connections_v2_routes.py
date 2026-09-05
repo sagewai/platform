@@ -17,8 +17,8 @@ Each plugin's :meth:`extra_routes` is additionally mounted under
 ``/start`` + ``/callback`` + ``/refresh`` + ``/revoke``).
 
 Auth: every route except plugin extras (which set their own policy via
-the plugin's contract) requires the ``sagewai_auth`` cookie via
-:func:`sagewai.admin.autopilot_routes._require_auth`. Plugin
+the plugin's contract) requires the ``sagewai_auth`` cookie via a local
+private helper. Plugin
 ``extra_routes`` use a module-level context injection (set by
 ``register`` at app construction time) so handlers don't take an extra
 parameter for the context.
@@ -270,10 +270,16 @@ def _decrypted_pd(ctx: ConnectionsContext, record, plugin) -> dict[str, Any]:
     )
 
 
+def _extract_token(request: Request) -> str | None:
+    """Get auth token from header or cookie."""
+    auth = request.headers.get("authorization", "")
+    if auth[:7].lower() == "bearer ":
+        return auth[7:]
+    return request.cookies.get("sagewai_auth")
+
+
 def _current_user_email(request: Request, sf: AdminStateFile) -> str | None:
     """Return the authenticated user's email for audit-log payloads, or None."""
-    from sagewai.admin.serve import _extract_token
-
     token = _extract_token(request)
     if not token:
         return None
@@ -281,13 +287,31 @@ def _current_user_email(request: Request, sf: AdminStateFile) -> str | None:
     return user.get("email") if user else None
 
 
+def _require_auth(request: Request, sf: AdminStateFile) -> JSONResponse | None:
+    """Return a 401 JSONResponse if the request is not authenticated, else None.
+
+    In multi-tenant mode the session lives in the IdentityStore, not the file
+    store, and ``AuthMiddleware`` has already validated it and built the
+    ``RequestContext``; trust that rather than re-checking the (tenant-blind)
+    file-store token table, which would 401 every valid tenant session.
+    """
+    ctx = getattr(request.state, "context", None)
+    if ctx is not None and getattr(ctx, "tenancy_mode", None) == "multi":
+        return None
+    token = _extract_token(request)
+    if not token:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    user = sf.get_user_by_token(token)
+    if user is None:
+        return JSONResponse({"error": "Invalid or expired token"}, status_code=401)
+    return None
+
+
 # ── Router factory ──────────────────────────────────────────────────
 
 
 def _build_router(sf: AdminStateFile, ctx: ConnectionsContext) -> APIRouter:
     """Construct the generic connections router bound to an AdminStateFile."""
-    from sagewai.admin.autopilot_routes import _require_auth
-
     # Session-derived tenant scope (multi-tenant only). Imported lazily to avoid a
     # serve <-> connections_v2_routes import cycle. In single-org mode ``_multi_ctx``
     # returns None and every guard below is a no-op, so the file-store path is

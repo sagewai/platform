@@ -2128,8 +2128,7 @@ def create_admin_serve_app(
         """Mark *provider_id* as the default LLM provider for the project scope.
 
         At most one provider can be the default per project (or org-global
-        when no ``X-Project-ID`` header is present). The autopilot mission
-        driver will pick this provider's credentials before any other.
+        when no ``X-Project-ID`` header is present).
         """
         _require_resource_write(request)
         store = _provider_store(request)
@@ -6755,7 +6754,7 @@ def _in_write_scope(item_project_id: str | None, request: Request) -> bool:
 # In multi mode, durable audit currently covers: org/project settings update;
 # provider upsert/delete/set-default; agent create/delete; prompt-log create/
 # update/delete; budget create/update/delete; guardrail upsert/delete;
-# notification channel/trigger upsert/delete; autopilot trigger create; workflow-
+# notification channel/trigger upsert/delete; workflow-
 # registry save; workflow run approve/reject; artifact-destination upsert/delete;
 # API-token create/revoke/delete; fleet worker approve/reject/revoke; fleet
 # enrollment-key create/revoke; connector save/delete. Remaining durable-audit
