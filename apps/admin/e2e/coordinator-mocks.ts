@@ -19,6 +19,7 @@ import type {
   TaskThread,
   TaskTemplateCatalogue,
   TaskTelemetry,
+  TaskTriggerSpec,
   ThreadEntry,
 } from '../utils/types';
 
@@ -35,13 +36,13 @@ export const project: Project = {
 };
 
 const budgetUsed: TaskBudgetUsed = {
-  works: 1,
-  attempts: 2,
+  works: 2,
+  attempts: 4,
   replans: 0,
   seconds: 120,
-  usd_actual: '1.50',
-  usd_reserved: '0.50',
-  usd_unknown: 0,
+  usd_actual: '0.42',
+  usd_reserved: '0',
+  usd_unknown: 2,
 };
 
 function record(overrides: Partial<TaskRecord> = {}): TaskRecord {
@@ -359,7 +360,7 @@ export function task(taskRecord: TaskRecord): Task {
     },
     authority: { plan: 'require', merge: 'require', replan: 'require', deliver: 'require' },
     routing: taskDefaults.routing,
-    routing_version: 0,
+    routing_version: 1,
     execution: taskDefaults.execution,
     sensitivity: 'internal',
     retention_days: null,
@@ -393,6 +394,18 @@ export const taskDetailTask = {
     merge: 'by_reversibility',
     replan: 'by_reversibility',
     deliver: 'by_reversibility',
+  },
+  routing: {
+    roles: {
+      planner: ['claude:analysis'],
+      designer: ['claude:analysis'],
+      analyst: ['harness:medium', 'claude:analysis'],
+      implementer: ['codex'],
+      repairer: ['codex'],
+      reviewer: ['claude:review'],
+      assessor: ['claude:review'],
+    },
+    prefer_free_implementation: false,
   },
 } satisfies Task;
 
@@ -975,6 +988,22 @@ export const telemetryHandlers: Handlers = {
   [`/api/v1/tasks/${taskDetailTask.id}/telemetry`]: () => telemetry,
 };
 
+export const trigger = {
+  trigger_id: 'trigger-1',
+  project_id: project.id,
+  source: 'github_label',
+  filter: { owner: 'sagewai', repo: 'platform', label: 'sagewai-task' },
+  template_id: 'software_delivery',
+  template_version: '1',
+  slots: {},
+  authority: { plan: 'require', merge: 'require', replan: 'require', deliver: 'require' },
+  enabled: true,
+} satisfies TaskTriggerSpec;
+
+export const settingsHandlers: Handlers = {
+  '/api/v1/tasks/triggers': () => ({ triggers: [trigger] }),
+};
+
 export const baseHandlers: Handlers = {
   ...composerHandlers,
   ...taskHandlers,
@@ -983,6 +1012,7 @@ export const baseHandlers: Handlers = {
   ...actionHandlers,
   ...activityHandlers,
   ...telemetryHandlers,
+  ...settingsHandlers,
   '/api/v1/tasks/board': () => board,
   '/api/v1/tasks': (url, method) => {
     if (method === 'POST') {

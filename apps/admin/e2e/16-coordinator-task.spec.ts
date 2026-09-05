@@ -24,13 +24,15 @@ import {
   settledGateThread,
   sseBody,
   task as makeTask,
+  taskBudget,
   taskDetail,
   taskDetailTask as task,
   taskPlan,
   telemetry,
   thread,
+  trigger,
 } from './coordinator-mocks';
-import type { TaskDetail, TaskTelemetry } from '../utils/types';
+import type { TaskDetail, TaskTelemetry, TaskTriggerSpec } from '../utils/types';
 
 test.describe('Coordinator Task page', () => {
   test('shows the header, the status and the six tabs', async ({ page }) => {
@@ -1803,5 +1805,438 @@ test.describe('Coordinator Task page', () => {
     const rows = page.getByTestId('work-telemetry-work-9').locator('tbody tr');
     await expect(rows.first()).toContainText('repairer');
     await expect(rows.last()).toContainText('implementer');
+  });
+
+  test('shows the definition read-only and the triggers that can start a Task', async ({
+    page,
+  }) => {
+    const requests: Array<{ path: string; scope: string | undefined; search: string }> = [];
+    await selectProject(page);
+    await mockCoordinatorApi(page);
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (
+        request.method() === 'GET' &&
+        (url.pathname === `/api/v1/tasks/${task.id}` ||
+          url.pathname === '/api/v1/tasks/triggers')
+      ) {
+        requests.push({
+          path: url.pathname,
+          scope: request.headers()['x-project-id'],
+          search: url.search,
+        });
+      }
+    });
+
+    await page.goto(`/tasks/${task.id}/settings`);
+
+    await expect(page.getByTestId('settings-target')).toContainText('sagewai/platform');
+    await expect(page.getByTestId('settings-authority')).toContainText('plan: require');
+    await expect(page.getByTestId('settings-routing')).toContainText(
+      'analyst: harness:medium → claude:analysis',
+    );
+    await expect(page.getByTestId('settings-routing')).toContainText('implementer: codex');
+    await expect(page.getByTestId('settings-schedule')).toContainText('runs once');
+    await expect(page.getByTestId('settings-trigger-trigger-1')).toContainText('sagewai-task');
+    await expect(page.getByLabel('Cycle limit (USD)')).toHaveValue(taskBudget.max_cycle_usd);
+    await expect(page.getByLabel('Works per cycle')).toHaveValue(
+      String(taskBudget.max_works_per_cycle),
+    );
+    await expect(page.getByLabel('Replans')).toHaveValue(String(taskBudget.max_replans));
+    const used = needsYouTask.budget_used;
+    await expect(page.getByTestId('settings-budget-used')).toContainText(
+      `fenced on revision ${needsYouTask.revision}. Used so far: ` +
+        `$${used.usd_actual} actual, $${used.usd_reserved} reserved, ` +
+        `${used.usd_unknown} unpriced attempt(s).`,
+    );
+    expect(requests).toContainEqual({
+      path: `/api/v1/tasks/${task.id}`,
+      scope: project.id,
+      search: '',
+    });
+    expect(requests).toContainEqual({
+      path: '/api/v1/tasks/triggers',
+      scope: project.id,
+      search: '',
+    });
+  });
+
+  test('says so when no trigger is configured', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      '/api/v1/tasks/triggers': () => ({ triggers: [] }),
+    });
+
+    await page.goto(`/tasks/${task.id}/settings`);
+
+    await expect(page.getByRole('heading', { name: 'No triggers' })).toBeVisible();
+    await expect(page.getByTestId('task-settings-error')).toHaveCount(0);
+  });
+
+  test('shows the settings refusal the API stated', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}/thread`]: () => ({
+        task_id: task.id,
+        project_id: task.project_id,
+        brief_ref: null,
+        entries: [],
+        open_question_ids: [],
+        pending_gate: null,
+      }),
+    });
+
+    await page.goto(`/tasks/${task.id}`);
+    await expect(page.getByRole('heading', { name: needsYouTask.title })).toBeVisible();
+
+    await page.route(
+      (url) => url.pathname === '/api/v1/tasks/triggers',
+      async (route) => {
+        await route.fulfill({ status: 503, json: { detail: 'settings projection unavailable' } });
+      },
+    );
+    await page.getByRole('link', { name: 'Settings' }).click();
+
+    await expect(page.getByTestId('task-settings-error')).toHaveText(
+      'settings projection unavailable',
+    );
+  });
+
+  test('re-reads the settings when the feed advances without blanking', async ({ page }) => {
+    let releaseStream = () => {};
+    let releaseTriggers = () => {};
+    let holdTriggerRead = false;
+    let triggerRequests = 0;
+    const streamReady = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    const triggersReady = new Promise<void>((resolve) => {
+      releaseTriggers = resolve;
+    });
+    const changedTrigger = {
+      ...trigger,
+      trigger_id: 'trigger-2',
+      filter: { ...trigger.filter, label: 'needs-review' },
+    } satisfies TaskTriggerSpec;
+    await selectProject(page);
+    await mockCoordinatorApi(page);
+    await page.route(
+      (url) => url.pathname === '/api/v1/tasks/triggers',
+      async (route) => {
+        triggerRequests += 1;
+        if (holdTriggerRead) {
+          await triggersReady;
+          holdTriggerRead = false;
+          await route.fulfill({ json: { triggers: [changedTrigger] } });
+          return;
+        }
+        await route.fulfill({ json: { triggers: [trigger] } });
+      },
+    );
+    await page.route(`**/api/v1/tasks/${task.id}/events`, async (route) => {
+      await streamReady;
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: `id: 5\nevent: task.updated\ndata: ${JSON.stringify({
+          source: 'task_event',
+          project_id: project.id,
+          task_id: task.id,
+          feed_sequence: 5,
+          source_id: 'event-5',
+          event_type: 'BUDGET_UPDATED',
+          payload_json: {},
+          created_at: '2026-09-01T11:35:00Z',
+        })}\n\n`,
+      });
+    });
+
+    await page.goto(`/tasks/${task.id}/settings`);
+    await expect(page.getByTestId('settings-trigger-trigger-1')).toContainText('sagewai-task');
+    const before = triggerRequests;
+    holdTriggerRead = true;
+    releaseStream();
+
+    await expect.poll(() => triggerRequests).toBeGreaterThan(before);
+    await expect(page.getByTestId('settings-trigger-trigger-1')).toContainText('sagewai-task');
+    releaseTriggers();
+    await expect(page.getByTestId('settings-trigger-trigger-2')).toContainText('needs-review');
+  });
+
+  test('keeps the settings and states the refusal when a refetch fails', async ({ page }) => {
+    let releaseStream = () => {};
+    let failTriggers = false;
+    let triggerRequests = 0;
+    const streamReady = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    await selectProject(page);
+    await mockCoordinatorApi(page);
+    await page.route(
+      (url) => url.pathname === '/api/v1/tasks/triggers',
+      async (route) => {
+        triggerRequests += 1;
+        if (failTriggers) {
+          await route.fulfill({
+            status: 503,
+            json: { detail: 'settings projection unavailable' },
+          });
+          return;
+        }
+        await route.fulfill({ json: { triggers: [trigger] } });
+      },
+    );
+    await page.route(`**/api/v1/tasks/${task.id}/events`, async (route) => {
+      await streamReady;
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: `id: 5\nevent: task.updated\ndata: ${JSON.stringify({
+          source: 'task_event',
+          project_id: project.id,
+          task_id: task.id,
+          feed_sequence: 5,
+          source_id: 'event-5',
+          event_type: 'BUDGET_UPDATED',
+          payload_json: {},
+          created_at: '2026-09-01T11:35:00Z',
+        })}\n\n`,
+      });
+    });
+
+    await page.goto(`/tasks/${task.id}/settings`);
+    await expect(page.getByTestId('settings-trigger-trigger-1')).toContainText('sagewai-task');
+    const before = triggerRequests;
+    failTriggers = true;
+    releaseStream();
+
+    await expect.poll(() => triggerRequests).toBeGreaterThan(before);
+    await expect(page.getByTestId('task-settings-error')).toHaveText(
+      'settings projection unavailable',
+    );
+    await expect(page.getByTestId('settings-trigger-trigger-1')).toContainText('sagewai-task');
+  });
+
+  test('keeps the API order of the project triggers', async ({ page }) => {
+    const secondTrigger = {
+      ...trigger,
+      trigger_id: 'trigger-2',
+      filter: { ...trigger.filter, label: 'needs-review' },
+    } satisfies TaskTriggerSpec;
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      '/api/v1/tasks/triggers': () => ({ triggers: [secondTrigger, trigger] }),
+    });
+
+    await page.goto(`/tasks/${task.id}/settings`);
+
+    const rows = page.locator('[data-testid^="settings-trigger-"]');
+    await expect(rows.first()).toContainText('needs-review');
+    await expect(rows.last()).toContainText('sagewai-task');
+  });
+
+  test('patches the budget at the Task revision', async ({ page }) => {
+    const bodies: unknown[] = [];
+    const scopes: Array<string | undefined> = [];
+    let taskReads = 0;
+    let patched = false;
+    await selectProject(page);
+    await mockCoordinatorApi(page);
+    await page.route(
+      (url) => url.pathname === `/api/v1/tasks/${task.id}`,
+      async (route) => {
+        if (route.request().method() === 'PATCH') {
+          patched = true;
+          await route.fulfill({
+            json: {
+              task: { ...task, budget: { ...taskBudget, max_cycle_usd: '25.00' } },
+              record: { ...needsYouTask, revision: needsYouTask.revision + 1 },
+            },
+          });
+          return;
+        }
+        taskReads += 1;
+        await route.fulfill({
+          json: patched
+            ? {
+                ...taskDetail,
+                task: { ...task, budget: { ...taskBudget, max_cycle_usd: '25.00' } },
+                record: { ...needsYouTask, revision: needsYouTask.revision + 1 },
+              }
+            : taskDetail,
+        });
+      },
+    );
+    page.on('request', (request) => {
+      if (request.method() === 'PATCH' && request.url().includes('/api/v1/tasks/')) {
+        bodies.push(JSON.parse(request.postData() ?? '{}'));
+        scopes.push(request.headers()['x-project-id']);
+      }
+    });
+
+    await page.goto(`/tasks/${task.id}/settings`);
+    await page.getByLabel('Cycle limit (USD)').fill('25.00');
+    const before = taskReads;
+    await page.getByRole('button', { name: 'Save budget' }).click();
+
+    await expect(
+      page.locator('[data-sonner-toast]').filter({ hasText: 'Budget updated' }),
+    ).toBeVisible();
+    await expect.poll(() => bodies).toEqual([
+      { budget: { ...taskBudget, max_cycle_usd: '25.00' }, revision: needsYouTask.revision },
+    ]);
+    expect(scopes).toEqual([project.id]);
+    await expect.poll(() => taskReads).toBeGreaterThan(before);
+  });
+
+  test('keeps the budget refusal when the feed advances', async ({ page }) => {
+    let releaseStream = () => {};
+    let taskReads = 0;
+    const streamReady = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    await selectProject(page);
+    await mockCoordinatorApi(page);
+    await page.route(
+      (url) => url.pathname === `/api/v1/tasks/${task.id}`,
+      async (route) => {
+        if (route.request().method() === 'PATCH') {
+          await route.fulfill({ status: 409, json: { detail: 'task revision moved' } });
+          return;
+        }
+        taskReads += 1;
+        await route.fulfill({ json: taskDetail });
+      },
+    );
+    await page.route(`**/api/v1/tasks/${task.id}/events`, async (route) => {
+      await streamReady;
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: `id: 5\nevent: task.updated\ndata: ${JSON.stringify({
+          source: 'task_event',
+          project_id: project.id,
+          task_id: task.id,
+          feed_sequence: 5,
+          source_id: 'event-5',
+          event_type: 'BUDGET_UPDATED',
+          payload_json: {},
+          created_at: '2026-09-01T11:35:00Z',
+        })}\n\n`,
+      });
+    });
+
+    await page.goto(`/tasks/${task.id}/settings`);
+    await page.getByLabel('Cycle limit (USD)').fill('25.00');
+    await page.getByRole('button', { name: 'Save budget' }).click();
+
+    await expect(page.getByTestId('task-settings-budget-error')).toHaveText(
+      'task revision moved',
+    );
+    const before = taskReads;
+    releaseStream();
+    await expect.poll(() => taskReads).toBeGreaterThan(before);
+    await expect(page.getByTestId('task-settings-budget-error')).toHaveText(
+      'task revision moved',
+    );
+  });
+
+  test('keeps the budget draft when the feed advances', async ({ page }) => {
+    let releaseStream = () => {};
+    let taskReads = 0;
+    const streamReady = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    await selectProject(page);
+    await mockCoordinatorApi(page);
+    await page.route(
+      (url) => url.pathname === `/api/v1/tasks/${task.id}`,
+      async (route) => {
+        taskReads += 1;
+        await route.fulfill({ json: taskDetail });
+      },
+    );
+    await page.route(`**/api/v1/tasks/${task.id}/events`, async (route) => {
+      await streamReady;
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: `id: 5\nevent: task.updated\ndata: ${JSON.stringify({
+          source: 'task_event',
+          project_id: project.id,
+          task_id: task.id,
+          feed_sequence: 5,
+          source_id: 'event-5',
+          event_type: 'BUDGET_UPDATED',
+          payload_json: {},
+          created_at: '2026-09-01T11:35:00Z',
+        })}\n\n`,
+      });
+    });
+
+    await page.goto(`/tasks/${task.id}/settings`);
+    await expect(page.getByLabel('Cycle limit (USD)')).toHaveValue(taskBudget.max_cycle_usd);
+    await page.getByLabel('Cycle limit (USD)').fill('25.00');
+    const before = taskReads;
+    releaseStream();
+
+    await expect.poll(() => taskReads).toBeGreaterThan(before);
+    await expect(page.getByLabel('Cycle limit (USD)')).toHaveValue('25.00');
+  });
+
+  test('shows the budget patch in flight and sends it once', async ({ page }) => {
+    const bodies: unknown[] = [];
+    let releasePatch = () => {};
+    let taskReads = 0;
+    let patched = false;
+    const patchReady = new Promise<void>((resolve) => {
+      releasePatch = resolve;
+    });
+    await selectProject(page);
+    await mockCoordinatorApi(page);
+    await page.route(
+      (url) => url.pathname === `/api/v1/tasks/${task.id}`,
+      async (route) => {
+        if (route.request().method() === 'PATCH') {
+          bodies.push(JSON.parse(route.request().postData() ?? '{}'));
+          await patchReady;
+          patched = true;
+          await route.fulfill({
+            json: {
+              task: { ...task, budget: { ...taskBudget, max_cycle_usd: '25.00' } },
+              record: { ...needsYouTask, revision: needsYouTask.revision + 1 },
+            },
+          });
+          return;
+        }
+        taskReads += 1;
+        await route.fulfill({
+          json: patched
+            ? {
+                ...taskDetail,
+                task: { ...task, budget: { ...taskBudget, max_cycle_usd: '25.00' } },
+                record: { ...needsYouTask, revision: needsYouTask.revision + 1 },
+              }
+            : taskDetail,
+        });
+      },
+    );
+
+    await page.goto(`/tasks/${task.id}/settings`);
+    await page.getByLabel('Cycle limit (USD)').fill('25.00');
+    const before = taskReads;
+    await page.getByRole('button', { name: 'Save budget' }).evaluate((button) => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const button = page.getByRole('button', { name: 'Saving budget' });
+    await expect(button).toHaveAttribute('aria-busy', 'true');
+    await expect(button).toBeDisabled();
+    releasePatch();
+    await expect.poll(() => bodies).toEqual([
+      { budget: { ...taskBudget, max_cycle_usd: '25.00' }, revision: needsYouTask.revision },
+    ]);
+    await expect.poll(() => taskReads).toBeGreaterThan(before);
   });
 });
