@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import os
-import re
 import shlex
 import shutil
 import tempfile
@@ -26,6 +25,7 @@ from sagewai.artifacts import LocalArtifactStore
 from sagewai.fleet.execution import WorkerProcessResult, run_worker_subprocess
 from sagewai.sandbox.backend import SandboxBackend
 from sagewai.sandbox.models import (
+    DIGEST_PINNED_IMAGE,
     NetworkPolicy,
     ResourceLimits,
     SandboxLifetime,
@@ -54,9 +54,6 @@ from sagewai.work.runtime import OperatorResult, WorkRequest, Workspace
 
 _VERIFICATION_INLINE_LIMIT_BYTES = 4000
 SOFTWARE_VERIFICATION_ISOLATION_PRECONDITION_ID = "software.verification.isolation"
-_DIGEST_PINNED_IMAGE = re.compile(
-    r"^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$"
-)
 
 
 class SoftwareResultValidator:
@@ -232,7 +229,7 @@ class SandboxedVerificationRunner:
         backend_factory: Callable[[], SandboxBackend] = _docker_backend,
         resource_limits: ResourceLimits | None = None,
     ) -> None:
-        if not _DIGEST_PINNED_IMAGE.fullmatch(image):
+        if not DIGEST_PINNED_IMAGE.fullmatch(image):
             raise ValueError("verification sandbox image must be digest-pinned")
         self._image = image
         self._backend_factory = backend_factory

@@ -806,7 +806,7 @@ test.describe('Coordinator Task page', () => {
     await expect(matrix).toContainText(
       'pnpm --filter @sagewai/admin exec playwright test 16-coordinator',
     );
-    await expect(matrix).toContainText('assessment');
+    await expect(matrix).toContainText('policy');
     expect(detailScopes).toContain(project.id);
   });
 

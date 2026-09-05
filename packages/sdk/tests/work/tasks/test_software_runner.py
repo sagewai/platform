@@ -40,7 +40,14 @@ from sagewai.work.store import WorkStore
 from sagewai.work.tasks.assessor import AssessmentFailedError, TaskAssessor
 from sagewai.work.tasks.coordinator import TaskCoordinator
 from sagewai.work.tasks.events import TaskEventType
-from sagewai.work.tasks.models import ExecutionRoute, HarnessTier, TaskDefaults, TaskOrigin
+from sagewai.work.tasks.models import (
+    ExecutionRoute,
+    HarnessTier,
+    RoleAlias,
+    RuntimeRef,
+    TaskDefaults,
+    TaskOrigin,
+)
 from sagewai.work.tasks.plan import AcceptedPlan, MatrixItem, PlanStep, TaskPlanResult
 from sagewai.work.tasks.runner import TaskCoordinatorRunner
 from sagewai.work.tasks.service import TaskService
@@ -114,6 +121,7 @@ def _stack_object(
     read_controller: object | None = None,
     read_capabilities: object | None = None,
     analysis_runtime: object | None = None,
+    planner_runtime: object | None = None,
     verifier: object | None = None,
 ):
     return SimpleNamespace(
@@ -125,6 +133,7 @@ def _stack_object(
         read_controller=read_controller or object(),
         read_capabilities=read_capabilities or object(),
         analysis_runtime=analysis_runtime or object(),
+        planner_runtime=planner_runtime or SimpleNamespace(name="claude"),
         verifier=verifier or object(),
     )
 
@@ -734,10 +743,11 @@ async def test_plan_wires_task_planner_from_the_stack(
             "work_store": stack.work_store,
             "capsule_compiler": stack.capsule_compiler,
             "controller": stack.read_controller,
-            "runtime": stack.analysis_runtime,
+            "runtime": stack.planner_runtime,
             "capabilities": stack.read_capabilities,
             "worktree_manager": stack.worktree_manager,
             "scratch_manager": planner_kwargs[0]["scratch_manager"],
+            "actor_ref": "runtime:claude:planner",
         }
     ]
 
@@ -796,7 +806,7 @@ async def test_assess_verifies_deterministic_items_at_the_supplied_merged_head_a
             MatrixItem(
                 id="readback",
                 statement="readback is correct",
-                verification_kind="assessment",
+                verification_kind="policy",
             ),
         ),
     )
@@ -964,6 +974,140 @@ async def test_the_harness_runtime_gets_its_sandbox_resolver_and_secrets(
         await harness._mcp_connections("github")
     assert connection_store.calls == [(PROJECT, "mcp")]
     assert harness._credential_values == {"GITHUB_TOKEN": "ghp_x"}
+
+
+@pytest.mark.asyncio
+async def test_the_codex_runtime_takes_its_model_from_the_project_defaults(
+    dialect_engine,  # noqa: F811
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SAGEWAI_HOME", str(tmp_path / "home"))
+    from tests.work.test_lifecycle import _repository
+
+    repo, _base = _repository(tmp_path)
+    task_store = TaskStore(engine=dialect_engine)
+    await task_store.init()
+    await task_store.put_defaults(
+        TaskDefaults(
+            project_id=PROJECT,
+            target=_task(project_id=PROJECT).target,
+            codex_model="gpt-5.5",
+        ),
+        expected_revision=0,
+    )
+
+    stack = await build_software_stack(
+        project_id=PROJECT,
+        repository=repo,
+        verification_image=IMAGE,
+        engine=dialect_engine,
+    )
+
+    assert stack.lifecycle._implementer.for_position(1).runtime._model == "gpt-5.5"
+
+
+@pytest.mark.asyncio
+async def test_the_codex_runtime_takes_no_model_without_a_project_default(
+    dialect_engine,  # noqa: F811
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SAGEWAI_HOME", str(tmp_path / "home"))
+    from tests.work.test_lifecycle import _repository
+
+    repo, _base = _repository(tmp_path)
+    task_store = TaskStore(engine=dialect_engine)
+    await task_store.init()
+
+    stack = await build_software_stack(
+        project_id=PROJECT,
+        repository=repo,
+        verification_image=IMAGE,
+        engine=dialect_engine,
+    )
+
+    assert stack.lifecycle._implementer.for_position(1).runtime._model is None
+
+
+@pytest.mark.asyncio
+async def test_the_planner_runtime_follows_the_routing_policy(
+    dialect_engine,  # noqa: F811
+    monkeypatch,
+) -> None:
+    work_store = WorkStore(engine=dialect_engine)
+    await work_store.init()
+    calls = []
+
+    async def fake_stack(**kwargs):
+        calls.append(kwargs)
+        return _stack_object(work_store, lifecycle=object())
+
+    monkeypatch.setattr("sagewai.work.tasks.software.build_software_stack", fake_stack)
+    runner = _runner(work_store, RecordingGitHub(), engine=dialect_engine)
+    task = _task(project_id=PROJECT)
+
+    await runner._stack(task)
+    codex_task = task.model_copy(
+        update={
+            "routing": task.routing.model_copy(
+                update={"roles": {RoleAlias.PLANNER: (RuntimeRef.CODEX,)}}
+            )
+        }
+    )
+    await runner._stack(codex_task)
+
+    assert calls[0]["planner_runtime"] is RuntimeRef.CLAUDE_ANALYSIS
+    assert calls[1]["planner_runtime"] is RuntimeRef.CODEX
+
+
+@pytest.mark.asyncio
+async def test_the_stack_builds_the_planner_runtime_the_ladder_names(
+    dialect_engine,  # noqa: F811
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SAGEWAI_HOME", str(tmp_path / "home"))
+    from tests.work.test_lifecycle import _repository
+
+    repo, _base = _repository(tmp_path)
+    task_store = TaskStore(engine=dialect_engine)
+    await task_store.init()
+    await task_store.put_defaults(
+        TaskDefaults(
+            project_id=PROJECT,
+            target=_task(project_id=PROJECT).target,
+            codex_model="gpt-5.5",
+        ),
+        expected_revision=0,
+    )
+
+    codex_stack = await build_software_stack(
+        project_id=PROJECT,
+        repository=repo,
+        verification_image=IMAGE,
+        planner_runtime=RuntimeRef.CODEX,
+        engine=dialect_engine,
+    )
+    assert codex_stack.planner_runtime is codex_stack.lifecycle._implementer.for_position(1).runtime
+    assert codex_stack.planner_runtime._model == "gpt-5.5"
+
+    claude_stack = await build_software_stack(
+        project_id=PROJECT,
+        repository=repo,
+        verification_image=IMAGE,
+        engine=dialect_engine,
+    )
+    assert claude_stack.planner_runtime is claude_stack.analysis_runtime
+
+    with pytest.raises(ValueError, match="needs harness tiers"):
+        await build_software_stack(
+            project_id=PROJECT,
+            repository=repo,
+            verification_image=IMAGE,
+            planner_runtime=RuntimeRef.HARNESS_MEDIUM,
+            engine=dialect_engine,
+        )
 
 
 @pytest.mark.asyncio

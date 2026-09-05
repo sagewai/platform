@@ -51,7 +51,7 @@ def _plan() -> AcceptedPlan:
                 verification_kind="deterministic",
                 command="just smoke",
             ),
-            MatrixItem(id="m2", statement="the change reads well", verification_kind="assessment"),
+            MatrixItem(id="m2", statement="the change reads well", verification_kind="policy"),
         ),
     )
 

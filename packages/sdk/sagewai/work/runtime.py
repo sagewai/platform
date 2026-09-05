@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+from collections.abc import Sequence
 from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal, Protocol, runtime_checkable
@@ -431,7 +432,9 @@ class CodexRuntime(_NativeRuntime):
                     request,
                     log,
                     self._with_selection_evidence(
-                        _failed_result(request, process.stderr)
+                        _native_failure(
+                            request, process.stderr, exit_code=process.returncode, log=log
+                        )
                     ),
                 )
             payload = {
@@ -553,7 +556,7 @@ class ClaudeRuntime(_NativeRuntime):
                 request,
                 log,
                 self._with_selection_evidence(
-                    _failed_result(request, process.stderr)
+                    _native_failure(request, process.stderr, exit_code=process.returncode, log=log)
                 ),
             )
         if claude_result is not None and "structured_output" in claude_result:
@@ -594,7 +597,9 @@ class ClaudeRuntime(_NativeRuntime):
             ),
         )
         if fallback.returncode != 0:
-            result = _failed_result(request, fallback.stderr)
+            result = _native_failure(
+                request, fallback.stderr, exit_code=fallback.returncode, log=log
+            )
             result = result.model_copy(
                 update={"verification": (*result.verification, fallback_note)}
             )
@@ -704,6 +709,13 @@ def _claude_workspace_pattern(root: object) -> str:
     return "/**" if normalized in {"", "."} else f"/{normalized}/**"
 
 
+def _native_failure(
+    request: WorkRequest, error: str, *, exit_code: int, log: Sequence[str]
+) -> OperatorResult:
+    """The reason an operator reads; the full streams stay in the archived activity log."""
+    return _failed_result(request, f"exit {exit_code}: {_failure_reason(error, log)[-3990:]}")
+
+
 def _failed_result(request: WorkRequest, error: str) -> OperatorResult:
     return OperatorResult(
         project_id=request.project_id,
@@ -719,3 +731,15 @@ def _failed_result(request: WorkRequest, error: str) -> OperatorResult:
         action_results=(),
         profile_context={},
     )
+
+
+def _failure_reason(error: str, log: Sequence[str]) -> str:
+    """The last line the CLI wrote: stderr when it wrote any, else the last activity summary."""
+    lines = error.strip().splitlines()
+    if lines:
+        return lines[-1]
+    for line in reversed(log):
+        summary = str(json.loads(line).get("summary", "")).strip()
+        if summary:
+            return summary
+    return ""

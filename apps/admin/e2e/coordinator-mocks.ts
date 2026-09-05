@@ -325,7 +325,7 @@ const softwareTarget = {
   owner: 'sagewai',
   repo: 'platform',
   default_branch: 'main',
-  verification_image: 'ghcr.io/sagewai/verify:1',
+  verification_image: `ghcr.io/sagewai/verify@sha256:${'1'.repeat(64)}`,
   verification_commands: ['just smoke'],
 } satisfies Task['target'];
 
@@ -352,6 +352,7 @@ const taskDefaults: TaskDefaults = {
   clarification_deadline_seconds: 14400,
   routing: { roles: {}, prefer_free_implementation: false },
   harness_tiers: {},
+  codex_model: null,
   decision_channels: ['console'],
   revision: 0,
 };
@@ -498,7 +499,7 @@ export const taskPlan = {
     {
       id: 'matrix-2',
       statement: 'The board reads as a calm surface.',
-      verification_kind: 'assessment',
+      verification_kind: 'policy',
       command: null,
     },
   ],

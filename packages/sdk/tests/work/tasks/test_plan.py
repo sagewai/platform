@@ -42,8 +42,13 @@ def _step(step_id: str, depends_on: tuple[str, ...] = (), scope: tuple[str, ...]
 
 def _matrix(command: str | None = "just smoke") -> tuple[MatrixItem, ...]:
     return (
-        MatrixItem(id="m1", statement="verification passes", verification_kind="deterministic", command=command),
-        MatrixItem(id="m2", statement="brief satisfied", verification_kind="assessment"),
+        MatrixItem(
+            id="m1",
+            statement="verification passes",
+            verification_kind="deterministic",
+            command=command,
+        ),
+        MatrixItem(id="m2", statement="brief satisfied", verification_kind="policy"),
     )
 
 
@@ -117,7 +122,7 @@ def test_accept_plan_rejects_empty_and_duplicate_matrix() -> None:
     assert "duplicate" in str(excinfo.value)
 
 
-def test_accept_plan_report_target_allows_assessment_only_matrix() -> None:
+def test_accept_plan_report_target_allows_policy_only_matrix() -> None:
     target = ReportTarget(required_sections=("Summary",))
     accepted = accept_plan(_result(steps=(_step("r"),), matrix=(_matrix()[1],)), budget=Budget(), target=target, version=1)
     assert [item.id for item in accepted.acceptance_matrix] == ["m2"]
@@ -125,12 +130,40 @@ def test_accept_plan_report_target_allows_assessment_only_matrix() -> None:
         accept_plan(_result(steps=(_step("r"),), matrix=_matrix()), budget=Budget(), target=target, version=1)
 
 
-def test_result_with_clarifications_must_have_no_steps() -> None:
-    question = ClarificationQuestion(id="q", text="?", defaultable=True, default="x")
-    with pytest.raises(Exception):
-        _result(steps=(_step("a"),), clarifications=(question,))
-    asking = _result(clarifications=(question,))
+def test_a_plan_may_carry_defaultable_clarifications() -> None:
+    defaultable = ClarificationQuestion(id="q", text="?", defaultable=True, default="x")
+    material = ClarificationQuestion(id="m", text="?", defaultable=False)
+    attached = _result(steps=(_step("a"),), clarifications=(defaultable,))
+    assert not attached.asks_first
+    accepted = accept_plan(attached, budget=Budget(), target=TARGET, version=1)
+    assert [step.id for step in accepted.steps] == ["a"]
+    with pytest.raises(ValueError):
+        _result(steps=(_step("a"),), clarifications=(material,))
+    with pytest.raises(ValueError):
+        _result(
+            steps=(_step("a"),),
+            clarifications=(ClarificationQuestion(id="q", text="?", defaultable=True),),
+        )
+    asking = _result(clarifications=(material,))
+    assert asking.asks_first
     with pytest.raises(PlanRejectedError) as excinfo:
         accept_plan(asking, budget=Budget(), target=TARGET, version=1)
     assert "clarifications" in str(excinfo.value)
-    assert asking.asks_first
+
+
+def test_matrix_speaks_the_kernel_verification_vocabulary() -> None:
+    judged = MatrixItem(id="m2", statement="brief satisfied", verification_kind="policy")
+    assert judged.command is None
+    for gone in ("assessment", "profile"):
+        with pytest.raises(ValueError):
+            MatrixItem(id="m3", statement="brief satisfied", verification_kind=gone)
+    accepted = accept_plan(
+        _result(steps=(_step("a"),), matrix=(_matrix()[0], judged)),
+        budget=Budget(),
+        target=TARGET,
+        version=1,
+    )
+    assert [item.verification_kind for item in accepted.acceptance_matrix] == [
+        "deterministic",
+        "policy",
+    ]

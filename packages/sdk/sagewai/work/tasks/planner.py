@@ -20,15 +20,22 @@ from sagewai.work.capsule import TaskCapsuleCompiler
 from sagewai.work.contract import AcceptanceCriterion, WorkContract
 from sagewai.work.control import OperatorController
 from sagewai.work.events import WorkEvent, WorkEventType
-from sagewai.work.models import TASK_PLAN_PROFILE, ActionScope, WorkItem, WorkRecord
+from sagewai.work.models import TASK_PLAN_PROFILE, ActionScope, TaskCapsule, WorkItem, WorkRecord
 from sagewai.work.profiles.software.scm import SoftwareWorktreeManager
-from sagewai.work.runtime import CapabilitySet, OperatorRuntime, WorkRequest, Workspace
+from sagewai.work.runtime import (
+    CapabilitySet,
+    OperatorResult,
+    OperatorRuntime,
+    WorkRequest,
+    Workspace,
+)
 from sagewai.work.store import WorkStore
 from sagewai.work.tasks.models import SoftwareTarget, Task
-from sagewai.work.tasks.plan import TaskPlanResult
+from sagewai.work.tasks.plan import PlanRejectedError, TaskPlanResult, accept_plan
 from sagewai.work.tasks.scratch import ScratchWorkspaceManager
 
 _MAX_BRIEF_CHARS = 20_000
+_PLAN_ATTEMPTS = 3
 
 
 class PlanningFailedError(RuntimeError):
@@ -76,8 +83,12 @@ class TaskPlanner:
     ) -> TaskPlanResult:
         """Run planning and return a validated result.
 
-        A failed attempt blocks the planning Work; the coordinator retries by bumping
-        plan_version, which creates a new planning Work.
+        A rejected result is re-asked at most ``_PLAN_ATTEMPTS`` times with the validator's error
+        appended to the capsule; a failed stage is a runtime failure and is not repaired
+        (section 9.2). Each re-ask is a full stage attempt with its own run id, so it reserves
+        and settles its own spend and counts against ``max_stage_attempts_per_cycle``. A failed
+        attempt blocks the planning Work; the coordinator retries by bumping plan_version, which
+        creates a new planning Work.
         """
         work_id = self.work_id(task, cycle=cycle, plan_version=plan_version)
         run_id = f"{work_id}:plan:1"
@@ -120,7 +131,9 @@ class TaskPlanner:
                 project_id=task.project_id,
                 objective=(
                     "Decompose the brief into a dependency-ordered plan with an "
-                    "acceptance matrix, or ask clarifying questions"
+                    "acceptance matrix; a plan may carry clarifications only when every "
+                    "clarification is defaultable with a default, and any question without a "
+                    "default means ask first with steps empty"
                 ),
                 allowed_targets=(".",),
                 allowed_capabilities=tuple(grant.name for grant in self._capabilities.grants),
@@ -128,34 +141,80 @@ class TaskPlanner:
             action_intents=(),
             control_preconditions=(),
         )
-        result = await self._controller.run(
-            runtime=self._runtime,
-            request=request,
-            capsule=capsule,
-            capabilities=self._capabilities,
-            workspace=workspace,
+        rejection: str | None = None
+        for attempt in range(1, _PLAN_ATTEMPTS + 1):
+            attempt_run_id = f"{work_id}:plan:{attempt}"
+            result = await self._controller.run(
+                runtime=self._runtime,
+                request=request.model_copy(update={"run_id": attempt_run_id}),
+                capsule=self._with_rejection(capsule, rejection),
+                capabilities=self._capabilities,
+                workspace=workspace,
+            )
+            if result.status != "passed":
+                detail = f"planning stage {result.status}: {result.summary[:500]}"
+                await self._block(work_item, "planning_failed", detail)
+                raise PlanningFailedError(detail)
+            plan, rejection = self._validate(result, attempt_run_id, task, plan_version)
+            if plan is not None:
+                await self._complete(work_item, attempt_run_id, result.evidence_refs)
+                return plan
+            await self._observe(work_item, attempt_run_id, rejection)
+        detail = f"invalid task_plan_result after {_PLAN_ATTEMPTS} attempts: {rejection[:500]}"
+        await self._block(work_item, "plan_result_invalid", detail)
+        raise PlanningFailedError(detail)
+
+    @staticmethod
+    def _with_rejection(capsule: TaskCapsule, rejection: str | None) -> TaskCapsule:
+        """Feed the validator's own words back, the way the blueprint service repairs."""
+        if rejection is None:
+            return capsule
+        return capsule.model_copy(
+            update={
+                "profile_context": {
+                    **capsule.profile_context,
+                    "task_plan_result_rejected": (
+                        f"your previous result was rejected: {rejection}; "
+                        "return a corrected task_plan_result"
+                    ),
+                }
+            }
         )
-        if result.status != "passed":
-            detail = f"planning stage {result.status}: {result.summary[:500]}"
-            await self._block(work_item, "planning_failed", detail)
-            raise PlanningFailedError(detail)
+
+    @staticmethod
+    def _validate(
+        result: OperatorResult, run_id: str, task: Task, version: int
+    ) -> tuple[TaskPlanResult | None, str]:
+        """Everything the contract rejects — schema and §7 acceptance alike — is repairable."""
         payload = result.profile_context.get("task_plan_result")
         if payload is None:
-            detail = "planning stage returned no task_plan_result"
-            await self._block(work_item, "plan_result_missing", detail)
-            raise PlanningFailedError(detail)
+            return None, "planning stage returned no task_plan_result"
         try:
             plan = TaskPlanResult.model_validate(payload)
         except ValueError as exc:
-            detail = f"invalid task_plan_result: {exc}"
-            await self._block(work_item, "plan_result_invalid", detail)
-            raise PlanningFailedError(detail) from exc
+            return None, f"invalid task_plan_result: {exc}"
         if plan.attempt_id != run_id:
-            detail = "plan result belongs to a different attempt"
-            await self._block(work_item, "plan_result_attempt_mismatch", detail)
-            raise PlanningFailedError(detail)
-        await self._complete(work_item, run_id, result.evidence_refs)
-        return plan
+            return None, "plan result belongs to a different attempt"
+        if not plan.asks_first:
+            try:
+                accept_plan(plan, budget=task.budget, target=task.target, version=version)
+            except PlanRejectedError as exc:
+                return None, f"plan rejected: {exc}"
+        return plan, ""
+
+    async def _observe(self, work_item: WorkItem, run_id: str, rejection: str) -> None:
+        events = await self._work_store.read_events(work_item.id, project_id=work_item.project_id)
+        if any(
+            event.event_type is WorkEventType.OBSERVATION_RECORDED
+            and event.payload_json["run_id"] == run_id
+            for event in events
+        ):
+            return
+        await self._append(
+            work_item,
+            WorkEventType.OBSERVATION_RECORDED,
+            {"run_id": run_id, "check": "task_plan_result", "passed": False, "detail": rejection},
+        )
 
     def _planning_work(
         self,

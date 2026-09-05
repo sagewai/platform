@@ -40,6 +40,7 @@ from sagewai.work.tasks.coordinator import TaskCoordinator
 from sagewai.work.tasks.decisions import ConsoleDecisionChannel, merge_policy_for, resolve_gate
 from sagewai.work.tasks.events import TaskEventType
 from sagewai.work.tasks.models import (
+    AttentionOwner,
     Authority,
     Budget,
     GateMode,
@@ -77,6 +78,7 @@ class FakeProfileRunner:
         self.merged = False
         self.plan_result = plan_result
         self.plan_error: Exception | None = None
+        self.base_sha_error: Exception | None = None
         self.statuses: dict[str, str] = {}
         self.gates: dict[str, str] = {}
         self.delivered: list[tuple[str, int]] = []
@@ -100,6 +102,8 @@ class FakeProfileRunner:
         self.ledgers.append(ledger)
 
     async def base_sha(self, task):
+        if self.base_sha_error is not None:
+            raise self.base_sha_error
         return self.head
 
     async def plan(self, task, *, cycle, plan_version, base_sha, brief_text, amendments):
@@ -178,7 +182,7 @@ class FakeProfileRunner:
                 matrix_results=tuple(
                     MatrixResult(item_id=item.id, passed=True)
                     for item in plan.acceptance_matrix
-                    if item.verification_kind == "assessment"
+                    if item.verification_kind != "deterministic"
                 ),
                 gaps=self.assessor_gaps,
                 verdict=self.assessor_verdict,
@@ -1671,6 +1675,75 @@ async def test_planning_clarification_uses_the_project_deadline(
 
 
 @pytest.mark.asyncio
+async def test_a_planning_exception_degrades_control_on_the_task(stores, tmp_path) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    channel = RecordingDecisionChannel()
+    coordinator._static_channels = (channel,)
+    runner.plan_error = ValueError("verification sandbox image must be digest-pinned")
+
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await coordinator.drive(record, lease_epoch=epoch)
+
+    assert record.status is TaskStatus.CONTROL_DEGRADED
+    assert record.attention_owner is AttentionOwner.USER
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    degraded = next(
+        event for event in events if event.event_type is TaskEventType.CONTROL_DEGRADED
+    )
+    assert degraded.payload_json["command"] == "run_planning"
+    assert "digest-pinned" in degraded.payload_json["detail"]
+    message = next(
+        event
+        for event in reversed(events)
+        if event.event_type is TaskEventType.TASK_MESSAGE
+    )
+    assert "digest-pinned" in message.payload_json["text"]
+    assert [call.urgency for call in channel.calls] == ["now"]
+
+
+@pytest.mark.asyncio
+async def test_an_unreachable_base_degrades_control_before_planning(stores, tmp_path) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    runner.base_sha_error = RuntimeError("repository unreachable: connection refused")
+
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await coordinator.drive(record, lease_epoch=epoch)
+
+    assert record.status is TaskStatus.CONTROL_DEGRADED
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    degraded = next(
+        event for event in events if event.event_type is TaskEventType.CONTROL_DEGRADED
+    )
+    assert degraded.payload_json["command"] == "run_planning"
+    assert "connection refused" in degraded.payload_json["detail"]
+
+
+@pytest.mark.asyncio
+async def test_a_step_exception_still_propagates_for_crash_replay(
+    stores, tmp_path, monkeypatch
+) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
+    original = runner.create_issue
+
+    async def crash_after_issue(task_, **kwargs):
+        url = await original(task_, **kwargs)
+        raise RuntimeError(f"crashed after creating {url}")
+
+    runner.create_issue = crash_after_issue
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+
+    with pytest.raises(RuntimeError):
+        await coordinator.drive(record, lease_epoch=epoch)
+
+    record = (await task_store.load(task.id, project_id=PROJECT))[1]
+    assert record.status is not TaskStatus.CONTROL_DEGRADED
+
+
+@pytest.mark.asyncio
 async def test_budget_exhaustion_records_ledger_usage_and_notifies_now(
     stores, tmp_path, monkeypatch
 ) -> None:
@@ -1703,6 +1776,53 @@ async def test_budget_exhaustion_records_ledger_usage_and_notifies_now(
     assert budget.payload_json["budget_used"]["usd_reserved"] == "1.00"
     assert presented.payload_json["urgency"] == "now"
     assert channel.calls[-1].urgency == "now"
+
+
+@pytest.mark.asyncio
+async def test_a_defaulted_answer_reaches_the_next_plan_version(stores, tmp_path) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    record = await TaskWriter(task_store).append(
+        record,
+        [
+            (
+                TaskEventType.CLARIFICATION_REQUESTED,
+                {
+                    "questions": [
+                        {
+                            "id": "difficulty",
+                            "text": "Which difficulty axis?",
+                            "kind": "text",
+                            "options": [],
+                            "default": "the plan above",
+                            "defaultable": True,
+                            "rationale": "",
+                            "attention_version": 1,
+                        }
+                    ],
+                    "deadline_at": (NOW + timedelta(hours=4)).isoformat(),
+                },
+            ),
+            (
+                TaskEventType.CLARIFICATION_DEFAULTED,
+                {"question_id": "difficulty", "answer": "the plan above"},
+            ),
+        ],
+        now=NOW + timedelta(hours=4),
+    )
+    assert record.status is TaskStatus.PLANNING and record.pending_questions == 0
+    amendments: list[tuple[str, ...]] = []
+    original_plan = runner.plan
+
+    async def capturing_plan(task_, **kwargs):
+        amendments.append(kwargs["amendments"])
+        return await original_plan(task_, **kwargs)
+
+    runner.plan = capturing_plan
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
+    await _drive_to_rest(coordinator, record, epoch)
+
+    assert amendments[0] == ("difficulty: the plan above",)
 
 
 @pytest.mark.asyncio
@@ -2026,3 +2146,123 @@ async def test_a_task_without_retention_completes_without_pruning(
     else:
         pytest.fail("the Task never completed")
     assert len(pruned) == 1 and pruned[0]["project_id"] == PROJECT
+
+
+@pytest.mark.asyncio
+async def test_a_plan_with_a_defaultable_question_is_proposed_and_the_question_recorded(
+    stores, tmp_path, monkeypatch
+) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    monkeypatch.setattr(coordinator, "_now", lambda: NOW)
+    runner.plan_result = _plan_result().model_copy(
+        update={
+            "clarifications": (
+                ClarificationQuestion(
+                    id="difficulty",
+                    text="Which difficulty axis do you prefer?",
+                    defaultable=True,
+                    default="the plan above",
+                ),
+            )
+        }
+    )
+
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    kinds = [
+        event.event_type
+        for event in await task_store.read_events(task.id, project_id=PROJECT)
+    ]
+    assert TaskEventType.PLAN_PROPOSED in kinds
+    assert TaskEventType.CLARIFICATION_REQUESTED in kinds
+    assert record.status is TaskStatus.PLAN_PROPOSED
+    assert record.pending_questions == 1 and record.pending_material_questions == 0
+    asked = [
+        event
+        for event in await task_store.read_events(task.id, project_id=PROJECT)
+        if event.event_type is TaskEventType.CLARIFICATION_REQUESTED
+    ][-1]
+    defaults = await task_store.get_defaults(project_id=PROJECT)
+    assert [question["id"] for question in asked.payload_json["questions"]] == ["difficulty"]
+    assert (
+        asked.payload_json["deadline_at"]
+        == (NOW + timedelta(seconds=defaults.clarification_deadline_seconds)).isoformat()
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_planning_offers_a_replan_gate(stores, tmp_path) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    runner.plan_error = PlanningFailedError("planning stage failed: exit 1: login expired")
+
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    assert record.status is TaskStatus.BLOCKED
+    assert record.pending_gate == f"replan:{task.id}:2"
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    proposed = next(
+        event for event in events if event.event_type is TaskEventType.REPLAN_PROPOSED
+    )
+    assert proposed.payload_json["version"] == 2
+    assert "login expired" in proposed.payload_json["reason"]
+
+    runner.plan_error = None
+    service = TaskService(store=task_store, artifact_store=LocalArtifactStore(root=tmp_path))
+    record = await service.decide_gate(
+        task.id,
+        project_id=PROJECT,
+        gate_id=f"replan:{task.id}:2",
+        decision="allow",
+        actor_ref="arda",
+    )
+    assert record.status is TaskStatus.PLANNING
+    record = await _drive_to_rest(coordinator, record, epoch)
+    assert record.status is TaskStatus.PLAN_PROPOSED
+    assert record.pending_gate == f"plan:{task.id}:2"
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_plan_offers_a_replan_gate_where_the_inbox_looks(stores, tmp_path) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    channel = RecordingDecisionChannel()
+    coordinator._static_channels = (channel,)
+    runner.plan_result = _plan_result().model_copy(update={"acceptance_matrix": ()})
+
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    assert record.status is TaskStatus.BLOCKED
+    assert record.pending_gate == f"replan:{task.id}:2"
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    proposed = next(
+        event for event in events if event.event_type is TaskEventType.REPLAN_PROPOSED
+    )
+    assert "acceptance matrix is empty" in proposed.payload_json["reason"]
+    assert channel.calls[-1].attention_id == record.pending_gate
+
+
+@pytest.mark.asyncio
+async def test_denying_the_replan_leaves_the_task_blocked(stores, tmp_path) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    runner.plan_error = PlanningFailedError("planning stage failed: exit 1: login expired")
+
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+    service = TaskService(store=task_store, artifact_store=LocalArtifactStore(root=tmp_path))
+
+    record = await service.decide_gate(
+        task.id,
+        project_id=PROJECT,
+        gate_id=f"replan:{task.id}:2",
+        decision="deny",
+        actor_ref="arda",
+        note="fix the login first",
+    )
+
+    assert record.status is TaskStatus.BLOCKED and record.pending_gate is None

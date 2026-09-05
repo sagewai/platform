@@ -1048,7 +1048,7 @@ export interface TaskPlanStep {
 export interface TaskMatrixItem {
   id: string;
   statement: string;
-  verification_kind: 'deterministic' | 'assessment';
+  verification_kind: 'deterministic' | 'policy';
   command: string | null;
 }
 
@@ -1353,6 +1353,7 @@ export interface TaskDefaults {
   clarification_deadline_seconds: number;
   routing: TaskRoutingPolicy;
   harness_tiers: Record<string, { backend: string; model: string }>;
+  codex_model: string | null;
   decision_channels: string[];
   revision: number;
 }

@@ -112,7 +112,7 @@ class TaskAssessor:
             action_scope=ActionScope(
                 project_id=task.project_id,
                 objective=(
-                    "Judge every assessment matrix item against the delivered result and "
+                    "Judge every policy matrix item against the delivered result and "
                     "the cited evidence; propose gaps, never changes"
                 ),
                 allowed_targets=(".",),

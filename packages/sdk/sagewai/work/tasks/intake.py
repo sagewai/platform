@@ -32,6 +32,9 @@ _AUTO_MARGIN = 0.12
 _PICKER_MIN = 0.18
 _SHORT_BRIEF_WORDS = 25
 _MAX_QUESTIONS = 3
+# Slots only the project's target can fill: an answer cannot build a SoftwareTarget (section 5.1),
+# so intake never asks for them and the preview carries the refusal ``create`` raises instead.
+_TARGET_SLOTS = frozenset({"repository"})
 
 _TIME_RE = re.compile(r"\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", re.IGNORECASE)
 _SCHEDULE_HINT_RE = re.compile(
@@ -140,7 +143,13 @@ def _candidate_titles(candidates: tuple[str, ...]) -> str:
     return " and ".join(CATALOGUE[candidate].title for candidate in candidates)
 
 
-def _preview(template: TaskTemplate, cron: str | None, questions: tuple[ClarificationQuestion, ...]) -> str:
+def _preview(
+    template: TaskTemplate,
+    cron: str | None,
+    questions: tuple[ClarificationQuestion, ...],
+    *,
+    blocked: str,
+) -> str:
     reads = {
         "software": "the trusted repository checkout and the brief",
         "report": "the declared sources through allow-listed browsing",
@@ -162,7 +171,7 @@ def _preview(template: TaskTemplate, cron: str | None, questions: tuple[Clarific
         asks = ""
     return (
         f"This Task will read {reads}. It {changes}. It spends {spend}. "
-        f"It asks for {approvals}.{schedule}{asks}"
+        f"It asks for {approvals}.{schedule}{asks}{blocked}"
     )
 
 
@@ -189,6 +198,14 @@ def route(brief: str, defaults: TaskDefaults) -> IntakeResult:
     slots: dict[str, Any] = {}
     if template.profile == "software" and isinstance(defaults.target, SoftwareTarget):
         slots["repository"] = defaults.target.repository_path
+    blocked = (
+        ""
+        if defaults.target is not None and defaults.target.kind == template.profile
+        else (
+            f" Creation will fail: project {defaults.project_id} has no {template.profile} "
+            f"target for template {template.id}."
+        )
+    )
     cron = extract_schedule(brief) if template.kind is TaskKind.SCHEDULED else None
     questions: list[ClarificationQuestion] = []
     if template.kind is TaskKind.SCHEDULED:
@@ -209,11 +226,13 @@ def route(brief: str, defaults: TaskDefaults) -> IntakeResult:
     short = len(brief.split()) < _SHORT_BRIEF_WORDS
     for spec in template.clarifications:
         if spec.when == "missing_slot" and spec.slot is not None and spec.slot not in slots:
+            if spec.slot in _TARGET_SLOTS:
+                continue
             questions.append(_question(spec))
         elif spec.when == "short_brief" and band == "synthesis" and short:
             questions.append(_question(spec))
     questions = sorted(questions, key=lambda question: question.defaultable)[:_MAX_QUESTIONS]
-    preview = _preview(template, cron, tuple(questions))
+    preview = _preview(template, cron, tuple(questions), blocked=blocked)
     if band == "synthesis":
         preview = (
             f"The brief did not clearly match a template; best guess is {template.title}; "

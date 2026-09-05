@@ -84,6 +84,7 @@ from sagewai.work.tasks.health import (
     cycle_history,
     evaluate_health,
 )
+from sagewai.work.tasks.intake import ClarificationQuestion
 from sagewai.work.tasks.models import BudgetUsed, Task, TaskKind, TaskRecord, TaskStatus
 from sagewai.work.tasks.plan import (
     AcceptedPlan,
@@ -924,22 +925,36 @@ class TaskCoordinator:
             )
         return await self._append(record, entries, lease_epoch, command=command)
 
+    async def _clarification_request(
+        self, task: Task, questions: tuple[ClarificationQuestion, ...]
+    ) -> Entry:
+        defaults = await self._task_store.get_defaults(project_id=task.project_id)
+        deadline = self._now() + timedelta(seconds=defaults.clarification_deadline_seconds)
+        return (
+            TaskEventType.CLARIFICATION_REQUESTED,
+            {
+                "questions": [question.model_dump(mode="json") for question in questions],
+                "deadline_at": deadline.isoformat(),
+            },
+        )
+
     async def _run_planning(
         self, task: Task, record: TaskRecord, command: RunPlanning, lease_epoch: int
     ) -> TaskRecord:
         profile = self._profile_for(task)
-        base_sha = await profile.base_sha(task)
-        brief = self._artifacts.read(task.brief_ref.storage_ref, project_id=task.project_id).decode(
-            "utf-8"
-        )
-        events = await self._task_store.read_events(task.id, project_id=task.project_id)
-        amendments = tuple(
-            f"{event.payload_json['question_id']}: {event.payload_json['answer']}"
-            for event in events
-            if event.event_type is TaskEventType.CLARIFICATION_ANSWERED
-        )
         ledger = self._meter(task, record)
         try:
+            base_sha = await profile.base_sha(task)
+            brief = self._artifacts.read(
+                task.brief_ref.storage_ref, project_id=task.project_id
+            ).decode("utf-8")
+            events = await self._task_store.read_events(task.id, project_id=task.project_id)
+            amendments = tuple(
+                f"{event.payload_json['question_id']}: {event.payload_json['answer']}"
+                for event in events
+                if event.event_type
+                in (TaskEventType.CLARIFICATION_ANSWERED, TaskEventType.CLARIFICATION_DEFAULTED)
+            )
             result = await profile.plan(
                 task,
                 cycle=record.current_cycle,
@@ -949,7 +964,7 @@ class TaskCoordinator:
                 amendments=amendments,
             )
         except PlanningFailedError as exc:
-            return await self._block(
+            return await self._block_planning(
                 task,
                 record,
                 f"planning failed: {exc}",
@@ -957,32 +972,19 @@ class TaskCoordinator:
                 command,
                 prefix=ledger.drain(),
             )
+        except Exception as exc:
+            return await self._degrade(task, record, command, exc, lease_epoch, ledger.drain())
         if result.asks_first:
-            defaults = await self._task_store.get_defaults(project_id=task.project_id)
-            deadline = self._now() + timedelta(seconds=defaults.clarification_deadline_seconds)
             entries = ledger.drain()
-            entries.extend(
-                [
-                    (
-                        TaskEventType.CLARIFICATION_REQUESTED,
-                        {
-                            "questions": [
-                                question.model_dump(mode="json")
-                                for question in result.clarifications
-                            ],
-                            "deadline_at": deadline.isoformat(),
-                        },
-                    ),
-                    status_entry(record, TaskStatus.CLARIFYING),
-                ]
-            )
+            entries.append(await self._clarification_request(task, result.clarifications))
+            entries.append(status_entry(record, TaskStatus.CLARIFYING))
             return await self._append(record, entries, lease_epoch, command=command)
         try:
             plan = accept_plan(
                 result, budget=task.budget, target=task.target, version=command.plan_version
             )
         except PlanRejectedError as exc:
-            return await self._block(
+            return await self._block_planning(
                 task,
                 record,
                 f"plan rejected: {exc}",
@@ -1003,6 +1005,8 @@ class TaskCoordinator:
                 },
             )
         )
+        if result.clarifications:
+            entries.append(await self._clarification_request(task, result.clarifications))
         action = coordinator_action(task.project_id, action="plan", work_id=task.id, scope=task.id)
         if resolve_gate(task.authority.plan, action) is GateDecision.REQUIRE_APPROVAL:
             entries.append(
@@ -1059,6 +1063,7 @@ class TaskCoordinator:
         lease_epoch: int,
         command: Command,
         prefix: Sequence[Entry] = (),
+        attention_id: str | None = None,
     ) -> TaskRecord:
         gaps = await self._block_gaps(task)
         message = text if not gaps else f"{text}: {'; '.join(gaps)}"
@@ -1076,7 +1081,7 @@ class TaskCoordinator:
             await self._present(
                 task,
                 record,
-                attention_id=f"block:{record.current_cycle}:{record.revision}",
+                attention_id=attention_id or f"block:{record.current_cycle}:{record.revision}",
                 summary=message,
                 urgency="now",
                 evidence_refs=gaps,
@@ -1087,6 +1092,88 @@ class TaskCoordinator:
             entries,
             lease_epoch,
             command=command,
+        )
+
+    async def _degrade(
+        self,
+        task: Task,
+        record: TaskRecord,
+        command: Command,
+        error: Exception,
+        lease_epoch: int,
+        prefix: Sequence[Entry] = (),
+    ) -> TaskRecord:
+        """A stage that raised is degraded control (spec:252-255), owned by a human.
+
+        Only planning and assessment reach here: they write nothing outside the Task, so no
+        receipt is left dangling. Every other command propagates for the section 8.1 replay.
+        """
+        detail = f"{command.kind} failed: {type(error).__name__}: {error}"[:2000]
+        logger.error(
+            "task command failed",
+            extra={
+                "event": "task.command.failed",
+                "task": task.id,
+                "command": command.kind,
+            },
+            exc_info=error,
+        )
+        entries: list[Entry] = [
+            *prefix,
+            (TaskEventType.CONTROL_DEGRADED, {"command": command.kind, "detail": detail}),
+            (TaskEventType.TASK_MESSAGE, {"author": "coordinator", "text": detail, "refs": []}),
+            status_entry(record, TaskStatus.CONTROL_DEGRADED),
+        ]
+        entries.extend(
+            await self._present(
+                task,
+                record,
+                attention_id=f"degraded:{record.current_cycle}:{record.revision}",
+                summary=detail,
+                urgency="now",
+            )
+        )
+        return await self._append(record, entries, lease_epoch, command=command)
+
+    async def _block_planning(
+        self,
+        task: Task,
+        record: TaskRecord,
+        text: str,
+        lease_epoch: int,
+        command: RunPlanning,
+        prefix: Sequence[Entry],
+    ) -> TaskRecord:
+        """Block, and offer the re-plan the operator needs once the cause is fixed.
+
+        The retry must be a new plan version: the failed version's planning Work is
+        ``WORK_BLOCKED`` and its durable run is terminal, so the same version replays the same
+        failure. The gate is always requested; an automatic re-plan would loop on the cause.
+        """
+        version = command.plan_version + 1
+        action = coordinator_action(
+            task.project_id, action="replan", work_id=task.id, scope=task.id
+        )
+        entries: list[Entry] = [
+            *prefix,
+            (TaskEventType.REPLAN_PROPOSED, {"version": version, "reason": text}),
+            (
+                TaskEventType.GATE_REQUESTED,
+                {
+                    "gate_id": f"replan:{task.id}:{version}",
+                    "question": f"{text}. Re-plan once the cause is fixed?",
+                    "action": action.model_dump(mode="json"),
+                },
+            ),
+        ]
+        return await self._block(
+            task,
+            record,
+            text,
+            lease_epoch,
+            command,
+            prefix=entries,
+            attention_id=f"replan:{task.id}:{version}",
         )
 
     async def _mirror(
@@ -1676,6 +1763,8 @@ class TaskCoordinator:
                 command,
                 prefix=ledger.drain(),
             )
+        except Exception as exc:
+            return await self._degrade(task, record, command, exc, lease_epoch, ledger.drain())
         entries: list[Entry] = ledger.drain()
         entries.append(status_entry(record, TaskStatus.ASSESSING))
         entries.append(

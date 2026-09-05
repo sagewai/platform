@@ -69,7 +69,19 @@ def _repository(tmp_path: Path) -> tuple[Path, str]:
     return repository, _git(repository, "rev-parse", "HEAD")
 
 
-def _plan_result(attempt_id: str) -> TaskPlanResult:
+def _plan_result(attempt_id: str, *, report: bool = False) -> TaskPlanResult:
+    matrix = (
+        MatrixItem(
+            id="m1", statement="the report reads well", verification_kind="policy", command=None
+        )
+        if report
+        else MatrixItem(
+            id="m1",
+            statement="verification passes",
+            verification_kind="deterministic",
+            command="just smoke",
+        )
+    )
     return TaskPlanResult(
         attempt_id=attempt_id,
         steps=(
@@ -86,30 +98,26 @@ def _plan_result(attempt_id: str) -> TaskPlanResult:
                 size="s",
             ),
         ),
-        acceptance_matrix=(
-            MatrixItem(
-                id="m1",
-                statement="verification passes",
-                verification_kind="deterministic",
-                command="just smoke",
-            ),
-        ),
+        acceptance_matrix=(matrix,),
     )
 
 
 class PlanningRuntime:
     name = "planning-runtime"
 
-    def __init__(self, *, attempt_id: str | None = None, fail: bool = False) -> None:
+    def __init__(
+        self, *, attempt_id: str | None = None, fail: bool = False, report: bool = False
+    ) -> None:
         self.attempt_id = attempt_id
         self.fail = fail
+        self.report = report
         self.requests = []
         self.capsules = []
 
     async def run(self, request, capsule, capabilities, workspace):
         self.requests.append(request)
         self.capsules.append(capsule)
-        plan = _plan_result(self.attempt_id or request.run_id)
+        plan = _plan_result(self.attempt_id or request.run_id, report=self.report)
         return OperatorResult(
             project_id=request.project_id,
             work_id=request.work_id,
@@ -266,7 +274,7 @@ async def test_planner_rejects_wrong_attempt_and_failed_stage(dialect_engine, tm
 
 @pytest.mark.asyncio
 async def test_planner_uses_scratch_workspace_for_report_targets(dialect_engine, tmp_path: Path) -> None:  # noqa: F811
-    runtime = PlanningRuntime()
+    runtime = PlanningRuntime(report=True)
     planner, _ = await _planner(dialect_engine, tmp_path, runtime, report=True)
     task = _task(tmp_path, LocalArtifactStore(root=tmp_path / "objects"), report=True)
     result = await planner.plan(task, cycle=1, plan_version=1, base_sha=None, brief_text="b")
@@ -288,3 +296,115 @@ async def test_failed_planning_blocks_the_planning_work(dialect_engine, tmp_path
     events = await work_store.read_events("task-1:plan:1:1", project_id="project-a")
     assert events[-1].event_type is WorkEventType.WORK_BLOCKED
     assert events[-1].payload_json["reason"] == "planning_failed"
+
+
+class RepairableRuntime:
+    """Returns a result the validator rejects until it is told what was wrong."""
+
+    name = "repairable-runtime"
+
+    def __init__(self, *, failures: int, flaw: str = "kind") -> None:
+        self.failures = failures
+        self.flaw = flaw
+        self.requests = []
+        self.rejections = []
+
+    async def run(self, request, capsule, capabilities, workspace):
+        self.requests.append(request)
+        self.rejections.append(capsule.profile_context.get("task_plan_result_rejected"))
+        plan = _plan_result(request.run_id).model_dump(mode="json")
+        if len(self.requests) <= self.failures:
+            if self.flaw == "kind":
+                plan["acceptance_matrix"][0]["verification_kind"] = "assessment"
+            else:
+                plan["acceptance_matrix"][0]["command"] = "make lint"
+        return OperatorResult(
+            project_id=request.project_id,
+            work_id=request.work_id,
+            run_id=request.run_id,
+            status="passed",
+            summary="planned",
+            evidence_refs=("evidence://brief",),
+            artifact_refs=(),
+            changes=(),
+            verification=(),
+            risks=(),
+            action_results=(),
+            profile_context={"task_plan_result": plan},
+        )
+
+
+@pytest.mark.asyncio
+async def test_an_invalid_plan_result_is_repaired_with_the_validator_error(
+    dialect_engine, tmp_path: Path  # noqa: F811
+) -> None:
+    repository, base_sha = _repository(tmp_path)
+    runtime = RepairableRuntime(failures=1)
+    planner, work_store = await _planner(dialect_engine, tmp_path, runtime)
+    task = _task(tmp_path, LocalArtifactStore(root=tmp_path / "objects"), repository=repository)
+
+    result = await planner.plan(task, cycle=1, plan_version=1, base_sha=base_sha, brief_text="b")
+
+    assert [step.id for step in result.steps] == ["engine"]
+    assert [request.run_id for request in runtime.requests] == [
+        "task-1:plan:1:1:plan:1",
+        "task-1:plan:1:1:plan:2",
+    ]
+    assert runtime.rejections[0] is None
+    assert "verification_kind" in runtime.rejections[1]
+    events = await work_store.read_events("task-1:plan:1:1", project_id="project-a")
+    rejected = [
+        event
+        for event in events
+        if event.event_type is WorkEventType.OBSERVATION_RECORDED
+    ]
+    assert len(rejected) == 1 and rejected[0].payload_json["passed"] is False
+    record = await work_store.load_work("task-1:plan:1:1", project_id="project-a")
+    assert record is not None and record.status == "COMPLETE"
+
+
+@pytest.mark.asyncio
+async def test_a_result_that_stays_invalid_blocks_after_the_attempt_cap(
+    dialect_engine, tmp_path: Path  # noqa: F811
+) -> None:
+    repository, base_sha = _repository(tmp_path)
+    runtime = RepairableRuntime(failures=99)
+    planner, work_store = await _planner(dialect_engine, tmp_path, runtime)
+    task = _task(tmp_path, LocalArtifactStore(root=tmp_path / "objects"), repository=repository)
+
+    with pytest.raises(PlanningFailedError) as excinfo:
+        await planner.plan(task, cycle=1, plan_version=1, base_sha=base_sha, brief_text="b")
+
+    assert "3 attempts" in str(excinfo.value) and "verification_kind" in str(excinfo.value)
+    assert len(runtime.requests) == 3
+    record = await work_store.load_work("task-1:plan:1:1", project_id="project-a")
+    assert record is not None and record.status == "WORK_BLOCKED"
+    events = await work_store.read_events("task-1:plan:1:1", project_id="project-a")
+    assert events[-1].payload_json["reason"] == "plan_result_invalid"
+    assert "verification_kind" in events[-1].payload_json["decision_request"]
+    observations = [e for e in events if e.event_type is WorkEventType.OBSERVATION_RECORDED]
+    assert [o.payload_json["run_id"] for o in observations] == [
+        f"task-1:plan:1:1:plan:{attempt}" for attempt in (1, 2, 3)
+    ]
+
+    with pytest.raises(PlanningFailedError):
+        await planner.plan(task, cycle=1, plan_version=1, base_sha=base_sha, brief_text="b")
+
+    replayed = await work_store.read_events("task-1:plan:1:1", project_id="project-a")
+    assert len(replayed) == len(events)
+
+
+@pytest.mark.asyncio
+async def test_a_contract_rejection_is_repaired_like_a_schema_one(
+    dialect_engine, tmp_path: Path  # noqa: F811
+) -> None:
+    repository, base_sha = _repository(tmp_path)
+    runtime = RepairableRuntime(failures=1, flaw="command")
+    planner, work_store = await _planner(dialect_engine, tmp_path, runtime)
+    task = _task(tmp_path, LocalArtifactStore(root=tmp_path / "objects"), repository=repository)
+
+    plan = await planner.plan(task, cycle=1, plan_version=1, base_sha=base_sha, brief_text="b")
+
+    assert plan.acceptance_matrix[0].command == "just smoke"
+    assert len(runtime.requests) == 2
+    assert "not one of the locked verification commands" in runtime.rejections[1]

@@ -43,5 +43,6 @@ image_id="$(
   docker image inspect "${verifier_tag}" |
     python3 -c 'import json, sys; print(json.load(sys.stdin)[0]["Id"])'
 )"
-printf '\nVerifier ready. Use this exact immutable local image ID:\n'
-printf 'export SAGEWAI_WORK_VERIFICATION_IMAGE=%q\n' "${image_id}"
+# Docker prints sha256:<hex>; Podman prints the bare hex. Sagewai accepts the digest form only.
+printf '\nVerifier ready. Use this exact immutable local image digest:\n'
+printf 'export SAGEWAI_WORK_VERIFICATION_IMAGE=%s\n' "sha256:${image_id#sha256:}"

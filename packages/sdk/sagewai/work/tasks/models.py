@@ -19,6 +19,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from sagewai.artifacts.models import ArtifactRef
+from sagewai.sandbox.models import DIGEST_PINNED_IMAGE
 from sagewai.work.runtime import CapabilityGrant
 from sagewai.work.tasks.schedule import validate_cron, validate_timezone
 
@@ -190,6 +191,14 @@ class RoutingPolicy(BaseModel):
         return value
 
 
+HONOURED_ROLES = frozenset({RoleAlias.PLANNER})
+"""The roles the coordinator resolves from a project's policy today (section 9.1).
+
+The rest are wired in ``work/profiles/software/assembly.py``; a project that sets one would be
+told a lie, so ``TaskDefaults`` refuses it instead.
+"""
+
+
 class ExecutionRoute(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -218,6 +227,16 @@ class SoftwareTarget(BaseModel):
 
     def lease_key(self, project_id: str) -> str:
         return f"{project_id}:{self.owner}/{self.repo}:{self.default_branch}"
+
+    @field_validator("verification_image")
+    @classmethod
+    def _digest_pinned(cls, value: str) -> str:
+        """The same rule the verification sandbox enforces before it runs a command."""
+        if not DIGEST_PINNED_IMAGE.fullmatch(value):
+            raise ValueError(
+                "verification_image must be digest-pinned as [name@]sha256:<64 hex>"
+            )
+        return value
 
 
 class Sink(BaseModel):
@@ -336,7 +355,14 @@ class HarnessTier(BaseModel):
 
 
 class TaskDefaults(BaseModel):
-    """Project-level defaults the composer prefills and the coordinator reads."""
+    """Project-level defaults the composer prefills and the coordinator reads.
+
+    ``codex_model`` pins the local Codex runtime the way ``harness_tiers`` pins harness
+    models: without it the CLI picks the model in the operator's ``~/.codex/config.toml``.
+    It is read on the local route only; a Fleet worker keeps naming its own model with
+    ``sagewai fleet run --codex-model`` (spec sections 4 and 9.3: the control plane sends
+    tiers, never models).
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -349,6 +375,7 @@ class TaskDefaults(BaseModel):
     harness_tiers: dict[Literal["simple", "medium", "complex"], HarnessTier] = Field(
         default_factory=dict
     )
+    codex_model: str | None = Field(default=None, min_length=1)
     decision_channels: tuple[str, ...] = ("console",)
     revision: int = Field(default=0, ge=0)
 
@@ -356,6 +383,18 @@ class TaskDefaults(BaseModel):
     @classmethod
     def _validate_timezone(cls, value: str) -> str:
         return validate_timezone(value)
+
+    @field_validator("routing")
+    @classmethod
+    def _only_honoured_roles(cls, value: RoutingPolicy) -> RoutingPolicy:
+        unhonoured = sorted(role.value for role in value.roles if role not in HONOURED_ROLES)
+        if unhonoured:
+            honoured = ", ".join(sorted(role.value for role in HONOURED_ROLES))
+            raise ValueError(
+                f"routing roles {', '.join(unhonoured)} are not honoured yet; "
+                f"only {honoured} is read from project defaults"
+            )
+        return value
 
 
 class TaskTriggerSpec(BaseModel):

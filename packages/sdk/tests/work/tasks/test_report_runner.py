@@ -84,7 +84,7 @@ def _report_plan() -> TaskPlanResult:
             MatrixItem(
                 id="grounded",
                 statement="every claim in the report cites a source snapshot",
-                verification_kind="assessment",
+                verification_kind="policy",
             ),
         ),
     )

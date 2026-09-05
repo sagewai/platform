@@ -122,7 +122,7 @@ class MatrixItemTemplate(BaseModel):
 
     id: str
     statement: str
-    verification_kind: Literal["deterministic", "assessment"]
+    verification_kind: Literal["deterministic", "policy"]
 
 
 class ClarificationSpec(BaseModel):
@@ -230,7 +230,7 @@ SOFTWARE_DELIVERY = TaskTemplate(
         MatrixItemTemplate(
             id="brief",
             statement="every requirement in the brief is present in the merged application",
-            verification_kind="assessment",
+            verification_kind="policy",
         ),
     ),
     clarifications=(
@@ -301,7 +301,7 @@ SCHEDULED_RESEARCH_REPORT = TaskTemplate(
         MatrixItemTemplate(
             id="grounded",
             statement="every claim in the report cites a source snapshot",
-            verification_kind="assessment",
+            verification_kind="policy",
         ),
     ),
     clarifications=(

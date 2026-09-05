@@ -30,10 +30,16 @@ configured adapter. A successful software run does not imply a deployment.
 
 ## 1. Prepare a trusted checkout
 
-Install Sagewai, `just`, Node.js 20 or newer, and the repository's locked Python
-toolchain. Install and authenticate the native `codex` and `claude` CLIs on the
-machine that will execute them. Sagewai uses their existing local authentication
-and does not collect those credentials.
+Install Sagewai, `just`, Node.js 20 or newer, and the repository's locked Python toolchain.
+Install and authenticate the native `codex` and `claude` CLIs on the machine that will execute
+them: run `claude auth login` and `codex login` as the user that runs the backend, and check them
+with `claude -p 'ok'` and `codex exec 'ok'` from a fresh shell. Sagewai uses their existing local
+authentication and does not collect those credentials: the runtime hands the CLI an allow-listed
+environment (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TERM`, `LANG`, `LANGUAGE`, `LC_ALL`,
+`LC_CTYPE`, `TZ`, `TMPDIR`, `PWD`) and nothing else, so a backend started from inside a Claude
+Code session never passes its `CLAUDE_CODE_*` or `CLAUDECODE` variables to the CLI, and an
+expired keychain login shows up as `Failed to authenticate` on the Task thread rather than as a
+silent stall.
 
 Verification is networkless and runs in a disposable container. Build the
 repository's pinned verifier image once on the coordinator machine:
@@ -42,11 +48,13 @@ repository's pinned verifier image once on the coordinator machine:
 just work-verifier-build
 ```
 
-The command runs `just smoke` inside the image with the checkout mounted
-read-only and prints an exact `SAGEWAI_WORK_VERIFICATION_IMAGE=sha256:...`
-export. Copy that export into the terminal where you run `sagewai work`. The
-direct image ID is immutable and local to that machine. Do not place model
-credentials or unrelated host secrets in the image.
+The command runs `just smoke` inside the image with the checkout mounted read-only and prints an
+exact `SAGEWAI_WORK_VERIFICATION_IMAGE=sha256:...` export. Copy that export into the terminal
+where you run `sagewai work`, and use the same value for the project's
+`task_defaults.target.verification_image`. Sagewai accepts `sha256:<64 hex>` or
+`name@sha256:<64 hex>` and refuses a tag, in the defaults route and at the sandbox. The direct
+image digest is immutable and local to that machine. Do not place model credentials or unrelated
+host secrets in the image.
 
 From this repository, prove the deterministic contract before involving either
 model:
@@ -155,7 +163,10 @@ export SAGEWAI_HOME="$PWD/.sagewai-dev"
 just dev-all
 ```
 
-Open <http://localhost:3008/setup> on a fresh installation, then use these
+Open <http://127.0.0.1:3008/setup> on a fresh installation. Use one host name for both the API and
+the console: the session cookie is scoped per host and not per port, so a console on
+`localhost:3008` never authenticates against an API on `127.0.0.1:8000`. `just dev-all` prints
+`localhost:3008`; open the `127.0.0.1` form when the backend listens on `127.0.0.1`. Then use these
 coordinator pages:
 
 - **`/board`** — the board's five columns: `inbox`, `needs_you`,
@@ -164,7 +175,9 @@ coordinator pages:
   filters that go to the API. The composer accepts a written brief or a dropped
   Markdown file; press `Preview` to see the template, kind, schedule, questions
   intake would ask, and the plain-language summary before creating the Task.
-  Target and execution come from the project's `task_defaults`.
+  Target and execution come from the project's `task_defaults`. When the project has no target
+  for the routed template, the preview says so in the same words the create call refuses with:
+  configure the target first, because a Task pins it at creation.
 - **`/tasks`** — the same Tasks across every project the caller can see (an
   owner or admin sees every project of the organization; other members their
   memberships), up to 20 Tasks per project with no paging, and a needs-you
@@ -269,6 +282,18 @@ account, and CLI version: run `codex debug models` on that worker before choosin
 a pair. For example, the current catalog advertises `ultra` for GPT-5.6 Sol and
 Terra, `max` for Luna, and `xhigh` for GPT-5.5. Sagewai passes the selected native
 model and effort through without storing a central model matrix.
+The same applies on the coordinator machine's local route: `codex exec` uses the model in
+`~/.codex/config.toml` unless the project's `task_defaults.codex_model` names one, and a model the
+installed CLI cannot run fails every implementation attempt with `requires a newer version of
+Codex`. Check with `codex debug models` and `claude -p 'ok'` before the first Task.
+
+The Task's routing ladder decides which runtime plans: the head of the `planner` ladder, from the
+template's contractual roles unless the project's `task_defaults.routing.roles` overrides it.
+Only `codex` and `claude:*` can plan; a `harness:*` planner ladder is refused when the stack is
+built. The other roles are not resolved from the policy yet — analysis and design run the analysis
+Claude, implementation and repair run Codex, review runs the review Claude (on the local route the
+same Claude as analysis), and assessment runs the analysis Claude — which is why the defaults route
+refuses a ladder for them.
 
 These native runtime settings are worker-local: Sagewai never sends them to the
 control plane, worker registration capabilities, Fleet task payloads, or Fleet
@@ -355,7 +380,12 @@ Fleet envelope.
 Local runtimes redact only credential values handed to the runtime through
 scoped credentials. Fleet runs redact nothing because worker-local CLI
 credentials are unknown to the platform and Fleet capabilities carry no
-credential refs. Operators must keep secrets out of worker CLI output.
+credential refs. Operators must keep secrets out of worker CLI output. When a native CLI exits non-zero, the Work result's summary is `exit <code>: <the last line the
+CLI wrote>` — its last stderr line, or, when the CLI reported the failure on stdout and wrote
+nothing to stderr, the last activity line. That sentence is what the Task thread shows, so an
+expired `claude` login reads as `exit 1: Failed to authenticate: OAuth session expired` instead
+of an empty reason. The full streams stay in the archived NDJSON activity log and in
+`work_activity`.
 
 When a Work record has `profile_context["task_id"]`, activity ingestion also
 mirrors entries into `task_feed`. `GET /api/v1/tasks/{id}/events` streams that
@@ -363,8 +393,10 @@ feed as Server-Sent Events. The stream replays stored entries after
 `Last-Event-ID` and sends a heartbeat every 15 seconds, configurable with
 `TASK_SSE_HEARTBEAT`.
 
-The Task page's Activity and Telemetry tabs are the console views of the same
-activity rows, Task feed entries, Work events, and spend-ledger projection.
+The Task page's Activity and Telemetry tabs are the console views of the same activity rows, Task
+feed entries, Work events, and spend-ledger projection. Both cover the planning Work
+(`<task id>:plan:<cycle>:<plan version>`) as well as the step Works, so the planner's reading and
+its repair attempts are visible while the Task is still `PLANNING`.
 
 `GET /api/v1/tasks/{id}/telemetry` returns
 `sagewai.work.tasks.telemetry.derive_task_telemetry`, a pure projection over
@@ -431,7 +463,20 @@ What the coordinator needs before the first tick:
 
 - **Project defaults** with a software target: repository path, owner, repo, default branch,
   the digest-pinned verification image, and the locked verification commands. Set them
-  through the console or `TaskStore.put_defaults`.
+  through the console or `TaskStore.put_defaults`. Set `codex_model` too when the operator's
+  `~/.codex/config.toml` names a model the installed `codex` cannot run: the coordinator passes
+  `--model` only when the defaults name one, and otherwise the CLI's own configuration decides.
+  Run `codex debug models` on that machine to see what it will accept. `codex_model` has no
+  console page and no CLI flag yet: set it with `PUT /api/v1/tasks/defaults` (project admin) or
+  `TaskStore.put_defaults`, and note that it binds the **local** route only and reaches the next
+  Task's stack, not a stack already cached for a running Task — a Fleet worker keeps its own
+  `sagewai fleet run --codex-model`.
+- **Routing, for the planner only.** `task_defaults.routing.roles` accepts a `planner` ladder,
+  which the software profile honours (the report profile still plans with the analysis Claude), and
+  refuses every other role: the implementer, reviewer, assessor, analyst, designer, composer, and
+  repairer ladders come from the template and are wired into the software stack, so accepting an
+  override for them would report a choice that never runs. A Task's Settings tab still shows the
+  full contractual ladder it was created with.
 - **Harness tiers, if you set `prefer_free_implementation`.** The routing default is off. When
   it is on, the coordinator tries the local harness `complex` tier before Codex, and the
   project defaults must declare that tier — an empty `harness_tiers` raises
@@ -461,6 +506,11 @@ cost after it. Crossing any limit — works, attempts, re-plans, seconds, or dol
 the Task to `BUDGET_EXHAUSTED` and asks you. Codex attempts are counted, never priced.
 Telemetry Decimal fields, including spend, are JSON strings.
 
+A planner result the contract rejects is re-asked with the validator's error at most twice before
+the Task blocks. Each re-ask is a full stage attempt: it reserves and settles its own spend and
+counts against `max_stage_attempts_per_cycle`, so a plan that needs both repairs costs three
+Claude attempts and shows as three rows on the Telemetry tab.
+
 Schedules and health: a scheduled Task fires at its cron in its own timezone, once per fire
 even when the backend was down. Three consecutive failed cycles pause the schedule; a single
 failed cycle is retried, counted against the budget; a cost or duration spike, or a success
@@ -468,10 +518,23 @@ rate below 80 percent over the last five cycles, raises an alert with a cooldown
 Nothing creates a monitoring Task on its own.
 
 Questions and gates: an unanswered question that carries a default is defaulted once its
-deadline passes and the Task returns to planning; a question that cannot be defaulted stays
+deadline passes and, from `Clarifying`, the Task returns to planning; a question that cannot
+be defaulted stays
 open and keeps the Task in `Needs you`. The plan and re-plan gates are decided on the Task; a
 merge gate belongs to the Work, so approve it with `sagewai work approve` or
 `POST /api/v1/work/{work_id}/gates/{gate_id}`.
+
+A plan may arrive with a defaultable question attached: the coordinator proposes the plan and
+records the question with its deadline, so the assumption is visible and correctable while the
+cycle runs. It is defaulted on that deadline like any other, including when the cycle has ended in
+a non-active status. Answering one after the plan is accepted records the answer and nothing
+else — the planner reads it at the next plan version, so use the re-plan gate when the answer
+should change the current plan. A question that cannot be defaulted still stops the plan and asks
+first.
+
+A planning failure blocks the Task and opens `replan:<task id>:<next version>` on the thread:
+fix the cause — an expired CLI login, a missing image, an unreachable repository — then allow the
+gate and the coordinator plans again at the next version. Denying it leaves the Task blocked.
 
 Triggers: an approved `github_label` trigger turns each newly labelled issue into one Task of
 origin `trigger`, bounded by the trigger's authority, which a Task may only tighten. **A
@@ -617,16 +680,24 @@ control stops new side effects.
 
 ## Troubleshooting
 
-- **Verification image rejected:** use an immutable digest, not a mutable tag, and
-  confirm the image contains `just`, `uv`, Python 3, Node.js 20 or newer, and the
-  repository's locked test environment.
+- **Verification image rejected:** use an immutable digest (`sha256:<64 hex>` or
+  `name@sha256:<64 hex>`), not a mutable tag, and confirm the image contains `just`, `uv`,
+  Python 3, Node.js 20 or newer, and the repository's locked test environment. `just
+  work-verifier-build` prints the accepted form; a bare Podman image id must be prefixed with
+  `sha256:`.
 - **Work needs attention:** run `pending`, act on the exact reported ID, then
   `resume`; do not restart the Work under a new ID.
 - **No compatible Fleet worker:** verify project scope and advertised
   `runtime.codex`, `runtime.claude`, or `runtime.harness` capability. Do not
   send model credentials or harness backend configuration to the control plane.
-- **Control degraded:** restore the failed authority, observability, or
-  reversibility precondition. A successful HTTP status with stale observations is
-  still degraded.
+- **Control degraded:** restore the failed authority, observability, or reversibility
+  precondition. A successful HTTP status with stale observations is still degraded. A Task also
+  reaches `CONTROL_DEGRADED` when its planning or assessment stage raises — an expired CLI login,
+  an unreachable repository, an unreadable brief: the thread carries the command
+  and the exception, the Task leaves the active set, and nothing drives it again until a human
+  moves it (a Task pins its target at create, so a defaults fix needs a new Task). If such a Task
+  was paused, `resume` returns it to `CONTROL_DEGRADED`; cancel and recreate is the way out. A step
+  Work that fails does not degrade the Task: its command is replayed on the next tick and
+  reconciled through its receipt, so watch `pending` and the Task thread instead.
 - **GitHub is unavailable:** retain the Work ID and resume after service recovers.
   Completed local implementation should not be repeated.

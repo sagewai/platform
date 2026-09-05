@@ -747,8 +747,8 @@ async def test_codex_failure_preserves_bounded_stderr_tail(tmp_path: Path) -> No
     )
 
     assert result.status == "failed"
-    assert len(result.summary) == 4000
-    assert result.summary.endswith("tail-error\n")
+    assert result.summary.startswith("exit 1: ") and len(result.summary) == 3998
+    assert result.summary.endswith("tail-error")
     assert result.verification == (
         "runtime.codex: model=gpt-5.5, effort=xhigh",
     )
@@ -889,3 +889,86 @@ def test_operator_result_rejects_action_result_from_different_project(
 
     with pytest.raises(ValidationError, match="action result belongs to a different project"):
         OperatorResult.model_validate(values)
+
+
+def _silent_failure_executable(tmp_path: Path) -> Path:
+    """A CLI that reports its error on stdout and exits non-zero with an empty stderr."""
+    executable = tmp_path / "fake-claude-failure"
+    executable.write_text(
+        textwrap.dedent(
+            f"""\
+            #!{sys.executable}
+            import json
+            import sys
+
+            sys.stdin.read()
+            print(json.dumps({{
+                "type": "assistant",
+                "message": {{"content": [{{
+                    "type": "text",
+                    "text": "Failed to authenticate: OAuth session expired",
+                }}]}},
+            }}))
+            raise SystemExit(1)
+            """
+        )
+    )
+    executable.chmod(0o755)
+    return executable
+
+
+@pytest.mark.asyncio
+async def test_a_failure_without_stderr_carries_the_last_activity_line(tmp_path: Path) -> None:
+    runtime = ClaudeRuntime(executable=str(_silent_failure_executable(tmp_path)), timeout=5)
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+
+    result = await runtime.run(
+        _request(),
+        _capsule(),
+        _capabilities(),
+        _workspace(workspace_path),
+    )
+
+    assert result.status == "failed"
+    assert result.summary == "exit 1: Failed to authenticate: OAuth session expired"
+
+
+def _environment_dump_executable(tmp_path: Path) -> Path:
+    executable = tmp_path / "fake-environment-dump"
+    executable.write_text(
+        textwrap.dedent(
+            f"""\
+            #!{sys.executable}
+            import json
+            import os
+            import pathlib
+            import sys
+
+            sys.stdin.read()
+            pathlib.Path("environment.json").write_text(json.dumps(sorted(os.environ)))
+            raise SystemExit(1)
+            """
+        )
+    )
+    executable.chmod(0o755)
+    return executable
+
+
+@pytest.mark.asyncio
+async def test_claude_runtime_never_passes_claude_code_session_variables(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A backend started from a Claude Code session must not hand its token to the CLI."""
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "must-not-leak")
+    monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "cli")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    runtime = ClaudeRuntime(executable=str(_environment_dump_executable(tmp_path)), timeout=5)
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+
+    await runtime.run(_request(), _capsule(), _capabilities(), _workspace(workspace_path))
+
+    names = json.loads((workspace_path / "environment.json").read_text())
+    assert [name for name in names if name.startswith("CLAUDE")] == []
+    assert "HOME" in names

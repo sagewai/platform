@@ -72,9 +72,13 @@ from sagewai.work.runtime import (
 )
 from sagewai.work.runtime_harness import HarnessRuntime
 from sagewai.work.store import WorkStore
+from sagewai.work.tasks.models import RuntimeRef
 from sagewai.work.tasks.store import TaskStore
 
 ControllerFactory = Callable[..., OperatorController]
+_PLANNER_RUNTIMES = frozenset(
+    {RuntimeRef.CODEX, RuntimeRef.CLAUDE_ANALYSIS, RuntimeRef.CLAUDE_REVIEW}
+)
 
 
 def github_token_credentials(**_kwargs: object) -> dict[str, str]:
@@ -132,6 +136,7 @@ class SoftwareStack:
     read_controller: OperatorController
     read_capabilities: CapabilitySet
     analysis_runtime: OperatorRuntime
+    planner_runtime: OperatorRuntime
     verifier: SoftwareVerifier
 
 
@@ -144,6 +149,7 @@ async def build_software_stack(
     execution: str = "local",
     fleet_org: str | None = None,
     prefer_free_implementation: bool = False,
+    planner_runtime: RuntimeRef = RuntimeRef.CLAUDE_ANALYSIS,
     max_attempts_per_stage: int = 3,
     controller_factory: ControllerFactory = OperatorController,
     engine: AsyncEngine | None = None,
@@ -154,6 +160,10 @@ async def build_software_stack(
     credential_values: Mapping[str, str] | None = None,
 ) -> SoftwareStack:
     """Build the ladders, controllers, verifier, and lifecycle for one repository."""
+    if planner_runtime not in _PLANNER_RUNTIMES:
+        raise ValueError(
+            f"planner runtime {planner_runtime.value} needs harness tiers; use codex or claude"
+        )
     if engine is None:
         await factory.ensure_schema()
         engine = factory.get_engine()
@@ -285,10 +295,21 @@ async def build_software_stack(
             capabilities=write_capabilities,
             controller=implementation_controller,
         )
+        planner = implementer.runtime if planner_runtime is RuntimeRef.CODEX else analyst.runtime
     else:
-        codex = CodexRuntime(activity_sink=activity_sink, artifact_store=artifact_store)
+        defaults = (
+            await task_store.get_defaults(project_id=project_id)
+            if project_id is not None
+            else None
+        )
+        codex = CodexRuntime(
+            model=None if defaults is None else defaults.codex_model,
+            activity_sink=activity_sink,
+            artifact_store=artifact_store,
+        )
         claude = ClaudeRuntime(activity_sink=activity_sink, artifact_store=artifact_store)
         analysis_runtime = claude
+        planner = codex if planner_runtime is RuntimeRef.CODEX else claude
         analyst = SoftwareStageOperator(
             actor_ref="runtime:claude:analyst",
             runtime=claude,
@@ -315,9 +336,8 @@ async def build_software_stack(
         )
         implementers = (codex_implementer,)
         if prefer_free_implementation:
-            if project_id is None:
+            if project_id is None or defaults is None:
                 raise ValueError("--prefer-free-implementation requires a project")
-            defaults = await task_store.get_defaults(project_id=project_id)
             if "complex" not in defaults.harness_tiers:
                 raise ValueError("configure harness tiers in task defaults")
             resolved = await resolve_credential_values(
@@ -393,6 +413,7 @@ async def build_software_stack(
         read_controller=review_controller,
         read_capabilities=read_capabilities,
         analysis_runtime=analysis_runtime,
+        planner_runtime=planner,
         verifier=verifier,
     )
 

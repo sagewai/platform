@@ -236,3 +236,27 @@ async def test_telemetry_route_404s_unknown_task_and_requires_project_scope(
     assert global_scope.json() == {
         "detail": "Tasks require an explicit project; there is no global Task scope"
     }
+
+
+@pytest.mark.asyncio
+async def test_telemetry_route_covers_the_planning_work(client: AdminClient) -> None:
+    task = _task("t1", project_id="p")
+    await client.app.state.task_store.create(
+        task,
+        record=_record(task),
+        events=(_event(task, 1, TaskEventType.TASK_CREATED, {"title": task.title}),),
+    )
+    await client.app.state.work_store.save_work(
+        _work_record("t1:plan:0:1", profile_context={"task_id": "t1"})
+    )
+    await client.app.state.work_store.append_events(
+        (
+            _selection("t1:plan:0:1", sequence=1, run_id="t1:plan:0:1:plan:1", runtime="claude"),
+            _execution("t1:plan:0:1", sequence=2, run_id="t1:plan:0:1:plan:1"),
+        )
+    )
+
+    response = await client.http.get("/api/v1/tasks/t1/telemetry", headers=client.headers)
+
+    assert response.status_code == 200
+    assert [work["work_id"] for work in response.json()["works"]] == ["t1:plan:0:1"]
