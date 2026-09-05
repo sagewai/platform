@@ -42,6 +42,7 @@ The platform is a control plane plus a worker fleet. The control plane plans, pe
 - Security tiers (Tier-1, Tier-2, Tier-3): https://docs.sagewai.ai/docs/architecture/security-tiers
 - Execution modes: https://docs.sagewai.ai/docs/architecture/execution-modes
 - Sandbox backends (Docker, Kubernetes, Null): https://docs.sagewai.ai/docs/architecture/sandbox-backends
+- What we keep and retire: https://docs.sagewai.ai/docs/architecture/work-control-plane-evolution
 
 ## Inference cost-down spectrum
 

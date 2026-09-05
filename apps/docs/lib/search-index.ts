@@ -449,6 +449,13 @@ export const SEARCH_INDEX: SearchEntry[] = [
     description: 'Docker and Kubernetes sandbox backend implementations.',
     keywords: 'sandbox backends docker kubernetes k8s container isolation',
   },
+  {
+    title: 'What we keep and retire',
+    href: '/docs/architecture/work-control-plane-evolution',
+    section: 'Architecture',
+    description: 'Which Sagewai subsystems are kept, adapted, frozen, or retired as a product surface.',
+    keywords: 'evolution boundary keep adapt freeze retire product center coordinator',
+  },
 
   // Reference
   {

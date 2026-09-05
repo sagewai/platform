@@ -23,7 +23,7 @@ export const metadata = {
 
 # Architecture
 
-This page gives you the mental model you need to deploy Sagewai with confidence: how planning and execution split across processes, where credentials live, and which option to set per workflow step. After reading, you'll know which of the four chapters that follow you need.
+This page gives you the mental model you need to deploy Sagewai with confidence: how planning and execution split across processes, where credentials live, and which option to set per workflow step. After reading, you'll know which of the five chapters that follow you need.
 
 If you just want to ship your first agent, start with the [Quickstart](/docs/get-started/quickstart). The architecture here is what's underneath — you don't need to internalise it to begin building.
 
@@ -84,6 +84,7 @@ Pick based on what you're trying to do.
 | Reason about credential isolation, audit, and what's exposed where | [Security tiers](/docs/architecture/security-tiers) |
 | Pick the right execution mode for each step in a workflow | [Execution modes](/docs/architecture/execution-modes) |
 | Decide between Docker, Kubernetes, or a serverless sandbox backend | [Sandbox backends](/docs/architecture/sandbox-backends) |
+| Check whether a subsystem is a supported product surface or a parked capability | [What we keep and retire](/docs/architecture/work-control-plane-evolution) |
 
 ## Next steps
 

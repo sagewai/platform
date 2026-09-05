@@ -118,6 +118,7 @@ const SECTIONS: NavSection[] = [
       { label: 'Security Tiers', href: '/docs/architecture/security-tiers' },
       { label: 'Execution Modes', href: '/docs/architecture/execution-modes' },
       { label: 'Sandbox Backends', href: '/docs/architecture/sandbox-backends' },
+      { label: 'What we keep and retire', href: '/docs/architecture/work-control-plane-evolution' },
     ],
   },
   {

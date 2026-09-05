@@ -1,23 +1,42 @@
-# Work control-plane evolution decisions
+import { TechArticleJsonLd } from '@/components/structured-data';
 
-This record defines the current product-center boundary for the public
-repository. It is intentionally narrower than a package retirement plan: Git
-history remains the archive, and a classification does not promise backward
-compatibility or authorize mass deletion.
+export const metadata = {
+  title: 'What Sagewai keeps, adapts, freezes, and retires',
+  description:
+    'The product-center boundary for Sagewai: which subsystems the Work coordinator is built on, which stay as lower-level capabilities, and what it takes to change one of those decisions.',
+  alternates: {
+    canonical: 'https://docs.sagewai.ai/docs/architecture/work-control-plane-evolution',
+  },
+};
 
-## Classification meanings
+<TechArticleJsonLd
+  name="Sagewai product-center boundary"
+  description="Which Sagewai subsystems are kept, adapted, frozen, or retired as a product surface, and the evidence required to change a decision."
+  path="/docs/architecture/work-control-plane-evolution"
+  articleSection="Architecture"
+/>
 
-- **KEEP** — already supports the Work control plane or remains a useful,
-  independently tested capability.
-- **ADAPT** — reuse the existing subsystem and add the smallest Work-facing
-  surface required; do not rewrite it.
-- **FREEZE** — retain the code and tests, but do not extend it as an alternate
-  product center without new evidence.
-- **RETIRE** — remove an obsolete narrative or surface once direct consumers
-  and replacement evidence are checked. This is not a compatibility-alias
-  instruction.
+# What we keep, adapt, freeze, and retire
 
-## Decisions
+Sagewai has more subsystems than any one product story needs. This page says which of them the
+Work coordinator is actually built on, which remain available as lower-level capabilities, and
+which have stopped being a product surface — so you can tell a supported path from a parked
+one before you build on it.
+
+Nothing here is a deprecation schedule. Git history is the archive, a classification promises
+no backward compatibility, and none of it authorises mass deletion.
+
+## The four classifications
+
+- **Keep** — already supports the Work control plane, or is a useful capability with its own
+  tests.
+- **Adapt** — reuse it and add the smallest Work-facing surface required; do not rewrite it.
+- **Freeze** — the code and its tests stay, but it is not extended as an alternate product
+  centre without new evidence.
+- **Retire as a product surface** — the narrative and the entry points go once their direct
+  consumers and a replacement are checked. The code may well stay.
+
+## The decisions
 
 | Package or subsystem | Decision | Repository evidence | Boundary |
 |---|---|---|---|
@@ -34,15 +53,12 @@ compatibility or authorize mass deletion.
 | Software delivery adapters under `packages/sdk/sagewai/work/profiles/software` | KEEP as optional extension | `SoftwareContractContext.delivery` is optional; lifecycle tests prove repository-only completion, while delivery tests exercise explicitly selected contracts. | No deployment provider, Cloudflare account, or external delivery dogfood is required for Core Work. Delivery runs only when a WorkContract activates it. |
 | Legacy copy that presents Autopilot, workflows, or the Training Loop as Sagewai's primary path | RETIRE | The actual primary CLI is `sagewai work`; canonical state and pending attention are implemented in WorkStore and shared by CLI/API/console. Git preserves the former copy. | Remove the obsolete product-center claim surgically. Do not delete the underlying packages or manufacture compatibility promises. |
 
-## Revisit rule
+## Changing one of these
 
-Change a decision only with one of these evidence types:
+A decision moves only on one of four kinds of evidence: a current WorkContract requires the
+subsystem; a reproducible runtime or retrieval failure identifies the minimum missing
+mechanism; repository consumers and tests prove a retained surface is obsolete; or an accepted
+security or correctness finding requires a boundary repair.
 
-1. a current WorkContract requires the subsystem;
-2. a reproducible runtime or retrieval failure identifies the minimum missing
-   mechanism;
-3. repository consumers and tests prove that a retained surface is obsolete; or
-4. an accepted security or correctness finding requires a boundary repair.
-
-Tool availability, credentials, hypothetical future consumers, and convenience
-alone are not evidence for expansion.
+Tool availability, credentials, hypothetical future consumers, and convenience are not
+evidence.
