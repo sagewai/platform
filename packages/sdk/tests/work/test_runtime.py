@@ -932,3 +932,43 @@ async def test_a_failure_without_stderr_carries_the_last_activity_line(tmp_path:
 
     assert result.status == "failed"
     assert result.summary == "exit 1: Failed to authenticate: OAuth session expired"
+
+
+def _environment_dump_executable(tmp_path: Path) -> Path:
+    executable = tmp_path / "fake-environment-dump"
+    executable.write_text(
+        textwrap.dedent(
+            f"""\
+            #!{sys.executable}
+            import json
+            import os
+            import pathlib
+            import sys
+
+            sys.stdin.read()
+            pathlib.Path("environment.json").write_text(json.dumps(sorted(os.environ)))
+            raise SystemExit(1)
+            """
+        )
+    )
+    executable.chmod(0o755)
+    return executable
+
+
+@pytest.mark.asyncio
+async def test_claude_runtime_never_passes_claude_code_session_variables(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A backend started from a Claude Code session must not hand its token to the CLI."""
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "must-not-leak")
+    monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "cli")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    runtime = ClaudeRuntime(executable=str(_environment_dump_executable(tmp_path)), timeout=5)
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+
+    await runtime.run(_request(), _capsule(), _capabilities(), _workspace(workspace_path))
+
+    names = json.loads((workspace_path / "environment.json").read_text())
+    assert [name for name in names if name.startswith("CLAUDE")] == []
+    assert "HOME" in names

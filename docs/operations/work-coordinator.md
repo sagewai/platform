@@ -30,10 +30,16 @@ configured adapter. A successful software run does not imply a deployment.
 
 ## 1. Prepare a trusted checkout
 
-Install Sagewai, `just`, Node.js 20 or newer, and the repository's locked Python
-toolchain. Install and authenticate the native `codex` and `claude` CLIs on the
-machine that will execute them. Sagewai uses their existing local authentication
-and does not collect those credentials.
+Install Sagewai, `just`, Node.js 20 or newer, and the repository's locked Python toolchain.
+Install and authenticate the native `codex` and `claude` CLIs on the machine that will execute
+them: run `claude auth login` and `codex login` as the user that runs the backend, and check them
+with `claude -p 'ok'` and `codex exec 'ok'` from a fresh shell. Sagewai uses their existing local
+authentication and does not collect those credentials: the runtime hands the CLI an allow-listed
+environment (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TERM`, `LANG`, `LANGUAGE`, `LC_ALL`,
+`LC_CTYPE`, `TZ`, `TMPDIR`, `PWD`) and nothing else, so a backend started from inside a Claude
+Code session never passes its `CLAUDE_CODE_*` or `CLAUDECODE` variables to the CLI, and an
+expired keychain login shows up as `Failed to authenticate` on the Task thread rather than as a
+silent stall.
 
 Verification is networkless and runs in a disposable container. Build the
 repository's pinned verifier image once on the coordinator machine:
