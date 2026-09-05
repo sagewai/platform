@@ -521,6 +521,10 @@ accepted records the answer and nothing else — the planner reads it at the nex
 use the re-plan gate when the answer should change the current plan. A question that cannot be
 defaulted still stops the plan and asks first.
 
+A planning failure blocks the Task and opens `replan:<task id>:<next version>` on the thread:
+fix the cause — an expired CLI login, a missing image, an unreachable repository — then allow the
+gate and the coordinator plans again at the next version. Denying it leaves the Task blocked.
+
 Triggers: an approved `github_label` trigger turns each newly labelled issue into one Task of
 origin `trigger`, bounded by the trigger's authority, which a Task may only tighten. **A
 non-human origin never merges automatically**: plan, merge, and deliver are forced to

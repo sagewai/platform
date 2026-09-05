@@ -964,7 +964,7 @@ class TaskCoordinator:
                 amendments=amendments,
             )
         except PlanningFailedError as exc:
-            return await self._block(
+            return await self._block_planning(
                 task,
                 record,
                 f"planning failed: {exc}",
@@ -984,7 +984,7 @@ class TaskCoordinator:
                 result, budget=task.budget, target=task.target, version=command.plan_version
             )
         except PlanRejectedError as exc:
-            return await self._block(
+            return await self._block_planning(
                 task,
                 record,
                 f"plan rejected: {exc}",
@@ -1063,6 +1063,7 @@ class TaskCoordinator:
         lease_epoch: int,
         command: Command,
         prefix: Sequence[Entry] = (),
+        attention_id: str | None = None,
     ) -> TaskRecord:
         gaps = await self._block_gaps(task)
         message = text if not gaps else f"{text}: {'; '.join(gaps)}"
@@ -1080,7 +1081,7 @@ class TaskCoordinator:
             await self._present(
                 task,
                 record,
-                attention_id=f"block:{record.current_cycle}:{record.revision}",
+                attention_id=attention_id or f"block:{record.current_cycle}:{record.revision}",
                 summary=message,
                 urgency="now",
                 evidence_refs=gaps,
@@ -1133,6 +1134,47 @@ class TaskCoordinator:
             )
         )
         return await self._append(record, entries, lease_epoch, command=command)
+
+    async def _block_planning(
+        self,
+        task: Task,
+        record: TaskRecord,
+        text: str,
+        lease_epoch: int,
+        command: RunPlanning,
+        prefix: Sequence[Entry],
+    ) -> TaskRecord:
+        """Block, and offer the re-plan the operator needs once the cause is fixed.
+
+        The retry must be a new plan version: the failed version's planning Work is
+        ``WORK_BLOCKED`` and its durable run is terminal, so the same version replays the same
+        failure. The gate is always requested; an automatic re-plan would loop on the cause.
+        """
+        version = command.plan_version + 1
+        action = coordinator_action(
+            task.project_id, action="replan", work_id=task.id, scope=task.id
+        )
+        entries: list[Entry] = [
+            *prefix,
+            (TaskEventType.REPLAN_PROPOSED, {"version": version, "reason": text}),
+            (
+                TaskEventType.GATE_REQUESTED,
+                {
+                    "gate_id": f"replan:{task.id}:{version}",
+                    "question": f"{text}. Re-plan once the cause is fixed?",
+                    "action": action.model_dump(mode="json"),
+                },
+            ),
+        ]
+        return await self._block(
+            task,
+            record,
+            text,
+            lease_epoch,
+            command,
+            prefix=entries,
+            attention_id=f"replan:{task.id}:{version}",
+        )
 
     async def _mirror(
         self, task: Task, record: TaskRecord, command: MirrorAttention, lease_epoch: int

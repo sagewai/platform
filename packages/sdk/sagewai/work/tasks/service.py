@@ -433,7 +433,8 @@ class TaskService:
                     },
                 )
             )
-            entries.append(status_entry(record, TaskStatus.BLOCKED))
+            if record.status is not TaskStatus.BLOCKED:
+                entries.append(status_entry(record, TaskStatus.BLOCKED))
         writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
         return await writer.append(record, entries, now=now)
 

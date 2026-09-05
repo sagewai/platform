@@ -2190,3 +2190,79 @@ async def test_a_plan_with_a_defaultable_question_is_proposed_and_the_question_r
         asked.payload_json["deadline_at"]
         == (NOW + timedelta(seconds=defaults.clarification_deadline_seconds)).isoformat()
     )
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_planning_offers_a_replan_gate(stores, tmp_path) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    runner.plan_error = PlanningFailedError("planning stage failed: exit 1: login expired")
+
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    assert record.status is TaskStatus.BLOCKED
+    assert record.pending_gate == f"replan:{task.id}:2"
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    proposed = next(
+        event for event in events if event.event_type is TaskEventType.REPLAN_PROPOSED
+    )
+    assert proposed.payload_json["version"] == 2
+    assert "login expired" in proposed.payload_json["reason"]
+
+    runner.plan_error = None
+    service = TaskService(store=task_store, artifact_store=LocalArtifactStore(root=tmp_path))
+    record = await service.decide_gate(
+        task.id,
+        project_id=PROJECT,
+        gate_id=f"replan:{task.id}:2",
+        decision="allow",
+        actor_ref="arda",
+    )
+    assert record.status is TaskStatus.PLANNING
+    record = await _drive_to_rest(coordinator, record, epoch)
+    assert record.status is TaskStatus.PLAN_PROPOSED
+    assert record.pending_gate == f"plan:{task.id}:2"
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_plan_offers_a_replan_gate_where_the_inbox_looks(stores, tmp_path) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    channel = RecordingDecisionChannel()
+    coordinator._static_channels = (channel,)
+    runner.plan_result = _plan_result().model_copy(update={"acceptance_matrix": ()})
+
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    assert record.status is TaskStatus.BLOCKED
+    assert record.pending_gate == f"replan:{task.id}:2"
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    proposed = next(
+        event for event in events if event.event_type is TaskEventType.REPLAN_PROPOSED
+    )
+    assert "acceptance matrix is empty" in proposed.payload_json["reason"]
+    assert channel.calls[-1].attention_id == record.pending_gate
+
+
+@pytest.mark.asyncio
+async def test_denying_the_replan_leaves_the_task_blocked(stores, tmp_path) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    runner.plan_error = PlanningFailedError("planning stage failed: exit 1: login expired")
+
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+    service = TaskService(store=task_store, artifact_store=LocalArtifactStore(root=tmp_path))
+
+    record = await service.decide_gate(
+        task.id,
+        project_id=PROJECT,
+        gate_id=f"replan:{task.id}:2",
+        decision="deny",
+        actor_ref="arda",
+        note="fix the login first",
+    )
+
+    assert record.status is TaskStatus.BLOCKED and record.pending_gate is None
