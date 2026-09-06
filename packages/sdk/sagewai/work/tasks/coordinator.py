@@ -1574,11 +1574,19 @@ class TaskCoordinator:
                 ttl_seconds=8 * 3600,
             )
             if not acquired:
-                logger.info(
-                    "repository lease held by another task",
-                    extra={"event": "task.lease.busy", "task": task.id, "lease_key": lease_key},
+                holder = await self._task_store.repository_lease_holder(
+                    lease_key, project_id=task.project_id
                 )
-                return record
+                held_by = "an expired lease" if holder is None else f"task {holder[0]}"
+                reason = f"waiting for repository lease {lease_key} held by {held_by}"
+                if record.waiting_reason == reason:
+                    return record
+                return await self._append(
+                    record,
+                    [(TaskEventType.ATTENTION_CHANGED, {"owner": "system", "reason": reason})],
+                    lease_epoch,
+                    command=command,
+                )
         issue_url = state.issue_urls.get(step.id)
         profile = self._profile_for(task)
         if issue_url is None and replay:
@@ -1615,6 +1623,10 @@ class TaskCoordinator:
                     {"lease_key": lease_key, "work_id": work.work_id},
                 )
             )
+            if (record.waiting_reason or "").startswith("waiting for repository lease "):
+                entries.append(
+                    (TaskEventType.ATTENTION_CHANGED, {"owner": "system", "reason": "working"})
+                )
         entries.extend(
             await self._track(
                 task,

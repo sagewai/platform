@@ -597,6 +597,48 @@ async def test_plan_to_two_steps_to_assess_to_complete(stores, tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_a_step_waiting_for_the_repository_lease_says_so(
+    stores, tmp_path, monkeypatch
+) -> None:
+    task_store, work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
+    runner.statuses["s1"] = "RUNNING"
+
+    async def no_progress(task_, *, cycle, work_id):
+        runner.resumed.append(work_id)
+        return await work_store.load_work(work_id, project_id=task_.project_id)
+
+    runner.resume = no_progress
+    lease_key = task.repository_lease_key
+    assert lease_key is not None
+    assert await task_store.acquire_repository_lease(
+        lease_key, project_id=PROJECT, task_id="other-task", work_id=None, ttl_seconds=3600
+    )
+
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    assert record.status is TaskStatus.EXECUTING
+    assert record.attention_owner is AttentionOwner.SYSTEM
+    assert record.waiting_reason == (
+        f"waiting for repository lease {lease_key} held by task other-task"
+    )
+    kinds = [e.event_type for e in await task_store.read_events(task.id, project_id=PROJECT)]
+    assert TaskEventType.STEP_WORK_STARTED not in kinds
+    assert kinds.count(TaskEventType.ATTENTION_CHANGED) == 1
+
+    assert await task_store.release_repository_lease(
+        lease_key, project_id=PROJECT, task_id="other-task"
+    )
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    assert record.waiting_reason == "working"
+    kinds = [e.event_type for e in await task_store.read_events(task.id, project_id=PROJECT)]
+    assert TaskEventType.STEP_WORK_STARTED in kinds
+
+
+@pytest.mark.asyncio
 async def test_assessment_receives_the_latest_base_advanced_sha(
     stores, tmp_path, monkeypatch
 ) -> None:
@@ -2048,10 +2090,16 @@ async def test_repository_lease_held_by_another_task_starts_no_side_effect(
     epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
     after = await coordinator.drive(record, lease_epoch=epoch)
     assert after.status is record.status
-    assert after.revision == record.revision
+    assert after.revision == record.revision + 1
+    assert after.attention_owner is AttentionOwner.SYSTEM
+    assert after.waiting_reason == (
+        f"waiting for repository lease {task.repository_lease_key} held by task another-task"
+    )
     assert runner.created_issues == []
     assert runner.started == []
-    assert await task_store.read_events(task.id, project_id=PROJECT) == before_events
+    after_events = await task_store.read_events(task.id, project_id=PROJECT)
+    assert after_events[: len(before_events)] == before_events
+    assert after_events[-1].event_type is TaskEventType.ATTENTION_CHANGED
 
 
 @pytest.mark.asyncio
