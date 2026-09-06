@@ -1581,8 +1581,9 @@ class TaskCoordinator:
                 holder = await self._task_store.repository_lease_holder(
                     lease_key, project_id=task.project_id
                 )
-                held_by = "an expired lease" if holder is None else f"task {holder[0]}"
-                reason = f"waiting for repository lease {lease_key} held by {held_by}"
+                if holder is None:
+                    return record
+                reason = f"waiting for repository lease {lease_key} held by task {holder[0]}"
                 if record.waiting_reason == reason:
                     return record
                 return await self._append(
@@ -1718,7 +1719,6 @@ class TaskCoordinator:
         step = next(step for step in state.plan.steps if step.id == command.step_id)
         issue_url = state.issue_urls[step.id]
         if command.reason == "decision":
-            assert command.decision_event_id is not None and command.decision is not None
             evidence = (f"task-decision://{command.decision_event_id}",)
             constraints = (command.decision,)
         else:

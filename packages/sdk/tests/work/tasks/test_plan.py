@@ -27,6 +27,7 @@ from sagewai.work.tasks.plan import (
     TaskPlanResult,
     accept_plan,
     clarification_request_entry,
+    proposed_plan_from_events,
 )
 
 NOW = datetime(2026, 9, 6, 11, 0, tzinfo=timezone.utc)
@@ -206,6 +207,30 @@ def test_a_clarification_request_states_the_open_counts() -> None:
     assert entry[1]["pending_questions"] == 2
     assert entry[1]["pending_material_questions"] == 1
     assert entry[1]["deadline_at"] == "2026-09-06T12:00:00+00:00"
+
+
+def test_the_latest_proposal_wins() -> None:
+    first = {
+        "version": 1,
+        "steps": [_step("s1").model_dump(mode="json")],
+        "acceptance_matrix": [item.model_dump(mode="json") for item in _matrix()],
+    }
+    second = {
+        "version": 2,
+        "steps": [_step("s2").model_dump(mode="json")],
+        "acceptance_matrix": [item.model_dump(mode="json") for item in _matrix()],
+    }
+
+    proposed = proposed_plan_from_events(
+        (
+            _event(1, TaskEventType.PLAN_PROPOSED, first),
+            _event(2, TaskEventType.PLAN_PROPOSED, second),
+        )
+    )
+
+    assert proposed is not None
+    assert proposed.version == 2
+    assert proposed.steps[0].id == "s2"
 
 
 def test_matrix_speaks_the_kernel_verification_vocabulary() -> None:

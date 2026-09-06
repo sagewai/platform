@@ -759,6 +759,10 @@ async def _seed_blocked_on_work(
     *,
     attention_id: str,
     work_id: str,
+    attention_kind: str = "WORK_BLOCKED",
+    task_status: TaskStatus = TaskStatus.BLOCKED,
+    message: Literal["decision", "rollback"] = "decision",
+    stale_cycle: bool = False,
 ):
     task, record = await service.create(
         SOFTWARE_BRIEF,
@@ -767,26 +771,50 @@ async def _seed_blocked_on_work(
         created_by="arda",
         now=NOW,
     )
-    record = await TaskWriter(store).append(
-        record,
-        [
-            (
-                TaskEventType.COMMAND_RECEIPT,
-                {
-                    "command_id": "mirror_attention:12",
+    entries: list[tuple[TaskEventType, dict]] = [
+        (TaskEventType.CYCLE_STARTED, {"cycle": 1, "scheduled_for": None}),
+        (
+            TaskEventType.STEP_WORK_STARTED,
+            {
+                "step_id": "s3",
+                "work_id": work_id,
+                "issue_url": "https://github.com/o/r/issues/3",
+                "base_sha": "a" * 40,
+            },
+        ),
+        (
+            TaskEventType.COMMAND_RECEIPT,
+            {
+                "command_id": "mirror_attention:12",
+                "kind": "mirror_attention",
+                "payload": {
                     "kind": "mirror_attention",
-                    "payload": {
-                        "kind": "mirror_attention",
-                        "step_id": "s3",
-                        "work_id": work_id,
-                        "attention_kind": "WORK_BLOCKED",
-                        "attention_id": attention_id,
-                        "summary": "Inspect the failed implementation evidence.",
-                        "gate_id": None,
-                        "evidence_refs": [],
-                    },
+                    "step_id": "s3",
+                    "work_id": work_id,
+                    "attention_kind": attention_kind,
+                    "attention_id": attention_id,
+                    "summary": "Inspect the failed implementation evidence.",
+                    "gate_id": None,
+                    "evidence_refs": [],
                 },
-            ),
+            },
+        ),
+    ]
+    if message == "rollback":
+        entries.append(
+            (
+                TaskEventType.GATE_REQUESTED,
+                {
+                    "gate_id": f"rollback:{work_id}",
+                    "question": "Allow the recorded rollback?",
+                    "action": {},
+                    "work_id": work_id,
+                    "attention_id": attention_id,
+                },
+            )
+        )
+    else:
+        entries.append(
             (
                 TaskEventType.TASK_MESSAGE,
                 {
@@ -795,9 +823,27 @@ async def _seed_blocked_on_work(
                     "refs": [work_id],
                     "attention_id": attention_id,
                 },
-            ),
-            status_entry(record, TaskStatus.BLOCKED),
-        ],
+            )
+        )
+    if stale_cycle:
+        entries.extend(
+            [
+                (TaskEventType.CYCLE_STARTED, {"cycle": 2, "scheduled_for": None}),
+                (
+                    TaskEventType.STEP_WORK_STARTED,
+                    {
+                        "step_id": "s3",
+                        "work_id": f"{work_id}-next",
+                        "issue_url": "https://github.com/o/r/issues/3",
+                        "base_sha": "b" * 40,
+                    },
+                ),
+            ]
+        )
+    entries.append(status_entry(record, task_status))
+    record = await TaskWriter(store).append(
+        record,
+        entries,
         now=NOW,
     )
     return task, record
@@ -858,6 +904,106 @@ async def test_an_answer_names_a_question_or_a_mirrored_block(
             attention_id="nope",
             attention_version=1,
             answer="x",
+            actor_ref="human:arda",
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_decision_needs_the_thread_entry_the_receipt_promised(
+    service: TaskService, store: TaskStore
+) -> None:
+    task, _record = await _seed_blocked_on_work(
+        service, store, attention_id="att-1", work_id="w3", message="rollback"
+    )
+
+    with pytest.raises(
+        TaskDecisionError, match="no open clarification question or blocked Work"
+    ):
+        await service.answer_attention(
+            task.id,
+            project_id="project-a",
+            attention_id="att-1",
+            attention_version=1,
+            answer="retry",
+            actor_ref="human:arda",
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_decision_from_an_earlier_cycle_is_refused(
+    service: TaskService, store: TaskStore
+) -> None:
+    task, _record = await _seed_blocked_on_work(
+        service, store, attention_id="att-1", work_id="w3", stale_cycle=True
+    )
+
+    with pytest.raises(
+        TaskDecisionError, match="no open clarification question or blocked Work"
+    ):
+        await service.answer_attention(
+            task.id,
+            project_id="project-a",
+            attention_id="att-1",
+            attention_version=1,
+            answer="retry",
+            actor_ref="human:arda",
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_control_degraded_mirror_is_not_a_decision(
+    service: TaskService, store: TaskStore
+) -> None:
+    task, _record = await _seed_blocked_on_work(
+        service,
+        store,
+        attention_id="att-1",
+        work_id="w3",
+        attention_kind="CONTROL_DEGRADED",
+        task_status=TaskStatus.CONTROL_DEGRADED,
+    )
+
+    with pytest.raises(
+        TaskDecisionError, match="no open clarification question or blocked Work"
+    ):
+        await service.answer_attention(
+            task.id,
+            project_id="project-a",
+            attention_id="att-1",
+            attention_version=1,
+            answer="retry",
+            actor_ref="human:arda",
+        )
+
+
+@pytest.mark.parametrize(
+    ("attention_version", "decision", "task_status", "message"),
+    [
+        (2, "retry", TaskStatus.BLOCKED, "presented at version 1"),
+        (1, None, TaskStatus.BLOCKED, "needs an answer"),
+        (1, "retry", TaskStatus.PAUSED, "not BLOCKED"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_decision_checks_its_version_answer_and_status(
+    service: TaskService,
+    store: TaskStore,
+    attention_version,
+    decision,
+    task_status,
+    message,
+) -> None:
+    task, _record = await _seed_blocked_on_work(
+        service, store, attention_id="att-1", work_id="w3", task_status=task_status
+    )
+
+    with pytest.raises(TaskDecisionError, match=message):
+        await service.answer_attention(
+            task.id,
+            project_id="project-a",
+            attention_id="att-1",
+            attention_version=attention_version,
+            answer=decision,
             actor_ref="human:arda",
         )
 

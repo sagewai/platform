@@ -147,6 +147,37 @@ async def _seed_proposed_plan(client: AdminClient, task_id: str) -> None:
     )
 
 
+async def _seed_replan_proposal(client: AdminClient, task_id: str) -> None:
+    task = _task(task_id, project_id="p")
+    record = _record(task)
+    replacement_step = {
+        **STEP,
+        "id": "s2",
+        "title": "Implement queue with a different step",
+    }
+    events = (
+        _event(task, 1, TaskEventType.TASK_CREATED, {"title": task.title}),
+        _event(
+            task,
+            2,
+            TaskEventType.PLAN_PROPOSED,
+            {"version": 1, "steps": [STEP], "acceptance_matrix": MATRIX},
+        ),
+        _event(task, 3, TaskEventType.PLAN_ACCEPTED, {"version": 1}),
+        _event(
+            task,
+            4,
+            TaskEventType.PLAN_PROPOSED,
+            {"version": 2, "steps": [replacement_step], "acceptance_matrix": MATRIX},
+        ),
+        _event(task, 5, TaskEventType.GATE_REQUESTED, {"gate_id": f"plan:{task_id}:2"}),
+        _event(task, 6, TaskEventType.TASK_STATUS_CHANGED, {"status": "PLAN_PROPOSED"}),
+    )
+    await client.app.state.task_store.create(
+        task, events=events, record=fold_record(record, events)
+    )
+
+
 @pytest.mark.asyncio
 async def test_get_task_returns_the_definition_and_the_projection(client: AdminClient) -> None:
     await _seed(client, "t-1")
@@ -206,6 +237,20 @@ async def test_get_task_returns_the_proposed_plan_before_acceptance(
     assert body["plan"] is None
     assert body["proposed_plan"]["version"] == 1
     assert body["proposed_plan"]["steps"][0]["id"] == "s1"
+
+
+@pytest.mark.asyncio
+async def test_a_replan_proposal_rides_next_to_the_accepted_plan(client: AdminClient) -> None:
+    await _seed_replan_proposal(client, "t-replan")
+
+    response = await client.http.get("/api/v1/tasks/t-replan", headers=client.headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["plan"]["version"] == 1
+    assert body["plan"]["steps"][0]["id"] == "s1"
+    assert body["proposed_plan"]["version"] == 2
+    assert body["proposed_plan"]["steps"][0]["id"] == "s2"
 
 
 @pytest.mark.asyncio

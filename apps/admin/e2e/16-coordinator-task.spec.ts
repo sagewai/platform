@@ -848,13 +848,14 @@ test.describe('Coordinator Task page', () => {
         ({
           ...taskDetail,
           record: { ...taskDetail.record, status: 'PLAN_PROPOSED' },
-          plan: null,
-          proposed_plan: taskPlan,
+          plan: { ...taskPlan, version: 1 },
+          proposed_plan: { ...taskPlan, version: 2 },
         }) satisfies TaskDetail,
     });
 
     await page.goto(`/tasks/${task.id}/plan`);
 
+    await expect(page.getByRole('heading', { name: /Plan version 2/ })).toBeVisible();
     await expect(page.getByTestId('plan-proposed')).toBeVisible();
     await expect(page.getByTestId('plan-step-step-1')).toBeVisible();
     await expect(page.getByText('waiting for your decision')).toBeVisible();

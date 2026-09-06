@@ -68,7 +68,7 @@ export default function TaskPlanPage({ params }: { params: Promise<{ id: string 
       <PlanError message={error} />
     );
   }
-  const plan = detail.plan ?? detail.proposed_plan;
+  const plan = detail.proposed_plan ?? detail.plan;
   if (plan === null) {
     return error === '' ? (
       <EmptyState
@@ -80,7 +80,7 @@ export default function TaskPlanPage({ params }: { params: Promise<{ id: string 
       <PlanError message={error} />
     );
   }
-  const proposed = detail.plan === null;
+  const proposed = detail.proposed_plan !== null;
 
   return (
     <div className="space-y-4">

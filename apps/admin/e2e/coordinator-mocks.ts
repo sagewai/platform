@@ -722,7 +722,7 @@ export const mirroredBlockDecisionThread = {
       text: 'Inspect the failed implementation evidence.',
       attention_id: 'att-1',
       attention_version: 1,
-      defaultable: false,
+      defaultable: null,
     }),
   ],
   open_question_ids: [],

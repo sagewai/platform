@@ -106,6 +106,16 @@ async def _seed_blocked_task_answer(app: Any) -> str:
     await TaskWriter(store).append(
         record,
         [
+            (TaskEventType.CYCLE_STARTED, {"cycle": 1, "scheduled_for": None}),
+            (
+                TaskEventType.STEP_WORK_STARTED,
+                {
+                    "step_id": "s3",
+                    "work_id": "w3",
+                    "issue_url": "https://github.com/o/r/issues/3",
+                    "base_sha": "a" * 40,
+                },
+            ),
             (
                 TaskEventType.COMMAND_RECEIPT,
                 {

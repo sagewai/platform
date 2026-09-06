@@ -310,6 +310,45 @@ def test_a_mirrored_block_is_a_decision_the_operator_answers() -> None:
     assert decided.entries[0].answered_by == "human"
 
 
+def test_a_control_degraded_mirror_stays_a_message() -> None:
+    view = thread_from_events(
+        (
+            _event(1, TaskEventType.TASK_CREATED, {"title": "Retry queue"}),
+            _event(
+                2,
+                TaskEventType.COMMAND_RECEIPT,
+                {
+                    "command_id": "mirror_attention:12",
+                    "kind": "mirror_attention",
+                    "payload": {
+                        "kind": "mirror_attention",
+                        "step_id": "s3",
+                        "work_id": "w3",
+                        "attention_kind": "CONTROL_DEGRADED",
+                        "attention_id": "degraded-1",
+                        "summary": "Verification backend failed.",
+                        "gate_id": None,
+                        "evidence_refs": [],
+                    },
+                },
+            ),
+            _event(
+                3,
+                TaskEventType.TASK_MESSAGE,
+                {
+                    "author": "coordinator",
+                    "text": "Verification backend failed.",
+                    "refs": ["w3"],
+                    "attention_id": "degraded-1",
+                },
+            ),
+        )
+    )
+
+    assert view.entries[0].kind == "message"
+    assert view.entries[0].attention_id is None
+
+
 def test_a_mirrored_work_gate_points_to_the_work_gate_route() -> None:
     view = thread_from_events(
         (

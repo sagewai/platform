@@ -15,8 +15,9 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
+from sagewai.work.models import SUPERSEDED
 from sagewai.work.tasks.budget import budget_breach
 from sagewai.work.tasks.decisions import TASK_GATES
 from sagewai.work.tasks.events import TaskEvent, TaskEventType
@@ -119,6 +120,16 @@ class SupersedeStep(_Command):
     reason: Literal["base_moved", "decision"] = "base_moved"
     decision_event_id: str | None = None
     decision: str | None = None
+
+    @model_validator(mode="after")
+    def _decision_fields(self) -> SupersedeStep:
+        carried = self.decision_event_id is not None and self.decision is not None
+        if (self.reason == "decision") != carried:
+            raise ValueError(
+                "a decision supersede carries its event id and decision; "
+                "a base move carries neither"
+            )
+        return self
 
 
 class RollbackWork(_Command):
@@ -409,7 +420,7 @@ def decide(
                 outcome="accepted",
                 merged_sha=active.merged_sha,
             )
-        if active.status == "WORK_BLOCKED" and active.work_id in state.decisions:
+        if active.work_id in state.decisions and active.status in {"WORK_BLOCKED", SUPERSEDED}:
             event_id, decision = state.decisions[active.work_id]
             return SupersedeStep(
                 step_id=active.step_id,

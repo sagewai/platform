@@ -39,6 +39,7 @@ from sagewai.work.tasks.models import (
 from sagewai.work.tasks.plan import clarification_request_entry, plan_from_events
 from sagewai.work.tasks.store import StaleTaskError, TaskStore
 from sagewai.work.tasks.templates import default_registry, get_template, validate_slots
+from sagewai.work.tasks.views import thread_from_events
 from sagewai.work.tasks.writer import Entry, TaskWriter, build_events, status_entry
 
 _MAX_TITLE = 200
@@ -355,6 +356,28 @@ class TaskService:
     ) -> TaskRecord:
         _task, record = await self._load(task_id, project_id=project_id)
         events = await self._store.read_events(task_id, project_id=project_id)
+        if any(
+            event.event_type is TaskEventType.DECISION_RECORDED
+            and event.payload_json["attention_id"] == attention_id
+            for event in events
+        ):
+            raise TaskDecisionError(f"attention {attention_id} was already decided")
+        state = fold_cycle(events, plan_version=record.plan_version)
+        entry = next(
+            (
+                item
+                for item in thread_from_events(events).entries
+                if item.kind == "decision"
+                and item.attention_id == attention_id
+                and item.answer is None
+                and not item.closed
+            ),
+            None,
+        )
+        if entry is None or attention_id not in state.mirrored:
+            raise TaskDecisionError(
+                f"no open clarification question or blocked Work named {attention_id}"
+            )
         mirror = next(
             (
                 event.payload_json["payload"]
@@ -364,22 +387,14 @@ class TaskService:
                 and event.payload_json["payload"]["attention_id"] == attention_id
                 and event.payload_json["payload"]["attention_kind"] == "WORK_BLOCKED"
             ),
-            None,
         )
-        if mirror is None:
-            raise TaskDecisionError(
-                f"no open clarification question or blocked Work named {attention_id}"
-            )
+        work_id = str(mirror["work_id"])
+        if work_id not in state.step_works.values() or work_id in state.superseded_works:
+            raise TaskDecisionError(f"blocked Work {work_id} is not this cycle's active Work")
         if attention_version != 1:
             raise TaskDecisionError(f"blocked Work {attention_id} was presented at version 1")
         if decision is None:
             raise TaskDecisionError("a decision on a blocked Work needs an answer")
-        if any(
-            event.event_type is TaskEventType.DECISION_RECORDED
-            and event.payload_json["attention_id"] == attention_id
-            for event in events
-        ):
-            raise TaskDecisionError(f"attention {attention_id} was already decided")
         if record.status is not TaskStatus.BLOCKED:
             raise TaskDecisionError(f"task {task_id} is {record.status.value}, not BLOCKED")
         entries: list[Entry] = [

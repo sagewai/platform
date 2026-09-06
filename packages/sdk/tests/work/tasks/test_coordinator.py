@@ -851,6 +851,33 @@ async def test_a_decided_blocked_work_is_superseded_with_the_decision(
     original = await work_store.load_work(runner.started[0], project_id=PROJECT)
     assert original.status == SUPERSEDED
 
+    from sagewai.work.tasks.decide import SupersedeStep, fold_cycle
+
+    command = SupersedeStep(
+        step_id="s1",
+        work_id=runner.started[0],
+        phase=None,
+        reason="decision",
+        decision_event_id=decided.id,
+        decision="retry: tool-channel misread",
+    )
+    started = list(runner.started)
+    state = fold_cycle(events, plan_version=record.plan_version)
+    record = await coordinator._supersede(task, record, command, state, epoch, replay=True)
+
+    assert runner.started == started
+    replayed_events = await task_store.read_events(task.id, project_id=PROJECT)
+    replayed = [
+        event
+        for event in replayed_events
+        if event.event_type is TaskEventType.STEP_WORK_SUPERSEDED
+    ][-1]
+    assert replayed.payload_json["superseded_by"] == replacement
+    replayed_items = await knowledge_store.find_by_source_ref(
+        f"task-decision://{decided.id}", project_id=PROJECT
+    )
+    assert len(replayed_items) == 1
+
 
 @pytest.mark.asyncio
 async def test_a_base_moved_work_is_superseded_and_rerun_on_the_new_head(
@@ -2195,6 +2222,57 @@ async def test_repository_lease_held_by_another_task_starts_no_side_effect(
     after_events = await task_store.read_events(task.id, project_id=PROJECT)
     assert after_events[: len(before_events)] == before_events
     assert after_events[-1].event_type is TaskEventType.ATTENTION_CHANGED
+
+
+@pytest.mark.asyncio
+async def test_repository_lease_holder_none_records_no_wait_attention(
+    stores, tmp_path, monkeypatch
+) -> None:
+    task_store, _ = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
+    monkeypatch.setattr(coordinator, "_now", lambda: NOW)
+    record = await TaskWriter(task_store).append(
+        record,
+        [
+            (
+                TaskEventType.PLAN_PROPOSED,
+                {
+                    "version": 1,
+                    "steps": [step.model_dump(mode="json") for step in _plan_result().steps],
+                    "acceptance_matrix": [
+                        item.model_dump(mode="json") for item in _plan_result().acceptance_matrix
+                    ],
+                },
+            ),
+            (TaskEventType.PLAN_ACCEPTED, {"version": 1}),
+            (TaskEventType.TASK_STATUS_CHANGED, {"status": TaskStatus.EXECUTING.value}),
+            (TaskEventType.CYCLE_STARTED, {"cycle": 1, "scheduled_for": None}),
+        ],
+        now=NOW,
+    )
+    assert await task_store.acquire_repository_lease(
+        task.repository_lease_key,
+        project_id=PROJECT,
+        task_id="another-task",
+        work_id=None,
+        ttl_seconds=3600,
+    )
+
+    async def no_current_holder(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(task_store, "repository_lease_holder", no_current_holder)
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
+    claimed = await task_store.load_record(task.id, project_id=PROJECT)
+    assert claimed is not None
+    before_events = await task_store.read_events(task.id, project_id=PROJECT)
+    after = await coordinator.drive(claimed, lease_epoch=epoch)
+
+    assert after == claimed
+    assert runner.created_issues == []
+    assert runner.started == []
+    assert await task_store.read_events(task.id, project_id=PROJECT) == before_events
 
 
 @pytest.mark.asyncio

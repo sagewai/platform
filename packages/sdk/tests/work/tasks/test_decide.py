@@ -18,6 +18,7 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
+from sagewai.work.models import SUPERSEDED
 from sagewai.work.tasks.budget import budget_breach, budget_used_from, worst_case_usd
 from sagewai.work.tasks.decide import (
     AssessCycle,
@@ -535,6 +536,69 @@ def test_a_decided_blocked_work_is_superseded_with_the_decision() -> None:
             decision="retry",
         )
     )
+
+
+def test_a_decided_superseded_work_replays_the_decision_supersede() -> None:
+    task = _task()
+    record = _record(task)
+    record, events = _apply(
+        record,
+        [
+            (
+                TaskEventType.PLAN_PROPOSED,
+                {
+                    "version": 1,
+                    "steps": [_step("s3", depends_on=[])],
+                    "acceptance_matrix": MATRIX,
+                },
+            ),
+            (TaskEventType.PLAN_ACCEPTED, {"version": 1}),
+            (TaskEventType.TASK_STATUS_CHANGED, {"status": TaskStatus.EXECUTING.value}),
+            (TaskEventType.CYCLE_STARTED, {"cycle": 1, "scheduled_for": None}),
+            (
+                TaskEventType.STEP_WORK_STARTED,
+                {"step_id": "s3", "work_id": "w3", "issue_url": "u", "base_sha": "a" * 40},
+            ),
+            (
+                TaskEventType.DECISION_RECORDED,
+                {
+                    "attention_id": "att-1",
+                    "work_id": "w3",
+                    "step_id": "s3",
+                    "decision": "retry",
+                },
+            ),
+        ],
+    )
+    active = StepWorkState(step_id="s3", work_id="w3", status=SUPERSEDED)
+
+    assert decide(task, record, events, {"s3": active}, budget_used=BudgetUsed(), now=NOW) == (
+        SupersedeStep(
+            step_id="s3",
+            work_id="w3",
+            phase=None,
+            reason="decision",
+            decision_event_id=events[-1].id,
+            decision="retry",
+        )
+    )
+
+
+def test_a_decision_supersede_carries_its_decision_fields() -> None:
+    message = (
+        "a decision supersede carries its event id and decision; "
+        "a base move carries neither"
+    )
+    with pytest.raises(ValueError, match=message):
+        SupersedeStep(step_id="s", work_id="w", phase=None, reason="decision")
+    with pytest.raises(ValueError, match=message):
+        SupersedeStep(
+            step_id="s",
+            work_id="w",
+            phase="publish",
+            decision="x",
+            decision_event_id="e",
+        )
 
 
 def test_plan_accepted_without_a_cycle_starts_cycle_one() -> None:

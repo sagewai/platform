@@ -80,6 +80,10 @@ async def build_report_stack(
     credential_values: Mapping[str, str] | None = None,
 ) -> ReportStack:
     """Every controller in this stack validates against a scratch workspace."""
+    if planner_runtime not in PLANNER_RUNTIMES:
+        raise ValueError(
+            f"planner runtime {planner_runtime.value} needs harness tiers; use codex or claude"
+        )
     if engine is None:
         await factory.ensure_schema()
         engine = factory.get_engine()
@@ -140,10 +144,6 @@ async def build_report_stack(
         credential_values=credential_values,
     )
     analysis_runtime = ClaudeRuntime(activity_sink=activity_sink, artifact_store=artifact_store)
-    if planner_runtime not in PLANNER_RUNTIMES:
-        raise ValueError(
-            f"planner runtime {planner_runtime.value} needs harness tiers; use codex or claude"
-        )
     if planner_runtime is RuntimeRef.CODEX:
         defaults = await task_store.get_defaults(project_id=project_id)
         planner = CodexRuntime(

@@ -1002,7 +1002,8 @@ def test_the_docker_backend_failure_names_its_cause(monkeypatch) -> None:
     with pytest.raises(VerificationIsolationError, match="unix:///nowhere.sock"):
         _docker_backend()
 
-    monkeypatch.setitem(sys.modules, "sagewai.sandbox.docker_backend", None)
+    monkeypatch.delitem(sys.modules, "sagewai.sandbox.docker_backend", raising=False)
+    monkeypatch.setitem(sys.modules, "aiodocker", None)
     with pytest.raises(VerificationIsolationError, match=r"install sagewai\[sandbox\]"):
         _docker_backend()
 
