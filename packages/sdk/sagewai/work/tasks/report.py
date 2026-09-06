@@ -147,6 +147,7 @@ class ReportProfileRunner:
         issue_url: str,
         base_sha: str | None,
         evidence_refs: tuple[str, ...] = (),
+        constraints: tuple[str, ...] = (),
     ) -> WorkRecord:
         stack = await self._stack(task)
         return await stack.lifecycle.start(
@@ -157,6 +158,7 @@ class ReportProfileRunner:
             step=step,
             source_ref=issue_url,
             evidence_refs=evidence_refs,
+            constraints=constraints,
         )
 
     async def resume(self, task: Task, *, cycle: int, work_id: str) -> WorkRecord:

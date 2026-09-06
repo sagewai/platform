@@ -19,6 +19,7 @@ from typing import Any, Protocol
 from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.work.activity import WorkActivityStore
 from sagewai.work.events import WorkEvent, WorkEventType
+from sagewai.work.knowledge import KnowledgeItem, KnowledgeKind, KnowledgeStore
 from sagewai.work.models import (
     SUPERSEDED,
     ActionRequest,
@@ -247,6 +248,7 @@ class ProfileRunner(Protocol):
         issue_url: str,
         base_sha: str | None,
         evidence_refs: tuple[str, ...] = (),
+        constraints: tuple[str, ...] = (),
     ) -> WorkRecord: ...
 
     async def resume(self, task: Task, *, cycle: int, work_id: str) -> WorkRecord: ...
@@ -282,6 +284,7 @@ class TaskCoordinator:
         *,
         task_store: TaskStore,
         work_store: WorkStore,
+        knowledge_store: KnowledgeStore,
         profile_runners: Callable[[Task], ProfileRunner],
         artifact_store: LocalArtifactStore | None = None,
         activity_store: WorkActivityStore | None = None,
@@ -292,6 +295,7 @@ class TaskCoordinator:
     ) -> None:
         self._task_store = task_store
         self._work_store = work_store
+        self._knowledge_store = knowledge_store
         self._profile_runners = profile_runners
         self._artifacts = artifact_store or LocalArtifactStore()
         self._command_failures: dict[tuple[str, str], int] = {}
@@ -1713,7 +1717,13 @@ class TaskCoordinator:
     ) -> TaskRecord:
         step = next(step for step in state.plan.steps if step.id == command.step_id)
         issue_url = state.issue_urls[step.id]
-        evidence = await self._supersede_evidence(task, command.work_id)
+        if command.reason == "decision":
+            assert command.decision_event_id is not None and command.decision is not None
+            evidence = (f"task-decision://{command.decision_event_id}",)
+            constraints = (command.decision,)
+        else:
+            evidence = await self._supersede_evidence(task, command.work_id)
+            constraints = ()
         profile = self._profile_for(task)
         base_sha = await profile.base_sha(task)
         replacement = await profile.find_work(task, issue_url=issue_url, exclude=command.work_id)
@@ -1725,6 +1735,7 @@ class TaskCoordinator:
                 issue_url=issue_url,
                 base_sha=base_sha,
                 evidence_refs=evidence,
+                constraints=constraints,
             )
         else:
             base_sha = replacement.profile_context.get("base_sha", base_sha)
@@ -1733,9 +1744,26 @@ class TaskCoordinator:
             work_id=command.work_id,
             project_id=task.project_id,
             superseded_by=replacement.work_id,
-            reason="base_moved",
+            reason=command.reason,
             actor_ref="coordinator",
         )
+        if command.reason == "decision" and not await self._knowledge_store.find_by_source_ref(
+            evidence[0], project_id=task.project_id
+        ):
+            # A replayed command (section 8.1) finds the item its first run published.
+            await self._knowledge_store.publish(
+                KnowledgeItem(
+                    id=f"task-decision:{command.decision_event_id}",
+                    project_id=task.project_id,
+                    work_id=replacement.work_id,
+                    kind=KnowledgeKind.DECISION,
+                    statement=command.decision,
+                    source_refs=evidence,
+                    factness_score=100,
+                    created_by="coordinator",
+                    created_at=self._now(),
+                )
+            )
         entries: list[Entry] = [
             (
                 TaskEventType.STEP_WORK_SUPERSEDED,
@@ -1743,7 +1771,7 @@ class TaskCoordinator:
                     "step_id": step.id,
                     "work_id": command.work_id,
                     "superseded_by": replacement.work_id,
-                    "reason": "base_moved",
+                    "reason": command.reason,
                 },
             ),
             (

@@ -570,10 +570,10 @@ async def post_task_answer(task_id: str, request: Request, body: _AnswerBody) ->
     project_id = _task_project_scope(request)
     service: TaskService = request.app.state.task_service
     with _service_errors():
-        record = await service.answer_clarification(
+        record = await service.answer_attention(
             task_id,
             project_id=project_id,
-            question_id=body.attention_id,
+            attention_id=body.attention_id,
             attention_version=body.attention_version,
             answer=body.answer,
             actor_ref=_actor_ref(request),

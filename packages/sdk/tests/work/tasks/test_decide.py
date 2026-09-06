@@ -435,6 +435,108 @@ def test_mirrored_attention_ids_are_suppressed_but_new_ids_mirror_again(event_ty
     )
 
 
+def test_fold_cycle_records_decisions_by_work_and_resets_per_cycle() -> None:
+    task = _task()
+    record = _record(task)
+    record, events = _apply(
+        record,
+        [
+            (
+                TaskEventType.PLAN_PROPOSED,
+                {
+                    "version": 1,
+                    "steps": [_step("s3", depends_on=[])],
+                    "acceptance_matrix": MATRIX,
+                },
+            ),
+            (TaskEventType.PLAN_ACCEPTED, {"version": 1}),
+            (TaskEventType.TASK_STATUS_CHANGED, {"status": TaskStatus.EXECUTING.value}),
+            (TaskEventType.CYCLE_STARTED, {"cycle": 1, "scheduled_for": None}),
+            (
+                TaskEventType.STEP_WORK_STARTED,
+                {"step_id": "s3", "work_id": "w3", "issue_url": "u", "base_sha": "a" * 40},
+            ),
+        ],
+    )
+    record, events = _extend(
+        record,
+        events,
+        [
+            (
+                TaskEventType.DECISION_RECORDED,
+                {
+                    "attention_id": "att-1",
+                    "work_id": "w3",
+                    "step_id": "s3",
+                    "decision": "retry",
+                },
+            )
+        ],
+    )
+    decision_event = events[-1]
+
+    state = fold_cycle(events, plan_version=1)
+
+    assert state.decisions == {"w3": (decision_event.id, "retry")}
+    record, events = _extend(
+        record, events, [(TaskEventType.CYCLE_STARTED, {"cycle": 2, "scheduled_for": None})]
+    )
+    assert fold_cycle(events, plan_version=1).decisions == {}
+
+
+def test_a_decided_blocked_work_is_superseded_with_the_decision() -> None:
+    task = _task()
+    record = _record(task)
+    record, events = _apply(
+        record,
+        [
+            (
+                TaskEventType.PLAN_PROPOSED,
+                {
+                    "version": 1,
+                    "steps": [_step("s3", depends_on=[])],
+                    "acceptance_matrix": MATRIX,
+                },
+            ),
+            (TaskEventType.PLAN_ACCEPTED, {"version": 1}),
+            (TaskEventType.TASK_STATUS_CHANGED, {"status": TaskStatus.EXECUTING.value}),
+            (TaskEventType.CYCLE_STARTED, {"cycle": 1, "scheduled_for": None}),
+            (
+                TaskEventType.STEP_WORK_STARTED,
+                {"step_id": "s3", "work_id": "w3", "issue_url": "u", "base_sha": "a" * 40},
+            ),
+            (
+                TaskEventType.DECISION_RECORDED,
+                {
+                    "attention_id": "att-1",
+                    "work_id": "w3",
+                    "step_id": "s3",
+                    "decision": "retry",
+                },
+            ),
+        ],
+    )
+    active = StepWorkState(
+        step_id="s3",
+        work_id="w3",
+        status="WORK_BLOCKED",
+        attention_kind="WORK_BLOCKED",
+        attention_id="att-1",
+        attention_summary="blocked",
+    )
+
+    assert decide(task, record, events, {"s3": active}, budget_used=BudgetUsed(), now=NOW) == (
+        SupersedeStep(
+            step_id="s3",
+            work_id="w3",
+            phase=None,
+            reason="decision",
+            decision_event_id=events[-1].id,
+            decision="retry",
+        )
+    )
+
+
 def test_plan_accepted_without_a_cycle_starts_cycle_one() -> None:
     task = _task()
     record = _record(task)

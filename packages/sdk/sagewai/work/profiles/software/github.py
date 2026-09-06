@@ -658,6 +658,7 @@ class GitHubIssueLifecycle:
         project_id: str,
         base_sha: str,
         evidence_refs: tuple[str, ...] = (),
+        constraints: tuple[str, ...] = (),
     ) -> WorkRecord:
         """Start the Work for one issue; extra evidence joins the issue on the contract."""
         issue = await self._github.fetch_issue(issue_url)
@@ -666,6 +667,7 @@ class GitHubIssueLifecycle:
             project_id=project_id,
             base_sha=base_sha,
             evidence_refs=evidence_refs,
+            constraints=constraints,
         )
 
     async def intake_labeled(
@@ -704,6 +706,7 @@ class GitHubIssueLifecycle:
         project_id: str,
         base_sha: str,
         evidence_refs: tuple[str, ...] = (),
+        constraints: tuple[str, ...] = (),
     ) -> WorkRecord:
         """Create canonical Work for one fetched issue and run through the merge gate."""
         if issue.project_id != project_id:
@@ -746,7 +749,7 @@ class GitHubIssueLifecycle:
                     verification_kind="profile",
                 ),
             ),
-            constraints=(),
+            constraints=constraints,
             non_goals=(),
             evidence_refs=(issue.url, *evidence_refs),
             assumption_ids=(),

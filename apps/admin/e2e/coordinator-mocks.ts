@@ -710,6 +710,25 @@ export const answeredThread = {
   pending_gate: null,
 } satisfies TaskThread;
 
+export const mirroredBlockDecisionThread = {
+  ...thread,
+  entries: [
+    threadEntry({
+      id: '7',
+      sequence: 7,
+      author: 'system',
+      actor_ref: 'coordinator',
+      kind: 'decision',
+      text: 'Inspect the failed implementation evidence.',
+      attention_id: 'att-1',
+      attention_version: 1,
+      defaultable: false,
+    }),
+  ],
+  open_question_ids: [],
+  pending_gate: null,
+} satisfies TaskThread;
+
 const answerHandlers: Handlers = {
   [`/api/v1/tasks/${taskDetailTask.id}/answers`]: () => needsYouTask,
 };

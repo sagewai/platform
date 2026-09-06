@@ -19,6 +19,7 @@ import pytest
 
 from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.work.events import WorkEvent, WorkEventType
+from sagewai.work.knowledge import KnowledgeKind, KnowledgeStore
 from sagewai.work.models import (
     SUPERSEDED,
     ActionRequest,
@@ -75,6 +76,7 @@ class FakeProfileRunner:
         self.started: list[str] = []
         self.resumed: list[str] = []
         self.evidence: list[tuple[str, ...]] = []
+        self.constraints: list[tuple[str, ...]] = []
         self.merged = False
         self.plan_result = plan_result
         self.plan_error: Exception | None = None
@@ -131,10 +133,21 @@ class FakeProfileRunner:
             return record
         return None
 
-    async def start(self, task, *, cycle, step, issue_url, base_sha, evidence_refs=()):
+    async def start(
+        self,
+        task,
+        *,
+        cycle,
+        step,
+        issue_url,
+        base_sha,
+        evidence_refs=(),
+        constraints=(),
+    ):
         work_id = f"w-{step.id}-{len(self.started) + 1}"
         self.started.append(work_id)
         self.evidence.append(tuple(evidence_refs))
+        self.constraints.append(tuple(constraints))
         record = await self._save(
             task,
             work_id,
@@ -385,7 +398,14 @@ async def stores(dialect_engine):  # noqa: F811
     return task_store, work_store
 
 
-async def _seed(stores, tmp_path, *, plan_auto: bool = True, origin: TaskOrigin = TaskOrigin.HUMAN):
+async def _seed(
+    stores,
+    tmp_path,
+    *,
+    plan_auto: bool = True,
+    origin: TaskOrigin = TaskOrigin.HUMAN,
+    knowledge_store: KnowledgeStore | None = None,
+):
     from sagewai.artifacts.object_store import LocalArtifactStore
 
     task_store, work_store = stores
@@ -404,12 +424,16 @@ async def _seed(stores, tmp_path, *, plan_auto: bool = True, origin: TaskOrigin 
             update={"authority": task.authority.model_copy(update={"plan": GateMode.AUTO})}
         )
     runner = FakeProfileRunner(work_store, plan_result=_plan_result())
+    if knowledge_store is None:
+        knowledge_store = KnowledgeStore(engine=task_store._engine)
+        await knowledge_store.init()
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,
         profile_runners=lambda _task: runner,
         artifact_store=artifacts,
         decision_channels=(ConsoleDecisionChannel(),),
+        knowledge_store=knowledge_store,
     )
     return task, record, runner, coordinator
 
@@ -758,6 +782,74 @@ async def test_a_blocked_step_work_blocks_the_task_and_presents_the_decision(
         "summary",
         "evidence_refs",
     }
+
+
+@pytest.mark.asyncio
+async def test_a_decided_blocked_work_is_superseded_with_the_decision(
+    stores, tmp_path, monkeypatch, dialect_engine  # noqa: F811
+) -> None:
+    task_store, work_store = stores
+    knowledge_store = KnowledgeStore(engine=dialect_engine)
+    await knowledge_store.init()
+    task, record, runner, coordinator = await _seed(
+        stores, tmp_path, knowledge_store=knowledge_store
+    )
+    runner.statuses["s1"] = "WORK_BLOCKED"
+    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
+    record = await coordinator.drive(record, lease_epoch=epoch)
+    await work_store.append_event(
+        WorkEvent(
+            id="e1",
+            project_id=PROJECT,
+            work_id=runner.started[-1],
+            sequence=1,
+            event_type=WorkEventType.WORK_BLOCKED,
+            actor_type="system",
+            actor_ref="test",
+            payload_json={
+                "reason": "needs a decision",
+                "decision_request": "choose the queue",
+            },
+            created_at=NOW,
+        )
+    )
+    record = await coordinator.drive(record, lease_epoch=epoch)
+    assert record.status is TaskStatus.BLOCKED
+
+    runner.statuses["s1"] = "WORK_BLOCKED"
+    record = await TaskService(
+        store=task_store, artifact_store=LocalArtifactStore(root=tmp_path / "objects")
+    ).answer_attention(
+        task.id,
+        project_id=PROJECT,
+        attention_id="e1",
+        attention_version=1,
+        answer="retry: tool-channel misread",
+        actor_ref="human:arda",
+    )
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    assert record.status is TaskStatus.EXECUTING
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    replaced = next(
+        event
+        for event in events
+        if event.event_type is TaskEventType.STEP_WORK_SUPERSEDED
+    )
+    assert replaced.payload_json["reason"] == "decision"
+    replacement = replaced.payload_json["superseded_by"]
+    decided = next(event for event in events if event.event_type is TaskEventType.DECISION_RECORDED)
+    replacement_index = runner.started.index(replacement)
+    assert runner.evidence[replacement_index] == (f"task-decision://{decided.id}",)
+    assert runner.constraints[replacement_index] == ("retry: tool-channel misread",)
+    items = await knowledge_store.find_by_source_ref(
+        f"task-decision://{decided.id}", project_id=PROJECT
+    )
+    assert len(items) == 1
+    assert items[0].kind is KnowledgeKind.DECISION and items[0].factness_score == 100
+    original = await work_store.load_work(runner.started[0], project_id=PROJECT)
+    assert original.status == SUPERSEDED
 
 
 @pytest.mark.asyncio
@@ -1649,9 +1741,12 @@ async def test_pruning_activity_includes_superseded_step_works(stores, tmp_path)
         async def prune(self, **kwargs) -> None:
             calls.append(kwargs)
 
+    knowledge_store = KnowledgeStore(engine=task_store._engine)
+    await knowledge_store.init()
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,
+        knowledge_store=knowledge_store,
         profile_runners=lambda _task: runner,
         activity_store=Activity(),
     )

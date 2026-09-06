@@ -302,6 +302,101 @@ class TaskService:
         writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
         return await writer.append(record, entries, now=now)
 
+    async def answer_attention(
+        self,
+        task_id: str,
+        *,
+        project_id: str,
+        attention_id: str,
+        attention_version: int,
+        answer: str | None,
+        actor_ref: str,
+        now: datetime | None = None,
+    ) -> TaskRecord:
+        """Section 17's one answer route.
+
+        A question's id answers it; a mirrored blocked Work's id records the decision that
+        supersedes it (section 8.4).
+        """
+        events = await self._store.read_events(task_id, project_id=project_id)
+        if any(
+            str(question["id"]) == attention_id
+            for question, _deadline in open_questions(events)
+        ):
+            return await self.answer_clarification(
+                task_id,
+                project_id=project_id,
+                question_id=attention_id,
+                attention_version=attention_version,
+                answer=answer,
+                actor_ref=actor_ref,
+                now=now,
+            )
+        return await self.decide_blocked_work(
+            task_id,
+            project_id=project_id,
+            attention_id=attention_id,
+            attention_version=attention_version,
+            decision=answer,
+            actor_ref=actor_ref,
+            now=now,
+        )
+
+    async def decide_blocked_work(
+        self,
+        task_id: str,
+        *,
+        project_id: str,
+        attention_id: str,
+        attention_version: int,
+        decision: str | None,
+        actor_ref: str,
+        now: datetime | None = None,
+    ) -> TaskRecord:
+        _task, record = await self._load(task_id, project_id=project_id)
+        events = await self._store.read_events(task_id, project_id=project_id)
+        mirror = next(
+            (
+                event.payload_json["payload"]
+                for event in reversed(events)
+                if event.event_type is TaskEventType.COMMAND_RECEIPT
+                and event.payload_json["kind"] == "mirror_attention"
+                and event.payload_json["payload"]["attention_id"] == attention_id
+                and event.payload_json["payload"]["attention_kind"] == "WORK_BLOCKED"
+            ),
+            None,
+        )
+        if mirror is None:
+            raise TaskDecisionError(
+                f"no open clarification question or blocked Work named {attention_id}"
+            )
+        if attention_version != 1:
+            raise TaskDecisionError(f"blocked Work {attention_id} was presented at version 1")
+        if decision is None:
+            raise TaskDecisionError("a decision on a blocked Work needs an answer")
+        if any(
+            event.event_type is TaskEventType.DECISION_RECORDED
+            and event.payload_json["attention_id"] == attention_id
+            for event in events
+        ):
+            raise TaskDecisionError(f"attention {attention_id} was already decided")
+        if record.status is not TaskStatus.BLOCKED:
+            raise TaskDecisionError(f"task {task_id} is {record.status.value}, not BLOCKED")
+        entries: list[Entry] = [
+            (
+                TaskEventType.DECISION_RECORDED,
+                {
+                    "attention_id": attention_id,
+                    "work_id": str(mirror["work_id"]),
+                    "step_id": str(mirror["step_id"]),
+                    "decision": decision,
+                },
+            ),
+            status_entry(record, TaskStatus.EXECUTING),
+        ]
+        writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
+        return await writer.append(record, entries, now=now)
+
     async def add_message(
         self,
         task_id: str,

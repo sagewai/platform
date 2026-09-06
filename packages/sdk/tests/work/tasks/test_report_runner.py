@@ -17,6 +17,7 @@ from types import SimpleNamespace
 import pytest
 
 from sagewai.artifacts.object_store import LocalArtifactStore
+from sagewai.work.knowledge import KnowledgeStore
 from sagewai.work.models import SUPERSEDED, ActionRequest, ActionResult, WorkRecord
 from sagewai.work.store import WorkStore
 from sagewai.work.tasks.actions import DeliveryReceipt, deliver_action
@@ -118,10 +119,21 @@ class FakeReportProfileRunner(FakeProfileRunner):
         self.created_issues.append((step.id, url))
         return url
 
-    async def start(self, task, *, cycle, step, issue_url, base_sha, evidence_refs=()):
+    async def start(
+        self,
+        task,
+        *,
+        cycle,
+        step,
+        issue_url,
+        base_sha,
+        evidence_refs=(),
+        constraints=(),
+    ):
         work_id = f"{task.id}:report:{cycle}:{step.id}"
         self.started.append(work_id)
         self.evidence.append(tuple(evidence_refs))
+        self.constraints.append(tuple(constraints))
         action = deliver_action(
             task.project_id,
             work_id=work_id,
@@ -223,9 +235,12 @@ async def _seed_report(stores, tmp_path):
         update={"authority": task.authority.model_copy(update={"plan": GateMode.AUTO})}
     )
     runner = FakeReportProfileRunner(work_store, plan_result=_report_plan())
+    knowledge_store = KnowledgeStore(engine=task_store._engine)
+    await knowledge_store.init()
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,
+        knowledge_store=knowledge_store,
         profile_runners=lambda _task: runner,
         artifact_store=artifacts,
         decision_channels=(ConsoleDecisionChannel(),),
@@ -436,9 +451,12 @@ async def test_the_selector_sends_each_task_to_its_own_runner(
     task_store, work_store = stores
     software_task, software_record, software_runner, _ = await _seed(stores, tmp_path)
     report_task, report_record, report_runner, _ = await _seed_report(stores, tmp_path)
+    knowledge_store = KnowledgeStore(engine=task_store._engine)
+    await knowledge_store.init()
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,
+        knowledge_store=knowledge_store,
         profile_runners=lambda task: report_runner if task.profile == "report" else software_runner,
         artifact_store=LocalArtifactStore(root=tmp_path / "objects"),
         decision_channels=(ConsoleDecisionChannel(),),

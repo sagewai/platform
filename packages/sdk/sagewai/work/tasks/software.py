@@ -196,6 +196,7 @@ class SoftwareProfileRunner:
         issue_url: str,
         base_sha: str | None,
         evidence_refs: tuple[str, ...] = (),
+        constraints: tuple[str, ...] = (),
     ) -> WorkRecord:
         lifecycle = self._lifecycle(task, await self._stack(task))
         try:
@@ -204,6 +205,7 @@ class SoftwareProfileRunner:
                 project_id=task.project_id,
                 base_sha=base_sha,
                 evidence_refs=evidence_refs,
+                constraints=constraints,
             )
         except BaseMovedError:
             return await lifecycle.start(
@@ -211,6 +213,7 @@ class SoftwareProfileRunner:
                 project_id=task.project_id,
                 base_sha=await self.base_sha(task),
                 evidence_refs=evidence_refs,
+                constraints=constraints,
             )
 
     async def resume(self, task: Task, *, cycle: int, work_id: str) -> WorkRecord:

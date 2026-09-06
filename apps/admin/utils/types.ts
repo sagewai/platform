@@ -1096,6 +1096,7 @@ export type ThreadEntryKind =
   | 'brief'
   | 'message'
   | 'question'
+  | 'decision'
   | 'gate'
   | 'plan'
   | 'output'
@@ -1109,7 +1110,7 @@ export interface ThreadEntry {
   actor_ref: string | null;
   kind: ThreadEntryKind;
   text: string;
-  /** The two fields `POST /answers` takes; both null on an entry that is not a question. */
+  /** The two fields `POST /answers` takes; both null outside questions and decisions. */
   attention_id: string | null;
   attention_version: number | null;
   answer: string | null;

@@ -214,6 +214,34 @@ def test_terminal_tasks_close_unanswered_questions_and_undecided_gates() -> None
             ),
             _event(
                 4,
+                TaskEventType.COMMAND_RECEIPT,
+                {
+                    "command_id": "mirror_attention:12",
+                    "kind": "mirror_attention",
+                    "payload": {
+                        "kind": "mirror_attention",
+                        "step_id": "s3",
+                        "work_id": "w3",
+                        "attention_kind": "WORK_BLOCKED",
+                        "attention_id": "att-1",
+                        "summary": "Inspect the failed implementation evidence.",
+                        "gate_id": None,
+                        "evidence_refs": [],
+                    },
+                },
+            ),
+            _event(
+                5,
+                TaskEventType.TASK_MESSAGE,
+                {
+                    "author": "coordinator",
+                    "text": "Inspect the failed implementation evidence.",
+                    "refs": ["w3"],
+                    "attention_id": "att-1",
+                },
+            ),
+            _event(
+                6,
                 TaskEventType.TASK_STATUS_CHANGED,
                 {"status": TaskStatus.CANCELLED.value},
             ),
@@ -222,10 +250,64 @@ def test_terminal_tasks_close_unanswered_questions_and_undecided_gates() -> None
 
     questions = [entry for entry in view.entries if entry.kind == "question"]
     gate = next(entry for entry in view.entries if entry.kind == "gate")
+    decision = next(entry for entry in view.entries if entry.kind == "decision")
     assert view.pending_gate is None
     assert view.open_question_ids == ()
     assert [entry.closed for entry in questions] == [True, True]
     assert gate.closed is True
+    assert decision.closed is True
+
+
+def test_a_mirrored_block_is_a_decision_the_operator_answers() -> None:
+    view_events = (
+        _event(1, TaskEventType.TASK_CREATED, {"title": "Harder game"}),
+        _event(
+            2,
+            TaskEventType.COMMAND_RECEIPT,
+            {
+                "command_id": "mirror_attention:12",
+                "kind": "mirror_attention",
+                "payload": {
+                    "kind": "mirror_attention",
+                    "step_id": "s3",
+                    "work_id": "w3",
+                    "attention_kind": "WORK_BLOCKED",
+                    "attention_id": "att-1",
+                    "summary": "Inspect the failed implementation evidence.",
+                    "gate_id": None,
+                    "evidence_refs": [],
+                },
+            },
+        ),
+        _event(
+            3,
+            TaskEventType.TASK_MESSAGE,
+            {
+                "author": "coordinator",
+                "text": "Inspect the failed implementation evidence.",
+                "refs": ["w3"],
+                "attention_id": "att-1",
+            },
+        ),
+    )
+    view = thread_from_events(view_events)
+    entry = view.entries[0]
+    assert entry.kind == "decision"
+    assert entry.attention_id == "att-1" and entry.attention_version == 1
+    assert entry.answer is None and not entry.closed
+
+    decided = thread_from_events(
+        (
+            *view_events,
+            _event(
+                4,
+                TaskEventType.DECISION_RECORDED,
+                {"attention_id": "att-1", "work_id": "w3", "step_id": "s3", "decision": "retry"},
+            ),
+        )
+    )
+    assert decided.entries[0].answer == "retry"
+    assert decided.entries[0].answered_by == "human"
 
 
 def test_a_mirrored_work_gate_points_to_the_work_gate_route() -> None:

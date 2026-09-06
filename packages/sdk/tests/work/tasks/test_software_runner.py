@@ -22,6 +22,7 @@ import pytest
 import sagewai.work.profiles.software.assembly as software_assembly
 from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.harness.discovery import DiscoveredServer
+from sagewai.work.knowledge import KnowledgeStore
 from sagewai.work.models import (
     CriterionVerification,
     ProposedAcceptanceCriterion,
@@ -404,9 +405,12 @@ async def test_concurrent_software_tasks_meter_into_their_own_ledgers(
     monkeypatch.setattr("sagewai.work.tasks.software.TaskPlanner", ReservingPlanner)
     profile = _runner(work_store, RecordingGitHub(), engine=dialect_engine)
     monkeypatch.setattr(profile, "base_sha", fake_base_sha)
+    knowledge_store = KnowledgeStore(engine=dialect_engine)
+    await knowledge_store.init()
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,
+        knowledge_store=knowledge_store,
         profile_runners=lambda _task: profile,
         artifact_store=artifacts,
     )

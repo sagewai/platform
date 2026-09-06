@@ -753,6 +753,115 @@ async def test_defaulting_a_question_without_a_default_is_refused(
     assert unchanged == record
 
 
+async def _seed_blocked_on_work(
+    service: TaskService,
+    store: TaskStore,
+    *,
+    attention_id: str,
+    work_id: str,
+):
+    task, record = await service.create(
+        SOFTWARE_BRIEF,
+        project_id="project-a",
+        origin=TaskOrigin.HUMAN,
+        created_by="arda",
+        now=NOW,
+    )
+    record = await TaskWriter(store).append(
+        record,
+        [
+            (
+                TaskEventType.COMMAND_RECEIPT,
+                {
+                    "command_id": "mirror_attention:12",
+                    "kind": "mirror_attention",
+                    "payload": {
+                        "kind": "mirror_attention",
+                        "step_id": "s3",
+                        "work_id": work_id,
+                        "attention_kind": "WORK_BLOCKED",
+                        "attention_id": attention_id,
+                        "summary": "Inspect the failed implementation evidence.",
+                        "gate_id": None,
+                        "evidence_refs": [],
+                    },
+                },
+            ),
+            (
+                TaskEventType.TASK_MESSAGE,
+                {
+                    "author": "coordinator",
+                    "text": "Inspect the failed implementation evidence.",
+                    "refs": [work_id],
+                    "attention_id": attention_id,
+                },
+            ),
+            status_entry(record, TaskStatus.BLOCKED),
+        ],
+        now=NOW,
+    )
+    return task, record
+
+
+@pytest.mark.asyncio
+async def test_a_bound_answer_to_a_blocked_work_records_the_decision(
+    service: TaskService, store: TaskStore
+) -> None:
+    task, _record = await _seed_blocked_on_work(
+        service, store, attention_id="att-1", work_id="w3"
+    )
+
+    record = await service.answer_attention(
+        task.id,
+        project_id="project-a",
+        attention_id="att-1",
+        attention_version=1,
+        answer="Retry: the implementer misread its tool channel; nothing to decide.",
+        actor_ref="human:arda",
+    )
+
+    assert record.status is TaskStatus.EXECUTING
+    events = await store.read_events(task.id, project_id="project-a")
+    decided = next(
+        event for event in events if event.event_type is TaskEventType.DECISION_RECORDED
+    )
+    assert decided.payload_json == {
+        "attention_id": "att-1",
+        "work_id": "w3",
+        "step_id": "s3",
+        "decision": "Retry: the implementer misread its tool channel; nothing to decide.",
+    }
+    with pytest.raises(TaskDecisionError, match="already decided"):
+        await service.answer_attention(
+            task.id,
+            project_id="project-a",
+            attention_id="att-1",
+            attention_version=1,
+            answer="again",
+            actor_ref="human:arda",
+        )
+
+
+@pytest.mark.asyncio
+async def test_an_answer_names_a_question_or_a_mirrored_block(
+    service: TaskService, store: TaskStore
+) -> None:
+    task, _record = await _seed_blocked_on_work(
+        service, store, attention_id="att-1", work_id="w3"
+    )
+    with pytest.raises(
+        TaskDecisionError, match="no open clarification question or blocked Work"
+    ):
+        await service.answer_attention(
+            task.id,
+            project_id="project-a",
+            attention_id="nope",
+            attention_version=1,
+            answer="x",
+            actor_ref="human:arda",
+        )
+
+
 STEP = {
     "id": "s1",
     "title": "Add the retry queue",

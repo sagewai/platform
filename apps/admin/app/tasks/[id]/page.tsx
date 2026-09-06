@@ -142,12 +142,16 @@ export default function TaskThreadPage({ params }: { params: Promise<{ id: strin
                   <span>{new Date(entry.at).toLocaleString()}</span>
                 </div>
                 <p className="m-0 mt-1 whitespace-pre-wrap text-sm">{entry.text}</p>
-                {entry.kind === 'question' &&
+                {(entry.kind === 'question' || entry.kind === 'decision') &&
                   entry.attention_id !== null &&
                   entry.attention_version !== null &&
                   (entry.answer !== null || entry.answered_by !== null ? (
                     <p className="m-0 mt-2 text-sm">
-                      {entry.answered_by === 'default' ? 'Defaulted: ' : 'Answered: '}
+                      {entry.kind === 'decision'
+                        ? 'Decided: '
+                        : entry.answered_by === 'default'
+                          ? 'Defaulted: '
+                          : 'Answered: '}
                       {entry.answer ?? 'the recorded default'}
                     </p>
                   ) : (
@@ -156,8 +160,8 @@ export default function TaskThreadPage({ params }: { params: Promise<{ id: strin
                         taskId={id}
                         attentionId={entry.attention_id}
                         attentionVersion={entry.attention_version}
-                        defaultable={entry.defaultable === true}
-                        deadlineAt={entry.deadline_at}
+                        defaultable={entry.kind === 'question' && entry.defaultable === true}
+                        deadlineAt={entry.kind === 'question' ? entry.deadline_at : null}
                         onAnswered={() => setReloads((count) => count + 1)}
                         onError={setAnswerError}
                       />

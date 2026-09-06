@@ -11,6 +11,7 @@ import {
   deliverAction,
   failedMergeAction,
   mergeAction,
+  mirroredBlockDecisionThread,
   mirroredGateTask,
   mirroredGateThread,
   mockCoordinatorApi,
@@ -443,6 +444,35 @@ test.describe('Coordinator Task page', () => {
       { attention_id: 'q-scope', attention_version: 2, answer: 'main' },
     ]);
     expect(scopes).toEqual([project.id]);
+  });
+
+  test('answers a mirrored block as a decision', async ({ page }) => {
+    const bodies: unknown[] = [];
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}/thread`]: () => mirroredBlockDecisionThread,
+    });
+    await mockTaskStream(page);
+    page.on('request', (request) => {
+      if (request.url().endsWith('/answers')) {
+        bodies.push(JSON.parse(request.postData() ?? '{}'));
+      }
+    });
+
+    await page.goto(`/tasks/${task.id}`);
+
+    const controls = page.getByTestId('answer-controls-att-1');
+    await expect(controls.getByRole('button', { name: 'Use default' })).toHaveCount(0);
+    await page.getByLabel('Answer to att-1').fill('retry: tool-channel misread');
+    await page.getByRole('button', { name: 'Send answer' }).click();
+
+    await expect.poll(() => bodies).toEqual([
+      {
+        attention_id: 'att-1',
+        attention_version: 1,
+        answer: 'retry: tool-channel misread',
+      },
+    ]);
   });
 
   test('takes the default instead of typing one', async ({ page }) => {
