@@ -1792,7 +1792,11 @@ class SoftwareLifecycle:
                 stage="review",
                 action_scope=ActionScope(
                     project_id=work_item.project_id,
-                    objective="Independently review the verified software change",
+                    objective=(
+                        "Independently review the verified software change; a review that "
+                        "reaches a verdict is a passed stage, and findings go in "
+                        "review_result with verdict repair"
+                    ),
                     allowed_targets=contract.allowed_scope,
                     allowed_capabilities=tuple(
                         grant.name for grant in reviewer.capabilities.grants
@@ -1818,7 +1822,13 @@ class SoftwareLifecycle:
                 capabilities=reviewer.capabilities,
                 workspace=workspace,
             )
-            if self._should_escalate(result, retries):
+            # A reviewer that reached a verdict but called the stage failed still reviewed;
+            # a blocked result is the validator's refusal and is never read as a review.
+            reviewed = (
+                result.status == "failed"
+                and result.profile_context.get("review_result") is not None
+            )
+            if not reviewed and self._should_escalate(result, retries):
                 retries += 1
                 reason = "escalated"
                 reviewer, run_id = await self._select_operator(
@@ -1838,7 +1848,7 @@ class SoftwareLifecycle:
                     return "CONTROL_DEGRADED"
                 continue
             break
-        if result.status != "passed":
+        if result.status != "passed" and not reviewed:
             if await self._stop_for_control_degradation(work_item, run_id=run_id):
                 return "CONTROL_DEGRADED"
             await self._block_once(
