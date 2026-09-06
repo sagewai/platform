@@ -145,19 +145,27 @@ test("the shipped game can be won without losing a life", () => {
       state.hazards.map((hazard) => hazard.pathIndex),
       state.lives,
       state.status,
+      state.turn,
     ]);
+  const turnBound = initial.level.turnLimit ?? 120;
   const queue = [initial];
   const visited = new Set([stateKey(initial)]);
-  let won = false;
+  let winningState = null;
 
   while (queue.length > 0) {
     const state = queue.shift();
     if (state.status === "won" && state.lives === initial.lives) {
-      won = true;
+      winningState = state;
       break;
+    }
+    if (state.status !== "playing" || state.turn >= turnBound) {
+      continue;
     }
     for (const direction of directions) {
       const next = move(state, direction);
+      if (next.lives < initial.lives) {
+        continue;
+      }
       const key = stateKey(next);
       if (!visited.has(key)) {
         visited.add(key);
@@ -166,7 +174,14 @@ test("the shipped game can be won without losing a life", () => {
     }
   }
 
-  assert.ok(won, `expected a winning route; searched ${visited.size} states`);
+  assert.ok(
+    winningState,
+    `expected a winning route within ${turnBound} turns; searched ${visited.size} states`,
+  );
+  assert.equal(winningState.lives, initial.lives);
+  if (initial.level.turnLimit !== undefined) {
+    assert.ok(winningState.turn <= initial.level.turnLimit);
+  }
 });
 
 test("glitch speed advances multiple path steps and checks intermediate collisions", () => {
