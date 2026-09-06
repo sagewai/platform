@@ -563,7 +563,7 @@ class TaskService:
         now: datetime | None = None,
     ) -> TaskRecord:
         """Stop the Task for good; the coordinator never drives a cancelled Task again."""
-        _task, record = await self._load(task_id, project_id=project_id)
+        task, record = await self._load(task_id, project_id=project_id)
         if record.status is TaskStatus.CANCELLED:
             return record
         entries: list[Entry] = []
@@ -571,6 +571,11 @@ class TaskService:
             entries.append(
                 (TaskEventType.TASK_MESSAGE, {"author": "human", "text": note, "refs": []})
             )
+        lease_key = task.repository_lease_key
+        if lease_key is not None and await self._store.release_repository_lease(
+            lease_key, project_id=project_id, task_id=task_id
+        ):
+            entries.append((TaskEventType.REPOSITORY_LEASE_RELEASED, {"lease_key": lease_key}))
         entries.append(status_entry(record, TaskStatus.CANCELLED))
         writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
         return await writer.append(record, entries, now=now)
