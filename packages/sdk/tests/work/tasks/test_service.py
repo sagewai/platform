@@ -872,7 +872,10 @@ async def test_cancel_releases_the_repository_lease(service: TaskService, store:
     assert record.status is TaskStatus.CANCELLED
     assert await store.repository_lease_holder(key, project_id="project-a") is None
     kinds = [event.event_type for event in await store.read_events(task.id, project_id="project-a")]
-    assert kinds[-2:] == [TaskEventType.REPOSITORY_LEASE_RELEASED, TaskEventType.TASK_STATUS_CHANGED]
+    assert kinds[-2:] == [
+        TaskEventType.REPOSITORY_LEASE_RELEASED,
+        TaskEventType.TASK_STATUS_CHANGED,
+    ]
 
 
 @pytest.mark.asyncio
