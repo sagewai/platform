@@ -11,7 +11,7 @@
 
 These are deliberately small: the "interesting" logic lives in
 :mod:`sagewai.autopilot.blueprint`, :mod:`sagewai.autopilot.agent_graph`,
-:mod:`sagewai.autopilot.slots`, and :mod:`sagewai.autopilot.mission`.
+and :mod:`sagewai.autopilot.slots`.
 """
 
 from __future__ import annotations
@@ -113,3 +113,81 @@ class LearningLoopConfig(BaseModel):
     promotion_criteria: str  # e.g. "accuracy >= 0.92 AND cost <= ..."
     fine_tune_method: str = "unsloth"
     deploy_as: str = "ollama"
+
+
+class StepTelemetry(BaseModel):
+    """Per-step harness telemetry — cost, tokens, routing decision.
+
+    Populated when an agent step routes through
+    :class:`~sagewai.harness.HarnessProxy`. Stays ``None`` on
+    :class:`StepResult` for steps that ran under the direct-litellm
+    fallback path or for deterministic/skipped steps.
+
+    Attributes:
+        cost_usd: Estimated cost of the LLM call in US dollars.
+        input_tokens: Prompt tokens billed.
+        output_tokens: Completion tokens billed.
+        model_used: The model name actually used after harness routing.
+            May differ from the requested model when policies / budget
+            actions / classifier downgrade kick in.
+        latency_ms: Wall-clock time of the LLM call (excludes routing
+            overhead — measured around the backend's
+            ``chat_completion`` call).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    cost_usd: float = Field(default=0.0, ge=0.0)
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    model_used: str = Field(min_length=1)
+    latency_ms: float = Field(default=0.0, ge=0.0)
+
+
+class StepResult(BaseModel):
+    """Record of one agent node's execution.
+
+    Attributes:
+        node_id: The agent node ID this step represents.
+        status: One of ``"completed"``, ``"skipped"``, or ``"failed"``.
+        output_preview: Short truncated output for UI/log display
+            (≤200 chars). May be ``None`` for deterministic steps.
+        output: Full LLM output content for LLM steps. ``None`` for
+            deterministic steps, skipped steps, or steps that ran the
+            direct-litellm fallback path before harness wiring landed.
+            Curator builds training samples from this field when
+            available, falling back to ``output_preview``.
+        messages: Full conversation messages (system + user +
+            assistant + tool turns) for this step. ``None`` outside
+            the harness path. ShareGPT-format training samples use
+            this for multi-turn conversations.
+        telemetry: Per-step harness telemetry (cost, tokens, model
+            used, latency). ``None`` outside the harness path.
+        tool_calls: Names of tools actually invoked during this step,
+            in call order. ``None`` when no tool calls were made.
+            Populated by the tool-call loop in ``AgentExecutor`` when
+            the agent has ``tools`` configured. Useful for telemetry
+            and Curator training-data labelling.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    node_id: str = Field(min_length=1)
+    status: str = Field(min_length=1)
+    output_preview: str | None = None
+    output: str | None = None
+    messages: tuple[dict, ...] | None = None
+    telemetry: StepTelemetry | None = None
+    tool_calls: tuple[str, ...] | None = None
+
+
+class MissionRunResult(BaseModel):
+    """Immutable result of a :class:`MissionDriver` execution."""
+
+    model_config = ConfigDict(frozen=True)
+
+    mission_id: str = Field(min_length=1)
+    status: str = Field(min_length=1)
+    steps: tuple[StepResult, ...] = ()
+    duration_seconds: float = Field(ge=0.0)
+    error: str | None = None

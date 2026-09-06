@@ -81,24 +81,20 @@ import json
 import os
 import platform
 import sys
-import tempfile
 from pathlib import Path
 
-from sagewai.autopilot.agent_graph import AgentGraph, Agent
+from sagewai.autopilot.agent_graph import Agent, AgentGraph
 from sagewai.autopilot.blueprint import Blueprint
-from sagewai.autopilot.controller.types import (
-    MissionRunResult,
-    StepResult,
-)
 from sagewai.autopilot.curator import Curator
 from sagewai.autopilot.curator.types import CuratorConfig
 from sagewai.autopilot.models import (
     EvalRef,
     LearningLoopConfig,
     Metric,
+    MissionRunResult,
+    StepResult,
     TrainingHook,
 )
-
 
 # ── 1. The blueprint that declares the training loop ──────────────
 

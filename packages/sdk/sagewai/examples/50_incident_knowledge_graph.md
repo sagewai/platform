@@ -89,6 +89,3 @@ clean triples.
 - **Example 41** (`41_graph_memory_incident_dependency.py`) — graph memory vs
   vector retrieval on incident dependencies; the retrieval-side companion to
   the graph this example *builds*.
-- **Example 30** (`30_oncall_agent.py`) — the v1.0 on-call lighthouse that
-  reacts to a single incident; pair it with this example for the
-  "react + learn from structure" loop.

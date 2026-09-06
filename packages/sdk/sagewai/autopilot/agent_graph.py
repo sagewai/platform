@@ -21,8 +21,7 @@ with only unconditional edges"; this keeps the framework one concept,
 not two.
 
 Note: this module defines the graph *shape* and traversal invariants.
-It does not execute agents — execution is the job of
-``sagewai.autopilot.mission`` plus (later) the ``AutopilotController``.
+It does not execute agents.
 """
 
 from __future__ import annotations

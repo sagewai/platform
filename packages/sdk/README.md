@@ -107,10 +107,6 @@ Every example is a complete, runnable file in [`sagewai/examples/`](sagewai/exam
 - [`07_mcp_tools.py`](sagewai/examples/07_mcp_tools.py) — expose agent tools as an MCP server.
 - [`08_directives.py`](sagewai/examples/08_directives.py) — `@context`, `@memory`, and `@agent` directive syntax.
 
-**Autopilot**
-- [`28_autopilot_quickstart.py`](sagewai/examples/28_autopilot_quickstart.py) — describe a goal; Autopilot designs and runs the agent graph.
-- [`35_autopilot_hosted_service.py`](sagewai/examples/35_autopilot_hosted_service.py) — drive Autopilot missions behind a hosted service.
-
 **Fleet**
 - [`20_fleet_workers.py`](sagewai/examples/20_fleet_workers.py) — run agents across a worker fleet with a dispatcher.
 - [`26_fleet_scoped_dispatch.py`](sagewai/examples/26_fleet_scoped_dispatch.py) — capability-based dispatch with project scoping.

@@ -294,10 +294,6 @@ swap when you put it in front of a real inbox:
   tier-routing demo (cheap LLM for simple, frontier for complex).
   Layer this script behind a tier router and the cost line in the
   proof block goes down further.
-- **`packages/sdk/sagewai/examples/30_oncall_agent.py`** — the v1.0
-  lighthouse on-call agent. Same triage-and-route shape as this
-  example but with autopilot blueprint, sandboxed tool calls, and
-  the full Sealed credential boundary.
 - **`sagewai/atelier:docs/v1.0/directives-soak-report.md`** — the
   publishable numbers across LLMs (Soak B). The section "What this
   enables in production" links back here.

@@ -19,6 +19,15 @@ from unittest.mock import patch
 
 import pytest
 
+from sagewai.autopilot.eval_harness import (
+    SYNTHETIC_GOLDEN_GOALS,
+    EvalConfig,
+    EvalHarness,
+    EvalReport,
+    GoldenGoal,
+    GoldenGoalSet,
+    run_eval,
+)
 from sagewai.core.registry import AgentRegistry
 from sagewai.engines.universal import UniversalAgent
 from sagewai.memory.graph import GraphMemory
@@ -28,7 +37,6 @@ from sagewai.observability.audit import AuditEvent, AuditLogger, InMemoryAuditBa
 from sagewai.observability.costs import CostTracker
 from sagewai.safety.guardrails import ContentFilter
 from sagewai.safety.pii import PIIGuard
-
 
 # ── Helper: mock LLM response ───────────────────────────────
 
@@ -379,7 +387,7 @@ class TestSecurity:
 
     def test_permission_policy_denies_restricted_tool(self):
         """Permission policy blocks tools with denied prefixes."""
-        from sagewai.safety.permissions import PermissionPolicy, PermissionLevel
+        from sagewai.safety.permissions import PermissionLevel, PermissionPolicy
 
         policy = PermissionPolicy(
             default_level=PermissionLevel.READ,
@@ -400,7 +408,7 @@ class TestSecurity:
 
     def test_trust_levels(self):
         """Trust level hierarchy is monotonic (only goes up)."""
-        from sagewai.core.trust import TrustLevel, DeferredInit
+        from sagewai.core.trust import DeferredInit, TrustLevel
 
         init = DeferredInit()
         assert init.trust_level == TrustLevel.UNTRUSTED
@@ -420,7 +428,7 @@ class TestSecurity:
     @pytest.mark.asyncio
     async def test_hook_runner_deny(self):
         """Hook runner blocks tool execution with DENY action."""
-        from sagewai.core.hooks import HookRunner, HookResult, HookAction, HookContext
+        from sagewai.core.hooks import HookAction, HookContext, HookResult, HookRunner
 
         runner = HookRunner()
 
@@ -459,7 +467,7 @@ class TestSecurity:
 
     def test_jwt_rejects_invalid_token(self):
         """JWT auth rejects invalid tokens."""
-        from sagewai.auth.jwt import JWTAuth, AuthenticationError
+        from sagewai.auth.jwt import AuthenticationError, JWTAuth
 
         auth = JWTAuth(secret="test-secret-key")
         with pytest.raises(AuthenticationError):
@@ -531,18 +539,6 @@ class TestCrossPillar:
 # Autopilot — eval harness
 # ═══════════════════════════════════════════════════════════════
 
-# sagewai.autopilot.eval_harness
-from sagewai.autopilot.eval_harness import (
-    EvalConfig,
-    EvalHarness,
-    EvalReport,
-    GoldenGoal,
-    GoldenGoalSet,
-    SYNTHETIC_GOLDEN_GOALS,
-    run_eval,
-)
-
-
 def test_smoke_eval_harness_types_importable():
     assert GoldenGoal is not None
     assert GoldenGoalSet is not None
@@ -563,25 +559,6 @@ def test_smoke_eval_config_defaults():
     cfg = EvalConfig()
     assert cfg.auto_route_threshold == 0.85
     assert cfg.picker_threshold == 0.65
-
-
-# ── Example 28 smoke ──────────────────────────────────────────────
-
-
-def test_smoke_example_28_autopilot_quickstart_importable():
-    """Example 28 must import cleanly and expose a main() callable."""
-    import importlib
-
-    mod = importlib.import_module("sagewai.examples.28_autopilot_quickstart")
-    assert callable(getattr(mod, "main", None))
-
-
-def test_smoke_example_28_autopilot_quickstart_main():
-    """Example 28 main() must run without error (offline, no real network)."""
-    import importlib
-
-    mod = importlib.import_module("sagewai.examples.28_autopilot_quickstart")
-    mod.main()
 
 
 # ── Example 38 smoke ──────────────────────────────────────────────

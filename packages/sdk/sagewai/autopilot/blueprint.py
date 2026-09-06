@@ -16,8 +16,7 @@ references, training hooks, and (optionally) a Layer 5 learning-loop
 configuration.
 
 Blueprints are deliberately *declarative* — they contain no Python
-callables and no runtime state. A blueprint plus concrete slot values
-becomes a :class:`sagewai.autopilot.mission.Mission`.
+callables and no runtime state.
 
 v1 blueprints carry a concrete ``agent_graph``.  v1.1 blueprints carry
 a ``composition`` list (pattern references) that a resolver materialises

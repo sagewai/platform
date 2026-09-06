@@ -7,7 +7,9 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
-"""Sagewai Autopilot — goal-driven agent mission framework.
+"""Sagewai Autopilot — retained library code: blueprints, agent graphs, the curator, the eval
+harness, the embedding router and the sagewai_llm client. The mission runtime it once drove is
+replaced by the Task coordinator (``sagewai.work.tasks``).
 
 Public API surface for the declarative framework. This subpackage
 contains zero production blueprints — all real blueprints live on the
@@ -20,14 +22,6 @@ from __future__ import annotations
 from ._types import AgentKind, MissionState, Mode, Operator
 from .agent_graph import Agent, AgentGraph, Branch
 from .blueprint import Blueprint
-from .controller import (
-    AutopilotController,
-    ControllerConfig,
-    MissionDriver,
-    MissionRunResult,
-    StepResult,
-    StepTelemetry,
-)
 from .curator import (
     Curator,
     CuratorConfig,
@@ -51,24 +45,14 @@ from .eval_harness import (
     GoldenGoalSet,
     run_eval,
 )
-from .healing import (
-    AlertOperator,
-    HealingAction,
-    HealingEngine,
-    HealingPolicy,
-    HealthMonitor,
-    HealthSignal,
-    MissionContext,
-    PauseBudget,
-    RetryMission,
-    RotateProvider,
-)
-from .mission import Mission
 from .models import (
     EvalRef,
     LearningLoopConfig,
     Metric,
+    MissionRunResult,
     ProviderRequirement,
+    StepResult,
+    StepTelemetry,
     TrainingHook,
 )
 from .routing import (
@@ -116,7 +100,6 @@ __all__ = [
     "AgentGraph",
     # Top-level
     "Blueprint",
-    "Mission",
     # Routing
     "GoalRouter",
     "ConfidenceConfig",
@@ -129,10 +112,7 @@ __all__ = [
     "SlotExtractor",
     "RuleBasedExtractor",
     "build_preview",
-    # Controller
-    "AutopilotController",
-    "MissionDriver",
-    "ControllerConfig",
+    # Result models
     "MissionRunResult",
     "StepResult",
     "StepTelemetry",
@@ -150,15 +130,4 @@ __all__ = [
     "GoldenGoal",
     "GoldenGoalSet",
     "run_eval",
-    # Healing (Layer 6 — self-healing ops)
-    "HealingPolicy",
-    "RotateProvider",
-    "PauseBudget",
-    "AlertOperator",
-    "RetryMission",
-    "HealingAction",
-    "HealthMonitor",
-    "HealthSignal",
-    "HealingEngine",
-    "MissionContext",
 ]

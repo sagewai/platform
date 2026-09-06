@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import pytest
 
-from sagewai.autopilot.controller import MissionRunResult, StepResult
 from sagewai.autopilot.curator.types import CuratorConfig
+from sagewai.autopilot.models import MissionRunResult, StepResult
 from tests.autopilot.fixtures import (
     make_synthetic_batch_blueprint,
     make_synthetic_event_driven_blueprint,

@@ -242,7 +242,6 @@ def test_clear_pending_jobs_empty_returns_empty_list():
 def test_curator_process_concurrent_no_exceptions():
     """Concurrent calls to process() must not raise and must be consistent."""
     import concurrent.futures
-    from typing import Any
 
     bp = make_synthetic_scheduled_blueprint()
     c = Curator(config=CuratorConfig(deduplicate_by_mission_id=False))
@@ -251,7 +250,7 @@ def test_curator_process_concurrent_no_exceptions():
 
     def _worker(idx: int) -> None:
         result = make_run_result(mission_id=f"concurrent-{idx}")
-        ctx: dict[str, Any] = {"user_rating": 5}
+        ctx: dict[str, object] = {"user_rating": 5}
         try:
             c.process(result, bp, ctx)
         except Exception as exc:  # noqa: BLE001
@@ -270,14 +269,13 @@ def test_curator_process_concurrent_no_exceptions():
 def test_curator_clear_pending_jobs_concurrent_no_duplicates():
     """clear_pending_jobs() under concurrent writers must not lose or duplicate."""
     import concurrent.futures
-    from typing import Any
 
     bp = make_synthetic_scheduled_blueprint()
     c = Curator(config=CuratorConfig(deduplicate_by_mission_id=False))
 
     def _add(idx: int) -> None:
         result = make_run_result(mission_id=f"cj-{idx}")
-        ctx: dict[str, Any] = {"user_rating": 5}
+        ctx: dict[str, object] = {"user_rating": 5}
         c.process(result, bp, ctx)
 
     # First populate some entries
@@ -309,8 +307,8 @@ def test_curator_clear_pending_jobs_concurrent_no_duplicates():
 
 def test_curator_alpaca_uses_full_step_output_when_available():
     """Curator.process emits Alpaca samples built from step.output, not the 200-char preview."""
-    from sagewai.autopilot.controller.types import StepResult, MissionRunResult
     from sagewai.autopilot.curator.curator import Curator
+    from sagewai.autopilot.models import MissionRunResult, StepResult
 
     full_text = "A" * 1000
     steps = (
@@ -333,8 +331,8 @@ def test_curator_alpaca_uses_full_step_output_when_available():
 
 def test_curator_alpaca_falls_back_to_preview_when_no_full_output():
     """Backward compat: when step.output is None, Curator uses output_preview."""
-    from sagewai.autopilot.controller.types import StepResult, MissionRunResult
     from sagewai.autopilot.curator.curator import Curator
+    from sagewai.autopilot.models import MissionRunResult, StepResult
 
     steps = (
         StepResult(
@@ -356,8 +354,8 @@ def test_curator_alpaca_falls_back_to_preview_when_no_full_output():
 
 def test_curator_sharegpt_uses_full_step_output_when_available():
     """ShareGPT format: gpt turn uses full output not preview."""
-    from sagewai.autopilot.controller.types import StepResult, MissionRunResult
     from sagewai.autopilot.curator.curator import Curator
+    from sagewai.autopilot.models import MissionRunResult, StepResult
 
     full_text = "B" * 800
     steps = (
