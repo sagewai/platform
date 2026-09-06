@@ -222,6 +222,16 @@ def plan_from_events(events: Sequence[TaskEvent], *, version: int) -> AcceptedPl
     )
 
 
+def proposed_plan_from_events(events: Sequence[TaskEvent]) -> AcceptedPlan | None:
+    """The latest proposal in the stream, whether or not it was accepted."""
+    versions = [
+        int(event.payload_json["version"])
+        for event in events
+        if event.event_type is TaskEventType.PLAN_PROPOSED
+    ]
+    return plan_from_events(events, version=max(versions)) if versions else None
+
+
 __all__ = [
     "AcceptedPlan",
     "MatrixItem",
@@ -231,4 +241,5 @@ __all__ = [
     "accept_plan",
     "clarification_request_entry",
     "plan_from_events",
+    "proposed_plan_from_events",
 ]

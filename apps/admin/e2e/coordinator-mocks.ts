@@ -505,7 +505,12 @@ export const taskPlan = {
   ],
 } satisfies TaskPlan;
 
-export const taskDetail = { task: taskDetailTask, record: needsYouTask, plan: null } satisfies TaskDetail;
+export const taskDetail = {
+  task: taskDetailTask,
+  record: needsYouTask,
+  plan: null,
+  proposed_plan: null,
+} satisfies TaskDetail;
 
 /** The same Task one gate later: version 1 accepted, so the detail route carries the plan. */
 export const acceptedPlanDetail = {
@@ -520,12 +525,14 @@ export const acceptedPlanDetail = {
     plan_version: 1,
   },
   plan: taskPlan,
+  proposed_plan: null,
 } satisfies TaskDetail;
 
 export const scheduledTaskDetail = {
   task: task(scheduledTask),
   record: { ...scheduledTask, plan_version: 1 },
   plan: taskPlan,
+  proposed_plan: null,
 } satisfies TaskDetail;
 
 function threadEntry(overrides: Partial<ThreadEntry>): ThreadEntry {

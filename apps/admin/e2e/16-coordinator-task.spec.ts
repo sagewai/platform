@@ -794,6 +794,7 @@ test.describe('Coordinator Task page', () => {
     await page.goto(`/tasks/${task.id}/plan`);
 
     await expect(page.getByRole('heading', { name: 'Plan version 1' })).toBeVisible();
+    await expect(page.getByTestId('plan-proposed')).toHaveCount(0);
     const first = page.getByTestId('plan-step-step-1');
     await expect(first).toContainText('Add the coordinator board');
     await expect(first).toContainText('Render the five columns from the board route.');
@@ -810,13 +811,32 @@ test.describe('Coordinator Task page', () => {
     expect(detailScopes).toContain(project.id);
   });
 
+  test('renders the proposed plan before it is accepted', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}`]: () =>
+        ({
+          ...taskDetail,
+          record: { ...taskDetail.record, status: 'PLAN_PROPOSED' },
+          plan: null,
+          proposed_plan: taskPlan,
+        }) satisfies TaskDetail,
+    });
+
+    await page.goto(`/tasks/${task.id}/plan`);
+
+    await expect(page.getByTestId('plan-proposed')).toBeVisible();
+    await expect(page.getByTestId('plan-step-step-1')).toBeVisible();
+    await expect(page.getByText('waiting for your decision')).toBeVisible();
+  });
+
   test('says so when no plan is accepted yet', async ({ page }) => {
     await selectProject(page);
     await mockCoordinatorApi(page);
 
     await page.goto(`/tasks/${task.id}/plan`);
 
-    await expect(page.getByRole('heading', { name: 'No accepted plan' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'No plan yet' })).toBeVisible();
   });
 
   test('shows the plan refusal the API stated', async ({ page }) => {

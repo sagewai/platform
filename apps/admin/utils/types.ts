@@ -1063,6 +1063,8 @@ export interface TaskDetail {
   task: Task;
   record: TaskRecord;
   plan: TaskPlan | null;
+  /** The latest proposal while the Task is `PLAN_PROPOSED`; `null` otherwise. */
+  proposed_plan: TaskPlan | null;
 }
 
 /** What a create and a budget patch return: the definition and its projection, no plan. */
