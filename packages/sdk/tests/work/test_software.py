@@ -53,7 +53,10 @@ from sagewai.work.profiles.software import (
     software_workspace_precondition,
     workspace_diff,
 )
-from sagewai.work.profiles.software.verification import _prepare_trusted_repository
+from sagewai.work.profiles.software.verification import (
+    _docker_backend,
+    _prepare_trusted_repository,
+)
 from tests.db.conftest import dialect_engine  # noqa: F401
 from tests.work.fakes_verification import LocalVerificationRunner
 
@@ -985,6 +988,23 @@ async def test_verification_sandbox_unavailability_fails_closed(tmp_path: Path) 
     assert backend.start_calls == 1
     assert backend.closed is True
     assert not escaped.exists()
+
+
+def test_the_docker_backend_failure_names_its_cause(monkeypatch) -> None:
+    def _unreachable(*_args, **_kwargs):
+        raise RuntimeError("Cannot connect to Docker Engine via unix:///nowhere.sock")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sagewai.sandbox.docker_backend",
+        SimpleNamespace(DockerBackend=_unreachable),
+    )
+    with pytest.raises(VerificationIsolationError, match="unix:///nowhere.sock"):
+        _docker_backend()
+
+    monkeypatch.setitem(sys.modules, "sagewai.sandbox.docker_backend", None)
+    with pytest.raises(VerificationIsolationError, match=r"install sagewai\[sandbox\]"):
+        _docker_backend()
 
 
 @pytest.mark.asyncio
