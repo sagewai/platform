@@ -251,7 +251,8 @@ class SoftwareProfileRunner:
         """Re-run the locked commands at the merged head, then judge (spec section 11)."""
         target = self._target(task)
         stack = await self._stack(task)
-        base_sha = merged_sha or await self.base_sha(task)
+        head = await self.base_sha(task)
+        base_sha = merged_sha or head
         work_id = TaskAssessor.work_id(task, cycle=cycle, plan_version=plan_version)
         workspace = await stack.worktree_manager.prepare(
             repository=Path(target.repository_path),

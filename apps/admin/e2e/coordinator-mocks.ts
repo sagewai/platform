@@ -118,6 +118,16 @@ export const clarifyingTask = record({
   updated_at: '2026-09-01T12:30:00Z',
 });
 
+export const degradedTask = record({
+  task_id: 'task-8',
+  title: 'Restore assessment control',
+  status: 'CONTROL_DEGRADED',
+  board_column: 'needs_you',
+  attention_owner: 'user',
+  waiting_reason: 'control_degraded',
+  updated_at: '2026-09-01T13:00:00Z',
+});
+
 export const scheduledTask = record({
   task_id: 'task-5',
   title: 'Nightly dependency report',
@@ -526,6 +536,12 @@ export const scheduledTaskDetail = {
   task: task(scheduledTask),
   record: { ...scheduledTask, plan_version: 1 },
   plan: taskPlan,
+} satisfies TaskDetail;
+
+export const degradedTaskDetail = {
+  task: task(degradedTask),
+  record: degradedTask,
+  plan: null,
 } satisfies TaskDetail;
 
 function threadEntry(overrides: Partial<ThreadEntry>): ThreadEntry {

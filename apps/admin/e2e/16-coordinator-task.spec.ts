@@ -9,6 +9,8 @@ import {
   answeredThread,
   briefBody,
   deliverAction,
+  degradedTask,
+  degradedTaskDetail,
   failedMergeAction,
   mergeAction,
   mirroredGateTask,
@@ -169,6 +171,55 @@ test.describe('Coordinator Task page', () => {
     ]);
     expect(pauseScopes).toEqual([project.id]);
     expect(cancelBodies).toEqual(['{"note":null}']);
+  });
+
+  test('restores control on a degraded Task', async ({ page }) => {
+    const writes: string[] = [];
+    const bodies: Array<string | null> = [];
+    const scopes: Array<string | undefined> = [];
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${degradedTask.task_id}`]: () => degradedTaskDetail,
+      [`/api/v1/tasks/${degradedTask.task_id}/thread`]: () => ({
+        task_id: degradedTask.task_id,
+        project_id: degradedTask.project_id,
+        brief_ref: null,
+        entries: [],
+        open_question_ids: [],
+        pending_gate: null,
+      }),
+    });
+    recordWrites(page, writes);
+    await page.route(`**/api/v1/tasks/${degradedTask.task_id}/restore`, async (route) => {
+      await route.fulfill({
+        json: {
+          ...degradedTask,
+          status: 'EXECUTING',
+          board_column: 'in_progress',
+          attention_owner: 'system',
+          waiting_reason: 'working',
+        },
+      });
+    });
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (
+        request.method() === 'POST' &&
+        url.pathname === `/api/v1/tasks/${degradedTask.task_id}/restore`
+      ) {
+        bodies.push(request.postData());
+        scopes.push(request.headers()['x-project-id']);
+      }
+    });
+
+    await page.goto(`/tasks/${degradedTask.task_id}`);
+    await expect(page.getByTestId('task-restore')).toBeVisible();
+    await page.getByTestId('task-restore').click();
+
+    await expect(page.getByTestId('task-status')).toHaveText('EXECUTING');
+    expect(writes).toEqual([`/api/v1/tasks/${degradedTask.task_id}/restore`]);
+    expect(bodies).toEqual(['{"note":null}']);
+    expect(scopes).toEqual([project.id]);
   });
 
   test('re-reads the detail when the feed advances', async ({ page }) => {

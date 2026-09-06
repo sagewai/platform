@@ -342,6 +342,9 @@ export const adminApi = {
   resumeTask: (taskId: string) =>
     taskWrite<TaskRecord>(`/api/v1/tasks/${encodeURIComponent(taskId)}/resume`, {}),
 
+  restoreTask: (taskId: string, note: string | null) =>
+    taskWrite<TaskRecord>(`/api/v1/tasks/${encodeURIComponent(taskId)}/restore`, { note }),
+
   cancelTask: (taskId: string, note: string | null) =>
     taskWrite<TaskRecord>(`/api/v1/tasks/${encodeURIComponent(taskId)}/cancel`, { note }),
 

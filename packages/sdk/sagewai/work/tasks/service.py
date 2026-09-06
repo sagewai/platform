@@ -553,6 +553,37 @@ class TaskService:
         writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
         return await writer.append(record, [status_entry(record, previous)], now=now)
 
+    async def restore(
+        self,
+        task_id: str,
+        *,
+        project_id: str,
+        actor_ref: str,
+        note: str | None = None,
+        now: datetime | None = None,
+    ) -> TaskRecord:
+        """Return a degraded Task to the status the degradation interrupted (section 8.1).
+
+        The human fixed the cause; the coordinator re-decides from there — the command that
+        degraded control runs again under a new receipt.
+        """
+        _task, record = await self._load(task_id, project_id=project_id)
+        if record.status is not TaskStatus.CONTROL_DEGRADED:
+            raise TaskDecisionError(
+                f"task {task_id} is {record.status.value}, not CONTROL_DEGRADED"
+            )
+        events = await self._store.read_events(task_id, project_id=project_id)
+        previous = _status_before(events, TaskStatus.CONTROL_DEGRADED, allowed=_BUDGETED)
+        writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
+        return await writer.append(
+            record,
+            [
+                (TaskEventType.CONTROL_RESTORED, {"note": note}),
+                status_entry(record, previous),
+            ],
+            now=now,
+        )
+
     async def cancel(
         self,
         task_id: str,

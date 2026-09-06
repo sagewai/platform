@@ -246,6 +246,26 @@ def test_a_mirrored_work_gate_points_to_the_work_gate_route() -> None:
     assert gate.work_id == "w1"
 
 
+def test_control_restored_renders_as_a_human_message() -> None:
+    view = thread_from_events(
+        (
+            _event(1, TaskEventType.TASK_CREATED, {"title": "Retry queue"}),
+            _event(
+                2,
+                TaskEventType.CONTROL_RESTORED,
+                {"note": "fetched main"},
+                author="human",
+            ),
+        )
+    )
+
+    restored = view.entries[0]
+    assert restored.kind == "message"
+    assert restored.author == "human"
+    assert restored.text == "control restored: fetched main"
+    assert restored.refs == ()
+
+
 def test_a_mirrored_work_gate_prefers_the_payload_owner_over_the_gate_prefix() -> None:
     view = thread_from_events(
         (

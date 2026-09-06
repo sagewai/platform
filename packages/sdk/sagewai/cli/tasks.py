@@ -279,6 +279,15 @@ def task_resume(project_id: str, task_id: str) -> None:
     _echo_record(_run_task(_resume(task_id, project_id=project_id)))
 
 
+@task_group.command("restore")
+@click.argument("task_id")
+@click.option("--note", default=None, help="Why, recorded on the thread.")
+@click.pass_obj
+def task_restore(project_id: str, task_id: str, note: str | None) -> None:
+    """Return a degraded TASK_ID to the status the degradation interrupted."""
+    _echo_record(_run_task(_restore(task_id, project_id=project_id, note=note)))
+
+
 @task_group.command("cancel")
 @click.argument("task_id")
 @click.option("--note", default=None, help="Why, recorded on the thread.")
@@ -493,6 +502,13 @@ async def _pause(task_id: str, *, project_id: str) -> TaskRecord:
 async def _resume(task_id: str, *, project_id: str) -> TaskRecord:
     service = await _service()
     return await service.resume(task_id, project_id=project_id, actor_ref="cli")
+
+
+async def _restore(task_id: str, *, project_id: str, note: str | None) -> TaskRecord:
+    service = await _service()
+    return await service.restore(
+        task_id, project_id=project_id, actor_ref="cli", note=note
+    )
 
 
 async def _cancel(task_id: str, *, project_id: str, note: str | None) -> TaskRecord:

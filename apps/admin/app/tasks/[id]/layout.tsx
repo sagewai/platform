@@ -13,7 +13,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useTaskFeed } from '@/hooks/use-task-feed';
 import { adminApi } from '@/utils/api';
 import { useProject } from '@/utils/project-context';
-import type { TaskDetail } from '@/utils/types';
+import type { TaskDetail, TaskRecord } from '@/utils/types';
 
 export default function TaskLayout({
   children,
@@ -30,7 +30,7 @@ export default function TaskLayout({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [lifecycleError, setLifecycleError] = useState('');
-  const [busy, setBusy] = useState<'pause' | 'resume' | 'cancel' | null>(null);
+  const [busy, setBusy] = useState<'pause' | 'resume' | 'restore' | 'cancel' | null>(null);
   const busyRef = useRef(false);
   const identityRef = useRef('');
   const needsProject = ready && currentSlug === null;
@@ -66,22 +66,27 @@ export default function TaskLayout({
     };
   }, [ready, currentSlug, id, feed.revision]);
 
-  async function run(action: 'pause' | 'resume' | 'cancel') {
+  async function run(action: 'pause' | 'resume' | 'restore' | 'cancel') {
     if (busyRef.current) return;
     busyRef.current = true;
     setBusy(action);
     setLifecycleError('');
     try {
-      const record =
-        action === 'pause'
-          ? await adminApi.pauseTask(id)
-          : action === 'resume'
-            ? await adminApi.resumeTask(id)
-            : await adminApi.cancelTask(id, null);
+      let record: TaskRecord;
+      if (action === 'pause') {
+        record = await adminApi.pauseTask(id);
+      } else if (action === 'resume') {
+        record = await adminApi.resumeTask(id);
+      } else if (action === 'restore') {
+        record = await adminApi.restoreTask(id, null);
+      } else {
+        record = await adminApi.cancelTask(id, null);
+      }
       setDetail((current) => (current === null ? current : { ...current, record }));
       const pastTense = {
         pause: 'paused',
         resume: 'resumed',
+        restore: 'restored',
         cancel: 'cancelled',
       }[action];
       toast('success', `Task ${pastTense}: ${record.status}`);
@@ -168,6 +173,18 @@ export default function TaskLayout({
             >
               {busy === 'resume' ? 'Resuming' : 'Resume'}
             </Button>
+            {detail.record.status === 'CONTROL_DEGRADED' && (
+              <Button
+                size="sm"
+                variant="outline"
+                data-testid="task-restore"
+                aria-busy={busy === 'restore'}
+                disabled={busy !== null}
+                onClick={() => void run('restore')}
+              >
+                {busy === 'restore' ? 'Restoring control' : 'Restore control'}
+              </Button>
+            )}
             <Button
               size="sm"
               variant="destructive"
