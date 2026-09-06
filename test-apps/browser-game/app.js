@@ -2,9 +2,12 @@ import { createGame, move, restart } from "./engine.js";
 
 const canvas = document.querySelector("#board");
 const context = canvas.getContext("2d");
+const hud = document.querySelector(".hud");
 const score = document.querySelector("#score");
 const signals = document.querySelector("#signals");
 const lives = document.querySelector("#lives");
+const turnsHud = document.querySelector("#turns-hud");
+const turns = document.querySelector("#turns");
 const message = document.querySelector("#message");
 const result = document.querySelector("#result");
 const resultKicker = document.querySelector("#result-kicker");
@@ -168,6 +171,13 @@ function render() {
   lives.textContent = Array.from({ length: state.level.lives }, (_, index) =>
     index < state.lives ? "●" : "○",
   ).join(" ");
+  const hasTurnLimit = state.level.turnLimit != null;
+  hud.classList.toggle("has-turn-limit", hasTurnLimit);
+  turnsHud.hidden = !hasTurnLimit;
+  if (hasTurnLimit) {
+    const remainingTurns = Math.max(0, state.level.turnLimit - state.turn);
+    turns.textContent = `${remainingTurns} left`;
+  }
   message.textContent = state.message;
 
   const ended = state.status !== "playing";
