@@ -28,16 +28,28 @@ const copyPoint = ([x, y]) => [x, y];
 const pointKey = ([x, y]) => `${x}:${y}`;
 const samePoint = (left, right) => left[0] === right[0] && left[1] === right[1];
 
-const normalizeLevel = (level) => ({
-  width: level.width,
-  height: level.height,
-  start: copyPoint(level.start),
-  exit: copyPoint(level.exit),
-  lives: level.lives,
-  walls: level.walls.map(copyPoint),
-  evidence: level.evidence.map(copyPoint),
-  hazards: level.hazards.map(({ path }) => ({ path: path.map(copyPoint) })),
-});
+const normalizeLevel = (level) => {
+  const normalized = {
+    width: level.width,
+    height: level.height,
+    start: copyPoint(level.start),
+    exit: copyPoint(level.exit),
+    lives: level.lives,
+    walls: level.walls.map(copyPoint),
+    evidence: level.evidence.map(copyPoint),
+    hazards: level.hazards.map((hazard) => {
+      const normalizedHazard = { path: hazard.path.map(copyPoint) };
+      if (Object.hasOwn(hazard, "speed")) {
+        normalizedHazard.speed = hazard.speed;
+      }
+      return normalizedHazard;
+    }),
+  };
+  if (Object.hasOwn(level, "turnLimit")) {
+    normalized.turnLimit = level.turnLimit;
+  }
+  return normalized;
+};
 
 export function createGame(level = DEFAULT_LEVEL) {
   const normalized = normalizeLevel(level);
@@ -47,11 +59,17 @@ export function createGame(level = DEFAULT_LEVEL) {
     exit: copyPoint(normalized.exit),
     walls: normalized.walls.map(copyPoint),
     evidence: normalized.evidence.map(copyPoint),
-    hazards: normalized.hazards.map(({ path }) => ({
-      path: path.map(copyPoint),
-      pathIndex: 0,
-      position: copyPoint(path[0]),
-    })),
+    hazards: normalized.hazards.map((hazard) => {
+      const activeHazard = {
+        path: hazard.path.map(copyPoint),
+        pathIndex: 0,
+        position: copyPoint(hazard.path[0]),
+      };
+      if (Object.hasOwn(hazard, "speed")) {
+        activeHazard.speed = hazard.speed;
+      }
+      return activeHazard;
+    }),
     lives: normalized.lives,
     score: 0,
     turn: 0,
@@ -95,15 +113,45 @@ function loseLife(state) {
   };
 }
 
-function advanceHazards(hazards) {
+function advanceHazard(hazard) {
+  const pathIndex = (hazard.pathIndex + 1) % hazard.path.length;
+  return {
+    ...hazard,
+    pathIndex,
+    position: copyPoint(hazard.path[pathIndex]),
+  };
+}
+
+function maxHazardSpeed(hazards) {
+  return hazards.reduce((max, hazard) => Math.max(max, hazard.speed ?? 1), 0);
+}
+
+function advanceHazardsOnce(hazards, step) {
   return hazards.map((hazard) => {
-    const pathIndex = (hazard.pathIndex + 1) % hazard.path.length;
-    return {
-      ...hazard,
-      pathIndex,
-      position: copyPoint(hazard.path[pathIndex]),
-    };
+    const speed = hazard.speed ?? 1;
+    if (step >= speed) {
+      return hazard;
+    }
+    return advanceHazard(hazard);
   });
+}
+
+function exhaustTurnLimit(state) {
+  if (!Object.hasOwn(state.level, "turnLimit") || state.turn < state.level.turnLimit) {
+    return state;
+  }
+  return {
+    ...state,
+    status: "lost",
+    message: "The route expired before the uplink was restored.",
+  };
+}
+
+function finishPlayingTurn(state) {
+  if (state.status !== "playing") {
+    return state;
+  }
+  return exhaustTurnLimit(state);
 }
 
 export function move(state, direction) {
@@ -137,15 +185,17 @@ export function move(state, direction) {
   }
 
   if (collide(next)) {
-    return loseLife(next);
+    return finishPlayingTurn(loseLife(next));
   }
 
-  next = {
-    ...next,
-    hazards: advanceHazards(next.hazards),
-  };
-  if (collide(next)) {
-    return loseLife(next);
+  for (let step = 0; step < maxHazardSpeed(next.hazards); step += 1) {
+    next = {
+      ...next,
+      hazards: advanceHazardsOnce(next.hazards, step),
+    };
+    if (collide(next)) {
+      return finishPlayingTurn(loseLife(next));
+    }
   }
 
   if (samePoint(next.player, next.exit)) {
@@ -157,11 +207,11 @@ export function move(state, direction) {
         message: "Uplink restored. Route complete!",
       };
     }
-    return {
+    return finishPlayingTurn({
       ...next,
       message: `${next.evidence.length} signal${next.evidence.length === 1 ? "" : "s"} still missing.`,
-    };
+    });
   }
 
-  return next;
+  return finishPlayingTurn(next);
 }
