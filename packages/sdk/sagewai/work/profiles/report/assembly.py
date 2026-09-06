@@ -41,11 +41,12 @@ from sagewai.work.runtime import (
     CapabilityGrant,
     CapabilitySet,
     ClaudeRuntime,
+    CodexRuntime,
     OperatorRuntime,
 )
 from sagewai.work.runtime_harness import HarnessRuntime
 from sagewai.work.store import WorkStore
-from sagewai.work.tasks.models import HarnessTier, ReportTarget
+from sagewai.work.tasks.models import PLANNER_RUNTIMES, HarnessTier, ReportTarget, RuntimeRef
 from sagewai.work.tasks.scratch import ScratchResultValidator, ScratchWorkspaceManager
 from sagewai.work.tasks.store import TaskStore
 
@@ -60,6 +61,7 @@ class ReportStack:
     read_controller: OperatorController
     read_capabilities: CapabilitySet
     analysis_runtime: OperatorRuntime
+    planner_runtime: OperatorRuntime
 
 
 async def build_report_stack(
@@ -67,6 +69,7 @@ async def build_report_stack(
     project_id: str,
     target: ReportTarget,
     harness_tiers: Mapping[str, HarnessTier],
+    planner_runtime: RuntimeRef = RuntimeRef.CLAUDE_ANALYSIS,
     github: GitHubClient | None = None,
     controller_factory: ControllerFactory = OperatorController,
     engine: AsyncEngine | None = None,
@@ -137,6 +140,19 @@ async def build_report_stack(
         credential_values=credential_values,
     )
     analysis_runtime = ClaudeRuntime(activity_sink=activity_sink, artifact_store=artifact_store)
+    if planner_runtime not in PLANNER_RUNTIMES:
+        raise ValueError(
+            f"planner runtime {planner_runtime.value} needs harness tiers; use codex or claude"
+        )
+    if planner_runtime is RuntimeRef.CODEX:
+        defaults = await task_store.get_defaults(project_id=project_id)
+        planner = CodexRuntime(
+            model=defaults.codex_model,
+            activity_sink=activity_sink,
+            artifact_store=artifact_store,
+        )
+    else:
+        planner = analysis_runtime
     composers: list[ReportOperator] = []
     medium = harness_tiers.get("medium")
     if medium is not None:
@@ -214,4 +230,5 @@ async def build_report_stack(
         read_controller=_controller(),
         read_capabilities=read_capabilities,
         analysis_runtime=analysis_runtime,
+        planner_runtime=planner,
     )

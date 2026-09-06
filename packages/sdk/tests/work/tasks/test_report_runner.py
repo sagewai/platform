@@ -26,6 +26,8 @@ from sagewai.work.tasks.events import TaskEventType
 from sagewai.work.tasks.models import (
     GateMode,
     ReportTarget,
+    RoleAlias,
+    RuntimeRef,
     TaskDefaults,
     TaskOrigin,
     TaskStatus,
@@ -314,6 +316,95 @@ async def test_report_runner_threads_harness_backends_to_the_stack_builder(
     assert calls[0]["connection_store"] is connection_store
     assert calls[0]["credentials"] is credentials
     assert calls[0]["secret_provider"] is secret_provider
+
+
+@pytest.mark.asyncio
+async def test_the_report_planner_runtime_follows_the_routing_policy(
+    stores,
+    dialect_engine,  # noqa: F811
+    monkeypatch,
+) -> None:
+    _task_store, work_store = stores
+    calls = []
+
+    async def fake_stack(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(activity_sink=object())
+
+    monkeypatch.setattr("sagewai.work.tasks.report.build_report_stack", fake_stack)
+    runner = ReportProfileRunner(work_store=work_store, engine=dialect_engine)
+    base_task = _report_task()
+    task = base_task.model_copy(
+        update={
+            "routing": base_task.routing.model_copy(
+                update={"roles": {RoleAlias.PLANNER: (RuntimeRef.CODEX,)}}
+            )
+        }
+    )
+
+    await runner._stack(task)
+    await runner._stack(_report_task())
+
+    assert calls[0]["planner_runtime"] is RuntimeRef.CODEX
+    assert calls[1]["planner_runtime"] is RuntimeRef.CLAUDE_ANALYSIS
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_report_plan_uses_the_stack_planner_runtime(
+    stores,
+    dialect_engine,  # noqa: F811
+    monkeypatch,
+) -> None:
+    _task_store, work_store = stores
+    planner_runtime = SimpleNamespace(name="codex")
+    stack = SimpleNamespace(
+        work_store=work_store,
+        capsule_compiler=object(),
+        read_controller=object(),
+        analysis_runtime=object(),
+        planner_runtime=planner_runtime,
+        read_capabilities=object(),
+        scratch_manager=object(),
+        activity_sink=object(),
+    )
+    planner_kwargs = []
+
+    async def fake_stack(**_kwargs):
+        return stack
+
+    class RecordingPlanner:
+        def __init__(self, **kwargs) -> None:
+            planner_kwargs.append(kwargs)
+
+        async def plan(self, task, **kwargs) -> TaskPlanResult:
+            return _report_plan()
+
+    monkeypatch.setattr("sagewai.work.tasks.report.build_report_stack", fake_stack)
+    monkeypatch.setattr("sagewai.work.tasks.report.TaskPlanner", RecordingPlanner)
+    runner = ReportProfileRunner(work_store=work_store, engine=dialect_engine)
+
+    await runner.plan(
+        _report_task(),
+        cycle=1,
+        plan_version=1,
+        base_sha=None,
+        brief_text="Write the report",
+        amendments=(),
+    )
+
+    assert planner_kwargs == [
+        {
+            "work_store": stack.work_store,
+            "capsule_compiler": stack.capsule_compiler,
+            "controller": stack.read_controller,
+            "runtime": stack.planner_runtime,
+            "capabilities": stack.read_capabilities,
+            "worktree_manager": planner_kwargs[0]["worktree_manager"],
+            "scratch_manager": stack.scratch_manager,
+            "actor_ref": "runtime:codex:planner",
+        }
+    ]
 
 
 @pytest.mark.asyncio
