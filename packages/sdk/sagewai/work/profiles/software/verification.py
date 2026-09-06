@@ -409,6 +409,15 @@ async def _prepare_trusted_repository(
     )
     if clone.returncode != 0:
         raise VerificationIsolationError(f"cannot prepare trusted repository: {clone.stderr}")
+    # The base is the fetched default-branch head, which the trusted repository may hold only
+    # under its remote-tracking refs; a clone copies branches, not those refs.
+    await _checked_git(
+        destination,
+        "fetch",
+        "--quiet",
+        str(repository),
+        "+refs/remotes/origin/*:refs/remotes/origin/*",
+    )
     await _checked_git(
         destination,
         "checkout",

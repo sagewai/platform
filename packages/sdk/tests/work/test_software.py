@@ -53,6 +53,7 @@ from sagewai.work.profiles.software import (
     software_workspace_precondition,
     workspace_diff,
 )
+from sagewai.work.profiles.software.verification import _prepare_trusted_repository
 from tests.db.conftest import dialect_engine  # noqa: F401
 from tests.work.fakes_verification import LocalVerificationRunner
 
@@ -180,6 +181,47 @@ def _repository(tmp_path: Path) -> tuple[Path, str]:
     _git(repository, "add", "README.md")
     _git(repository, "commit", "-m", "base")
     return repository, _git(repository, "rev-parse", "HEAD")
+
+
+def _repository_behind_its_origin(tmp_path: Path) -> tuple[Path, str]:
+    """A trusted checkout whose fetched origin head is not on any local branch."""
+    repository, _base = _repository(tmp_path)
+    origin = tmp_path / "origin.git"
+    _git(repository, "init", "--bare", str(origin))
+    _git(repository, "remote", "add", "origin", str(origin))
+    _git(repository, "push", "--quiet", "origin", "HEAD:main")
+    other = tmp_path / "other"
+    _git(repository, "clone", "--quiet", str(origin), str(other))
+    _git(other, "config", "user.email", "test@example.com")
+    _git(other, "config", "user.name", "Test")
+    (other / "README.md").write_text("moved\n")
+    _git(other, "commit", "-am", "move the base")
+    _git(other, "push", "--quiet", "origin", "HEAD:main")
+    _git(repository, "fetch", "--quiet", "origin", "main")
+    return repository, _git(repository, "rev-parse", "origin/main")
+
+
+@pytest.mark.asyncio
+async def test_verification_prepares_a_base_the_checkout_only_knows_from_origin(
+    tmp_path: Path,
+) -> None:
+    repository, base_sha = _repository_behind_its_origin(tmp_path)
+    workspace = SoftwareWorkspace(
+        ref="workspace://workspace",
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="workspace",
+        repository=repository,
+        path=tmp_path / "workspace",
+        base_sha=base_sha,
+        initial_sha=base_sha,
+    )
+    workspace.path.mkdir()
+    destination = tmp_path / "trusted"
+
+    await _prepare_trusted_repository(workspace, destination)
+
+    assert _git(destination, "rev-parse", "HEAD") == base_sha
 
 
 def _verification_contract() -> work.WorkContract:
