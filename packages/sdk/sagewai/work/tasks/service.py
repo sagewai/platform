@@ -20,7 +20,7 @@ from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.work.tasks import intake as intake_module
 from sagewai.work.tasks.decide import _BUDGETED, fold_cycle
 from sagewai.work.tasks.decisions import TASK_GATES
-from sagewai.work.tasks.events import TaskEvent, TaskEventType, fold_record
+from sagewai.work.tasks.events import TaskEvent, TaskEventType, fold_record, open_questions
 from sagewai.work.tasks.models import (
     TERMINAL_STATUSES,
     Authority,
@@ -36,7 +36,7 @@ from sagewai.work.tasks.models import (
     TaskStatus,
     TaskTarget,
 )
-from sagewai.work.tasks.plan import plan_from_events
+from sagewai.work.tasks.plan import clarification_request_entry, plan_from_events
 from sagewai.work.tasks.store import StaleTaskError, TaskStore
 from sagewai.work.tasks.templates import default_registry, get_template, validate_slots
 from sagewai.work.tasks.writer import Entry, TaskWriter, build_events, status_entry
@@ -71,26 +71,6 @@ def _title(brief: str) -> str:
         if stripped:
             return stripped[:_MAX_TITLE]
     raise TaskCreationError("brief is empty")
-
-
-def _open_questions(
-    events: Sequence[TaskEvent],
-) -> list[tuple[dict[str, Any], datetime | None]]:
-    """Requested questions with no answer or default yet, each with its deadline."""
-    pending: dict[str, tuple[dict[str, Any], datetime | None]] = {}
-    for event in sorted(events, key=lambda item: item.sequence):
-        payload = event.payload_json
-        if event.event_type is TaskEventType.CLARIFICATION_REQUESTED:
-            raw = payload.get("deadline_at")
-            deadline = datetime.fromisoformat(raw) if raw else None
-            for question in payload["questions"]:
-                pending[str(question["id"])] = (question, deadline)
-        elif event.event_type in {
-            TaskEventType.CLARIFICATION_ANSWERED,
-            TaskEventType.CLARIFICATION_DEFAULTED,
-        }:
-            pending.pop(str(payload["question_id"]), None)
-    return list(pending.values())
 
 
 def _default_clarification_entry(question: dict[str, Any]) -> Entry:
@@ -250,14 +230,13 @@ class TaskService:
             ),
         ]
         if routed.questions:
-            deadline = moment + timedelta(seconds=defaults.clarification_deadline_seconds)
             entries.append(
-                (
-                    TaskEventType.CLARIFICATION_REQUESTED,
-                    {
-                        "questions": [question.model_dump(mode="json") for question in routed.questions],
-                        "deadline_at": deadline.isoformat(),
-                    },
+                clarification_request_entry(
+                    (),
+                    routed.questions,
+                    deadline_at=moment + timedelta(
+                        seconds=defaults.clarification_deadline_seconds
+                    ),
                 )
             )
             entries.append(status_entry(base, TaskStatus.CLARIFYING))
@@ -290,8 +269,12 @@ class TaskService:
         re-asked at a higher version rejects an answer composed against the old text.
         """
         _task, record = await self._load(task_id, project_id=project_id)
-        open_questions = _open_questions(await self._store.read_events(task_id, project_id=project_id))
-        questions = {str(question["id"]): question for question, _deadline in open_questions}
+        questions = {
+            str(question["id"]): question
+            for question, _deadline in open_questions(
+                await self._store.read_events(task_id, project_id=project_id)
+            )
+        }
         try:
             question = questions.pop(question_id)
         except KeyError as exc:
@@ -635,16 +618,16 @@ class TaskService:
         if record.status not in _OPEN_QUESTION_STATUSES or record.pending_questions == 0:
             return record
         events = await self._store.read_events(task_id, project_id=project_id)
-        open_questions = _open_questions(events)
+        open_items = open_questions(events)
         expired = [
             question
-            for question, deadline in open_questions
+            for question, deadline in open_items
             if bool(question["defaultable"]) and deadline is not None and deadline <= moment
         ]
         if not expired:
             return record
         entries: list[Entry] = [_default_clarification_entry(question) for question in expired]
-        if record.status is TaskStatus.CLARIFYING and len(expired) == len(open_questions):
+        if record.status is TaskStatus.CLARIFYING and len(expired) == len(open_items):
             entries.append(status_entry(record, TaskStatus.PLANNING))
         writer = TaskWriter(self._store)
         return await writer.append(record, entries, now=moment)

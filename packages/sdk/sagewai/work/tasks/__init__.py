@@ -42,6 +42,7 @@ from sagewai.work.tasks.events import (
     board_column,
     derive_attention,
     fold_record,
+    open_questions,
 )
 from sagewai.work.tasks.feed import FeedBus, FeedEntry
 from sagewai.work.tasks.health import evaluate_health
@@ -78,6 +79,7 @@ from sagewai.work.tasks.plan import (
     PlanStep,
     TaskPlanResult,
     accept_plan,
+    clarification_request_entry,
     plan_from_events,
 )
 from sagewai.work.tasks.planner import PlanningFailedError, TaskPlanner
@@ -149,9 +151,10 @@ __all__ = [
     "TaskPlanResult", "TaskPlanner", "TaskRecord", "TaskService", "TaskStatus", "TaskStore",
     "TaskTelemetry", "TaskTemplate", "TaskTriggerSpec", "TaskWriter", "ThreadEntry", "ThreadView",
     "VerificationRunTelemetry", "WorkTelemetry", "accept_plan", "actions_from_events",
-    "assert_transition", "board_column", "budget_breach", "budget_used_from", "decide",
-    "decision_inbox", "derive_attention", "derive_task_telemetry", "evaluate_health",
-    "fold_cycle", "fold_record", "get_template", "merge_assessment", "next_fire",
-    "plan_from_events", "preset_to_cron", "referenced_artifacts", "route", "status_entry",
-    "task_work_ids", "thread_from_events", "validate_cron", "validate_slots", "validate_timezone",
+    "assert_transition", "board_column", "budget_breach", "budget_used_from",
+    "clarification_request_entry", "decide", "decision_inbox", "derive_attention",
+    "derive_task_telemetry", "evaluate_health", "fold_cycle", "fold_record", "get_template",
+    "merge_assessment", "next_fire", "open_questions", "plan_from_events", "preset_to_cron",
+    "referenced_artifacts", "route", "status_entry", "task_work_ids", "thread_from_events",
+    "validate_cron", "validate_slots", "validate_timezone",
 ]

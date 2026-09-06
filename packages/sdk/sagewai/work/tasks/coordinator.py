@@ -91,6 +91,7 @@ from sagewai.work.tasks.plan import (
     PlanStep,
     TaskPlanResult,
     accept_plan,
+    clarification_request_entry,
 )
 from sagewai.work.tasks.planner import PlanningFailedError
 from sagewai.work.tasks.store import StaleTaskError, TaskStore
@@ -956,13 +957,11 @@ class TaskCoordinator:
         self, task: Task, questions: tuple[ClarificationQuestion, ...]
     ) -> Entry:
         defaults = await self._task_store.get_defaults(project_id=task.project_id)
-        deadline = self._now() + timedelta(seconds=defaults.clarification_deadline_seconds)
-        return (
-            TaskEventType.CLARIFICATION_REQUESTED,
-            {
-                "questions": [question.model_dump(mode="json") for question in questions],
-                "deadline_at": deadline.isoformat(),
-            },
+        events = await self._task_store.read_events(task.id, project_id=task.project_id)
+        return clarification_request_entry(
+            events,
+            questions,
+            deadline_at=self._now() + timedelta(seconds=defaults.clarification_deadline_seconds),
         )
 
     async def _run_planning(

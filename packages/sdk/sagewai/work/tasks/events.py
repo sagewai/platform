@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import datetime
 from enum import Enum
 from typing import Any
@@ -145,7 +145,7 @@ def fold_record(previous: TaskRecord, events: Iterable[TaskEvent]) -> TaskRecord
 
     Payload keys read by the projection:
     TASK_STATUS_CHANGED: status
-    CLARIFICATION_REQUESTED: questions[*].defaultable
+    CLARIFICATION_REQUESTED: pending_questions, pending_material_questions
     CLARIFICATION_ANSWERED: material
     CLARIFICATION_DEFAULTED: none
     PLAN_ACCEPTED: version
@@ -177,11 +177,8 @@ def fold_record(previous: TaskRecord, events: Iterable[TaskEvent]) -> TaskRecord
                 values["pending_questions"] = 0
                 values["pending_material_questions"] = 0
         elif event_type is TaskEventType.CLARIFICATION_REQUESTED:
-            questions = payload["questions"]
-            values["pending_questions"] += len(questions)
-            values["pending_material_questions"] += sum(
-                1 for question in questions if not bool(question["defaultable"])
-            )
+            values["pending_questions"] = int(payload["pending_questions"])
+            values["pending_material_questions"] = int(payload["pending_material_questions"])
         elif event_type in {
             TaskEventType.CLARIFICATION_ANSWERED,
             TaskEventType.CLARIFICATION_DEFAULTED,
@@ -232,4 +229,31 @@ def fold_record(previous: TaskRecord, events: Iterable[TaskEvent]) -> TaskRecord
     return TaskRecord.model_validate(values)
 
 
-__all__ = ["TaskEvent", "TaskEventType", "board_column", "derive_attention", "fold_record"]
+def open_questions(
+    events: Sequence[TaskEvent],
+) -> list[tuple[dict[str, Any], datetime | None]]:
+    """Requested questions with no answer or default yet, each with its deadline."""
+    pending: dict[str, tuple[dict[str, Any], datetime | None]] = {}
+    for event in sorted(events, key=lambda item: item.sequence):
+        payload = event.payload_json
+        if event.event_type is TaskEventType.CLARIFICATION_REQUESTED:
+            raw = payload.get("deadline_at")
+            deadline = datetime.fromisoformat(raw) if raw else None
+            for question in payload["questions"]:
+                pending[str(question["id"])] = (question, deadline)
+        elif event.event_type in {
+            TaskEventType.CLARIFICATION_ANSWERED,
+            TaskEventType.CLARIFICATION_DEFAULTED,
+        }:
+            pending.pop(str(payload["question_id"]), None)
+    return list(pending.values())
+
+
+__all__ = [
+    "TaskEvent",
+    "TaskEventType",
+    "board_column",
+    "derive_attention",
+    "fold_record",
+    "open_questions",
+]

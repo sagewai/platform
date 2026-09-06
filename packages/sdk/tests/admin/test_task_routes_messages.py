@@ -108,6 +108,8 @@ async def _add_clarification_question(
                         }
                     ],
                     "deadline_at": NOW.isoformat(),
+                    "pending_questions": 2,
+                    "pending_material_questions": 0 if defaultable else 1,
                 },
             )
         ],

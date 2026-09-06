@@ -138,6 +138,8 @@ async def test_create_that_asks_first_starts_clarifying(service: TaskService, st
     events = await store.read_events(task.id, project_id="project-a")
     assert events[3].event_type is TaskEventType.CLARIFICATION_REQUESTED
     assert events[3].payload_json["deadline_at"] == "2026-09-03T13:00:00+00:00"
+    assert events[3].payload_json["pending_questions"] == record.pending_questions
+    assert events[3].payload_json["pending_material_questions"] == record.pending_material_questions
     assert events[4].payload_json == {"status": "CLARIFYING"}
 
 
@@ -296,6 +298,8 @@ async def test_answering_questions_uses_the_open_set_and_materiality(
                         }
                     ],
                     "deadline_at": NOW.isoformat(),
+                    "pending_questions": 2,
+                    "pending_material_questions": 1,
                 },
             )
         ],
@@ -441,6 +445,8 @@ async def test_a_non_defaultable_question_is_never_defaulted(
                         }
                     ],
                     "deadline_at": NOW.isoformat(),
+                    "pending_questions": 2,
+                    "pending_material_questions": 1,
                 },
             )
         ],
@@ -484,6 +490,8 @@ async def test_a_question_attached_to_a_plan_defaults_without_returning_to_plann
                         }
                     ],
                     "deadline_at": (NOW + timedelta(hours=9)).isoformat(),
+                    "pending_questions": 1,
+                    "pending_material_questions": 0,
                 },
             ),
             status_entry(record, TaskStatus.PLAN_PROPOSED),
@@ -677,6 +685,8 @@ async def test_defaulting_a_non_defaultable_question_is_refused(
                         }
                     ],
                     "deadline_at": NOW.isoformat(),
+                    "pending_questions": 2,
+                    "pending_material_questions": 1,
                 },
             )
         ],
@@ -722,6 +732,8 @@ async def test_defaulting_a_question_without_a_default_is_refused(
                         }
                     ],
                     "deadline_at": NOW.isoformat(),
+                    "pending_questions": 2,
+                    "pending_material_questions": 0,
                 },
             )
         ],

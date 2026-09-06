@@ -74,6 +74,8 @@ def _stream() -> tuple[TaskEvent, ...]:
                     },
                 ],
                 "deadline_at": NOW.isoformat(),
+                "pending_questions": 2,
+                "pending_material_questions": 1,
             },
         ),
         _event(
@@ -201,6 +203,8 @@ def test_terminal_tasks_close_unanswered_questions_and_undecided_gates() -> None
                         },
                     ],
                     "deadline_at": NOW.isoformat(),
+                    "pending_questions": 2,
+                    "pending_material_questions": 1,
                 },
             ),
             _event(

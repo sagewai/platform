@@ -1851,6 +1851,8 @@ async def test_a_defaulted_answer_reaches_the_next_plan_version(stores, tmp_path
                         }
                     ],
                     "deadline_at": (NOW + timedelta(hours=4)).isoformat(),
+                    "pending_questions": 1,
+                    "pending_material_questions": 0,
                 },
             ),
             (
