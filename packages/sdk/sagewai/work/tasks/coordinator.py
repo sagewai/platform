@@ -88,7 +88,6 @@ from sagewai.work.tasks.intake import ClarificationQuestion
 from sagewai.work.tasks.models import BudgetUsed, Task, TaskKind, TaskRecord, TaskStatus
 from sagewai.work.tasks.plan import (
     AcceptedPlan,
-    PlanRejectedError,
     PlanStep,
     TaskPlanResult,
     accept_plan,
@@ -1007,19 +1006,9 @@ class TaskCoordinator:
             entries.append(await self._clarification_request(task, result.clarifications))
             entries.append(status_entry(record, TaskStatus.CLARIFYING))
             return await self._append(record, entries, lease_epoch, command=command)
-        try:
-            plan = accept_plan(
-                result, budget=task.budget, target=task.target, version=command.plan_version
-            )
-        except PlanRejectedError as exc:
-            return await self._block_planning(
-                task,
-                record,
-                f"plan rejected: {exc}",
-                lease_epoch,
-                command,
-                prefix=ledger.drain(),
-            )
+        plan = accept_plan(
+            result, budget=task.budget, target=task.target, version=command.plan_version
+        )
         entries = ledger.drain()
         entries.append(
             (

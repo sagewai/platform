@@ -2281,7 +2281,9 @@ async def test_a_rejected_plan_offers_a_replan_gate_where_the_inbox_looks(stores
     task, record, runner, coordinator = await _seed(stores, tmp_path)
     channel = RecordingDecisionChannel()
     coordinator._static_channels = (channel,)
-    runner.plan_result = _plan_result().model_copy(update={"acceptance_matrix": ()})
+    runner.plan_error = PlanningFailedError(
+        "invalid task_plan_result after 3 attempts: plan rejected: acceptance matrix is empty"
+    )
 
     epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
     record = await _drive_to_rest(coordinator, record, epoch)
