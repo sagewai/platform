@@ -101,6 +101,25 @@ class PlanRejectedError(ValueError):
     """The planner's result violates a deterministic acceptance rule."""
 
 
+def plan_rules(target: SoftwareTarget | ReportTarget) -> tuple[str, ...]:
+    """Section 7's deterministic acceptance rules, in the words the planner must satisfy."""
+    if isinstance(target, SoftwareTarget):
+        commands = ", ".join(repr(command) for command in target.verification_commands)
+        return (
+            "every step's allowed_scope lists files or directories relative to the checkout "
+            "(for example src/app.js or docs/); never '.', an absolute path, or '..'",
+            "at least one acceptance-matrix item is deterministic and its command is one of the "
+            f"locked verification commands, verbatim: {commands}",
+            "every other matrix item is policy (judged by the assessor) and carries no command",
+        )
+    return (
+        "every step's allowed_scope names the report artifact the step writes, relative "
+        "(for example report.md); never '.', an absolute path, or '..'",
+        "a report target has no verification commands: every acceptance-matrix item is policy "
+        "(judged by the assessor) and carries no command",
+    )
+
+
 def _is_surgical(target: str) -> bool:
     path = PurePosixPath(target.strip())
     return bool(path.parts) and not path.is_absolute() and ".." not in path.parts
@@ -151,25 +170,35 @@ def accept_plan(
     for step in result.steps:
         for scope in step.allowed_scope:
             if not _is_surgical(scope):
-                raise PlanRejectedError(f"scope {scope!r} in step {step.id!r} is not surgical")
+                raise PlanRejectedError(
+                    f"scope {scope!r} in step {step.id!r} is not surgical: "
+                    f"{plan_rules(target)[0]}"
+                )
     ordered = _topological(result.steps)
     if not result.acceptance_matrix:
         raise PlanRejectedError("acceptance matrix is empty")
     matrix_ids = [item.id for item in result.acceptance_matrix]
     if len(set(matrix_ids)) != len(matrix_ids):
         raise PlanRejectedError("duplicate matrix item id")
-    deterministic = [item for item in result.acceptance_matrix if item.verification_kind == "deterministic"]
+    deterministic = [
+        item for item in result.acceptance_matrix if item.verification_kind == "deterministic"
+    ]
     if isinstance(target, SoftwareTarget):
         if not deterministic:
-            raise PlanRejectedError("software targets need at least one deterministic matrix item")
+            raise PlanRejectedError(
+                "software targets need at least one deterministic matrix item: "
+                f"{plan_rules(target)[1]}"
+            )
         for item in deterministic:
             if item.command not in target.verification_commands:
                 raise PlanRejectedError(
-                    f"matrix item {item.id!r} names {item.command!r}, not one of the locked verification commands"
+                    f"matrix item {item.id!r} names {item.command!r}, not one of the "
+                    f"locked verification commands: {plan_rules(target)[1]}"
                 )
     elif deterministic:
         raise PlanRejectedError(
-            "report targets verify through the profile; matrix items are judged, not run"
+            "report targets verify through the profile: every matrix item is policy "
+            "and carries no command"
         )
     return AcceptedPlan(version=version, steps=ordered, acceptance_matrix=result.acceptance_matrix)
 
@@ -241,5 +270,6 @@ __all__ = [
     "accept_plan",
     "clarification_request_entry",
     "plan_from_events",
+    "plan_rules",
     "proposed_plan_from_events",
 ]

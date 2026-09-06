@@ -27,6 +27,7 @@ from sagewai.work.tasks.plan import (
     TaskPlanResult,
     accept_plan,
     clarification_request_entry,
+    plan_rules,
     proposed_plan_from_events,
 )
 
@@ -80,6 +81,38 @@ def _event(sequence: int, event_type: TaskEventType, payload: dict) -> TaskEvent
         payload_json=payload,
         created_at=NOW,
     )
+
+
+def test_plan_rules_name_the_shape_each_target_needs() -> None:
+    target = TARGET.model_copy(update={"verification_commands": ("just smoke", "just test")})
+    software_rules = plan_rules(target)
+    report_rules = plan_rules(ReportTarget(required_sections=("Summary",)))
+
+    assert "deterministic" in " ".join(software_rules)
+    for command in target.verification_commands:
+        assert repr(command) in " ".join(software_rules)
+    assert "report.md" in " ".join(report_rules)
+    assert "policy" in " ".join(report_rules)
+
+
+def test_a_rejected_scope_says_what_a_scope_is() -> None:
+    with pytest.raises(PlanRejectedError) as excinfo:
+        accept_plan(
+            _result(steps=(_step("a", scope=(".",)),)),
+            budget=Budget(),
+            target=TARGET,
+            version=1,
+        )
+    assert "relative to the checkout" in str(excinfo.value)
+
+    with pytest.raises(PlanRejectedError) as excinfo:
+        accept_plan(
+            _result(steps=(_step("r", scope=(".",)),), matrix=(_matrix()[1],)),
+            budget=Budget(),
+            target=ReportTarget(required_sections=("Summary",)),
+            version=1,
+        )
+    assert "report.md" in str(excinfo.value)
 
 
 def test_accept_plan_orders_steps_topologically() -> None:

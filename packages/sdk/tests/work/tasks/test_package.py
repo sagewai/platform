@@ -29,7 +29,8 @@ def test_package_exports_planning_names() -> None:
     for name in (
         "CATALOGUE", "TaskTemplate", "SlotSpec", "validate_slots", "get_template",
         "IntakeResult", "ClarificationQuestion", "route",
-        "TaskPlanResult", "PlanStep", "MatrixItem", "AcceptedPlan", "PlanRejectedError", "accept_plan",
+        "TaskPlanResult", "PlanStep", "MatrixItem", "AcceptedPlan", "PlanRejectedError",
+        "accept_plan", "plan_rules",
         "ScratchWorkspace", "ScratchWorkspaceManager", "ScratchResultValidator",
         "TaskPlanner", "PlanningFailedError",
     ):

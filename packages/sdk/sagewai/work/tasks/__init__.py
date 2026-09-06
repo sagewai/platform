@@ -83,6 +83,7 @@ from sagewai.work.tasks.plan import (
     accept_plan,
     clarification_request_entry,
     plan_from_events,
+    plan_rules,
     proposed_plan_from_events,
 )
 from sagewai.work.tasks.planner import PlanningFailedError, TaskPlanner
@@ -157,8 +158,8 @@ __all__ = [
     "assert_transition", "board_column", "budget_breach", "budget_used_from",
     "clarification_request_entry", "decide", "decision_inbox", "derive_attention",
     "derive_task_telemetry", "evaluate_health", "fold_cycle", "fold_record", "get_template",
-    "merge_assessment", "next_fire", "open_questions", "plan_from_events", "planner_runtime",
-    "preset_to_cron", "proposed_plan_from_events", "referenced_artifacts", "route",
-    "status_entry", "task_work_ids", "thread_from_events", "validate_cron", "validate_slots",
-    "validate_timezone",
+    "merge_assessment", "next_fire", "open_questions", "plan_from_events", "plan_rules",
+    "planner_runtime", "preset_to_cron", "proposed_plan_from_events", "referenced_artifacts",
+    "route", "status_entry", "task_work_ids", "thread_from_events", "validate_cron",
+    "validate_slots", "validate_timezone",
 ]
