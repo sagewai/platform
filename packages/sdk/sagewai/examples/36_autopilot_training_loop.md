@@ -102,9 +102,8 @@ needed, no sagewai-llm server needed.
 ### With real captured data — run Example 30 first
 
 ```bash
-# Step 1: run the on-call triage agent — this writes JSONL captures
-export ANTHROPIC_API_KEY=sk-ant-...
-python packages/sdk/sagewai/examples/30_oncall_agent.py
+# Step 1: produce captures — any run that writes the training_runs/ JSONL capture
+# format (the on-call agent example that used to do this was retired with Autopilot)
 
 # Step 2: run the training loop — cycle 2 picks up the captures
 python packages/sdk/sagewai/examples/36_autopilot_training_loop.py
@@ -232,9 +231,5 @@ default and works with all major fine-tuning frameworks.
 
 ## What to read next
 
-- **Example 30** (`30_oncall_agent.py`) — produces the `training_runs/` JSONL
-  that this example's cycle-2 consumes. Run it first for real captured data.
-- **Example 28** (`28_autopilot_quickstart.py`) — the routing tier that
-  eventually routes to your fine-tuned model once it's deployed via Ollama.
 - **Example 38** (`38_local_slm_training.py`) — full Unsloth fine-tune on a
   real dataset and Ollama deploy. The natural next step after this example.

@@ -332,9 +332,6 @@ real deployment:
 
 If you ran this and want to go deeper:
 
-- **Example 30** (`30_oncall_agent.py`) — the v1.0 lighthouse this
-  builds on. Reactive triage of a single incident; pair with
-  Example 41 to get the "react + learn from structure" loop.
 - **Example 04** (`04_memory_agent.py`) — the basic vector memory
   example. Useful when you want the storage-and-similarity
   story without the graph layer.

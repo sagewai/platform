@@ -82,7 +82,6 @@ from typing import Any
 
 from sagewai.autopilot.agent_graph import Agent, AgentGraph
 from sagewai.autopilot.blueprint import Blueprint
-from sagewai.autopilot.controller.types import MissionRunResult, StepResult
 from sagewai.autopilot.curator import (
     Curator,
     CuratorConfig,
@@ -95,6 +94,8 @@ from sagewai.autopilot.models import (
     EvalRef,
     LearningLoopConfig,
     Metric,
+    MissionRunResult,
+    StepResult,
     TrainingHook,
 )
 

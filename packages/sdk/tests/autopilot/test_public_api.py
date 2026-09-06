@@ -25,14 +25,16 @@ def test_public_surface_is_importable():
         EvalRef,
         LearningLoopConfig,
         Metric,
-        Mission,
         MissionLifecycleError,
+        MissionRunResult,
         MissionState,
         Mode,
         Operator,
         ProviderRequirement,
         SlotSpec,
         SlotValidationError,
+        StepResult,
+        StepTelemetry,
         TrainingHook,
         ValidatorRegistry,
         default_registry,
@@ -44,6 +46,31 @@ def test_public_all_lists_every_export():
 
     for name in ap.__all__:
         assert hasattr(ap, name), f"{name} listed in __all__ but not exported"
+
+
+def test_public_api_excludes_retired_runtime_names():
+    import sagewai.autopilot as ap
+
+    retired_names = {
+        "AlertOperator",
+        "AutopilotController",
+        "ControllerConfig",
+        "HealingAction",
+        "HealingEngine",
+        "HealingPolicy",
+        "HealthMonitor",
+        "HealthSignal",
+        "Mission",
+        "MissionContext",
+        "MissionDriver",
+        "PauseBudget",
+        "RetryMission",
+        "RotateProvider",
+    }
+
+    assert retired_names.isdisjoint(ap.__all__)
+    for name in retired_names:
+        assert not hasattr(ap, name)
 
 
 def test_round_trip_synthetic_blueprints_through_public_api():

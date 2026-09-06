@@ -36,7 +36,7 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from sagewai.autopilot.blueprint import Blueprint
-from sagewai.autopilot.controller import MissionRunResult
+from sagewai.autopilot.models import MissionRunResult
 
 from .filter import eval_quality_filter
 from .types import CuratorConfig, DatasetFormat, FineTuneJob, TrainingDataset

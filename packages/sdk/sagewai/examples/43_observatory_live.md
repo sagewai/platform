@@ -277,4 +277,3 @@ and the bootstrap step skips itself when setup is already complete.
 - [`/docs/observatory`](https://github.com/sagewai/platform/blob/main/apps/docs/app/docs/observatory/page.mdx) — the docs-site Observatory page that uses the screenshots this example produces.
 - [Example 34 — Observatory cost tracking](34_observatory_cost_tracking.py) — the cost story (deterministic, no live admin backend needed).
 - [Example 40 — Fleet under load](40_fleet_under_load.py) — pure fleet-dispatch load generator (no admin backend, in-memory only).
-- [Example 30 — On-call agent](30_oncall_agent.py) — a single complete mission, easier to follow on the HUD graph than dozens of concurrent runs.
