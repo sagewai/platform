@@ -93,9 +93,6 @@ import type {
   FleetAuditEvent,
   IntelligenceStatus,
   SavedWorkflow,
-  AutopilotStatus,
-  AutopilotGoalResponse,
-  AutopilotMissionsResponse,
   BlueprintExplainResponse,
   SandboxRequirementsPayload,
   SandboxRequirementsResponse,
@@ -123,10 +120,6 @@ import type {
   InferenceProviderWritePayload,
   InferenceProviderTestResult,
   InferenceProviderKey,
-  AutopilotMissionDetail,
-  AutopilotMissionExplain,
-  AutopilotMissionTrace,
-  MissionRunEvent,
   ToolRegistryEntry,
   ToolConnectionMetadata,
   ToolTestResult,
@@ -1538,78 +1531,6 @@ export const adminApi = {
     return j as PoolStatsSnapshot;
   },
 
-  /* ─── Autopilot endpoints ─── */
-  getAutopilotStatus: () =>
-    analyticsClient.get<AutopilotStatus>('/api/v1/autopilot/status'),
-
-  getAutopilotExamples: () =>
-    analyticsClient.get<{ examples: string[] }>('/api/v1/autopilot/examples'),
-
-  enableAutopilot: (tier: string) =>
-    analyticsClient.post<AutopilotStatus>('/api/v1/autopilot/enable', { tier }),
-
-  disableAutopilot: () =>
-    analyticsClient.post<{ status: string }>('/api/v1/autopilot/disable', {}),
-
-  getAutopilotSystemReadiness: () =>
-    analyticsClient.get<{
-      providers: Array<{
-        id: string;
-        provider_name: string;
-        display_name: string;
-        default: boolean;
-        model: string | null;
-        type: string;
-      }>;
-      default_provider: { id: string; provider_name: string; model: string | null } | null;
-      search_keys_set: { serper: boolean; tavily: boolean; brave: boolean };
-      active_search_backend: string;
-      warnings: Array<{ code: string; severity: 'error' | 'warning' | 'info'; message: string; fix: string }>;
-      ready: boolean;
-    }>('/api/v1/autopilot/system-readiness'),
-
-  submitAutopilotGoal: (goal: string) =>
-    analyticsClient.post<AutopilotGoalResponse>('/api/v1/autopilot/goal', { goal }),
-
-  synthesizeAutopilotBlueprint: (goal: string) =>
-    analyticsClient.post<AutopilotGoalResponse>('/api/v1/autopilot/synthesize', { goal }),
-
-  approveAutopilotMission: (missionId: string, blueprintId?: string) =>
-    analyticsClient.post<{ status: string; mission_id: string }>(
-      '/api/v1/autopilot/approve',
-      { mission_id: missionId, blueprint_id: blueprintId ?? null },
-    ),
-
-  listAutopilotMissions: (
-    limitOrOpts?: number | { limit?: number; offset?: number; q?: string; status?: string },
-  ) => {
-    const opts =
-      typeof limitOrOpts === "number"
-        ? { limit: limitOrOpts }
-        : limitOrOpts ?? {};
-    const params = new URLSearchParams();
-    if (opts.limit !== undefined) params.set("limit", String(opts.limit));
-    if (opts.offset !== undefined) params.set("offset", String(opts.offset));
-    if (opts.q) params.set("q", opts.q);
-    if (opts.status) params.set("status", opts.status);
-    const qs = params.toString() ? `?${params.toString()}` : "";
-    return analyticsClient.get<AutopilotMissionsResponse>(
-      `/api/v1/autopilot/missions${qs}`,
-    );
-  },
-
-  rerunAutopilotMission: (missionId: string) =>
-    analyticsClient.post<{ mission_id: string; source_mission_id: string; status: string }>(
-      `/api/v1/autopilot/missions/${encodeURIComponent(missionId)}/rerun`,
-      {},
-    ),
-
-  cancelAutopilotMission: (missionId: string, reason: string) =>
-    analyticsClient.post<{ mission_id: string; status: string }>(
-      `/api/v1/autopilot/missions/${encodeURIComponent(missionId)}/cancel`,
-      { reason },
-    ),
-
   explainBlueprint: (blueprint_json: object) =>
     analyticsClient.post<BlueprintExplainResponse>('/v1/blueprints/explain', { blueprint_json }),
 
@@ -2155,30 +2076,6 @@ export const adminApi = {
     analyticsClient.post<InferenceProviderTestResult>(
       `/api/v1/admin/connections/${encodeURIComponent(provider)}/test`,
       {},
-    ),
-
-  /* ─── Autopilot mission detail (Plan G) ─── */
-  getAutopilotMission: (id: string) =>
-    analyticsClient.get<AutopilotMissionDetail>(
-      `/api/v1/autopilot/missions/${encodeURIComponent(id)}`,
-    ),
-
-  explainAutopilotMission: (id: string) =>
-    analyticsClient.post<AutopilotMissionExplain>(
-      `/api/v1/autopilot/missions/${encodeURIComponent(id)}/explain`,
-      {},
-    ),
-
-  runAutopilotMission: (id: string) =>
-    analyticsClient.post<{ run_id: string; started_at: string }>(
-      `/api/v1/autopilot/missions/${encodeURIComponent(id)}/run`,
-      {},
-    ),
-
-  /* ─── Autopilot mission trace (Plan H) ─── */
-  getAutopilotMissionTrace: (id: string) =>
-    analyticsClient.get<AutopilotMissionTrace>(
-      `/api/v1/autopilot/missions/${encodeURIComponent(id)}/trace`,
     ),
 
   /* ─── Tool connections (batch-2a) ─── */

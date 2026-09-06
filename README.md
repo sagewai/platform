@@ -39,7 +39,7 @@ In practice that means you can:
 - **Stop safely** at approval, blocked, or degraded-control states and surface them through the CLI and Work Control Console.
 - **Execute locally by default**, or dispatch credential-free stages to compatible, project-scoped Fleet workers. Codex and Claude authentication remains on each worker.
 
-The agent SDK, workflows, Autopilot, Sealed, Observatory, and Training Loop remain in the repository. They are retained capabilities, not the primary Work lifecycle described here. See the [evolution decisions](./docs/architecture/work-control-plane-evolution.md) for the current boundaries.
+The agent SDK, workflows, Sealed, Observatory, and Training Loop remain in the repository. They are retained capabilities, not the primary Work lifecycle described here. See the [evolution decisions](./docs/architecture/work-control-plane-evolution.md) for the current boundaries.
 
 All AGPL-3.0. Install with `uv pip install sagewai` (or `pip install sagewai` inside a virtualenv), or clone the repo and build the full stack from source with `just stack-up`. Self-hostable on your own hardware.
 
@@ -176,7 +176,6 @@ Inside the SDK — [`packages/sdk/sagewai/`](./packages/sdk/sagewai) — the sub
 | `cli` | The `sagewai` command-line entrypoints |
 | `work` | Durable Work kernel, evidence, operator runtimes, and profiles |
 | `engines` | Agent runtimes (`UniversalAgent`, workflows) |
-| `autopilot` | Goal → agent-graph planning and missions |
 | `fleet` | Distributed workers, dispatch, enrollment |
 | `sandbox` | Isolated execution backends (Docker, Kubernetes) |
 | `sealed` | Workload identity, secret backends, redaction |

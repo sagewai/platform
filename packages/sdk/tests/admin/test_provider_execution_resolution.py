@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-from sagewai.admin.autopilot_routes import _resolve_executor_config
 from sagewai.admin.provider_resolution import choose_provider, litellm_kwargs_for_provider
 
 
@@ -32,25 +31,6 @@ def test_provider_resolution_returns_explicit_litellm_kwargs():
     }
 
 
-def test_autopilot_executor_config_uses_injected_tenant_provider():
-    provider = {
-        "provider_name": "openai",
-        "default": True,
-        "config": {"api_key": "sk-project", "model": "gpt-4o"},
-    }
-    cfg = _resolve_executor_config(
-        _UnexpectedFileStore(),
-        "project-a",
-        providers=[provider],
-    )
-    assert cfg.model == "gpt-4o"
-    assert cfg.api_key == "sk-project"
-    assert cfg.allow_env_fallback is False
-
-
-def test_autopilot_executor_config_disables_env_fallback_for_empty_tenant_providers():
-    cfg = _resolve_executor_config(_UnexpectedFileStore(), "project-a", providers=[])
-    assert cfg.allow_env_fallback is False
 
 
 def test_choose_provider_prefers_project_default_over_older_org_default():
