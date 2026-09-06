@@ -24,6 +24,7 @@ from sagewai.work.tasks.models import TaskDefaults, TaskStatus
 from sagewai.work.tasks.store import TaskStore
 from sagewai.work.tasks.writer import TaskWriter, status_entry
 from tests.db.conftest import dialect_engine  # noqa: F401
+from tests.work.tasks.test_service import MATRIX, STEP
 from tests.work.tasks.test_store import _record, _task
 
 NOW = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
@@ -169,7 +170,11 @@ async def gated(wired, dialect_engine):  # noqa: F811
     await _create(
         store,
         "t-5",
-        extra=((TaskEventType.GATE_REQUESTED, {"gate_id": "plan:t-5:1", "question": "Approve."}),),
+        extra=(
+            (TaskEventType.PLAN_PROPOSED, {"version": 1, "steps": [STEP], "acceptance_matrix": MATRIX}),
+            (TaskEventType.GATE_REQUESTED, {"gate_id": "plan:t-5:1", "question": "Approve."}),
+            (TaskEventType.TASK_STATUS_CHANGED, {"status": "PLAN_PROPOSED"}),
+        ),
     )
     return wired
 
@@ -252,7 +257,7 @@ def test_approve_decides_a_task_gate(wired, gated) -> None:
     result = wired.invoke(task_group, ["--project", "project-a", "approve", "t-5", "plan:t-5:1"])
 
     assert result.exit_code == 0, result.output
-    assert result.output.strip() == "Task t-5: PLANNING"
+    assert result.output.strip() == "Task t-5: EXECUTING"
 
 
 def test_approve_deny_blocks_the_task(wired, gated) -> None:
