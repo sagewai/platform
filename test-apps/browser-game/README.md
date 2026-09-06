@@ -13,8 +13,10 @@ npm run serve
 ```
 
 Open <http://localhost:4173>. Use the arrow keys, WASD, or the touch controls.
-Collect all five yellow signals, avoid the pink glitches, and reach the green
-uplink.
+Collect all five yellow signals, preserve your three lives, avoid the four pink
+glitches, and reach the green uplink within the 28-turn budget. Hazard pressure
+is higher than the original level: one glitch moves at double speed while the
+other three move one step per turn.
 
 ## Verification contract
 
@@ -44,3 +46,6 @@ In test-apps/browser-game, add a second level that starts only after the first
 uplink is restored. Preserve the current first level and prove both levels are
 reachable with deterministic tests. Do not add dependencies or network calls.
 ```
+
+Future level tuning should use the level configuration levers already carried by
+the engine, especially each hazard's speed and the level's turn limit.
