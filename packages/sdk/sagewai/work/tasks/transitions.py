@@ -33,7 +33,9 @@ _ALLOWED: dict[TaskStatus, frozenset[TaskStatus]] = {
     }),
     S.BLOCKED: frozenset({S.PLANNING, S.EXECUTING, S.PAUSED, S.CANCELLED}),
     S.BUDGET_EXHAUSTED: frozenset({S.PLANNING, S.EXECUTING, S.PAUSED, S.CANCELLED}),
-    S.CONTROL_DEGRADED: frozenset({S.EXECUTING, S.BLOCKED, S.PAUSED, S.CANCELLED}),
+    S.CONTROL_DEGRADED: frozenset(
+        {S.PLANNING, S.EXECUTING, S.ASSESSING, S.BLOCKED, S.PAUSED, S.CANCELLED}
+    ),
     S.COMPLETE: frozenset(),
     S.CANCELLED: frozenset(),
 }

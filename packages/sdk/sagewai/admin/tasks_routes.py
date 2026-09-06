@@ -279,6 +279,12 @@ class _CancelBody(BaseModel):
     note: str | None = Field(default=None, max_length=2000)
 
 
+class _RestoreBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    note: str | None = Field(default=None, max_length=2000)
+
+
 class _PatchTaskBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -623,6 +629,18 @@ async def resume_task(task_id: str, request: Request) -> dict:
     with _service_errors():
         record = await service.resume(task_id, project_id=project_id, actor_ref=_actor_ref(request))
     await _emit_audit(request, "task.resume", target_type="task", target_id=task_id)
+    return record.model_dump(mode="json")
+
+
+@router.post("/{task_id}/restore")
+async def restore_task(task_id: str, request: Request, body: _RestoreBody) -> dict:
+    project_id = _task_project_scope(request)
+    service: TaskService = request.app.state.task_service
+    with _service_errors():
+        record = await service.restore(
+            task_id, project_id=project_id, actor_ref=_actor_ref(request), note=body.note
+        )
+    await _emit_audit(request, "task.restore", target_type="task", target_id=task_id)
     return record.model_dump(mode="json")
 
 

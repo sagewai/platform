@@ -234,6 +234,10 @@ def thread_from_events(events: Sequence[TaskEvent]) -> ThreadView:
             decision["answered_by"] = "human"
         elif event.event_type is TaskEventType.BUDGET_UPDATED:
             entries.append({**base, "kind": "message", "author": "human", "text": "budget updated"})
+        elif event.event_type is TaskEventType.CONTROL_RESTORED:
+            note = payload["note"]
+            text = "control restored" if note is None else f"control restored: {note}"
+            entries.append({**base, "kind": "message", "author": "human", "text": text})
         elif event.event_type is TaskEventType.TASK_STATUS_CHANGED:
             status = TaskStatus(str(payload["status"]))
             entries.append({**base, "kind": "status", "text": status.value})

@@ -97,6 +97,7 @@ class FakeProfileRunner:
         self.created_issues: list[tuple[str, str]] = []
         self.ledgers: list = []
         self.assessed: list = []
+        self.assess_error: Exception | None = None
         self.assessor_verdict = "accept"
         self.assessor_gaps = ()
 
@@ -192,6 +193,10 @@ class FakeProfileRunner:
     async def assess(self, task, *, cycle, plan_version, plan, outcomes, merged_sha, evidence):
         self._billable(task)
         self.assessed.append((cycle, plan_version, merged_sha))
+        if self.assess_error is not None:
+            error = self.assess_error
+            self.assess_error = None
+            raise error
         attempt_id = f"{task.id}:assess:{cycle}:{plan_version}"
         return merge_assessment(
             plan,
@@ -689,6 +694,43 @@ async def test_assessment_receives_the_latest_base_advanced_sha(
 
     assert record.status is TaskStatus.COMPLETE
     assert runner.assessed == [(1, 1, "d" * 40)]
+
+
+@pytest.mark.asyncio
+async def test_a_restored_task_assesses_again_and_completes(
+    stores, tmp_path, monkeypatch
+) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
+    runner.assess_error = RuntimeError("merged head missing from the trusted checkout")
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
+
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    assert record.status is TaskStatus.CONTROL_DEGRADED
+    runner.assess_error = None
+    service = TaskService(
+        store=task_store, artifact_store=LocalArtifactStore(root=tmp_path / "objects")
+    )
+    record = await service.restore(
+        task.id,
+        project_id=PROJECT,
+        actor_ref="arda",
+        note="fetched main",
+    )
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    assert record.status is TaskStatus.COMPLETE
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    receipts = [
+        event
+        for event in events
+        if event.event_type is TaskEventType.COMMAND_RECEIPT
+        and event.payload_json["kind"] == "assess_cycle"
+    ]
+    assert len(receipts) == 2
+    assert runner.assessed == [(1, 1, "c" * 40), (1, 1, "c" * 40)]
 
 
 @pytest.mark.asyncio

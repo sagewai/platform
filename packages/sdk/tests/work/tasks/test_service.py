@@ -1162,6 +1162,57 @@ async def test_denying_the_plan_gate_blocks_the_task(service: TaskService, store
 
 
 @pytest.mark.asyncio
+async def test_restore_returns_a_degraded_task_to_the_status_it_interrupted(
+    service_and_record,
+    store: TaskStore,
+) -> None:
+    service, record = service_and_record
+    running = await TaskWriter(store).append(
+        record, [status_entry(record, TaskStatus.EXECUTING)], now=NOW
+    )
+    degraded = await TaskWriter(store).append(
+        running,
+        [
+            (
+                TaskEventType.CONTROL_DEGRADED,
+                {"command": "assess_cycle", "detail": "checkout failed"},
+            ),
+            status_entry(running, TaskStatus.CONTROL_DEGRADED),
+        ],
+        now=NOW,
+    )
+
+    restored = await service.restore(
+        degraded.task_id,
+        project_id=degraded.project_id,
+        actor_ref="arda",
+        note="fetched main",
+        now=NOW,
+    )
+
+    assert restored.status is TaskStatus.EXECUTING
+    assert restored.attention_owner is AttentionOwner.SYSTEM
+    assert restored.waiting_reason == "working"
+    events = await store.read_events(degraded.task_id, project_id=degraded.project_id)
+    assert events[-2].event_type is TaskEventType.CONTROL_RESTORED
+    assert events[-2].payload_json == {"note": "fetched main"}
+    assert events[-2].actor_ref == "arda"
+
+
+@pytest.mark.asyncio
+async def test_restore_refuses_a_task_that_is_not_degraded(service_and_record) -> None:
+    service, record = service_and_record
+
+    with pytest.raises(TaskDecisionError, match="not CONTROL_DEGRADED"):
+        await service.restore(
+            record.task_id,
+            project_id=record.project_id,
+            actor_ref="arda",
+            now=NOW,
+        )
+
+
+@pytest.mark.asyncio
 async def test_budget_raise_revives_an_exhausted_executing_task(
     service_and_record,
 ) -> None:

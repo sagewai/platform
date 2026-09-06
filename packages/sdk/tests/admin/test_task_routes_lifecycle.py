@@ -21,6 +21,9 @@ from fastapi import FastAPI
 from sagewai.admin.tasks_routes import router
 from sagewai.artifacts import LocalArtifactStore
 from sagewai.work.tasks import TaskDefaults, TaskService, TaskStore
+from sagewai.work.tasks.events import TaskEventType
+from sagewai.work.tasks.models import TaskStatus
+from sagewai.work.tasks.writer import TaskWriter, status_entry
 from tests.db.conftest import dialect_engine  # noqa: F401
 from tests.work.tasks.test_store import _task
 
@@ -62,6 +65,24 @@ async def _create(client: AdminClient, brief: str = BRIEF) -> str:
     return response.json()["task"]["id"]
 
 
+async def _degrade(client: AdminClient, task_id: str) -> None:
+    store = client.app.state.task_store
+    record = await store.load_record(task_id, project_id="p")
+    running = await TaskWriter(store).append(
+        record, [status_entry(record, TaskStatus.EXECUTING)]
+    )
+    await TaskWriter(store).append(
+        running,
+        [
+            (
+                TaskEventType.CONTROL_DEGRADED,
+                {"command": "assess_cycle", "detail": "checkout failed"},
+            ),
+            status_entry(running, TaskStatus.CONTROL_DEGRADED),
+        ],
+    )
+
+
 @pytest.mark.asyncio
 async def test_pause_resume_and_cancel_move_the_status(client: AdminClient) -> None:
     task_id = await _create(client)
@@ -81,6 +102,26 @@ async def test_pause_resume_and_cancel_move_the_status(client: AdminClient) -> N
 
 
 @pytest.mark.asyncio
+async def test_restore_moves_a_degraded_task(client: AdminClient) -> None:
+    task_id = await _create(client)
+    await _degrade(client, task_id)
+
+    restored = await client.http.post(
+        f"/api/v1/tasks/{task_id}/restore",
+        headers=client.headers,
+        json={"note": "fetched main"},
+    )
+    thread = await client.http.get(f"/api/v1/tasks/{task_id}/thread", headers=client.headers)
+
+    assert restored.status_code == 200
+    assert restored.json()["status"] == "EXECUTING"
+    assert restored.json()["board_column"] == "in_progress"
+    assert "control restored: fetched main" in [
+        entry["text"] for entry in thread.json()["entries"]
+    ]
+
+
+@pytest.mark.asyncio
 async def test_resuming_a_running_task_is_a_409(client: AdminClient) -> None:
     task_id = await _create(client)
 
@@ -88,6 +129,18 @@ async def test_resuming_a_running_task_is_a_409(client: AdminClient) -> None:
 
     assert response.status_code == 409
     assert "not PAUSED" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_restoring_a_running_task_is_a_409(client: AdminClient) -> None:
+    task_id = await _create(client)
+
+    response = await client.http.post(
+        f"/api/v1/tasks/{task_id}/restore", headers=client.headers, json={}
+    )
+
+    assert response.status_code == 409
+    assert "not CONTROL_DEGRADED" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -101,7 +154,7 @@ async def test_pausing_a_cancelled_task_is_a_409(client: AdminClient) -> None:
     assert response.json()["detail"] == "cannot move Task from CANCELLED to PAUSED"
 
 
-@pytest.mark.parametrize("action", ["pause", "resume", "cancel"])
+@pytest.mark.parametrize("action", ["pause", "resume", "restore", "cancel"])
 @pytest.mark.asyncio
 async def test_the_lifecycle_routes_404_for_an_unknown_task(
     client: AdminClient, action: str
@@ -112,7 +165,7 @@ async def test_the_lifecycle_routes_404_for_an_unknown_task(
     assert response.status_code == 404
 
 
-@pytest.mark.parametrize("action", ["pause", "resume", "cancel"])
+@pytest.mark.parametrize("action", ["pause", "resume", "restore", "cancel"])
 @pytest.mark.asyncio
 async def test_a_lifecycle_route_that_loses_the_append_race_is_a_409(
     client: AdminClient, monkeypatch, action: str
@@ -122,6 +175,8 @@ async def test_a_lifecycle_route_that_loses_the_append_race_is_a_409(
     task_id = await _create(client)
     if action == "resume":
         await client.http.post(f"/api/v1/tasks/{task_id}/pause", headers=client.headers)
+    elif action == "restore":
+        await _degrade(client, task_id)
 
     async def _stale(*_args, **_kwargs):
         raise StaleTaskError("projection changed under the append")
@@ -136,7 +191,7 @@ async def test_a_lifecycle_route_that_loses_the_append_race_is_a_409(
     assert response.json()["detail"] == "projection changed under the append"
 
 
-@pytest.mark.parametrize("action", ["pause", "resume", "cancel"])
+@pytest.mark.parametrize("action", ["pause", "resume", "restore", "cancel"])
 @pytest.mark.asyncio
 async def test_the_lifecycle_routes_refuse_global_scope(client: AdminClient, action: str) -> None:
     response = await client.http.post(

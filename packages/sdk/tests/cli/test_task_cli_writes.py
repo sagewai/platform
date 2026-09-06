@@ -310,6 +310,39 @@ def test_pause_resume_cancel_move_the_status(wired, seeded, dialect_engine) -> N
     assert events[-1].actor_ref == "cli"
 
 
+def test_restore_moves_a_degraded_task(wired, seeded, dialect_engine) -> None:  # noqa: F811
+    store = TaskStore(engine=dialect_engine)
+    record = asyncio.run(store.load_record("t-1", project_id="project-a"))
+    running = asyncio.run(
+        TaskWriter(store).append(record, [status_entry(record, TaskStatus.EXECUTING)], now=NOW)
+    )
+    asyncio.run(
+        TaskWriter(store).append(
+            running,
+            [
+                (
+                    TaskEventType.CONTROL_DEGRADED,
+                    {"command": "assess_cycle", "detail": "checkout failed"},
+                ),
+                status_entry(running, TaskStatus.CONTROL_DEGRADED),
+            ],
+            now=NOW,
+        )
+    )
+
+    result = wired.invoke(
+        task_group, ["--project", "project-a", "restore", "t-1", "--note", "fetched main"]
+    )
+    thread = wired.invoke(task_group, ["--project", "project-a", "thread", "t-1"])
+    events = asyncio.run(store.read_events("t-1", project_id="project-a"))
+
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == "Task t-1: EXECUTING"
+    assert "message human: control restored: fetched main" in thread.output
+    assert events[-2].event_type is TaskEventType.CONTROL_RESTORED
+    assert events[-2].actor_ref == "cli"
+
+
 def test_resuming_a_running_task_fails(wired, seeded) -> None:
     result = wired.invoke(task_group, ["--project", "project-a", "resume", "t-1"])
 

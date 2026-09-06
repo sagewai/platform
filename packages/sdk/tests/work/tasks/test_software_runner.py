@@ -818,12 +818,12 @@ async def test_assess_verifies_deterministic_items_at_the_supplied_merged_head_a
     async def fake_stack(**_kwargs):
         return stack
 
-    async def fail_base_sha(_task):
-        raise AssertionError("base_sha should not run when merged_sha is known")
+    async def known_head(_task):
+        return "a" * 40
 
     monkeypatch.setattr("sagewai.work.tasks.software.build_software_stack", fake_stack)
     runner = _runner(work_store, RecordingGitHub(), engine=dialect_engine)
-    monkeypatch.setattr(runner, "base_sha", fail_base_sha)
+    monkeypatch.setattr(runner, "base_sha", known_head)
     work_id = TaskAssessor.work_id(task, cycle=1, plan_version=2)
 
     with pytest.raises(AssessmentFailedError, match="assessor stopped"):
@@ -853,6 +853,88 @@ async def test_assess_verifies_deterministic_items_at_the_supplied_merged_head_a
     )
     assert verifier.calls[0]["commands"] == ("just smoke", "just lint")
     assert verifier.calls[0]["run_id"] == f"{work_id}:verify:1"
+
+
+@pytest.mark.asyncio
+async def test_the_assessment_fetches_the_default_branch_before_checking_out_the_merged_head(
+    dialect_engine,  # noqa: F811
+    tmp_path,
+    monkeypatch,
+) -> None:
+    work_store = WorkStore(engine=dialect_engine)
+    await work_store.init()
+    calls: list[str] = []
+    verifier = _RecordingVerifier()
+
+    class OrderedWorktreeManager(_RecordingWorktreeManager):
+        async def prepare(self, **kwargs):
+            calls.append("prepare")
+            return await super().prepare(**kwargs)
+
+    worktrees = OrderedWorktreeManager(tmp_path / "worktrees")
+    stack = _stack_object(
+        work_store,
+        lifecycle=object(),
+        worktree_manager=worktrees,
+        capsule_compiler=_RecordingCompiler(),
+        read_controller=_FailingAssessorController(),
+        read_capabilities=CapabilitySet(project_id="project-a", grants=()),
+        analysis_runtime=SimpleNamespace(name="claude"),
+        verifier=verifier,
+    )
+    task = _task(project_id="project-a")
+    repository = tmp_path / "repo"
+    task = task.model_copy(
+        update={"target": task.target.model_copy(update={"repository_path": str(repository)})}
+    )
+    plan = AcceptedPlan(
+        version=1,
+        steps=(STEP,),
+        acceptance_matrix=(
+            MatrixItem(
+                id="smoke",
+                statement="smoke passes",
+                verification_kind="deterministic",
+                command="just smoke",
+            ),
+        ),
+    )
+
+    async def fake_stack(**_kwargs):
+        return stack
+
+    async def record_fetch(repository_path, default_branch):
+        calls.append("fetch")
+        assert repository_path == repository
+        assert default_branch == "main"
+        return "a" * 40
+
+    monkeypatch.setattr("sagewai.work.tasks.software.build_software_stack", fake_stack)
+    monkeypatch.setattr("sagewai.work.tasks.software.fetch_default_branch_head", record_fetch)
+    runner = _runner(work_store, RecordingGitHub(), engine=dialect_engine)
+    work_id = TaskAssessor.work_id(task, cycle=1, plan_version=2)
+
+    with pytest.raises(AssessmentFailedError, match="assessor stopped"):
+        await runner.assess(
+            task,
+            cycle=1,
+            plan_version=2,
+            plan=plan,
+            outcomes={"s1": "accepted"},
+            merged_sha="b" * 40,
+            evidence=("git://" + "b" * 40,),
+        )
+
+    assert calls == ["fetch", "prepare"]
+    assert worktrees.prepared == [
+        {
+            "repository": repository,
+            "project_id": "project-a",
+            "work_id": work_id,
+            "attempt_id": "assess-2",
+            "base_sha": "b" * 40,
+        }
+    ]
 
 
 def test_target_rejects_a_task_whose_profile_is_not_software() -> None:

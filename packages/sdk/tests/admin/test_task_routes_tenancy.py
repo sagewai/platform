@@ -50,9 +50,9 @@ from sagewai.work.tasks.events import TaskEventType, fold_record
 from sagewai.work.tasks.models import Budget, TaskDefaults, TaskTriggerSpec
 from tests.work.tasks.test_store import NOW, _event, _record, _task
 
-_EXPECTED_ROUTE_COUNT = 29
+_EXPECTED_ROUTE_COUNT = 30
 _ROUTE_ENUMERATION_CONTRACT = "a new Task route must be enumerated by this isolation suite"
-_EXPECTED_MEMBER_TASK_BOUND_ROUTE_COUNT = 14
+_EXPECTED_MEMBER_TASK_BOUND_ROUTE_COUNT = 15
 _EXPECTED_TOKEN_READ_TASK_BOUND_ROUTE_COUNT = 8
 _WORK_ACTIVITY_ROUTE = ("GET", "/api/v1/work/{work_id}/activity")
 _WORK_WRITE_ROUTE = ("POST", "/api/v1/work/{work_id}/gates/{gate_id}")
@@ -437,7 +437,7 @@ def _body_for_route(
         }
     if "/gates/" in path:
         return {"decision": "allow"}
-    if path.endswith("/cancel"):
+    if path.endswith("/restore") or path.endswith("/cancel"):
         return {}
     if method == "PATCH":
         return {"budget": _budget_body(), "revision": 1}
