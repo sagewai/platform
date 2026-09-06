@@ -1743,6 +1743,34 @@ async def test_an_unreachable_base_degrades_control_before_planning(stores, tmp_
 
 
 @pytest.mark.asyncio
+async def test_a_command_that_keeps_raising_degrades_control_on_the_third_tick(
+    stores, tmp_path, monkeypatch
+) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
+
+    async def always_crash(task_, **kwargs):
+        raise RuntimeError("issue tracker unreachable")
+
+    runner.create_issue = always_crash
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+
+    for _tick in range(2):
+        with pytest.raises(RuntimeError):
+            await coordinator.drive(record, lease_epoch=epoch)
+        record = (await task_store.load(task.id, project_id=PROJECT))[1]
+        assert record.status is TaskStatus.EXECUTING
+    record = await coordinator.drive(record, lease_epoch=epoch)
+
+    assert record.status is TaskStatus.CONTROL_DEGRADED
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    degraded = next(event for event in events if event.event_type is TaskEventType.CONTROL_DEGRADED)
+    assert degraded.payload_json["command"] == "start_step"
+    assert "issue tracker unreachable" in degraded.payload_json["detail"]
+
+
+@pytest.mark.asyncio
 async def test_a_step_exception_still_propagates_for_crash_replay(
     stores, tmp_path, monkeypatch
 ) -> None:

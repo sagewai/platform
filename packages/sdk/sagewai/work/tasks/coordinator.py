@@ -294,6 +294,7 @@ class TaskCoordinator:
         self._work_store = work_store
         self._profile_runners = profile_runners
         self._artifacts = artifact_store or LocalArtifactStore()
+        self._command_failures: dict[tuple[str, str], int] = {}
         self._activity_store = activity_store
         self._static_channels = tuple(decision_channels) or (ConsoleDecisionChannel(),)
         self._channel_factory = channel_factory
@@ -355,12 +356,39 @@ class TaskCoordinator:
                 payload=command.model_dump(mode="json"),
             )
             revision = record.revision
-            record = await self._execute(
-                task, record, command, state, used, lease_epoch=lease_epoch, replay=replay
-            )
+            receipt_id = command.receipt_id(revision)
+            try:
+                record = await self._execute(
+                    task, record, command, state, used, lease_epoch=lease_epoch, replay=replay
+                )
+            except StaleTaskError:
+                raise
+            except Exception as exc:
+                return await self._failed_command(task, receipt_id, command, exc, lease_epoch)
+            self._command_failures.pop((task.id, receipt_id), None)
             if record.revision == revision:
                 return record
         return record
+
+    _MAX_COMMAND_FAILURES = 3
+
+    async def _failed_command(
+        self, task: Task, receipt_id: str, command: Command, error: Exception, lease_epoch: int
+    ) -> TaskRecord:
+        """A raising command is replayed by the next tick (section 8.1), but not forever.
+
+        The receipt keeps the replay honest, so nothing is appended between failures; the
+        third consecutive failure of one receipt degrades control with the exception instead
+        of replaying again.
+        """
+        key = (task.id, receipt_id)
+        failures = self._command_failures.get(key, 0) + 1
+        if failures < self._MAX_COMMAND_FAILURES:
+            self._command_failures[key] = failures
+            raise error
+        self._command_failures.pop(key, None)
+        _task, record = await self._load(task.id, task.project_id)
+        return await self._degrade(task, record, command, error, lease_epoch)
 
     async def _work_states(
         self, task: Task, state: CycleState, pending_gate: str | None
