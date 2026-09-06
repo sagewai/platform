@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createGame, move, restart } from "./engine.js";
+import { DEFAULT_LEVEL, createGame, move, restart } from "./engine.js";
 
 const level = (overrides = {}) => ({
   width: 4,
@@ -14,6 +14,47 @@ const level = (overrides = {}) => ({
   lives: 3,
   ...overrides,
 });
+
+const PRE_DIFFICULTY_SHORTEST_WINNING_ROUTE = 18;
+
+function shortestLivesPreservingWin(levelConfig = DEFAULT_LEVEL, turnBound = 120) {
+  const directions = ["up", "down", "left", "right"];
+  const initial = createGame(levelConfig);
+  const stateKey = (state) =>
+    JSON.stringify([
+      state.player,
+      state.evidence,
+      state.hazards.map((hazard) => hazard.pathIndex),
+      state.lives,
+      state.status,
+      state.turn,
+    ]);
+  const queue = [initial];
+  const visited = new Set([stateKey(initial)]);
+
+  for (let index = 0; index < queue.length; index += 1) {
+    const state = queue[index];
+    if (state.status === "won" && state.lives === initial.lives) {
+      return { turn: state.turn, visited: visited.size };
+    }
+    if (state.status !== "playing" || state.turn >= turnBound) {
+      continue;
+    }
+    for (const direction of directions) {
+      const next = move(state, direction);
+      if (next.lives < initial.lives) {
+        continue;
+      }
+      const key = stateKey(next);
+      if (!visited.has(key)) {
+        visited.add(key);
+        queue.push(next);
+      }
+    }
+  }
+
+  return null;
+}
 
 test("blocked moves do not advance the turn", () => {
   const state = createGame(
@@ -135,6 +176,38 @@ test("restart restores the original level", () => {
   assert.deepEqual(restart(changed), initial);
 });
 
+test("the shipped level declares the retuned difficulty levers", () => {
+  assert.equal(DEFAULT_LEVEL.turnLimit, 28);
+  assert.ok(DEFAULT_LEVEL.hazards.length > 3);
+  assert.ok(DEFAULT_LEVEL.hazards.some((hazard) => hazard.speed > 1));
+});
+
+test("the shipped level keeps hazards away from the respawn point", () => {
+  for (const hazard of DEFAULT_LEVEL.hazards) {
+    for (const point of hazard.path) {
+      assert.notDeepEqual(point, DEFAULT_LEVEL.start);
+    }
+  }
+});
+
+test("the shipped level places evidence and hazards on open board cells", () => {
+  const wallKeys = new Set(DEFAULT_LEVEL.walls.map(([x, y]) => `${x}:${y}`));
+  const assertOpenCell = ([x, y]) => {
+    assert.ok(x >= 0 && x < DEFAULT_LEVEL.width);
+    assert.ok(y >= 0 && y < DEFAULT_LEVEL.height);
+    assert.ok(!wallKeys.has(`${x}:${y}`));
+  };
+
+  for (const point of DEFAULT_LEVEL.evidence) {
+    assertOpenCell(point);
+  }
+  for (const hazard of DEFAULT_LEVEL.hazards) {
+    for (const point of hazard.path) {
+      assertOpenCell(point);
+    }
+  }
+});
+
 test("the shipped game can be won without losing a life", () => {
   const directions = ["up", "down", "left", "right"];
   const initial = createGame();
@@ -182,6 +255,16 @@ test("the shipped game can be won without losing a life", () => {
   if (initial.level.turnLimit !== undefined) {
     assert.ok(winningState.turn <= initial.level.turnLimit);
   }
+});
+
+test("the shipped turn budget binds after the difficulty retune", () => {
+  const winningRoute = shortestLivesPreservingWin(DEFAULT_LEVEL, DEFAULT_LEVEL.turnLimit);
+
+  assert.ok(winningRoute);
+  assert.equal(winningRoute.turn, 26);
+  assert.ok(winningRoute.turn > PRE_DIFFICULTY_SHORTEST_WINNING_ROUTE);
+  assert.equal(DEFAULT_LEVEL.turnLimit - winningRoute.turn, 2);
+  assert.equal(shortestLivesPreservingWin(DEFAULT_LEVEL, winningRoute.turn - 1), null);
 });
 
 test("glitch speed advances multiple path steps and checks intermediate collisions", () => {
