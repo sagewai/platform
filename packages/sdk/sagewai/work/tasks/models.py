@@ -345,6 +345,17 @@ class Task(BaseModel):
         return None
 
 
+PLANNER_RUNTIMES = frozenset(
+    {RuntimeRef.CODEX, RuntimeRef.CLAUDE_ANALYSIS, RuntimeRef.CLAUDE_REVIEW}
+)
+
+
+def planner_runtime(task: Task) -> RuntimeRef:
+    """Section 9.1: the head of the project's ``planner`` ladder runs the planning stage."""
+    ladder = task.routing.roles.get(RoleAlias.PLANNER, ())
+    return ladder[0] if ladder else RuntimeRef.CLAUDE_ANALYSIS
+
+
 class HarnessTier(BaseModel):
     """A local harness tier; a priced backend would need a price field."""
 

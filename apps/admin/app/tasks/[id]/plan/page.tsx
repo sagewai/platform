@@ -68,30 +68,38 @@ export default function TaskPlanPage({ params }: { params: Promise<{ id: string 
       <PlanError message={error} />
     );
   }
-  if (detail.plan === null) {
+  const plan = detail.proposed_plan ?? detail.plan;
+  if (plan === null) {
     return error === '' ? (
       <EmptyState
         icon={ListChecks}
-        title="No accepted plan"
-        description="The coordinator proposes a plan once intake is settled; accepting it fills this tab."
+        title="No plan yet"
+        description="The coordinator proposes a plan once intake is settled; it shows here as soon as it is proposed."
       />
     ) : (
       <PlanError message={error} />
     );
   }
-
-  const plan = detail.plan;
+  const proposed = detail.proposed_plan !== null;
 
   return (
     <div className="space-y-4">
       <Card>
         <CardHeader className="border-b">
           <CardTitle>
-            <h2 className="m-0 text-base font-medium">Plan version {plan.version}</h2>
+            <h2 className="m-0 flex items-center gap-2 text-base font-medium">
+              Plan version {plan.version}
+              {proposed && (
+                <Badge variant="secondary" data-testid="plan-proposed">
+                  proposed
+                </Badge>
+              )}
+            </h2>
           </CardTitle>
           <CardDescription className="text-foreground">
-            The steps this cycle accepted, in dependency order, with what each one is allowed to
-            touch and what it must satisfy.
+            {proposed
+              ? 'Proposed and waiting for your decision on the plan gate in the thread; these steps run once you allow it.'
+              : 'The steps this cycle accepted, in dependency order, with what each one is allowed to touch and what it must satisfy.'}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">

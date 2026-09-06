@@ -137,6 +137,10 @@ async def _seed_clarifying_task_with_questions(
                 {
                     "questions": list(questions),
                     "deadline_at": (NOW + timedelta(hours=2)).isoformat(),
+                    "pending_questions": len(questions),
+                    "pending_material_questions": sum(
+                        1 for question in questions if not bool(question["defaultable"])
+                    ),
                 },
             ),
             (
@@ -171,6 +175,8 @@ async def _seed_blocked_task_with_question(store: TaskStore, task_id: str) -> No
                         )
                     ],
                     "deadline_at": (NOW + timedelta(hours=2)).isoformat(),
+                    "pending_questions": 1,
+                    "pending_material_questions": 1,
                 },
             ),
             (
@@ -198,6 +204,8 @@ async def _seed_task_with_gate_and_question(store: TaskStore, task_id: str) -> N
                         )
                     ],
                     "deadline_at": (NOW + timedelta(hours=2)).isoformat(),
+                    "pending_questions": 1,
+                    "pending_material_questions": 1,
                 },
             ),
             (

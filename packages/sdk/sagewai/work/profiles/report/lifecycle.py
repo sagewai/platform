@@ -131,6 +131,7 @@ class ReportLifecycle:
         step: PlanStep,
         source_ref: str,
         evidence_refs: tuple[str, ...] = (),
+        constraints: tuple[str, ...] = (),
     ) -> WorkRecord:
         """Create the Work at COMPOSING; the coordinator's ResumeStep drives it from there."""
         target = task.target
@@ -172,7 +173,7 @@ class ReportLifecycle:
                     verification_kind="profile",
                 ),
             ),
-            constraints=(),
+            constraints=constraints,
             non_goals=(),
             evidence_refs=evidence_refs,
             assumption_ids=(),

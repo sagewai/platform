@@ -207,6 +207,8 @@ async def _seed_project_b(app, project_id: str) -> ProjectBSeed:
             {
                 "questions": [_question(seed.question_id, seed.attention_version)],
                 "deadline_at": NOW.isoformat(),
+                "pending_questions": 1,
+                "pending_material_questions": 1,
             },
         ),
         _event(task, 4, TaskEventType.CYCLE_STARTED, {"cycle": 1, "scheduled_for": None}),

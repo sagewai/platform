@@ -46,7 +46,7 @@ from sagewai.work.tasks.assessment import MatrixResult, TaskAssessmentResult
 from sagewai.work.tasks.assessor import DeterministicCheck, TaskAssessor
 from sagewai.work.tasks.budget import BudgetLedger, MeteredOperatorController
 from sagewai.work.tasks.decisions import merge_policy_for
-from sagewai.work.tasks.models import RoleAlias, RuntimeRef, SoftwareTarget, Task
+from sagewai.work.tasks.models import SoftwareTarget, Task, planner_runtime
 from sagewai.work.tasks.plan import AcceptedPlan, PlanStep, TaskPlanResult
 from sagewai.work.tasks.planner import TaskPlanner
 from sagewai.work.tasks.scratch import ScratchWorkspaceManager
@@ -196,6 +196,7 @@ class SoftwareProfileRunner:
         issue_url: str,
         base_sha: str | None,
         evidence_refs: tuple[str, ...] = (),
+        constraints: tuple[str, ...] = (),
     ) -> WorkRecord:
         lifecycle = self._lifecycle(task, await self._stack(task))
         try:
@@ -204,6 +205,7 @@ class SoftwareProfileRunner:
                 project_id=task.project_id,
                 base_sha=base_sha,
                 evidence_refs=evidence_refs,
+                constraints=constraints,
             )
         except BaseMovedError:
             return await lifecycle.start(
@@ -211,6 +213,7 @@ class SoftwareProfileRunner:
                 project_id=task.project_id,
                 base_sha=await self.base_sha(task),
                 evidence_refs=evidence_refs,
+                constraints=constraints,
             )
 
     async def resume(self, task: Task, *, cycle: int, work_id: str) -> WorkRecord:
@@ -348,12 +351,6 @@ class SoftwareProfileRunner:
         return task.target
 
     @staticmethod
-    def _planner_runtime(task: Task) -> RuntimeRef:
-        """Section 9.1: the head of the project's ``planner`` ladder runs the planning stage."""
-        ladder = task.routing.roles.get(RoleAlias.PLANNER, ())
-        return ladder[0] if ladder else RuntimeRef.CLAUDE_ANALYSIS
-
-    @staticmethod
     def _issue_body(task: Task, *, cycle: int, step: PlanStep) -> str:
         criteria = "\n".join(f"- {item.statement}" for item in step.acceptance_criteria)
         scope = ", ".join(step.allowed_scope)
@@ -380,7 +377,7 @@ class SoftwareProfileRunner:
             execution=task.execution.route,
             fleet_org=task.execution.fleet_org_id,
             prefer_free_implementation=task.routing.prefer_free_implementation,
-            planner_runtime=self._planner_runtime(task),
+            planner_runtime=planner_runtime(task),
             max_attempts_per_stage=task.budget.max_attempts_per_stage,
             controller_factory=self._controller_factory(task.id),
             engine=self._engine,
@@ -409,7 +406,7 @@ class SoftwareProfileRunner:
             task.execution.route,
             task.routing.prefer_free_implementation,
             task.budget.max_attempts_per_stage,
-            SoftwareProfileRunner._planner_runtime(task).value,
+            planner_runtime(task).value,
             target.verification_image,
             target.verification_commands,
         )

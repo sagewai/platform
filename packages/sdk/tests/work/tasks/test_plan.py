@@ -11,9 +11,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from sagewai.work.models import ProposedAcceptanceCriterion
+from sagewai.work.tasks.events import TaskEvent, TaskEventType
 from sagewai.work.tasks.intake import ClarificationQuestion
 from sagewai.work.tasks.models import Budget, ReportTarget, SoftwareTarget
 from sagewai.work.tasks.plan import (
@@ -23,8 +26,11 @@ from sagewai.work.tasks.plan import (
     PlanStep,
     TaskPlanResult,
     accept_plan,
+    clarification_request_entry,
+    proposed_plan_from_events,
 )
 
+NOW = datetime(2026, 9, 6, 11, 0, tzinfo=timezone.utc)
 TARGET = SoftwareTarget(repository_path="/repo", owner="o", repo="r", verification_image="sha256:" + "a" * 64)
 
 
@@ -59,6 +65,20 @@ def _result(steps=(), matrix=None, clarifications=()) -> TaskPlanResult:
         acceptance_matrix=_matrix() if matrix is None else matrix,
         clarifications=tuple(clarifications),
         claims=(),
+    )
+
+
+def _event(sequence: int, event_type: TaskEventType, payload: dict) -> TaskEvent:
+    return TaskEvent(
+        id=f"event-{sequence}",
+        project_id="project-a",
+        task_id="task-1",
+        sequence=sequence,
+        event_type=event_type,
+        actor_type="system",
+        actor_ref="test",
+        payload_json=payload,
+        created_at=NOW,
     )
 
 
@@ -149,6 +169,68 @@ def test_a_plan_may_carry_defaultable_clarifications() -> None:
     with pytest.raises(PlanRejectedError) as excinfo:
         accept_plan(asking, budget=Budget(), target=TARGET, version=1)
     assert "clarifications" in str(excinfo.value)
+
+
+def test_a_clarification_request_states_the_open_counts() -> None:
+    open_q1 = _event(
+        1,
+        TaskEventType.CLARIFICATION_REQUESTED,
+        {
+            "questions": [
+                {
+                    "id": "q1",
+                    "defaultable": True,
+                    "default": "x",
+                    "attention_version": 1,
+                }
+            ],
+            "deadline_at": None,
+            "pending_questions": 1,
+            "pending_material_questions": 0,
+        },
+    )
+    entry = clarification_request_entry(
+        [open_q1],
+        (
+            ClarificationQuestion(
+                id="q1",
+                text="again",
+                defaultable=True,
+                default="x",
+                attention_version=2,
+            ),
+            ClarificationQuestion(id="q2", text="new", defaultable=False),
+        ),
+        deadline_at=datetime(2026, 9, 6, 12, 0, tzinfo=timezone.utc),
+    )
+    assert entry[0] is TaskEventType.CLARIFICATION_REQUESTED
+    assert entry[1]["pending_questions"] == 2
+    assert entry[1]["pending_material_questions"] == 1
+    assert entry[1]["deadline_at"] == "2026-09-06T12:00:00+00:00"
+
+
+def test_the_latest_proposal_wins() -> None:
+    first = {
+        "version": 1,
+        "steps": [_step("s1").model_dump(mode="json")],
+        "acceptance_matrix": [item.model_dump(mode="json") for item in _matrix()],
+    }
+    second = {
+        "version": 2,
+        "steps": [_step("s2").model_dump(mode="json")],
+        "acceptance_matrix": [item.model_dump(mode="json") for item in _matrix()],
+    }
+
+    proposed = proposed_plan_from_events(
+        (
+            _event(1, TaskEventType.PLAN_PROPOSED, first),
+            _event(2, TaskEventType.PLAN_PROPOSED, second),
+        )
+    )
+
+    assert proposed is not None
+    assert proposed.version == 2
+    assert proposed.steps[0].id == "s2"
 
 
 def test_matrix_speaks_the_kernel_verification_vocabulary() -> None:

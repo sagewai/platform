@@ -15,8 +15,9 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
+from sagewai.work.models import SUPERSEDED
 from sagewai.work.tasks.budget import budget_breach
 from sagewai.work.tasks.decisions import TASK_GATES
 from sagewai.work.tasks.events import TaskEvent, TaskEventType
@@ -115,7 +116,20 @@ class SupersedeStep(_Command):
     kind: Literal["supersede_step"] = "supersede_step"
     step_id: str
     work_id: str
-    phase: str
+    phase: str | None
+    reason: Literal["base_moved", "decision"] = "base_moved"
+    decision_event_id: str | None = None
+    decision: str | None = None
+
+    @model_validator(mode="after")
+    def _decision_fields(self) -> SupersedeStep:
+        carried = self.decision_event_id is not None and self.decision is not None
+        if (self.reason == "decision") != carried:
+            raise ValueError(
+                "a decision supersede carries its event id and decision; "
+                "a base move carries neither"
+            )
+        return self
 
 
 class RollbackWork(_Command):
@@ -208,6 +222,7 @@ class CycleState(BaseModel):
     decided_gates: dict[str, str] = {}
     delivered: frozenset[str] = frozenset()
     rolled_back: frozenset[str] = frozenset()
+    decisions: dict[str, tuple[str, str]] = {}
 
 
 def fold_cycle(events: Sequence[TaskEvent], *, plan_version: int) -> CycleState:
@@ -223,6 +238,7 @@ def fold_cycle(events: Sequence[TaskEvent], *, plan_version: int) -> CycleState:
     decided_gates: dict[str, str] = {}
     delivered: set[str] = set()
     rolled_back: set[str] = set()
+    decisions: dict[str, tuple[str, str]] = {}
     for event in sorted(events, key=lambda item: item.sequence):
         payload = event.payload_json
         if event.event_type is TaskEventType.CYCLE_STARTED:
@@ -234,6 +250,7 @@ def fold_cycle(events: Sequence[TaskEvent], *, plan_version: int) -> CycleState:
             decided_gates = {}
             delivered = set()
             rolled_back = set()
+            decisions = {}
         elif event.event_type is TaskEventType.PLAN_ACCEPTED:
             assessment = None
         elif event.event_type is TaskEventType.STEP_WORK_STARTED:
@@ -257,6 +274,8 @@ def fold_cycle(events: Sequence[TaskEvent], *, plan_version: int) -> CycleState:
                 delivered.add(action_id)
             elif action_id.startswith(_ROLLBACK_ACTION_PREFIXES):
                 rolled_back.add(str(payload["work_id"]))
+        elif event.event_type is TaskEventType.DECISION_RECORDED:
+            decisions[str(payload["work_id"])] = (event.id, str(payload["decision"]))
     return CycleState(
         cycle=cycle,
         started_at=started_at,
@@ -270,6 +289,7 @@ def fold_cycle(events: Sequence[TaskEvent], *, plan_version: int) -> CycleState:
         decided_gates=decided_gates,
         delivered=frozenset(delivered),
         rolled_back=frozenset(rolled_back),
+        decisions=decisions,
     )
 
 
@@ -399,6 +419,16 @@ def decide(
                 work_id=active.work_id,
                 outcome="accepted",
                 merged_sha=active.merged_sha,
+            )
+        if active.work_id in state.decisions and active.status in {"WORK_BLOCKED", SUPERSEDED}:
+            event_id, decision = state.decisions[active.work_id]
+            return SupersedeStep(
+                step_id=active.step_id,
+                work_id=active.work_id,
+                phase=None,
+                reason="decision",
+                decision_event_id=event_id,
+                decision=decision,
             )
         if active.attention_kind is not None:
             if active.attention_id in state.mirrored:

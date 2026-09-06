@@ -26,9 +26,8 @@ from pydantic import BaseModel, ConfigDict
 from sagewai.work.store import WorkStore
 from sagewai.work.tasks.channels import open_item
 from sagewai.work.tasks.decisions import DUE_IN, URGENCY_BY_KIND, gate_decided_by
-from sagewai.work.tasks.events import TaskEvent, TaskEventType
+from sagewai.work.tasks.events import TaskEvent, TaskEventType, open_questions
 from sagewai.work.tasks.models import AttentionOwner, TaskRecord, TaskStatus
-from sagewai.work.tasks.service import _open_questions
 from sagewai.work.tasks.store import TaskStore
 
 _NOW_STATUSES = frozenset(
@@ -95,7 +94,7 @@ async def decision_inbox(
         if record.attention_owner is not AttentionOwner.USER:
             continue
         events = await task_store.read_events(record.task_id, project_id=project_id)
-        questions = _open_questions(events)
+        questions = open_questions(events)
         item = open_item(events)
         material_questions = tuple(
             (question, deadline)

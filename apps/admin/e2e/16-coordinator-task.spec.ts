@@ -11,6 +11,7 @@ import {
   deliverAction,
   failedMergeAction,
   mergeAction,
+  mirroredBlockDecisionThread,
   mirroredGateTask,
   mirroredGateThread,
   mockCoordinatorApi,
@@ -445,6 +446,35 @@ test.describe('Coordinator Task page', () => {
     expect(scopes).toEqual([project.id]);
   });
 
+  test('answers a mirrored block as a decision', async ({ page }) => {
+    const bodies: unknown[] = [];
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}/thread`]: () => mirroredBlockDecisionThread,
+    });
+    await mockTaskStream(page);
+    page.on('request', (request) => {
+      if (request.url().endsWith('/answers')) {
+        bodies.push(JSON.parse(request.postData() ?? '{}'));
+      }
+    });
+
+    await page.goto(`/tasks/${task.id}`);
+
+    const controls = page.getByTestId('answer-controls-att-1');
+    await expect(controls.getByRole('button', { name: 'Use default' })).toHaveCount(0);
+    await page.getByLabel('Answer to att-1').fill('retry: tool-channel misread');
+    await page.getByRole('button', { name: 'Send answer' }).click();
+
+    await expect.poll(() => bodies).toEqual([
+      {
+        attention_id: 'att-1',
+        attention_version: 1,
+        answer: 'retry: tool-channel misread',
+      },
+    ]);
+  });
+
   test('takes the default instead of typing one', async ({ page }) => {
     const bodies: unknown[] = [];
     const scopes: Array<string | undefined> = [];
@@ -794,6 +824,7 @@ test.describe('Coordinator Task page', () => {
     await page.goto(`/tasks/${task.id}/plan`);
 
     await expect(page.getByRole('heading', { name: 'Plan version 1' })).toBeVisible();
+    await expect(page.getByTestId('plan-proposed')).toHaveCount(0);
     const first = page.getByTestId('plan-step-step-1');
     await expect(first).toContainText('Add the coordinator board');
     await expect(first).toContainText('Render the five columns from the board route.');
@@ -810,13 +841,33 @@ test.describe('Coordinator Task page', () => {
     expect(detailScopes).toContain(project.id);
   });
 
+  test('renders the proposed plan before it is accepted', async ({ page }) => {
+    await selectProject(page);
+    await mockCoordinatorApi(page, {
+      [`/api/v1/tasks/${task.id}`]: () =>
+        ({
+          ...taskDetail,
+          record: { ...taskDetail.record, status: 'PLAN_PROPOSED' },
+          plan: { ...taskPlan, version: 1 },
+          proposed_plan: { ...taskPlan, version: 2 },
+        }) satisfies TaskDetail,
+    });
+
+    await page.goto(`/tasks/${task.id}/plan`);
+
+    await expect(page.getByRole('heading', { name: /Plan version 2/ })).toBeVisible();
+    await expect(page.getByTestId('plan-proposed')).toBeVisible();
+    await expect(page.getByTestId('plan-step-step-1')).toBeVisible();
+    await expect(page.getByText('waiting for your decision')).toBeVisible();
+  });
+
   test('says so when no plan is accepted yet', async ({ page }) => {
     await selectProject(page);
     await mockCoordinatorApi(page);
 
     await page.goto(`/tasks/${task.id}/plan`);
 
-    await expect(page.getByRole('heading', { name: 'No accepted plan' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'No plan yet' })).toBeVisible();
   });
 
   test('shows the plan refusal the API stated', async ({ page }) => {

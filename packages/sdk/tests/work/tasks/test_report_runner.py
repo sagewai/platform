@@ -17,6 +17,7 @@ from types import SimpleNamespace
 import pytest
 
 from sagewai.artifacts.object_store import LocalArtifactStore
+from sagewai.work.knowledge import KnowledgeStore
 from sagewai.work.models import SUPERSEDED, ActionRequest, ActionResult, WorkRecord
 from sagewai.work.store import WorkStore
 from sagewai.work.tasks.actions import DeliveryReceipt, deliver_action
@@ -26,6 +27,8 @@ from sagewai.work.tasks.events import TaskEventType
 from sagewai.work.tasks.models import (
     GateMode,
     ReportTarget,
+    RoleAlias,
+    RuntimeRef,
     TaskDefaults,
     TaskOrigin,
     TaskStatus,
@@ -116,10 +119,21 @@ class FakeReportProfileRunner(FakeProfileRunner):
         self.created_issues.append((step.id, url))
         return url
 
-    async def start(self, task, *, cycle, step, issue_url, base_sha, evidence_refs=()):
+    async def start(
+        self,
+        task,
+        *,
+        cycle,
+        step,
+        issue_url,
+        base_sha,
+        evidence_refs=(),
+        constraints=(),
+    ):
         work_id = f"{task.id}:report:{cycle}:{step.id}"
         self.started.append(work_id)
         self.evidence.append(tuple(evidence_refs))
+        self.constraints.append(tuple(constraints))
         action = deliver_action(
             task.project_id,
             work_id=work_id,
@@ -221,9 +235,12 @@ async def _seed_report(stores, tmp_path):
         update={"authority": task.authority.model_copy(update={"plan": GateMode.AUTO})}
     )
     runner = FakeReportProfileRunner(work_store, plan_result=_report_plan())
+    knowledge_store = KnowledgeStore(engine=task_store._engine)
+    await knowledge_store.init()
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,
+        knowledge_store=knowledge_store,
         profile_runners=lambda _task: runner,
         artifact_store=artifacts,
         decision_channels=(ConsoleDecisionChannel(),),
@@ -317,6 +334,95 @@ async def test_report_runner_threads_harness_backends_to_the_stack_builder(
 
 
 @pytest.mark.asyncio
+async def test_the_report_planner_runtime_follows_the_routing_policy(
+    stores,
+    dialect_engine,  # noqa: F811
+    monkeypatch,
+) -> None:
+    _task_store, work_store = stores
+    calls = []
+
+    async def fake_stack(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(activity_sink=object())
+
+    monkeypatch.setattr("sagewai.work.tasks.report.build_report_stack", fake_stack)
+    runner = ReportProfileRunner(work_store=work_store, engine=dialect_engine)
+    base_task = _report_task()
+    task = base_task.model_copy(
+        update={
+            "routing": base_task.routing.model_copy(
+                update={"roles": {RoleAlias.PLANNER: (RuntimeRef.CODEX,)}}
+            )
+        }
+    )
+
+    await runner._stack(task)
+    await runner._stack(_report_task())
+
+    assert calls[0]["planner_runtime"] is RuntimeRef.CODEX
+    assert calls[1]["planner_runtime"] is RuntimeRef.CLAUDE_ANALYSIS
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_report_plan_uses_the_stack_planner_runtime(
+    stores,
+    dialect_engine,  # noqa: F811
+    monkeypatch,
+) -> None:
+    _task_store, work_store = stores
+    planner_runtime = SimpleNamespace(name="codex")
+    stack = SimpleNamespace(
+        work_store=work_store,
+        capsule_compiler=object(),
+        read_controller=object(),
+        analysis_runtime=object(),
+        planner_runtime=planner_runtime,
+        read_capabilities=object(),
+        scratch_manager=object(),
+        activity_sink=object(),
+    )
+    planner_kwargs = []
+
+    async def fake_stack(**_kwargs):
+        return stack
+
+    class RecordingPlanner:
+        def __init__(self, **kwargs) -> None:
+            planner_kwargs.append(kwargs)
+
+        async def plan(self, task, **kwargs) -> TaskPlanResult:
+            return _report_plan()
+
+    monkeypatch.setattr("sagewai.work.tasks.report.build_report_stack", fake_stack)
+    monkeypatch.setattr("sagewai.work.tasks.report.TaskPlanner", RecordingPlanner)
+    runner = ReportProfileRunner(work_store=work_store, engine=dialect_engine)
+
+    await runner.plan(
+        _report_task(),
+        cycle=1,
+        plan_version=1,
+        base_sha=None,
+        brief_text="Write the report",
+        amendments=(),
+    )
+
+    assert planner_kwargs == [
+        {
+            "work_store": stack.work_store,
+            "capsule_compiler": stack.capsule_compiler,
+            "controller": stack.read_controller,
+            "runtime": stack.planner_runtime,
+            "capabilities": stack.read_capabilities,
+            "worktree_manager": planner_kwargs[0]["worktree_manager"],
+            "scratch_manager": stack.scratch_manager,
+            "actor_ref": "runtime:codex:planner",
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_a_report_task_plans_composes_delivers_and_completes(stores, tmp_path) -> None:
     task_store, _work_store = stores
     task, record, runner, coordinator = await _seed_report(stores, tmp_path)
@@ -345,9 +451,12 @@ async def test_the_selector_sends_each_task_to_its_own_runner(
     task_store, work_store = stores
     software_task, software_record, software_runner, _ = await _seed(stores, tmp_path)
     report_task, report_record, report_runner, _ = await _seed_report(stores, tmp_path)
+    knowledge_store = KnowledgeStore(engine=task_store._engine)
+    await knowledge_store.init()
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,
+        knowledge_store=knowledge_store,
         profile_runners=lambda task: report_runner if task.profile == "report" else software_runner,
         artifact_store=LocalArtifactStore(root=tmp_path / "objects"),
         decision_channels=(ConsoleDecisionChannel(),),

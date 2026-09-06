@@ -209,13 +209,17 @@ class VerificationCommandRunner(Protocol):
 
 
 def _docker_backend() -> SandboxBackend:
-    try:
-        from sagewai.sandbox.docker_backend import DockerBackend
+    from sagewai.sandbox.docker_backend import DockerBackend
 
+    try:
         return DockerBackend()
-    except (ImportError, RuntimeError) as exc:
+    except ImportError as exc:
         raise VerificationIsolationError(
             "Docker verification backend is unavailable; install sagewai[sandbox]"
+        ) from exc
+    except RuntimeError as exc:
+        raise VerificationIsolationError(
+            f"Docker verification backend is unavailable: {exc}"
         ) from exc
 
 

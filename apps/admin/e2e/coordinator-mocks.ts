@@ -505,7 +505,12 @@ export const taskPlan = {
   ],
 } satisfies TaskPlan;
 
-export const taskDetail = { task: taskDetailTask, record: needsYouTask, plan: null } satisfies TaskDetail;
+export const taskDetail = {
+  task: taskDetailTask,
+  record: needsYouTask,
+  plan: null,
+  proposed_plan: null,
+} satisfies TaskDetail;
 
 /** The same Task one gate later: version 1 accepted, so the detail route carries the plan. */
 export const acceptedPlanDetail = {
@@ -520,12 +525,14 @@ export const acceptedPlanDetail = {
     plan_version: 1,
   },
   plan: taskPlan,
+  proposed_plan: null,
 } satisfies TaskDetail;
 
 export const scheduledTaskDetail = {
   task: task(scheduledTask),
   record: { ...scheduledTask, plan_version: 1 },
   plan: taskPlan,
+  proposed_plan: null,
 } satisfies TaskDetail;
 
 function threadEntry(overrides: Partial<ThreadEntry>): ThreadEntry {
@@ -697,6 +704,25 @@ export const answeredThread = {
       answered_by: 'default',
       defaultable: true,
       deadline_at: '2026-09-01T13:00:00Z',
+    }),
+  ],
+  open_question_ids: [],
+  pending_gate: null,
+} satisfies TaskThread;
+
+export const mirroredBlockDecisionThread = {
+  ...thread,
+  entries: [
+    threadEntry({
+      id: '7',
+      sequence: 7,
+      author: 'system',
+      actor_ref: 'coordinator',
+      kind: 'decision',
+      text: 'Inspect the failed implementation evidence.',
+      attention_id: 'att-1',
+      attention_version: 1,
+      defaultable: null,
     }),
   ],
   open_question_ids: [],

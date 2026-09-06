@@ -33,6 +33,7 @@ from sagewai.artifacts import LocalArtifactStore
 from sagewai.connections.bootstrap import build_connections_context
 from sagewai.db import factory
 from sagewai.work.activity import WorkActivityStore
+from sagewai.work.knowledge import KnowledgeStore
 from sagewai.work.profiles.software.assembly import github_client_for
 from sagewai.work.store import WorkStore
 from sagewai.work.tasks.actions import RollbackExecutor
@@ -543,6 +544,8 @@ async def _config_store(project_id: str, state_file: AdminStateFile):
 
 async def _tick(project_id: str) -> int:
     task_store, work_store, activity_store = await _stores()
+    knowledge_store = KnowledgeStore(engine=factory.get_engine())
+    await knowledge_store.init()
     service = TaskService(store=task_store, artifact_store=LocalArtifactStore())
     state_file = AdminStateFile(default_admin_state_path())
     connections = build_connections_context(state_file)
@@ -577,6 +580,7 @@ async def _tick(project_id: str) -> int:
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,
+        knowledge_store=knowledge_store,
         profile_runners=lambda task: report if task.profile == "report" else software,
         activity_store=activity_store,
         channel_factory=_ready_channels,

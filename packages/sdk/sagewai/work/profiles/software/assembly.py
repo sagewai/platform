@@ -72,13 +72,10 @@ from sagewai.work.runtime import (
 )
 from sagewai.work.runtime_harness import HarnessRuntime
 from sagewai.work.store import WorkStore
-from sagewai.work.tasks.models import RuntimeRef
+from sagewai.work.tasks.models import PLANNER_RUNTIMES, RuntimeRef
 from sagewai.work.tasks.store import TaskStore
 
 ControllerFactory = Callable[..., OperatorController]
-_PLANNER_RUNTIMES = frozenset(
-    {RuntimeRef.CODEX, RuntimeRef.CLAUDE_ANALYSIS, RuntimeRef.CLAUDE_REVIEW}
-)
 
 
 def github_token_credentials(**_kwargs: object) -> dict[str, str]:
@@ -160,7 +157,7 @@ async def build_software_stack(
     credential_values: Mapping[str, str] | None = None,
 ) -> SoftwareStack:
     """Build the ladders, controllers, verifier, and lifecycle for one repository."""
-    if planner_runtime not in _PLANNER_RUNTIMES:
+    if planner_runtime not in PLANNER_RUNTIMES:
         raise ValueError(
             f"planner runtime {planner_runtime.value} needs harness tiers; use codex or claude"
         )

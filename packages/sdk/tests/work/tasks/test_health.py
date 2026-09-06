@@ -16,6 +16,7 @@ from decimal import Decimal
 
 import pytest
 
+from sagewai.work.knowledge import KnowledgeStore
 from sagewai.work.tasks.health import (
     AlertOperator,
     HealthPolicy,
@@ -138,7 +139,7 @@ def test_cycle_history_reads_the_task_stream_and_the_ledger() -> None:
 
 @pytest.mark.asyncio
 async def test_a_cost_spike_on_a_scheduled_task_holds_needs_you(
-    stores, monkeypatch  # noqa: F811
+    stores, monkeypatch, dialect_engine  # noqa: F811
 ) -> None:  # noqa: F811
     from sagewai.work.tasks.coordinator import TaskCoordinator
     from sagewai.work.tasks.events import TaskEventType
@@ -272,9 +273,12 @@ async def test_a_cost_spike_on_a_scheduled_task_holds_needs_you(
     monkeypatch.setattr(task_store, "spend_totals", capture_spend_totals)
     channel = RecordingDecisionChannel()
     profile = FakeProfileRunner(work_store, plan_result=plan)
+    knowledge_store = KnowledgeStore(engine=dialect_engine)
+    await knowledge_store.init()
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,
+        knowledge_store=knowledge_store,
         profile_runners=lambda _task: profile,
         decision_channels=(channel,),
     )

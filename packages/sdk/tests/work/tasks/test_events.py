@@ -129,7 +129,9 @@ def test_fold_record_applies_status_gates_questions_cycles_and_budget() -> None:
                 "questions": [
                     {"id": "q1", "defaultable": True},
                     {"id": "q2", "defaultable": False},
-                ]
+                ],
+                "pending_questions": 2,
+                "pending_material_questions": 1,
             },
         ),
         _event(3, TaskEventType.TASK_STATUS_CHANGED, {"status": "CLARIFYING"}),
@@ -210,7 +212,15 @@ def test_fold_record_ignores_events_of_other_tasks() -> None:
 
 def test_terminal_status_clears_questions_and_attention() -> None:
     events = [
-        _event(1, TaskEventType.CLARIFICATION_REQUESTED, {"questions": [{"id": "q1", "defaultable": False}]}),
+        _event(
+            1,
+            TaskEventType.CLARIFICATION_REQUESTED,
+            {
+                "questions": [{"id": "q1", "defaultable": False}],
+                "pending_questions": 1,
+                "pending_material_questions": 1,
+            },
+        ),
         _event(2, TaskEventType.TASK_STATUS_CHANGED, {"status": "CLARIFYING"}),
         _event(3, TaskEventType.TASK_STATUS_CHANGED, {"status": "CANCELLED"}),
     ]
@@ -256,9 +266,46 @@ def test_status_change_drops_explicit_wait_reason() -> None:
 
 
 def test_fold_applies_only_unapplied_events() -> None:
-    events = [_event(1, TaskEventType.CLARIFICATION_REQUESTED, {"questions": [{"id": "q1", "defaultable": True}]})]
+    events = [
+        _event(
+            1,
+            TaskEventType.CLARIFICATION_REQUESTED,
+            {
+                "questions": [{"id": "q1", "defaultable": True}],
+                "pending_questions": 1,
+                "pending_material_questions": 0,
+            },
+        )
+    ]
     once = fold_record(_record(), events)
     assert once.pending_questions == 1
     assert once.last_event_sequence == 1
     assert fold_record(once, []) == once
     assert fold_record(once, events) == once
+
+
+def test_a_reasked_question_is_counted_once() -> None:
+    record = _record()
+    asked = _event(
+        1,
+        TaskEventType.CLARIFICATION_REQUESTED,
+        {
+            "questions": [{"id": "q1", "defaultable": False, "attention_version": 1}],
+            "deadline_at": None,
+            "pending_questions": 1,
+            "pending_material_questions": 1,
+        },
+    )
+    reasked = _event(
+        2,
+        TaskEventType.CLARIFICATION_REQUESTED,
+        {
+            "questions": [{"id": "q1", "defaultable": False, "attention_version": 2}],
+            "deadline_at": None,
+            "pending_questions": 1,
+            "pending_material_questions": 1,
+        },
+    )
+    folded = fold_record(record, [asked, reasked])
+    assert folded.pending_questions == 1
+    assert folded.pending_material_questions == 1

@@ -12,13 +12,14 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import PurePosixPath
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from sagewai.work.models import ClassifiedClaim, ProposedAcceptanceCriterion
-from sagewai.work.tasks.events import TaskEvent, TaskEventType
+from sagewai.work.tasks.events import TaskEvent, TaskEventType, open_questions
 from sagewai.work.tasks.intake import ClarificationQuestion
 from sagewai.work.tasks.models import Budget, ReportTarget, SoftwareTarget
 
@@ -173,6 +174,32 @@ def accept_plan(
     return AcceptedPlan(version=version, steps=ordered, acceptance_matrix=result.acceptance_matrix)
 
 
+def clarification_request_entry(
+    events: Sequence[TaskEvent],
+    questions: Sequence[ClarificationQuestion],
+    *,
+    deadline_at: datetime,
+) -> tuple[TaskEventType, dict[str, Any]]:
+    """The request carries the open counts after it: a re-asked id replaces, never adds."""
+    open_by_id = {
+        str(question["id"]): bool(question["defaultable"])
+        for question, _deadline in open_questions(events)
+    }
+    for question in questions:
+        open_by_id[question.id] = question.defaultable
+    return (
+        TaskEventType.CLARIFICATION_REQUESTED,
+        {
+            "questions": [question.model_dump(mode="json") for question in questions],
+            "deadline_at": deadline_at.isoformat(),
+            "pending_questions": len(open_by_id),
+            "pending_material_questions": sum(
+                1 for defaultable in open_by_id.values() if not defaultable
+            ),
+        },
+    )
+
+
 def plan_from_events(events: Sequence[TaskEvent], *, version: int) -> AcceptedPlan | None:
     """Read back the plan proposed at ``version`` from the Task stream."""
     payload = next(
@@ -195,6 +222,16 @@ def plan_from_events(events: Sequence[TaskEvent], *, version: int) -> AcceptedPl
     )
 
 
+def proposed_plan_from_events(events: Sequence[TaskEvent]) -> AcceptedPlan | None:
+    """The latest proposal in the stream, whether or not it was accepted."""
+    versions = [
+        int(event.payload_json["version"])
+        for event in events
+        if event.event_type is TaskEventType.PLAN_PROPOSED
+    ]
+    return plan_from_events(events, version=max(versions)) if versions else None
+
+
 __all__ = [
     "AcceptedPlan",
     "MatrixItem",
@@ -202,5 +239,7 @@ __all__ = [
     "PlanStep",
     "TaskPlanResult",
     "accept_plan",
+    "clarification_request_entry",
     "plan_from_events",
+    "proposed_plan_from_events",
 ]

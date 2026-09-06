@@ -51,7 +51,7 @@ from sagewai.work.tasks.models import (
     TaskTarget,
     TaskTriggerSpec,
 )
-from sagewai.work.tasks.plan import plan_from_events
+from sagewai.work.tasks.plan import plan_from_events, proposed_plan_from_events
 from sagewai.work.tasks.service import (
     TaskCreationError,
     TaskDecisionError,
@@ -497,13 +497,18 @@ async def get_task(task_id: str, request: Request) -> dict:
         raise HTTPException(status_code=404, detail="Not found")
     task, record = loaded
     plan = None
-    if record.plan_version != 0:
+    proposed = None
+    if record.plan_version != 0 or record.status is TaskStatus.PLAN_PROPOSED:
         events = await store.read_events(task_id, project_id=project_id)
-        plan = plan_from_events(events, version=record.plan_version)
+        if record.plan_version != 0:
+            plan = plan_from_events(events, version=record.plan_version)
+        if record.status is TaskStatus.PLAN_PROPOSED:
+            proposed = proposed_plan_from_events(events)
     return {
         "task": task.model_dump(mode="json"),
         "record": record.model_dump(mode="json"),
         "plan": None if plan is None else plan.model_dump(mode="json"),
+        "proposed_plan": None if proposed is None else proposed.model_dump(mode="json"),
     }
 
 
@@ -565,10 +570,10 @@ async def post_task_answer(task_id: str, request: Request, body: _AnswerBody) ->
     project_id = _task_project_scope(request)
     service: TaskService = request.app.state.task_service
     with _service_errors():
-        record = await service.answer_clarification(
+        record = await service.answer_attention(
             task_id,
             project_id=project_id,
-            question_id=body.attention_id,
+            attention_id=body.attention_id,
             attention_version=body.attention_version,
             answer=body.answer,
             actor_ref=_actor_ref(request),

@@ -20,7 +20,7 @@ from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.work.tasks import intake as intake_module
 from sagewai.work.tasks.decide import _BUDGETED, fold_cycle
 from sagewai.work.tasks.decisions import TASK_GATES
-from sagewai.work.tasks.events import TaskEvent, TaskEventType, fold_record
+from sagewai.work.tasks.events import TaskEvent, TaskEventType, fold_record, open_questions
 from sagewai.work.tasks.models import (
     TERMINAL_STATUSES,
     Authority,
@@ -36,9 +36,10 @@ from sagewai.work.tasks.models import (
     TaskStatus,
     TaskTarget,
 )
-from sagewai.work.tasks.plan import plan_from_events
+from sagewai.work.tasks.plan import clarification_request_entry, plan_from_events
 from sagewai.work.tasks.store import StaleTaskError, TaskStore
 from sagewai.work.tasks.templates import default_registry, get_template, validate_slots
+from sagewai.work.tasks.views import thread_from_events
 from sagewai.work.tasks.writer import Entry, TaskWriter, build_events, status_entry
 
 _MAX_TITLE = 200
@@ -71,26 +72,6 @@ def _title(brief: str) -> str:
         if stripped:
             return stripped[:_MAX_TITLE]
     raise TaskCreationError("brief is empty")
-
-
-def _open_questions(
-    events: Sequence[TaskEvent],
-) -> list[tuple[dict[str, Any], datetime | None]]:
-    """Requested questions with no answer or default yet, each with its deadline."""
-    pending: dict[str, tuple[dict[str, Any], datetime | None]] = {}
-    for event in sorted(events, key=lambda item: item.sequence):
-        payload = event.payload_json
-        if event.event_type is TaskEventType.CLARIFICATION_REQUESTED:
-            raw = payload.get("deadline_at")
-            deadline = datetime.fromisoformat(raw) if raw else None
-            for question in payload["questions"]:
-                pending[str(question["id"])] = (question, deadline)
-        elif event.event_type in {
-            TaskEventType.CLARIFICATION_ANSWERED,
-            TaskEventType.CLARIFICATION_DEFAULTED,
-        }:
-            pending.pop(str(payload["question_id"]), None)
-    return list(pending.values())
 
 
 def _default_clarification_entry(question: dict[str, Any]) -> Entry:
@@ -250,14 +231,13 @@ class TaskService:
             ),
         ]
         if routed.questions:
-            deadline = moment + timedelta(seconds=defaults.clarification_deadline_seconds)
             entries.append(
-                (
-                    TaskEventType.CLARIFICATION_REQUESTED,
-                    {
-                        "questions": [question.model_dump(mode="json") for question in routed.questions],
-                        "deadline_at": deadline.isoformat(),
-                    },
+                clarification_request_entry(
+                    (),
+                    routed.questions,
+                    deadline_at=moment + timedelta(
+                        seconds=defaults.clarification_deadline_seconds
+                    ),
                 )
             )
             entries.append(status_entry(base, TaskStatus.CLARIFYING))
@@ -290,8 +270,12 @@ class TaskService:
         re-asked at a higher version rejects an answer composed against the old text.
         """
         _task, record = await self._load(task_id, project_id=project_id)
-        open_questions = _open_questions(await self._store.read_events(task_id, project_id=project_id))
-        questions = {str(question["id"]): question for question, _deadline in open_questions}
+        questions = {
+            str(question["id"]): question
+            for question, _deadline in open_questions(
+                await self._store.read_events(task_id, project_id=project_id)
+            )
+        }
         try:
             question = questions.pop(question_id)
         except KeyError as exc:
@@ -316,6 +300,115 @@ class TaskService:
             ]
         if record.status is TaskStatus.CLARIFYING and not questions:
             entries.append(status_entry(record, TaskStatus.PLANNING))
+        writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
+        return await writer.append(record, entries, now=now)
+
+    async def answer_attention(
+        self,
+        task_id: str,
+        *,
+        project_id: str,
+        attention_id: str,
+        attention_version: int,
+        answer: str | None,
+        actor_ref: str,
+        now: datetime | None = None,
+    ) -> TaskRecord:
+        """Section 17's one answer route.
+
+        A question's id answers it; a mirrored blocked Work's id records the decision that
+        supersedes it (section 8.4).
+        """
+        events = await self._store.read_events(task_id, project_id=project_id)
+        if any(
+            str(question["id"]) == attention_id
+            for question, _deadline in open_questions(events)
+        ):
+            return await self.answer_clarification(
+                task_id,
+                project_id=project_id,
+                question_id=attention_id,
+                attention_version=attention_version,
+                answer=answer,
+                actor_ref=actor_ref,
+                now=now,
+            )
+        return await self.decide_blocked_work(
+            task_id,
+            project_id=project_id,
+            attention_id=attention_id,
+            attention_version=attention_version,
+            decision=answer,
+            actor_ref=actor_ref,
+            now=now,
+        )
+
+    async def decide_blocked_work(
+        self,
+        task_id: str,
+        *,
+        project_id: str,
+        attention_id: str,
+        attention_version: int,
+        decision: str | None,
+        actor_ref: str,
+        now: datetime | None = None,
+    ) -> TaskRecord:
+        _task, record = await self._load(task_id, project_id=project_id)
+        events = await self._store.read_events(task_id, project_id=project_id)
+        if any(
+            event.event_type is TaskEventType.DECISION_RECORDED
+            and event.payload_json["attention_id"] == attention_id
+            for event in events
+        ):
+            raise TaskDecisionError(f"attention {attention_id} was already decided")
+        state = fold_cycle(events, plan_version=record.plan_version)
+        entry = next(
+            (
+                item
+                for item in thread_from_events(events).entries
+                if item.kind == "decision"
+                and item.attention_id == attention_id
+                and item.answer is None
+                and not item.closed
+            ),
+            None,
+        )
+        if entry is None or attention_id not in state.mirrored:
+            raise TaskDecisionError(
+                f"no open clarification question or blocked Work named {attention_id}"
+            )
+        mirror = next(
+            (
+                event.payload_json["payload"]
+                for event in reversed(events)
+                if event.event_type is TaskEventType.COMMAND_RECEIPT
+                and event.payload_json["kind"] == "mirror_attention"
+                and event.payload_json["payload"]["attention_id"] == attention_id
+                and event.payload_json["payload"]["attention_kind"] == "WORK_BLOCKED"
+            ),
+        )
+        work_id = str(mirror["work_id"])
+        if work_id not in state.step_works.values() or work_id in state.superseded_works:
+            raise TaskDecisionError(f"blocked Work {work_id} is not this cycle's active Work")
+        if attention_version != 1:
+            raise TaskDecisionError(f"blocked Work {attention_id} was presented at version 1")
+        if decision is None:
+            raise TaskDecisionError("a decision on a blocked Work needs an answer")
+        if record.status is not TaskStatus.BLOCKED:
+            raise TaskDecisionError(f"task {task_id} is {record.status.value}, not BLOCKED")
+        entries: list[Entry] = [
+            (
+                TaskEventType.DECISION_RECORDED,
+                {
+                    "attention_id": attention_id,
+                    "work_id": str(mirror["work_id"]),
+                    "step_id": str(mirror["step_id"]),
+                    "decision": decision,
+                },
+            ),
+            status_entry(record, TaskStatus.EXECUTING),
+        ]
         writer = TaskWriter(self._store, actor_type="human", actor_ref=actor_ref)
         return await writer.append(record, entries, now=now)
 
@@ -635,16 +728,16 @@ class TaskService:
         if record.status not in _OPEN_QUESTION_STATUSES or record.pending_questions == 0:
             return record
         events = await self._store.read_events(task_id, project_id=project_id)
-        open_questions = _open_questions(events)
+        open_items = open_questions(events)
         expired = [
             question
-            for question, deadline in open_questions
+            for question, deadline in open_items
             if bool(question["defaultable"]) and deadline is not None and deadline <= moment
         ]
         if not expired:
             return record
         entries: list[Entry] = [_default_clarification_entry(question) for question in expired]
-        if record.status is TaskStatus.CLARIFYING and len(expired) == len(open_questions):
+        if record.status is TaskStatus.CLARIFYING and len(expired) == len(open_items):
             entries.append(status_entry(record, TaskStatus.PLANNING))
         writer = TaskWriter(self._store)
         return await writer.append(record, entries, now=moment)

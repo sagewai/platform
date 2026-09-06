@@ -33,13 +33,13 @@ from sagewai.work.tasks.actions import DeliveryReceipt
 from sagewai.work.tasks.assessment import TaskAssessmentResult
 from sagewai.work.tasks.assessor import TaskAssessor
 from sagewai.work.tasks.budget import BudgetLedger, MeteredOperatorController
-from sagewai.work.tasks.models import ReportTarget, Task, TaskDefaults
+from sagewai.work.tasks.models import ReportTarget, Task, TaskDefaults, planner_runtime
 from sagewai.work.tasks.plan import AcceptedPlan, PlanStep, TaskPlanResult
 from sagewai.work.tasks.planner import TaskPlanner
 from sagewai.work.tasks.store import TaskStore
 
 _STACK_CACHE_LIMIT = 8
-_StackKey = tuple[str, int, tuple[str, ...]]
+_StackKey = tuple[str, int, str, tuple[str, ...]]
 
 
 def step_ref(task: Task, *, cycle: int, step: PlanStep) -> str:
@@ -103,10 +103,11 @@ class ReportProfileRunner:
             work_store=stack.work_store,
             capsule_compiler=stack.capsule_compiler,
             controller=stack.read_controller,
-            runtime=stack.analysis_runtime,
+            runtime=stack.planner_runtime,
             capabilities=stack.read_capabilities,
             worktree_manager=SoftwareWorktreeManager(),
             scratch_manager=stack.scratch_manager,
+            actor_ref=f"runtime:{stack.planner_runtime.name}:planner",
         )
         return await planner.plan(
             task,
@@ -146,6 +147,7 @@ class ReportProfileRunner:
         issue_url: str,
         base_sha: str | None,
         evidence_refs: tuple[str, ...] = (),
+        constraints: tuple[str, ...] = (),
     ) -> WorkRecord:
         stack = await self._stack(task)
         return await stack.lifecycle.start(
@@ -156,6 +158,7 @@ class ReportProfileRunner:
             step=step,
             source_ref=issue_url,
             evidence_refs=evidence_refs,
+            constraints=constraints,
         )
 
     async def resume(self, task: Task, *, cycle: int, work_id: str) -> WorkRecord:
@@ -213,9 +216,11 @@ class ReportProfileRunner:
 
     async def _stack(self, task: Task) -> ReportStack:
         target = self._target(task)
+        runtime_ref = planner_runtime(task)
         key: _StackKey = (
             task.id,
             task.budget.max_attempts_per_stage,
+            runtime_ref.value,
             tuple(f"{sink.kind}:{sink.version}" for sink in target.sinks),
         )
         cached = self._stacks.get(key)
@@ -227,6 +232,7 @@ class ReportProfileRunner:
             project_id=task.project_id,
             target=target,
             harness_tiers=defaults.harness_tiers,
+            planner_runtime=runtime_ref,
             github=(
                 self._github_factory(task)
                 if self._github_factory is not None

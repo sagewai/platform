@@ -19,6 +19,7 @@ from typing import Any, Protocol
 from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.work.activity import WorkActivityStore
 from sagewai.work.events import WorkEvent, WorkEventType
+from sagewai.work.knowledge import KnowledgeItem, KnowledgeKind, KnowledgeStore
 from sagewai.work.models import (
     SUPERSEDED,
     ActionRequest,
@@ -88,10 +89,10 @@ from sagewai.work.tasks.intake import ClarificationQuestion
 from sagewai.work.tasks.models import BudgetUsed, Task, TaskKind, TaskRecord, TaskStatus
 from sagewai.work.tasks.plan import (
     AcceptedPlan,
-    PlanRejectedError,
     PlanStep,
     TaskPlanResult,
     accept_plan,
+    clarification_request_entry,
 )
 from sagewai.work.tasks.planner import PlanningFailedError
 from sagewai.work.tasks.store import StaleTaskError, TaskStore
@@ -247,6 +248,7 @@ class ProfileRunner(Protocol):
         issue_url: str,
         base_sha: str | None,
         evidence_refs: tuple[str, ...] = (),
+        constraints: tuple[str, ...] = (),
     ) -> WorkRecord: ...
 
     async def resume(self, task: Task, *, cycle: int, work_id: str) -> WorkRecord: ...
@@ -282,6 +284,7 @@ class TaskCoordinator:
         *,
         task_store: TaskStore,
         work_store: WorkStore,
+        knowledge_store: KnowledgeStore,
         profile_runners: Callable[[Task], ProfileRunner],
         artifact_store: LocalArtifactStore | None = None,
         activity_store: WorkActivityStore | None = None,
@@ -292,6 +295,7 @@ class TaskCoordinator:
     ) -> None:
         self._task_store = task_store
         self._work_store = work_store
+        self._knowledge_store = knowledge_store
         self._profile_runners = profile_runners
         self._artifacts = artifact_store or LocalArtifactStore()
         self._command_failures: dict[tuple[str, str], int] = {}
@@ -957,13 +961,11 @@ class TaskCoordinator:
         self, task: Task, questions: tuple[ClarificationQuestion, ...]
     ) -> Entry:
         defaults = await self._task_store.get_defaults(project_id=task.project_id)
-        deadline = self._now() + timedelta(seconds=defaults.clarification_deadline_seconds)
-        return (
-            TaskEventType.CLARIFICATION_REQUESTED,
-            {
-                "questions": [question.model_dump(mode="json") for question in questions],
-                "deadline_at": deadline.isoformat(),
-            },
+        events = await self._task_store.read_events(task.id, project_id=task.project_id)
+        return clarification_request_entry(
+            events,
+            questions,
+            deadline_at=self._now() + timedelta(seconds=defaults.clarification_deadline_seconds),
         )
 
     async def _run_planning(
@@ -1007,19 +1009,9 @@ class TaskCoordinator:
             entries.append(await self._clarification_request(task, result.clarifications))
             entries.append(status_entry(record, TaskStatus.CLARIFYING))
             return await self._append(record, entries, lease_epoch, command=command)
-        try:
-            plan = accept_plan(
-                result, budget=task.budget, target=task.target, version=command.plan_version
-            )
-        except PlanRejectedError as exc:
-            return await self._block_planning(
-                task,
-                record,
-                f"plan rejected: {exc}",
-                lease_epoch,
-                command,
-                prefix=ledger.drain(),
-            )
+        plan = accept_plan(
+            result, budget=task.budget, target=task.target, version=command.plan_version
+        )
         entries = ledger.drain()
         entries.append(
             (
@@ -1586,11 +1578,20 @@ class TaskCoordinator:
                 ttl_seconds=8 * 3600,
             )
             if not acquired:
-                logger.info(
-                    "repository lease held by another task",
-                    extra={"event": "task.lease.busy", "task": task.id, "lease_key": lease_key},
+                holder = await self._task_store.repository_lease_holder(
+                    lease_key, project_id=task.project_id
                 )
-                return record
+                if holder is None:
+                    return record
+                reason = f"waiting for repository lease {lease_key} held by task {holder[0]}"
+                if record.waiting_reason == reason:
+                    return record
+                return await self._append(
+                    record,
+                    [(TaskEventType.ATTENTION_CHANGED, {"owner": "system", "reason": reason})],
+                    lease_epoch,
+                    command=command,
+                )
         issue_url = state.issue_urls.get(step.id)
         profile = self._profile_for(task)
         if issue_url is None and replay:
@@ -1627,6 +1628,10 @@ class TaskCoordinator:
                     {"lease_key": lease_key, "work_id": work.work_id},
                 )
             )
+            if (record.waiting_reason or "").startswith("waiting for repository lease "):
+                entries.append(
+                    (TaskEventType.ATTENTION_CHANGED, {"owner": "system", "reason": "working"})
+                )
         entries.extend(
             await self._track(
                 task,
@@ -1713,11 +1718,18 @@ class TaskCoordinator:
     ) -> TaskRecord:
         step = next(step for step in state.plan.steps if step.id == command.step_id)
         issue_url = state.issue_urls[step.id]
-        evidence = await self._supersede_evidence(task, command.work_id)
+        if command.reason == "decision":
+            evidence = (f"task-decision://{command.decision_event_id}",)
+            constraints = (command.decision,)
+        else:
+            evidence = await self._supersede_evidence(task, command.work_id)
+            constraints = ()
         profile = self._profile_for(task)
         base_sha = await profile.base_sha(task)
         replacement = await profile.find_work(task, issue_url=issue_url, exclude=command.work_id)
+        spent: list[Entry] = []
         if replacement is None:
+            ledger = self._meter(task, record)
             replacement = await profile.start(
                 task,
                 cycle=record.current_cycle,
@@ -1725,7 +1737,9 @@ class TaskCoordinator:
                 issue_url=issue_url,
                 base_sha=base_sha,
                 evidence_refs=evidence,
+                constraints=constraints,
             )
+            spent = ledger.drain()
         else:
             base_sha = replacement.profile_context.get("base_sha", base_sha)
         await supersede_work(
@@ -1733,17 +1747,35 @@ class TaskCoordinator:
             work_id=command.work_id,
             project_id=task.project_id,
             superseded_by=replacement.work_id,
-            reason="base_moved",
+            reason=command.reason,
             actor_ref="coordinator",
         )
+        if command.reason == "decision" and not await self._knowledge_store.find_by_source_ref(
+            evidence[0], project_id=task.project_id
+        ):
+            # A replayed command (section 8.1) finds the item its first run published.
+            await self._knowledge_store.publish(
+                KnowledgeItem(
+                    id=f"task-decision:{command.decision_event_id}",
+                    project_id=task.project_id,
+                    work_id=replacement.work_id,
+                    kind=KnowledgeKind.DECISION,
+                    statement=command.decision,
+                    source_refs=evidence,
+                    factness_score=100,
+                    created_by="coordinator",
+                    created_at=self._now(),
+                )
+            )
         entries: list[Entry] = [
+            *spent,
             (
                 TaskEventType.STEP_WORK_SUPERSEDED,
                 {
                     "step_id": step.id,
                     "work_id": command.work_id,
                     "superseded_by": replacement.work_id,
-                    "reason": "base_moved",
+                    "reason": command.reason,
                 },
             ),
             (

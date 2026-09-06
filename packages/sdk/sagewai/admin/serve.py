@@ -899,8 +899,11 @@ def create_admin_serve_app(
         engine = _db_factory.get_engine()
         app.state.work_store = WorkStore(engine=engine)
         app.state.activity_store = WorkActivityStore(engine=engine)
+        from sagewai.work.knowledge import KnowledgeStore
         from sagewai.work.tasks import TaskStore
         app.state.task_store = TaskStore(engine=engine)
+        app.state.knowledge_store = KnowledgeStore(engine=engine)
+        await app.state.knowledge_store.init()
         app.state.activity_ingestion = ActivityIngestion(
             work_store=app.state.work_store,
             task_store=app.state.task_store,
@@ -1052,6 +1055,7 @@ def create_admin_serve_app(
             driver=TaskCoordinator(
                 task_store=app.state.task_store,
                 work_store=app.state.work_store,
+                knowledge_store=app.state.knowledge_store,
                 profile_runners=lambda task: (
                     app.state.task_report_runner
                     if task.profile == "report"

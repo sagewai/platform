@@ -20,10 +20,16 @@ import pytest
 from fastapi import FastAPI
 
 from sagewai.admin.tasks_routes import router
+from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.work import WorkStore
 from sagewai.work.tasks import TaskStore
+from sagewai.work.tasks.events import TaskEventType
+from sagewai.work.tasks.models import TaskDefaults, TaskOrigin, TaskStatus
+from sagewai.work.tasks.service import TaskService
+from sagewai.work.tasks.writer import TaskWriter, status_entry
 from tests.db.conftest import dialect_engine  # noqa: F401
 from tests.work.tasks.test_inbox import NOW, _seed_presented_task, _seed_work_gate
+from tests.work.tasks.test_service import SOFTWARE_BRIEF, TARGET
 
 
 @dataclass
@@ -34,9 +40,12 @@ class AdminClient:
 
 
 @pytest.fixture
-async def client(dialect_engine) -> AdminClient:  # noqa: F811
+async def client(dialect_engine, tmp_path) -> AdminClient:  # noqa: F811
     task_store = TaskStore(engine=dialect_engine)
     await task_store.init()
+    await task_store.put_defaults(
+        TaskDefaults(project_id="p", target=TARGET), expected_revision=0
+    )
     work_store = WorkStore(engine=dialect_engine)
     await work_store.init()
     await _seed_presented_task(
@@ -46,6 +55,9 @@ async def client(dialect_engine) -> AdminClient:  # noqa: F811
     app = FastAPI()
     app.state.task_store = task_store
     app.state.work_store = work_store
+    app.state.task_service = TaskService(
+        store=task_store, artifact_store=LocalArtifactStore(root=tmp_path / "objects")
+    )
     app.include_router(router)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as http:
@@ -79,3 +91,90 @@ async def test_decisions_is_empty_for_a_quiet_project(client: AdminClient) -> No
 async def test_decisions_refuses_the_global_scope(client: AdminClient) -> None:
     response = await client.http.get("/api/v1/tasks/decisions", headers={"X-Project-ID": "global"})
     assert response.status_code == 400
+
+
+async def _seed_blocked_task_answer(app: Any) -> str:
+    service: TaskService = app.state.task_service
+    store: TaskStore = app.state.task_store
+    task, record = await service.create(
+        SOFTWARE_BRIEF,
+        project_id="p",
+        origin=TaskOrigin.HUMAN,
+        created_by="arda",
+        now=NOW,
+    )
+    await TaskWriter(store).append(
+        record,
+        [
+            (TaskEventType.CYCLE_STARTED, {"cycle": 1, "scheduled_for": None}),
+            (
+                TaskEventType.STEP_WORK_STARTED,
+                {
+                    "step_id": "s3",
+                    "work_id": "w3",
+                    "issue_url": "https://github.com/o/r/issues/3",
+                    "base_sha": "a" * 40,
+                },
+            ),
+            (
+                TaskEventType.COMMAND_RECEIPT,
+                {
+                    "command_id": "mirror_attention:12",
+                    "kind": "mirror_attention",
+                    "payload": {
+                        "kind": "mirror_attention",
+                        "step_id": "s3",
+                        "work_id": "w3",
+                        "attention_kind": "WORK_BLOCKED",
+                        "attention_id": "att-1",
+                        "summary": "Inspect the failed implementation evidence.",
+                        "gate_id": None,
+                        "evidence_refs": [],
+                    },
+                },
+            ),
+            (
+                TaskEventType.TASK_MESSAGE,
+                {
+                    "author": "coordinator",
+                    "text": "Inspect the failed implementation evidence.",
+                    "refs": ["w3"],
+                    "attention_id": "att-1",
+                },
+            ),
+            status_entry(record, TaskStatus.BLOCKED),
+        ],
+        now=NOW,
+    )
+    return task.id
+
+
+@pytest.mark.asyncio
+async def test_answers_records_a_decision_for_a_mirrored_block(client: AdminClient) -> None:
+    task_id = await _seed_blocked_task_answer(client.app)
+
+    response = await client.http.post(
+        f"/api/v1/tasks/{task_id}/answers",
+        headers=client.headers,
+        json={
+            "attention_id": "att-1",
+            "attention_version": 1,
+            "answer": "Retry: tool-channel misread.",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "EXECUTING"
+
+
+@pytest.mark.asyncio
+async def test_answers_refuses_an_unknown_attention_id(client: AdminClient) -> None:
+    task_id = await _seed_blocked_task_answer(client.app)
+
+    response = await client.http.post(
+        f"/api/v1/tasks/{task_id}/answers",
+        headers=client.headers,
+        json={"attention_id": "nope", "attention_version": 1, "answer": "x"},
+    )
+
+    assert response.status_code == 409

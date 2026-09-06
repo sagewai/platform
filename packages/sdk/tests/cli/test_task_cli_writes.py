@@ -121,6 +121,8 @@ async def clarifying(wired, dialect_engine):  # noqa: F811
                         }
                     ],
                     "deadline_at": NOW.isoformat(),
+                    "pending_questions": 1,
+                    "pending_material_questions": 1,
                 },
             ),
             (TaskEventType.TASK_STATUS_CHANGED, {"status": "CLARIFYING"}),
@@ -154,6 +156,8 @@ async def defaultable(wired, dialect_engine):  # noqa: F811
                         }
                     ],
                     "deadline_at": NOW.isoformat(),
+                    "pending_questions": 1,
+                    "pending_material_questions": 0,
                 },
             ),
             (TaskEventType.TASK_STATUS_CHANGED, {"status": "CLARIFYING"}),

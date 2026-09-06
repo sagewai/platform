@@ -15,6 +15,7 @@ from datetime import timedelta
 
 import pytest
 
+from sagewai.work.knowledge import KnowledgeStore
 from sagewai.work.profiles.software.github import GitHubIssue
 from sagewai.work.store import WorkStore
 from sagewai.work.tasks.assessment import AssessmentGap
@@ -100,9 +101,12 @@ async def _seed_report(
     task = Task.model_validate(values)
     record = await _store_task(task_store, task)
     runner = FakeProfileRunner(work_store)
+    knowledge_store = KnowledgeStore(engine=task_store._engine)
+    await knowledge_store.init()
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,
+        knowledge_store=knowledge_store,
         profile_runners=lambda _task: runner,
         decision_channels=(ConsoleDecisionChannel(),),
     )
@@ -119,9 +123,12 @@ async def _seed_task_with_override(
     )
     record = await _store_task(task_store, task)
     runner = FakeProfileRunner(work_store)
+    knowledge_store = KnowledgeStore(engine=task_store._engine)
+    await knowledge_store.init()
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,
+        knowledge_store=knowledge_store,
         profile_runners=lambda _task: runner,
         decision_channels=(ConsoleDecisionChannel(),),
     )

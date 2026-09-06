@@ -19,6 +19,7 @@ import pytest
 
 from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.work.events import WorkEvent, WorkEventType
+from sagewai.work.knowledge import KnowledgeKind, KnowledgeStore
 from sagewai.work.models import (
     SUPERSEDED,
     ActionRequest,
@@ -75,6 +76,7 @@ class FakeProfileRunner:
         self.started: list[str] = []
         self.resumed: list[str] = []
         self.evidence: list[tuple[str, ...]] = []
+        self.constraints: list[tuple[str, ...]] = []
         self.merged = False
         self.plan_result = plan_result
         self.plan_error: Exception | None = None
@@ -100,6 +102,14 @@ class FakeProfileRunner:
 
     def use_ledger(self, ledger) -> None:
         self.ledgers.append(ledger)
+        self._metered = True
+
+    def _billable(self, task) -> None:
+        """The real runners bill every profile call to the ledger the coordinator handed them
+        just before (software.py: ``self._ledgers[task_id]``); a call without one is F22."""
+        if not getattr(self, "_metered", False):
+            raise KeyError(task.id)
+        self._metered = False
 
     async def base_sha(self, task):
         if self.base_sha_error is not None:
@@ -107,6 +117,7 @@ class FakeProfileRunner:
         return self.head
 
     async def plan(self, task, *, cycle, plan_version, base_sha, brief_text, amendments):
+        self._billable(task)
         assert base_sha == self.head
         if self.plan_error is not None:
             raise self.plan_error
@@ -131,10 +142,22 @@ class FakeProfileRunner:
             return record
         return None
 
-    async def start(self, task, *, cycle, step, issue_url, base_sha, evidence_refs=()):
+    async def start(
+        self,
+        task,
+        *,
+        cycle,
+        step,
+        issue_url,
+        base_sha,
+        evidence_refs=(),
+        constraints=(),
+    ):
+        self._billable(task)
         work_id = f"w-{step.id}-{len(self.started) + 1}"
         self.started.append(work_id)
         self.evidence.append(tuple(evidence_refs))
+        self.constraints.append(tuple(constraints))
         record = await self._save(
             task,
             work_id,
@@ -148,6 +171,7 @@ class FakeProfileRunner:
         return record
 
     async def resume(self, task, *, cycle, work_id):
+        self._billable(task)
         self.resumed.append(work_id)
         record = await self._work_store.load_work(work_id, project_id=task.project_id)
         if record.status == "WORK_BLOCKED":
@@ -166,6 +190,7 @@ class FakeProfileRunner:
         return self.merged
 
     async def assess(self, task, *, cycle, plan_version, plan, outcomes, merged_sha, evidence):
+        self._billable(task)
         self.assessed.append((cycle, plan_version, merged_sha))
         attempt_id = f"{task.id}:assess:{cycle}:{plan_version}"
         return merge_assessment(
@@ -385,7 +410,14 @@ async def stores(dialect_engine):  # noqa: F811
     return task_store, work_store
 
 
-async def _seed(stores, tmp_path, *, plan_auto: bool = True, origin: TaskOrigin = TaskOrigin.HUMAN):
+async def _seed(
+    stores,
+    tmp_path,
+    *,
+    plan_auto: bool = True,
+    origin: TaskOrigin = TaskOrigin.HUMAN,
+    knowledge_store: KnowledgeStore | None = None,
+):
     from sagewai.artifacts.object_store import LocalArtifactStore
 
     task_store, work_store = stores
@@ -404,12 +436,16 @@ async def _seed(stores, tmp_path, *, plan_auto: bool = True, origin: TaskOrigin 
             update={"authority": task.authority.model_copy(update={"plan": GateMode.AUTO})}
         )
     runner = FakeProfileRunner(work_store, plan_result=_plan_result())
+    if knowledge_store is None:
+        knowledge_store = KnowledgeStore(engine=task_store._engine)
+        await knowledge_store.init()
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,
         profile_runners=lambda _task: runner,
         artifact_store=artifacts,
         decision_channels=(ConsoleDecisionChannel(),),
+        knowledge_store=knowledge_store,
     )
     return task, record, runner, coordinator
 
@@ -597,6 +633,48 @@ async def test_plan_to_two_steps_to_assess_to_complete(stores, tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_a_step_waiting_for_the_repository_lease_says_so(
+    stores, tmp_path, monkeypatch
+) -> None:
+    task_store, work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
+    runner.statuses["s1"] = "RUNNING"
+
+    async def no_progress(task_, *, cycle, work_id):
+        runner.resumed.append(work_id)
+        return await work_store.load_work(work_id, project_id=task_.project_id)
+
+    runner.resume = no_progress
+    lease_key = task.repository_lease_key
+    assert lease_key is not None
+    assert await task_store.acquire_repository_lease(
+        lease_key, project_id=PROJECT, task_id="other-task", work_id=None, ttl_seconds=3600
+    )
+
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    assert record.status is TaskStatus.EXECUTING
+    assert record.attention_owner is AttentionOwner.SYSTEM
+    assert record.waiting_reason == (
+        f"waiting for repository lease {lease_key} held by task other-task"
+    )
+    kinds = [e.event_type for e in await task_store.read_events(task.id, project_id=PROJECT)]
+    assert TaskEventType.STEP_WORK_STARTED not in kinds
+    assert kinds.count(TaskEventType.ATTENTION_CHANGED) == 1
+
+    assert await task_store.release_repository_lease(
+        lease_key, project_id=PROJECT, task_id="other-task"
+    )
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    assert record.waiting_reason == "working"
+    kinds = [e.event_type for e in await task_store.read_events(task.id, project_id=PROJECT)]
+    assert TaskEventType.STEP_WORK_STARTED in kinds
+
+
+@pytest.mark.asyncio
 async def test_assessment_receives_the_latest_base_advanced_sha(
     stores, tmp_path, monkeypatch
 ) -> None:
@@ -716,6 +794,101 @@ async def test_a_blocked_step_work_blocks_the_task_and_presents_the_decision(
         "summary",
         "evidence_refs",
     }
+
+
+@pytest.mark.asyncio
+async def test_a_decided_blocked_work_is_superseded_with_the_decision(
+    stores, tmp_path, monkeypatch, dialect_engine  # noqa: F811
+) -> None:
+    task_store, work_store = stores
+    knowledge_store = KnowledgeStore(engine=dialect_engine)
+    await knowledge_store.init()
+    task, record, runner, coordinator = await _seed(
+        stores, tmp_path, knowledge_store=knowledge_store
+    )
+    runner.statuses["s1"] = "WORK_BLOCKED"
+    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
+    record = await coordinator.drive(record, lease_epoch=epoch)
+    await work_store.append_event(
+        WorkEvent(
+            id="e1",
+            project_id=PROJECT,
+            work_id=runner.started[-1],
+            sequence=1,
+            event_type=WorkEventType.WORK_BLOCKED,
+            actor_type="system",
+            actor_ref="test",
+            payload_json={
+                "reason": "needs a decision",
+                "decision_request": "choose the queue",
+            },
+            created_at=NOW,
+        )
+    )
+    record = await coordinator.drive(record, lease_epoch=epoch)
+    assert record.status is TaskStatus.BLOCKED
+
+    runner.statuses["s1"] = "WORK_BLOCKED"
+    record = await TaskService(
+        store=task_store, artifact_store=LocalArtifactStore(root=tmp_path / "objects")
+    ).answer_attention(
+        task.id,
+        project_id=PROJECT,
+        attention_id="e1",
+        attention_version=1,
+        answer="retry: tool-channel misread",
+        actor_ref="human:arda",
+    )
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    assert record.status is TaskStatus.EXECUTING
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    replaced = next(
+        event
+        for event in events
+        if event.event_type is TaskEventType.STEP_WORK_SUPERSEDED
+    )
+    assert replaced.payload_json["reason"] == "decision"
+    replacement = replaced.payload_json["superseded_by"]
+    decided = next(event for event in events if event.event_type is TaskEventType.DECISION_RECORDED)
+    replacement_index = runner.started.index(replacement)
+    assert runner.evidence[replacement_index] == (f"task-decision://{decided.id}",)
+    assert runner.constraints[replacement_index] == ("retry: tool-channel misread",)
+    items = await knowledge_store.find_by_source_ref(
+        f"task-decision://{decided.id}", project_id=PROJECT
+    )
+    assert len(items) == 1
+    assert items[0].kind is KnowledgeKind.DECISION and items[0].factness_score == 100
+    original = await work_store.load_work(runner.started[0], project_id=PROJECT)
+    assert original.status == SUPERSEDED
+
+    from sagewai.work.tasks.decide import SupersedeStep, fold_cycle
+
+    command = SupersedeStep(
+        step_id="s1",
+        work_id=runner.started[0],
+        phase=None,
+        reason="decision",
+        decision_event_id=decided.id,
+        decision="retry: tool-channel misread",
+    )
+    started = list(runner.started)
+    state = fold_cycle(events, plan_version=record.plan_version)
+    record = await coordinator._supersede(task, record, command, state, epoch, replay=True)
+
+    assert runner.started == started
+    replayed_events = await task_store.read_events(task.id, project_id=PROJECT)
+    replayed = [
+        event
+        for event in replayed_events
+        if event.event_type is TaskEventType.STEP_WORK_SUPERSEDED
+    ][-1]
+    assert replayed.payload_json["superseded_by"] == replacement
+    replayed_items = await knowledge_store.find_by_source_ref(
+        f"task-decision://{decided.id}", project_id=PROJECT
+    )
+    assert len(replayed_items) == 1
 
 
 @pytest.mark.asyncio
@@ -1607,9 +1780,12 @@ async def test_pruning_activity_includes_superseded_step_works(stores, tmp_path)
         async def prune(self, **kwargs) -> None:
             calls.append(kwargs)
 
+    knowledge_store = KnowledgeStore(engine=task_store._engine)
+    await knowledge_store.init()
     coordinator = TaskCoordinator(
         task_store=task_store,
         work_store=work_store,
+        knowledge_store=knowledge_store,
         profile_runners=lambda _task: runner,
         activity_store=Activity(),
     )
@@ -1851,6 +2027,8 @@ async def test_a_defaulted_answer_reaches_the_next_plan_version(stores, tmp_path
                         }
                     ],
                     "deadline_at": (NOW + timedelta(hours=4)).isoformat(),
+                    "pending_questions": 1,
+                    "pending_material_questions": 0,
                 },
             ),
             (
@@ -2046,7 +2224,64 @@ async def test_repository_lease_held_by_another_task_starts_no_side_effect(
     epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
     after = await coordinator.drive(record, lease_epoch=epoch)
     assert after.status is record.status
-    assert after.revision == record.revision
+    assert after.revision == record.revision + 1
+    assert after.attention_owner is AttentionOwner.SYSTEM
+    assert after.waiting_reason == (
+        f"waiting for repository lease {task.repository_lease_key} held by task another-task"
+    )
+    assert runner.created_issues == []
+    assert runner.started == []
+    after_events = await task_store.read_events(task.id, project_id=PROJECT)
+    assert after_events[: len(before_events)] == before_events
+    assert after_events[-1].event_type is TaskEventType.ATTENTION_CHANGED
+
+
+@pytest.mark.asyncio
+async def test_repository_lease_holder_none_records_no_wait_attention(
+    stores, tmp_path, monkeypatch
+) -> None:
+    task_store, _ = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
+    monkeypatch.setattr(coordinator, "_now", lambda: NOW)
+    record = await TaskWriter(task_store).append(
+        record,
+        [
+            (
+                TaskEventType.PLAN_PROPOSED,
+                {
+                    "version": 1,
+                    "steps": [step.model_dump(mode="json") for step in _plan_result().steps],
+                    "acceptance_matrix": [
+                        item.model_dump(mode="json") for item in _plan_result().acceptance_matrix
+                    ],
+                },
+            ),
+            (TaskEventType.PLAN_ACCEPTED, {"version": 1}),
+            (TaskEventType.TASK_STATUS_CHANGED, {"status": TaskStatus.EXECUTING.value}),
+            (TaskEventType.CYCLE_STARTED, {"cycle": 1, "scheduled_for": None}),
+        ],
+        now=NOW,
+    )
+    assert await task_store.acquire_repository_lease(
+        task.repository_lease_key,
+        project_id=PROJECT,
+        task_id="another-task",
+        work_id=None,
+        ttl_seconds=3600,
+    )
+
+    async def no_current_holder(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(task_store, "repository_lease_holder", no_current_holder)
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
+    claimed = await task_store.load_record(task.id, project_id=PROJECT)
+    assert claimed is not None
+    before_events = await task_store.read_events(task.id, project_id=PROJECT)
+    after = await coordinator.drive(claimed, lease_epoch=epoch)
+
+    assert after == claimed
     assert runner.created_issues == []
     assert runner.started == []
     assert await task_store.read_events(task.id, project_id=PROJECT) == before_events
@@ -2281,7 +2516,9 @@ async def test_a_rejected_plan_offers_a_replan_gate_where_the_inbox_looks(stores
     task, record, runner, coordinator = await _seed(stores, tmp_path)
     channel = RecordingDecisionChannel()
     coordinator._static_channels = (channel,)
-    runner.plan_result = _plan_result().model_copy(update={"acceptance_matrix": ()})
+    runner.plan_error = PlanningFailedError(
+        "invalid task_plan_result after 3 attempts: plan rejected: acceptance matrix is empty"
+    )
 
     epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
     record = await _drive_to_rest(coordinator, record, epoch)

@@ -21,7 +21,9 @@ from sagewai.work.tasks.decisions import gate_decided_by
 from sagewai.work.tasks.events import TaskEvent, TaskEventType
 from sagewai.work.tasks.models import TERMINAL_STATUSES, TaskStatus
 
-ThreadKind = Literal["brief", "message", "question", "gate", "plan", "output", "status"]
+ThreadKind = Literal[
+    "brief", "message", "question", "decision", "gate", "plan", "output", "status"
+]
 
 
 class ThreadEntry(BaseModel):
@@ -72,7 +74,9 @@ def thread_from_events(events: Sequence[TaskEvent]) -> ThreadView:
     ordered = sorted(events, key=lambda event: event.sequence)
     entries: list[dict] = []
     questions: dict[str, dict] = {}
+    decisions: dict[str, dict] = {}
     gates: dict[str, list[dict]] = {}
+    mirrors: dict[str, str] = {}
     brief_ref: str | None = None
     pending_gate: str | None = None
     for event in ordered:
@@ -120,16 +124,39 @@ def thread_from_events(events: Sequence[TaskEvent]) -> ThreadView:
             defaulted = questions[str(payload["question_id"])]
             defaulted["answer"] = None if payload["answer"] is None else str(payload["answer"])
             defaulted["answered_by"] = "default"
+        elif event.event_type is TaskEventType.COMMAND_RECEIPT:
+            if payload["kind"] == "mirror_attention":
+                mirror = payload["payload"]
+                mirrors[str(mirror["attention_id"])] = str(mirror["attention_kind"])
         elif event.event_type is TaskEventType.TASK_MESSAGE:
-            entries.append(
-                {
+            attention_id = payload.get("attention_id")
+            if (
+                attention_id is not None
+                and mirrors.get(str(attention_id)) == "WORK_BLOCKED"
+            ):
+                entry = {
                     **base,
-                    "kind": "message",
+                    "kind": "decision",
                     "author": str(payload["author"]),
                     "text": str(payload["text"]),
+                    "attention_id": str(attention_id),
+                    "attention_version": 1,
+                    "answer": None,
+                    "answered_by": None,
                     "refs": tuple(str(ref) for ref in payload["refs"]),
                 }
-            )
+                decisions[str(attention_id)] = entry
+                entries.append(entry)
+            else:
+                entries.append(
+                    {
+                        **base,
+                        "kind": "message",
+                        "author": str(payload["author"]),
+                        "text": str(payload["text"]),
+                        "refs": tuple(str(ref) for ref in payload["refs"]),
+                    }
+                )
         elif event.event_type is TaskEventType.PLAN_PROPOSED:
             version = int(payload["version"])
             entries.append(
@@ -201,6 +228,10 @@ def thread_from_events(events: Sequence[TaskEvent]) -> ThreadView:
             )
             if external_ref is not None:
                 entries[-1]["refs"] = (str(external_ref), *entries[-1]["refs"])
+        elif event.event_type is TaskEventType.DECISION_RECORDED:
+            decision = decisions[str(payload["attention_id"])]
+            decision["answer"] = str(payload["decision"])
+            decision["answered_by"] = "human"
         elif event.event_type is TaskEventType.BUDGET_UPDATED:
             entries.append({**base, "kind": "message", "author": "human", "text": "budget updated"})
         elif event.event_type is TaskEventType.TASK_STATUS_CHANGED:
@@ -215,6 +246,9 @@ def thread_from_events(events: Sequence[TaskEvent]) -> ThreadView:
                     for gate in gate_entries:
                         if "decision" not in gate:
                             gate["closed"] = True
+                for decision in decisions.values():
+                    if decision.get("answered_by") is None:
+                        decision["closed"] = True
     return ThreadView(
         task_id=ordered[0].task_id,
         project_id=ordered[0].project_id,
