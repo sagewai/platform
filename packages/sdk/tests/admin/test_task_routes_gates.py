@@ -25,6 +25,7 @@ from sagewai.work import WorkEvent, WorkEventType, WorkRecord, WorkStore
 from sagewai.work.tasks import TaskService, TaskStore
 from sagewai.work.tasks.events import TaskEvent, TaskEventType, fold_record
 from tests.db.conftest import dialect_engine  # noqa: F401
+from tests.work.tasks.test_service import MATRIX, STEP
 from tests.work.tasks.test_store import _record, _task
 
 NOW = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
@@ -94,10 +95,32 @@ async def _task_with_gate(client: AdminClient, gate_id: str, task_id: str = "t-1
             project_id="p",
             task_id=task_id,
             sequence=2,
+            event_type=TaskEventType.PLAN_PROPOSED,
+            actor_type="system",
+            actor_ref="coordinator",
+            payload_json={"version": 1, "steps": [STEP], "acceptance_matrix": MATRIX},
+            created_at=NOW,
+        ),
+        TaskEvent(
+            id=f"{task_id}-3",
+            project_id="p",
+            task_id=task_id,
+            sequence=3,
             event_type=TaskEventType.GATE_REQUESTED,
             actor_type="system",
             actor_ref="coordinator",
             payload_json={"gate_id": gate_id, "question": "Approve it."},
+            created_at=NOW,
+        ),
+        TaskEvent(
+            id=f"{task_id}-4",
+            project_id="p",
+            task_id=task_id,
+            sequence=4,
+            event_type=TaskEventType.TASK_STATUS_CHANGED,
+            actor_type="system",
+            actor_ref="coordinator",
+            payload_json={"status": "PLAN_PROPOSED"},
             created_at=NOW,
         ),
     )
@@ -166,7 +189,8 @@ async def test_a_plan_gate_is_decided_on_the_task(client: AdminClient) -> None:
 
     assert response.status_code == 200
     assert response.json()["pending_gate"] is None
-    assert response.json()["status"] == "PLANNING"
+    assert response.json()["status"] == "EXECUTING"
+    assert response.json()["plan_version"] == 1
 
 
 @pytest.mark.asyncio

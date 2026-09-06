@@ -842,6 +842,23 @@ async def test_accept_plan_is_idempotent_for_an_already_accepted_version(
 
 
 @pytest.mark.asyncio
+async def test_allowing_the_plan_gate_accepts_the_plan(service: TaskService, store: TaskStore) -> None:
+    task, record = await _proposed(service, store)
+    record = await service.decide_gate(
+        task.id,
+        project_id="project-a",
+        gate_id=f"plan:{task.id}:1",
+        decision="allow",
+        actor_ref="arda",
+        now=NOW,
+    )
+    assert record.status is TaskStatus.EXECUTING
+    assert record.plan_version == 1 and record.pending_gate is None
+    kinds = [event.event_type for event in await store.read_events(task.id, project_id="project-a")]
+    assert kinds.index(TaskEventType.GATE_DECIDED) < kinds.index(TaskEventType.PLAN_ACCEPTED)
+
+
+@pytest.mark.asyncio
 async def test_denying_the_plan_gate_blocks_the_task(service: TaskService, store: TaskStore) -> None:
     task, record = await _proposed(service, store)
     record = await service.decide_gate(

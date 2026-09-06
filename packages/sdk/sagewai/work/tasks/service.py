@@ -411,6 +411,14 @@ class TaskService:
         _task, record = await self._load(task_id, project_id=project_id)
         if record.pending_gate != gate_id:
             raise TaskDecisionError(f"no open gate {gate_id}")
+        if decision == "allow" and gate_id.startswith("plan:"):
+            return await self.accept_plan(
+                task_id,
+                project_id=project_id,
+                version=int(gate_id.rsplit(":", 1)[1]),
+                actor_ref=actor_ref,
+                now=now,
+            )
         entries: list[Entry] = [
             (TaskEventType.GATE_DECIDED, {"gate_id": gate_id, "decision": decision})
         ]
