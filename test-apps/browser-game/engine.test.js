@@ -168,3 +168,135 @@ test("the shipped game can be won without losing a life", () => {
 
   assert.ok(won, `expected a winning route; searched ${visited.size} states`);
 });
+
+test("glitch speed advances multiple path steps and checks intermediate collisions", () => {
+  const advanced = move(
+    createGame(
+      level({
+        height: 2,
+        hazards: [{ path: [[3, 0], [2, 0], [1, 0], [2, 0]], speed: 2 }],
+      }),
+    ),
+    "down",
+  );
+
+  assert.equal(advanced.hazards[0].pathIndex, 2);
+  assert.deepEqual(advanced.hazards[0].position, [1, 0]);
+
+  const collided = move(
+    createGame(
+      level({
+        hazards: [{ path: [[3, 0], [1, 0], [2, 0]], speed: 2 }],
+      }),
+    ),
+    "right",
+  );
+
+  assert.equal(collided.lives, 2);
+  assert.deepEqual(collided.player, [0, 0]);
+  assert.equal(collided.hazards[0].pathIndex, 1);
+  assert.deepEqual(collided.hazards[0].position, [1, 0]);
+});
+
+test("turn limit loses on the move that exhausts the budget", () => {
+  const lost = move(
+    createGame(
+      level({
+        turnLimit: 1,
+      }),
+    ),
+    "down",
+  );
+
+  assert.equal(lost.turn, 1);
+  assert.equal(lost.status, "lost");
+});
+
+test("reaching the exit on the final permitted turn still wins", () => {
+  const won = move(
+    createGame(
+      level({
+        width: 2,
+        height: 1,
+        exit: [1, 0],
+        turnLimit: 1,
+      }),
+    ),
+    "right",
+  );
+
+  assert.equal(won.turn, 1);
+  assert.equal(won.status, "won");
+});
+
+test("omitted difficulty controls preserve the original state shape", () => {
+  const state = createGame(
+    level({
+      hazards: [{ path: [[3, 0], [3, 1]] }],
+    }),
+  );
+
+  assert.deepEqual(Object.keys(state), [
+    "level",
+    "player",
+    "exit",
+    "walls",
+    "evidence",
+    "hazards",
+    "lives",
+    "score",
+    "turn",
+    "status",
+    "message",
+  ]);
+  assert.deepEqual(Object.keys(state.level), [
+    "width",
+    "height",
+    "start",
+    "exit",
+    "lives",
+    "walls",
+    "evidence",
+    "hazards",
+  ]);
+  assert.deepEqual(Object.keys(state.level.hazards[0]), ["path"]);
+  assert.deepEqual(Object.keys(state.hazards[0]), ["path", "pathIndex", "position"]);
+  assert.deepEqual(state, {
+    level: {
+      width: 4,
+      height: 3,
+      start: [0, 0],
+      exit: [3, 2],
+      lives: 3,
+      walls: [],
+      evidence: [],
+      hazards: [{ path: [[3, 0], [3, 1]] }],
+    },
+    player: [0, 0],
+    exit: [3, 2],
+    walls: [],
+    evidence: [],
+    hazards: [{ path: [[3, 0], [3, 1]], pathIndex: 0, position: [3, 0] }],
+    lives: 3,
+    score: 0,
+    turn: 0,
+    status: "playing",
+    message: "Collect every signal, then reach the uplink.",
+  });
+});
+
+test("restart round-trips hazard speed and turn limit", () => {
+  const initial = createGame(
+    level({
+      turnLimit: 4,
+      hazards: [{ path: [[3, 0], [3, 1]], speed: 2 }],
+    }),
+  );
+  const changed = move(initial, "down");
+  const restarted = restart(changed);
+
+  assert.equal(restarted.level.turnLimit, 4);
+  assert.equal(restarted.level.hazards[0].speed, 2);
+  assert.equal(restarted.hazards[0].speed, 2);
+  assert.deepEqual(restarted, initial);
+});
