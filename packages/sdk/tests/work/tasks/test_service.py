@@ -859,6 +859,23 @@ async def test_allowing_the_plan_gate_accepts_the_plan(service: TaskService, sto
 
 
 @pytest.mark.asyncio
+async def test_cancel_releases_the_repository_lease(service: TaskService, store: TaskStore) -> None:
+    task, _record = await _proposed(service, store)
+    key = task.repository_lease_key
+    assert key is not None
+    assert await store.acquire_repository_lease(
+        key, project_id="project-a", task_id=task.id, work_id=None, ttl_seconds=3600
+    )
+
+    record = await service.cancel(task.id, project_id="project-a", actor_ref="arda", now=NOW)
+
+    assert record.status is TaskStatus.CANCELLED
+    assert await store.repository_lease_holder(key, project_id="project-a") is None
+    kinds = [event.event_type for event in await store.read_events(task.id, project_id="project-a")]
+    assert kinds[-2:] == [TaskEventType.REPOSITORY_LEASE_RELEASED, TaskEventType.TASK_STATUS_CHANGED]
+
+
+@pytest.mark.asyncio
 async def test_denying_the_plan_gate_blocks_the_task(service: TaskService, store: TaskStore) -> None:
     task, record = await _proposed(service, store)
     record = await service.decide_gate(
