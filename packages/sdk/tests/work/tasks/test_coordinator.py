@@ -1641,6 +1641,28 @@ async def test_planning_gate_under_require_records_the_gate_payload(
 
 
 @pytest.mark.asyncio
+async def test_a_human_allowing_the_plan_gate_starts_execution(stores, tmp_path, monkeypatch) -> None:
+    task_store, _work_store = stores
+    task, record, _runner, coordinator = await _seed(stores, tmp_path, plan_auto=False)
+    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+    assert record.status is TaskStatus.PLAN_PROPOSED
+    await task_store.release(task.id, project_id=PROJECT, owner="runner-1", lease_epoch=epoch)
+
+    service = TaskService(store=task_store, artifact_store=coordinator._artifacts)
+    record = await service.decide_gate(
+        task.id, project_id=PROJECT, gate_id=f"plan:{task.id}:1", decision="allow", actor_ref="arda"
+    )
+    assert record.status is TaskStatus.EXECUTING and record.plan_version == 1
+
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="runner-1", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    assert record.status is TaskStatus.COMPLETE
+
+
+@pytest.mark.asyncio
 async def test_planning_clarification_uses_the_project_deadline(
     stores, tmp_path, monkeypatch
 ) -> None:
