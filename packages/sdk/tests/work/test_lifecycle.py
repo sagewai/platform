@@ -733,6 +733,18 @@ class DiffReadingReviewRuntime(ReviewRuntime):
         return await super().run(request, capsule, capabilities, workspace)
 
 
+class FailedStatusReviewRuntime(ReviewRuntime):
+    """A reviewer that reaches a verdict but marks a repair review as a failed stage."""
+
+    name = "failed-status-review-runtime"
+
+    async def run(self, request, capsule, capabilities, workspace):
+        result = await super().run(request, capsule, capabilities, workspace)
+        if result.profile_context["review_result"]["verdict"] == "repair":
+            return result.model_copy(update={"status": "failed"})
+        return result
+
+
 class FailingReviewRuntime(ReviewRuntime):
     name = "failing-review-runtime"
 
@@ -4126,6 +4138,43 @@ async def test_delivery_triage_resumes_repair_with_failed_observation_context(
     assert repair_context.triage.observation["verdict"] == "fail"
     assert "metrics://failed-canary" in capsule.prior_result_refs
     assert "work-event://triage-1" in capsule.prior_result_refs
+
+
+@pytest.mark.asyncio
+async def test_a_repair_verdict_is_a_review_whatever_the_stage_status(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    implementer = MutationRuntime(implement_text="initial", repair_text="fixed")
+    repairer = MutationRuntime(implement_text="unused", repair_text="fixed")
+    reviewer = FailedStatusReviewRuntime("repair", "accept")
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        implementer=implementer,
+        reviewer=reviewer,
+        repairer=repairer,
+        commands=(_always_pass_command(),),
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    assert record.status == "READY_TO_MERGE"
+    assert reviewer.calls == 2 and repairer.calls == 1
+    events = await work_store.read_events("work-1", project_id="project-a")
+    selections = [
+        event.payload_json
+        for event in events
+        if event.event_type is WorkEventType.RUNTIME_SELECTED
+        and event.payload_json["stage"] == "review"
+    ]
+    assert [selection["reason"] for selection in selections] == ["initial", "initial"]
+    assert not any(event.event_type is WorkEventType.WORK_BLOCKED for event in events)
 
 
 @pytest.mark.asyncio
