@@ -255,7 +255,7 @@ async def test_verified_commit_completes_with_exact_sha_and_resumes_without_reru
 
 
 @pytest.mark.asyncio
-async def test_mixed_criterion_kinds_use_exact_issuers_and_missing_policy_blocks_completion(
+async def test_a_judged_criterion_is_refused_at_analysis_not_at_completion(
     completion_stores,
     tmp_path: Path,
 ) -> None:
@@ -309,51 +309,15 @@ async def test_mixed_criterion_kinds_use_exact_issuers_and_missing_policy_blocks
 
     assert record.status == "WORK_BLOCKED"
     events = await work_store.read_events("work-1", project_id="project-a")
-    accepted = WorkContract.model_validate(
-        next(
-            event.payload_json
-            for event in events
-            if event.event_type is WorkEventType.CONTRACT_ACCEPTED
-        )
-    )
-    deterministic_id, profile_id, policy_id = (
-        criterion.id for criterion in accepted.acceptance_criteria[1:]
-    )
-    assert verifier.criterion_ids == [(deterministic_id,)]
+    blocker = next(event for event in events if event.event_type is WorkEventType.WORK_BLOCKED)
+    assert blocker.payload_json["reason"] == "analysis_result_invalid"
+    assert blocker.payload_json["violations"] == [
+        "a Work contract carries deterministic and profile criteria; judged statements "
+        "belong to the Task's acceptance matrix"
+    ]
+    assert verifier.criterion_ids == []
+    assert implementer.calls == 0
 
-    completed_mutation = next(
-        event
-        for event in events
-        if event.event_type is WorkEventType.STAGE_COMPLETED
-        and event.payload_json.get("stage") == "implement"
-    )
-    profile_result = VerificationResult.model_validate(
-        completed_mutation.payload_json["profile_verification"]
-    )
-    assert tuple(item.criterion_id for item in profile_result.criterion_results) == (
-        profile_id,
-    )
-
-    stage_result = next(
-        VerificationResult.model_validate(event.payload_json)
-        for event in events
-        if event.event_type is WorkEventType.VERIFICATION_RECORDED
-        and event.payload_json.get("stage") == "verification"
-    )
-    assert tuple(item.criterion_id for item in stage_result.criterion_results) == (
-        deterministic_id,
-        profile_id,
-    )
-    assert policy_id not in {item.criterion_id for item in stage_result.criterion_results}
-    assert reviewer.calls == 1
-    blocker = next(
-        event for event in events if event.event_type is WorkEventType.WORK_BLOCKED
-    )
-    assert blocker.payload_json["reason"] == "completion_evidence_invalid"
-    assert blocker.payload_json["violations"] == [f"missing criterion ids: {policy_id}"]
-    assert not any(
-        event.event_type is WorkEventType.WORK_COMPLETED for event in events
-    )
 
 
 @pytest.mark.asyncio

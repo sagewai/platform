@@ -560,7 +560,9 @@ class SoftwareLifecycle:
                     project_id=work_item.project_id,
                     objective=(
                         "Ground material claims and propose the smallest sufficient software "
-                        "contract"
+                        "contract; "
+                        "acceptance criteria are deterministic (a locked verification command) or "
+                        "profile — judged statements belong to the Task's acceptance matrix"
                     ),
                     allowed_targets=draft_contract.allowed_scope,
                     allowed_capabilities=tuple(
@@ -796,6 +798,11 @@ class SoftwareLifecycle:
             raise ValueError("analysis contract requires acceptance criteria")
         if not proposal.allowed_scope:
             raise ValueError("analysis contract requires an allowed scope")
+        if any(item.verification_kind == "policy" for item in proposal.acceptance_criteria):
+            raise ValueError(
+                "a Work contract carries deterministic and profile criteria; judged statements "
+                "belong to the Task's acceptance matrix"
+            )
         for target in proposal.allowed_scope:
             path = PurePosixPath(target)
             if (
