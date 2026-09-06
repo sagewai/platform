@@ -1727,7 +1727,9 @@ class TaskCoordinator:
         profile = self._profile_for(task)
         base_sha = await profile.base_sha(task)
         replacement = await profile.find_work(task, issue_url=issue_url, exclude=command.work_id)
+        spent: list[Entry] = []
         if replacement is None:
+            ledger = self._meter(task, record)
             replacement = await profile.start(
                 task,
                 cycle=record.current_cycle,
@@ -1737,6 +1739,7 @@ class TaskCoordinator:
                 evidence_refs=evidence,
                 constraints=constraints,
             )
+            spent = ledger.drain()
         else:
             base_sha = replacement.profile_context.get("base_sha", base_sha)
         await supersede_work(
@@ -1765,6 +1768,7 @@ class TaskCoordinator:
                 )
             )
         entries: list[Entry] = [
+            *spent,
             (
                 TaskEventType.STEP_WORK_SUPERSEDED,
                 {

@@ -102,6 +102,14 @@ class FakeProfileRunner:
 
     def use_ledger(self, ledger) -> None:
         self.ledgers.append(ledger)
+        self._metered = True
+
+    def _billable(self, task) -> None:
+        """The real runners bill every profile call to the ledger the coordinator handed them
+        just before (software.py: ``self._ledgers[task_id]``); a call without one is F22."""
+        if not getattr(self, "_metered", False):
+            raise KeyError(task.id)
+        self._metered = False
 
     async def base_sha(self, task):
         if self.base_sha_error is not None:
@@ -109,6 +117,7 @@ class FakeProfileRunner:
         return self.head
 
     async def plan(self, task, *, cycle, plan_version, base_sha, brief_text, amendments):
+        self._billable(task)
         assert base_sha == self.head
         if self.plan_error is not None:
             raise self.plan_error
@@ -144,6 +153,7 @@ class FakeProfileRunner:
         evidence_refs=(),
         constraints=(),
     ):
+        self._billable(task)
         work_id = f"w-{step.id}-{len(self.started) + 1}"
         self.started.append(work_id)
         self.evidence.append(tuple(evidence_refs))
@@ -161,6 +171,7 @@ class FakeProfileRunner:
         return record
 
     async def resume(self, task, *, cycle, work_id):
+        self._billable(task)
         self.resumed.append(work_id)
         record = await self._work_store.load_work(work_id, project_id=task.project_id)
         if record.status == "WORK_BLOCKED":
@@ -179,6 +190,7 @@ class FakeProfileRunner:
         return self.merged
 
     async def assess(self, task, *, cycle, plan_version, plan, outcomes, merged_sha, evidence):
+        self._billable(task)
         self.assessed.append((cycle, plan_version, merged_sha))
         attempt_id = f"{task.id}:assess:{cycle}:{plan_version}"
         return merge_assessment(
