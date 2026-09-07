@@ -71,10 +71,13 @@ class TaskCoordinatorRunner:
         self._lease_ttl = lease_ttl_seconds
         self._heartbeat = heartbeat_seconds
         self._task: asyncio.Task | None = None
+        self._inflight: dict[tuple[str, str], asyncio.Task[int]] = {}
 
     async def tick(self) -> int:
-        """Run the sweepers and drive up to max_tasks claimed Tasks per project; never raises."""
-        driven = 0
+        """Run the sweepers; claim up to max_tasks Tasks per project that are not already
+        in flight and start their drives; never raises and never waits for a drive.
+        """
+        started = 0
         now = datetime.now(timezone.utc)
         for project_id in await self._list_project_ids():
             for sweeper in self._sweepers:
@@ -85,9 +88,13 @@ class TaskCoordinatorRunner:
                         "project sweeper failed",
                         extra={"project": project_id, "sweeper": type(sweeper).__name__},
                     )
-            claimed: list[tuple[TaskRecord, int]] = []
+            self._reap_finished(project_id)
+            inflight_count = sum(1 for key in self._inflight if key[0] == project_id)
             for record in await self._claimable(project_id, now):
-                if len(claimed) == self._max_tasks:
+                key = (record.project_id, record.task_id)
+                if key in self._inflight:
+                    continue
+                if inflight_count >= self._max_tasks:
                     break
                 try:
                     epoch = await self._task_store.claim(
@@ -102,17 +109,34 @@ class TaskCoordinatorRunner:
                     )
                     break
                 if epoch is not None:
-                    claimed.append((record, epoch))
+                    self._inflight[key] = asyncio.ensure_future(self._drive(record, epoch))
+                    inflight_count += 1
+                    started += 1
+        return started
+
+    def _reap_finished(self, project_id: str) -> None:
+        for key, task in list(self._inflight.items()):
+            if key[0] != project_id or not task.done():
+                continue
+            del self._inflight[key]
+            try:
+                task.result()
+            except BaseException as exc:
+                logger.error("task drive failed", exc_info=exc)
+
+    async def drain(self) -> None:
+        """Await every in-flight drive; drive failures are logged, not raised."""
+        while self._inflight:
+            items = tuple(self._inflight.items())
             results = await asyncio.gather(
-                *(self._drive(record, epoch) for record, epoch in claimed),
+                *(task for _key, task in items),
                 return_exceptions=True,
             )
+            for key, _task in items:
+                self._inflight.pop(key, None)
             for result in results:
                 if isinstance(result, BaseException):
                     logger.error("task drive failed", exc_info=result)
-                else:
-                    driven += result
-        return driven
 
     async def _claimable(self, project_id: str, now: datetime) -> list[TaskRecord]:
         active = await self._task_store.list_records(project_id=project_id, statuses=_ACTIVE)
@@ -174,11 +198,23 @@ class TaskCoordinatorRunner:
             self._task = asyncio.ensure_future(self._loop())
 
     async def aclose(self) -> None:
+        """Stop the loop first so no tick starts a drive while the in-flight ones are cancelled."""
         if self._task is not None:
             self._task.cancel()
             with suppress(asyncio.CancelledError):
                 await self._task
             self._task = None
+        for task in self._inflight.values():
+            task.cancel()
+        for key, task in tuple(self._inflight.items()):
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                logger.error("task drive failed", exc_info=exc)
+            finally:
+                self._inflight.pop(key, None)
 
 
 def interval_from_env() -> float:

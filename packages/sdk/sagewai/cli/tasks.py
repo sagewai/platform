@@ -620,7 +620,9 @@ async def _tick(project_id: str) -> int:
         max_tasks=max_tasks_from_env(),
     )
     try:
-        return await runner.tick()
+        started = await runner.tick()
+        await runner.drain()
+        return started
     finally:
         try:
             await software.aclose()
