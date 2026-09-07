@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from sagewai.fleet.execution import WorkerConfigurationError
 from sagewai.fleet.runner import WorkerRunner, WorkerTaskContext
 from sagewai.work.fleet import (
     FleetOperatorResultEnvelope,
@@ -350,7 +351,7 @@ async def test_software_handler_rejects_unsupported_codex_stage_before_runtime(
         codex_runtime=codex,
     )
 
-    with pytest.raises(ValueError, match="does not support stage"):
+    with pytest.raises(WorkerConfigurationError, match="does not support stage"):
         await handler(
             _task(runtime="runtime.codex", stage=stage),
             _context(capabilities=("runtime.codex", "cli.git")),
@@ -418,6 +419,29 @@ async def test_software_handler_selects_claude_runtime_by_stage(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["plan", "assess"])
+async def test_software_handler_runs_the_task_stages_on_the_analysis_claude(stage: str) -> None:
+    """The coordinator dispatches its planning and assessment as ``plan`` and ``assess``."""
+    resolver = _Resolver()
+    claude_analysis = _Claude()
+    claude_review = _Claude()
+    handler = SoftwareFleetTaskHandler(
+        workspace_resolver=resolver,
+        claude_analysis_runtime=claude_analysis,
+        claude_review_runtime=claude_review,
+        codex_runtime=_Codex(),
+    )
+
+    await handler(
+        _task(stage=stage),
+        _context(capabilities=("runtime.claude", "cli.git")),
+    )
+
+    assert len(claude_analysis.calls) == 1
+    assert claude_review.calls == []
+
+
+@pytest.mark.asyncio
 async def test_software_handler_rejects_unsupported_claude_stage_before_runtime() -> None:
     resolver = _Resolver()
     claude_analysis = _Claude()
@@ -429,7 +453,7 @@ async def test_software_handler_rejects_unsupported_claude_stage_before_runtime(
         codex_runtime=_Codex(),
     )
 
-    with pytest.raises(ValueError, match="does not support stage"):
+    with pytest.raises(WorkerConfigurationError, match="does not support stage"):
         await handler(
             _task(stage="repair"),
             _context(capabilities=("runtime.claude", "cli.git")),

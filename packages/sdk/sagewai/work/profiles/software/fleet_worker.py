@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from sagewai.engines.universal import UniversalAgent
-from sagewai.fleet.execution import run_worker_subprocess
+from sagewai.fleet.execution import WorkerConfigurationError, run_worker_subprocess
 from sagewai.fleet.runner import WorkerTaskContext
 from sagewai.work.activity import (
     FLEET_ACTIVITY_LOG_MAX_BYTES,
@@ -338,7 +338,9 @@ class SoftwareFleetTaskHandler:
     ) -> OperatorRuntime:
         if runtime_capability == "runtime.codex":
             if stage not in {"implement", "repair"}:
-                raise ValueError(f"runtime.codex does not support stage {stage!r}")
+                raise WorkerConfigurationError(
+                    f"runtime.codex does not support stage {stage!r}"
+                )
             return self._codex_runtime
         if runtime_capability == "runtime.harness":
             return HarnessRuntime(
@@ -351,11 +353,11 @@ class SoftwareFleetTaskHandler:
             )
         if runtime_capability != "runtime.claude":
             raise ValueError("unsupported native runtime capability")
-        if stage in {"analysis", "design"}:
+        if stage in {"analysis", "design", "plan", "assess"}:
             return self._claude_analysis_runtime
         if stage == "review":
             return self._claude_review_runtime
-        raise ValueError(f"runtime.claude does not support stage {stage!r}")
+        raise WorkerConfigurationError(f"runtime.claude does not support stage {stage!r}")
 
     @staticmethod
     def _validate_payload(payload: FleetOperatorTaskPayload) -> str:
