@@ -194,7 +194,7 @@ def _repository_behind_its_origin(tmp_path: Path) -> tuple[Path, str]:
     _git(repository, "remote", "add", "origin", str(origin))
     _git(repository, "push", "--quiet", "origin", "HEAD:main")
     other = tmp_path / "other"
-    _git(repository, "clone", "--quiet", str(origin), str(other))
+    _git(repository, "clone", "--quiet", "--branch", "main", str(origin), str(other))
     _git(other, "config", "user.email", "test@example.com")
     _git(other, "config", "user.name", "Test")
     (other / "README.md").write_text("moved\n")
