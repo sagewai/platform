@@ -16,15 +16,15 @@ Usage::
 
     sagewai fleet register --name my-gpu-box --org acme --models gpt-4o,llama3-70b
     sagewai fleet list-workers --org acme
-    sagewai fleet create-key --org acme --name onboarding-key --max-uses 10
-    sagewai fleet list-keys --org acme
+    sagewai fleet create-key --name onboarding-key --max-uses 10
+    sagewai fleet list-keys
     sagewai fleet revoke-key <key-id>
 """
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
+import json
 import os
 import re
 import uuid
@@ -35,12 +35,7 @@ from pathlib import Path
 import click
 import httpx
 
-from sagewai.fleet.models import (
-    EnrollmentKey,
-    WorkerApprovalStatus,
-    WorkerCapabilities,
-    WorkerRecord,
-)
+from sagewai.fleet.models import WorkerApprovalStatus, WorkerCapabilities, WorkerRecord
 from sagewai.fleet.normalizer import ModelNormalizer
 from sagewai.fleet.runner import RegistrationError, TerminalAuthError, WorkerRunner
 from sagewai.harness.discovery import openai_base_url
@@ -70,7 +65,6 @@ class _LocalFleetRegistry:
 
     def __init__(self) -> None:
         self.workers: dict[str, WorkerRecord] = {}
-        self.keys: dict[str, EnrollmentKey] = {}
 
     @classmethod
     def get(cls) -> _LocalFleetRegistry:
@@ -171,6 +165,36 @@ def _parse_harness_backends(values: tuple[str, ...]) -> dict[str, str]:
     return backends
 
 
+def _fleet_gateway_url(gateway_url: str | None) -> str:
+    return gateway_url or os.environ.get("SAGEWAI_ADMIN_URL", "http://localhost:8000")
+
+
+def _fleet_gateway_headers(project: str | None) -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    token = os.environ.get("SAGEWAI_ADMIN_TOKEN", "")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if project:
+        headers["X-Project-ID"] = project
+    return headers
+
+
+def _raise_fleet_gateway_error(action: str, response: httpx.Response) -> None:
+    hint = " — set SAGEWAI_ADMIN_TOKEN" if response.status_code == 401 else ""
+    message = f"{action} failed: {response.status_code} {response.text[:200]}{hint}"
+    raise click.ClickException(message)
+
+
+def _fleet_key_status(key: dict) -> str:
+    if key["revoked"]:
+        return "revoked"
+    if key["expires_at"] is not None:
+        expires_at = datetime.fromisoformat(str(key["expires_at"]).replace("Z", "+00:00"))
+        if datetime.now(timezone.utc) >= expires_at:
+            return "expired"
+    return "active"
+
+
 # ---------------------------------------------------------------------------
 # Fleet command group
 # ---------------------------------------------------------------------------
@@ -184,8 +208,8 @@ def fleet_group() -> None:
     Examples:
       sagewai fleet register --name gpu-box --org acme --models gpt-4o,llama3
       sagewai fleet list-workers --org acme --status approved
-      sagewai fleet create-key --org acme --name onboarding --max-uses 10
-      sagewai fleet list-keys --org acme
+      sagewai fleet create-key --name onboarding --max-uses 10
+      sagewai fleet list-keys
       sagewai fleet revoke-key <key-id>
     """
 
@@ -239,22 +263,7 @@ def register(
     worker_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
 
-    # Determine approval status
     approval = WorkerApprovalStatus.PENDING
-    if enrollment_key:
-        registry = _LocalFleetRegistry.get()
-        # Find matching key by comparing hash against stored keys
-        matched = False
-        key_hash = hashlib.sha256(enrollment_key.encode()).hexdigest()
-        for ek in registry.keys.values():
-            if ek.is_usable() and ek.org_id == org and ek.key_hash == key_hash:
-                matched = True
-                ek.current_uses += 1
-                break
-        if matched:
-            approval = WorkerApprovalStatus.APPROVED
-        else:
-            click.echo("Warning: enrollment key not recognized. Worker registered as PENDING.")
 
     record = WorkerRecord(
         id=worker_id,
@@ -770,76 +779,80 @@ def list_workers(org: str, status: str | None, pool: str | None, as_json: bool) 
 
 
 @fleet_group.command("create-key")
-@click.option("--org", required=True, help="Organization ID.")
 @click.option("--name", required=True, help="Key name.")
 @click.option("--max-uses", default=None, type=int, help="Maximum registrations.")
 @click.option("--expires", default=None, help="Expiration duration (e.g. '7d', '24h').")
 @click.option("--pools", default=None, help="Comma-separated allowed pools.")
 @click.option("--models", default=None, help="Comma-separated allowed models.")
+@click.option("--project", default=None, help="Project scope (X-Project-ID).")
+@click.option("--gateway-url", default=None, help="Gateway base URL.")
 def create_key(
-    org: str,
     name: str,
     max_uses: int | None,
     expires: str | None,
     pools: str | None,
     models: str | None,
+    project: str | None,
+    gateway_url: str | None,
 ) -> None:
     """Create an enrollment key for fleet worker registration."""
-    key_id = str(uuid.uuid4())
-    raw_key = f"swk_{uuid.uuid4().hex}"  # prefix for identification
-    now = datetime.now(timezone.utc)
-
-    expires_at: datetime | None = None
+    expires_at: str | None = None
     if expires:
         delta = _parse_duration(expires)
-        expires_at = now + delta
+        expires_at = (datetime.now(timezone.utc) + delta).isoformat()
 
     allowed_pools = [p.strip() for p in pools.split(",") if p.strip()] if pools else []
     allowed_models = [m.strip() for m in models.split(",") if m.strip()] if models else []
-
-    ek = EnrollmentKey(
-        id=key_id,
-        org_id=org,
-        name=name,
-        key_hash=f"local:{raw_key}",  # placeholder — production uses bcrypt
-        max_uses=max_uses,
-        expires_at=expires_at,
-        allowed_pools=allowed_pools,
-        allowed_models=allowed_models,
-        created_at=now,
-        created_by="cli",
+    body = {
+        "name": name,
+        "max_uses": max_uses,
+        "expires_at": expires_at,
+        "allowed_pools": allowed_pools,
+        "allowed_models": allowed_models,
+    }
+    base_url = _fleet_gateway_url(gateway_url)
+    response = httpx.post(
+        base_url + "/api/v1/fleet/enrollment-keys",
+        json=body,
+        headers=_fleet_gateway_headers(project),
+        timeout=30.0,
     )
+    if response.status_code not in (200, 201):
+        _raise_fleet_gateway_error("create-key", response)
+    data = response.json()
 
-    registry = _LocalFleetRegistry.get()
-    registry.keys[key_id] = ek
-
-    click.echo(f"Enrollment key created: {raw_key}")
+    click.echo(f"Enrollment key created: {data['raw_key']}")
     click.echo("Save this key - it will not be shown again.")
-    click.echo(f"  ID      : {key_id[:12]}...")
-    click.echo(f"  Name    : {name}")
-    click.echo(f"  Org     : {org}")
-    if max_uses:
-        click.echo(f"  Max uses: {max_uses}")
-    if expires_at:
-        click.echo(f"  Expires : {expires_at.isoformat()[:19]}Z")
-    if allowed_pools:
-        click.echo(f"  Pools   : {', '.join(allowed_pools)}")
-    if allowed_models:
-        click.echo(f"  Models  : {', '.join(allowed_models)}")
+    click.echo(f"  ID      : {data['id'][:12]}...")
+    click.echo(f"  Name    : {data['name']}")
+    if data["max_uses"]:
+        click.echo(f"  Max uses: {data['max_uses']}")
+    if data["expires_at"]:
+        click.echo(f"  Expires : {data['expires_at']}")
+    if data["allowed_pools"]:
+        click.echo(f"  Pools   : {', '.join(data['allowed_pools'])}")
+    if data["allowed_models"]:
+        click.echo(f"  Models  : {', '.join(data['allowed_models'])}")
 
 
 @fleet_group.command("list-keys")
-@click.option("--org", required=True, help="Organization ID.")
 @click.option("--json", "as_json", is_flag=True, help="Output raw JSON.")
-def list_keys(org: str, as_json: bool) -> None:
+@click.option("--project", default=None, help="Project scope (X-Project-ID).")
+@click.option("--gateway-url", default=None, help="Gateway base URL.")
+def list_keys(as_json: bool, project: str | None, gateway_url: str | None) -> None:
     """List enrollment keys."""
-    import json
-
-    registry = _LocalFleetRegistry.get()
-    keys = [k for k in registry.keys.values() if k.org_id == org]
+    base_url = _fleet_gateway_url(gateway_url)
+    response = httpx.get(
+        base_url + "/api/v1/fleet/enrollment-keys",
+        headers=_fleet_gateway_headers(project),
+        timeout=30.0,
+    )
+    if response.status_code != 200:
+        _raise_fleet_gateway_error("list-keys", response)
+    keys = response.json()["keys"]
 
     if as_json:
-        click.echo(json.dumps([k.model_dump(mode="json") for k in keys], indent=2))
+        click.echo(json.dumps(keys, indent=2))
         return
 
     if not keys:
@@ -847,34 +860,31 @@ def list_keys(org: str, as_json: bool) -> None:
         return
 
     for k in keys:
-        status = "revoked" if k.revoked else ("expired" if k.is_expired() else "active")
-        uses = f"{k.current_uses}/{k.max_uses}" if k.max_uses else f"{k.current_uses}/unlimited"
-        expires = k.expires_at.isoformat()[:19] if k.expires_at else "never"
+        status = _fleet_key_status(k)
+        uses = (
+            f"{k['current_uses']}/{k['max_uses']}"
+            if k["max_uses"]
+            else f"{k['current_uses']}/unlimited"
+        )
+        expires = str(k["expires_at"])[:19] if k["expires_at"] else "never"
         click.echo(
-            f"  {k.id[:12]}  {k.name:<20s}  {status:<10s}  uses={uses:<15s}  expires={expires}"
+            f"  {k['id'][:12]}  {k['name']:<20s}  {status:<10s}  "
+            f"uses={uses:<15s}  expires={expires}"
         )
 
 
 @fleet_group.command("revoke-key")
 @click.argument("key_id")
-def revoke_key(key_id: str) -> None:
+@click.option("--project", default=None, help="Project scope (X-Project-ID).")
+@click.option("--gateway-url", default=None, help="Gateway base URL.")
+def revoke_key(key_id: str, project: str | None, gateway_url: str | None) -> None:
     """Revoke an enrollment key."""
-    registry = _LocalFleetRegistry.get()
-
-    # Find by full or partial ID
-    target: EnrollmentKey | None = None
-    for ek in registry.keys.values():
-        if ek.id == key_id or ek.id.startswith(key_id):
-            target = ek
-            break
-
-    if target is None:
-        click.echo(f"Error: enrollment key '{key_id}' not found.", err=True)
-        raise SystemExit(1)
-
-    if target.revoked:
-        click.echo(f"Key '{target.name}' is already revoked.")
-        return
-
-    target.revoked = True
-    click.echo(f"Revoked enrollment key '{target.name}' ({target.id[:12]}...).")
+    base_url = _fleet_gateway_url(gateway_url)
+    response = httpx.delete(
+        base_url + f"/api/v1/fleet/enrollment-keys/{key_id}",
+        headers=_fleet_gateway_headers(project),
+        timeout=30.0,
+    )
+    if response.status_code not in (200, 204):
+        _raise_fleet_gateway_error("revoke-key", response)
+    click.echo(f"Revoked enrollment key {key_id}.")

@@ -10,8 +10,7 @@
 """PostgresFleetRegistry on sqlite+aiosqlite — persistence + secret + project + status."""
 from __future__ import annotations
 
-import hashlib
-from datetime import timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -120,6 +119,26 @@ async def test_approve_and_list_and_enrollment(reg):
     assert (await r.find_enrollment_key_by_hash(_hash_key(raw))).id == rec.id
     await r.heartbeat(w.id, pool_stats={"warm": 1})
     assert (await r.get_pool_stats(w.id)) == {"warm": 1}
+
+
+@pytest.mark.asyncio
+async def test_enrollment_key_expiry_survives_sqlite_round_trip(reg):
+    r, _ = reg
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+    _rec, raw = await r.create_enrollment_key(
+        org_id="o",
+        name="expiring",
+        created_by="admin",
+        expires_at=expires_at,
+    )
+
+    by_hash = await r.find_enrollment_key_by_hash(_hash_key(raw))
+
+    assert by_hash is not None
+    assert by_hash.expires_at is not None
+    assert by_hash.expires_at.tzinfo is not None
+    assert by_hash.is_usable()
+    assert (await r.validate_enrollment_key("o", raw)) is not None
 
 
 @pytest.mark.asyncio
