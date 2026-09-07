@@ -549,6 +549,7 @@ export const degradedTaskDetail = {
   task: task(degradedTask),
   record: degradedTask,
   plan: null,
+  proposed_plan: null,
 } satisfies TaskDetail;
 
 function threadEntry(overrides: Partial<ThreadEntry>): ThreadEntry {
