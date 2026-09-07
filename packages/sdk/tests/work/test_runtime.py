@@ -322,6 +322,10 @@ async def test_native_runtime_uses_fake_executable_without_session_or_api_key(
         {"project_id": "project-a", "action_id": "action-1"}
     ]
     assert result_contract["required_profile_context"] == {}
+    assert any(
+        "never commits, pushes, tags, or opens pull requests" in rule
+        for rule in result_contract["rules"]
+    )
     assert provider.declared_scopes == ["credential://workspace"]
     assert not hasattr(runtime, "intercept_tool_call")
     if runtime_type is CodexRuntime:

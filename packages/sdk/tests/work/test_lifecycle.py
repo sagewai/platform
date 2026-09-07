@@ -2129,6 +2129,57 @@ async def test_implementation_blocks_after_max_attempts(
 
 
 @pytest.mark.asyncio
+async def test_implementation_retries_a_failed_noop_before_blocking(
+    stores,
+    tmp_path: Path,
+) -> None:
+    work_store, knowledge_store = stores
+    repository, base_sha = _repository(tmp_path)
+    implementer = FailingOnceWithoutActionReceiptRuntime(
+        implement_text="initial",
+        repair_text="unused",
+    )
+    lifecycle = _lifecycle(
+        repository=repository,
+        worktree_root=tmp_path / "worktrees",
+        work_store=work_store,
+        knowledge_store=knowledge_store,
+        durability=InMemoryStore(),
+        implementer=implementer,
+        implementer_ladder=(implementer,),
+        reviewer=ReviewRuntime("accept"),
+        repairer=MutationRuntime(implement_text="unused", repair_text="fixed"),
+        commands=(_command("initial"),),
+        max_attempts_per_stage=2,
+    )
+
+    record = await lifecycle.start(work_item=_work_item(), contract=_contract(base_sha))
+
+    events = await work_store.read_events("work-1", project_id="project-a")
+    selected = [
+        event.payload_json
+        for event in events
+        if event.event_type is WorkEventType.RUNTIME_SELECTED
+        and event.payload_json["stage"] == "implement"
+    ]
+    completed = [
+        event.payload_json
+        for event in events
+        if event.event_type is WorkEventType.STAGE_COMPLETED
+        and event.payload_json.get("stage") == "implement"
+    ]
+
+    assert record.status == "READY_TO_MERGE"
+    assert implementer.calls == 2
+    assert [(item["run_id"], item["reason"], item["attempt"]) for item in selected] == [
+        ("work-1:implement:1", "initial", 1),
+        ("work-1:implement:2", "escalated", 2),
+    ]
+    assert [item["run_id"] for item in completed] == ["work-1:implement:2"]
+    assert not any(event.event_type is WorkEventType.WORK_BLOCKED for event in events)
+
+
+@pytest.mark.asyncio
 async def test_analysis_failed_block_includes_attempt_count(
     stores,
     tmp_path: Path,
@@ -3609,7 +3660,7 @@ async def test_failed_implementation_without_action_receipt_is_not_contract_drif
 
 
 @pytest.mark.asyncio
-async def test_resume_retries_failed_implementation_without_rerunning_analysis(
+async def test_failed_implementation_retries_without_rerunning_analysis(
     stores,
     tmp_path: Path,
 ) -> None:
@@ -3633,14 +3684,12 @@ async def test_resume_retries_failed_implementation_without_rerunning_analysis(
         commands=(_command("initial"),),
     )
 
-    blocked = await lifecycle.start(
+    record = await lifecycle.start(
         work_item=_work_item(),
         contract=_contract(base_sha),
     )
-    resumed = await lifecycle.resume("work-1", project_id="project-a")
 
-    assert blocked.status == "WORK_BLOCKED"
-    assert resumed.status == "READY_TO_MERGE"
+    assert record.status == "READY_TO_MERGE"
     assert analyzer.calls == 1
     assert implementer.calls == 2
     assert [request.run_id for request in implementer.requests] == [
@@ -3759,10 +3808,7 @@ async def test_later_review_blocker_prevents_stale_implementation_retry(
         for event in events
         if event.event_type is WorkEventType.WORK_BLOCKED
     ]
-    assert [blocker["reason"] for blocker in blockers] == [
-        "implement_failed",
-        "review_blocked",
-    ]
+    assert [blocker["reason"] for blocker in blockers] == ["review_blocked"]
 
 
 @pytest.mark.asyncio
@@ -3815,11 +3861,11 @@ async def test_failed_implementation_resume_backfills_interrupted_execution_even
         )
 
     monkeypatch.setattr(work_store, "append_event", original_append)
-    blocked = await lifecycle.resume("work-1", project_id="project-a")
     resumed = await lifecycle.resume("work-1", project_id="project-a")
+    unchanged = await lifecycle.resume("work-1", project_id="project-a")
 
-    assert blocked.status == "WORK_BLOCKED"
     assert resumed.status == "READY_TO_MERGE"
+    assert unchanged == resumed
     assert analyzer.calls == 1
     assert implementer.calls == 2
     assert [request.run_id for request in implementer.requests] == [
@@ -3837,10 +3883,7 @@ async def test_failed_implementation_resume_backfills_interrupted_execution_even
         "work-1:implement:1",
         "work-1:implement:2",
     ]
-    assert [execution["status"] for execution in executions] == [
-        "blocked",
-        "passed",
-    ]
+    assert [execution["status"] for execution in executions] == ["failed", "passed"]
 
 
 @pytest.mark.asyncio

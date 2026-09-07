@@ -15,6 +15,8 @@ The shipped software profile can coordinate a local request or GitHub issue
 through analysis, implementation, verification, independent review, bounded
 repair, pull request and merge gates, and a verified result. It can resume after
 a process or worker disappears without repeating completed stages.
+Operator stages leave verified changes in the working tree; the platform records,
+reviews, and delivers them.
 Implementation uses Codex by default; HarnessRuntime is opt-in with
 `--prefer-free-implementation`.
 
@@ -388,6 +390,8 @@ nothing to stderr, the last activity line. That sentence is what the Task thread
 expired `claude` login reads as `exit 1: Failed to authenticate: OAuth session expired` instead
 of an empty reason. The full streams stay in the archived NDJSON activity log and in
 `work_activity`.
+A failed attempt that records no action receipts and leaves no changed files is
+retried up to `max_attempts_per_stage` before the Work blocks.
 
 When a Work record has `profile_context["task_id"]`, activity ingestion also
 mirrors entries into `task_feed`. `GET /api/v1/tasks/{id}/events` streams that

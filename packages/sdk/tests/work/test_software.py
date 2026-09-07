@@ -786,6 +786,115 @@ async def test_post_run_validator_accepts_recursive_directory_target(
 
 
 @pytest.mark.asyncio
+async def test_failed_result_with_no_changes_does_not_owe_action_receipts(
+    tmp_path: Path,
+) -> None:
+    repository, base_sha = _repository(tmp_path)
+    manager = SoftwareWorktreeManager(root=tmp_path / "worktrees")
+    workspace = await manager.prepare(
+        repository=repository,
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="attempt-1",
+        base_sha=base_sha,
+    )
+    request = WorkRequest(
+        project_id="project-a",
+        work_id="work-1",
+        run_id="run-1",
+        stage="implement",
+        action_scope=ActionScope(
+            project_id="project-a",
+            objective="Change target.txt",
+            allowed_targets=("target.txt",),
+            allowed_capabilities=("filesystem.write",),
+        ),
+        action_intents=(
+            ActionIntent(
+                project_id="project-a",
+                action_id="run-1:change",
+                capability="filesystem.write",
+                target="target.txt",
+                expected_effect="Change target.txt",
+                scope={"allowed_targets": ["target.txt"]},
+                risk="low",
+                reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
+                required_permission="workspace.write",
+                evidence_refs=("contract://1",),
+            ),
+        ),
+        control_preconditions=(),
+    )
+    result = _result().model_copy(
+        update={
+            "status": "failed",
+            "summary": "Selected model is at capacity. Please try a different model.",
+            "action_results": (),
+        }
+    )
+
+    report = await SoftwareResultValidator().validate(
+        request=request,
+        result=result,
+        workspace=workspace,
+    )
+
+    assert report.verdict == "pass"
+    assert report.scope_violations == ()
+
+
+@pytest.mark.asyncio
+async def test_passed_result_without_required_action_receipt_is_a_scope_violation(
+    tmp_path: Path,
+) -> None:
+    repository, base_sha = _repository(tmp_path)
+    manager = SoftwareWorktreeManager(root=tmp_path / "worktrees")
+    workspace = await manager.prepare(
+        repository=repository,
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="attempt-1",
+        base_sha=base_sha,
+    )
+    request = WorkRequest(
+        project_id="project-a",
+        work_id="work-1",
+        run_id="run-1",
+        stage="implement",
+        action_scope=ActionScope(
+            project_id="project-a",
+            objective="Change target.txt",
+            allowed_targets=("target.txt",),
+            allowed_capabilities=("filesystem.write",),
+        ),
+        action_intents=(
+            ActionIntent(
+                project_id="project-a",
+                action_id="run-1:change",
+                capability="filesystem.write",
+                target="target.txt",
+                expected_effect="Change target.txt",
+                scope={"allowed_targets": ["target.txt"]},
+                risk="low",
+                reversibility=Reversibility.SNAPSHOT_REVERSIBLE,
+                required_permission="workspace.write",
+                evidence_refs=("contract://1",),
+            ),
+        ),
+        control_preconditions=(),
+    )
+
+    report = await SoftwareResultValidator().validate(
+        request=request,
+        result=_result(),
+        workspace=workspace,
+    )
+
+    assert report.verdict == "blocked"
+    assert "missing action result: run-1:change" in report.scope_violations
+
+
+@pytest.mark.asyncio
 async def test_result_validator_does_not_run_worktree_git_filters(tmp_path: Path) -> None:
     repository, base_sha = _repository(tmp_path)
     (repository / ".gitattributes").write_text("*.txt filter=escape\n")
