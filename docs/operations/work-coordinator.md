@@ -234,7 +234,9 @@ credentials to the backend.
 In Admin, create project `coordinator-demo`, then open
 <http://localhost:3008/fleet/enrollment-keys>. Create one key with max uses `2`,
 or `3` if you will also register the harness worker below, and allowed pool
-`default`. Copy the secret when it appears; it is shown once.
+`default`. The CLI equivalent is
+`sagewai fleet create-key --name devices --max-uses 2 --expires 24h --pools default`.
+Copy the secret when it appears; it is shown once.
 
 If the backend listens only on laptop loopback, open a tunnel from the Mac mini:
 

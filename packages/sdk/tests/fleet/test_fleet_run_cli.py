@@ -153,6 +153,174 @@ def test_enqueue_posts_task(monkeypatch):
     assert "run-123" in res.output
 
 
+def test_create_key_posts_to_gateway(monkeypatch):
+    import httpx
+
+    calls = {}
+
+    class _Response:
+        status_code = 201
+        text = '{"id":"key-123","raw_key":"swk_raw"}'
+
+        def json(self):
+            return {
+                "id": "key-123",
+                "name": "devices",
+                "raw_key": "swk_raw",
+                "max_uses": 2,
+                "expires_at": "2026-09-08T12:00:00+00:00",
+                "allowed_pools": ["default"],
+                "allowed_models": ["gpt-4o"],
+            }
+
+    def fake_post(url, json, headers, timeout):
+        calls.update({"url": url, "json": json, "headers": headers, "timeout": timeout})
+        return _Response()
+
+    monkeypatch.setenv("SAGEWAI_ADMIN_URL", "http://gateway.test")
+    monkeypatch.setenv("SAGEWAI_ADMIN_TOKEN", "secret-token")
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    res = CliRunner().invoke(
+        fleet_group,
+        [
+            "create-key",
+            "--name",
+            "devices",
+            "--max-uses",
+            "2",
+            "--expires",
+            "24h",
+            "--pools",
+            "default",
+            "--models",
+            "gpt-4o",
+            "--project",
+            "project-a",
+        ],
+    )
+
+    assert res.exit_code == 0, res.output
+    assert calls["url"] == "http://gateway.test/api/v1/fleet/enrollment-keys"
+    assert calls["json"]["name"] == "devices"
+    assert calls["json"]["max_uses"] == 2
+    assert calls["json"]["allowed_pools"] == ["default"]
+    assert calls["json"]["allowed_models"] == ["gpt-4o"]
+    assert calls["json"]["expires_at"].endswith("+00:00")
+    assert calls["headers"]["Authorization"] == "Bearer secret-token"
+    assert calls["headers"]["X-Project-ID"] == "project-a"
+    assert calls["timeout"] == 30.0
+    assert "Enrollment key created: swk_raw" in res.output
+    assert "Save this key - it will not be shown again." in res.output
+
+
+def test_list_keys_gets_gateway_rows(monkeypatch):
+    import httpx
+
+    calls = {}
+
+    class _Response:
+        status_code = 200
+        text = '{"keys":[],"total":0}'
+
+        def json(self):
+            return {
+                "keys": [
+                    {
+                        "id": "key-123456789",
+                        "name": "devices",
+                        "max_uses": 2,
+                        "current_uses": 1,
+                        "expires_at": None,
+                        "revoked": False,
+                    },
+                    {
+                        "id": "key-revoked",
+                        "name": "old",
+                        "max_uses": None,
+                        "current_uses": 0,
+                        "expires_at": None,
+                        "revoked": True,
+                    },
+                ],
+                "total": 2,
+            }
+
+    def fake_get(url, headers, timeout):
+        calls.update({"url": url, "headers": headers, "timeout": timeout})
+        return _Response()
+
+    monkeypatch.setenv("SAGEWAI_ADMIN_URL", "http://gateway.test")
+    monkeypatch.setenv("SAGEWAI_ADMIN_TOKEN", "secret-token")
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    res = CliRunner().invoke(
+        fleet_group,
+        ["list-keys", "--project", "project-a"],
+    )
+
+    assert res.exit_code == 0, res.output
+    assert calls["url"] == "http://gateway.test/api/v1/fleet/enrollment-keys"
+    assert calls["headers"]["Authorization"] == "Bearer secret-token"
+    assert calls["headers"]["X-Project-ID"] == "project-a"
+    assert "key-12345678" in res.output
+    assert "devices" in res.output
+    assert "active" in res.output
+    assert "old" in res.output
+    assert "revoked" in res.output
+
+
+def test_revoke_key_deletes_gateway_key(monkeypatch):
+    import httpx
+
+    calls = {}
+
+    class _Response:
+        status_code = 200
+        text = '{"status":"ok"}'
+
+    def fake_delete(url, headers, timeout):
+        calls.update({"url": url, "headers": headers, "timeout": timeout})
+        return _Response()
+
+    monkeypatch.setenv("SAGEWAI_ADMIN_URL", "http://gateway.test")
+    monkeypatch.setenv("SAGEWAI_ADMIN_TOKEN", "secret-token")
+    monkeypatch.setattr(httpx, "delete", fake_delete)
+
+    res = CliRunner().invoke(
+        fleet_group,
+        ["revoke-key", "key-123", "--project", "project-a"],
+    )
+
+    assert res.exit_code == 0, res.output
+    assert calls["url"] == "http://gateway.test/api/v1/fleet/enrollment-keys/key-123"
+    assert calls["headers"]["Authorization"] == "Bearer secret-token"
+    assert calls["headers"]["X-Project-ID"] == "project-a"
+    assert "Revoked enrollment key key-123." in res.output
+
+
+def test_create_key_401_mentions_admin_token(monkeypatch):
+    import httpx
+
+    class _Response:
+        status_code = 401
+        text = '{"detail":"Unauthorized"}'
+
+        def json(self):
+            return {}
+
+    def fake_post(url, json, headers, timeout):
+        return _Response()
+
+    monkeypatch.delenv("SAGEWAI_ADMIN_TOKEN", raising=False)
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    res = CliRunner().invoke(fleet_group, ["create-key", "--name", "devices"])
+
+    assert res.exit_code != 0
+    assert "SAGEWAI_ADMIN_TOKEN" in res.output
+
+
 def test_run_register_only_invokes_register(monkeypatch, tmp_path):
     repository = tmp_path / "repository"
     repository.mkdir()
