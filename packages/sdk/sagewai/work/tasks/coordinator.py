@@ -19,6 +19,7 @@ from typing import Any, Protocol
 from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.work.activity import WorkActivityStore
 from sagewai.work.events import WorkEvent, WorkEventType
+from sagewai.work.fleet import NoCompatibleWorkerError
 from sagewai.work.knowledge import KnowledgeItem, KnowledgeKind, KnowledgeStore
 from sagewai.work.models import (
     SUPERSEDED,
@@ -1002,6 +1003,8 @@ class TaskCoordinator:
                 command,
                 prefix=ledger.drain(),
             )
+        except NoCompatibleWorkerError as exc:
+            return await self._wait_for_worker(record, command, exc, lease_epoch, ledger.drain())
         except Exception as exc:
             return await self._degrade(task, record, command, exc, lease_epoch, ledger.drain())
         if result.asks_first:
@@ -1154,6 +1157,27 @@ class TaskCoordinator:
             )
         )
         return await self._append(record, entries, lease_epoch, command=command)
+
+    async def _wait_for_worker(
+        self,
+        record: TaskRecord,
+        command: Command,
+        exc: NoCompatibleWorkerError,
+        lease_epoch: int,
+        prefix: Sequence[Entry],
+    ) -> TaskRecord:
+        reason = f"waiting for a Fleet worker: {exc}"
+        if record.waiting_reason == reason and not prefix:
+            return record
+        return await self._append(
+            record,
+            [
+                *prefix,
+                (TaskEventType.ATTENTION_CHANGED, {"owner": "external", "reason": reason}),
+            ],
+            lease_epoch,
+            command=command,
+        )
 
     async def _block_planning(
         self,
@@ -1823,10 +1847,20 @@ class TaskCoordinator:
                 command,
                 prefix=ledger.drain(),
             )
+        except NoCompatibleWorkerError as exc:
+            prefix = ledger.drain()
+            if record.status is not TaskStatus.ASSESSING:
+                prefix.append(status_entry(record, TaskStatus.ASSESSING))
+            return await self._wait_for_worker(record, command, exc, lease_epoch, prefix)
         except Exception as exc:
             return await self._degrade(task, record, command, exc, lease_epoch, ledger.drain())
         entries: list[Entry] = ledger.drain()
-        entries.append(status_entry(record, TaskStatus.ASSESSING))
+        if record.status is not TaskStatus.ASSESSING:
+            entries.append(status_entry(record, TaskStatus.ASSESSING))
+        elif (record.waiting_reason or "").startswith("waiting for a Fleet worker:"):
+            entries.append(
+                (TaskEventType.ATTENTION_CHANGED, {"owner": "system", "reason": "working"})
+            )
         entries.append(
             (
                 TaskEventType.ASSESSMENT_RECORDED,
