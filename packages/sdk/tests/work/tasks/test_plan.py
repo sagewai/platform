@@ -91,8 +91,11 @@ def test_plan_rules_name_the_shape_each_target_needs() -> None:
     assert "deterministic" in " ".join(software_rules)
     for command in target.verification_commands:
         assert repr(command) in " ".join(software_rules)
+    assert "never instruct delivery" in " ".join(software_rules)
+    assert "pull request" in " ".join(software_rules)
     assert "report.md" in " ".join(report_rules)
     assert "policy" in " ".join(report_rules)
+    assert "pull request" not in " ".join(report_rules)
 
 
 def test_a_rejected_scope_says_what_a_scope_is() -> None:

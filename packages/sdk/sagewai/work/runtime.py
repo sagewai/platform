@@ -231,6 +231,9 @@ def build_operator_prompt(
             "When a required_profile_context entry contains identity, copy it exactly into the profile result identity fields.",
             "Do not place required profile result fields directly at the profile_context root.",
             "Ground every evidence reference in material actually observed or produced.",
+            "The run ends with changes in the working tree and verification commands green; "
+            "never commits, pushes, tags, or opens pull requests because the platform records, "
+            "reviews, and delivers the changes left behind.",
         ],
     }
     return json.dumps(

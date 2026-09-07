@@ -105,8 +105,15 @@ class SoftwareResultValidator:
         receipt_ids = {receipt.action_id for receipt in result.action_results}
         for action_id in sorted(receipt_ids - declared_action_ids):
             scope_violations.append(f"undeclared action result: {action_id}")
-        for action_id in sorted(declared_action_ids - receipt_ids):
-            scope_violations.append(f"missing action result: {action_id}")
+        skip_missing_receipts = (
+            result.status == "failed"
+            and not result.action_results
+            and not result.changes
+            and not changed_files
+        )
+        if not skip_missing_receipts:
+            for action_id in sorted(declared_action_ids - receipt_ids):
+                scope_violations.append(f"missing action result: {action_id}")
 
         verdict: Literal["pass", "blocked"] = "blocked" if scope_violations else "pass"
         return OperatorDisciplineReport(

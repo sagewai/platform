@@ -111,6 +111,10 @@ def plan_rules(target: SoftwareTarget | ReportTarget) -> tuple[str, ...]:
             "at least one acceptance-matrix item is deterministic and its command is one of the "
             f"locked verification commands, verbatim: {commands}",
             "every other matrix item is policy (judged by the assessor) and carries no command",
+            "step goals and acceptance criteria describe the change and how it is verified; "
+            'never instruct delivery such as "commit", "push", "open a pull request", or '
+            '"ship as a PR" because the coordinator delivers every accepted step as its own '
+            "pull request",
         )
     return (
         "every step's allowed_scope names the report artifact the step writes, relative "
