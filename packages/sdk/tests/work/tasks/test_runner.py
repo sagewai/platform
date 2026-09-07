@@ -20,7 +20,7 @@ from sagewai.work.tasks.events import TaskEventType
 from sagewai.work.tasks.models import Schedule, TaskKind, TaskStatus
 from sagewai.work.tasks.runner import TaskCoordinatorRunner
 from sagewai.work.tasks.store import TaskStore
-from sagewai.work.tasks.writer import TaskWriter
+from sagewai.work.tasks.writer import TaskWriter, status_entry
 from tests.db.conftest import dialect_engine  # noqa: F401
 from tests.work.tasks.test_schedules import _mark_scheduled, _scheduled
 from tests.work.tasks.test_store import _create, _task
@@ -40,6 +40,39 @@ class RecordingDriver:
         self.calls.append((record.task_id, lease_epoch))
         if self.fail:
             raise RuntimeError("drive exploded")
+        return record
+
+
+class BlockingDriver:
+    def __init__(
+        self,
+        store: TaskStore,
+        *,
+        blocked_task_id: str,
+        release: asyncio.Event,
+        done_events: dict[str, asyncio.Event] | None = None,
+    ) -> None:
+        self.store = store
+        self.blocked_task_id = blocked_task_id
+        self.release = release
+        self.done_events = done_events or {}
+        self.blocked = asyncio.Event()
+        self.calls: list[tuple[str, int]] = []
+
+    async def drive(self, record, *, lease_epoch):
+        self.calls.append((record.task_id, lease_epoch))
+        if record.task_id == self.blocked_task_id:
+            self.blocked.set()
+            await self.release.wait()
+        current = await self.store.load_record(record.task_id, project_id=record.project_id)
+        assert current is not None
+        await TaskWriter(self.store).append(
+            current,
+            [status_entry(current, TaskStatus.BLOCKED)],
+            lease_epoch=lease_epoch,
+        )
+        if record.task_id in self.done_events:
+            self.done_events[record.task_id].set()
         return record
 
 
@@ -103,7 +136,9 @@ async def test_a_tick_claims_drives_and_releases(store) -> None:
     await _create(store, task)
     driver = RecordingDriver()
     driver.store = store
-    assert await _runner(store, driver).tick() == 1
+    runner = _runner(store, driver)
+    assert await runner.tick() == 1
+    await runner.drain()
     assert [call[0] for call in driver.calls] == [task.id]
     assert driver.observed_leases == [("runner-1", 1)]
     released = await store.load_record(task.id, project_id=task.project_id)
@@ -130,25 +165,72 @@ async def test_held_tasks_do_not_consume_the_tick_budget(store) -> None:
         await store.claim(task.id, project_id=task.project_id, owner="runner-2", ttl_seconds=90)
     driver = RecordingDriver()
 
-    assert await _runner(store, driver, max_tasks=2).tick() == 2
+    runner = _runner(store, driver, max_tasks=2)
+    assert await runner.tick() == 2
+    await runner.drain()
 
     assert [task_id for task_id, _epoch in driver.calls] == ["task-2", "task-3"]
 
 
 @pytest.mark.asyncio
-async def test_max_tasks_bounds_one_tick(store) -> None:
-    for index in range(4):
-        await _create(store, _task(f"task-{index}"))
-    driver = RecordingDriver()
-    assert await _runner(store, driver, max_tasks=2).tick() == 2
-    assert len(driver.calls) == 2
+async def test_a_long_drive_does_not_block_another_task(store) -> None:
+    for task_id in ("task-1", "task-2"):
+        await _create(store, _task(task_id))
+    release = asyncio.Event()
+    task_2_done = asyncio.Event()
+    driver = BlockingDriver(
+        store,
+        blocked_task_id="task-1",
+        release=release,
+        done_events={"task-2": task_2_done},
+    )
+    runner = _runner(store, driver, max_tasks=2)
+
+    assert await asyncio.wait_for(runner.tick(), timeout=1) == 2
+    await asyncio.wait_for(driver.blocked.wait(), timeout=1)
+    await asyncio.wait_for(task_2_done.wait(), timeout=1)
+    assert sorted(task_id for task_id, _epoch in driver.calls) == ["task-1", "task-2"]
+    assert await runner.tick() == 0
+
+    release.set()
+    await runner.drain()
+
+    for task_id in ("task-1", "task-2"):
+        released = await store.load_record(task_id, project_id="project-a")
+        assert released.lease_owner is None
+
+
+@pytest.mark.asyncio
+async def test_max_tasks_bounds_in_flight_drives_not_ticks(store) -> None:
+    for task_id in ("task-1", "task-2"):
+        await _create(store, _task(task_id))
+    release = asyncio.Event()
+    driver = BlockingDriver(store, blocked_task_id="task-1", release=release)
+    runner = _runner(store, driver, max_tasks=1)
+
+    assert await asyncio.wait_for(runner.tick(), timeout=1) == 1
+    await asyncio.wait_for(driver.blocked.wait(), timeout=1)
+    assert await runner.tick() == 0
+    release.set()
+    await runner.drain()
+    assert [task_id for task_id, _epoch in driver.calls] == ["task-1"]
+
+    assert await runner.tick() == 1
+    await runner.drain()
+    assert [task_id for task_id, _epoch in driver.calls] == ["task-1", "task-2"]
+
+    for task_id in ("task-1", "task-2"):
+        released = await store.load_record(task_id, project_id="project-a")
+        assert released.lease_owner is None
 
 
 @pytest.mark.asyncio
 async def test_a_failing_drive_releases_the_lease_and_the_tick_survives(store, caplog) -> None:
     task = _task()
     await _create(store, task)
-    assert await _runner(store, RecordingDriver(fail=True)).tick() == 0
+    runner = _runner(store, RecordingDriver(fail=True))
+    assert await runner.tick() == 1
+    await runner.drain()
     released = await store.load_record(task.id, project_id=task.project_id)
     assert released.lease_owner is None
     assert "drive exploded" in caplog.text
@@ -173,7 +255,9 @@ async def test_a_heartbeat_failure_does_not_skip_release_or_drive_count(
     monkeypatch.setattr(store, "renew", failed_renew)
     driver = SlowDriver()
 
-    assert await _runner(store, driver, heartbeat_seconds=0.01).tick() == 1
+    runner = _runner(store, driver, heartbeat_seconds=0.01)
+    assert await runner.tick() == 1
+    await runner.drain()
 
     released = await store.load_record(task.id, project_id=task.project_id)
     assert released.lease_owner is None
@@ -197,6 +281,7 @@ async def test_the_heartbeat_extends_the_lease_while_a_drive_runs(store) -> None
 
     runner = _runner(store, SlowDriver(), lease_ttl_seconds=90, heartbeat_seconds=0.01)
     assert await runner.tick() == 1
+    await runner.drain()
     assert len(expiries) == 2
     assert expiries[1] > expiries[0]
 
@@ -227,6 +312,7 @@ async def test_every_sweeper_runs_once_per_project_and_a_failure_never_stops_the
         sweepers=(Sweeper("triggers", fail=True), Sweeper("deadlines")),
     )
     assert await runner.tick() == 1
+    await runner.drain()
     assert calls == ["triggers:project-a", "deadlines:project-a"]
     assert "triggers exploded" in caplog.text
 
@@ -237,7 +323,9 @@ async def test_a_due_scheduled_task_is_picked_up(store) -> None:
     await _create(store, task)
     await _mark_scheduled(store, task.id, datetime.now(timezone.utc) - timedelta(minutes=1))
     driver = RecordingDriver()
-    assert await _runner(store, driver).tick() == 1
+    runner = _runner(store, driver)
+    assert await runner.tick() == 1
+    await runner.drain()
     assert [call[0] for call in driver.calls] == [task.id]
 
 
@@ -287,9 +375,28 @@ async def test_a_claim_that_raises_keeps_earlier_claims_driven_and_released(stor
 
     store.claim = claim  # type: ignore[method-assign]
     driver = RecordingDriver()
-    assert await _runner(store, driver, max_tasks=3).tick() == 1
+    runner = _runner(store, driver, max_tasks=3)
+    assert await runner.tick() == 1
+    await runner.drain()
     assert [call[0] for call in driver.calls] == ["task-0"]
     released = await store.load_record("task-0", project_id="project-a")
     assert released.lease_owner is None
     assert "task claim failed" in caplog.text
 
+
+@pytest.mark.asyncio
+async def test_aclose_cancels_in_flight_drives_and_releases_their_leases(
+    store, caplog
+) -> None:
+    await _create(store, _task("task-1"))
+    release = asyncio.Event()
+    driver = BlockingDriver(store, blocked_task_id="task-1", release=release)
+    runner = _runner(store, driver, max_tasks=1)
+
+    assert await asyncio.wait_for(runner.tick(), timeout=1) == 1
+    await asyncio.wait_for(driver.blocked.wait(), timeout=1)
+    await runner.aclose()
+
+    released = await store.load_record("task-1", project_id="project-a")
+    assert released.lease_owner is None
+    assert "task drive failed" not in caplog.text

@@ -422,6 +422,7 @@ async def test_concurrent_software_tasks_meter_into_their_own_ledgers(
     )
 
     assert await runner.tick() == 2
+    await runner.drain()
 
     assert sorted(bound_ledgers) == sorted((task.id, task.id) for task in tasks)
     assert sorted((item.project_id, item.task_id, item.cycle) for item in reservations) == [
