@@ -31,8 +31,9 @@ from sagewai.work.runtime import (
 )
 from sagewai.work.store import WorkStore
 from sagewai.work.tasks.models import SoftwareTarget, Task
-from sagewai.work.tasks.plan import PlanRejectedError, TaskPlanResult, accept_plan
+from sagewai.work.tasks.plan import PlanRejectedError, TaskPlanResult, accept_plan, plan_rules
 from sagewai.work.tasks.scratch import ScratchWorkspaceManager
+from sagewai.work.tasks.templates import get_template
 
 _MAX_BRIEF_CHARS = 20_000
 _PLAN_ATTEMPTS = 3
@@ -92,6 +93,7 @@ class TaskPlanner:
         """
         work_id = self.work_id(task, cycle=cycle, plan_version=plan_version)
         run_id = f"{work_id}:plan:1"
+        template = get_template(task.template_id)
         work_item, contract = self._planning_work(task, work_id, cycle, plan_version)
         await self._ensure_created(work_item, contract)
         workspace = await self._workspace(task, work_id, base_sha)
@@ -120,6 +122,15 @@ class TaskPlanner:
                     if isinstance(task.target, SoftwareTarget)
                     else []
                 ),
+                "plan_rules": list(plan_rules(task.target)),
+                "template": {
+                    "plan_skeleton": [
+                        step.model_dump(mode="json") for step in template.plan_skeleton
+                    ],
+                    "matrix_template": [
+                        item.model_dump(mode="json") for item in template.matrix_template
+                    ],
+                },
             },
         )
         request = WorkRequest(
@@ -133,7 +144,9 @@ class TaskPlanner:
                     "Decompose the brief into a dependency-ordered plan with an "
                     "acceptance matrix; a plan may carry clarifications only when every "
                     "clarification is defaultable with a default, and any question without a "
-                    "default means ask first with steps empty"
+                    "default means ask first with steps empty; the capsule's "
+                    "profile_context.plan_rules are deterministic acceptance rules the result "
+                    "must satisfy, and profile_context.template is the skeleton to start from"
                 ),
                 allowed_targets=(".",),
                 allowed_capabilities=tuple(grant.name for grant in self._capabilities.grants),

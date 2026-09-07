@@ -44,9 +44,10 @@ from sagewai.work.tasks.models import (
     TaskKind,
     TaskOrigin,
 )
-from sagewai.work.tasks.plan import MatrixItem, PlanStep, TaskPlanResult
+from sagewai.work.tasks.plan import MatrixItem, PlanStep, TaskPlanResult, plan_rules
 from sagewai.work.tasks.planner import PlanningFailedError, TaskPlanner
 from sagewai.work.tasks.scratch import ScratchResultValidator, ScratchWorkspaceManager
+from sagewai.work.tasks.templates import get_template
 from tests.db.conftest import dialect_engine  # noqa: F401
 
 NOW = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
@@ -180,8 +181,8 @@ def _task(
         title="Build the engine",
         brief_ref=brief,
         brief_summary="Build the engine",
-        template_id="software_delivery",
-        template_version="1",
+        template_id="scheduled_research_report" if report else "software_delivery",
+        template_version="2" if report else "1",
         profile="report" if report else "software",
         target=target,
         authority=Authority.for_kind(TaskKind.BATCH),
@@ -236,6 +237,12 @@ async def test_planner_runs_planning_work_in_pinned_worktree(dialect_engine, tmp
     assert capsule.profile_context["task_plan_result_schema"]["title"] == "TaskPlanResult"
     assert capsule.profile_context["brief"].startswith("# Brief")
     assert capsule.profile_context["verification_commands"] == ["just smoke"]
+    assert capsule.profile_context["plan_rules"] == list(plan_rules(task.target))
+    software_template = get_template("software_delivery")
+    assert capsule.profile_context["template"]["plan_skeleton"] == [
+        step.model_dump(mode="json") for step in software_template.plan_skeleton
+    ]
+    assert capsule.profile_context["template"]["matrix_template"][0]["id"] == "verification"
     assert task.brief_ref.storage_ref in capsule.contract.evidence_refs
     events = await work_store.read_events("task-1:plan:1:1", project_id="project-a")
     kinds = [event.event_type for event in events]
@@ -279,7 +286,17 @@ async def test_planner_uses_scratch_workspace_for_report_targets(dialect_engine,
     task = _task(tmp_path, LocalArtifactStore(root=tmp_path / "objects"), report=True)
     result = await planner.plan(task, cycle=1, plan_version=1, base_sha=None, brief_text="b")
     assert result.steps
-    assert runtime.capsules[0].profile_context["verification_commands"] == []
+    capsule = runtime.capsules[0]
+    assert capsule.profile_context["verification_commands"] == []
+    assert capsule.profile_context["plan_rules"] == list(plan_rules(task.target))
+    report_template = get_template("scheduled_research_report")
+    assert capsule.profile_context["template"]["plan_skeleton"][0]["id"] == "report"
+    assert capsule.profile_context["template"]["plan_skeleton"] == [
+        step.model_dump(mode="json") for step in report_template.plan_skeleton
+    ]
+    assert capsule.profile_context["template"]["matrix_template"] == [
+        item.model_dump(mode="json") for item in report_template.matrix_template
+    ]
     assert runtime.requests[0].action_scope.allowed_targets == (".",)
     assert (tmp_path / "scratch" / "project-a" / "task-1:plan:1:1" / "plan").is_dir()
 
