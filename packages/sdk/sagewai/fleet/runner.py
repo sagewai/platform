@@ -438,6 +438,7 @@ class WorkerRunner:
         hb = asyncio.create_task(self._heartbeat_loop())
         inflight: set[asyncio.Task] = set()
         terminal: TerminalAuthError | None = None
+        claim_delay = 0.5
         try:
             while not self._stop.is_set():
                 await sem.acquire()
@@ -455,6 +456,17 @@ class WorkerRunner:
                     logger.error("terminal: %s — exiting", exc)
                     terminal = exc
                     break
+                except httpx.HTTPError as exc:
+                    sem.release()
+                    logger.warning(
+                        "claim network error: %s; retrying in %.1fs",
+                        exc,
+                        claim_delay,
+                    )
+                    await self._sleep_or_stop(claim_delay)
+                    claim_delay = min(claim_delay * 2, 30.0)
+                    continue
+                claim_delay = 0.5
                 if task is None:
                     sem.release()
                     await self._sleep_or_stop(1.0)

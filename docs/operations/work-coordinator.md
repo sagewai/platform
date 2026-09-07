@@ -418,6 +418,9 @@ Fleet workers and the control plane must run the same SDK version: the result
 envelope and the progress path changed together, and neither side accepts the
 other's older shape.
 
+Fleet workers keep polling through gateway outages and exit only when the
+gateway returns a terminal authentication error.
+
 Fleet workers post live activity for claimed `work.operator` tasks to
 `POST /api/v1/fleet/progress`. The endpoint accepts batches of at most 50
 entries and 640 KiB, in sequence order per run, and feeds the same activity
@@ -688,8 +691,10 @@ control stops new side effects.
 - **Work needs attention:** run `pending`, act on the exact reported ID, then
   `resume`; do not restart the Work under a new ID.
 - **No compatible Fleet worker:** verify project scope and advertised
-  `runtime.codex`, `runtime.claude`, or `runtime.harness` capability. Do not
-  send model credentials or harness backend configuration to the control plane.
+  `runtime.codex`, `runtime.claude`, or `runtime.harness` capability. The Task
+  waits with `external` attention and continues when a compatible worker comes
+  online. Do not send model credentials or harness backend configuration to the
+  control plane.
 - **Control degraded:** restore the failed authority, observability, or reversibility
   precondition. A successful HTTP status with stale observations is still degraded. A Task also
   reaches `CONTROL_DEGRADED` when its planning or assessment stage raises — an expired CLI login,

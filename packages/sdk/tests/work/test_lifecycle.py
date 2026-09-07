@@ -27,6 +27,7 @@ from sagewai.safety.permissions import PermissionPolicy
 from sagewai.work import (
     AcceptanceCriterion,
     ActionResult,
+    ActionScope,
     ActivitySink,
     Assumption,
     CapabilityGrant,
@@ -40,6 +41,7 @@ from sagewai.work import (
     ProposedAcceptanceCriterion,
     ReviewFinding,
     ReviewResult,
+    TaskCapsule,
     TaskCapsuleCompiler,
     VerificationResult,
     WorkAnalysisResult,
@@ -50,6 +52,7 @@ from sagewai.work import (
     WorkEventType,
     WorkItem,
     WorkRecord,
+    WorkRequest,
     WorkStore,
     execution_attempt_from_events,
 )
@@ -74,6 +77,7 @@ from sagewai.work.profiles.software import (
     SoftwareReviewContext,
     SoftwareStageOperator,
     SoftwareVerifier,
+    SoftwareWorkspace,
     SoftwareWorkspaceControlCheck,
     SoftwareWorktreeManager,
     StageOperatorLadder,
@@ -81,7 +85,11 @@ from sagewai.work.profiles.software import (
     WorkspaceStaleError,
 )
 from sagewai.work.profiles.software.github import GitHubComment
-from sagewai.work.profiles.software.lifecycle import _store_diff_context
+from sagewai.work.profiles.software.lifecycle import (
+    _DIFF_WORKSPACE_PATH,
+    _DiffMaterializingRuntime,
+    _store_diff_context,
+)
 from tests.db.conftest import dialect_engine  # noqa: F401
 from tests.work.fakes_verification import LocalVerificationRunner
 
@@ -731,6 +739,21 @@ class DiffReadingReviewRuntime(ReviewRuntime):
                 ).stat().st_ino
             )
         return await super().run(request, capsule, capabilities, workspace)
+
+
+class DiffPathReadingRuntime:
+    name = "diff-path-reading-runtime"
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.materialized_diffs: list[bytes] = []
+
+    async def run(self, request, capsule, capabilities, workspace):
+        self.calls += 1
+        self.materialized_diffs.append(
+            (workspace.path / _DIFF_WORKSPACE_PATH).read_bytes()
+        )
+        return _operator_result(request)
 
 
 class FailedStatusReviewRuntime(ReviewRuntime):
@@ -4049,6 +4072,147 @@ async def test_review_finding_reaches_repair_as_typed_canonical_context(
     assert len(repair_context.findings) == 1
     assert repair_context.findings[0].required_change == "Write the repaired target"
     assert repair_context.open_assumptions == ()
+
+
+@pytest.mark.asyncio
+async def test_review_diff_materialization_replaces_a_stale_regular_file(
+    stores,
+    tmp_path: Path,
+) -> None:
+    _work_store, _knowledge_store = stores
+    artifact_store = LocalArtifactStore(root=tmp_path / "objects")
+    expected = b"diff --git a/target.txt b/target.txt\n"
+    artifact = artifact_store.put_bytes(
+        expected,
+        project_id="project-a",
+        media_type="text/x-diff",
+        created_by="software.lifecycle",
+    )
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    stale = workspace_path / _DIFF_WORKSPACE_PATH
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_bytes(b"stale previous attempt\n")
+    delegate = DiffPathReadingRuntime()
+    runtime = _DiffMaterializingRuntime(
+        delegate=delegate,
+        artifact_store=artifact_store,
+        artifact=artifact,
+        relative_path=_DIFF_WORKSPACE_PATH,
+    )
+    request = WorkRequest(
+        project_id="project-a",
+        work_id="work-1",
+        run_id="work-1:review:1",
+        stage="review",
+        action_scope=ActionScope(
+            project_id="project-a",
+            objective="Review diff",
+            allowed_targets=("target.txt",),
+            allowed_capabilities=("filesystem.read",),
+        ),
+        action_intents=(),
+        control_preconditions=(),
+    )
+    capsule = TaskCapsule(
+        project_id="project-a",
+        work_id="work-1",
+        stage="review",
+        work_item=_work_item(),
+        contract=_contract("a" * 40),
+        knowledge_refs=(),
+        knowledge_items=(),
+        knowledge_items_considered=0,
+        artifact_bytes_referenced=artifact.size_bytes,
+        open_assumption_ids=(),
+        prior_result_refs=(),
+    )
+    workspace = SoftwareWorkspace(
+        ref="workspace://work-1",
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="work-1:review:1",
+        repository=workspace_path,
+        path=workspace_path,
+        base_sha="a" * 40,
+        initial_sha="a" * 40,
+    )
+
+    result = await runtime.run(request, capsule, _read_capabilities(), workspace)
+
+    assert result.status == "passed"
+    assert delegate.materialized_diffs == [expected]
+    assert not stale.exists()
+
+
+@pytest.mark.asyncio
+async def test_review_diff_materialization_refuses_a_stale_symlink(
+    stores,
+    tmp_path: Path,
+) -> None:
+    _work_store, _knowledge_store = stores
+    artifact_store = LocalArtifactStore(root=tmp_path / "objects")
+    artifact = artifact_store.put_bytes(
+        b"diff --git a/target.txt b/target.txt\n",
+        project_id="project-a",
+        media_type="text/x-diff",
+        created_by="software.lifecycle",
+    )
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    (workspace_path / "target.txt").write_text("initial\n")
+    stale = workspace_path / _DIFF_WORKSPACE_PATH
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.symlink_to(workspace_path / "target.txt")
+    delegate = DiffPathReadingRuntime()
+    runtime = _DiffMaterializingRuntime(
+        delegate=delegate,
+        artifact_store=artifact_store,
+        artifact=artifact,
+        relative_path=_DIFF_WORKSPACE_PATH,
+    )
+    request = WorkRequest(
+        project_id="project-a",
+        work_id="work-1",
+        run_id="work-1:review:1",
+        stage="review",
+        action_scope=ActionScope(
+            project_id="project-a",
+            objective="Review diff",
+            allowed_targets=("target.txt",),
+            allowed_capabilities=("filesystem.read",),
+        ),
+        action_intents=(),
+        control_preconditions=(),
+    )
+    capsule = TaskCapsule(
+        project_id="project-a",
+        work_id="work-1",
+        stage="review",
+        work_item=_work_item(),
+        contract=_contract("a" * 40),
+        knowledge_refs=(),
+        knowledge_items=(),
+        knowledge_items_considered=0,
+        artifact_bytes_referenced=artifact.size_bytes,
+        open_assumption_ids=(),
+        prior_result_refs=(),
+    )
+    workspace = SoftwareWorkspace(
+        ref="workspace://work-1",
+        project_id="project-a",
+        work_id="work-1",
+        attempt_id="work-1:review:1",
+        repository=workspace_path,
+        path=workspace_path,
+        base_sha="a" * 40,
+        initial_sha="a" * 40,
+    )
+
+    with pytest.raises(WorkspaceStaleError, match="diff workspace path already exists"):
+        await runtime.run(request, capsule, _read_capabilities(), workspace)
+
+    assert delegate.calls == 0
 
 
 @pytest.mark.asyncio

@@ -185,6 +185,10 @@ sagewai fleet run --name harness-worker --project my-project \
   --harness-backend localai=http://127.0.0.1:8080/v1
 ```
 
+Workers keep polling through gateway outages and exit only when the gateway
+returns a terminal authentication error. A Task with no compatible online worker
+waits with `external` attention and continues when one comes online.
+
 Start or resume Work with Fleet selected explicitly:
 
 ```bash

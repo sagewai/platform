@@ -314,6 +314,109 @@ async def test_run_drains_then_stops_on_signal_event(app_token):
 
 
 @pytest.mark.asyncio
+async def test_run_keeps_polling_through_gateway_outage(app_token):
+    app, token = app_token
+    r = _runner(app, token, heartbeat_interval=0.05)
+    wid, _ = await r.register()
+    await _approve(app, token, wid)
+    org_id = await _worker_org_id(app, wid)
+    await app.state.fleet_task_store.enqueue(
+        {"run_id": "rOutage", "org_id": org_id, "model": "gpt-4o", "pool": "default"}
+    )
+    real_claim = r._claim
+    claims = {"n": 0}
+
+    async def flaky_claim():
+        claims["n"] += 1
+        if claims["n"] <= 2:
+            raise httpx.ConnectError("boom")
+        return await real_claim()
+
+    delays = []
+
+    async def record_sleep(delay):
+        delays.append(delay)
+
+    real_report = r._report
+
+    async def report_and_stop(*args, **kwargs):
+        reported = await real_report(*args, **kwargs)
+        r.stop()
+        return reported
+
+    async def no_heartbeat():
+        await asyncio.Event().wait()
+
+    r._claim = flaky_claim  # type: ignore[assignment]
+    r._report = report_and_stop  # type: ignore[assignment]
+    r._sleep_or_stop = record_sleep  # type: ignore[assignment]
+    r._heartbeat_loop = no_heartbeat  # type: ignore[assignment]
+
+    await r.run()
+
+    store = app.state.fleet_task_store
+    assert (
+        await store.get_task("rOutage", org_id=org_id, project_id=None) or {}
+    ).get("status") == "completed"
+    assert delays[:2] == [0.5, 1.0]
+
+
+@pytest.mark.asyncio
+async def test_run_resets_gateway_outage_backoff_after_successful_claim(app_token):
+    app, token = app_token
+    r = _runner(app, token, heartbeat_interval=0.05)
+    wid, _ = await r.register()
+    await _approve(app, token, wid)
+    org_id = await _worker_org_id(app, wid)
+    for run_id in ("rResetA", "rResetB"):
+        await app.state.fleet_task_store.enqueue(
+            {"run_id": run_id, "org_id": org_id, "model": "gpt-4o", "pool": "default"}
+        )
+    real_claim = r._claim
+    claims = {"n": 0}
+
+    async def flaky_claim():
+        claims["n"] += 1
+        if claims["n"] in {1, 2, 4}:
+            raise httpx.ConnectError("boom")
+        return await real_claim()
+
+    delays = []
+
+    async def record_sleep(delay):
+        delays.append(delay)
+
+    real_report = r._report
+    reports = []
+
+    async def report_and_stop_after_second(run_id, *args, **kwargs):
+        reported = await real_report(run_id, *args, **kwargs)
+        reports.append(run_id)
+        if len(reports) == 2:
+            r.stop()
+        return reported
+
+    async def no_heartbeat():
+        await asyncio.Event().wait()
+
+    r._claim = flaky_claim  # type: ignore[assignment]
+    r._report = report_and_stop_after_second  # type: ignore[assignment]
+    r._sleep_or_stop = record_sleep  # type: ignore[assignment]
+    r._heartbeat_loop = no_heartbeat  # type: ignore[assignment]
+
+    await r.run()
+
+    store = app.state.fleet_task_store
+    assert (
+        await store.get_task("rResetA", org_id=org_id, project_id=None) or {}
+    ).get("status") == "completed"
+    assert (
+        await store.get_task("rResetB", org_id=org_id, project_id=None) or {}
+    ).get("status") == "completed"
+    assert delays == [0.5, 1.0, 0.5]
+
+
+@pytest.mark.asyncio
 async def test_native_task_surfaces_trusted_configuration_failure() -> None:
     async def handler(_task, _context):
         raise WorkerConfigurationError(

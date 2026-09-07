@@ -116,8 +116,8 @@ def _diff_workspace_target(workspace: SoftwareWorkspace, relative_path: str) -> 
     if relative.is_absolute() or ".." in relative.parts:
         raise ValueError("diff workspace path must stay inside the workspace")
     root = workspace.path.resolve()
-    target = (root / Path(*relative.parts)).resolve()
-    if not target.is_relative_to(root):
+    target = root / Path(*relative.parts)
+    if not target.resolve().is_relative_to(root):
         raise ValueError("diff workspace path must stay inside the workspace")
     return target
 
@@ -150,7 +150,7 @@ class _DiffMaterializingRuntime:
             raise ValueError("diff artifact belongs to a different project")
         target = _diff_workspace_target(workspace, self.relative_path)
         parent_existed = target.parent.exists()
-        if target.exists() or target.is_symlink():
+        if target.is_symlink() or (target.exists() and not target.is_file()):
             raise WorkspaceStaleError(f"diff workspace path already exists: {self.relative_path}")
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -158,7 +158,7 @@ class _DiffMaterializingRuntime:
                 self.artifact_store.resolve(
                     self.artifact.storage_ref, project_id=request.project_id
                 ).open("rb") as source,
-                target.open("xb") as destination,
+                target.open("wb") as destination,
             ):
                 shutil.copyfileobj(source, destination)
             return await self.delegate.run(request, capsule, capabilities, workspace)

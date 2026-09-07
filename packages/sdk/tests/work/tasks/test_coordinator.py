@@ -19,6 +19,7 @@ import pytest
 
 from sagewai.artifacts.object_store import LocalArtifactStore
 from sagewai.work.events import WorkEvent, WorkEventType
+from sagewai.work.fleet import NoCompatibleWorkerError
 from sagewai.work.knowledge import KnowledgeKind, KnowledgeStore
 from sagewai.work.models import (
     SUPERSEDED,
@@ -1943,6 +1944,38 @@ async def test_a_planning_exception_degrades_control_on_the_task(stores, tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_no_compatible_worker_waits_in_planning_without_degrading(
+    stores, tmp_path, monkeypatch
+) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
+    message = "no approved online worker satisfies the required stage capabilities"
+    runner.plan_error = NoCompatibleWorkerError(message)
+
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    assert record.status is TaskStatus.PLANNING
+    assert record.attention_owner is AttentionOwner.EXTERNAL
+    assert record.waiting_reason.startswith("waiting for a Fleet worker")
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    assert not any(event.event_type is TaskEventType.CONTROL_DEGRADED for event in events)
+    assert sum(event.event_type is TaskEventType.ATTENTION_CHANGED for event in events) == 1
+
+    second = await coordinator.drive(record, lease_epoch=epoch)
+    second_events = await task_store.read_events(task.id, project_id=PROJECT)
+    assert second.revision == record.revision
+    assert second_events == events
+
+    runner.plan_error = None
+    planned = await coordinator.drive(record, lease_epoch=epoch)
+    planned_events = await task_store.read_events(task.id, project_id=PROJECT)
+    assert planned.attention_owner is not AttentionOwner.EXTERNAL
+    assert any(event.event_type is TaskEventType.PLAN_PROPOSED for event in planned_events)
+
+
+@pytest.mark.asyncio
 async def test_an_unreachable_base_degrades_control_before_planning(stores, tmp_path) -> None:
     task_store, _work_store = stores
     task, record, runner, coordinator = await _seed(stores, tmp_path)
@@ -1958,6 +1991,56 @@ async def test_an_unreachable_base_degrades_control_before_planning(stores, tmp_
     )
     assert degraded.payload_json["command"] == "run_planning"
     assert "connection refused" in degraded.payload_json["detail"]
+
+
+@pytest.mark.asyncio
+async def test_no_compatible_worker_waits_in_assessment_without_degrading(
+    stores, tmp_path, monkeypatch
+) -> None:
+    task_store, _work_store = stores
+    task, record, runner, coordinator = await _seed(stores, tmp_path)
+    monkeypatch.setattr(coordinator, "_load", _fixed_task(task_store, task))
+    message = "no approved online worker satisfies the required stage capabilities"
+
+    assessment_outage = {"enabled": True}
+    real_assess = runner.assess
+
+    async def assess(task_, *, cycle, plan_version, plan, outcomes, merged_sha, evidence):
+        if assessment_outage["enabled"]:
+            runner._billable(task_)
+            raise NoCompatibleWorkerError(message)
+        return await real_assess(
+            task_,
+            cycle=cycle,
+            plan_version=plan_version,
+            plan=plan,
+            outcomes=outcomes,
+            merged_sha=merged_sha,
+            evidence=evidence,
+        )
+
+    runner.assess = assess
+
+    epoch = await task_store.claim(task.id, project_id=PROJECT, owner="r", ttl_seconds=90)
+    record = await _drive_to_rest(coordinator, record, epoch)
+
+    assert record.status is TaskStatus.ASSESSING
+    assert record.attention_owner is AttentionOwner.EXTERNAL
+    assert record.waiting_reason.startswith("waiting for a Fleet worker")
+    events = await task_store.read_events(task.id, project_id=PROJECT)
+    assert not any(event.event_type is TaskEventType.CONTROL_DEGRADED for event in events)
+    assert sum(event.event_type is TaskEventType.ATTENTION_CHANGED for event in events) == 1
+
+    second = await coordinator.drive(record, lease_epoch=epoch)
+    second_events = await task_store.read_events(task.id, project_id=PROJECT)
+    assert second.revision == record.revision
+    assert second_events == events
+
+    assessment_outage["enabled"] = False
+    assessed = await coordinator.drive(record, lease_epoch=epoch)
+    assessed_events = await task_store.read_events(task.id, project_id=PROJECT)
+    assert assessed.attention_owner is not AttentionOwner.EXTERNAL
+    assert any(event.event_type is TaskEventType.ASSESSMENT_RECORDED for event in assessed_events)
 
 
 @pytest.mark.asyncio
