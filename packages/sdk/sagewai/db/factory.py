@@ -20,8 +20,10 @@ sqlite:///path    -> that SQLite file.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import threading
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -175,6 +177,16 @@ async def get_workflow_store():
 
 
 def reset_engine() -> None:
-    """Synchronously clear the cached engine reference (tests). Does not dispose async resources."""
+    """Drop the cached engine after closing its pooled connections (tests).
+
+    The close runs on a private loop in a helper thread, so it works from sync fixtures and
+    from inside a running test loop alike; a leaked aiosqlite connection would otherwise be
+    closed by garbage collection on whatever loop is current at that moment.
+    """
     global _engine
-    _engine = None
+    engine, _engine = _engine, None
+    if engine is None:
+        return
+    worker = threading.Thread(target=asyncio.run, args=(engine.dispose(),))
+    worker.start()
+    worker.join()
