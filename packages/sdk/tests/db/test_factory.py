@@ -7,9 +7,13 @@
 #
 # This file is also available under a commercial license.
 # See COMMERCIAL-LICENSE.md for details.
+import asyncio
 import os
+import threading
+import time
 
 import pytest
+import sqlalchemy as sa
 
 from sagewai.db import factory
 
@@ -105,8 +109,8 @@ async def test_get_workflow_store_sqlite_is_initialized():
 @pytest.mark.skipif(not _PG_URL, reason="SAGEWAI_TEST_DATABASE_URL not set")
 async def test_get_workflow_store_postgres_is_initialized(monkeypatch):
     """get_workflow_store() returns a PostgresStore with a live pool for Postgres."""
-    from sagewai.core.stores.postgres import PostgresStore
     from sagewai.core.state import WorkflowRun
+    from sagewai.core.stores.postgres import PostgresStore
     from sagewai.db.engine import create_engine as _create_engine
     from sagewai.db.models import Base
 
@@ -143,3 +147,46 @@ async def test_get_workflow_store_postgres_is_initialized(monkeypatch):
         if store is not None:
             await store.close()
         factory.reset_engine()
+
+
+def _aiosqlite_worker_threads() -> int:
+    from aiosqlite.core import _connection_worker_thread
+
+    return sum(
+        getattr(thread, "_target", None) is _connection_worker_thread
+        for thread in threading.enumerate()
+    )
+
+
+def _wait_for_worker_threads(count: int) -> int:
+    deadline = time.monotonic() + 2.0
+    while _aiosqlite_worker_threads() != count and time.monotonic() < deadline:
+        time.sleep(0.02)
+    return _aiosqlite_worker_threads()
+
+
+async def _open_one_pooled_connection() -> None:
+    async with factory.get_engine().connect() as conn:
+        await conn.execute(sa.text("select 1"))
+
+
+def test_reset_engine_closes_pooled_connections_without_a_loop():
+    baseline = _aiosqlite_worker_threads()
+    asyncio.run(_open_one_pooled_connection())
+    engine = factory.get_engine()
+    assert _aiosqlite_worker_threads() == baseline + 1
+
+    factory.reset_engine()
+
+    assert _wait_for_worker_threads(baseline) == baseline
+    assert factory.get_engine() is not engine
+
+
+async def test_reset_engine_closes_pooled_connections_under_a_running_loop():
+    baseline = _aiosqlite_worker_threads()
+    await _open_one_pooled_connection()
+    assert _aiosqlite_worker_threads() == baseline + 1
+
+    factory.reset_engine()
+
+    assert _wait_for_worker_threads(baseline) == baseline
