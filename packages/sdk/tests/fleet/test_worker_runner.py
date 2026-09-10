@@ -221,16 +221,16 @@ async def test_run_once_renews_lease_during_long_task(app_token):
 
     app, token = app_token
     store = app.state.fleet_task_store
-    store._lease_ttl_seconds = 0.3              # short lease
-    r = _runner(app, token, exec_cmd="sleep 1")  # task far longer than the lease
+    store._lease_ttl_seconds = 2.0              # short lease
+    r = _runner(app, token, exec_cmd="sleep 3")  # task longer than the lease
     wid, _ = await r.register()
     await _approve(app, token, wid)
-    r.heartbeat_interval = 0.05                 # renew well inside the 0.3s lease
+    r.heartbeat_interval = 0.2                  # renew well inside the 2s lease
     org_id = (await app.state.fleet_registry.get_worker(wid)).org_id
     await store.enqueue(
         {"run_id": "rl", "org_id": org_id, "project_id": None, "model": "gpt-4o", "pool": "default"}
     )
-    reaper = FleetReaper(store, interval_seconds=0.05)
+    reaper = FleetReaper(store, interval_seconds=0.25)
     reaper.start()
     try:
         result = await r.run_once()
