@@ -835,6 +835,7 @@ def create_admin_serve_app(
     prompt_log_store: Any = None,
     admin_resource_store: Any = None,
     api_token_store: Any = None,
+    training_jobs: Any = None,
 ) -> FastAPI:
     """Create the complete admin API server.
 
@@ -1119,9 +1120,11 @@ def create_admin_serve_app(
         # routes read. Zero-dep fallbacks inside, so this never crashes startup.
         _setup_memory_engines(app)
 
+        await app.state.training_worker.start()
         try:
             yield
         finally:
+            await app.state.training_worker.close()
             await sub_manager.aclose()
             if getattr(app.state, "fleet_reaper", None) is not None:
                 await app.state.fleet_reaper.aclose()
@@ -1162,6 +1165,63 @@ def create_admin_serve_app(
             GlobalMemory.configure_backend(InMemoryBackend())
 
     app = FastAPI(title="Sagewai Admin", version=version, lifespan=lifespan)
+
+    from sagewai.admin.local_training import (
+        JobConflictError,
+        TrainingJobs,
+        TrainingRequest,
+        TrainingWorker,
+    )
+
+    app.state.training_jobs = training_jobs or TrainingJobs(home.data_dir() / "local-training")
+    app.state.training_worker = TrainingWorker(app.state.training_jobs)
+
+    def _training_scope(request: Request, job_id: str):
+        from uuid import UUID
+        project = request.headers.get("x-project-id")
+        if not project or project == "global":
+            raise HTTPException(400, "Select an explicit project with X-Project-ID")
+        ctx = request.state.context
+        if ctx.project_id != project or (
+            ctx.tenancy_mode == "single" and sf.get_project(project) is None
+        ):
+            raise HTTPException(404, "Not found")
+        try:
+            ident = str(UUID(job_id))
+        except ValueError:
+            raise HTTPException(422, "Training job ID must be a UUID") from None
+        return ctx.org_id, project, ident
+
+    @app.post("/api/v1/training/jobs/{job_id}")
+    async def submit_training_job(job_id: str, request: Request):
+        _require_resource_write(request)
+        scope = _training_scope(request, job_id)
+        raw = await request.body()
+        if len(raw) > 10 * 1024 * 1024:
+            raise HTTPException(413, "Training request exceeds 10 MiB")
+        try:
+            body = TrainingRequest.model_validate_json(raw)
+        except ValueError:
+            raise HTTPException(422, "Invalid training job input") from None
+        try:
+            return app.state.training_jobs.submit(*scope, body)
+        except JobConflictError as exc:
+            raise HTTPException(409, str(exc)) from None
+
+    @app.get("/api/v1/training/jobs/{job_id}")
+    async def get_training_job(job_id: str, request: Request):
+        result = app.state.training_jobs.get(*_training_scope(request, job_id))
+        if result is None:
+            raise HTTPException(404, "Not found")
+        return result
+
+    @app.delete("/api/v1/training/jobs/{job_id}")
+    async def cancel_training_job(job_id: str, request: Request):
+        _require_resource_write(request)
+        result = await app.state.training_worker.cancel(*_training_scope(request, job_id))
+        if result is None:
+            raise HTTPException(404, "Not found")
+        return result
 
     # Tenant resource-store bundle. Injected stores (tests/DI) win; otherwise the
     # lifespan builds them once the schema exists (multi-tenant only). Attached

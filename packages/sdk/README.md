@@ -144,6 +144,47 @@ sagewai work --project my-project approve WORK_ID GATE_ID
 sagewai admin serve --port 8000      # authenticated Work API
 ```
 
+## Local training jobs
+
+The existing authenticated admin server exposes durable local training jobs at
+`/api/v1/training/jobs/{UUID}`. Complete the normal admin setup first. Every
+Wolf request uses an existing API token and an explicit authorized `X-Project-ID`;
+multi-tenant tokens must be bound to that project. `POST` accepts
+`{dataset_id, manifest_hash, base_model, samples:[{instruction,output}]}`; the
+manifest hash is a lowercase SHA-256 hex string. The same UUID and input returns
+the original receipt; changed input returns 409. `GET` returns its input lineage,
+status, reason, and verified candidate identity. `DELETE` durably cancels the job
+and terminates its exact training process. Cancelling an unknown UUID creates a
+scoped tombstone, so a late `POST` cannot start training. Requests are limited to
+10 MiB.
+
+Configure the local server process explicitly:
+
+```sh
+export SAGEWAI_LOCAL_TRAINING_MODELS='{"catalog-model:tag":"/absolute/installed/trainable-model"}'
+export SAGEWAI_LOCAL_TRAINING_OLLAMA_URL='http://127.0.0.1:11434'
+sagewai admin serve
+```
+
+The configured base tag must already exist in that local Ollama service. No model
+is downloaded. Training uses the existing optional `FineTuneExecutor` backend in
+an offline child process with private caches and without admin credentials.
+Its existing GGUF export bridge must be installed/configured; missing backends,
+failed exports, imports, and readbacks produce failed jobs. Completion requires an
+actual GGUF imported as `sagewai-trained-<opaque scoped hash>:latest`, plus its
+Ollama digest and positive context window read back from the server. Base models
+are never overwritten, and successful training alone does not qualify a candidate.
+
+Receipts and private job files live under
+`$SAGEWAI_HOME/data/local-training/`. Run one admin process per local training
+directory. A second worker cannot claim it; queued jobs survive restart and
+interrupted running jobs fail without repeating training. Status is one of
+`queued`, `running`, `completed`, `failed`, or `cancelled`. Terminal jobs retain
+only immutable input lineage and a request hash for retry checks; plaintext
+samples, request files, and dataset snapshots are removed. Trained weights remain.
+An isolated child also stops its own process group and removes those input files
+if the service parent is killed.
+
 ## Documentation
 
 - [docs.sagewai.ai](https://docs.sagewai.ai) — full documentation
