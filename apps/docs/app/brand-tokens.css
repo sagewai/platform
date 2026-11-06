@@ -1,47 +1,73 @@
-/* Brand design tokens. Tailwind itself is imported once in globals.css,
-   so we don't re-import it here. */
+/* Sagewai brand tokens — mirrors sagewai/web app/brand-tokens.css, the
+   canonical implementation; keep token-identical.
+   Brand intent: atelier/brand/docs/sagewai_branding.md. Tailwind is imported
+   once in globals.css, so it is not re-imported here. */
 @import "./tokens/motion.css";
 
 @theme {
-  /* ── Light Mode (default) ───────────────────────────────── */
+  /* ── Brand palette — raw values for fills, gradients, illustration ── */
+  --color-brand-navy: #0B1B3B;
+  --color-brand-midnight: #071330;
+  --color-brand-royal: #2563FF;
+  --color-brand-indigo: #5B21F6;
+  --color-brand-purple: #A21CAF;
+  --color-brand-coral: #FF5A3D;
+  --color-brand-amber: #FFB400;
+  --color-brand-cyan: #06D6FF;
+  --color-brand-mist: #F6F8FF;
+
+  /* ── Light mode (default) ─────────────────────────────────── */
   --color-bg-page: #FFFFFF;
-  --color-bg-surface: #F8FAFC;
-  --color-bg-subtle: #F1F5F9;
+  --color-bg-surface: #F6F8FF;
+  --color-bg-subtle: #EEF1FC;
   --color-bg-elevated: #FFFFFF;
-  --color-bg-card: #F8FAFC;
-  --color-bg-card-hover: #F1F5F9;
-  --color-border: #E2E8F0;
-  --color-border-dim: #F1F5F9;
-  --color-text-primary: #0F172A;
-  --color-text-secondary: #5C6B82;
-  --color-text-muted: #6B7280;
-  --color-text-on-dark: #F0F4F8;
+  --color-bg-card: #F6F8FF;
+  --color-bg-card-hover: #EEF1FC;
+  --color-border: #E1E6F5;
+  --color-border-dim: #EDF0FA;
+  --color-text-primary: #0B1B3B;
+  --color-text-secondary: #45506F;
+  --color-text-muted: #5F6A8A;
+  --color-text-on-dark: #EEF1FF;
 
-  /* Primary (Sage Teal — darkened for light bg contrast) */
-  --color-primary: #0E7490;
-  --color-primary-hover: #0891B2;
-  --color-primary-light: #CCFBF1;
+  /* Primary — Indigo: links, focus, active states */
+  --color-primary: #5B21F6;
+  --color-primary-hover: #4A14DE;
+  --color-primary-light: #EFEAFE;
 
-  /* Secondary (Circuit Gold — darkened) */
-  --color-secondary: #B45309;
-  --color-secondary-light: #FFF3E0;
+  /* CTA — filled buttons, white label in both themes */
+  --color-cta: #5B21F6;
+  --color-cta-hover: #4A14DE;
+  --color-on-cta: #FFFFFF;
 
-  /* Accents (darkened for WCAG AA on white) */
-  --color-accent-purple: #7E22CE;
-  --color-accent-purple-light: #F3E5F5;
-  --color-accent-orange: #C2410C;
-  --color-accent-orange-light: #FBE9E7;
+  /* Secondary — Amber, darkened for text on light */
+  --color-secondary: #A65400;
+  --color-secondary-light: #FFF4D6;
+
+  /* Accents (WCAG AA on white) */
+  --color-accent-purple: #A21CAF;
+  --color-accent-purple-light: #FBE8FD;
+  --color-accent-orange: #D13A1F;
+  --color-accent-orange-light: #FFECE7;
+  --color-accent-blue: #2563FF;
+  --color-accent-blue-light: #E8EFFF;
+  --color-accent-cyan: #0077A8;
+  --color-accent-cyan-light: #E3F9FF;
 
   /* Status */
   --color-success: #15803D;
-  --color-success-light: #F0FDF4;
+  --color-success-light: #EAF7EF;
   --color-error: #DC2626;
   --color-error-light: #FEF2F2;
-  --color-warning: #D97706;
+  --color-warning: #B45309;
   --color-warning-light: #FEF3C7;
 
-  /* Brand gradient */
-  --gradient-brand: linear-gradient(135deg, #9C27B0 0%, #FF7043 50%, #26C6DA 100%);
+  /* Gradients. `brand` is the full spectrum of the mark — rules, hairlines,
+     never text. `text` is the AA-safe gradient for highlighted phrases.
+     `wai` matches the wordmark. */
+  --gradient-brand: linear-gradient(90deg, #FFB400 0%, #FF4A3D 22%, #F2167E 40%, #A21CAF 55%, #5B21F6 70%, #2563FF 85%, #06D6FF 100%);
+  --gradient-text: linear-gradient(90deg, #2A36FF 0%, #5B21F6 45%, #A21CAF 100%);
+  --gradient-wai: linear-gradient(90deg, #2A36FF 0%, #5B21F6 100%);
 
   /* Spacing */
   --spacing-xs: 4px;
@@ -52,8 +78,8 @@
   --spacing-2xl: 48px;
 
   /* Typography */
-  --font-heading: var(--font-inter, system-ui, sans-serif);
-  --font-body: var(--font-inter, system-ui, sans-serif);
+  --font-heading: var(--font-manrope, system-ui, sans-serif);
+  --font-body: var(--font-manrope, system-ui, sans-serif);
   --font-mono: var(--font-jetbrains, ui-monospace, monospace);
 
   /* Radii */
@@ -74,48 +100,60 @@
   --font-family-base: var(--font-body);
   --font-family-mono: var(--font-mono);
 
-  /* Dark-mode surface aliases (used by admin components) */
-  --color-bg-deep: #F1F5F9;
-  --color-surface-dark: #E2E8F0;
-  --color-surface-dark-hover: #CBD5E1;
+  /* Deep surfaces (used by admin-derived components) */
+  --color-bg-deep: #EEF1FC;
+  --color-surface-dark: #E1E6F5;
+  --color-surface-dark-hover: #CFD6EE;
 }
 
-/* ── Dark Mode ──────────────────────────────────────────── */
+/* ── Dark Mode — Navy is the page ───────────────────────────── */
 [data-theme="dark"] {
-  --color-bg-deep: #0A1628;
-  --color-surface-dark: #111B2E;
-  --color-surface-dark-hover: #1A2740;
-  --color-bg-page: #0A1628;
-  --color-bg-surface: #111D35;
-  --color-bg-subtle: #1A2B4A;
-  --color-bg-elevated: #132440;
-  --color-bg-card: #132440;
-  --color-bg-card-hover: #1A2E50;
-  --color-border: rgba(255, 255, 255, 0.06);
-  --color-border-dim: rgba(255, 255, 255, 0.03);
-  --color-text-primary: #F0F4F8;
-  --color-text-secondary: #94A3B8;
-  --color-text-muted: #7C8DA2;
-  --color-primary: #26C6DA;
-  --color-primary-hover: #1EAFC2;
-  --color-primary-light: rgba(38, 198, 218, 0.1);
-  --color-secondary: #FFB74D;
-  --color-secondary-light: rgba(255, 183, 77, 0.1);
-  --color-accent-purple: #9C27B0;
-  --color-accent-purple-light: rgba(156, 39, 176, 0.1);
-  --color-accent-orange: #FF7043;
-  --color-accent-orange-light: rgba(255, 112, 67, 0.1);
-  --color-success: #4CAF50;
-  --color-success-light: rgba(76, 175, 80, 0.12);
-  --color-error: #EF5350;
-  --color-error-light: rgba(239, 83, 80, 0.12);
-  --color-warning: #FFB74D;
-  --color-warning-light: rgba(255, 183, 77, 0.12);
+  --color-bg-deep: #050D24;
+  --color-surface-dark: #0E2048;
+  --color-surface-dark-hover: #142A57;
+  --color-bg-page: #0B1B3B;
+  --color-bg-surface: #0E2048;
+  --color-bg-subtle: #132857;
+  --color-bg-elevated: #10234C;
+  --color-bg-card: #10234C;
+  --color-bg-card-hover: #152B5C;
+  --color-border: rgba(150, 168, 255, 0.14);
+  --color-border-dim: rgba(150, 168, 255, 0.08);
+  --color-text-primary: #EEF1FF;
+  --color-text-secondary: #A9B4D6;
+  --color-text-muted: #8692B8;
+  --color-primary: #9D8DFF;
+  --color-primary-hover: #B8ACFF;
+  --color-primary-light: rgba(157, 141, 255, 0.14);
+  --color-cta: #6534FF;
+  --color-cta-hover: #7650FF;
+  --color-secondary: #FFB400;
+  --color-secondary-light: rgba(255, 180, 0, 0.12);
+  --color-accent-purple: #D670E3;
+  --color-accent-purple-light: rgba(214, 112, 227, 0.14);
+  --color-accent-orange: #FF7A5C;
+  --color-accent-orange-light: rgba(255, 122, 92, 0.14);
+  --color-accent-blue: #6B9BFF;
+  --color-accent-blue-light: rgba(107, 155, 255, 0.14);
+  --color-accent-cyan: #06D6FF;
+  --color-accent-cyan-light: rgba(6, 214, 255, 0.12);
+  --color-success: #34D399;
+  --color-success-light: rgba(52, 211, 153, 0.12);
+  --color-error: #FF6B6B;
+  --color-error-light: rgba(255, 107, 107, 0.12);
+  --color-warning: #FFB400;
+  --color-warning-light: rgba(255, 180, 0, 0.12);
+  --gradient-text: linear-gradient(90deg, #3CC8FF 0%, #9D8DFF 50%, #E879D9 100%);
+  --gradient-wai: linear-gradient(90deg, #5A7DFF 0%, #9C6CFF 100%);
+}
+
+::selection {
+  background: rgba(91, 33, 246, 0.18);
 }
 
 [data-theme="dark"] ::selection {
-  background: rgba(38, 198, 218, 0.3);
-  color: #F0F4F8;
+  background: rgba(157, 141, 255, 0.35);
+  color: #EEF1FF;
 }
 
 body {

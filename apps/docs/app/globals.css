@@ -40,3 +40,11 @@
     min-width: 0;
   }
 }
+
+/* Gradient text utility — AA-safe text gradient, never the full spectrum */
+.text-gradient {
+  background: var(--gradient-text);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}

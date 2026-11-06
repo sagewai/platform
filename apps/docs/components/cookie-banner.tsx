@@ -83,7 +83,7 @@ export function CookieBanner() {
               </button>
               <button
                 onClick={acceptAll}
-                className="px-4 py-2 text-sm font-medium rounded-lg bg-primary text-bg-deep hover:bg-primary/90 transition-colors"
+                className="px-4 py-2 text-sm font-medium rounded-lg bg-cta text-on-cta hover:bg-cta-hover transition-colors"
               >
                 Accept All
               </button>
@@ -124,7 +124,7 @@ export function CookieBanner() {
                   onClick={() => {
                     updateConsent(draft);
                   }}
-                  className="px-4 py-2 text-sm font-medium rounded-lg bg-primary text-bg-deep hover:bg-primary/90 transition-colors"
+                  className="px-4 py-2 text-sm font-medium rounded-lg bg-cta text-on-cta hover:bg-cta-hover transition-colors"
                 >
                   Save Preferences
                 </button>
