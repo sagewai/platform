@@ -127,12 +127,12 @@ export default function LandingPage() {
             <img
               src="/brand/sagewai_logo.svg"
               alt="Sagewai"
-              className="h-8 w-auto block dark:hidden"
+              className="h-9 w-auto block dark:hidden"
             />
             <img
               src="/brand/sagewai_logo_dark.svg"
               alt="Sagewai"
-              className="h-8 w-auto hidden dark:block"
+              className="h-9 w-auto hidden dark:block"
             />
             <span className="text-xs bg-primary-light text-primary px-2 py-0.5 rounded-full font-medium shrink-0">
               SDK
@@ -160,7 +160,7 @@ export default function LandingPage() {
           </div>
           <Link
             href="/docs/get-started/quickstart"
-            className="bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary-hover transition-colors"
+            className="bg-cta text-on-cta px-4 py-2 rounded-lg text-sm font-medium hover:bg-cta-hover transition-colors"
           >
             Get Started
           </Link>
@@ -177,7 +177,7 @@ export default function LandingPage() {
             </div>
             <h1 className="text-5xl md:text-6xl font-bold text-text-primary leading-tight tracking-tight mb-6">
               Build agents that{' '}
-              <span className="bg-gradient-to-r from-primary to-accent-purple bg-clip-text text-transparent">
+              <span className="text-gradient">
                 run in production.
               </span>
             </h1>
@@ -189,7 +189,7 @@ export default function LandingPage() {
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
               <Link
                 href="/docs/get-started/quickstart"
-                className="w-full sm:w-auto bg-primary text-white px-8 py-3.5 rounded-xl text-base font-semibold hover:bg-primary-hover transition-colors shadow-lg shadow-primary/20"
+                className="w-full sm:w-auto bg-cta text-on-cta px-8 py-3.5 rounded-xl text-base font-semibold hover:bg-cta-hover transition-colors shadow-lg shadow-cta/25"
               >
                 Get Started
               </Link>
@@ -347,7 +347,7 @@ export default function LandingPage() {
         <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
           <Link
             href="/docs/get-started/quickstart"
-            className="bg-primary text-white px-8 py-3.5 rounded-xl text-base font-semibold hover:bg-primary-hover transition-colors shadow-lg shadow-primary/20"
+            className="bg-cta text-on-cta px-8 py-3.5 rounded-xl text-base font-semibold hover:bg-cta-hover transition-colors shadow-lg shadow-cta/25"
           >
             Read the Docs
           </Link>
@@ -369,12 +369,12 @@ export default function LandingPage() {
                 <img
                   src="/brand/sagewai_logo.svg"
                   alt="Sagewai"
-                  className="h-6 w-auto block dark:hidden"
+                  className="h-8 w-auto block dark:hidden"
                 />
                 <img
                   src="/brand/sagewai_logo_dark.svg"
                   alt="Sagewai"
-                  className="h-6 w-auto hidden dark:block"
+                  className="h-8 w-auto hidden dark:block"
                 />
               </div>
               <p className="text-sm text-text-muted mt-2">

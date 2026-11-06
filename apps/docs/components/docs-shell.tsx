@@ -13,8 +13,8 @@ import { SearchModal } from '@/components/search-modal';
  * Client-side shell for /docs/* pages.
  *
  * Owns the mobile drawer state for the sidebar and renders:
- * - A top nav bar with the SAGEWAI logo (icon-only on mobile, full
- *   wordmark on sm+), a "Docs" pill, desktop nav links, and a mobile
+ * - A top nav bar with the Sagewai logo (mark + wordmark lockup on all
+ *   breakpoints), a "Docs" pill, desktop nav links, and a mobile
  *   hamburger toggle.
  * - The sidebar as a static 256px column on lg+ screens, or as a fixed
  *   drawer with overlay on mobile when open.
@@ -81,12 +81,12 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
               <img
                 src="/brand/sagewai_logo.svg"
                 alt="Sagewai"
-                className="h-8 w-auto block dark:hidden"
+                className="h-9 w-auto block dark:hidden"
               />
               <img
                 src="/brand/sagewai_logo_dark.svg"
                 alt="Sagewai"
-                className="h-8 w-auto hidden dark:block"
+                className="h-9 w-auto hidden dark:block"
               />
               <span className="text-xs bg-primary-light text-primary px-2 py-0.5 rounded-full font-medium shrink-0">
                 Docs

@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { CookieConsentProvider } from '@/components/cookie-consent-context';
 import { CookieBanner } from '@/components/cookie-banner';
+import { fontVariables } from './fonts';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -36,7 +37,7 @@ export const metadata: Metadata = {
       { url: '/brand/favicon.ico', sizes: 'any' },
       { url: '/brand/sagewai_icon.svg', type: 'image/svg+xml' },
     ],
-    apple: '/brand/sagewai_icon.webp',
+    apple: '/brand/apple-touch-icon.png',
   },
   openGraph: {
     title: 'Sagewai — The autonomous AI agent platform',
@@ -46,7 +47,7 @@ export const metadata: Metadata = {
     siteName: 'Sagewai',
     images: [
       {
-        url: '/brand/sagewai_logo.webp',
+        url: '/brand/sagewai_og.png',
         width: 1200,
         height: 630,
         alt: 'Sagewai — the autonomous agent platform',
@@ -60,7 +61,7 @@ export const metadata: Metadata = {
     title: 'Sagewai — The autonomous AI agent platform',
     description:
       'Build production AI agents with any LLM. Open source, MCP-native, with cost tracking and a training loop that owns the cost-down path.',
-    images: ['/brand/sagewai_logo.webp'],
+    images: ['/brand/sagewai_og.png'],
   },
   robots: {
     index: true,
@@ -77,7 +78,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning className={fontVariables}>
       <head>
         <script
           type="application/ld+json"

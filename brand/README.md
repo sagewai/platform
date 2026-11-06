@@ -19,6 +19,7 @@ directories — import from here.
 | `sagewai_icon_dark.webp` | Raster square icon, dark |
 | `logo.svg` | Compact mark used inside the admin UI |
 | `favicon.ico` | Browser favicon |
+| `apple-touch-icon.png` | 180×180 iOS home-screen icon |
 
 ## Rule: prefer the wordmark
 
