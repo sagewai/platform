@@ -81,17 +81,19 @@ when the product needs it; use the smallest working deployment.
 
 ## Backend services
 
-A deployable backend service exposes HTTP, MCP, and CLI adapters over the same
-application use cases. A library is not a service. Keep domain rules in one place;
-transport adapters translate requests, identities, errors, and results.
+A new deployable backend service exposes HTTP, MCP, and CLI adapters over the
+same application use cases. A library is not a service. Keep domain rules in
+one place; adapters translate requests, identities, errors, and results.
+Existing services change their recorded API contract first and add missing
+adapters through explicit migration, without creating a competing contract.
 
 - **DDD by default.** Name bounded contexts and use the domain's language in code
   and contracts. Put invariants in domain types or aggregates, orchestration in
   application services, and storage/external calls behind ports. Keep transport
   and database models out of the domain; add tactical patterns only when they
   protect a real invariant.
-- **API first.** Define and review a versioned OpenAPI contract before building
-  handlers. Specify authentication, tenant scope, request/response schemas,
+- **API first.** For HTTP APIs, define and review a versioned OpenAPI contract
+  before building handlers. Specify authentication, tenant scope, schemas,
   errors, pagination, and idempotency. Pin a tooling-supported OpenAPI 3.x
   version; lint and check breaking changes in CI, then generate clients/types
   from the contract. Use RFC 9457 Problem Details where HTTP errors need a
@@ -108,8 +110,9 @@ transport adapters translate requests, identities, errors, and results.
   exit codes, `--help`, and noninteractive operation for automation.
 - **Twelve-factor runtime.** Keep build, release, and run separate; processes
   start fast, shut down gracefully, and hold no durable state. Treat databases,
-  queues, and object stores as attached resources; write structured logs to
-  stdout and let the platform collect them. Keep dev/prod behavior close.
+  queues, and object stores as attached resources. In server mode, emit structured
+  logs to a platform-collected stream; when stdout carries MCP stdio or CLI
+  results, send diagnostics to stderr. Keep dev/prod behavior close.
   Inject deploy-specific config and secrets from the environment or a secret
   manager; typed loaders may combine files, env, and flags without committing
   secrets. Validate at startup; publish immutable snapshots for runtime changes.
