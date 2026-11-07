@@ -79,15 +79,78 @@ when the product needs it; use the smallest working deployment.
   owning systems. Treat CMS content as untrusted input at rendering boundaries.
   Check supported Next.js, Node, and adapter versions before installation.
 
+## Backend services
+
+A deployable backend service exposes HTTP, MCP, and CLI adapters over the same
+application use cases. A library is not a service. Keep domain rules in one place;
+transport adapters translate requests, identities, errors, and results.
+
+- **DDD by default.** Name bounded contexts and use the domain's language in code
+  and contracts. Put invariants in domain types or aggregates, orchestration in
+  application services, and storage/external calls behind ports. Keep transport
+  and database models out of the domain; add tactical patterns only when they
+  protect a real invariant.
+- **API first.** Define and review a versioned OpenAPI contract before building
+  handlers. Specify authentication, tenant scope, request/response schemas,
+  errors, pagination, and idempotency. Pin a tooling-supported OpenAPI 3.x
+  version; lint and check breaking changes in CI, then generate clients/types
+  from the contract. Use RFC 9457 Problem Details where HTTP errors need a
+  machine-readable body.
+- **MCP enabled.** Publish an intentional, typed MCP tool/resource surface for
+  agent-useful capabilities. Map it to the same application services and
+  authorization as HTTP; never expose raw database operations or every HTTP
+  endpoint automatically. Keep local use on stdio and expose remote HTTP only
+  with authentication, tenant isolation, bounded input, timeouts, and audit.
+  Pin an SDK and protocol version supported by the clients in use.
+- **CLI enabled.** Provide versioned commands for serving, config validation,
+  migrations, health, and relevant domain operations. CLI paths use the same
+  application services and permissions; offer machine-readable output, stable
+  exit codes, `--help`, and noninteractive operation for automation.
+- **Twelve-factor runtime.** Keep build, release, and run separate; processes
+  start fast, shut down gracefully, and hold no durable state. Treat databases,
+  queues, and object stores as attached resources; write structured logs to
+  stdout and let the platform collect them. Keep dev/prod behavior close.
+  Inject deploy-specific config and secrets from the environment or a secret
+  manager; typed loaders may combine files, env, and flags without committing
+  secrets. Validate at startup; publish immutable snapshots for runtime changes.
+- **Safe boundaries.** Authenticate and authorize every adapter, resolve tenant
+  scope before application work, use least privilege, deadlines, bounded work,
+  and idempotency for commands that can be retried. Record trace IDs and
+  redact sensitive data. Test domain claims once, then a small set of HTTP,
+  MCP, and CLI contract paths; avoid repeating the same journey three times.
+
 ## Language and framework defaults
 
 | Stack | Small required change gate | Additional checks when relevant |
 | --- | --- | --- |
+| Go | `gofmt`, `go vet`, build, module tidiness, focused `go test` | Targeted `-race` and integration; `govulncheck` on dependency changes or scheduled gate |
 | Rust | `cargo fmt --check`, `cargo clippy -- -D warnings`, focused `cargo test` | Full tests and integration; `tracing` with OTel at service boundaries; use `serde` for wire data |
 | Python | `uv` lock/sync, Ruff, type check changed code, focused `pytest` | Full suite and integration; Pydantic for external/config schemas; use `pytest.mark.parametrize` for variants |
 | Node/TypeScript | Pinned `pnpm` install, formatter/linter, `tsc --noEmit`, focused unit tests | Browser journeys only for user-visible contracts; use strict TypeScript and schema validation at external boundaries |
 | React/Next.js | Typecheck and build changed app; component and route behavior tests | Playwright for critical flows; keep server/client boundaries explicit and apply the UI standard above |
 | Vue/Nuxt | Typecheck, build, focused component/route tests | Integrate or migrate substantial UI to the required React stack; keep tokens and accessibility while migrating |
+
+### Go service rules
+
+- Keep packages cohesive and dependencies explicit; prefer the standard library.
+  Pass `context.Context` first, wrap errors with `%w`, avoid mutable globals and
+  `init` side effects, and define narrow interfaces at the consuming boundary.
+- Use typed config with explicit precedence: defaults, files, environment, then
+  supplied flags. Koanf is useful for multiple sources; keep schema and validation
+  independent of the loader. Inject validated config through constructors. For
+  runtime and multitenant changes, publish immutable versioned snapshots and
+  resolve tenant overrides at the boundary.
+- Give AI tasks a goal, acceptance claim, file scope, and proof command. Keep the
+  diff small and review it against the claim; use independent review when the
+  repository workflow requires one.
+- Test observable behavior with named table rows and `t.Run`. Use `t.TempDir`,
+  `httptest`, controlled clocks, and explicit synchronization. No sleeps, live
+  services, shared mutable fixtures, retries, or tests of getters and mock calls
+  just to raise coverage. Fix flaky tests before merging.
+- Keep the Go gate short: format, vet, build, module and generated-file drift,
+  affected-package tests and dependents. Run the full unit suite if impact
+  selection is unreliable; target race and integration checks to changed
+  boundaries, with broader checks on scheduled or release gates.
 
 Use table-driven or parameterized tests for behavior variants, deterministic
 fixtures and clocks, and no retries to mask flaky tests. Run broader suites,
@@ -97,6 +160,9 @@ that rewards tests of implementation details.
 
 ## Primary references
 
+- [Domain-driven design and bounded contexts](https://martinfowler.com/bliki/BoundedContext.html)
+- [OpenAPI specification](https://spec.openapis.org/oas/) and [HTTP Problem Details](https://www.rfc-editor.org/rfc/rfc9457.html)
+- [Model Context Protocol](https://modelcontextprotocol.io/specification) and [twelve-factor app](https://12factor.net/)
 - [shadcn/ui AI Elements](https://ui.shadcn.com/docs/ai-elements)
 - [VictoriaMetrics and OpenTelemetry](https://docs.victoriametrics.com/opentelemetry/)
 - [DuckDB Parquet](https://duckdb.org/docs/data/parquet) and [S3/R2 access](https://duckdb.org/docs/current/guides/network_cloud_storage/s3_import)
