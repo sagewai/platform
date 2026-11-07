@@ -62,7 +62,7 @@ git push origin main --follow-tags
 
 ## Where to look first
 
-- `docs/engineering-standards.md` and `docs/infrastructure-delivery-standards.md` — portable stack and delivery defaults; repository-specific rules here win except the machine-wide UI rule.
+- Shared standards: [Go](docs/go-project-guidelines.md), [engineering](docs/engineering-standards.md), and [infrastructure/delivery](docs/infrastructure-delivery-standards.md); repository-specific rules here win except the machine-wide UI rule.
 - `README.md` — quickstart + tour
 - `docs/architecture/README.md` — canonical runtime architecture
 - `packages/sdk/sagewai/examples/` — runnable end-to-end examples
